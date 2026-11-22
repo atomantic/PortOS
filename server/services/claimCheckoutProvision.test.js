@@ -122,6 +122,20 @@ describe('provisionClaimCheckout', () => {
     expect(result.refused).toMatch(/already exists locally/);
     expect(existsSync(claimDir())).toBe(false);
   });
+
+  it.each(['next/issue-42', 'cos/sys-claim/issue-42/agent-abc'])('refuses when a sibling documented claim ref %s exists locally', async (ref) => {
+    await execGit(['branch', ref], repo);
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(result.refused).toBe(`${ref} already exists locally`);
+    expect(existsSync(claimDir())).toBe(false);
+  });
+
+  it.each(['next/issue-42', 'cos/sys-claim/issue-42/agent-abc'])('refuses when a sibling documented claim ref %s exists on origin', async (ref) => {
+    await execGit(['push', 'origin', `HEAD:refs/heads/${ref}`], repo);
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(result.refused).toBe(`${ref} already exists on origin`);
+    expect(existsSync(claimDir())).toBe(false);
+  });
 });
 
 describe('serverClaimCheckoutBranch', () => {

@@ -18,6 +18,7 @@ import Pill from '../ui/Pill';
 import Banner from '../ui/Banner';
 import ToggleSwitch from '../ToggleSwitch';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
+import InfoTooltip from '../ui/InfoTooltip';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { getHarnesses, refreshHarnessModels } from '../../services/apiHarnesses.js';
@@ -27,6 +28,7 @@ import { pluralize } from '../../lib/textUtils';
 import { serviceReadinessCopy } from '../../lib/providerManagement';
 import { providerHarnessId } from '../../utils/providerHarnesses';
 import ProviderCredentialBootstraps from './ProviderCredentialBootstraps';
+import { HARNESS_GUIDES } from './harnessGuides';
 
 /**
  * AI Providers → Harnesses: one card per registry harness — the program that
@@ -71,6 +73,28 @@ const ACTION_COPY = {
   },
 };
 
+function GuideList({ title, items, tone }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <p className={`font-semibold ${tone}`}>{title}</p>
+      <ul className="mt-0.5 list-disc space-y-0.5 pl-4">
+        {items.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+function HarnessGuide({ guide }) {
+  return (
+    <div className="space-y-2 leading-snug">
+      <p><span className="font-semibold text-white">Best for:</span> {guide.bestFor}</p>
+      <GuideList title="Strengths" items={guide.strengths} tone="text-port-success-text" />
+      <GuideList title="Limits" items={guide.limits} tone="text-port-warning-text" />
+    </div>
+  );
+}
+
 function HarnessCard({
   harness,
   detail,
@@ -107,6 +131,7 @@ function HarnessCard({
   const canRefreshModels = Boolean(detail?.listsModels && isInstalled);
   const effectiveLabel = detail?.label || runtime?.label || harness.label;
   const effectiveCommand = detail?.command || harness.id;
+  const guide = HARNESS_GUIDES[harness.id] || null;
 
   return (
     <article
@@ -116,11 +141,18 @@ function HarnessCard({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 id={`harness-${harness.id}-title`} className="text-base font-semibold text-white flex items-center gap-2">
-            <TerminalSquare className="w-4 h-4 text-port-accent shrink-0" aria-hidden="true" />
-            <Link to={`/ai/harnesses/${encodeURIComponent(harness.id)}`} className="hover:underline">{harness.label}</Link>
-            <code className="text-xs font-mono text-gray-500">{harness.id}</code>
-          </h3>
+          <div className="flex items-center">
+            <h3 id={`harness-${harness.id}-title`} className="text-base font-semibold text-white flex items-center gap-2">
+              <TerminalSquare className="w-4 h-4 text-port-accent shrink-0" aria-hidden="true" />
+              <Link to={`/ai/harnesses/${encodeURIComponent(harness.id)}`} className="hover:underline">{harness.label}</Link>
+              <code className="text-xs font-mono text-gray-500">{harness.id}</code>
+            </h3>
+            {guide && (
+              <InfoTooltip label={`Why use ${harness.label}`} width={300} align="start" placement="below" panelClassName="max-w-[calc(100vw-1rem)]">
+                <HarnessGuide guide={guide} />
+              </InfoTooltip>
+            )}
+          </div>
           <p className="mt-1 text-xs text-gray-500">{SOURCE_COPY[harness.source] || ''}</p>
         </div>
         {alwaysOn ? (

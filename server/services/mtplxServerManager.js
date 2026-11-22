@@ -918,6 +918,13 @@ export const markMtplxUsed = () => onDemand.markUsed();
 export const ensureMtplxRunning = () => onDemand.ensureRunning();
 
 /**
+ * The launch line a saved MTPLX card has persisted ({ model, port, raw }), or
+ * an entry with an empty `raw` when nothing was ever saved. Read-only: the
+ * card and the refresh path both render it so neither has to re-derive.
+ */
+export const getMtplxSavedLaunch = () => onDemand.savedLaunch();
+
+/**
  * Is this provider served by the MTPLX daemon PortOS manages?
  *
  * Mirrors `ollamaManager.isOllamaProvider` so `services/aiProvider.js` gates both

@@ -906,6 +906,7 @@ describe('checkPullRequests trusted maintenance boundary', () => {
       const result = await checkPullRequests(app, { authorFilter });
       expect(result.newPrs.map(pr => pr.number)).toEqual([10, 11]);
       expect(Object.keys(result.activityByPr)).toEqual(['10', '11']);
+      expect(result.externalPrs).toEqual([12, 13]);
     }
     expect((await checkPullRequests(app, { authorFilter: 'self' })).newPrs.map(pr => pr.number)).toEqual([10]);
   });

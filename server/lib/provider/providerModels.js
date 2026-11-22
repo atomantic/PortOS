@@ -368,7 +368,12 @@ export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
   const harness = provider.harnessId ?? null;
   if (harness === 'opencode' || isOpencodeLocalProvider(provider)) {
-    return isOpencodeLocalProvider(provider) ? opencodeEffortLevelsForModel(model) : null;
+    if (!isOpencodeLocalProvider(provider)) return null;
+    // MTPLX applies the model's own chat template, so a model whose template takes a thinking
+    // level (Inkling) gets its full ladder, not the portable three rungs; MTPLX hands OpenCode's
+    // `reasoning_effort` to that template.
+    const templateLevels = provider.mtplxBacked === true ? ollamaThinkingLevelsForModel(model) : null;
+    return templateLevels ?? opencodeEffortLevelsForModel(model);
   }
   if (harness === 'codex' || isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (harness === 'antigravity' || isAntigravityProvider(provider)) {

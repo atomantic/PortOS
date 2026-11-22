@@ -412,6 +412,13 @@ export const getLocalLlmAssessmentSweep = (options) =>
 export const startLocalLlmAssessmentSweep = (payload, options) =>
   request('/local-llm/assessments/sweep', { method: 'POST', body: JSON.stringify(payload), ...options });
 
+// Side-by-side benchmark of the picked models (`[{ backend, modelId }]`, 2–8), on the same
+// server-side queue as the sweep. Only the list travels: the profile (prompt size, runs, output
+// budget) is fixed server-side and shipped as `report.benchmarkProfile` for the consent gate.
+// 409s when the queue is busy or a pick is not installed.
+export const startLocalLlmAssessmentBenchmark = (payload, options) =>
+  request('/local-llm/assessments/benchmark', { method: 'POST', body: JSON.stringify(payload), ...options });
+
 // Stop the queue and the model in flight. Everything already measured stays.
 export const cancelLocalLlmAssessmentSweep = (options) =>
   request('/local-llm/assessments/sweep/cancel', { method: 'POST', ...options });

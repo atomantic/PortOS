@@ -21,6 +21,7 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
+import { claimIssueNumber } from '../lib/issueClaimEvidence.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { appWorktreeSlug } from '../lib/worktreeOwnership.js';
 
@@ -56,14 +57,24 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
   if (fetched?.exitCode !== 0) return { refused: `fetching origin/${baseBranch} failed` };
 
   if (existsSync(worktreePath)) return { refused: `${worktreePath} already exists` };
-  const local = await execGit(['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
-  if (local?.exitCode === 0) return { refused: `${branch} already exists locally` };
-  if (local?.exitCode !== 1) return { refused: `the local ${branch} ref could not be read` };
-  // `--exit-code` answers 2 only for "no such ref"; any other failure proves nothing.
-  const remote = await execGit(['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${branch}`], sourceWorkspace,
+  const targetNum = Number(issueNumber);
+  // Check every documented claim ref pattern (claim/issue-<n>, next/issue-<n>,
+  // cos/<task>/issue-<n>/<agent>) locally and on origin so the agent does not
+  // have to repeat `git branch -a` / `git ls-remote` in Phase 1.
+  const localRefs = await execGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], sourceWorkspace, { ignoreExitCode: true }).catch(() => null);
+  if (localRefs?.exitCode !== 0) return { refused: `the local ${branch} ref could not be read` };
+  const localCollision = String(localRefs.stdout || '').split('\n').map(s => s.trim()).filter(Boolean)
+    .find(ref => ref === branch || claimIssueNumber(ref) === targetNum);
+  if (localCollision) return { refused: `${localCollision} already exists locally` };
+
+  const remoteRefs = await execGit(['ls-remote', '--heads', 'origin'], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).catch(() => null);
-  if (remote?.exitCode === 0) return { refused: `${branch} already exists on origin` };
-  if (remote?.exitCode !== 2) return { refused: `origin's ${branch} ref could not be read` };
+  if (remoteRefs?.exitCode !== 0) return { refused: `origin's ${branch} ref could not be read` };
+  const remoteCollision = String(remoteRefs.stdout || '').split('\n')
+    .map(line => line.split('\t')[1]?.trim().replace(/^refs\/heads\//, '') || '')
+    .filter(Boolean)
+    .find(ref => ref === branch || claimIssueNumber(ref) === targetNum);
+  if (remoteCollision) return { refused: `${remoteCollision} already exists on origin` };
 
   await ensureDir(worktreesRoot);
   const added = await execGit(['worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${baseBranch}`],

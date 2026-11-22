@@ -106,6 +106,7 @@ export default function ProviderCard({
   runnerAllowedCommands,
   testResult,
   refreshing,
+  refreshNotice = null,
   recovering,
   onTest,
   onRefreshModels,
@@ -317,6 +318,15 @@ export default function ProviderCard({
             >
               {refreshing ? 'Refreshing...' : 'Refresh Models'}
             </button>
+          )}
+          {/* A typed refusal the server says the card can act on — e.g. MTPLX
+              stopped with no saved launch line. Rendered inline with its fix,
+              never as a bare toast. */}
+          {refreshNotice && supportsModelRefresh(provider) && (
+            <p role="alert" className="text-xs text-port-warning flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              <span>{refreshNotice.message}</span>
+              <Link to="/models/llms-runtimes/mtplx" className="text-port-accent hover:underline shrink-0">Open the MTPLX card</Link>
+            </p>
           )}
 
           <button

@@ -1096,9 +1096,12 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   const held = check.selfManagedHeld?.length
     ? `; leaving ${check.selfManagedHeld.length} self-managed PR(s) to their author until stale (#${check.selfManagedHeld.join(', #')})`
     : '';
+  const external = check.externalPrs?.length
+    ? `; ${check.externalPrs.length} external contributor PR(s) belong to pr-reviewer (#${check.externalPrs.join(', #')})`
+    : '';
   if (check.newPrs.length === 0) {
     await recordPoll();
-    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})${held}`, { appId: app.id });
+    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})${held}${external}`, { appId: app.id });
     return { skip: true };
   }
 
@@ -1124,7 +1127,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
  * reviewers stamps the resolved bundle back onto `metadata` (see below), the
  * same way `applyPlanIdMetadata` writes `planId`.
  */
-export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks, reviewerTaskType = promptTaskType, reviewerOverrideMetadata = {} }) {
+export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks, reviewerTaskType = promptTaskType, reviewerOverrideMetadata = {}, commentsClear = false }) {
   // Resolve the `{reviewers}` the agent is told to run. When the task itself
   // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
   // (Settings → Code Reviewers) rather than a hardcoded reviewer —
@@ -1181,7 +1184,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{trackerInstructions\}/g, () => blocks.trackerInstructions);
 
   const claimPolicyFirst = promptTaskType === 'claim-issue' || promptTaskType === 'claim-issue-gitlab';
-  return (claimPolicyFirst ? '' : reviewerIdentityNotice) + applyAppPlaceholders(withBlocks, app)
+  const renderedCore = (claimPolicyFirst ? '' : reviewerIdentityNotice) + applyAppPlaceholders(withBlocks, app)
     // Function form — reviewersCsv can carry a user-set reviewerModels pin,
     // and normalizeReviewerModel allows `$` in that free text (only `[`, `]`,
     // `,`, and line breaks/tabs are forbidden), so a string replacement would
@@ -1203,7 +1206,15 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{repoSyncReport\}/g, () => blocks.repoSyncReport || '')
     .replace(/\{repoFullName\}/g, () => blocks.repoFullName)
     .replace(/\{defaultBranch\}/g, () => blocks.defaultBranch)
-    .replace(/\{planConstraint\}/g, () => blocks.planConstraint)
+    .replace(/\{planConstraint\}/g, () => blocks.planConstraint);
+  const prefetchedIssue = blocks?.prefetchedIssue || '';
+  const selectionMarker = '\n\n## Selection exit';
+  const withPrefetchedIssue = prefetchedIssue
+    ? (renderedCore.includes(selectionMarker)
+      ? renderedCore.replace(selectionMarker, () => `${prefetchedIssue}${selectionMarker}`)
+      : `${renderedCore}${prefetchedIssue}`)
+    : renderedCore;
+  return withPrefetchedIssue
     + (claimPolicyFirst ? reviewerIdentityNotice : '')
     // The effort note and the local-reviewer procedure accompany the reviewer
     // CSV, so they are appended only when this template actually carries one. A
@@ -1216,7 +1227,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
         ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)
           + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds, claimReviewers.usernames)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
-            claimCommentGate: promptTaskType === 'claim-issue',
+            claimCommentGate: promptTaskType === 'claim-issue' && !commentsClear,
             enforceIsolation: promptTaskType.startsWith('claim-issue'),
           })
         : '');

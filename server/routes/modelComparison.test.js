@@ -435,3 +435,30 @@ it('marks a local speed measured before the machine changed as an estimate and n
   expect(local.tokensPerSecond).toMatchObject({ value: 90, estimated: true });
   expect(local.tokensPerSecond.method).toMatch(/different machine state.*Re-run the assessment/);
 });
+
+it('plots measured prefill speed and first-token time for local runtimes only, with the measurement named', async () => {
+  const fast = seed.observations.find(row => row.quality && row.tokensPerSecond?.value > 0);
+  await mkdir(join(dir, 'local-llm'), { recursive: true });
+  await writeFile(join(dir, 'local-llm', 'assessments.json'), JSON.stringify({ schemaVersion: 1, assessments: [
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: '', profile: 'benchmark', benchmark: { contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1 }, assessedAt: '2026-11-20T00:00:00.000Z', performance: { meanTokensPerSecond: 120.5, meanPromptTokensPerSecond: 1500, meanTtftMs: 380, samplesOk: 3 } },
+  ] }));
+  app = express();
+  app.use(express.json());
+  app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'example-provider', name: 'Example provider', models: [fast.model], enabled: true },
+    { id: 'mtplx', name: 'MTPLX', servicePlan: 'local', models: ['example-local', 'unmeasured-local'], enabled: true },
+  ] }) }));
+  app.use(errorMiddleware);
+
+  const { rows, sources } = (await request(app).get('/comparison')).body.composite;
+  const local = rows.find(row => row.model === 'example-local');
+  expect(local).toMatchObject({ localInference: true, runtime: 'mtplx' });
+  expect(local.prefillTokensPerSecond).toMatchObject({ value: 1500, estimated: false, measurement: { runtime: 'mtplx', profile: 'benchmark', stale: false, assessedAt: '2026-11-20T00:00:00.000Z' } });
+  expect(local.ttftMs).toMatchObject({ value: 380, estimated: false });
+  expect(local.ttftMs.method).toMatch(/time to first token.*3 warm runs at 4,096 tokens/);
+  expect(sources[local.ttftMs.sourceIds[0]].url).toBe('/models/performance/results');
+  const unmeasured = rows.find(row => row.model === 'unmeasured-local');
+  expect(unmeasured).toMatchObject({ localInference: true, prefillTokensPerSecond: null, ttftMs: null, tokensPerSecond: null });
+  const api = rows.find(row => row.providerId === 'example-provider');
+  expect(api).toMatchObject({ localInference: false, runtime: null, prefillTokensPerSecond: null, ttftMs: null });
+});

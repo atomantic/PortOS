@@ -8,6 +8,8 @@ import { retryHoldMetadata, isDeliveryCleanupHeld } from '../../lib/taskRetryHol
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { getAppDataForTask } from './agentAppWorkspace.js';
 /**
  * Agent Finalization
  *
@@ -1435,6 +1437,29 @@ export async function recordCompletionArtifacts(ctx, forgeOutcome, settlement) {
   });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
+
+  // If PortOS stamped `@me` + `in-progress` at spawn for a server-provisioned
+  // claim and the run stopped with no PR (clean `no-action-needed` or a
+  // terminal `blocked` on an empty branch), release those markers defensively
+  // so an agent that forgot to unmark never leaves a zombie `in-progress` issue.
+  const serverClaimTarget = isTruthyMeta(task.metadata?.claimServerCheckout)
+    ? String(task.metadata?.claimTarget ?? '').trim()
+    : '';
+  const unusedServerClaim = /^\d+$/.test(serverClaimTarget)
+    && !prEvidence.cleanupEvidence?.prs?.length
+    && taskUpdate.status !== 'pending'
+    && (taskOutcome?.status === 'no-action-needed'
+      || (taskUpdate.status === 'blocked' && prEvidence.branchProvenEmpty === true));
+  if (unusedServerClaim && task.metadata?.app) {
+    const resolvedApp = await getAppDataForTask(task).catch(() => null);
+    if (resolvedApp) {
+      await import('../appIssues.js')
+        .then(({ releaseAppIssueClaim }) => releaseAppIssueClaim(resolvedApp, serverClaimTarget))
+        .catch(err => {
+          emitLog('warn', `⚠️ Could not release unused claim markers for issue #${serverClaimTarget}: ${err.message}`, { agentId, taskId: task.id });
+        });
+    }
+  }
 
   if (usesCreativeDirectorScratchCwd(task)) {
     await removeCreativeDirectorScratchCwd(agentId).catch((err) => {

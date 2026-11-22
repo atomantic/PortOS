@@ -2,13 +2,15 @@
  * Image Gen — Antigravity (`agy`) CLI provider.
  *
  * Agy is an opt-in cloud CLI backend. Each request runs in a throwaway scratch
- * directory and directs the built-in `generate_image` tool to one PortOS-owned
- * staging path. Only signature-verified image bytes are moved into the gallery.
+ * directory and directs the built-in `image-generator` subagent (agy >= 1.2.16)
+ * or direct `generate_image` tool (older agy builds) to one PortOS-owned staging
+ * path. Only signature-verified image bytes are moved into the gallery.
  *
- * `generate_image` takes input images through its `ImagePaths` parameter — up
- * to 3, usable to "edit, combine, or use as references" — so an init image and
- * the reference slots both reach it. Unlike codex/grok, `Prompt` is a REQUIRED
- * tool parameter, so an image-only agy render is rejected up front.
+ * `generate_image` (and the `image-generator` subagent wrapping it) takes input
+ * images through `ImagePaths` — up to 3, usable to "edit, combine, or use as
+ * references" — so an init image and the reference slots both reach it. Unlike
+ * codex/grok, `Prompt` is a REQUIRED tool parameter, so an image-only agy render
+ * is rejected up front.
  */
 
 import { spawn } from '../../lib/childProcess.js';
@@ -105,9 +107,14 @@ export function listModels({ agyPath } = {}) {
 }
 
 const AGY_TOOL = IMAGE_TOOL_NAMES[IMAGE_GEN_MODE.AGY];
+// Since agy 1.2.16, image generation moved from a top-level `generate_image`
+// tool to the built-in `image-generator` subagent invoked via `invoke_subagent`.
+// Older installs still expose `generate_image` directly, so the prompt accepts
+// either while keeping `noFabricationClause` strict against code-drawn stand-ins.
+const AGY_SUBAGENT = 'image-generator';
 
 const AGY_NO_IMAGE_HINT =
-  'Agy returned no image — the selected model may not expose generate_image, or the model declined. Check Settings → Image Gen → Agy CLI.';
+  'Agy returned no image — the selected model may not expose image-generator or generate_image, or the model declined. Check Settings → Image Gen → Agy CLI.';
 
 export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
   hint: AGY_NO_IMAGE_HINT,
@@ -115,7 +122,8 @@ export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail,
 });
 
 /**
- * Directs agy's `generate_image` at whatever input images the render carries.
+ * Directs agy's `image-generator` subagent (or legacy `generate_image` tool) at
+ * whatever input images the render carries.
  *
  * `ImagePaths` is a real tool parameter — "Optional absolute paths to the images
  * to use in generation. You can pass in images here if you would like to edit,
@@ -135,7 +143,7 @@ const agyImagePathsDirective = ({ paths, initPath, referencePaths, initImageStre
   const role = initPath
     ? `The first is the source image to edit — ${describeFidelity(initImageStrength)}.${refCount ? ` The rest are ${visualReferenceRole(refCount)}.` : ''}`
     : `Use ${refCount === 1 ? 'it' : 'them'} as ${visualReferenceRole(refCount)}.`;
-  return `\nPass these files from the working directory to the tool's ImagePaths parameter, in this order: ${paths.join(', ')}\nIf ImagePaths requires absolute paths, resolve those files locally against the working directory.\n${role}`;
+  return `\nUse these files from the working directory as input images (ImagePaths), in this order: ${paths.join(', ')}\nResolve those files locally against the working directory and pass their absolute paths to ${AGY_SUBAGENT} (or to ${AGY_TOOL}'s ImagePaths parameter).\n${role}`;
 };
 
 export function buildAgyPrompt({
@@ -156,13 +164,17 @@ export function buildAgyPrompt({
   // reach for code that can. It also leaks into the artwork: the render that
   // exposed this failure mode captioned itself "DIMENSIONS: 832 x 1216 (2:3)".
   const ratio = nearestAgyAspectRatio(width, height);
-  const aspect = ratio ? `\nPass AspectRatio "${ratio}" to the tool.` : '';
+  const aspect = ratio ? `\nPass AspectRatio "${ratio}" to ${AGY_SUBAGENT} (or ${AGY_TOOL}).` : '';
   const images = agyImagePathsDirective({ ...cliPromptImageNames(inputImages), initImageStrength });
-  return `Use your built-in ${AGY_TOOL} tool to generate exactly one image.
+  // `image-generator` saves into the conversation's artifacts directory (often
+  // as JPEG) and replies with the saved path, so the parent agent must copy the
+  // returned file as-is to `OUTPUT_NAME`; cliJobRunner sniffs magic bytes and
+  // converts non-PNG files to PNG via sharp.
+  return `Use your built-in ${AGY_SUBAGENT} subagent (via invoke_subagent with TypeName "${AGY_SUBAGENT}") — or your built-in ${AGY_TOOL} tool if available directly — to generate exactly one image.
 Image prompt: ${prompt.trim()}${avoid}${aspect}${images}
-Save the generated image as a PNG file at exactly this path in the working directory: ${OUTPUT_NAME}
-${noFabricationClause(AGY_TOOL)}
-Do not create any other files, do not modify any code or workspace content, and do not run unrelated tools. When the file is written, you are done.`;
+Save the generated image at exactly this path in the working directory: ${OUTPUT_NAME} (when using ${AGY_SUBAGENT}, wait for it to reply with the saved image path and copy that file as-is to ${OUTPUT_NAME} without converting or re-encoding it).
+${noFabricationClause(AGY_TOOL, { subagent: AGY_SUBAGENT })}
+Do not create any other files, do not modify any code or workspace content, and do not run unrelated tools. When ${OUTPUT_NAME} is written, you are done.`;
 }
 
 /**

@@ -770,6 +770,28 @@ describe('measured assessments wiring', () => {
     expect(res.status).toBe(409);
   });
 
+  // Only the model list travels: the profile is server-fixed so the gate's count is what runs.
+  it('POST /assessments/benchmark queues exactly the picked models on the sweep queue', async () => {
+    startSweep.mockResolvedValueOnce({ status: 'running', mode: 'benchmark', total: 2 });
+    const models = [{ backend: 'ollama', modelId: 'example-mlx' }, { backend: 'mtplx', modelId: 'example-mtp' }];
+    const res = await request(makeApp()).post('/api/local-llm/assessments/benchmark').send({ models, contextTokens: [131072] });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ mode: 'benchmark', total: 2 });
+    expect(startSweep).toHaveBeenCalledWith(expect.objectContaining({ models }));
+    expect(startSweep.mock.calls[0][0]).not.toHaveProperty('contextTokens');
+  });
+
+  it('POST /assessments/benchmark refuses one model, a duplicate pick, or a service refusal', async () => {
+    const one = [{ backend: 'ollama', modelId: 'example-mlx' }];
+    expect((await request(makeApp()).post('/api/local-llm/assessments/benchmark').send({ models: one })).status).toBe(400);
+    expect((await request(makeApp()).post('/api/local-llm/assessments/benchmark').send({ models: [...one, ...one] })).status).toBe(400);
+    expect(startSweep).not.toHaveBeenCalled();
+    startSweep.mockResolvedValueOnce({ status: 'idle', rejected: 'example-mtp is not installed on mtplx' });
+    const refused = await request(makeApp()).post('/api/local-llm/assessments/benchmark')
+      .send({ models: [...one, { backend: 'mtplx', modelId: 'example-mtp' }] });
+    expect(refused.status).toBe(409);
+  });
+
   it('forwards sweep progress and public queue snapshots to their socket events', async () => {
     startSweep.mockImplementation(async ({ onProgress, onChange }) => {
       onProgress({ scope: 'assessment-sweep', event: 'start', total: 2, completed: 0 });

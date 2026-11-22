@@ -93,8 +93,10 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
   const { text, model: effectiveModel } = await runPromptThroughProvider({
     provider: providerForCall, prompt, source: `brain-${promptStageName}`, model,
-    // Pin the admitted provider so runtime fallback cannot switch to one with tools.
-    ...(toolFree && { toolFree: true, allowFallback: false }),
+    // Pin the admitted provider so runtime fallback cannot switch to one with tools. The model is
+    // not part of that contract: a saved model the provider no longer lists is corrected on the
+    // SAME provider rather than failing every scheduled digest/review.
+    ...(toolFree && { toolFree: true, allowFallback: false, allowModelCorrection: true }),
   });
   return { content: text, model: effectiveModel || model, providerId: provider.id, prompt };
 }

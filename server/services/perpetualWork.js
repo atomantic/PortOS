@@ -793,6 +793,20 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
       if (cause != null) skipCauses[cause] = (skipCauses[cause] || 0) + 1;
     }
   }
+  // Match CLAIM_QUEUE_ORDER's two-pass walk: oldest-first atomic issues first,
+  // then oldest-first undecomposed epics. Carrying these candidates out lets
+  // non-swarm scheduled claims pre-pin and server-provision the top target
+  // instead of re-running Phase 1's 500-issue scan from scratch.
+  const isActionableEpic = (issue) => {
+    const labels = (Array.isArray(issue.labels) ? issue.labels : [])
+      .map((l) => (typeof l === 'string' ? l : l?.name) || '')
+      .map((s) => s.toLowerCase());
+    return isEpicIssue(issue.title, labels);
+  };
+  const orderedActionable = [
+    ...actionable.filter((i) => !isActionableEpic(i)),
+    ...actionable.filter((i) => isActionableEpic(i)),
+  ];
   return {
     actionable: actionable.length > 0,
     count: actionable.length,
@@ -802,6 +816,12 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     skipCauses,
     reason: actionable.length > 0 ? 'actionable-issues' : 'no-actionable-issues',
     sample: actionable.slice(0, 5).map((i) => i.number),
+    candidates: orderedActionable.slice(0, 5).map((i) => ({
+      number: i.number,
+      title: i.title || '',
+      epic: isActionableEpic(i),
+      author: i.authorLogin || null,
+    })),
     // The perpetual drain uses the complete candidate set to detect a
     // successful agent that exited without claiming anything. `sample` is
     // intentionally capped for UI payloads, so it cannot serve as that brake.

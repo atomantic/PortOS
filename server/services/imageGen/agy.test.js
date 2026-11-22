@@ -162,11 +162,14 @@ describe('agy image provider', () => {
     expect(args).toContain('--dangerously-skip-permissions');
     expect(args).toEqual(expect.arrayContaining(['--model', 'gemini-3-pro-image', '--print']));
     const prompt = args[args.indexOf('--print') + 1];
+    expect(prompt).toContain('image-generator');
+    expect(prompt).toContain('invoke_subagent');
     expect(prompt).toContain('generate_image');
     expect(prompt).toContain('exactly one image');
     expect(prompt).toContain('a fox beneath the stars');
     expect(prompt).toContain('Avoid: watermark');
     expect(prompt).toContain('working directory: output.png');
+    expect(prompt).toContain('copy that file as-is to output.png');
     expect(prompt).not.toContain(stagingPathFor(job.jobId));
     expect(prompt).toContain('do not modify any code or workspace content');
     await closeChild();
@@ -205,7 +208,7 @@ describe('agy image provider', () => {
     });
     const { args } = spawnCalls[0];
     const prompt = args[args.indexOf('--print') + 1];
-    expect(prompt).toContain('ImagePaths parameter, in this order: input-1.png, input-2.jpg, input-3.webp\n');
+    expect(prompt).toContain('as input images (ImagePaths), in this order: input-1.png, input-2.jpg, input-3.webp\n');
     expect(prompt).not.toContain(FAKE_IMAGES_DIR);
     expect(prompt).not.toContain('ref-a.png');
     expect(await Promise.all(['input-1.png', 'input-2.jpg', 'input-3.webp'].map(name =>
@@ -364,7 +367,7 @@ describe('agy image provider', () => {
 
   it('forbids fabricating the image by any other means', () => {
     const prompt = agy._internals.buildAgyPrompt({ prompt: 'a fox' });
-    expect(prompt).toContain('Only the generate_image tool may produce this image');
+    expect(prompt).toContain('Only the built-in image-generator subagent or generate_image tool may produce this image');
     expect(prompt).toContain('Reporting the failure is the correct outcome');
   });
 
@@ -377,7 +380,7 @@ describe('agy image provider', () => {
     });
     expect(prompt).not.toContain('832');
     expect(prompt).not.toContain('1216');
-    expect(prompt).toContain('Pass AspectRatio "2:3" to the tool.');
+    expect(prompt).toContain('Pass AspectRatio "2:3" to image-generator (or generate_image).');
   });
 
   // The tool's AspectRatio parameter defaults to '1:1', so a render that names
@@ -399,12 +402,12 @@ describe('agy image provider', () => {
       [1500, 1000, '3:2'],
       [1000, 1500, '2:3'],
     ])('directs the nearest supported ratio for %ix%i', (width, height, ratio) => {
-      expect(build(width, height)).toContain(`Pass AspectRatio "${ratio}" to the tool.`);
+      expect(build(width, height)).toContain(`Pass AspectRatio "${ratio}" to image-generator (or generate_image).`);
     });
 
     it('snaps an unsupported ratio to the closest supported one', () => {
       // 21:9 ultrawide has no exact match — 16:9 is nearest.
-      expect(build(2560, 1080)).toContain('Pass AspectRatio "16:9" to the tool.');
+      expect(build(2560, 1080)).toContain('Pass AspectRatio "16:9" to image-generator (or generate_image).');
     });
 
     it('omits the directive entirely when dimensions are absent', () => {

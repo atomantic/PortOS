@@ -5,11 +5,13 @@
  * going with nobody watching, and the page reads progress from a status endpoint plus
  * the `localLlm:progress` socket event.
  *
- * ## Two dimensions, one queue
+ * ## Three modes, one queue
  *
  *   - **Model sweep**: every model a scope covers, each under its own tuning.
  *   - **Tuning sweep**: one model across a grid of tunings
  *     (`lib/localModelTuning.js#tuningGridFor`), which `compareTunings` ranks.
+ *   - **Benchmark**: the user's picked models side by side, each at backend defaults under the
+ *     fixed `BENCHMARK_PROFILE` (repeated warm runs at one context).
  *
  * They share one queue (cancellation, progress, accelerator claim, one-at-a-time rule);
  * a second queue could run concurrently and make every number describe the contention.
@@ -18,8 +20,9 @@
  *
  * A sweep calls a provider once per queued measurement, so it is STRICTLY
  * user-triggered:
- *   - `startSweep()` is reachable only from `POST /api/local-llm/assessments/sweep`,
- *     behind a consent gate naming the measurement and generation counts.
+ *   - `startSweep()` is reachable only from `POST /api/local-llm/assessments/sweep` and
+ *     `POST /api/local-llm/assessments/benchmark`, behind a consent gate naming the
+ *     models and generation counts.
  *   - `getSweepStatus()` reads module state only; zero LLM calls.
  *
  * Never add a cron entry, boot hook, or auto-start that fires this without a click.
@@ -37,7 +40,7 @@
  * relaunching a daemon at boot to restore it is boot-time work this module refuses.
  */
 
-import { selectSweepTargets, SWEEP_SCOPES } from '../lib/localModelAssessment.js';
+import { selectBenchmarkTargets, selectSweepTargets, SWEEP_SCOPES } from '../lib/localModelAssessment.js';
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js';
 import { tuningGridFor } from '../lib/localModelTuning.js';
 import {
@@ -81,7 +84,8 @@ function snapshot() {
   return {
     status: sweep.status,
     // 'models' = every model the scope covers, each under one tuning.
-    // 'tunings' = ONE model across a grid of tunings. The page renders a
+    // 'tunings' = ONE model across a grid of tunings.
+    // 'benchmark' = the user's picked models, each under `BENCHMARK_PROFILE`. The page renders a
     // different sentence for each, so it cannot be inferred from the counts.
     mode: sweep.mode,
     scope: sweep.scope,
@@ -204,7 +208,7 @@ export function __resetSweep() {
 // It mutates the `run` it was handed, NOT the module-level `sweep`: a cancelled
 // queue is replaceable the moment it is cancelled, and a loop still winding down
 // its last model must not write its results into the sweep that succeeded it.
-async function runSweepLoop(run, targets, contextTokens, emit) {
+async function runSweepLoop(run, targets, contextTokens, emit, profile = null) {
   // A tuning sweep asks each variant to be the COMPLETE tuning, while a model
   // sweep applies each model's recorded tuning. In both cases the launch line
   // is made explicit before the measurement, and `beginSweep` captured what
@@ -248,6 +252,7 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
       backend: target.backend,
       modelId: target.modelId,
       contextTokens,
+      profile,
       tuning: target.tuning,
       resetTuning,
       signal: run.controller.signal,
@@ -272,6 +277,9 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
       error: result?.error || null,
       meanTokensPerSecond: Number.isFinite(result?.performance?.meanTokensPerSecond) ? result.performance.meanTokensPerSecond : null,
       meanCharsPerSecond: Number.isFinite(result?.performance?.meanCharsPerSecond) ? result.performance.meanCharsPerSecond : null,
+      meanPromptTokensPerSecond: Number.isFinite(result?.performance?.meanPromptTokensPerSecond) ? result.performance.meanPromptTokensPerSecond : null,
+      meanTtftMs: Number.isFinite(result?.performance?.meanTtftMs) ? result.performance.meanTtftMs : null,
+      residentGb: Number.isFinite(result?.residentGb) ? result.residentGb : null,
       // Travels WITH the rate it qualifies. Dropping it here would render a
       // frame-counted estimate as a tokenizer measurement in the results list.
       tokensEstimated: typeof result?.performance?.tokensEstimated === 'boolean' ? result.performance.tokensEstimated : null,
@@ -311,13 +319,15 @@ async function runSweepLoop(run, targets, contextTokens, emit) {
  * @param {string} [options.modelId]
  * @param {boolean} [options.tunings] sweep the named model's tuning grid instead
  *   of measuring it under the tuning it already carries
+ * @param {Array<{backend:string, modelId:string}>|null} [options.models] a side-by-side
+ *   benchmark of exactly these models, each run under `BENCHMARK_PROFILE` at backend defaults
  * @param {number[]} [options.contextTokens] passed through to each measurement
  * @param {(frame: object) => void} [options.onProgress] forwarded to the socket
  * @param {(state: object) => void} [options.onChange] public queue snapshots on state changes
  * @returns {Promise<object>} the initial snapshot, or `{ rejected }` when a
  *   sweep is already running or the request covers nothing
  */
-export async function startSweep({ scope = 'unmeasured', backend, modelId, tunings = false, contextTokens, onProgress, onChange } = {}) {
+export async function startSweep({ scope = 'unmeasured', backend, modelId, tunings = false, models = null, contextTokens, onProgress, onChange } = {}) {
   if (sweep?.status === 'running' || startingSweep) return { ...snapshot(), rejected: 'a sweep is already running' };
   // A CANCELLED sweep is not finished with the machine: its last measurement is
   // still aborting and it may have a launch configuration to put back. Starting
@@ -334,7 +344,7 @@ export async function startSweep({ scope = 'unmeasured', backend, modelId, tunin
   let handedOff = false;
   try {
     permit = maintenance.admit('heavy-job', 'local-model-assessment-sweep');
-    return await permit.run(() => beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange,
+    return await permit.run(() => beginSweep({ scope, backend, modelId, tunings, models, contextTokens, onProgress, onChange,
       permit, handOff: () => { handedOff = true; } }));
   } finally {
     startingSweep = false;
@@ -342,9 +352,10 @@ export async function startSweep({ scope = 'unmeasured', backend, modelId, tunin
   }
 }
 
-async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onProgress, onChange, permit, handOff }) {
+async function beginSweep({ scope, backend, modelId, tunings, models, contextTokens, onProgress, onChange, permit, handOff }) {
   const resolvedScope = SWEEP_SCOPES.includes(scope) ? scope : 'unmeasured';
   const named = backend && modelId ? { backend, modelId } : null;
+  const benchmark = Array.isArray(models);
 
   // A tuning sweep varies the configuration of ONE model, so without a model
   // there is nothing to hold constant and the request is meaningless.
@@ -368,7 +379,7 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
   if (grid && grid.length < 2) {
     return { ...snapshot(), rejected: `${named.backend} has no tuning knobs PortOS can sweep` };
   }
-  const mode = grid ? 'tunings' : 'models';
+  const mode = benchmark ? 'benchmark' : grid ? 'tunings' : 'models';
 
   // Read the report ONCE, here, rather than per model: it lists installed models
   // across every runtime and annotates staleness, which is exactly the input the
@@ -377,7 +388,13 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
   const uninstalledKeys = new Set(report.uninstalled.map((u) => `${u.backend}:${u.modelId}`));
   const installed = report.assessments.filter((a) => !uninstalledKeys.has(`${a?.backend}:${a?.modelId}`));
 
-  const targets = selectSweepTargets({
+  // A benchmark refuses the WHOLE request when one pick cannot run: a side-by-side table with a
+  // hole where the user asked for a model is not the comparison they agreed to.
+  const picked = benchmark ? selectBenchmarkTargets({ assessments: installed, unassessed: report.unassessed, models }) : null;
+  if (picked?.missing.length) {
+    return { ...snapshot(), rejected: picked.missing.map((m) => `${m.modelId} ${m.reason}`).join('; ') };
+  }
+  const targets = picked ? picked.targets : selectSweepTargets({
     // Records for models that are no longer installed cannot be re-measured, so
     // they never enter the queue.
     assessments: installed,
@@ -386,6 +403,7 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     only: named,
     tunings: grid,
   });
+  if (picked && targets.length < 2) return { ...snapshot(), rejected: 'a side-by-side benchmark needs at least two different models' };
 
   // An empty list for a NAMED model means it is not installed — the selector
   // found neither a record nor a listing for it. Saying so beats queuing one
@@ -444,7 +462,7 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
     mode,
     // A tuning sweep of ONE named model did not consult the scope, so reporting
     // one would tell the page it measured a set it never looked at.
-    scope: named ? null : resolvedScope,
+    scope: named || benchmark ? null : resolvedScope,
     target: named,
     startedAt: nowIso(),
     finishedAt: null,
@@ -475,13 +493,14 @@ async function beginSweep({ scope, backend, modelId, tunings, contextTokens, onP
   const plural = targets.length === 1 ? '' : 's';
   const what = grid
     ? `${named.modelId} across ${targets.length} tuning${plural}`
-    : `${targets.length} model${plural}`;
-  console.log(`📏 Local LLM: assessment sweep started — ${targets.length} measurement${plural} (${named ? named.modelId : resolvedScope})`);
+    : `${targets.length} model${plural}${benchmark ? ' side by side' : ''}`;
+  console.log(`📏 Local LLM: assessment sweep started — ${targets.length} measurement${plural} (${named ? named.modelId : benchmark ? 'benchmark' : resolvedScope})`);
   emit({ scope: 'assessment-sweep', event: 'start', total: targets.length, completed: 0, message: `Measuring ${what}…` });
 
   // Detached on purpose: the caller is an HTTP handler that must return now.
   handOff();
-  runSweepLoop(run, targets, contextTokens, emit)
+  // A benchmark's contexts come from `BENCHMARK_PROFILE` inside `runAssessment`.
+  runSweepLoop(run, targets, contextTokens, emit, benchmark ? 'benchmark' : null)
     .catch((err) => {
       run.error = err?.message || 'sweep failed';
       console.error(`❌ Local LLM: assessment sweep failed: ${run.error}`);

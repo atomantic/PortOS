@@ -51,6 +51,36 @@ beforeEach(() => {
 });
 afterEach(() => __resetSweep());
 
+describe('startSweep — side-by-side benchmark', () => {
+  it('runs each picked model once, in order, under the benchmark profile at backend defaults', async () => {
+    getAssessmentReport.mockResolvedValue(report({
+      assessments: [{ backend: 'ollama', modelId: 'example-mlx', tuningKey: 'num_ctx=8192', tuning: { num_ctx: 8192 } }],
+      unassessed: [{ backend: 'mtplx', modelId: 'example-mtp' }, { backend: 'ollama', modelId: 'not-picked' }],
+    }));
+    runAssessment.mockResolvedValue({ verdict: 'fits', residentGb: 9.5, performance: { meanTokensPerSecond: 60, meanPromptTokensPerSecond: 900, meanTtftMs: 410 } });
+    const status = await startSweep({ models: [{ backend: 'mtplx', modelId: 'example-mtp' }, { backend: 'ollama', modelId: 'example-mlx' }] });
+    expect(status).toMatchObject({ status: 'running', mode: 'benchmark', scope: null, total: 2 });
+    await vi.waitFor(() => expect(getSweepStatus().settled).toBe(true));
+    expect(runAssessment.mock.calls.map(([options]) => [options.modelId, options.profile, options.tuning])).toEqual([
+      ['example-mtp', 'benchmark', {}],
+      ['example-mlx', 'benchmark', {}],
+    ]);
+    expect(getSweepStatus().results[1]).toMatchObject({ meanTokensPerSecond: 60, meanPromptTokensPerSecond: 900, meanTtftMs: 410, residentGb: 9.5 });
+  });
+
+  it('refuses the whole benchmark when a pick is not installed, an embedding model, or the only distinct model', async () => {
+    getAssessmentReport.mockResolvedValue(report({ unassessed: [{ backend: 'ollama', modelId: 'example-mlx' }, { backend: 'ollama', modelId: 'nomic-embed-text:latest' }] }));
+    const missing = await startSweep({ models: [{ backend: 'ollama', modelId: 'example-mlx' }, { backend: 'mtplx', modelId: 'gone' }] });
+    expect(missing.rejected).toMatch(/gone is not installed on mtplx/);
+    const embed = await startSweep({ models: [{ backend: 'ollama', modelId: 'example-mlx' }, { backend: 'ollama', modelId: 'nomic-embed-text:latest' }] });
+    expect(embed.rejected).toMatch(/embedding model/);
+    const single = await startSweep({ models: [{ backend: 'ollama', modelId: 'example-mlx' }, { backend: 'ollama', modelId: 'example-mlx' }] });
+    expect(single.rejected).toMatch(/at least two/);
+    expect(runAssessment).not.toHaveBeenCalled();
+    expect(getSweepStatus().status).toBe('idle');
+  });
+});
+
 describe('startSweep', () => {
   it('keeps update admission closed between measurements and through restoration', async () => {
     getAssessmentReport.mockResolvedValue(report({ unassessed: [

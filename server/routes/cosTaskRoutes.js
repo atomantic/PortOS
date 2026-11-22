@@ -398,9 +398,27 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       ...(forgeTarget ? { preverified: true, nonEpic: !titleMarksEpic(issueContext?.title) } : {})
     });
     if (claim.target && ['github', 'gitlab'].includes(claim.tracker)) {
-      const { epic } = await prepareAppIssueClaim(appObj, claim.target, claim.tracker);
-      if (epic && !titleMarksEpic(issueContext?.title)) {
-        claim = await buildClaimWorkTask(appObj, { ...claimOptions, preverified: true });
+      const preflight = await prepareAppIssueClaim(appObj, claim.target, claim.tracker, { includePreflight: true });
+      const epic = preflight?.epic === true;
+      const needsRebuild = Boolean(
+        (epic && !titleMarksEpic(issueContext?.title))
+        || preflight?.commentsClear
+        || preflight?.linkedWorkClear
+        || preflight?.forgeContext
+        || preflight?.linkedItems?.length
+        || (!issueContext && preflight?.issueContext)
+      );
+      if (needsRebuild) {
+        claim = await buildClaimWorkTask(appObj, {
+          ...claimOptions,
+          issueContext: issueContext || preflight?.issueContext,
+          preverified: true,
+          nonEpic: !epic,
+          commentsClear: preflight?.commentsClear === true,
+          linkedWorkClear: preflight?.linkedWorkClear === true,
+          forgeContext: preflight?.forgeContext || null,
+          linkedItems: preflight?.linkedItems || null,
+        });
       }
     }
     const scope = claim.target
