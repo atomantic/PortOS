@@ -50,6 +50,7 @@ export const SMOKE_BOOT_DISABLED_STEPS = Object.freeze({
     // Interrupted-run reconcile needs the real database. A hermetic smoke names
     // a database that does not exist; skipping it keeps that miss off stderr.
     'initLoraTraining',
+    'recoverStoryboardRuns',
     'initSharing',
     'recoverCreativeDirectorProjects'
   ]),
@@ -384,6 +385,7 @@ export const runPostRouteSequence = ({
   initMediaJobQueue,
   initLoraTraining,
   initMediaJobDependentHooks,
+  recoverStoryboardRuns,
   resumeMediaJobCompletions,
   initSharing,
   recoverCreativeDirectorProjects,
@@ -417,6 +419,9 @@ export const runPostRouteSequence = ({
     .then(whileRunning(timed('mediaQueue', () => initMediaJobQueue({ deferCompletionRecovery: true }))))
     .then(whileRunning(timed('lora', () => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))))
     .then(whileRunning(initMediaJobDependentHooks))
+    .then(whileRunning(() => {
+      bestEffort(recoverStoryboardRuns(), logFailure('Storyboard run recovery failed'));
+    }))
     .then(whileRunning(() => {
       // Recovery may wait behind a backup cut; arm it without blocking boot.
       resumeMediaJobCompletions();
