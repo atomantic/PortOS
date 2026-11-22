@@ -2,7 +2,7 @@
  * Music Video page suite for the Shots step container (`useProduceStageWiring`): shot media and takes, the video renderer, shot edits, revisions, composition and the Blender film.
  * Drives the real page through the shared scaffold in `test/musicVideoPageMocks.jsx`.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
@@ -36,6 +36,8 @@ import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { problem, withProblems } from '../../../test/musicVideoProblems.js';
 import { finalApprovalPatch } from '../../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
+import { warmSceneCard } from '../sceneCardTestWarmup.jsx';
+beforeAll(warmSceneCard, 30000);
 
 installMusicVideoPageHooks();
 

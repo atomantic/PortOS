@@ -17,7 +17,7 @@
  * content off-screen.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Download, BookOpenText, LayoutGrid, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -36,17 +36,12 @@ import { useScrollLock } from '../hooks/useScrollLock';
 import LoomBoard from '../components/fableloom/LoomBoard';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomEpisodeOutline from '../components/fableloom/LoomEpisodeOutline';
-import LoomEpisodeOutlinePlanner from '../components/fableloom/LoomEpisodeOutlinePlanner';
 import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
-import LoomImageComposer from '../components/fableloom/LoomImageComposer';
-import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
-import LoomExportModal from '../components/fableloom/LoomExportModal';
-import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
-import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import LoomAiRunStatus from '../components/fableloom/LoomAiRunStatus';
+import { lazyWithReload } from '../utils/lazyWithReload.js';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
   buildFableLoomVideoRequest,
@@ -80,6 +75,15 @@ import { getUniverse } from '../services/apiUniverseBuilder.js';
 const headerActionBase = 'flex min-h-[44px] items-center gap-1 rounded border px-2.5 py-2 text-xs pointer-fine:sm:min-h-[36px] sm:py-1.5';
 const headerActionClass = `${headerActionBase} border-port-border hover:border-port-accent`;
 const headerPlayClass = `${headerActionBase} border-port-accent bg-port-accent text-white`;
+
+// Workspaces, drawers and modals that open on demand load their own chunk, so the story route
+// ships only the graph/board/outline views it lands on.
+const LoomSeriesPlan = lazyWithReload(() => import('../components/fableloom/LoomSeriesPlan'));
+const LoomEpisodeOutlinePlanner = lazyWithReload(() => import('../components/fableloom/LoomEpisodeOutlinePlanner'));
+const LoomImageComposer = lazyWithReload(() => import('../components/fableloom/LoomImageComposer'));
+const LoomPlayPanel = lazyWithReload(() => import('../components/fableloom/LoomPlayPanel'));
+const LoomExportModal = lazyWithReload(() => import('../components/fableloom/LoomExportModal'));
+const LoomSettingsDrawer = lazyWithReload(() => import('../components/fableloom/LoomSettingsDrawer'));
 
 export default function FableLoomStory({ view = 'graph' }) {
   const { loomId, episodeId, nodeId } = useParams();
@@ -634,7 +638,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       </header>
 
       {seriesPlanOpen ? (
-        <LoomSeriesPlan loom={loom} universe={linkedUniverse} onLoomUpdate={setLoom} />
+        <Suspense fallback={<PageSkeleton label="Loading series plan" sidebar={false} />}><LoomSeriesPlan loom={loom} universe={linkedUniverse} onLoomUpdate={setLoom} /></Suspense>
       ) : !episode ? (
         <div className="flex-1 grid place-items-center p-8 text-center">
           <div>
@@ -804,7 +808,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       )}
 
       {imageComposer && episode && imageComposer.loomId === loom.id && imageComposer.episodeId === episode.id && (
-        <LoomImageComposer
+        <Suspense fallback={null}><LoomImageComposer
           key={`${loom.id}:${episode.id}:${imageComposer.node.id}`}
           loom={loom} episode={episode}
           node={{ ...(episode.nodes.find(item => item.id === imageComposer.node.id) || imageComposer.node), imagePrompt: imageComposer.node.imagePrompt }}
@@ -812,12 +816,12 @@ export default function FableLoomStory({ view = 'graph' }) {
           onRender={submitSceneImage} onClose={() => setImageComposer(null)}
           disabled={mediaWorkflowBlocked || styleContextLoading || styleContextUnavailable}
           disabledReason={mediaGenerationDisabledReason}
-        />
+        /></Suspense>
       )}
 
-      <LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} />
+      {exportOpen && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
 
-      <LoomSettingsDrawer
+      {settingsOpen && <Suspense fallback={null}><LoomSettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         loom={loom}
@@ -825,7 +829,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         onLoomUpdate={setLoom}
         onRewritten={handleRewritten}
         episodeId={seriesPlanOpen ? null : episodeId}
-      />
+      /></Suspense>}
 
       {episode && (
         <Modal
@@ -839,7 +843,7 @@ export default function FableLoomStory({ view = 'graph' }) {
           panelClassName="h-[100dvh] w-full overflow-hidden bg-black"
           ariaLabel={`${loom.name} player`}
         >
-          <LoomPlayPanel loom={loom} episode={episode} onClose={() => setPlayOpen(false)} />
+          <Suspense fallback={null}><LoomPlayPanel loom={loom} episode={episode} onClose={() => setPlayOpen(false)} /></Suspense>
         </Modal>
       )}
 
@@ -953,7 +957,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
           <p className="text-xs text-port-text-muted">
             Start with the beat outline below, review the whole arc, then expand it into one-camera-cut teleplay scenes.
           </p>
-          <LoomEpisodeOutlinePlanner
+          <Suspense fallback={null}><LoomEpisodeOutlinePlanner
             open={open}
             loom={loom}
             episode={episode}
@@ -962,7 +966,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
             onLoomUpdate={onLoomUpdate}
             onExpand={requestWeave}
             expanding={weaving}
-          />
+          /></Suspense>
           {expansionConfirm.isConfirming(episode.id) && (
             <ConfirmButtonPair
               prompt={`Replace ${episode.nodes.length} existing scene${episode.nodes.length === 1 ? '' : 's'} and remove their rendered stills and video clips?`}

@@ -205,6 +205,8 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
       const renderer = page.getByRole('region', { name: 'Render' }).getByLabel('Render on');
       await page.locator('#mv-scene-layout-frame-render').waitFor({ state: 'hidden' });
       await renderer.waitFor();
+      // The settings groups load as their own chunk beside the card.
+      await page.locator('[data-testid="shot-group-direction"]').waitFor();
       for (const value of ['', 'grok', 'local']) {
         await renderer.selectOption(value);
         if (value === 'local') {

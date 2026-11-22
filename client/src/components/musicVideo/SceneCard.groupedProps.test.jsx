@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeAll } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import SceneCard from './SceneCard.jsx';
 import { normalizeSceneCardProps } from './sceneCardProps.js';
+import { warmSceneCard } from './sceneCardTestWarmup.jsx';
+beforeAll(warmSceneCard, 30000);
 
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({
   ...await importOriginal(),
