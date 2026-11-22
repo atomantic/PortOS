@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { basename, dirname } from 'path';
+import { UUID_RE } from '../lib/fileCore.js';
 import { pinPlatform } from '../lib/testHelper.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -14,6 +15,9 @@ import { computeGoalUrgency } from './identity/goals.js';
 // supplies the rename/unlink/mkdir the real atomicWrite needs so the temp→final
 // move lands in the same store the reads come from.
 afterAll(cleanupTempDataRoots);
+afterEach(() => vi.useRealTimers());
+
+const TEST_TIMESTAMP = '2026-01-15T12:00:00.000Z';
 
 // Every integration block below installs BOTH halves of the isolation: the
 // in-memory fs above, and a redirected data root. Nothing here reaches a disk
@@ -106,10 +110,10 @@ describe('extractSleepMarkers', () => {
 
     const result = extractSleepMarkers(saved);
 
-    expect(Object.keys(result)).toHaveLength(2);
-    expect(result.clockGene).toBeDefined();
-    expect(result.cry1).toBeDefined();
-    expect(result.per2).toBeUndefined();
+    expect(result).toEqual({
+      clockGene: { rsid: 'rs1801260', genotype: 'AG', status: 'typical', signal: 0 },
+      cry1: { rsid: 'rs2287161', genotype: 'CT', status: 'concern', signal: -1 }
+    });
   });
 
   it('should return empty object for empty savedMarkers', () => {
@@ -416,9 +420,12 @@ describe('extractLongevityMarkers', () => {
     ]);
 
     const result = extractLongevityMarkers(saved);
-    expect(Object.keys(result)).toHaveLength(1);
-    expect(result.foxo3a).toBeDefined();
-    expect(result.igf1r).toBeUndefined();
+    expect(result).toEqual({
+      foxo3a: {
+        rsid: 'rs2802292', gene: 'FOXO3A', label: 'Longevity / FOXO3A',
+        genotype: 'TG', status: 'beneficial', weight: 0.25, signal: 1
+      }
+    });
   });
 
   it('should return empty for no longevity markers', () => {
@@ -660,15 +667,17 @@ describe('Integration: deriveChronotype', () => {
   });
 
   it('should derive chronotype from genome markers', async () => {
+    vi.setSystemTime(new Date(TEST_TIMESTAMP));
     const result = await deriveChronotype();
 
-    expect(result.type).toBeDefined();
-    expect(['morning', 'intermediate', 'evening']).toContain(result.type);
-    expect(result.confidence).toBeGreaterThan(0);
-    expect(result.derivedAt).toBeDefined();
-    expect(result.recommendations).toBeDefined();
-    expect(result.geneticMarkers.clockGene).toBeDefined();
-    expect(result.caffeineMarkers.cyp1a2).toBeDefined();
+    expect(result).toMatchObject({
+      type: 'morning',
+      confidence: 0.5,
+      derivedAt: TEST_TIMESTAMP,
+      recommendations: { wakeTime: '06:00', sleepTime: '22:00', caffeineCutoff: '12:00', lastMealCutoff: '19:00' },
+      geneticMarkers: { clockGene: { rsid: 'rs1801260', genotype: 'TT', status: 'beneficial', signal: -1 } },
+      caffeineMarkers: { cyp1a2: { rsid: 'rs762551', genotype: 'AC', status: 'concern' } }
+    });
   });
 
   it('should return slow-metabolizer caffeine cutoff for concern CYP1A2', async () => {
@@ -738,11 +747,13 @@ describe('Integration: getIdentityStatus', () => {
   it('should return all five sections', async () => {
     const result = await getIdentityStatus();
 
-    expect(result.sections.genome).toBeDefined();
-    expect(result.sections.chronotype).toBeDefined();
-    expect(result.sections.longevity).toBeDefined();
-    expect(result.sections.aesthetics).toBeDefined();
-    expect(result.sections.goals).toBeDefined();
+    expect(result.sections).toEqual({
+      genome: { status: 'active', label: 'Genome', markerCount: 3, updatedAt: '2025-01-01T00:00:00.000Z' },
+      chronotype: { status: 'pending', label: 'Chronotype', updatedAt: null },
+      longevity: { status: 'pending', label: 'Longevity', updatedAt: null },
+      aesthetics: { status: 'unavailable', label: 'Aesthetics', updatedAt: null },
+      goals: { status: 'unavailable', label: 'Goals', updatedAt: null }
+    });
   });
 
   it('should show genome as active when markers exist', async () => {
@@ -839,13 +850,14 @@ describe('Integration: deriveLongevity', () => {
   });
 
   it('should derive longevity from genome markers', async () => {
+    vi.setSystemTime(new Date(TEST_TIMESTAMP));
     const result = await deriveLongevity();
 
-    expect(result.derivedAt).toBeDefined();
+    expect(result.derivedAt).toBe(TEST_TIMESTAMP);
     expect(Object.keys(result.longevityMarkers)).toHaveLength(5);
     expect(Object.keys(result.cardiovascularMarkers)).toHaveLength(6);
     expect(result.lifeExpectancy.baseline).toBe(78.5);
-    expect(result.lifeExpectancy.adjusted).toBeDefined();
+    expect(result.lifeExpectancy.adjusted).toBe(78.4);
     expect(result.confidence).toBeGreaterThan(0.9); // 11/11 markers
   });
 
@@ -906,15 +918,17 @@ describe('Integration: Goal CRUD', () => {
   });
 
   it('should create a goal with defaults', async () => {
+    vi.setSystemTime(new Date(TEST_TIMESTAMP));
     const goal = await createGoal({ title: 'Learn piano' });
 
-    expect(goal.id).toBeDefined();
+    expect(goal.id).toMatch(/^goal-/);
+    expect(goal.id.slice('goal-'.length)).toMatch(UUID_RE);
     expect(goal.title).toBe('Learn piano');
     expect(goal.horizon).toBe('5-year');
     expect(goal.category).toBe('mastery');
     expect(goal.status).toBe('active');
     expect(goal.milestones).toEqual([]);
-    expect(goal.createdAt).toBeDefined();
+    expect(goal.createdAt).toBe(TEST_TIMESTAMP);
   });
 
   it('should create a goal with custom fields', async () => {
@@ -969,10 +983,11 @@ describe('Integration: Goal CRUD', () => {
   it.each(['linux', 'win32'])('should set birth date and re-derive longevity (%s)', async (platform) => {
     const restorePlatform = pinPlatform(platform);
     try {
+      vi.setSystemTime(new Date(TEST_TIMESTAMP));
       const goals = await setBirthDate('1985-03-20');
 
       expect(goals.birthDate).toBe('1985-03-20');
-      expect(goals.updatedAt).toBeDefined();
+      expect(goals.updatedAt).toBe(TEST_TIMESTAMP);
     } finally {
       restorePlatform();
     }
@@ -985,7 +1000,8 @@ describe('Integration: Goal CRUD', () => {
       targetDate: '2026-06-01'
     });
 
-    expect(milestone.id).toBeDefined();
+    expect(milestone.id).toMatch(/^ms-/);
+    expect(milestone.id.slice('ms-'.length)).toMatch(UUID_RE);
     expect(milestone.title).toBe('First milestone');
     expect(milestone.targetDate).toBe('2026-06-01');
     expect(milestone.completedAt).toBeNull();
@@ -999,11 +1015,10 @@ describe('Integration: Goal CRUD', () => {
   it('should complete a milestone', async () => {
     const goal = await createGoal({ title: 'With milestones' });
     const milestone = await addMilestone(goal.id, { title: 'Complete me' });
+    vi.setSystemTime(new Date(TEST_TIMESTAMP));
     const completed = await completeMilestone(goal.id, milestone.id);
 
-    expect(completed.completedAt).not.toBeNull();
-    expect(typeof completed.completedAt).toBe('string');
-    expect(Number.isNaN(Date.parse(completed.completedAt))).toBe(false);
+    expect(completed).toMatchObject({ id: milestone.id, completedAt: TEST_TIMESTAMP });
   });
 
   it('should return null for completing non-existent milestone', async () => {
@@ -1160,8 +1175,8 @@ describe('Integration: Progress Log', () => {
     const goal = await createGoal({ title: 'Meditate' });
     const entry = await addProgressEntry(goal.id, { date: '2025-06-01', note: '10 min session', durationMinutes: 10 });
 
-    expect(entry).toBeDefined();
     expect(entry.id).toMatch(/^prog-/);
+    expect(entry.id.slice('prog-'.length)).toMatch(UUID_RE);
     expect(entry.note).toBe('10 min session');
     expect(entry.durationMinutes).toBe(10);
     expect(entry.date).toBe('2025-06-01');
@@ -1497,8 +1512,11 @@ describe('Integration: organizeGoals', () => {
 
     const result = await organizeGoals();
 
-    expect(result.apexGoal).toBeDefined();
-    expect(result.apexGoal.suggestedTitle).toBe('Live fully');
+    expect(result.apexGoal).toEqual({
+      existingId: null,
+      suggestedTitle: 'Live fully',
+      suggestedDescription: 'The ultimate purpose'
+    });
     expect(result.organization).toHaveLength(2);
     expect(result.organization[0].goalType).toBe('sub-apex');
     expect(result.organization[1].suggestedParentId).toBe(goal1.id);

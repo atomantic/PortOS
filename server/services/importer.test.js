@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, unlinkSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { UUID_RE } from '../lib/fileCore.js';
 import { mockNoPeerSync, mockNoPeers } from '../lib/mockPathsDataRoot.js';
 
 // Create the tempRoot at top-level so PATHS.data resolves before any
@@ -331,7 +332,7 @@ describe('analyzeImport', () => {
 
     expect(result.isExistingUniverse).toBe(false);
     expect(result.isExistingSeries).toBe(false);
-    expect(result.universe.id).toBeDefined();
+    expect(result.universe.id).toMatch(UUID_RE);
     expect(result.series.id).toMatch(/^ser-/);
     expect(result.series.universeId).toBe(result.universe.id);
     // New shells are created as import drafts (issue #727): `ephemeral` keeps
@@ -374,19 +375,15 @@ describe('analyzeImport', () => {
 
   it('rejects oversized source with ERR_VALIDATION before calling the LLM', async () => {
     wireDefaultLLMResponses();
-    let caught;
-    try {
-      await importerSvc.analyzeImport({
-        universeName: 'U',
-        seriesName: 'S',
-        contentType: 'novel',
-        source: 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1),
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    await expect(importerSvc.analyzeImport({
+      universeName: 'U',
+      seriesName: 'S',
+      contentType: 'novel',
+      source: 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1),
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringContaining('-char ceiling'),
+    });
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
   });
 
@@ -457,12 +454,14 @@ describe('analyzeImport', () => {
       source: 'A new story arrives.',
     });
 
-    // Lookup by stage name rather than calls[0] — analyzeImport fires
-    // canon + arc via Promise.all and any future scheduling change could
-    // swap the order without breaking the contract.
-    const canonCall = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'importer-canon-extract');
-    expect(canonCall).toBeDefined();
-    expect(canonCall[1].existingCanonBlock).toContain('Aria Existing');
+    expect(mockRunStagedLLM).toHaveBeenCalledWith(
+      'importer-canon-extract',
+      expect.objectContaining({
+        source: 'A new story arrives.',
+        existingCanonBlock: expect.stringContaining('Aria Existing'),
+      }),
+      expect.objectContaining({ returnsJson: true }),
+    );
   });
 
   it('emits ordered stage-progress frames with a stable runId', async () => {
@@ -483,12 +482,17 @@ describe('analyzeImport', () => {
     }
 
     const start = frames.find((f) => f.type === 'start');
-    expect(start).toBeDefined();
-    expect(start.stages.map((s) => s.id)).toEqual(['canon', 'arc', 'issues']);
+    expect(start).toMatchObject({
+      runId: expect.stringMatching(UUID_RE),
+      stages: [
+        { id: 'canon', label: 'Extracting canon (characters, places, objects)' },
+        { id: 'arc', label: 'Extracting story arc & seasons' },
+        { id: 'issues', label: 'Proposing issue split' },
+      ],
+    });
 
     // Every frame shares the start frame's runId.
     const runId = start.runId;
-    expect(runId).toBeTruthy();
     expect(frames.every((f) => f.runId === runId)).toBe(true);
 
     // Each stage reaches both running and done.
@@ -570,10 +574,12 @@ describe('analyzeImport', () => {
     expect(result.arcPreview.shape).toBe('man-in-hole');
     // Universe + series are actually PERSISTED (not just in-memory shells) so
     // the client has stable ids to retry/commit against — re-read from disk.
-    expect(result.universe.id).toBeDefined();
+    expect(result.universe.id).toMatch(UUID_RE);
     expect(result.series.id).toMatch(/^ser-/);
-    expect(await universeSvc.getUniverse(result.universe.id)).toBeTruthy();
-    expect(await seriesSvc.getSeries(result.series.id)).toBeTruthy();
+    expect(await universeSvc.getUniverse(result.universe.id)).toMatchObject({ id: result.universe.id, name: 'Resilient U' });
+    expect(await seriesSvc.getSeries(result.series.id)).toMatchObject({
+      id: result.series.id, name: 'Resilient S', universeId: result.universe.id,
+    });
     expect(result.runIds.issues).toBeNull();
   });
 
@@ -604,19 +610,15 @@ describe('analyzeImport', () => {
     await seriesSvc.updateSeries(seeded.id, { locked: { arc: true } });
 
     wireDefaultLLMResponses();
-    let caught;
-    try {
-      await importerSvc.analyzeImport({
-        universeName: 'Locked U',
-        seriesName: 'Locked S',
-        contentType: 'short-story',
-        source: 'anything',
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_LOCKED);
+    await expect(importerSvc.analyzeImport({
+      universeName: 'Locked U',
+      seriesName: 'Locked S',
+      contentType: 'short-story',
+      source: 'anything',
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_LOCKED,
+      message: expect.stringContaining('Series "Locked S" has a locked arc'),
+    });
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
   });
 });
@@ -652,9 +654,11 @@ describe('retryIssueSplit', () => {
     });
     expect(out.method).toBe('llm');
     expect(out.issueProposals).toHaveLength(1);
-    const call = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'importer-issue-proposal');
-    expect(call).toBeDefined();
-    expect(call[2]).toMatchObject({ timeoutOverride: importerSvc.ANALYZE_STAGE_TIMEOUT_MS });
+    expect(mockRunStagedLLM).toHaveBeenCalledWith(
+      'importer-issue-proposal',
+      expect.objectContaining({ contentType: 'novel', source: 'a novel body', arcSummary: 'the arc summary' }),
+      expect.objectContaining({ timeoutOverride: importerSvc.ANALYZE_STAGE_TIMEOUT_MS }),
+    );
   });
 
   it('rejects an oversized source before calling the LLM', async () => {
@@ -780,27 +784,19 @@ describe('classifyImportContent', () => {
   });
 
   it('rejects missing source with ERR_VALIDATION before calling the LLM', async () => {
-    let caught;
-    try {
-      await importerSvc.classifyImportContent({ source: '' });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    await expect(importerSvc.classifyImportContent({ source: '' })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: 'source is required',
+    });
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
   });
 
   it('rejects oversized source with ERR_VALIDATION before calling the LLM', async () => {
     const oversized = 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1);
-    let caught;
-    try {
-      await importerSvc.classifyImportContent({ source: oversized });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    await expect(importerSvc.classifyImportContent({ source: oversized })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringContaining('-char ceiling'),
+    });
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
   });
 
@@ -865,9 +861,11 @@ describe('reformatSeededExcerpts', () => {
       [{ title: 'P', arcPosition: 1, proseExcerpt: 'PAGE 1\nPANEL 1\nGiant descends.' }],
       { contentType: 'comic-script' },
     );
-    const call = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'manuscript-reformat');
-    expect(call).toBeDefined();
-    expect(call[1].format).toBe('Comic script');
+    expect(mockRunStagedLLM).toHaveBeenCalledWith(
+      'manuscript-reformat',
+      expect.objectContaining({ format: 'Comic script' }),
+      expect.anything(),
+    );
   });
 
   it('falls back to the verbatim excerpt when the reformat fails (best-effort, never throws)', async () => {
@@ -948,9 +946,13 @@ describe('commitImport', () => {
     });
 
     // Universe canon was merged.
-    expect(result.universe.characters.find((c) => c.name === 'Aria')).toBeDefined();
-    expect(result.universe.places.find((s) => s.name === 'The Foundry')).toBeDefined();
-    expect(result.universe.objects.find((o) => o.name === 'The Locket')).toBeDefined();
+    expect(result.universe.characters.find((c) => c.name === 'Aria')).toMatchObject({
+      role: 'protagonist', physicalDescription: 'tall',
+    });
+    expect(result.universe.places.find((s) => s.name === 'The Foundry')).toMatchObject({
+      slugline: 'INT. FOUNDRY — NIGHT', description: 'molten',
+    });
+    expect(result.universe.objects.find((o) => o.name === 'The Locket')).toMatchObject({ significance: 'heirloom' });
     // Series got arc + seasons.
     expect(result.series.arc.shape).toBe('man-in-hole');
     expect(result.series.seasons).toHaveLength(1);
@@ -1171,21 +1173,17 @@ describe('commitImport', () => {
   it('refuses to commit when the series arc is locked', async () => {
     const { uni, ser } = await setupForCommit();
     await seriesSvc.updateSeries(ser.id, { locked: { arc: true } });
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id,
-        seriesId: ser.id,
-        canonSelections: { characters: [], places: [], objects: [] },
-        arc: { logline: 'x', summary: 'y' },
-        seasons: [],
-        issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p' }],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_LOCKED);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'x', summary: 'y' },
+      seasons: [],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p' }],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_LOCKED,
+      message: expect.stringContaining('has a locked arc — commit refused'),
+    });
     // No issues were created.
     const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
     expect(issuesAfter).toHaveLength(0);
@@ -1229,21 +1227,17 @@ describe('commitImport', () => {
 
   it('refuses commit when the issues array is empty', async () => {
     const { uni, ser } = await setupForCommit();
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id,
-        seriesId: ser.id,
-        canonSelections: { characters: [], places: [], objects: [] },
-        arc: null,
-        seasons: [],
-        issues: [],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: 'At least one issue is required',
+    });
   });
 
   it('refuses commit when at least one issue in the array is missing a title', async () => {
@@ -1251,25 +1245,20 @@ describe('commitImport', () => {
     // A non-empty issues array where one entry has no title must be rejected
     // fail-fast, before any state is written to disk.
     const { uni, ser } = await setupForCommit();
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id,
-        seriesId: ser.id,
-        canonSelections: { characters: [], places: [], objects: [] },
-        arc: null,
-        seasons: [],
-        issues: [
-          { title: 'Valid Issue', arcPosition: 1, proseExcerpt: 'p1' },
-          { title: '', arcPosition: 2, proseExcerpt: 'p2' },
-        ],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
-    expect(caught.message).toMatch(/position 2/i);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [
+        { title: 'Valid Issue', arcPosition: 1, proseExcerpt: 'p1' },
+        { title: '', arcPosition: 2, proseExcerpt: 'p2' },
+      ],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringMatching(/issue at position 2 is missing a title/i),
+    });
     // Confirm no issues were created — the fail-fast guard prevented any write.
     const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
     expect(issuesAfter).toHaveLength(0);
@@ -1307,16 +1296,13 @@ describe('commitImport', () => {
       issues: [{ title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }],
     });
 
-    // After merge: series must contain both seasons.
     expect(second.series.seasons).toHaveLength(2);
-    const titles = second.series.seasons.map((s) => s.title);
-    expect(titles).toContain('Season One');
-    expect(titles).toContain('Season Two');
-    // Season numbers must also be preserved correctly.
-    const s1 = second.series.seasons.find((s) => s.number === 1);
-    const s2 = second.series.seasons.find((s) => s.number === 2);
-    expect(s1).toBeDefined();
-    expect(s2).toBeDefined();
+    expect(second.series.seasons.find((s) => s.number === 1)).toMatchObject({
+      id: first.series.seasons[0].id, title: 'Season One', logline: 'Beginning',
+    });
+    expect(second.series.seasons.find((s) => s.number === 2)).toMatchObject({
+      id: expect.stringMatching(/^sea-/), title: 'Season Two', logline: 'Escalation',
+    });
   });
 
   // Round-12 review: cross-universe guard must refuse commit when the
@@ -1329,21 +1315,16 @@ describe('commitImport', () => {
     // sanitizeSeries normalizes a missing universeId to null. Confirm
     // the precondition before exercising the guard.
     expect(ser.universeId).toBeFalsy();
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id, seriesId: ser.id,
-        canonSelections: { characters: [], places: [], objects: [] },
-        arc: null,
-        seasons: [],
-        issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p' }],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
-    expect(caught.message).toMatch(/no universeId/i);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p' }],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringMatching(/no universeId/i),
+    });
   });
 
   // Round-10 review: round-9's auto-assign fix only covered the omitted
@@ -1359,22 +1340,17 @@ describe('commitImport', () => {
       seasons: [],
       issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }],
     });
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id, seriesId: ser.id,
-        canonSelections: { characters: [], places: [], objects: [] },
-        arc: null,
-        seasons: [],
-        // Explicit arcPosition 1 — already used by I1 above.
-        issues: [{ title: 'Collision', arcPosition: 1, proseExcerpt: 'p2' }],
-      });
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
-    expect(caught.message).toMatch(/collides with an existing issue/i);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      // Explicit arcPosition 1 — already used by I1 above.
+      issues: [{ title: 'Collision', arcPosition: 1, proseExcerpt: 'p2' }],
+    })).rejects.toMatchObject({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringMatching(/collides with an existing issue/i),
+    });
     // No issue created — the gate fires before createIssue.
     const all = await issuesSvc.listIssues({ seriesId: ser.id });
     expect(all).toHaveLength(1);
@@ -1455,7 +1431,7 @@ describe('commitImport', () => {
 
     const created = await issuesSvc.getIssue(second.createdIssueIds[0]);
     const seasonOne = second.series.seasons.find((s) => s.number === 1);
-    expect(seasonOne).toBeDefined();
+    expect(seasonOne).toMatchObject({ id: expect.stringMatching(/^sea-/), title: 'One', logline: 'c' });
     expect(created.seasonId).toBe(seasonOne.id);
   });
 
@@ -1480,7 +1456,8 @@ describe('commitImport', () => {
     expect(remap.requestedSeasonNumber).toBe(99);
     expect(remap.actualSeasonNumber).toBe(1);
     expect(remap.actualSeasonTitle).toBe('Foundry');
-    expect(remap.actualSeasonId).toBeDefined();
+    expect(remap.actualSeasonId).toMatch(/^sea-/);
+    expect(remap.actualSeasonId).toBe(result.series.seasons[0].id);
   });
 
   // Round-8 review: missing test for the ERR_PARTIAL_COMMIT_ISSUES rollback
@@ -1497,36 +1474,24 @@ describe('commitImport', () => {
       return realIssuesRef.current.ensureIssueWithId(...args);
     });
 
-    let caught;
-    try {
-      await importerSvc.commitImport({
-        universeId: uni.id, seriesId: ser.id,
-        canonSelections: { characters: [{ name: 'Aria' }], places: [], objects: [] },
-        arc: { logline: 'A', summary: 'S', shape: 'man-in-hole' },
-        seasons: [{ number: 1, title: 'S1', logline: '', synopsis: '', endingHook: '' }],
-        issues: [
-          { title: 'I1', arcPosition: 1, proseExcerpt: 'p1' },
-          { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' },
-          { title: 'I3', arcPosition: 3, proseExcerpt: 'p3' },
-        ],
-      });
-    } catch (err) {
-      caught = err;
-    }
-
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe('IMPORTER_PARTIAL_COMMIT_ISSUES');
-    expect(caught.message).toMatch(/universe and series were updated/i);
-    expect(caught.message).toMatch(/simulated mid-loop FS error/);
-    // The error carries the structured context the client needs to shape
-    // its retry — universe + series ids (so a re-fetch isn't required) and
-    // `arcAlreadyPersisted` (so the retry drops arc + seasons + canon from
-    // the payload and lets the server-side state stand).
-    expect(caught.context).toBeDefined();
-    expect(caught.context.universeId).toBe(uni.id);
-    expect(caught.context.seriesId).toBe(ser.id);
-    expect(caught.context.arcAlreadyPersisted).toBe(true);
-    expect(caught.context.skipArcOnRetry).toBe(true);
+    await expect(importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [{ name: 'Aria' }], places: [], objects: [] },
+      arc: { logline: 'A', summary: 'S', shape: 'man-in-hole' },
+      seasons: [{ number: 1, title: 'S1', logline: '', synopsis: '', endingHook: '' }],
+      issues: [
+        { title: 'I1', arcPosition: 1, proseExcerpt: 'p1' },
+        { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' },
+        { title: 'I3', arcPosition: 3, proseExcerpt: 'p3' },
+      ],
+    })).rejects.toMatchObject({
+      code: 'IMPORTER_PARTIAL_COMMIT_ISSUES',
+      message: expect.stringMatching(/universe and series were updated.*simulated mid-loop FS error/i),
+      // The client uses these fields to retry without overwriting the arc, seasons or canon.
+      context: {
+        universeId: uni.id, seriesId: ser.id, arcAlreadyPersisted: true, skipArcOnRetry: true, survivingIssueIds: [],
+      },
+    });
 
     // Universe + series writes survive (user-confirmed, idempotent).
     const universeAfter = await universeSvc.getUniverse(uni.id);
@@ -2258,15 +2223,10 @@ describe('mergeSeasons (pure helper)', () => {
     const existing = Array.from({ length: 99 }, (_, i) => ({
       id: `e${i + 1}`, number: i + 1, title: `S${i + 1}`, logline: '', synopsis: '',
     }));
-    let caught;
-    try {
-      importerSvc.mergeSeasons(existing, [{ title: 'overflow' }], stubBuildSeason);
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
-    expect(caught.message).toContain('99');
+    expect(() => importerSvc.mergeSeasons(existing, [{ title: 'overflow' }], stubBuildSeason)).toThrow(expect.objectContaining({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringContaining('99'),
+    }));
   });
 
   // Round-11 review: legacy seasons with `title: undefined` would
@@ -2289,18 +2249,13 @@ describe('mergeSeasons (pure helper)', () => {
   // callers, but a future direct consumer would otherwise silently collapse
   // two entries sharing a number into one merge target.
   it('throws ERR_VALIDATION on duplicate explicit incoming season numbers', () => {
-    let caught;
-    try {
-      importerSvc.mergeSeasons([], [
-        { number: 1, title: 'A' },
-        { number: 1, title: 'B' },
-      ], stubBuildSeason);
-    } catch (err) {
-      caught = err;
-    }
-    expect(caught).toBeDefined();
-    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
-    expect(caught.message).toMatch(/duplicate/i);
+    expect(() => importerSvc.mergeSeasons([], [
+      { number: 1, title: 'A' },
+      { number: 1, title: 'B' },
+    ], stubBuildSeason)).toThrow(expect.objectContaining({
+      code: importerSvc.ERR_VALIDATION,
+      message: expect.stringMatching(/duplicate explicit season number 1/i),
+    }));
   });
 });
 
