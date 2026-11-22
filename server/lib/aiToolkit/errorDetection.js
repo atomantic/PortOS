@@ -150,6 +150,24 @@ const ERROR_PATTERNS = [
     suggestedFix: 'The local inference runtime ran out of GPU memory. Retry once the device drains, shrink the context/KV cache, or run a smaller model.'
   },
   {
+    // Ollama's per-model output parser rejected tool-call markup the MODEL
+    // emitted mid-stream (Inkling2: `invalid Inkling2 tool name "x.y" for
+    // header "toolCalls"` when the model opened a native tool frame whose
+    // header disagrees with its body; other parsers: `invalid tool call JSON`,
+    // `qwen3.5 tool call parsing failed`). The daemon is healthy and serves the
+    // next prompt fine, so this is one malformed RESPONSE: `parse-error` keeps
+    // it in the schema/type tier and out of the provider bench
+    // (isRequestSpecificCategory in lib/provider/providerCooldown.js), where
+    // UNKNOWN benched Ollama for every caller and escalated straight to an
+    // investigation. Anchored on the prefix only ./internal/ollamaNativeChat.js
+    // writes, so an agent transcript that merely mentions a tool call can't match.
+    pattern: /Ollama stream error:[^\n]*\btool[ _-]?(?:call|name)\b/i,
+    category: 'parse-error',
+    requiresFallback: true,
+    actionable: false,
+    suggestedFix: 'The model emitted malformed tool-call markup that Ollama could not parse. Retry the request; a model that keeps doing this needs a prompt that asks for plain-text output.'
+  },
+  {
     // Codex's transient model-capacity rejection is not a credential or
     // billing problem. Let the existing rate-limit recovery choose a fallback.
     pattern: /^(?:ERROR:\s*)?Selected model is at capacity\. Please try a different model\.[ \t]*$/im,

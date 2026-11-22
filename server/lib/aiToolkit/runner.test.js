@@ -589,6 +589,31 @@ describe('AI Toolkit runner service', () => {
     expect(result.error).toContain('model runner has unexpectedly stopped');
   });
 
+  // Inkling 2 opened a native tool frame headed by the prompt's own JSON key
+  // (`toolCalls`) mid-reply; Ollama's parser rejected it. That is one malformed
+  // response, so the run must carry a schema/type category rather than UNKNOWN,
+  // which benched the whole Ollama provider and escalated to an investigation.
+  it('classifies an Ollama native stream rejection of model tool markup as parse-error', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    stubNdjsonFetch([
+      `${JSON.stringify({ message: { role: 'assistant', content: 'I will check local chat.' }, done: false })}\n`,
+      `${JSON.stringify({ error: 'invalid Inkling2 tool name "eidoverse.chat" for header "toolCalls"' })}\n`,
+    ]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-numctx-tool-markup', provider: runReady({ numCtx: 16384 }), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    const result = await completed;
+    expect(result).toMatchObject({ success: false, errorCategory: 'parse-error' });
+    expect(result.errorAnalysis).toMatchObject({ hasError: true, category: 'parse-error' });
+  });
+
   it('keeps a non-Ollama endpoint with numCtx on /chat/completions and sends it no num_ctx', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
