@@ -969,9 +969,7 @@ export function buildReviewerPinNote(reviewersCsv) {
     '## Reviewer pin — use the reviewers PortOS configured',
     `PortOS resolved this run's reviewers from its own configuration: \`${csv}\`. That list is authoritative for every review in this run — it is the same list the phases above name. Never substitute a different reviewer set for it.`,
     flagTokens.length
-      && `**A saved slashdo default must never stand in for it.** If you invoke ANY slashdo \`/do:*\` command that runs a review loop (${REVIEW_LOOP_SLASHDO_EXAMPLES_MD}, and others), pass \`--review-with ${flagTokens.join(',')}\` explicitly. A bare invocation resolves \`--review-with\` from the host's saved defaults instead — \`.slashdo.json\` at the repo root, or the host CLI's \`.slashdo-config.json\` — which name a different reviewer set and can carry an auto-merge default this run never asked for.`,
-    flagTokens.length
-      && 'Pass those tokens exactly as written: their `[<model>]`, `~opt`, `~max=<n>`, and `~effort=<level>` suffixes are slashdo grammar and already carry each reviewer\'s pinned model, optional/blocking status, round cap, and reasoning effort — so do not also apply those by hand on that path.',
+      && `**A saved slashdo default must never stand in for it.** If you invoke ANY slashdo \`/do:*\` command that runs a review loop (${REVIEW_LOOP_SLASHDO_EXAMPLES_MD}, and others), pass \`--review-with ${flagTokens.join(',')}\` exactly as written: its \`[<model>]\`, \`~opt\`, \`~max=<n>\` and \`~effort=<level>\` suffixes already carry each reviewer's pins, so do not reapply them by hand. A bare invocation reads the host's saved defaults instead (\`.slashdo.json\` at the repo root, or the host CLI's \`.slashdo-config.json\`), which name a different reviewer set and can carry an auto-merge default this run never asked for.`,
     portosOnly.length
       && `PortOS runs \`${portosOnly.join('`, `')}\` itself — no slashdo slug, so never a \`--review-with\` value. That review happens through the Local Reviewer Procedure below, and leaving it out of a slashdo invocation is not permission to skip it.`,
   ].filter(Boolean).join('\n\n');

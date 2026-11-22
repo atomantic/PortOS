@@ -12,7 +12,7 @@
  * derived, never hand-maintained, so a new data dir can't regress silently:
  *
  *   1. `PATHS` in lib/fileUtils.js — every value under `PATHS.data`.
- *   2. `DEFAULT_EXCLUDES` in services/backup.js — anchored rsync filter paths.
+ *   2. `DEFAULT_EXCLUDES` in services/backup/excludes.js (re-exported by services/backup.js) — anchored rsync filter paths.
  *   3. Source scan of server/ + scripts/ for the ways a data dir is spelled
  *      outside PATHS: `dataPath('name')`, `join(PATHS.data, 'name')`,
  *      `` `${PATHS.data}/name` ``, `join(root, 'data', 'name')`, and the

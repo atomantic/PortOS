@@ -123,6 +123,15 @@ function rulePrefillFrom(params) {
 
 function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgents, onSaveRules, savingRules, onSaveAccount, prefill, onPrefillDone }) {
   const selectId = `github-mode-${account.id}`;
+  const runBlockedReason = !account.enabled ? null
+    : account.mode === 'disabled' ? 'Choose a mode other than Disabled to run checks'
+    : savingMode || savingRules ? 'Saving changes…' : null;
+  // One guard for the Run now button and the rules editor's apply-now path, so
+  // neither can start a check against stale or in-flight account settings.
+  const guardedRun = (accountId) => {
+    if (running || !account.enabled || runBlockedReason) return undefined;
+    return onRun(accountId);
+  };
   return (
     <li className="min-w-0 space-y-2 rounded-lg border border-port-border bg-port-card p-4">
       <div className="flex flex-wrap items-start gap-2">
@@ -153,15 +162,16 @@ function AccountCard({ account, running, onRun, onMode, savingMode, onAllowAgent
       {account.lastError && <p role="alert" className="break-words text-xs text-port-error">{account.lastError}</p>}
       <button
         type="button"
-        onClick={() => onRun(account.id)}
-        disabled={running || !account.enabled}
+        onClick={() => guardedRun(account.id)}
+        disabled={running || !account.enabled || !!runBlockedReason}
         className="inline-flex items-center gap-1.5 rounded border border-port-border px-3 py-1.5 text-xs text-gray-300 disabled:opacity-50"
       >
         <Play size={12} aria-hidden="true" /> {running ? 'Checking…' : 'Run now'}
       </button>
+      {runBlockedReason && <p role="status" className="text-xs text-gray-400">{runBlockedReason}</p>}
       <AgentAccess account={account} onAllow={onAllowAgents} saving={savingMode} />
       <AgentDefaults account={account} onSave={onSaveAccount} saving={savingMode} />
-      <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} prefill={prefill} onPrefillDone={onPrefillDone} onApplyNow={onRun} />
+      <GitHubAgentRules account={account} onSave={onSaveRules} saving={savingRules} prefill={prefill} onPrefillDone={onPrefillDone} onApplyNow={guardedRun} />
     </li>
   );
 }

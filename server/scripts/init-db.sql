@@ -2831,6 +2831,46 @@ DROP TRIGGER IF EXISTS trg_tribe_identities_audit ON tribe_identities;
 
 CREATE TRIGGER trg_tribe_identities_audit AFTER UPDATE OR DELETE ON tribe_identities FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
+DROP TRIGGER IF EXISTS trg_music_video_projects_audit ON music_video_projects;
+
+CREATE TRIGGER trg_music_video_projects_audit AFTER UPDATE OR DELETE ON music_video_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_creative_commissions_audit ON creative_commissions;
+
+CREATE TRIGGER trg_creative_commissions_audit AFTER UPDATE OR DELETE ON creative_commissions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_code_animation_projects_audit ON code_animation_projects;
+
+CREATE TRIGGER trg_code_animation_projects_audit AFTER UPDATE OR DELETE ON code_animation_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_code_animation_project_revisions_audit ON code_animation_project_revisions;
+
+CREATE TRIGGER trg_code_animation_project_revisions_audit AFTER UPDATE OR DELETE ON code_animation_project_revisions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_decks_audit ON decks;
+
+CREATE TRIGGER trg_decks_audit AFTER UPDATE OR DELETE ON decks FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_deck_cards_audit ON deck_cards;
+
+CREATE TRIGGER trg_deck_cards_audit AFTER UPDATE OR DELETE ON deck_cards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_mind_tool_recipes_audit ON mind_tool_recipes;
+
+CREATE TRIGGER trg_mind_tool_recipes_audit AFTER UPDATE OR DELETE ON mind_tool_recipes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_mind_tool_recipe_versions_audit ON mind_tool_recipe_versions;
+
+CREATE TRIGGER trg_mind_tool_recipe_versions_audit AFTER UPDATE OR DELETE ON mind_tool_recipe_versions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_voice_profiles_audit ON voice_profiles;
+
+CREATE TRIGGER trg_voice_profiles_audit AFTER UPDATE OR DELETE ON voice_profiles FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_writers_room_exercises_audit ON writers_room_exercises;
+
+CREATE TRIGGER trg_writers_room_exercises_audit AFTER UPDATE OR DELETE ON writers_room_exercises FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
 CREATE TABLE IF NOT EXISTS sync_feed (
       stream TEXT NOT NULL,
       row_sequence BIGINT NOT NULL,

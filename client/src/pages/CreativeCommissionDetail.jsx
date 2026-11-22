@@ -44,6 +44,10 @@ import { getCreativeDirectorProjectsByIds } from '../services/apiCreativeDirecto
 const PROJECT_EVENTS = ['creative-director:project:changed'];
 const COMMISSION_EVENTS = ['commission:changed'];
 
+// Snapshot of the editable fields. `enabled` is excluded because Pause/Resume
+// persists it on its own and must not make the form look dirty.
+const snapshotForm = (form) => JSON.stringify({ ...toPayload(form), enabled: null });
+
 export default function CreativeCommissionDetail() {
   const { id } = useParams();
   return <CommissionDetail key={id} id={id} />;
@@ -72,9 +76,13 @@ function CommissionDetail({ id }) {
   // they'd silently discard unsaved field edits. Keying on the last-synced id
   // makes an in-place update of the same id a no-op here.
   const syncedIdRef = useRef(null);
+  // Last form state the server is known to hold; a differing form is unsaved.
+  const [savedSnapshot, setSavedSnapshot] = useState(null);
   useEffect(() => {
     if (commission && syncedIdRef.current !== commission.id) {
-      setForm(toForm(commission));
+      const synced = toForm(commission);
+      setForm(synced);
+      setSavedSnapshot(snapshotForm(synced));
       syncedIdRef.current = commission.id;
     }
   }, [commission]);
@@ -106,8 +114,10 @@ function CommissionDetail({ id }) {
     const err = validateForm(form);
     if (err) { toast.error(err); return; }
     setSaving(true);
+    const submitted = snapshotForm(form);
     try {
       const updated = await updateCommission(id, toPayload(form), { silent: true });
+      setSavedSnapshot(submitted);
       setCommission((prev) => ({ ...updated, feedback: prev?.feedback ?? updated.feedback }));
       toast.success('Commission updated');
     } catch (e) {
@@ -116,6 +126,9 @@ function CommissionDetail({ id }) {
       setSaving(false);
     }
   };
+
+  const isDirty = savedSnapshot !== null && snapshotForm(form) !== savedSnapshot;
+  const runBlockedReason = saving ? 'Saving changes…' : isDirty ? 'Save configuration changes before running' : null;
 
   const handleDelete = async () => {
     try {
@@ -142,6 +155,7 @@ function CommissionDetail({ id }) {
   // Runs the same gated path as a cron tick, so a skip (autonomy off, over
   // budget) is itself the result and is toasted with its reason.
   const handleRunNow = async () => {
+    if (running || runBlockedReason) return;
     setRunning(true);
     try {
       const result = await runCommissionNow(id, { silent: true });
@@ -252,8 +266,8 @@ function CommissionDetail({ id }) {
           <div className="flex items-center gap-1">
             <button
               onClick={handleRunNow}
-              disabled={running}
-              title="Run now (ignores schedule)"
+              disabled={running || !!runBlockedReason}
+              title={runBlockedReason || 'Run now (ignores schedule)'}
               aria-label={`Run commission ${commission.name} now`}
               className="flex items-center gap-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white px-3 py-2 rounded text-sm font-medium"
             >
@@ -287,6 +301,9 @@ function CommissionDetail({ id }) {
             )}
           </div>
         </div>
+        {runBlockedReason && (
+          <p role="status" className="mt-2 text-xs text-port-warning text-right">{runBlockedReason}</p>
+        )}
       </div>
 
       {/* Renders + Config — side-by-side on desktop, stacked on mobile. */}

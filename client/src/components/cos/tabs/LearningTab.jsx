@@ -793,8 +793,8 @@ export default function LearningTab() {
                   </p>
                   <div className="space-y-2">
                     {skipped.skippedTypes.map((item, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-2 bg-port-bg rounded">
-                        <div>
+                      <div key={idx} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-port-bg rounded">
+                        <div className="min-w-0">
                           <span className="text-sm text-white">{item.taskType}</span>
                           <span className="text-xs text-gray-500 ml-2">
                             ({runsLabel(item, 'attempts')})
@@ -838,15 +838,15 @@ export default function LearningTab() {
                 </span>
               </button>
               {expandedSections.durations && (
-                <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
+                  <table className="w-full min-w-[460px] text-sm">
                     <thead className="bg-port-bg">
                       <tr>
                         <th className="text-left p-3 text-gray-500 font-medium">Task Type</th>
                         <th className="text-right p-3 text-gray-500 font-medium">Avg</th>
                         <th className="text-right p-3 text-gray-500 font-medium" title="P80 estimate used for progress bars">Est</th>
-                        <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Samples</th>
-                        <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Success</th>
+                        <th className="text-right p-3 text-gray-500 font-medium">Samples</th>
+                        <th className="text-right p-3 text-gray-500 font-medium">Success</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -859,10 +859,10 @@ export default function LearningTab() {
                           <td className="p-3 text-right text-port-accent font-mono" title="P80 estimate used for progress bars and ETAs">
                             {(data.p80DurationMs || data.avgDurationMs) ? formatDurationMin(Math.round((data.p80DurationMs || data.avgDurationMs) / 60000)) || '—' : '—'}
                           </td>
-                          <td className="p-3 text-right text-gray-500 hidden sm:table-cell">
+                          <td className="p-3 text-right text-gray-500">
                             {data.completed}
                           </td>
-                          <td className={`p-3 text-right font-mono hidden sm:table-cell ${getSuccessRateColor(data.successRate)}`}>
+                          <td className={`p-3 text-right font-mono ${getSuccessRateColor(data.successRate)}`}>
                             {data.successRate}%
                           </td>
                         </tr>
@@ -958,8 +958,8 @@ export default function LearningTab() {
                       </p>
                       <div className="space-y-1">
                         {routing.misroutes.map((m, idx) => (
-                          <div key={idx} className="flex items-center justify-between p-2 bg-port-bg rounded text-sm">
-                            <div className="flex items-center gap-2">
+                          <div key={idx} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-port-bg rounded text-sm">
+                            <div className="flex flex-wrap items-center gap-2 min-w-0">
                               <span className="text-white">{m.taskType}</span>
                               <span className="text-gray-500">on</span>
                               <span className="text-orange-400 font-medium">{m.tier}</span>
@@ -1009,15 +1009,15 @@ export default function LearningTab() {
                   )}
 
                   {/* Full Matrix */}
-                  <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
+                  <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
+                    <table className="w-full min-w-[520px] text-sm">
                       <thead className="bg-port-bg">
                         <tr>
                           <th className="text-left p-3 text-gray-500 font-medium">Task Type</th>
                           <th className="text-left p-3 text-gray-500 font-medium">Tier</th>
                           <th className="text-right p-3 text-gray-500 font-medium">Success</th>
-                          <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Pass</th>
-                          <th className="text-right p-3 text-gray-500 font-medium hidden sm:table-cell">Fail</th>
+                          <th className="text-right p-3 text-gray-500 font-medium">Pass</th>
+                          <th className="text-right p-3 text-gray-500 font-medium">Fail</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1040,8 +1040,8 @@ export default function LearningTab() {
                               <td className={`p-3 text-right font-mono ${getSuccessRateColor(tier.successRate)}`}>
                                 {tier.successRate}%
                               </td>
-                              <td className="p-3 text-right text-port-success hidden sm:table-cell">{tier.succeeded}</td>
-                              <td className="p-3 text-right text-port-error hidden sm:table-cell">{tier.failed}</td>
+                              <td className="p-3 text-right text-port-success">{tier.succeeded}</td>
+                              <td className="p-3 text-right text-port-error">{tier.failed}</td>
                             </tr>
                           ))
                         )}

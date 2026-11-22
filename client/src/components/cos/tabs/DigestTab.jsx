@@ -189,7 +189,7 @@ export default function DigestTab() {
       {loading && currentDigest && <div className="flex justify-center py-6"><BrailleSpinner text="Loading digest" /></div>}
       {/* Header with Week Selector */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
           <Calendar className="w-5 h-5 text-port-accent" />
           <h3 className="text-lg font-semibold text-white">Weekly Digest</h3>
           {digestList.length > 0 && (
@@ -402,14 +402,14 @@ export default function DigestTab() {
                 <span className="text-xs text-gray-500">({currentDigest.byTaskType.length} types)</span>
               </button>
               {expandedSections.byTaskType && (
-                <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
-                  <table className="w-full text-sm">
+                <div className="bg-port-card border border-port-border rounded-lg overflow-x-auto">
+                  <table className="w-full min-w-[460px] text-sm">
                     <thead className="bg-port-bg">
                       <tr>
                         <th className="text-left p-2 text-gray-500 font-medium">Type</th>
                         <th className="text-right p-2 text-gray-500 font-medium">Done</th>
                         <th className="text-right p-2 text-gray-500 font-medium">Rate</th>
-                        <th className="text-right p-2 text-gray-500 font-medium hidden sm:table-cell">Time</th>
+                        <th className="text-right p-2 text-gray-500 font-medium">Time</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -423,7 +423,7 @@ export default function DigestTab() {
                           }`}>
                             {item.successRate}%
                           </td>
-                          <td className="p-2 text-right text-gray-500 font-mono hidden sm:table-cell">
+                          <td className="p-2 text-right text-gray-500 font-mono">
                             {Math.round(item.totalDurationMs / 60000)}m
                           </td>
                         </tr>

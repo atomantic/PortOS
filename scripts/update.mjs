@@ -235,6 +235,9 @@ async function install(previous) {
     log('❌ Critical dependency missing: client/node_modules/vite. Try npm run install:all.');
     fail();
   }
+  // The updater runs without application imports (headless-install guard), so it
+  // clears the marker scripts/lib/dependencyReconcile.js writes by file name (#17511).
+  rmSync(join(dataDir, 'dependency-reconcile-pending.json'), { force: true });
   step('npm-install', 'done', 'Dependencies installed');
 }
 

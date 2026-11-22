@@ -220,7 +220,7 @@ async function standDown(reason, detail) {
  *
  * @returns {{available: boolean, detail: string}}
  */
-function updateAvailableFor(channel, status, verdict) {
+async function updateAvailableFor(channel, status, verdict) {
   if (channel === 'release') {
     if (status.updateAvailable) return { available: true, detail: `release v${status.latestRelease?.version}` };
     return { available: false, detail: 'no newer release' };
@@ -233,6 +233,10 @@ function updateAvailableFor(channel, status, verdict) {
   // needs the same reconcile run.
   if (verdict.behind > 0) return { available: true, detail: `${verdict.behind} commit(s) behind origin/${verdict.defaultBranch}` };
   if (status.installState?.outOfSync) return { available: true, detail: 'install out of sync with the checked-out code' };
+  // A fast-forward under agent work (`ensureLatest`) moved the checkout onto new
+  // lockfiles without reinstalling; the update's install step reconciles them (#17511).
+  const { isDependencyReconcilePending } = await import('../../scripts/lib/dependencyReconcile.js'); // deferred: boot closure is capped
+  if (isDependencyReconcilePending(PATHS.data)) return { available: true, detail: 'dependency reconcile pending after a lockfile change' };
   return { available: false, detail: `up to date with origin/${verdict.defaultBranch || 'default'}` };
 }
 
@@ -320,7 +324,7 @@ export async function runAutoUpdateTick({ io = ioRef } = {}) {
     return standDown('repo-not-ready', read.summary);
   }
 
-  const availability = updateAvailableFor(config.channel, status, read);
+  const availability = await updateAvailableFor(config.channel, status, read);
   if (!availability.available) return standDown('up-to-date', availability.detail);
 
   // Idle is checked immediately before anything is written, so the window it

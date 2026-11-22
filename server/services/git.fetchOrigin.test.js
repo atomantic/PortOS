@@ -27,6 +27,8 @@ describe('fetchOrigin', () => {
       .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 0 });
 
     const result = fetchOrigin('/repo');
+    // The lock classifier loads on demand before it schedules the retry.
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(result).resolves.toBe(true);
@@ -60,6 +62,7 @@ describe('fetchOrigin', () => {
 
     const result = fetchOrigin('/repo');
     const assertion = expect(result).rejects.toThrow(/cannot lock ref/);
+    await vi.dynamicImportSettled();
     await vi.runAllTimersAsync();
 
     await assertion;

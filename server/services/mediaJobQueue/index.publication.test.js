@@ -233,6 +233,7 @@ describe('backup snapshot admission for media completion', () => {
         beforeHooks = { job: persistedJobs()[0], rowCount: rows.size };
       },
       initMediaJobDependentHooks: () => expect(loadHook).not.toHaveBeenCalled(),
+      recoverStoryboardRuns: noWork,
       resumeMediaJobCompletions: mediaJobQueue.resumeMediaJobCompletions,
       initSharing: noWork, recoverCreativeDirectorProjects: noWork,
       runDatabasePhase: noWork, loadSeriesCoverBackfill: async () => noWork,

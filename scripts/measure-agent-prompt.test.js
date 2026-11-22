@@ -16,12 +16,17 @@ describe('scripts/measure-agent-prompt.js', () => {
     const { stdout } = await execFileAsync(
       process.execPath,
       [join(PATHS.installRoot, 'scripts', 'measure-agent-prompt.js'), 'claim-issue', 'tui'],
-      { cwd: PATHS.installRoot, timeout: 15000 },
+      // A standalone CLI run, like the boot smoke: the script stages into its own disposable data
+      // root, which the runner's live-data write guard (keyed on VITEST) would otherwise refuse.
+      { cwd: PATHS.installRoot, timeout: 15000, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'VITEST')) },
     );
 
     expect(stdout).toContain('claim-issue via tui:');
     expect(stdout).toContain('--- user prompt (');
     expect(stdout).toContain('--- system prompt (');
+    // #17471: the full claim-issue dispatch (user + system prompt) stays at or under 38 KB.
+    const total = Number(stdout.match(/ total=(\d+)B /)?.[1]);
+    expect(total, 'claim-issue tui prompt grew past its 38,000 B budget').toBeLessThanOrEqual(38_000);
 
     if (existedBefore) {
       expect(statSync(schedulePath).mtimeMs).toBe(mtimeBefore);
