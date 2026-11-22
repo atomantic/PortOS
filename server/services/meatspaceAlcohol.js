@@ -129,9 +129,7 @@ const substanceLog = createSubstanceLog({
   computeAverages: (entries, config) => computeRollingAverages(entries, config?.sex || 'male'),
   summaryConfig: () => readJSONFile(CONFIG_FILE, { sex: 'male' }),
   describe: {
-    icon: '🍺', noun: 'drink', amountUnit: 'std',
-    item: item => `${item.name || 'unnamed'} ${item.oz}oz @ ${item.abv}%`,
-    button: item => `${item.name} ${item.oz}oz @ ${item.abv}%`
+    icon: '🍺', noun: 'drink'
   },
   customButtons: { file: 'custom-drinks.json', field: 'drinks', defaults: DEFAULT_DRINK_BUTTONS, fields: ['name', 'oz', 'abv'] }
 });

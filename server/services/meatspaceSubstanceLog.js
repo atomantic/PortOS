@@ -67,7 +67,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
       invalidate();
       const dailyLog = await loadDailyLog();
       const entry = dailyLog.entries.find(e => e.date === targetDate);
-      console.log(`${describe.icon} Logged ${describe.noun} (MortalLoom): ${describe.item(item)} on ${targetDate}`);
+      console.log(`${describe.icon} Logged ${describe.noun} (MortalLoom) on ${targetDate}`);
       return { [itemName]: item, [amountField]: amount, date: targetDate, dayTotal: entry?.[key]?.[totalField] || amount };
     }
     const result = await mutateDailyLog((dailyLog) => {
@@ -80,7 +80,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
       return { [itemName]: event, [amountField]: amount, date: targetDate, dayTotal: substance[totalField] };
     }, { label });
     invalidate();
-    console.log(`${describe.icon} Logged ${describe.noun}: ${describe.item(item)} (${amount} ${describe.amountUnit}) on ${targetDate}`);
+    console.log(`${describe.icon} Logged ${describe.noun} ${result[itemName].id} on ${targetDate}`);
     return result;
   }
 
@@ -109,7 +109,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
       const effectiveDate = updated?.date || date;
       const dailyLog = await loadDailyLog();
       const entry = dailyLog.entries.find(e => e.date === effectiveDate);
-      console.log(`📝 Updated ${describe.noun} (MortalLoom) ${date}[${index}] → ${effectiveDate}: ${updated?.[itemFields[0]]}`);
+      console.log(`📝 Updated ${describe.noun} (MortalLoom) ${date}[${index}] → ${effectiveDate}`);
       return { [itemName]: Object.fromEntries(itemFields.map(field => [field, updated[field]])), dayTotal: entry?.[key]?.[totalField] || 0, date: effectiveDate };
     }
     const result = await mutateDailyLog((dailyLog) => {
@@ -138,7 +138,8 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     }, { label });
     if (!result) return null;
     invalidate();
-    console.log(`📝 ${result.date && result.date !== date ? 'Moved' : 'Updated'} ${describe.noun} ${result.date && result.date !== date ? `from ${date}[${index}] to ${result.date}` : `on ${date}[${index}]`}: ${describe.item(result[itemName])}`);
+    const moved = result.date && result.date !== date;
+    console.log(`📝 ${moved ? 'Moved' : 'Updated'} ${describe.noun} ${result[itemName].id} ${moved ? `from ${date}[${index}] to ${result.date}` : `on ${date}[${index}]`}`);
     return result;
   }
 
@@ -162,7 +163,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     }, { label });
     if (!result) return null;
     invalidate();
-    console.log(`🗑️ Removed ${describe.noun} from ${date}[${index}]: ${describe.item(result)}`);
+    console.log(`🗑️ Removed ${describe.noun} ${result.id} from ${date}[${index}]`);
     return result;
   }
 
@@ -187,7 +188,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     const item = Object.fromEntries(customButtons.fields.map(field => [field, input[field]]));
     data[customButtons.field].push(item);
     await saveButtons(data);
-    console.log(`${describe.icon} Added custom ${describe.noun} button: ${describe.button(item)}`);
+    console.log(`${describe.icon} Added custom ${describe.noun} button`);
     return item;
   });
   const updateButton = (index, updates) => withButtonsLock(async () => {
@@ -197,7 +198,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     const item = data[customButtons.field][index];
     for (const field of customButtons.fields) if (updates[field] !== undefined) item[field] = updates[field];
     await saveButtons(data);
-    console.log(`📝 Updated custom ${describe.noun} button [${index}]: ${item.name}`);
+    console.log(`📝 Updated custom ${describe.noun} button [${index}]`);
     return item;
   });
   const removeButton = (index) => withButtonsLock(async () => {
@@ -206,7 +207,7 @@ export function createSubstanceLog({ key, itemsField, totalField, mlCollection, 
     if (index < 0 || index >= data[customButtons.field].length) return null;
     const removed = data[customButtons.field].splice(index, 1)[0];
     await saveButtons(data);
-    console.log(`🗑️ Removed custom ${describe.noun} button: ${removed.name}`);
+    console.log(`🗑️ Removed custom ${describe.noun} button [${index}]`);
     return removed;
   });
   return { summary, daily, log, update, remove, getButtons, addButton, updateButton, removeButton };
