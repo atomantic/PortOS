@@ -1,7 +1,7 @@
 /**
  * HTML Pages bench: run installed local models against the fixed creative HTML brief and keep each model's pages as a durable run for side-by-side comparison.
  *
- * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. A run left queued or generating by a restart is reported as failed, never resumed.
+ * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
@@ -13,6 +13,7 @@ import {
 } from '../../lib/htmlPageBench.js';
 import { listRuntimeModels } from '../localModelAssessments.js';
 import { generate } from '../modelCapabilityTests.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { createRun, deleteRun as deleteStoredRun, getRun, listRuns as listStoredRuns, mutateRun } from './db.js';
 
 const ACTIVE = new Set(['queued', 'generating']);
@@ -31,8 +32,10 @@ const CLAIM_WAIT_MS = 10 * 60 * 1000;
 const runtimeLabel = (id) => LOCAL_RUNTIMES[id]?.label || id;
 
 const queue = [];
-const controllers = new Map();
+// Run id → { controller }, from queueing until the run settles. A run this process holds is live; one marked active without a slot was cut off by a restart.
+const liveRuns = trackedRenderMap('html-pages', { noun: 'HTML pages run', link: () => '/html-pages' });
 let draining = false;
+const isCutOff = (run) => ACTIVE.has(run.status) && !liveRuns.has(run.id);
 
 /** Every installed, chat-capable model across the assessable runtimes, for the picker. Disk/loopback only; no model is called. */
 export async function listSelectableModels() {
@@ -63,9 +66,7 @@ const summarize = (run) => ({ ...run, pages: (run.pages || []).map(({ html, ...p
 /** Stored run summaries, newest first. A run still marked active that this process is not working on was cut off by a restart. */
 export async function listRuns() {
   const runs = await listStoredRuns();
-  const current = await Promise.all(runs.map((run) => (ACTIVE.has(run.status) && !controllers.has(run.id) && !queue.includes(run.id)
-    ? markInterrupted(run.id)
-    : run)));
+  const current = await Promise.all(runs.map((run) => (isCutOff(run) ? markInterrupted(run.id) : run)));
   return current.map(summarize);
 }
 
@@ -76,7 +77,7 @@ const markInterrupted = (id) => mutateRun(id, (current) => (ACTIVE.has(current.s
 export const readRun = async (id) => {
   const run = await getRun(id);
   if (!run) throw new ServerError('HTML pages run not found', { status: 404, code: 'NOT_FOUND' });
-  return ACTIVE.has(run.status) && !controllers.has(run.id) && !queue.includes(run.id) ? markInterrupted(id) : run;
+  return isCutOff(run) ? markInterrupted(id) : run;
 };
 
 /**
@@ -95,7 +96,7 @@ export async function startRuns({ models, pages }) {
   const runs = [];
   for (const m of models) {
     const run = await createRun({ backend: m.backend, modelId: m.modelId, pageCount: pages.length, themes: pages, prompts });
-    queue.push(run.id);
+    enqueue(run.id);
     runs.push(run);
   }
   console.log(`🧩 HTML pages: queued ${runs.length} run${runs.length === 1 ? '' : 's'} of ${pages.length} page${pages.length === 1 ? '' : 's'}`);
@@ -103,11 +104,50 @@ export async function startRuns({ models, pages }) {
   return runs;
 }
 
+const enqueue = (id) => {
+  liveRuns.set(id, { controller: new AbortController() });
+  queue.push(id);
+};
+
+/**
+ * Re-queue a failed or cut-off run on the same model with the prompts it recorded, keeping the pages it finished before the first one that has no HTML. Only an explicit request reaches here.
+ */
+export async function resumeRun(id) {
+  if (liveRuns.has(id)) throw new ServerError('That run is already queued or generating', { status: 409, code: 'HTML_PAGES_RUN_ACTIVE' });
+  // Held before the write so a concurrent read cannot see the re-queued row as cut off.
+  liveRuns.set(id, { controller: new AbortController() });
+  let run;
+  try {
+    run = await mutateRun(id, (current) => {
+      if (current.status === 'complete') return null;
+      const firstMissing = current.pages.findIndex((page) => !page.html);
+      const pages = firstMissing < 0 ? current.pages : current.pages.slice(0, firstMissing);
+      return {
+        ...current, status: 'queued', pages, progress: { done: pages.length, total: current.pageCount }, detail: null, error: null, finishedAt: null,
+      };
+    });
+  } catch (err) {
+    liveRuns.delete(id);
+    throw err;
+  }
+  if (run.status !== 'queued') {
+    liveRuns.delete(id);
+    throw new ServerError('Only a failed run can be resumed', { status: 409, code: 'HTML_PAGES_RUN_NOT_RESUMABLE' });
+  }
+  queue.push(id);
+  console.log(`🧩 HTML pages: resuming ${run.modelId} from page ${run.pages.length + 1} of ${run.pageCount}`);
+  void drain();
+  return summarize(run);
+}
+
 /** Soft-delete a run. A run still generating is stopped first. */
 export async function removeRun(id) {
   const index = queue.indexOf(id);
-  if (index >= 0) queue.splice(index, 1);
-  controllers.get(id)?.abort();
+  if (index >= 0) {
+    queue.splice(index, 1);
+    liveRuns.delete(id);
+  }
+  liveRuns.get(id)?.controller.abort();
   return deleteStoredRun(id);
 }
 
@@ -117,7 +157,9 @@ async function drain() {
   try {
     while (queue.length) {
       const id = queue.shift();
-      await processRun(id).catch((err) => console.log(`🧩 HTML pages: run ${id} stopped: ${err.message}`));
+      await processRun(id)
+        .catch((err) => console.log(`🧩 HTML pages: run ${id} stopped: ${err.message}`))
+        .finally(() => liveRuns.delete(id));
     }
   } finally {
     draining = false;
@@ -127,16 +169,17 @@ async function drain() {
 async function processRun(id) {
   const run = await getRun(id);
   if (!run || run.deleted || run.status !== 'queued') return;
-  const controller = new AbortController();
-  controllers.set(id, controller);
+  const { controller } = liveRuns.get(id);
   let claim = null;
   try {
     claim = await claimHeavyLocalJob({ kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS });
     if (!claim.ok) throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
-    console.log(`🧩 HTML pages: ${run.modelId} on ${runtimeLabel(run.backend)} — ${run.themes.length} page(s)`);
+    console.log(`🧩 HTML pages: ${run.modelId} on ${runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
 
     for (const [index, theme] of run.themes.entries()) {
+      // A resumed run keeps the pages it already finished.
+      if (index < run.pages.length) continue;
       if (controller.signal.aborted) return;
       const startedAt = Date.now();
       const result = await generate({
@@ -174,7 +217,6 @@ async function processRun(id) {
     console.log(`🧩 HTML pages: ${run.modelId} failed: ${err.message}`);
     await mutateRun(id, (c) => (c.deleted ? null : { ...c, status: 'failed', error: err.message, finishedAt: new Date().toISOString() })).catch(() => null);
   } finally {
-    controllers.delete(id);
     await claim?.release?.();
   }
 }

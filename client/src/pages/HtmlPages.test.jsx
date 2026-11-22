@@ -21,13 +21,14 @@ vi.mock('../services/apiHtmlPages.js', () => ({
   getHtmlPageRun: vi.fn(),
   startHtmlPageRuns: vi.fn(),
   deleteHtmlPageRun: vi.fn(),
+  resumeHtmlPageRun: vi.fn(),
 }));
 vi.mock('../components/htmlPages/HtmlPreviewFrame', () => ({
   default: ({ html, title }) => <div data-testid="frame" aria-label={title}>{html ? 'page' : 'empty'}</div>,
 }));
 
 import HtmlPages from './HtmlPages';
-import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, startHtmlPageRuns } from '../services/apiHtmlPages.js';
+import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
 
 const CATALOG = {
   models: [
@@ -189,5 +190,16 @@ describe('HtmlPages', () => {
     await waitFor(() => expect(deleteHtmlPageRun).toHaveBeenCalledWith('r1', expect.anything()));
     await waitFor(() => expect(screen.queryByText(/2 of 2 pages pass every check/)).not.toBeInTheDocument());
     expect(screen.getByLabelText('query')).not.toHaveTextContent('compare');
+  });
+
+  it('offers Resume only on a failed run and shows it queued again', async () => {
+    resumeHtmlPageRun.mockResolvedValue(run('r2', 'example-b:7b', { status: 'queued', pages: [] }));
+    renderPage();
+    await screen.findByText('model server went away');
+    expect(screen.queryByRole('button', { name: 'Resume the example-a:7b run' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Resume the example-b:7b run' }));
+    await waitFor(() => expect(resumeHtmlPageRun).toHaveBeenCalledWith('r2', expect.anything()));
+    await waitFor(() => expect(screen.queryByText('model server went away')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Resume the example-b:7b run' })).not.toBeInTheDocument();
   });
 });
