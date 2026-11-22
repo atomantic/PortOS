@@ -42,7 +42,7 @@ export const shardIndexes = (mode, count) => (
  *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
  *   The client has no reach measure, so only the cap applies there.
  * - Everything else stays on one runner. Record-aware selection
- *   (`recordedReach` in lib/testMemo.js, #16424) narrows what a selected test
+ *   (`recordedReach` in lib/testMemo/analyzer.js, #16424) narrows what a selected test
  *   actually runs; reach is measured, not assumed, so a small graph stays put.
  *
  * No shard-count floor is needed: the runner slices the selection itself and
