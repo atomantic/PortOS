@@ -9,13 +9,16 @@ const { renderOnGeminiWeb } = await import('./geminiWebDriver.js');
 
 // Just enough of a Playwright page to stand in for the Gemini composer. Each test
 // scripts what the app shows: the consent dialog, and the chat's answers in order.
-function fakeGemini({ consent = false, uploadClickFails = false, duplicateUploader = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
-  const log = { clicks: [], files: null, typed: '', closed: false, front: 0 };
+function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
+  const log = { clicks: [], files: null, typed: '', closed: false, front: 0, uploaderFilters: [] };
   let chooserResolve;
   let chooserReject;
   const chooserEvent = new Promise((resolve, reject) => { chooserResolve = resolve; chooserReject = reject; });
   const control = (name) => ({
-    filter: () => control(name),
+    filter: (options) => {
+      if (name === 'uploader') log.uploaderFilters.push(options);
+      return control(name);
+    },
     first: () => control(name),
     waitFor: async () => {
       if (name === 'dialog' && !consent) await new Promise(() => {});
@@ -31,13 +34,7 @@ function fakeGemini({ consent = false, uploadClickFails = false, duplicateUpload
   const page = {
     goto: async () => {},
     url: () => url,
-    getByRole: (role, { name } = {}) => control(role === 'dialog' ? 'dialog' : role === 'menuitemradio' ? 'mode' : String(name)),
-    locator: (selector) => {
-      if (duplicateUploader && !selector.endsWith(':visible')) {
-        return { click: async () => { throw new Error('strict mode violation: uploader resolved to 2 elements'); } };
-      }
-      return control('uploader');
-    },
+    getByRole: (role, { name } = {}) => control(role === 'dialog' ? 'dialog' : role === 'menuitemradio' ? 'mode' : role === 'menuitem' && /Upload files/.test(String(name)) ? 'uploader' : String(name)),
     waitForEvent: () => chooserEvent,
     keyboard: { insertText: async (text) => { log.typed = text; } },
     evaluate: async () => answers.shift() ?? { responded: false },
@@ -87,9 +84,10 @@ describe('renderOnGeminiWeb', () => {
     expect(fake.log.closed).toBe(true);
   });
 
-  it('ignores the hidden duplicate upload item and still attaches before sending once', async () => {
-    const fake = fakeGemini({ duplicateUploader: true, answers: [CLIP] });
+  it('picks the visible Upload files item by name, since its test id lives only on a hidden copy', async () => {
+    const fake = fakeGemini({ answers: [CLIP] });
     await render(fake);
+    expect(fake.log.uploaderFilters).toEqual([{ visible: true }]);
     expect(fake.log.files).toEqual(['/example/frame.png', '/example/sheet.png']);
     expect(sends(fake.log)).toBe(1);
     expect(fake.log.clicks.indexOf('uploader')).toBeLessThan(fake.log.clicks.indexOf('Send message'));
