@@ -826,8 +826,10 @@ export function createRunnerService(config = {}) {
       const nativeOllamaUrl = ollamaNativeChatUrl(windowProvider);
       // An effort the model takes as an Ollama thinking level replaces the
       // provider's boolean `thinking` for this run.
-      const thinkLevel = isOllamaBackedProvider(provider) ? ollamaThinkLevel(requestModel, effort) : null;
-      const generation = { ...apiGenerationOptions(provider), ...(thinkLevel ? { think: thinkLevel } : {}) };
+      const thinkLevel = isOllamaBackedProvider(provider) || provider?.mtplxBacked === true ? ollamaThinkLevel(requestModel, effort) : null;
+      // MTPLX has no native `think` field: Inkling takes its level as a chat-template kwarg.
+      const mtplxEffort = provider?.mtplxBacked === true && thinkLevel;
+      const generation = { ...apiGenerationOptions(provider), ...(thinkLevel && !mtplxEffort ? { think: thinkLevel } : {}) };
       const requestBody = nativeOllamaUrl
         ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider: windowProvider, generation, maxTokens })
         : {
@@ -836,6 +838,7 @@ export function createRunnerService(config = {}) {
             stream: true,
             ...apiGenerationOptions(provider),
             ...openRouterBodyFragment(provider, requestModel),
+            ...(mtplxEffort ? { chat_template_kwargs: { ...apiGenerationOptions(provider).chat_template_kwargs, reasoning_effort: thinkLevel } } : {}),
             ...(thinkLevel ? { reasoning_effort: thinkLevel } : {}),
             ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
           };

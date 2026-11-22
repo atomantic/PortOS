@@ -630,6 +630,28 @@ describe('AI Toolkit runner service', () => {
     expect(JSON.parse(fetch.mock.calls[0][1].body).think).toBe('low');
   });
 
+  it('sends an MTPLX Inkling effort as a chat-template kwarg beside the output-token cap', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const fetch = stubStreamingFetch();
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-mtplx-effort',
+      provider: runReady({ id: 'mtplx', endpoint: 'http://localhost:8000/v1', mtplxBacked: true, thinking: true }),
+      model: 'Youssofal/Inkling-2-Mini-MTPLX-Optimized-Speed', effort: 'low', maxTokens: 512,
+      prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true });
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, reasoning_effort: 'low' });
+    expect(body.max_tokens).toBe(512);
+    expect(body).not.toHaveProperty('think');
+  });
+
   it('fails an Ollama native run whose stream reports an error frame', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

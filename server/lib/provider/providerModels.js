@@ -381,7 +381,8 @@ export function effortLevelsForProvider(provider, model = null) {
   if (harness === 'grok' || isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (harness === 'claude' || isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
   // An Ollama API provider's effort is the model's thinking level, where its template takes one.
-  if (provider.type === 'api' && isOllamaBackedProvider(provider)) return ollamaThinkingLevelsForModel(model);
+  // An MTPLX provider hands the same level to the chat template (Inkling packs).
+  if (provider.type === 'api' && (isOllamaBackedProvider(provider) || provider.mtplxBacked === true)) return ollamaThinkingLevelsForModel(model);
   return null;
 }
 
