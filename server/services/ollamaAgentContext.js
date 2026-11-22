@@ -12,7 +12,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
  * capability ahead of the spawn.
  */
 
-import { isOllamaBackedProvider } from './provider/providers.js'
+import { getProviderById, isOllamaBackedProvider } from './provider/providers.js'
 // Straight from `internal/`: deliberately not re-exported from providers.js, so
 // the normalization cannot drift.
 import { ollamaBaseFromProvider, withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js'
@@ -23,6 +23,7 @@ import {
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
 import {
+  beginOllamaWork,
   beginOllamaWorkAfterReload,
   ensureContextWindow,
   getBaseUrl,
@@ -82,6 +83,10 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
 
 const noop = () => {}
 
+const usesLocalOllamaDaemon = (provider) => !!provider
+  && isOllamaBackedProvider(provider)
+  && isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())
+
 /**
  * Register an agent harness run on the local daemon as in-flight Ollama work, so a
  * later spawn's `ensureContextWindow` defers its reload instead of restarting the
@@ -92,12 +97,30 @@ const noop = () => {}
  * rejects: the reload gate only resolves and the registry is in-memory.
  *
  * @param {object|null} provider
- * @returns {Promise<() => void>} idempotent release; call it when the harness process exits
+ * @returns {Promise<() => void>} idempotent release; call it when the harness run ends
  */
 export async function beginOllamaAgentWork(provider) {
-  if (!provider || !isOllamaBackedProvider(provider)) return noop
-  if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())) return noop
+  if (!usesLocalOllamaDaemon(provider)) return noop
   return beginOllamaWorkAfterReload()
+}
+
+/**
+ * Re-register an agent that survived a server restart. The in-flight registry is
+ * in-memory, so a runner-hosted harness still talking to the local daemon is
+ * invisible to the drain check until it is counted again (#17342). The provider is
+ * resolved from the persisted record's `metadata.providerId`; an unknown, deleted,
+ * non-Ollama or remote-daemon provider gets a no-op release. Does not wait for a
+ * reload: the harness is already running, so the hold must land immediately.
+ * Never rejects.
+ *
+ * @param {{metadata?: {providerId?: string}}|null} record - the persisted agent record
+ * @returns {Promise<() => void>} idempotent release
+ */
+export async function holdRecoveredOllamaAgentWork(record) {
+  const providerId = record?.metadata?.providerId
+  if (!providerId) return noop
+  const provider = await getProviderById(providerId).catch(() => null)
+  return usesLocalOllamaDaemon(provider) ? beginOllamaWork() : noop
 }
 
 /**

@@ -102,6 +102,13 @@ vi.mock('./agentManagement.js', () => ({ handleOrphanedTask: vi.fn() }));
 // ledger, and so the boundary assertions below can read the envelope (#4540).
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
+// The daemon side (window reload, in-flight registry) is pinned in
+// ollamaAgentContext.test.js; here only the acquire/release seam matters.
+const { ensureOllamaAgentContext, beginOllamaAgentWork } = vi.hoisted(() => ({
+  ensureOllamaAgentContext: vi.fn(async () => ({ skipped: false, contextLength: 131072, applied: false, warning: null })),
+  beginOllamaAgentWork: vi.fn(),
+}));
+vi.mock('../ollamaAgentContext.js', () => ({ ensureOllamaAgentContext, beginOllamaAgentWork }));
 vi.mock('./agentPromptBuilder.js', () => ({ buildAgentPrompt: vi.fn(), getAppWorkspace: vi.fn() }));
 // The real classification of a `spawn-rejected` reason (non-actionable, so the
 // task is budgeted a retry rather than blocked) is pinned in
@@ -492,5 +499,68 @@ describe('spawnViaRunner — credentials in the env delta', () => {
     expect(spawnAgentViaRunner).toHaveBeenCalledWith(expect.objectContaining({
       envVars: expect.objectContaining({ PORTOS_API_TOKEN: 'portos-session-token' }),
     }));
+  });
+});
+
+describe('spawnViaRunner — Ollama-backed harnesses hold the daemon (#17342)', () => {
+  const ollamaOpts = () => ({
+    ...runnerOpts(),
+    model: 'qwen3:32b',
+    provider: { id: 'claude-ollama', name: 'Claude Ollama', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } },
+  });
+  let release;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runnerAgents.clear();
+    release = vi.fn();
+    beginOllamaAgentWork.mockResolvedValue(release);
+  });
+
+  it('prepares the context window and holds in-flight work before the spawn rpc', async () => {
+    const order = [];
+    ensureOllamaAgentContext.mockImplementationOnce(async () => { order.push('context'); return { skipped: false, warning: null }; });
+    beginOllamaAgentWork.mockImplementationOnce(async () => { order.push('hold'); return release; });
+    vi.mocked(spawnAgentViaRunner).mockImplementationOnce(async () => { order.push('spawn'); return { pid: 4242 }; });
+
+    await spawnViaRunner('agent-1', { id: 'task-1' }, ollamaOpts());
+
+    expect(order).toEqual(['context', 'hold', 'spawn']);
+    expect(ensureOllamaAgentContext).toHaveBeenCalledWith(expect.objectContaining({ id: 'claude-ollama' }), { model: 'qwen3:32b' });
+    expect(runnerAgents.get('agent-1')?.releaseOllamaWork).toBe(release);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('releases the hold when the run completes', async () => {
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+    await spawnViaRunner('agent-1', { id: 'task-1' }, ollamaOpts());
+    vi.mocked(getAgentRecord).mockResolvedValueOnce({ id: 'agent-1', status: 'running', taskId: 'task-1', metadata: {} });
+
+    await handleAgentCompletion('agent-1', 0, true, 1000);
+
+    expect(runnerAgents.has('agent-1')).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the hold when the runner rejects the spawn', async () => {
+    vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(refusal());
+    await spawnViaRunner('agent-1', { id: 'task-1' }, ollamaOpts());
+    expect(runnerAgents.has('agent-1')).toBe(false);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the hold at once when a teardown dropped the entry before the rpc', async () => {
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    vi.mocked(resolveAgentApiEnv).mockImplementationOnce(async () => { runnerAgents.delete('agent-1'); return {}; });
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+    await spawnViaRunner('agent-1', { id: 'task-1' }, ollamaOpts());
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a non-Ollama provider untouched', async () => {
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+    await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());
+    expect(ensureOllamaAgentContext).not.toHaveBeenCalled();
+    expect(beginOllamaAgentWork).not.toHaveBeenCalled();
   });
 });

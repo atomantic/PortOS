@@ -2,13 +2,15 @@
  * Focused unit tests for the agentGuards primitives in isolation (issue #2548).
  *
  * agentLifecycle.test.js drives these same helpers through the spawn/completion
- * lenses; here we pin their bare contract against throwaway collections so a
+ * lenses; here we pin their bare contract (against throwaway collections or the
+ * import-free agentState maps) so a
  * regression in the helper is unambiguous and doesn't require the lifecycle
  * module's imports to load.
  */
 
-import { describe, it, expect } from 'vitest';
-import { withSpawnDedupGuard, withMapEntryCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
+import { describe, it, expect, vi } from 'vitest';
+import { withSpawnDedupGuard, withRunnerAgentCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
+import { runnerAgents } from './agentState.js';
 
 describe('withSpawnDedupGuard', () => {
   it('acquires, runs, and releases on success', async () => {
@@ -59,25 +61,26 @@ describe('withSpawnDedupGuard', () => {
   });
 });
 
-describe('withMapEntryCleanup', () => {
-  it('runs fn, returns its value, and deletes the entry', async () => {
-    const map = new Map([['k', { v: 1 }]]);
-    const result = await withMapEntryCleanup(map, 'k', async () => 'ok');
+describe('withRunnerAgentCleanup', () => {
+  it('runs fn, returns its value, and drops the entry with its Ollama hold', async () => {
+    const releaseOllamaWork = vi.fn();
+    runnerAgents.set('k', { v: 1, releaseOllamaWork });
+    const result = await withRunnerAgentCleanup('k', async () => 'ok');
     expect(result).toBe('ok');
-    expect(map.has('k')).toBe(false);
+    expect(runnerAgents.has('k')).toBe(false);
+    expect(releaseOllamaWork).toHaveBeenCalledTimes(1);
   });
 
-  it('deletes the entry even when fn throws, then re-raises', async () => {
-    const map = new Map([['k', { v: 1 }]]);
+  it('drops the entry even when fn throws, then re-raises', async () => {
+    runnerAgents.set('k', { v: 1 });
     await expect(
-      withMapEntryCleanup(map, 'k', async () => { throw new Error('fail'); })
+      withRunnerAgentCleanup('k', async () => { throw new Error('fail'); })
     ).rejects.toThrow('fail');
-    expect(map.has('k')).toBe(false);
+    expect(runnerAgents.has('k')).toBe(false);
   });
 
   it('is a no-op when the key is absent', async () => {
-    const map = new Map();
-    await withMapEntryCleanup(map, 'missing', async () => {});
-    expect(map.has('missing')).toBe(false);
+    await withRunnerAgentCleanup('missing', async () => {});
+    expect(runnerAgents.has('missing')).toBe(false);
   });
 });

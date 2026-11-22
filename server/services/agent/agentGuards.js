@@ -1,4 +1,5 @@
 import { assertDatabaseAdmission } from '../../lib/databaseMaintenanceJournal.js';
+import { dropRunnerAgent } from './agentState.js';
 /**
  * Agent lifecycle guard primitives: small dependency-injected helpers carved out of
  * `spawnAgentForTask` / `handleAgentCompletion` (agentLifecycle.js) so their concurrency
@@ -48,17 +49,17 @@ export async function withUpdateInProgressGuard(isUpdateInProgress, fn) {
 }
 
 /**
- * Run `fn`, then delete `key` from `map` in a `finally`, so a throw in any completion step never
- * strands an entry in `runnerAgents` (unbounded growth, misrouted re-emitted completion).
- * @param {Map<string, any>} map
- * @param {string} key
+ * Run `fn`, then drop the `runnerAgents` entry for `agentId` in a `finally`, so a throw in any
+ * completion step never strands the entry (unbounded growth, misrouted re-emitted completion) or
+ * its in-flight Ollama hold (every later context reload deferred to the drain timeout).
+ * @param {string} agentId
  * @param {() => Promise<any>} fn
  * @returns {Promise<any>}
  */
-export async function withMapEntryCleanup(map, key, fn) {
+export async function withRunnerAgentCleanup(agentId, fn) {
   try {
     return await fn();
   } finally {
-    map.delete(key);
+    dropRunnerAgent(agentId);
   }
 }
