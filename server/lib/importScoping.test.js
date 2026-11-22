@@ -117,6 +117,8 @@ describe('instance identity stays a leaf (#6836)', () => {
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
 const SELECTION_CUTS = [
+  ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
+    'classifies observed facts without importing reconciliation or CoS orchestration'],
   ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
@@ -143,7 +145,7 @@ const importTargets = (entry) => {
 
 describe('CI-selection cuts stay cut (#12285)', () => {
   it.each(SELECTION_CUTS)('%s imports %s neither statically nor dynamically — it %s', (entry, target) => {
-    expect(importTargets(entry)).not.toContain(target);
+    expect(importTargets(entry)).not.toContainEqual(typeof target === 'string' ? target : expect.stringMatching(target));
   });
 
   it('the leaves the cut entries import stay import-free', () => {
