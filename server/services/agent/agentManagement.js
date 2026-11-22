@@ -1265,6 +1265,7 @@ async function runCleanupOrphanedAgents() {
       // Before marking as orphaned, check if the process is actually still running.
       // Any leftover entry stays until the pid is known dead: a live Ollama-backed
       // harness must never be uncounted as in-flight daemon work (#17342).
+      const tracked = runnerAgents.get(agent.id);
       if (agent.pid) {
         const stillAlive = await isPidAlive(agent.pid);
         if (stillAlive) {
@@ -1277,15 +1278,21 @@ async function runCleanupOrphanedAgents() {
             acquired?.();
             continue;
           }
-          // The stub carries the existing hold over, so replacing the entry keeps it.
+          // The stub carries the existing hold over, so replacing the entry keeps
+          // it; one that appeared on the entry during the await wins over ours.
+          const carried = current?.releaseOllamaWork ?? acquired;
+          if (acquired && carried !== acquired) acquired();
           trackRunnerAgent(agent.id, {
             id: agent.id, pid: agent.pid, taskId: agent.taskId,
             task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' },
-            releaseOllamaWork: current?.releaseOllamaWork ?? acquired
+            releaseOllamaWork: carried
           });
           continue;
         }
       }
+      // A spawn or sync that tracked this id during the liveness probe owns it now.
+      const replacement = runnerAgents.get(agent.id);
+      if (replacement && replacement !== tracked) continue;
       dropRunnerAgent(agent.id);
 
       // Recheck after the awaited pid probes: completion owns its terminal write.

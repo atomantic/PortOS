@@ -518,6 +518,26 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       runnerAgents.clear();
     });
 
+    it('returns its own hold when the entry gained one while it was being acquired', async () => {
+      const ours = vi.fn();
+      const theirs = vi.fn();
+      runnerAgents.set('agent-alive', { taskId: 'task-1' });
+      readAgentRecordOrUnreadable.mockResolvedValueOnce(liveRecord());
+      holdRecoveredRunnerOllamaWork.mockImplementationOnce(async () => {
+        runnerAgents.get('agent-alive').releaseOllamaWork = theirs;
+        return ours;
+      });
+      getAgents.mockResolvedValueOnce([liveRecord()]);
+      getActiveAgentsFromRunner.mockResolvedValueOnce(staleListing());
+
+      await cleanupOrphanedAgents();
+
+      expect(ours).toHaveBeenCalledTimes(1);
+      expect(theirs).not.toHaveBeenCalled();
+      expect(runnerAgents.get('agent-alive')?.releaseOllamaWork).toBe(theirs);
+      runnerAgents.clear();
+    });
+
     it('acquires a hold for an untracked live survivor', async () => {
       const hold = vi.fn();
       holdRecoveredRunnerOllamaWork.mockResolvedValueOnce(hold);
