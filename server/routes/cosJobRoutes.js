@@ -8,6 +8,8 @@ import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
+import { getJobNotepad, getJobNote, setJobNote, deleteJobNote, clearJobNotes } from '../services/autonomousJobs/notepad.js';
+import { noteKeySchema, putNoteBodySchema } from '../lib/autonomousJobNotepadValidation.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -284,6 +286,58 @@ router.delete('/jobs/:id', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json({ success: true });
+}));
+
+// Per-job durable KV notepad (#17392). Machine-local; the job must exist so a
+// typo'd id cannot accumulate orphan rows that deleteJob would never clear.
+async function requireJob(id) {
+  const job = await autonomousJobs.getJob(id);
+  if (!job) throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+}
+
+function parseNoteKey(key) {
+  const parsed = noteKeySchema.safeParse(key);
+  if (!parsed.success) failValidation(parsed);
+  return parsed.data;
+}
+
+// GET /api/cos/jobs/:id/notepad - Entries plus byte usage and remaining budget
+router.get('/jobs/:id/notepad', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  res.json(await getJobNotepad(req.params.id));
+}));
+
+// GET /api/cos/jobs/:id/notepad/:key - One entry
+router.get('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  const note = await getJobNote(req.params.id, parseNoteKey(req.params.key));
+  if (!note) throw new ServerError('Notepad key not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(note);
+}));
+
+// PUT /api/cos/jobs/:id/notepad/:key - Upsert { value }; 400 on a cap overflow, state untouched
+router.put('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  const key = parseNoteKey(req.params.key);
+  const parsed = putNoteBodySchema.safeParse(req.body);
+  if (!parsed.success) failValidation(parsed);
+  await requireJob(req.params.id);
+  res.json(await setJobNote(req.params.id, key, parsed.data.value));
+}));
+
+// DELETE /api/cos/jobs/:id/notepad/:key - Delete one entry
+router.delete('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  if (!await deleteJobNote(req.params.id, parseNoteKey(req.params.key))) {
+    throw new ServerError('Notepad key not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(await getJobNotepad(req.params.id));
+}));
+
+// DELETE /api/cos/jobs/:id/notepad - Clear every entry
+router.delete('/jobs/:id/notepad', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  await clearJobNotes(req.params.id);
+  res.json(await getJobNotepad(req.params.id));
 }));
 
 export default router;

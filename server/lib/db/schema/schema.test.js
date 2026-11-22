@@ -25,7 +25,7 @@ import {
 } from './index.js';
 
 const DOMAIN_ARRAYS = [
-  'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl', 'reviewQueueTriageDdl', 'cosAgentFeedbackDdl', 'cosTasksDdl', 'cosAgentsDdl', 'aiGraphDdl', 'usageLedgerDdl', 'peerExecutionDdl',
+  'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl', 'reviewQueueTriageDdl', 'autonomousJobNotepadsDdl', 'cosAgentFeedbackDdl', 'cosTasksDdl', 'cosAgentsDdl', 'aiGraphDdl', 'usageLedgerDdl', 'peerExecutionDdl',
   'catalogDdl', 'catalogIdentityDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
   'libraryDdl', 'pipelineDdl', 'writersRoomDdl', 'loraDdl', 'privacyDdl', 'stackerNewsDdl', 'xDdl',
   'beeperDdl', 'githubNotificationsDdl', 'mindToolRecipesDdl',
@@ -49,6 +49,7 @@ describe('db/schema barrel + composer (#2832)', () => {
       ...schema.commissionsDdl,
       ...schema.userActionsDdl,
       ...schema.reviewQueueTriageDdl,
+      ...schema.autonomousJobNotepadsDdl,
       ...schema.cosAgentFeedbackDdl,
       ...schema.cosTasksDdl,
       ...schema.cosAgentsDdl,

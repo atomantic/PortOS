@@ -9,6 +9,7 @@ import { posix } from 'node:path';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  'services/autonomousJobs/notepad.db.test.js',
   'services/catalog/catalogDB.merge.db.test.js',
   'services/catalogIdentity/protocol.db.test.js',
   'services/catalog/catalogDB.identityIntegration.db.test.js',

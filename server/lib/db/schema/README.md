@@ -34,6 +34,7 @@ identical catalogs.
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
 | `userActions.js` | `userActionsDdl` | Operator-action ledger — what the human did in the UI (machine-local) |
 | `reviewQueueTriage.js` | `reviewQueueTriageDdl` | Machine-local Review Hub presentation markers — snooze, optional dismissal, and delivery generation keyed by canonical action identity |
+| `autonomousJobNotepads.js` | `autonomousJobNotepadsDdl` | Machine-local per-job durable KV notepad for CoS Autonomous Jobs (bounded cursors/watermarks, never federated) |
 | `cosTasks.js` | `cosTasksDdl` | The CoS task queues, one row per task (stored form, queue order, completed-at window) plus a per-queue write version |
 | `cosAgents.js` | `cosAgentsDdl` | The CoS agent working set (running + not-yet-archived), one row per agent (exact JSON text, query projections, insertion order) plus a write version |
 | `cosAgentFeedback.js` | `cosAgentFeedbackDdl` | Durable machine-local references to completed manual CoS runs awaiting a rating (agent id + archive locator only) |
