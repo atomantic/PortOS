@@ -49,8 +49,8 @@ import { cliProviderAuthDescriptor } from '../../lib/processEnv.js';
 import { isClaudeCliProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
 import { resolveForgeTokenEnv } from '../forgeAuth.js';
 import { resolveAgentApiEnv } from './agentApiAuth.js';
-import { runnerAgents, completingAgents, pausedAgents, consumePausedAgentExit, spawningTasks, isTruthyMeta } from './agentState.js';
-import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
+import { runnerAgents, dropRunnerAgent, trackRunnerAgent, completingAgents, pausedAgents, consumePausedAgentExit, spawningTasks, isTruthyMeta } from './agentState.js';
+import { withSpawnDedupGuard, withRunnerAgentCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from '../updateChecker.js';
 import { createAgentSpawnContext, prepareAgentSpawn } from './agentSpawnPreparation.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
@@ -58,6 +58,7 @@ import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { finalizeAgent, retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
+import { isOllamaBackedProvider } from '../provider/providers.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
@@ -185,6 +186,22 @@ export async function spawnViaRunner(agentId, task, opts) {
   // Wait for runner to be stable to prevent orphaned agents during rolling restarts
   await waitForRunnerStability();
 
+  // The runner-hosted harness talks to the local Ollama daemon on its own, so it
+  // gets the same pre-spawn window preparation and in-flight hold as the direct
+  // and TUI paths (#17342). Acquired before the entry is tracked so the hold is
+  // never attached to an entry a concurrent teardown already dropped; every
+  // teardown releases it through `dropRunnerAgent`.
+  let releaseOllamaWork = null;
+  if (isOllamaBackedProvider(provider)) {
+    // Deferred so the Ollama context module stays out of the boot closure.
+    const { beginOllamaAgentWork, ensureOllamaAgentContext } = await import('../ollamaAgentContext.js');
+    const ollamaContext = await ensureOllamaAgentContext(provider, { model });
+    if (ollamaContext.warning) {
+      emitLog('warn', `Agent ${agentId} Ollama context preparation: ${ollamaContext.warning}`, { agentId, taskId: task.id });
+    }
+    releaseOllamaWork = await beginOllamaAgentWork(provider);
+  }
+
   const agentInfo = {
     taskId: task.id,
     task,
@@ -194,9 +211,10 @@ export async function spawnViaRunner(agentId, task, opts) {
     hasStartedWorking: false,
     startedAt: Date.now(),
     initializationTimeout: null,
-    workspacePath
+    workspacePath,
+    releaseOllamaWork
   };
-  runnerAgents.set(agentId, agentInfo);
+  trackRunnerAgent(agentId, agentInfo);
 
   // If no output after 3 seconds, transition from initializing to working to show progress
   agentInfo.initializationTimeout = setTimeout(async () => {
@@ -277,7 +295,7 @@ export async function spawnViaRunner(agentId, task, opts) {
     // (#4615).
     const refused = classifyRunnerSpawnFailure(err) === RUNNER_SPAWN_REFUSED;
     clearTimeout(agentInfo.initializationTimeout);
-    runnerAgents.delete(agentId);
+    dropRunnerAgent(agentId);
     // A handoff that did not land (#4540). Recorded as its own boundary
     // rather than left to the failure the finalize below records: "the run
     // never started because the runner would not take it" and "the run started
@@ -534,7 +552,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
   // under a later resume. Mirrors the CLI/TUI close-handler pause guards.
   if (pausedAgents.has(agentId)) {
     consumePausedAgentExit(agentId);
-    runnerAgents.delete(agentId);
+    dropRunnerAgent(agentId);
     await maintenance.finishResource('agent', agentId);
     return;
   }
@@ -546,13 +564,13 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
 
   const { task, runId, model } = agent;
 
-  // withMapEntryCleanup drops the runnerAgents entry in a finally even if any
+  // withRunnerAgentCleanup drops the runnerAgents entry (and its Ollama hold) in a finally even if any
   // inner completion step throws — otherwise a memory-extraction crash etc.
   // would strand it forever and no future spawn could reclaim the slot. The
   // error still propagates to the caller (agentGuards.js, issue #2548). The
   // already-finalized guard below sits INSIDE it so its early return drops the
   // entry too, rather than hand-rolling a second delete.
-  return withMapEntryCleanup(runnerAgents, agentId, async () => {
+  return withRunnerAgentCleanup(agentId, async () => {
     // The persisted record, read once and shared with the PR-ownership check
     // further down. Read off the PERSISTED record, not the in-memory
     // `runnerAgents` entry: the entry carries only `providerId` (and a

@@ -15,7 +15,7 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cos/cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../../lib/runnerAgentLiveness.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
-import { isAgentOwnedLocally, runnerAgents, spawningTasks } from './agentState.js';
+import { isAgentOwnedLocally, runnerAgents, spawningTasks, trackRunnerAgent } from './agentState.js';
 import { AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import * as shellService from '../shell.js';
@@ -65,6 +65,26 @@ async function stopInterruptedStartup(agentId) {
  * the finished task. Observed on a 55-min release-check run that had already
  * published its release and merged all of its PRs.
  */
+
+const noOllamaHold = () => {};
+
+/**
+ * Re-register a restart survivor's in-flight Ollama hold (#17342); resolves to its
+ * release. Deferred import keeps `ollamaAgentContext.js` (and the Ollama manager)
+ * out of the boot closure for the many records that name no provider.
+ *
+ * @param {object|null} record - the persisted agent record
+ * @returns {Promise<() => void>}
+ */
+export const holdRecoveredRunnerOllamaWork = (record) => (record?.metadata?.providerId
+  ? import('../ollamaAgentContext.js')
+    .then(({ holdRecoveredOllamaAgentWork }) => holdRecoveredOllamaAgentWork(record))
+    .catch((err) => {
+      console.warn(`⚠️ Ollama hold failed for recovered agent ${record?.id}: ${err.message}`);
+      return noOllamaHold;
+    })
+  : Promise.resolve(noOllamaHold));
+
 export async function syncRunnerAgents() {
   const agents = await getActiveAgentsFromRunner().catch(err => {
     console.error(`❌ Failed to get active agents from runner: ${err.message}`);
@@ -145,7 +165,16 @@ export async function syncRunnerAgents() {
       }
       const persisted = read === AGENT_RECORD_UNREADABLE ? null : read;
       const recoveredRunId = persisted?.metadata?.runId || null;
-      runnerAgents.set(agent.id, {
+      // The in-flight Ollama registry is in-memory, so a surviving harness on the
+      // local daemon must be counted again or the next spawn's context reload
+      // restarts the daemon under it (#17342). Released by `dropRunnerAgent`.
+      const releaseOllamaWork = await holdRecoveredRunnerOllamaWork(persisted);
+      // Another sweep may have adopted it while this one awaited.
+      if (isAgentOwnedLocally(agent.id)) {
+        releaseOllamaWork();
+        continue;
+      }
+      trackRunnerAgent(agent.id, {
         taskId: agent.taskId,
         task: task || { id: agent.taskId, taskType: inferredType, description: 'Recovered from runner' },
         runId: recoveredRunId,
@@ -156,13 +185,14 @@ export async function syncRunnerAgents() {
         recoveredFromRunner: true,
         hasStartedWorking: true,
         startedAt: agent.startedAt,
+        releaseOllamaWork,
         ...(agent.kind === 'tui' && agent.promptSubmitted === false ? { startupErrorAnalysis } : {}),
       });
       if (!recoveredRunId) {
         console.warn(`⚠️ Recovered agent ${agent.id} has no run id on record — its run stays open and unbilled`);
       }
       // Record the re-adoption in the lifecycle ledger (#4540). No explicit
-      // idempotency key here, unlike the orphan sweep: `runnerAgents.set` above
+      // idempotency key here, unlike the orphan sweep: `trackRunnerAgent` above
       // has already made this agent locally owned, so the `isAgentOwnedLocally`
       // guard stops this branch re-firing within the process. A SECOND
       // re-adoption therefore means a second server lifetime — a genuinely

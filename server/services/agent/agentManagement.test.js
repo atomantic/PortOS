@@ -144,7 +144,7 @@ vi.mock('../../lib/maintenanceAdmission.js', async (importOriginal) => {
   const admission = actual.createMaintenanceAdmission(maintenanceTestDir, { assertWrite: () => {} });
   return { ...actual, maintenance: new Proxy(admission, { get: (target, key) => key === 'finishResource' ? finishResource : target[key] }) };
 });
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0), readRunnerCompletionReceipt: vi.fn().mockResolvedValue(null) }));
+vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0), readRunnerCompletionReceipt: vi.fn().mockResolvedValue(null), holdRecoveredRunnerOllamaWork: vi.fn().mockResolvedValue(() => {}) }));
 // The sweep defers this import for a receipt-backed completion (#14261).
 vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
@@ -260,9 +260,12 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
   // over-protecting worktrees from the cleanup job and counting against the
   // update gate that blocks the very restart that would clear it.
   it('drops runner-agent tracking whose record is gone or finalized, keeping live and unknowable ones', async () => {
-    runnerAgents.set('agent-ghost', { taskId: 'task-1' });
+    // Dropped tracking must also release the in-flight Ollama hold (#17342).
+    const ghostHold = vi.fn();
+    const liveHold = vi.fn();
+    runnerAgents.set('agent-ghost', { taskId: 'task-1', releaseOllamaWork: ghostHold });
     runnerAgents.set('agent-done', { taskId: 'task-1' });
-    runnerAgents.set('agent-live', { taskId: 'task-1' });
+    runnerAgents.set('agent-live', { taskId: 'task-1', releaseOllamaWork: liveHold });
     runnerAgents.set('agent-unreadable', { taskId: 'task-1' });
     readAgentRecordOrUnreadable.mockImplementation(async (id) => {
       if (id === 'agent-ghost') return null;
@@ -279,6 +282,8 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     // A failed read proves nothing — dropping tracking on it would strand a run
     // whose completion event still has to land.
     expect(runnerAgents.has('agent-unreadable')).toBe(true);
+    expect(ghostHold).toHaveBeenCalledTimes(1);
+    expect(liveHold).not.toHaveBeenCalled();
     runnerAgents.clear();
   });
 
@@ -489,7 +494,8 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
   });
 
   it('reaps a stale listing even if runnerAgents already adopted the id', async () => {
-    runnerAgents.set('agent-stale', { taskId: 'task-1' });
+    const staleHold = vi.fn();
+    runnerAgents.set('agent-stale', { taskId: 'task-1', releaseOllamaWork: staleHold });
     getAgents.mockResolvedValueOnce([{
       id: 'agent-stale',
       status: 'running',
@@ -513,6 +519,7 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
       success: false,
     }));
     expect(runnerAgents.has('agent-stale')).toBe(false);
+    expect(staleHold).toHaveBeenCalledTimes(1);
   });
 
   it('preserves the blocked task and worktree after retiring a run with a held outcome', async () => {
@@ -2171,7 +2178,7 @@ describe('close-handler skip-finalization — source contract', () => {
     const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
     for (const [label, dispatch] of [
       ['post-restart recovery hand-off', 'completeUntrackedAgentFromCosState('],
-      ['live in-memory completion path', 'withMapEntryCleanup('],
+      ['live in-memory completion path', 'withRunnerAgentCleanup('],
     ]) {
       const dispatchPos = fnBody.indexOf(dispatch);
       expect(dispatchPos, `${label} (${dispatch}) must exist in handleAgentCompletion`).toBeGreaterThan(-1);
@@ -2187,9 +2194,10 @@ describe('close-handler skip-finalization — source contract', () => {
 
     const guardPos = fnBody.indexOf('pausedAgents.has(agentId)');
     const returnAfterGuard = fnBody.indexOf('return', guardPos);
-    // Between the guard and the early return, runnerAgents.delete must be called
+    // Between the guard and the early return, dropRunnerAgent (which also
+    // releases the in-flight Ollama hold) must be called
     const guardToReturn = fnBody.slice(guardPos, returnAfterGuard + 10);
-    expect(guardToReturn).toMatch(/runnerAgents\.delete\(agentId\)/);
+    expect(guardToReturn).toMatch(/dropRunnerAgent\(agentId\)/);
   });
 });
 
@@ -2974,7 +2982,8 @@ describe('lifecycle ledger — pause and interruption', () => {
   it('reads the ids out of the RUNNER map when that is where the agent lives', async () => {
     // A runner-spawned agent is absent from activeAgents entirely; a boundary
     // that consulted only that map would record the interrupt with no run id.
-    runnerAgents.set('runner-1', { taskId: 'task-1', runId: 'run-9' });
+    const releaseOllamaWork = vi.fn();
+    runnerAgents.set('runner-1', { taskId: 'task-1', runId: 'run-9', releaseOllamaWork });
     killAgentViaRunner.mockResolvedValue({ success: true });
 
     await killAgent('runner-1');
@@ -2982,6 +2991,9 @@ describe('lifecycle ledger — pause and interruption', () => {
     expect(ledgerCalls('run.interrupted')).toEqual([expect.objectContaining({
       runId: 'run-9', agentId: 'runner-1', data: expect.objectContaining({ mode: 'runner' })
     })]);
+    // The terminate teardown drops the entry and its in-flight Ollama hold (#17342).
+    expect(runnerAgents.has('runner-1')).toBe(false);
+    expect(releaseOllamaWork).toHaveBeenCalledTimes(1);
   });
 
   it('writes nothing for a kill aimed at an agent that is already gone', async () => {

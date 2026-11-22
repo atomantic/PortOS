@@ -95,7 +95,7 @@ vi.mock('../../lib/hostShutdown.js', async (importOriginal) => ({
   readHostShutdownMarker: vi.fn().mockResolvedValue(null),
   clearHostShutdownMarker: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0), readRunnerCompletionReceipt: vi.fn().mockResolvedValue(null) }));
+vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0), readRunnerCompletionReceipt: vi.fn().mockResolvedValue(null), holdRecoveredRunnerOllamaWork: vi.fn().mockResolvedValue(() => {}) }));
 vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn(), listWorktrees: vi.fn(async () => []) }));
 vi.mock('../creativeDirector/local.js', () => ({

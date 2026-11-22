@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./ollamaManager.js', () => ({
+  beginOllamaWork: vi.fn(),
+  waitForOllamaReload: vi.fn(async () => {}),
   ensureContextWindow: vi.fn(),
   getRuntimeContextLength: vi.fn(),
   getModelCapabilities: vi.fn(),
   getBaseUrl: vi.fn(() => 'http://localhost:11434')
 }))
 
-import { ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
-import { dropUnsupportedOllamaThinking, ensureOllamaAgentContext } from './ollamaAgentContext.js'
+vi.mock('./provider/providers.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getProviderById: vi.fn()
+}))
+
+import { beginOllamaWork, ensureContextWindow, getModelCapabilities, getRuntimeContextLength, waitForOllamaReload } from './ollamaManager.js'
+import { getProviderById } from './provider/providers.js'
+import {
+  beginOllamaAgentWork,
+  dropUnsupportedOllamaThinking,
+  ensureOllamaAgentContext,
+  holdRecoveredOllamaAgentWork
+} from './ollamaAgentContext.js'
 
 const claudeOllamaTui = {
   id: 'claude-ollama-tui',
@@ -158,5 +171,60 @@ describe('dropUnsupportedOllamaThinking', () => {
     const provider = { ...opencodeOllama, effort: 'high', endpoint: 'http://198.51.100.7:11434/v1' }
     expect((await dropUnsupportedOllamaThinking(provider, 'gemma3:27b', 'high')).dropped).toBe(false)
     expect(getModelCapabilities).not.toHaveBeenCalled()
+  })
+})
+
+describe('beginOllamaAgentWork', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('waits out a reload in progress, then registers in-flight work', async () => {
+    const release = vi.fn()
+    const order = []
+    waitForOllamaReload.mockImplementationOnce(async () => { order.push('wait') })
+    beginOllamaWork.mockImplementationOnce(() => { order.push('begin'); return release })
+    expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
+    expect(order).toEqual(['wait', 'begin'])
+  })
+
+  it('returns a no-op release for non-Ollama and remote-daemon providers', async () => {
+    const remote = { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
+    for (const provider of [null, { id: 'claude-code', type: 'cli' }, remote]) {
+      const release = await beginOllamaAgentWork(provider)
+      expect(typeof release).toBe('function')
+      release()
+    }
+    expect(beginOllamaWork).not.toHaveBeenCalled()
+  })
+})
+
+describe('holdRecoveredOllamaAgentWork', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('re-registers a survivor whose persisted provider uses the local daemon, without waiting for a reload', async () => {
+    const release = vi.fn()
+    beginOllamaWork.mockReturnValueOnce(release)
+    getProviderById.mockResolvedValueOnce(claudeOllamaTui)
+    expect(await holdRecoveredOllamaAgentWork({ metadata: { providerId: 'claude-ollama-tui' } })).toBe(release)
+    expect(getProviderById).toHaveBeenCalledWith('claude-ollama-tui')
+    expect(waitForOllamaReload).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no provider id', null, {}],
+    ['a deleted provider', null, { metadata: { providerId: 'gone' } }],
+    ['a non-Ollama provider', { id: 'codex', type: 'cli' }, { metadata: { providerId: 'codex' } }],
+    ['a remote daemon', { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }, { metadata: { providerId: 'remote' } }]
+  ])('holds nothing for %s', async (_label, provider, record) => {
+    getProviderById.mockResolvedValueOnce(provider)
+    const release = await holdRecoveredOllamaAgentWork(record)
+    expect(typeof release).toBe('function')
+    expect(beginOllamaWork).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed provider lookup as no hold rather than rejecting', async () => {
+    getProviderById.mockRejectedValueOnce(new Error('toolkit not ready'))
+    const release = await holdRecoveredOllamaAgentWork({ metadata: { providerId: 'claude-ollama-tui' } })
+    expect(typeof release).toBe('function')
+    expect(beginOllamaWork).not.toHaveBeenCalled()
   })
 })

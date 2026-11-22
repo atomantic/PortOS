@@ -31,7 +31,7 @@ import { syncRunnerAgents } from './agent/agentRunnerSync.js';
 import { cleanupOrphanedAgents } from './agent/agentManagement.js';
 import { completeAgentRun } from './agent/agentRunTracking.js';
 import { appendRunEvent } from './agent/agentRunEventLog.js';
-import { activeAgents, runnerAgents, setUseRunner, useRunner } from './agent/agentState.js';
+import { activeAgents, dropRunnerAgent, runnerAgents, setUseRunner, useRunner } from './agent/agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { loadState } from './cos/cosState.js';
@@ -374,7 +374,7 @@ async function runInitSpawner() {
       await completeAgent(agentId, { success: false, validationPassed: null, error });
       await releaseAgentReservation(agentId);
       await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });
-      runnerAgents.delete(agentId);
+      dropRunnerAgent(agentId);
     }
   });
 

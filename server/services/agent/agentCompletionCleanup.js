@@ -298,7 +298,7 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
  * notification and merge-recovery task).
  *
  * Called from `handleAgentCompletion` after `finalizeAgent`, inside its
- * try/finally so `runnerAgents.delete(agentId)` still fires on a throw here.
+ * try/finally so `dropRunnerAgent(agentId)` still fires on a throw here.
  *
  * The retry hold is released in a `finally` (#3373): a failed task is left
  * `in_progress` + held by `finalizeAgent` so nothing can dequeue its retry before

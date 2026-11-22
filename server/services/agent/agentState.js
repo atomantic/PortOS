@@ -11,6 +11,35 @@ export const activeAgents = new Map();
 
 export const runnerAgents = new Map();
 
+// A runner entry may carry `releaseOllamaWork`, the in-flight hold that keeps
+// another spawn's context reload from restarting the local Ollama daemon under a
+// live harness (#17342). Mutate the map ONLY through these two helpers so every
+// teardown and overwrite releases that hold; a bare `runnerAgents.delete` leaks
+// it and defers every later reload until the drain timeout.
+const releaseEntryHold = (entry) => {
+  try {
+    entry?.releaseOllamaWork?.();
+  } catch (err) {
+    console.error(`❌ Ollama work release failed: ${err.message}`);
+  }
+};
+
+/** Track a runner-hosted agent; an entry it replaces has its hold released. */
+export const trackRunnerAgent = (agentId, entry) => {
+  const previous = runnerAgents.get(agentId);
+  runnerAgents.set(agentId, entry);
+  if (previous && previous !== entry) releaseEntryHold(previous);
+  return entry;
+};
+
+/** Stop tracking a runner-hosted agent and release its in-flight hold. */
+export const dropRunnerAgent = (agentId) => {
+  const entry = runnerAgents.get(agentId);
+  const deleted = runnerAgents.delete(agentId);
+  releaseEntryHold(entry);
+  return deleted;
+};
+
 // Completion events can outlive the runner process (hooks, forge checks and
 // persistence all await). Sweeps must not race them to the first terminal write.
 export const completingAgents = new Set();
