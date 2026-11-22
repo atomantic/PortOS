@@ -18,6 +18,7 @@ import {
   describeStaleness,
   measuredFitVerdict,
   reconcileFit,
+  sampleHidesReasoning,
 } from './localModelAssessment.js';
 
 const okSample = (contextTokens, charsPerSecond, ttftMs = 300) => ({
@@ -91,6 +92,20 @@ describe('maxWorkingContextTokens', () => {
   });
 });
 
+describe('sampleHidesReasoning', () => {
+  it('compares visible characters against generated tokens', () => {
+    expect(sampleHidesReasoning({ ok: true, chars: 1, completionTokens: 70 })).toBe(true);
+    // A non-thinking model's bare "4" plus an end token is not hidden reasoning.
+    expect(sampleHidesReasoning({ ok: true, chars: 1, completionTokens: 2 })).toBe(false);
+    expect(sampleHidesReasoning({ ok: true, chars: 16, completionTokens: 5 })).toBe(false);
+  });
+
+  it('is null without the evidence or for a failed sample', () => {
+    expect(sampleHidesReasoning({ ok: true, chars: 1, completionTokens: null })).toBeNull();
+    expect(sampleHidesReasoning({ ok: false, chars: 1, completionTokens: 70 })).toBeNull();
+  });
+});
+
 describe('summarizePerformance', () => {
   it('averages only successful samples and reports the degradation trend', () => {
     const perf = summarizePerformance([okSample(512, 200, 100), okSample(4096, 100, 400), failSample(16384, 'oom')]);
@@ -118,6 +133,28 @@ describe('summarizePerformance', () => {
     // Reporting 1 here would claim "throughput held flat across contexts" on
     // the strength of one data point.
     expect(summarizePerformance([okSample(512, 200)]).contextDegradation).toBeNull();
+  });
+
+  // A thinking model's answer is "4" after ~70 hidden reasoning tokens.
+  const thinkingSample = (contextTokens, tokensPerSecond) => ({
+    ...okSample(contextTokens, 0.2), chars: 1, completionTokens: 70, tokensPerSecond,
+  });
+
+  it('flags a thinking model whose visible text hid its reasoning, and trends on tokens/s', () => {
+    const perf = summarizePerformance([thinkingSample(512, 100), thinkingSample(4096, 80)]);
+    expect(perf.reasoningHidden).toBe(true);
+    expect(perf.contextDegradation).toBe(0.8);
+  });
+
+  it('gives no chars/s trend for a thinking model without two token rates', () => {
+    const perf = summarizePerformance([thinkingSample(512, null), thinkingSample(4096, null)]);
+    expect(perf.reasoningHidden).toBe(true);
+    expect(perf.contextDegradation).toBeNull();
+  });
+
+  it('leaves reasoningHidden unknown without token counts, false when the text accounts for them', () => {
+    expect(summarizePerformance([okSample(512, 100)]).reasoningHidden).toBeNull();
+    expect(summarizePerformance([{ ...okSample(512, 100), completionTokens: 10 }]).reasoningHidden).toBe(false);
   });
 
   it('reports nulls, not zeros, when nothing was measured', () => {
@@ -154,9 +191,19 @@ describe('scoreAssessment', () => {
   it('scores every axis that has evidence', () => {
     const scores = scoreAssessment(base);
     expect(scores.capability).toBeGreaterThan(0);
-    expect(scores.speed).toBeCloseTo(0.5, 5);
+    // 120 chars/s against the 480 chars/s anchor (120 tok/s at ~4 chars per token).
+    expect(scores.speed).toBeCloseTo(0.25, 5);
     expect(scores.fidelity).toBeCloseTo(0.8, 5);
     expect(scores.memory).toBeCloseTo(0.75, 5);
+  });
+
+  it('scores speed on decode tokens/s when the runtime reported it', () => {
+    const perf = { meanTokensPerSecond: 60, meanCharsPerSecond: 0.2, reasoningHidden: true };
+    expect(scoreAssessment({ ...base, performance: perf }).speed).toBeCloseTo(0.5, 5);
+  });
+
+  it('gives no speed score from chars/s that only counted a thinking model\'s visible answer', () => {
+    expect(scoreAssessment({ ...base, performance: { meanCharsPerSecond: 0.2, reasoningHidden: true } }).speed).toBeNull();
   });
 
   it('caps speed at the interactive anchor rather than rewarding runaway numbers', () => {
@@ -314,6 +361,29 @@ describe('rankByIntent', () => {
     ];
     expect(rankByIntent(models, 'fastest').ranked[0].modelId).toBe('example-small:7b');
     expect(rankByIntent(models, 'smartest').ranked[0].modelId).toBe('example-large:70b');
+  });
+
+  // #17430: the same thinking model on two runtimes. Both visible answers are one character, so
+  // chars/s is ~0.2 for each; the MTP runtime decodes 1.7x faster once warm and must rank first.
+  it('ranks the faster sustained decoder first when chars/s only counted a one-character answer', () => {
+    const thinking = (tokensPerSecond) => [512, 4096, 16384].map((contextTokens) => ({
+      contextTokens, ok: true, chars: 1, charsPerSecond: 0.2, completionTokens: 256, tokensPerSecond, ttftMs: 300, error: null,
+    }));
+    const models = [
+      { ...assessment('example-thinker:30b', 'fits', summarizePerformance(thinking(38.3)), { residentGb: 26 }), backend: 'ollama' },
+      { ...assessment('example-thinker:30b', 'fits', summarizePerformance(thinking(65.3)), { residentGb: 26 }), backend: 'mtplx' },
+    ];
+    for (const intent of ['balanced', 'fastest']) {
+      expect(rankByIntent(models, intent).ranked[0].backend).toBe('mtplx');
+    }
+    expect(explainAssessment(models[1], 'fastest')).not.toMatch(/chars\/s/);
+  });
+
+  it('reads reasoningHidden from the samples of a record stored before the field existed', () => {
+    const samples = [{ contextTokens: 512, ok: true, chars: 1, charsPerSecond: 0.2, completionTokens: 70, error: null }];
+    const legacy = assessment('example-thinker:30b', 'fits', { meanCharsPerSecond: 0.2 }, { samples });
+    expect(scoreAssessment(legacy).speed).toBeNull();
+    expect(buildThroughputReport([legacy]).rows[0].reasoningHidden).toBe(true);
   });
 
   it('favors the lightest resident footprint for "lightweight"', () => {

@@ -111,6 +111,40 @@ export function maxWorkingContextTokens(samples) {
 }
 
 /**
+ * Whether a successful sample's visible text under-represents what the model generated: fewer than
+ * half a character per generated token. A thinking model answers the benchmark's "4" after ~70
+ * reasoning tokens streamed on a separate channel, so its chars/s measures the answer's length,
+ * not its speed (#17430). `null` when the runtime reported no token count to compare against.
+ *
+ * @param {{ ok?: boolean, chars?: number|null, completionTokens?: number|null }} sample
+ * @returns {boolean|null}
+ */
+export function sampleHidesReasoning(sample) {
+  if (sample?.ok !== true || !isMeasured(sample.chars) || !isMeasured(sample.completionTokens)) return null;
+  return sample.completionTokens > 2 * sample.chars;
+}
+
+/**
+ * `true` when any successful sample hid most of its generation as reasoning, `false` when token
+ * counts were reported and none did, `null` when no sample carried the evidence.
+ */
+function reasoningHiddenIn(samples) {
+  const flags = okSamples(samples).map(sampleHidesReasoning).filter((flag) => flag !== null);
+  return flags.length ? flags.some(Boolean) : null;
+}
+
+/**
+ * A stored record's performance with `reasoningHidden` filled in from its samples when the record
+ * predates the field, so older thinking-model readings are read the same way as new ones.
+ */
+function performanceOf(assessment) {
+  const perf = assessment?.performance || {};
+  return typeof perf.reasoningHidden === 'boolean' || perf.reasoningHidden === null
+    ? perf
+    : { ...perf, reasoningHidden: reasoningHiddenIn(assessment?.samples) };
+}
+
+/**
  * Mean of a numeric field across successful samples, or `null` when the field
  * was never measured. Rounded to two decimals so persisted records stay stable.
  */
@@ -144,11 +178,19 @@ function meanOf(samples, field) {
  */
 export function summarizePerformance(samples) {
   const ok = okSamples(samples);
-  const measured = ok
-    .filter((s) => isMeasured(s.charsPerSecond) && s.charsPerSecond > 0 && isMeasured(s.contextTokens));
-  const fastest = measured.length ? Math.max(...measured.map((s) => s.charsPerSecond)) : null;
-  const atLongest = measured.length
-    ? measured.reduce((longest, s) => (s.contextTokens > longest.contextTokens ? s : longest)).charsPerSecond
+  const reasoningHidden = reasoningHiddenIn(samples);
+  const rated = (field) => ok.filter((s) => isMeasured(s[field]) && s[field] > 0 && isMeasured(s.contextTokens));
+  const charRated = rated('charsPerSecond');
+  // The degradation trend reads decode tokens/s when two or more contexts reported it: that is the
+  // generation speed itself. Chars/s is the fallback for runtimes without token counts, and has no
+  // trend to give when the visible text hid the reasoning.
+  const tokenRated = rated('tokensPerSecond');
+  const [trend, trendField] = tokenRated.length >= 2
+    ? [tokenRated, 'tokensPerSecond']
+    : [reasoningHidden ? [] : charRated, 'charsPerSecond'];
+  const fastest = trend.length ? Math.max(...trend.map((s) => s[trendField])) : null;
+  const atLongest = trend.length
+    ? trend.reduce((longest, s) => (s.contextTokens > longest.contextTokens ? s : longest))[trendField]
     : null;
   const tokenRates = ok.map((s) => s.tokensPerSecond).filter(isMeasured);
   return {
@@ -156,7 +198,10 @@ export function summarizePerformance(samples) {
     samplesOk: ok.length,
     meanCharsPerSecond: meanOf(samples, 'charsPerSecond'),
     meanTtftMs: meanOf(samples, 'ttftMs'),
-    peakCharsPerSecond: fastest,
+    peakCharsPerSecond: charRated.length ? Math.max(...charRated.map((s) => s.charsPerSecond)) : null,
+    // `true` = chars/s describes a short visible answer, not generation speed (see
+    // `sampleHidesReasoning`); readers must not present it as a speed figure.
+    reasoningHidden,
     // Token-denominated throughput, present only when the daemon reported token
     // counts. `null` here means the runtime told us nothing — a reader must show
     // "not measured", not fall back to chars/s under a tokens/s label.
@@ -177,7 +222,7 @@ export function summarizePerformance(samples) {
     // Clamped: the longest context can measure marginally ABOVE the peak of the
     // others only through noise, and a >1 "degradation" is meaningless.
     contextDegradation:
-      measured.length >= 2 && fastest > 0 ? Number(Math.min(1, atLongest / fastest).toFixed(3)) : null,
+      trend.length >= 2 && fastest > 0 ? Number(Math.min(1, atLongest / fastest).toFixed(3)) : null,
   };
 }
 
@@ -208,7 +253,7 @@ export function buildThroughputReport(assessments) {
 
   for (const assessment of list) {
     const samples = Array.isArray(assessment?.samples) ? assessment.samples : [];
-    const perf = assessment?.performance || {};
+    const perf = performanceOf(assessment);
     const points = [];
     for (const sample of samples) {
       if (!isMeasured(sample?.contextTokens)) continue;
@@ -248,6 +293,8 @@ export function buildThroughputReport(assessments) {
       peakTokensPerSecond: num(perf.peakTokensPerSecond),
       meanPromptTokensPerSecond: num(perf.meanPromptTokensPerSecond),
       meanCharsPerSecond: num(perf.meanCharsPerSecond),
+      // `true`: the chars/s column describes the visible answer only; the UI shows it as n/a.
+      reasoningHidden: perf.reasoningHidden ?? null,
       meanTtftMs: num(perf.meanTtftMs),
       // The discarded first request (load / warm-up); `null` for records measured before it existed.
       warmupMs: num(assessment?.warmup?.totalMs),
@@ -278,14 +325,26 @@ export function buildThroughputReport(assessments) {
   };
 }
 
-// Speed normalization anchor, in CHARACTERS per second. Chars/s, not tokens/s: a
-// runtime without a usage block would score `null` and drop out, and older records
-// carry no token counts, so chars/s is the one figure everywhere. Nothing derives
-// tokens from characters.
+// Speed normalization anchors. Decode tokens/s scores the axis whenever the runtime reported it:
+// it is the generation speed itself, where chars/s counts only the visible answer and reads ~0 for
+// a thinking model (#17430). Chars/s is the fallback for runtimes and older records without token
+// counts. The chars anchor is the tokens anchor at ~4 chars per token so the two bases score on the
+// same scale; nothing derives tokens from characters.
 //
-// 240 chars/s (~60 tok/s) is a comfortable interactive rate; at or above it the
-// axis scores 1, below it linear.
-const SPEED_CEILING_CHARS_PER_SECOND = 240;
+// 120 tok/s is fast for local decode on current Apple Silicon and GPUs; at or above it the axis
+// scores 1, below it linear. A lower anchor (60) scored every fast runtime 1 and stopped telling
+// an MTP runtime from the plain build it outruns.
+const SPEED_CEILING_TOKENS_PER_SECOND = 120;
+const SPEED_CEILING_CHARS_PER_SECOND = SPEED_CEILING_TOKENS_PER_SECOND * 4;
+
+/** Speed axis in [0, 1] from a performance summary, or `null` when no speed figure applies. */
+function speedScore(perf) {
+  if (isMeasured(perf.meanTokensPerSecond)) return clamp01(perf.meanTokensPerSecond / SPEED_CEILING_TOKENS_PER_SECOND);
+  if (perf.reasoningHidden !== true && isMeasured(perf.meanCharsPerSecond)) {
+    return clamp01(perf.meanCharsPerSecond / SPEED_CEILING_CHARS_PER_SECOND);
+  }
+  return null;
+}
 
 // Parameter-count anchor for the capability score. Local models above ~70B are
 // rare on consumer hardware and already score at the top of the curve.
@@ -320,7 +379,7 @@ export function parseParamsBillions({ params, modelId } = {}) {
  * @returns {{capability:number|null, speed:number|null, fidelity:number|null, memory:number|null}}
  */
 export function scoreAssessment(assessment) {
-  const perf = assessment?.performance || {};
+  const perf = performanceOf(assessment);
   const paramsB = parseParamsBillions({ params: assessment?.params, modelId: assessment?.modelId });
   const residentGb = assessment?.residentGb;
   const budgetGb = assessment?.environment?.memoryBudgetGb;
@@ -332,7 +391,7 @@ export function scoreAssessment(assessment) {
 
   return {
     capability: paramsB == null ? null : clamp01(Math.log10(1 + paramsB) / Math.log10(1 + PARAMS_CEILING_B)),
-    speed: isMeasured(perf.meanCharsPerSecond) ? clamp01(perf.meanCharsPerSecond / SPEED_CEILING_CHARS_PER_SECOND) : null,
+    speed: speedScore(perf),
     fidelity: isMeasured(perf.contextDegradation) ? clamp01(perf.contextDegradation) : null,
     memory,
   };
@@ -384,14 +443,14 @@ const INTENT_LABEL = {
  * described with a guess.
  */
 export function explainAssessment(assessment, intent) {
-  const perf = assessment?.performance || {};
+  const perf = performanceOf(assessment);
   const parts = [];
   // Tokens/s leads when the runtime reported token counts — it is the figure
   // people actually compare local models on. Chars/s is the fallback, never both:
   // two throughput numbers in one sentence read as a contradiction.
   if (isMeasured(perf.meanTokensPerSecond)) {
     parts.push(`${perf.meanTokensPerSecond} tok/s${perf.tokensEstimated ? ' (estimated)' : ''} measured`);
-  } else if (isMeasured(perf.meanCharsPerSecond)) {
+  } else if (perf.reasoningHidden !== true && isMeasured(perf.meanCharsPerSecond)) {
     parts.push(`${perf.meanCharsPerSecond} chars/s measured`);
   }
   if (isMeasured(perf.maxWorkingContextTokens)) {
@@ -456,7 +515,7 @@ export function rankByIntent(assessments, intent = 'balanced') {
       score,
       coverage,
       scores,
-      performance: assessment?.performance || null,
+      performance: assessment?.performance ? performanceOf(assessment) : null,
       // The measured footprint feeds the memory axis, so it travels WITH the entry.
       residentGb: Number.isFinite(assessment?.residentGb) ? assessment.residentGb : null,
       params: assessment?.params ?? null,

@@ -81,6 +81,15 @@ vi.mock('./slotstreamServerManager.js', () => ({
   getSlotstreamServerEndpoint: (...args) => getSlotstreamServerEndpoint(...args),
 }));
 
+// A PM2-managed daemon's resident footprint is read from its process tree. Unmocked, this suite would
+// read the developer's real PM2 list and process table.
+const getAppStatus = vi.fn(async (name) => ({ name, status: 'not_found' }));
+vi.mock('./pm2.js', () => ({ getAppStatus: (...args) => getAppStatus(...args) }));
+const readProcessTreeResidentBytes = vi.fn(async () => null);
+vi.mock('../lib/processTreeMemory.js', () => ({
+  readProcessTreeResidentBytes: (...args) => readProcessTreeResidentBytes(...args),
+}));
+
 const getSpecDecodePresetStatus = vi.fn(async () => []);
 vi.mock('./specDecodeModels.js', () => ({
   getSpecDecodePresetStatus: (...args) => getSpecDecodePresetStatus(...args),
@@ -162,6 +171,8 @@ beforeEach(() => {
   getMtplxServerEndpoint.mockReset().mockResolvedValue('http://127.0.0.1:8000/v1');
   getSlotstreamServerEndpoint.mockReset().mockResolvedValue('http://127.0.0.1:18030/v1');
   relaunchMtplxServerWithTuning.mockReset().mockResolvedValue({ applied: true, reason: null, config: null });
+  getAppStatus.mockReset().mockImplementation(async (name) => ({ name, status: 'not_found' }));
+  readProcessTreeResidentBytes.mockReset().mockResolvedValue(null);
 });
 
 describe('buildSamplePrompt', () => {
@@ -473,6 +484,7 @@ describe('runAssessment', () => {
     runLocalLlmTest.mockResolvedValue(okRun());
     const ollama = await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
     expect(ollama.residentGb).toBe(5);
+    expect(ollama.residentSource).toBe('ollama');
 
     const lmstudio = await svc.runAssessment({ backend: 'lmstudio', modelId: 'example-model:7b', contextTokens: [512] });
     // Copying the weight-file size here would silently re-introduce the estimate
@@ -855,13 +867,42 @@ describe('endpoint runtimes', () => {
     expect(result.endpoint).toBeTruthy();
   });
 
-  // Only Ollama's /api/ps reports a footprint. Copying a weight-file size in
-  // would re-introduce the estimate this whole feature exists to replace.
-  it('records no resident footprint for a runtime that reports none', async () => {
+  // A daemon PortOS does not run under PM2 (external, stopped) has no pid to read. Copying a
+  // weight-file size in would re-introduce the estimate this whole feature exists to replace.
+  it('records no resident footprint when the runtime is not a PM2 daemon PortOS runs', async () => {
     probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['dflash'], error: null });
     runEndpointLlmTest.mockResolvedValue(okRun());
     const result = await svc.runAssessment({ backend: 'llama', modelId: 'dflash', contextTokens: [512] });
     expect(result.residentGb).toBeNull();
+    expect(result.residentSource).toBeNull();
+    expect(getAppStatus).toHaveBeenCalledWith('portos-llama-server');
+    expect(readProcessTreeResidentBytes).not.toHaveBeenCalled();
+
+    const vllm = await svc.runAssessment({ backend: 'vllm', modelId: 'dflash', contextTokens: [512] });
+    expect(vllm.residentGb).toBeNull();
+  });
+
+  it('records a PM2-managed MTPLX daemon\'s process footprint as its resident memory', async () => {
+    probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['example-mtp'], error: null });
+    runEndpointLlmTest.mockResolvedValue(okRun());
+    getAppStatus.mockImplementation(async (name) => ({ name, status: 'online', pid: 4321 }));
+    readProcessTreeResidentBytes.mockResolvedValue({ bytes: 26 * 2 ** 30, source: 'footprint', pids: 2 });
+
+    const result = await svc.runAssessment({ backend: 'mtplx', modelId: 'example-mtp', contextTokens: [512] });
+    expect(getAppStatus).toHaveBeenCalledWith('portos-mtplx');
+    expect(readProcessTreeResidentBytes).toHaveBeenCalledWith(4321);
+    expect(result).toMatchObject({ residentGb: 26, residentSource: 'process-footprint' });
+    expect((await svc.loadAssessments())[0].residentGb).toBe(26);
+  });
+
+  it('leaves memory unknown when the managed daemon\'s process cannot be read', async () => {
+    probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['example-mtp'], error: null });
+    runEndpointLlmTest.mockResolvedValue(okRun());
+    getAppStatus.mockImplementation(async (name) => ({ name, status: 'online', pid: 4321 }));
+    readProcessTreeResidentBytes.mockResolvedValue(null);
+    const result = await svc.runAssessment({ backend: 'slotstream', modelId: 'example-mtp', contextTokens: [512] });
+    expect(getAppStatus).toHaveBeenCalledWith('portos-slotstream');
+    expect(result).toMatchObject({ residentGb: null, residentSource: null });
   });
 });
 
