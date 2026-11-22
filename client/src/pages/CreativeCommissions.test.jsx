@@ -52,3 +52,19 @@ describe('CreativeCommissions index empty state', () => {
     expect(screen.queryByRole('link', { name: 'Create your first commission' })).toBeNull();
   });
 });
+
+describe('CreativeCommissions failed list read', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows a Retry instead of the empty state, and recovers on Retry', async () => {
+    listCommissions.mockRejectedValueOnce(new Error('503 down')).mockResolvedValue([
+      { id: 'commission-1', name: 'Example Commission', enabled: true, schedule: {}, createdAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load commissions');
+    expect(screen.queryByText('No commissions yet')).not.toBeInTheDocument();
+    await act(async () => { screen.getByRole('button', { name: 'Retry' }).click(); });
+    expect(await screen.findByText('Example Commission')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

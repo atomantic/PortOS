@@ -190,3 +190,19 @@ describe('ThreejsModels', () => {
     });
   });
 });
+
+describe('ThreejsModels failed list read', () => {
+  it('shows a Retry instead of the empty copy, and recovers on Retry', async () => {
+    vi.clearAllMocks();
+    listThreejsModelFamilies.mockResolvedValue(FAMILY_OPTIONS);
+    listThreejsModels.mockRejectedValueOnce(new Error('503 down')).mockResolvedValue([
+      { id: 'threejs-example', name: 'Example Robot', status: 'ready', createdAt: '2026-01-01T00:00:00.000Z' },
+    ]);
+    render(<MemoryRouter initialEntries={['/media/threejs']}><ThreejsModels /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load model workspaces');
+    expect(screen.queryByText('No procedural models yet')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Robot')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
