@@ -30,6 +30,8 @@ export default function HealthTab() {
   const sectionParam = searchParams.get('section');
 
   const [availableMetrics, setAvailableMetrics] = useState(new Set());
+  // Kept apart from an empty catalog: a failed read must not render as "no metrics".
+  const [catalogFailed, setCatalogFailed] = useState(false);
   const [expandedSections, setExpandedSections] = useState(new Set());
   const [correlationData, setCorrelationData] = useState(null);
   const [workouts, setWorkouts] = useState([]);
@@ -39,10 +41,15 @@ export default function HealthTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const sectionRefs = useRef({});
 
-  // Fetch which metrics have data (once on mount)
-  useEffect(() => {
+  // Fetch which metrics have data (on mount, and again from the failure notice's Retry)
+  const catalogRequestRef = useRef(0);
+  const fetchCatalog = useCallback(() => {
+    // Overlapping Retry clicks: only the latest request may update state.
+    const requestId = ++catalogRequestRef.current;
     getAvailableHealthMetrics()
       .then(metrics => {
+        if (requestId !== catalogRequestRef.current) return;
+        setCatalogFailed(false);
         setAvailableMetrics(new Set(metrics.map(m => m.name)));
         // Set initial expanded sections after we know what's available
         const initial = new Set();
@@ -52,12 +59,19 @@ export default function HealthTab() {
         setExpandedSections(initial);
         setInitialized(true);
       })
-      .catch(() => setInitialized(true));
+      .catch(() => {
+        if (requestId !== catalogRequestRef.current) return;
+        setCatalogFailed(true);
+        setInitialized(true);
+      });
   }, []);
 
-  // Expand and scroll to section when URL param changes
+  useEffect(() => { fetchCatalog(); }, [fetchCatalog]);
+
+  // Expand and scroll to section when URL param changes. Waits for a successful catalog:
+  // while it failed no category is mounted, and the success path resets expandedSections.
   useEffect(() => {
-    if (!sectionParam || !initialized) return;
+    if (!sectionParam || !initialized || catalogFailed) return;
     setExpandedSections(prev => {
       if (prev.has(sectionParam)) return prev;
       const next = new Set(prev);
@@ -66,7 +80,7 @@ export default function HealthTab() {
     });
     const el = sectionRefs.current[sectionParam];
     if (el) setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-  }, [sectionParam, initialized]);
+  }, [sectionParam, initialized, catalogFailed]);
 
   // Fetch correlation data
   const days = RANGES.find(r => r.id === range)?.days ?? 7;
@@ -198,7 +212,9 @@ export default function HealthTab() {
       </section>
 
       {/* Category sections */}
-      {METRIC_CATEGORIES.map(category => (
+      {catalogFailed ? (
+        <LoadFailureNotice message="Could not load the health metric list. Retry." onRetry={fetchCatalog} />
+      ) : METRIC_CATEGORIES.map(category => (
         <div key={category.id} ref={el => sectionRefs.current[category.id] = el}>
           <HealthCategorySection
             category={category}
