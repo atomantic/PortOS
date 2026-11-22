@@ -365,7 +365,8 @@ export function identifierValue(token, ctx, depth) {
   // Named like a module-level path (`function read(ROOT)` beside `const ROOT = …`): the constant when
   // every call passes one path, which is then that path; otherwise somewhere the source does not say,
   // starting from the constant the name was read as before binders were modelled. Never nothing.
-  const outer = bindingValue(token.v, ctx, depth);
+  // A default the calls do not all agree with is that starting point too: the read stays open, never dropped.
+  const outer = binder.fallback ?? bindingValue(token.v, ctx, depth);
   if (outer.k === 'path') return partialPath(outer, outer.v, { open: true, via });
   return via === null ? UNKNOWN : variableValue({ open: true, via });
 }
