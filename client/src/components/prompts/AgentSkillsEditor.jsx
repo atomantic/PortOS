@@ -155,7 +155,7 @@ function LedgerDrawer({ open, onClose, onRolledBack }) {
     toast.success(`Rolled back ${entry.action} of ${entry.skill?.id || 'skill'}`);
     if (res.usageReconciled === false) toast.error('Files restored, but the skill\'s usage record could not be updated');
     setAttempt((n) => n + 1);
-    onRolledBack();
+    await onRolledBack(entry);
   };
 
   return (
@@ -253,8 +253,9 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
       .catch((err) => { toast.error(`Failed to save skill: ${err.message || 'Unknown error'}`); return false; });
     setSaving(false);
     if (!ok) return;
-    baselineRef.current = sent;
-    editor.markSaved(sentFor, sent);
+    // Only while the same skill is open: after a switch the ref already holds
+    // the newly opened skill's text, which the next patch must match.
+    if (editor.markSaved(sentFor, sent)) baselineRef.current = sent;
     toast.success('Skill saved');
     await refresh();
   };
@@ -263,6 +264,7 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
     if (!skill || busyAction) return;
     setConfirmArchive(false);
     setBusyAction(action);
+    const startedFor = selected;
     const ref = action === 'restore' ? skill.originalId || skill.id : skill.id;
     const res = await applySkillAction(ref, action, { silent: true })
       .catch((err) => { toast.error(`${action} failed: ${err.message || 'Unknown error'}`); return null; });
@@ -270,9 +272,18 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
     if (!res) return;
     toast.success(`${ACTION_LABELS[action]}: ${skill.name}`);
     await refresh();
-    // The skill changed identity: follow it to its new place.
+    // The skill changed identity: follow it to its new place, unless the
+    // user has opened another skill meanwhile.
+    if (editor.liveRef.current.selected !== startedFor) return;
     if (action === 'archive' && res.archivePath) switchSkill(`archive:${res.archivePath.replace(/^\.archive\//, '')}`);
     if (action === 'restore' && res.skill?.id) switchSkill(res.skill.id);
+  };
+
+  // A rollback rewrote files on the server: an open editor for that skill
+  // re-reads them, so its text and patch baseline match the restored file.
+  const afterRollback = async (entry) => {
+    await refresh();
+    if (entry.skill?.id && editor.liveRef.current.selected === entry.skill.id) editor.retryRead();
   };
 
   const renderRow = (entry, inArchive) => (
@@ -292,6 +303,7 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
       <button
         key={entry.id}
         type="button"
+        disabled={Boolean(busyAction) || saving}
         onClick={() => editor.request(entry.id)}
         className={`w-full text-left px-3 py-2 rounded-lg text-sm ${selected === entry.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-300 hover:bg-port-border'}`}
       >
@@ -447,7 +459,7 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
         chooserOpen={chooserOpen}
         onChooserOpenChange={setChooserOpen}
       />
-      <LedgerDrawer open={ledgerOpen} onClose={() => setLedgerOpen(false)} onRolledBack={refresh} />
+      <LedgerDrawer open={ledgerOpen} onClose={() => setLedgerOpen(false)} onRolledBack={afterRollback} />
     </>
   );
 }

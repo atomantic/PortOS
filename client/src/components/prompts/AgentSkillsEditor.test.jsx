@@ -107,6 +107,48 @@ describe('AgentSkillsEditor', () => {
     expect(screen.queryByRole('button', { name: /save/i })).toBeNull();
   });
 
+  it('re-reads the open skill after rolling back one of its changes', async () => {
+    api.getSkillLedger.mockResolvedValue({ entries: [
+      { id: 'e2', at: new Date().toISOString(), actor: 'agent', action: 'patch', skill: { id: 'local:deploy' }, before: { files: 1 }, after: { files: 1 } },
+    ] });
+    api.rollbackSkillLedgerEntry.mockResolvedValueOnce({ ok: true, restored: ['deploy/SKILL.md'], removed: [], usageReconciled: true });
+    await renderPage('/prompts/agent-skills?agentSkill=local%3Adeploy');
+    await screen.findByDisplayValue('# local:deploy body');
+    api.viewSkill.mockResolvedValueOnce({ content: '# restored body' });
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Roll back' }));
+    fireEvent.click(within(screen.getByLabelText('Confirm rolling back patch of local:deploy')).getByRole('button', { name: 'Roll back' }));
+    const box = await screen.findByDisplayValue('# restored body');
+
+    // The next save patches from the restored text, not the stale one.
+    fireEvent.change(box, { target: { value: '# restored body!' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.editSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ oldString: '# restored body', newString: '# restored body!' }), { silent: true },
+    ));
+  });
+
+  it('keeps the newly opened skill\'s baseline when an earlier save lands late', async () => {
+    let finishSave;
+    api.editSkill.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    await renderPage('/prompts/agent-skills?agentSkill=local%3Adeploy');
+    const box = await screen.findByDisplayValue('# local:deploy body');
+    fireEvent.change(box, { target: { value: 'edited deploy' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    // Rows are locked while the save is in flight.
+    expect(screen.getByText('notes').closest('button').disabled).toBe(true);
+    finishSave({ ok: true });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Skill saved'));
+
+    fireEvent.click(screen.getByText('notes'));
+    const notes = await screen.findByDisplayValue('# local:notes body');
+    fireEvent.change(notes, { target: { value: '# local:notes body!' } });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.editSkill).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: 'local:notes', oldString: '# local:notes body' }), { silent: true },
+    ));
+  });
+
   it('previews a curator pass without applying it', async () => {
     api.runCurator.mockResolvedValueOnce({ dryRun: true, transitions: [{ id: 'local:deploy', from: 'active', to: 'stale', idleDays: 20 }], failures: [] });
     await renderPage('/prompts/agent-skills');
