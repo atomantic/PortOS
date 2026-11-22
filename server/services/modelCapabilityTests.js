@@ -197,11 +197,11 @@ const progressFrame = (backend, modelId, testId, frame) => ({
  * record for something the user started outside PortOS would put a phantom
  * provider in the run history. Same result shape either way.
  */
-async function generate({ backend, modelId, prompt, images, maxTokens, signal }) {
+export async function generate({ backend, modelId, prompt, images, maxTokens, signal, temperature = TEST_TEMPERATURE, timeoutMs = CHAT_TIMEOUT_MS }) {
   if (MANAGED_ASSESSMENT_BACKENDS.includes(backend)) {
     return runLocalLlmTest({
       backend, modelId, prompt, images, maxTokens, signal,
-      temperature: TEST_TEMPERATURE, timeoutMs: CHAT_TIMEOUT_MS,
+      temperature, timeoutMs,
     });
   }
   const endpoint = await runtimeEndpoint(backend);
@@ -213,7 +213,7 @@ async function generate({ backend, modelId, prompt, images, maxTokens, signal })
   return runEndpointLlmTest({
     runtime: backend, endpoint, apiKey: await runtimeApiKey(backend),
     modelId, prompt, images, maxTokens, signal,
-    temperature: TEST_TEMPERATURE, timeoutMs: CHAT_TIMEOUT_MS,
+    temperature, timeoutMs,
   });
 }
 
