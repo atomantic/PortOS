@@ -30,6 +30,7 @@ export const CATALOG_DIRS = Object.freeze([
   'server/lib/musicVideo',
   'server/lib/persistent',
   'server/lib/provider',
+  'server/lib/schemaVersions',
   'client/src/lib',
   'client/src/hooks',
   'client/src/utils',

@@ -22,7 +22,7 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { getPeers } from '../instances.js';
 import {
   peerCosHistoryManifestSchema,
@@ -127,7 +127,7 @@ export async function buildCosHistoryManifest() {
   const manifestHash = createHash('sha256')
     .update(entries.map((e) => `${e.date}:${e.agentId}:${e.file}:${e.sha256}`).join('\n'))
     .digest('hex');
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosHistory, manifestHash, entries };
+  return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosHistory, manifestHash, entries };
 }
 
 /**
@@ -273,8 +273,8 @@ export async function syncCosHistoryFromPeer(peer) {
     const manifest = parsed.data;
     // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
     // upgrade rather than mis-pull against a manifest shape we can't read.
-    if (manifest.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosHistory) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-history manifest is schema v${manifest.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.cosHistory} — skipping until this instance updates`);
+    if (manifest.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosHistory) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-history manifest is schema v${manifest.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.cosHistory} — skipping until this instance updates`);
       return { pulled: 0, skipped: 'schema-ahead' };
     }
     // Unchanged short-circuit, with a periodic forced re-diff so a LOCAL file
@@ -418,7 +418,7 @@ function taskToWireEntry(task, taskType) {
  * @returns {Promise<{ schemaVersion:number, listHash:string, tasks:Array }>}
  */
 export async function buildCosTasksPayload() {
-  const empty = { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
+  const empty = { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
   const mod = await import('../cos/cosTaskStore.js').catch(() => null);
   if (!mod?.getUserTasks || !mod?.getCosTasks) return empty;
   const [userRes, cosRes] = await Promise.all([
@@ -444,7 +444,7 @@ export async function buildCosTasksPayload() {
   const listHash = createHash('sha256')
     .update(entries.map((e) => `${e.taskType}:${e.id}:${e.status}:${e.priority}:${e.description || ''}:${e.approvalRequired ?? ''}:${e.autoApproved ?? ''}:${JSON.stringify(e.metadata || {})}`).join('\n'))
     .digest('hex');
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
+  return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
 }
 
 // Receiver-side bookkeeping — mirrors the cos-history sweep.
@@ -522,8 +522,8 @@ export async function syncCosTasksFromPeer(peer) {
     const payload = parsed.data;
     // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
     // upgrade rather than mis-merge against a payload shape we can't read.
-    if (payload.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosTasks) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-tasks payload is schema v${payload.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.cosTasks} — skipping until this instance updates`);
+    if (payload.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosTasks) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-tasks payload is schema v${payload.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.cosTasks} — skipping until this instance updates`);
       return { merged: 0, skipped: 'schema-ahead' };
     }
     // Unchanged short-circuit, with a periodic forced re-merge so a LOCAL task

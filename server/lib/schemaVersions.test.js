@@ -1,15 +1,26 @@
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { describe, it, expect } from 'vitest';
 import { IMAGE_GEN_MODES, VIDEO_GEN_MODES } from './generationModes.js';
+import { CREATIVE_MEDIA_SCHEMA_VERSIONS, RENDER_PIN_SENDER_VERSIONS } from './schemaVersions/creativeMedia.js';
+import { MUSIC_SCHEMA_VERSIONS } from './schemaVersions/music.js';
+import { PLATFORM_SCHEMA_VERSIONS } from './schemaVersions/platform.js';
+import { STORY_CANON_SCHEMA_VERSIONS } from './schemaVersions/storyCanon.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
-  RENDER_PIN_SENDER_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
   compareSchemaVersions,
   scopeVersionDiff,
   formatVersionGap,
   buildPortosMeta,
 } from './schemaVersions.js';
+
+const SLICES = {
+  'creativeMedia.js': CREATIVE_MEDIA_SCHEMA_VERSIONS,
+  'music.js': MUSIC_SCHEMA_VERSIONS,
+  'platform.js': PLATFORM_SCHEMA_VERSIONS,
+  'storyCanon.js': STORY_CANON_SCHEMA_VERSIONS,
+};
+const SLICE_FILES = Object.keys(SLICES);
 
 describe('PORTOS_SCHEMA_VERSIONS', () => {
   it('is a frozen object', () => {
@@ -38,21 +49,50 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     }
   });
 
-  it('caps each entry\'s comment block at 6 lines so the registry cannot regrow history', () => {
-    const lines = readFileSync(new URL('./schemaVersions.js', import.meta.url), 'utf8').split('\n');
-    const start = lines.findIndex((l) => l.startsWith('export const PORTOS_SCHEMA_VERSIONS'));
-    const end = lines.findIndex((l, i) => i > start && l === '});');
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
+  it('caps each entry\'s comment block at 6 lines so no slice can regrow history', () => {
     const offenders = [];
-    let commentLines = 0;
-    for (const line of lines.slice(start + 1, end)) {
-      if (line.trimStart().startsWith('//')) { commentLines += 1; continue; }
-      const entry = line.match(/^ {2}(\w+):/);
-      if (entry && commentLines > 6) offenders.push(`${entry[1]} (${commentLines} lines)`);
-      commentLines = 0;
+    for (const file of SLICE_FILES) {
+      const lines = readFileSync(new URL(`./schemaVersions/${file}`, import.meta.url), 'utf8').split('\n');
+      const start = lines.findIndex((l) => /^export const \w+_SCHEMA_VERSIONS = Object\.freeze\(\{$/.test(l));
+      const end = lines.findIndex((l, i) => i > start && l === '});');
+      expect(start, file).toBeGreaterThan(-1);
+      expect(end, file).toBeGreaterThan(start);
+      let commentLines = 0;
+      for (const line of lines.slice(start + 1, end)) {
+        if (line.trimStart().startsWith('//')) { commentLines += 1; continue; }
+        const entry = line.match(/^ {2}(\w+):/);
+        if (entry && commentLines > 6) offenders.push(`${file} ${entry[1]} (${commentLines} lines)`);
+        commentLines = 0;
+      }
     }
     expect(offenders).toEqual([]);
+  });
+
+  // Peers compare the composed map, and syncOrchestrator compares a stored copy by JSON.stringify, so the
+  // split (#17460) must keep the shipped keys in their shipped order. A new category appends here on purpose.
+  it('composes exactly the shipped categories, in shipped order', () => {
+    expect(Object.keys(PORTOS_SCHEMA_VERSIONS)).toEqual([
+      'appQuality', 'memoryHistory', 'universes', 'pipelineIssues', 'pipelineSeries', 'mediaCollections', 'videoHistory',
+      'decks', 'storyboards', 'authors', 'artists', 'albums', 'tracks', 'catalog', 'storyBuilder', 'fableLoom',
+      'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises',
+      'musicVideoProjects', 'commissionFeedback', 'creativeCommissions', 'mediaLibrary', 'cosHistory', 'cosTasks',
+      'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps',
+    ]);
+  });
+
+  it('takes every value from exactly one domain slice, and every slice category is composed', () => {
+    const onDisk = readdirSync(new URL('./schemaVersions/', import.meta.url)).filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'));
+    expect(onDisk.sort(), 'list a new slice file in SLICES').toEqual([...SLICE_FILES].sort());
+    const owners = new Map();
+    for (const [file, slice] of Object.entries(SLICES)) {
+      expect(Object.isFrozen(slice), file).toBe(true);
+      for (const [category, version] of Object.entries(slice)) {
+        expect(owners.has(category), `${category} is declared by ${owners.get(category)} and ${file}`).toBe(false);
+        owners.set(category, file);
+        expect(PORTOS_SCHEMA_VERSIONS[category], `${file} ${category}`).toBe(version);
+      }
+    }
+    expect([...owners.keys()].sort()).toEqual(Object.keys(PORTOS_SCHEMA_VERSIONS).sort());
   });
 });
 

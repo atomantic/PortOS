@@ -10,7 +10,7 @@
  * Federation: standalone media-library bytes (`asset-file-db-indexed`) mirror only to
  * `peer.fullSync` peers and honor backup `DEFAULT_EXCLUDES`; the derived `media_assets`
  * index is rebuilt locally and video thumbnails are regenerated, never byte-federated.
- * The manifest envelope is version-gated by `PORTOS_SCHEMA_VERSIONS.mediaLibrary`.
+ * The manifest envelope is version-gated by `PLATFORM_SCHEMA_VERSIONS.mediaLibrary`.
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
@@ -26,7 +26,7 @@ import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { getPeers } from '../instances.js';
 import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/peerSyncValidation.js';
 import { listExportableMediaTombstones } from '../mediaTombstones.js';
@@ -220,7 +220,7 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
     + (deleted.length > 0 ? `\n#tombstones\n${deleted.map((t) => `${t.key}@${t.deletedAt}`).join('\n')}` : '');
   const manifestHash = createHash('sha256').update(hashInput).digest('hex');
   return {
-    schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+    schemaVersion: PLATFORM_SCHEMA_VERSIONS.mediaLibrary,
     manifestHash,
     assets: sorted,
     ...(deleted.length > 0 ? { tombstones: deleted } : {}),
@@ -341,8 +341,8 @@ export async function syncMediaLibraryFromPeer(peer) {
     // newer than this instance understands. Wait for the local PortOS to upgrade
     // rather than mis-pull against a contract we can't read. (Bytes are
     // version-agnostic, but a manifest-SHAPE bump means a new field we'd mishandle.)
-    if (manifest.schemaVersion > PORTOS_SCHEMA_VERSIONS.mediaLibrary) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} media-library manifest is schema v${manifest.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.mediaLibrary} — skipping until this instance updates`);
+    if (manifest.schemaVersion > PLATFORM_SCHEMA_VERSIONS.mediaLibrary) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} media-library manifest is schema v${manifest.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.mediaLibrary} — skipping until this instance updates`);
       return { pulled: 0, skipped: 'schema-ahead' };
     }
     // Unchanged-library short-circuit — but force a full re-diff every
