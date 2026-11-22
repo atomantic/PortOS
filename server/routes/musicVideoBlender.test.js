@@ -8,6 +8,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
@@ -618,11 +619,18 @@ describe('Blender film shot renders', () => {
     delete index[0].songHash;
     writeFileSync(join(workspace(), 'renders/s010/stills/stills.json'), JSON.stringify(index));
     expect((await state()).renders.s010.stills[0].stale).toBe(false);
+    // A render that hashed the whole staged song, before names and audio folders were left out, stays current.
+    const staged = readFileSync(join(workspace(), 'song.json'), 'utf8');
+    writeFileSync(metadata, JSON.stringify({ ...recorded, songHash: createHash('sha256').update(JSON.stringify(JSON.parse(staged))).digest('hex') }));
+    expect((await state()).renders.s010.preview).toMatchObject({ stale: false, staleReasons: [] });
     await renderAll('preview', { shotIds: ['s010'], force: true });
     await renderAll('still', { shotIds: ['s010'] });
     const original = await projects.getProject(project.id);
+    // Renaming the project changes nothing a shot was rendered from.
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, name: 'A new title' } }));
+    expect((await state()).renders.s010.preview.stale).toBe(false);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, name: original.name } }));
     for (const change of [
-      { name: 'A new title' },
       { audioAnalysis: { ...original.audioAnalysis, beats: [0.25], bpm: 110 } },
       { lyricCues: [{ id: 'line-1', text: 'New words', startSec: 0, endSec: 1, words: [{ w: 'New', startSec: 0, endSec: 0.5 }] }] },
       { lyricMarkers: [{ type: 'section', label: 'New marker', kind: 'verse', line: 0 }] },
