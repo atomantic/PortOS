@@ -16,6 +16,12 @@ const BACKEND_LABEL = {
   hy3dgen: 'Hunyuan3D',
   'hf-xet-cache': 'HF xet cache',
   'pixie-forge': 'Pixie Forge',
+  slotstream: 'Slotstream',
+  'fastvideo-mlx': 'FastVideo MLX',
+  'auk-ckpts': 'AuK voice',
+  'portos-models': 'Manual download',
+  'repo-models': 'llama-server',
+  'legacy-runtime': 'Retired runtime',
 };
 
 /**
@@ -188,6 +194,7 @@ export default function ModelsPanel({ report, loading, initializing = false, onR
                       <span className="rounded bg-port-border px-1.5 py-0.5 text-[10px] uppercase text-gray-400">{BACKEND_LABEL[model.backend] || model.backend}</span>
                       {effectiveLoaded && <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] uppercase text-purple-300">loaded</span>}
                       {residencyUnknown && <span className="rounded bg-port-warning/10 px-1.5 py-0.5 text-[10px] uppercase text-port-warning">status unknown</span>}
+                      {model.unmanaged && <span className="rounded bg-port-warning/10 px-1.5 py-0.5 text-[10px] uppercase text-port-warning" title="Large weights outside the Hugging Face cache; PortOS cannot re-download, move or track them">unmanaged</span>}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-gray-500">
                       {[model.detail, provenanceLabel(model)].filter(Boolean).join(' · ')}
