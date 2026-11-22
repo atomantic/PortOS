@@ -107,7 +107,7 @@ not touch; the snapshot cut is always held.
 Each boundary stays held until everything inside it — transfer and cache
 reconciliation, including after a partial transfer failure — has settled, so the
 settings queue remains held through CoS reconciliation. The order is declared once
-in `LIVE_FILE_RESTORE_OWNERS` (`server/services/backup.js`); insert a new
+in `LIVE_FILE_RESTORE_OWNERS` (`server/services/backup/restore.js`); insert a new
 boundary there rather than nesting another wrapper. Snapshot integrity is
 verified before any boundary is acquired, and a dry run acquires none of them.
 

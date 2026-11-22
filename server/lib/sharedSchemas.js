@@ -79,7 +79,7 @@ export const isSafeSnapshotSource = (v) =>
 //
 // The exclude list is rsync FILTER syntax: a pattern is anchored to the transfer root only when it starts with `/`; anything else matches at EVERY level, so `cache/` also drops
 // nested per-run caches and the snapshot still reports success (the omission surfaces only at restore). `DEFAULT_EXCLUDES` is anchored by hand (tested in `backup.snapshots.test.js`);
-// this applies the same rule to the user-edited list. It lives beside `isSafeSubdirFilter` because `backupConfigSchema` and `computeEffectiveExcludes` (services/backup.js) must share ONE
+// this applies the same rule to the user-edited list. It lives beside `isSafeSubdirFilter` because `backupConfigSchema` and `computeEffectiveExcludes` (services/backup/excludes.js) must share ONE
 // rule from a leaf both already import (lib/importScoping.test.js). Anchoring happens at READ time; stored settings stay as typed, so nothing to migrate.
 // Mirrored to `client/src/lib/backupExcludes.js`.
 // ---------------------------------------------------------------------------

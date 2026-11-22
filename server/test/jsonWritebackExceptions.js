@@ -18,10 +18,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Rebuildable: a lost session file only signs browsers out (login mints new sessions); it never grants access."
   },
   {
-    "key": "backup.js :: manifestPath",
-    "reason": "No write-back cycle: snapshot generation builds manifests from snapshot files; listing and restore only consume them."
-  },
-  {
     "key": "claudeChangelog.js :: STATE_FILE",
     "reason": "Cache-only: feed polling replaces the feed cache and its polling/seen cursors; there is no user-edit writer."
   },
