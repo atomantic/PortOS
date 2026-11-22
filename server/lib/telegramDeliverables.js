@@ -21,12 +21,12 @@ export const TELEGRAM_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 /** `sendPhoto` rejects photos over 10 MB; larger images go out as documents. */
 export const TELEGRAM_MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 /** Telegram caption limit (characters). */
-export const TELEGRAM_MAX_CAPTION_CHARS = 1024;
+const TELEGRAM_MAX_CAPTION_CHARS = 1024;
 /** Bound how many uploads a single notification may fan out into. */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 /** PortOS artifact directories a deliverable may live in. */
-export const DELIVERABLE_ROOTS = Object.freeze([
+const DELIVERABLE_ROOTS = Object.freeze([
   PATHS.images,
   PATHS.imageThumbnails,
   PATHS.videos,
@@ -45,7 +45,7 @@ const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm']);
 const DOCUMENT_EXTS = new Set(['.pdf', '.csv', '.txt', '.md', '.html', '.zip']);
 const ALLOWED_EXTS = new Set([...IMAGE_EXTS, ...AUDIO_EXTS, ...VIDEO_EXTS, ...DOCUMENT_EXTS]);
 
-export const ATTACHMENT_KINDS = Object.freeze(['auto', 'photo', 'document', 'audio', 'voice', 'video']);
+const ATTACHMENT_KINDS = Object.freeze(['auto', 'photo', 'document', 'audio', 'voice', 'video']);
 
 /** Bot API method → multipart field name carrying the file. */
 const METHOD_FIELD = {
@@ -74,7 +74,7 @@ const PATH_TOKEN = new RegExp(`(?:~?/|\\bdata/)[^\\s()<>"'\`\\[\\]]+?\\.(?:${EXT
  * @param {string} text
  * @returns {Array<{ code: boolean, text: string }>}
  */
-export function segmentText(text) {
+function segmentText(text) {
   const segments = [];
   const source = typeof text === 'string' ? text : '';
   const re = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;

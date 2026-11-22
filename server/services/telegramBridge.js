@@ -166,7 +166,7 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
  * lib/telegramDeliverables.js) via a multipart Bot API call. Shares the text
  * rate limiter.
  */
-export async function sendMedia(attachment, opts = {}) {
+export async function sendMedia(attachment) {
   if (!botToken || !chatId) {
     return { success: false, error: !botToken ? 'No bot token' : 'No chat ID' };
   }
@@ -176,7 +176,7 @@ export async function sendMedia(attachment, opts = {}) {
     return { success: false, error: 'Rate limit exceeded' };
   }
 
-  const result = await uploadMedia(botToken, chatId, attachment, opts).catch((err) => {
+  const result = await uploadMedia(botToken, chatId, attachment).catch((err) => {
     console.error(`📱 TG Bridge: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
     return null;
   });

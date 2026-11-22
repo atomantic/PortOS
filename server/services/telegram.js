@@ -329,7 +329,7 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
  * rate limiter. An upload rejection is a per-file failure, not a lost
  * connection, so unlike sendMessage it never arms a reconnect.
  */
-export async function sendMedia(attachment, opts = {}) {
+export async function sendMedia(attachment) {
   if (!bot || !authorizedChatId) return { success: false, error: !bot ? 'Bot not initialized' : 'No chatId configured' };
 
   if (!rateLimiter.consume()) {
@@ -337,7 +337,7 @@ export async function sendMedia(attachment, opts = {}) {
     return { success: false, error: 'Rate limit exceeded' };
   }
 
-  const result = await bot.sendMedia(authorizedChatId, attachment, opts).catch((err) => {
+  const result = await bot.sendMedia(authorizedChatId, attachment).catch((err) => {
     console.error(`📱 Telegram: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
     return null;
   });

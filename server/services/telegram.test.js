@@ -372,7 +372,7 @@ describe('telegram service', () => {
       dl.attachments = [attachment];
       await forward({ type: 'briefing_ready', title: 'Daily Briefing Ready', description: 'ready', priority: 'low' });
       await vi.waitFor(() => expect(h.sendMedia).toHaveBeenCalled());
-      expect(h.sendMedia).toHaveBeenCalledWith('42', attachment, {});
+      expect(h.sendMedia).toHaveBeenCalledWith('42', attachment);
       expect(h.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(h.sendMedia.mock.invocationCallOrder[0]);
     });
 

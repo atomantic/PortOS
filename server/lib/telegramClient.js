@@ -54,18 +54,14 @@ async function apiCall(token, method, body = {}) {
  * @param {string} token
  * @param {string|number} chatId
  * @param {{ path: string, filename: string, method: string, field: string, caption?: string|null }} attachment
- * @param {object} [extra] - extra form fields (e.g. `reply_to_message_id`)
  */
-export async function uploadMedia(token, chatId, attachment, extra = {}) {
+export async function uploadMedia(token, chatId, attachment) {
   const bytes = await readFile(attachment.path);
   const form = new FormData();
   form.append('chat_id', String(chatId));
   // Plain-text caption: it comes from a filename or producer text, so no
   // parse_mode — an unescaped `<` would otherwise make Telegram reject the upload.
   if (attachment.caption) form.append('caption', attachment.caption);
-  for (const [key, value] of Object.entries(extra)) {
-    if (value !== undefined && value !== null) form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
-  }
   form.append(attachment.field, new Blob([bytes]), attachment.filename);
 
   const res = await fetch(buildUrl(token, attachment.method), {
@@ -165,8 +161,8 @@ export function createTelegramBot(token, opts = {}) {
     sendMessage(chatId, text, extra = {}) {
       return apiCall(token, 'sendMessage', { chat_id: chatId, text, ...extra });
     },
-    sendMedia(chatId, attachment, extra = {}) {
-      return uploadMedia(token, chatId, attachment, extra);
+    sendMedia(chatId, attachment) {
+      return uploadMedia(token, chatId, attachment);
     },
     answerCallbackQuery(callbackQueryId, extra = {}) {
       return apiCall(token, 'answerCallbackQuery', { callback_query_id: callbackQueryId, ...extra });
