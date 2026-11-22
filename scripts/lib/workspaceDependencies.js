@@ -27,6 +27,7 @@ function readJson(path) {
  */
 export function inspectWorkspaceDependencies({ dir, label }) {
   const issues = [];
+  let versionMismatches = 0;
   let linked = false;
   let directoryAvailable = false;
   let owner = dir;
@@ -59,11 +60,13 @@ export function inspectWorkspaceDependencies({ dir, label }) {
       } else if (typeof installed.value?.version !== 'string') {
         issues.push(`${path}: unreadable package version; expected ${expected.version}`);
       } else if (installed.value.version !== expected.version) {
+        versionMismatches += 1;
         issues.push(`${path}: expected ${expected.version}, installed ${installed.value.version}`);
       }
     }
   }
-  return { label, linked, owner, directoryAvailable, issues };
+  const versionMismatchOnly = versionMismatches > 0 && versionMismatches === issues.length;
+  return { label, linked, owner, directoryAvailable, issues, versionMismatchOnly };
 }
 
 /** Returns diagnostics only; never installs, patches, deletes or writes receipts. */
