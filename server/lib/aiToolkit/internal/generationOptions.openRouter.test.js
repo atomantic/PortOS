@@ -39,7 +39,6 @@ describe('resolveOpenRouterProviderField', () => {
       expect(openRouterBodyFragment({ endpoint, providerRouting: routing }, 'm')).toEqual({});
     }
   });
-  });
 });
 
 describe('providerRoutingSchema', () => {
