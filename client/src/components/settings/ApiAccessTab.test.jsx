@@ -102,7 +102,7 @@ describe('ApiAccessTab', () => {
     await waitFor(() => expect(screen.getByLabelText('Enable local MCP context')).toBeEnabled());
     fireEvent.click(screen.getByLabelText('Allow semantic PortOS reads'));
     await waitFor(() => expect(updateSettings).toHaveBeenLastCalledWith({
-      agentContext: { ...saved.agentContext, actions: { ...saved.agentContext.actions, readPortos: false } },
+      agentContext: { ...saved.agentContext, actions: { ...saved.agentContext.actions, browserVaultFill: false, readPortos: false } },
     }, { silent: true }));
   });
 
@@ -244,7 +244,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, browserVaultFill: false },
       },
     }, { silent: true }));
   });
@@ -265,7 +265,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation'],
-        actions: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
+        actions: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, browserVaultFill: false },
       },
     }, { silent: true }));
   });
@@ -279,7 +279,22 @@ describe('ApiAccessTab', () => {
         enabled: false,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false, browserVaultFill: false },
+      },
+    }, { silent: true }));
+  });
+
+  it('persists the default-off website login fill grant independently (#17397)', async () => {
+    getSettings.mockResolvedValue({});
+    await renderTab();
+    expect(screen.getByLabelText('Allow website login fill').checked).toBe(false);
+    fireEvent.click(screen.getByLabelText('Allow website login fill'));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith({
+      agentContext: {
+        enabled: false,
+        profile: 'metadata',
+        scopes: ['navigation', 'workspaces'],
+        actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, browserVaultFill: true },
       },
     }, { silent: true }));
   });
@@ -293,7 +308,7 @@ describe('ApiAccessTab', () => {
         enabled: false,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, callToolRecipes: true, manageEidoverse: false, visitEidoversePeers: false },
+        actions: { readPortos: false, writePortos: false, callToolRecipes: true, manageEidoverse: false, visitEidoversePeers: false, browserVaultFill: false },
       },
     }, { silent: true }));
   });

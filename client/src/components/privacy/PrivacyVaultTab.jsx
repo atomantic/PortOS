@@ -10,6 +10,7 @@ import {
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import VaultRecordDrawer from './VaultRecordDrawer';
+import WebsiteLoginsSection from './WebsiteLoginsSection';
 import { VAULT_TYPES, SENSITIVE_TYPES } from './constants';
 import useLatestRequest from '../../hooks/useLatestRequest';
 
@@ -212,6 +213,8 @@ export default function PrivacyVaultTab({ subjectId }) {
           ))}
         </div>
       )}
+
+      <WebsiteLoginsSection subjectId={subjectId} />
 
       <VaultRecordDrawer
         open={drawerOpen}

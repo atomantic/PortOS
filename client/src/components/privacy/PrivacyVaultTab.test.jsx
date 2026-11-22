@@ -17,6 +17,7 @@ vi.mock('../../services/apiPrivacy.js', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./VaultRecordDrawer', () => ({ default: () => null }));
+vi.mock('./WebsiteLoginsSection', () => ({ default: () => null }));
 
 import PrivacyVaultTab from './PrivacyVaultTab';
 
