@@ -10,6 +10,7 @@ import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import CollapsibleListItem from '../../ui/CollapsibleListItem';
 import useConfirmDelete from '../../../hooks/useConfirmDelete';
+import { localDateKey, shiftISODate } from '../../../utils/formatters';
 
 const RANGES = [
   { id: '7d', label: '7d', days: 7 },
@@ -19,9 +20,9 @@ const RANGES = [
 ];
 
 function getFromDate(days) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().split('T')[0];
+  // Calendar-key shift, not toISOString: day files are named from the export's
+  // local timestamp prefix, and a UTC day drops or adds a file near midnight.
+  return shiftISODate(localDateKey(), -days);
 }
 
 export default function HealthTab() {
@@ -85,7 +86,7 @@ export default function HealthTab() {
   // Fetch correlation data
   const days = RANGES.find(r => r.id === range)?.days ?? 7;
   const from = getFromDate(days);
-  const to = new Date().toISOString().split('T')[0];
+  const to = localDateKey();
 
   useEffect(() => {
     let active = true;

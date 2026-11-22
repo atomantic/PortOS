@@ -12,11 +12,12 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   getClinvarStatus: vi.fn(async () => ({ synced: false })),
   syncClinvar: mocks.sync,
   deleteGenomeData: mocks.del,
+  scanGenomeMarkers: vi.fn(async () => ({ markers: [] })),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: mocks.success } }));
 vi.mock('../EpigeneticTracker', () => ({ default: () => null }));
 import GenomeTab from './GenomeTab';
-import { getGenomeSummary } from '../../../services/apiMeatspace.js';
+import { getClinvarStatus, getGenomeSummary } from '../../../services/apiMeatspace.js';
 
 const emit = (frame) => act(() => { for (const handler of mocks.listeners) handler(frame); });
 const begin = async () => {
@@ -110,5 +111,34 @@ describe('genome delete (#17354)', () => {
     await confirmDelete();
     expect(await screen.findByText(/Upload your 23andMe raw data export/)).toBeInTheDocument();
     expect(mocks.success).toHaveBeenCalledWith('Genome data deleted');
+  });
+});
+
+describe('ClinVar status failure vs unsynced', () => {
+  it('shows the first-time sync control only for a successful unsynced status', async () => {
+    getClinvarStatus.mockResolvedValueOnce({ synced: false });
+    render(<GenomeTab />);
+    expect(await screen.findByRole('button', { name: 'Sync ClinVar Database' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the last synced status and offers retry when a later status read rejects', async () => {
+    getClinvarStatus
+      .mockResolvedValueOnce({ synced: true, variantCount: 9 })
+      .mockRejectedValueOnce(new Error('status down'))
+      .mockResolvedValueOnce({ synced: true, variantCount: 11 });
+    render(<GenomeTab />);
+    expect(await screen.findByText('9 variants indexed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Scan Known Markers' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not read ClinVar status/);
+    expect(screen.queryByRole('button', { name: 'Sync ClinVar Database' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Scan Against ClinVar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-sync' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('11 variants indexed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Scan Against ClinVar' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Re-sync' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync ClinVar Database' })).not.toBeInTheDocument();
   });
 });

@@ -146,6 +146,10 @@ export default function GenomeTab() {
 
   // ClinVar state
   const [clinvarStatus, setClinvarStatus] = useState(null);
+  // A rejected status read must not collapse into `{ synced: false }`. That
+  // value is the first-time "database absent" branch and would offer a full
+  // ClinVar download over an index that may already exist.
+  const [clinvarStatusFailed, setClinvarStatusFailed] = useState(false);
   const [clinvarSyncing, setClinvarSyncing] = useState(false);
   const [clinvarProgress, setClinvarProgress] = useState('');
   const [clinvarResults, setClinvarResults] = useState(null);
@@ -164,13 +168,24 @@ export default function GenomeTab() {
   const jumpRef = useRef(null);
 
   const fetchSummary = useCallback(async () => {
-    const [data, cvStatus] = await Promise.all([
-      getGenomeSummary({ silent: true }).catch(() => null),
-      getClinvarStatus().catch(() => ({ synced: false }))
+    const [summaryResult, clinvarResult] = await Promise.all([
+      getGenomeSummary({ silent: true }).then(
+        (value) => ({ ok: true, value }),
+        () => ({ ok: false })
+      ),
+      getClinvarStatus().then(
+        (value) => ({ ok: true, value }),
+        () => ({ ok: false })
+      )
     ]);
-    setSummaryFailed(data === null);
-    setSummary(data);
-    setClinvarStatus(cvStatus);
+    setSummaryFailed(!summaryResult.ok);
+    setSummary(summaryResult.ok ? summaryResult.value : null);
+    if (clinvarResult.ok) {
+      setClinvarStatus(clinvarResult.value);
+      setClinvarStatusFailed(false);
+    } else {
+      setClinvarStatusFailed(true);
+    }
     setLoading(false);
   }, []);
 
@@ -719,18 +734,17 @@ export default function GenomeTab() {
           </div>
         </div>
 
-        {/* ClinVar status + actions */}
+        {/* ClinVar status + actions. First-time sync only after a successful
+            read that says the index is absent. A failed read keeps the last
+            status and asks to retry instead. */}
+        {clinvarStatusFailed && (
+          <LoadFailureNotice
+            message="Could not read ClinVar status. Retry before syncing — a failed read does not mean the database was never synced."
+            onRetry={fetchSummary}
+          />
+        )}
         <div className="flex flex-wrap items-center gap-2">
-          {!clinvarStatus?.synced ? (
-            <button
-              onClick={handleClinvarSync}
-              disabled={clinvarSyncing}
-              className="flex items-center gap-2 px-3 py-2 bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30 rounded hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 text-sm"
-            >
-              {clinvarSyncing ? <BrailleSpinner /> : <Download size={14} />}
-              {clinvarSyncing ? 'Syncing...' : 'Sync ClinVar Database'}
-            </button>
-          ) : (
+          {clinvarStatus?.synced ? (
             <>
               <span className="text-xs text-gray-500">
                 {formatCount(clinvarStatus.variantCount)} variants indexed
@@ -752,7 +766,16 @@ export default function GenomeTab() {
                 {clinvarSyncing ? 'Re-syncing...' : 'Re-sync'}
               </button>
             </>
-          )}
+          ) : clinvarStatus?.synced === false ? (
+            <button
+              onClick={handleClinvarSync}
+              disabled={clinvarSyncing}
+              className="flex items-center gap-2 px-3 py-2 bg-port-accent-2/20 text-port-accent-2 border border-port-accent-2/30 rounded hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 text-sm"
+            >
+              {clinvarSyncing ? <BrailleSpinner /> : <Download size={14} />}
+              {clinvarSyncing ? 'Syncing...' : 'Sync ClinVar Database'}
+            </button>
+          ) : null}
         </div>
 
         {/* Sync progress */}
