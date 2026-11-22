@@ -39,7 +39,16 @@ vi.mock('../services/apiCreativeDirector.js', async (importOriginal) => ({
 }));
 // The config form loads model catalogs on mount — out of scope here, and it
 // would put real requests behind the assertions about which projects load.
-vi.mock('../components/creative-commission/CommissionConfigForm.jsx', () => ({ default: () => null }));
+// It exposes one edit button and a save button so the dirty/saving gating on
+// Run now can be driven without the real form's catalog fetches.
+vi.mock('../components/creative-commission/CommissionConfigForm.jsx', () => ({
+  default: ({ patchForm, onSave }) => (
+    <div>
+      <button type="button" onClick={() => patchForm(['name'], 'Edited name')}>edit-name</button>
+      <button type="button" onClick={onSave}>save-config</button>
+    </div>
+  ),
+}));
 // Callable: the degraded run-history warning (#7529) is a render-prop toast,
 // so the double has to be a function with the named helpers hung off it.
 vi.mock('../components/ui/Toast', () => ({
@@ -389,4 +398,45 @@ it('reconciles commission events and rejects project batches from a prior route'
   getCommission.mockResolvedValue({ ...other, name: 'Renamed commission' });
   await fireSocket('commission:changed', { id: 'cc-other' });
   expect(screen.getByRole('heading', { name: 'Renamed commission' })).toBeInTheDocument();
+});
+
+describe('CreativeCommissionDetail Run now gating', () => {
+  const runButton = () => screen.getByRole('button', { name: /Run commission .* now/i });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // A savable record: the save path validates the brief before sending.
+    getCommission.mockResolvedValue({ ...COMMISSION, brief: { intent: 'An example brief' } });
+    getCreativeDirectorProjectsByIds.mockResolvedValue([]);
+  });
+
+  it('blocks Run now on unsaved edits and while saving, and re-enables after the save lands', async () => {
+    let finishSave;
+    updateCommission.mockReturnValue(new Promise((resolve) => { finishSave = resolve; }));
+    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+    await screen.findByRole('heading', { name: COMMISSION.name });
+    expect(runButton().disabled).toBe(false);
+
+    fireEvent.click(screen.getByText('edit-name'));
+    expect(runButton().disabled).toBe(true);
+    expect(screen.getByText('Save configuration changes before running')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('save-config'));
+    await screen.findByText('Saving changes…');
+    expect(runButton().disabled).toBe(true);
+
+    await act(async () => { finishSave({ ...COMMISSION, name: 'Edited name' }); });
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    expect(screen.queryByText('Save configuration changes before running')).toBeNull();
+    expect(runCommissionNow).not.toHaveBeenCalled();
+  });
+
+  it('does not treat Pause/Resume as an unsaved edit', async () => {
+    updateCommission.mockResolvedValue({ ...COMMISSION, enabled: false });
+    render(<MemoryRouter><CreativeCommissionDetail /></MemoryRouter>);
+    await screen.findByRole('heading', { name: COMMISSION.name });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Pause commission/i })); });
+    expect(runButton().disabled).toBe(false);
+  });
 });
