@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // Same hook stubs as GlobalConfigControls.test.jsx, but ReviewerPicker is REAL
@@ -31,7 +31,7 @@ const BASE_CONFIG = {
   status: {},
 };
 
-function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'claim-work' } = {}) {
+function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'claim-work', setUpdating = () => {} } = {}) {
   render(
     <GlobalConfigControls
       taskType={taskType}
@@ -41,7 +41,7 @@ function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskTy
       providers={[]}
       apps={[]}
       updating={false}
-      setUpdating={() => {}}
+      setUpdating={setUpdating}
       allTaskTypes={['claim-work']}
     />
   );
@@ -106,5 +106,17 @@ describe('GlobalConfigControls — reviewer override emits only what changed (#6
     expect(onUpdate).toHaveBeenCalledWith('claim-work', {
       taskMetadata: { useWorktree: false, openPR: false, claimFlow: true },
     });
+  });
+
+  it('locks updating around a reviewer change until its PATCH settles', async () => {
+    let resolveUpdate;
+    const onUpdate = vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; }));
+    const setUpdating = vi.fn();
+    renderControls({ taskMetadata: { useWorktree: false, openPR: false, claimFlow: true }, onUpdate, setUpdating });
+    fireEvent.click(screen.getByLabelText('Remove Codex'));
+    expect(setUpdating).toHaveBeenCalledWith(true);
+    expect(setUpdating).not.toHaveBeenCalledWith(false);
+    await act(async () => { resolveUpdate(); await Promise.resolve(); });
+    expect(setUpdating).toHaveBeenLastCalledWith(false);
   });
 });
