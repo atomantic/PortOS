@@ -10,7 +10,7 @@ import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
-import { withModelNumCtx } from './internal/ollamaBacked.js';
+import { isOllamaBackedProvider, ollamaThinkLevel, withModelNumCtx } from './internal/ollamaBacked.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound
@@ -705,7 +705,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure, effort = provider?.effort ?? null }) {
       const ownershipSaved = patchRunMetadata(runId, runOwnership('api'));
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
@@ -824,13 +824,18 @@ export function createRunnerService(config = {}) {
       // A per-model window (`modelNumCtx`) replaces `numCtx` for this model only.
       const windowProvider = withModelNumCtx(provider, requestModel);
       const nativeOllamaUrl = ollamaNativeChatUrl(windowProvider);
+      // An effort the model takes as an Ollama thinking level replaces the
+      // provider's boolean `thinking` for this run.
+      const thinkLevel = isOllamaBackedProvider(provider) ? ollamaThinkLevel(requestModel, effort) : null;
+      const generation = { ...apiGenerationOptions(provider), ...(thinkLevel ? { think: thinkLevel } : {}) };
       const requestBody = nativeOllamaUrl
-        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider: windowProvider, generation: apiGenerationOptions(provider), maxTokens })
+        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider: windowProvider, generation, maxTokens })
         : {
             model: requestModel,
             messages: [{ role: 'user', content: messageContent }],
             stream: true,
             ...apiGenerationOptions(provider),
+            ...(thinkLevel ? { reasoning_effort: thinkLevel } : {}),
             ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
           };
       const response = !endpointGuard.allowed

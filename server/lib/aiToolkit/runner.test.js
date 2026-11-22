@@ -571,6 +571,23 @@ describe('AI Toolkit runner service', () => {
     expect(await readFile(join(dataDir, 'runs', 'run-numctx', 'output.txt'), 'utf-8')).toBe('hello');
   });
 
+  it('sends a supported effort as the Ollama thinking level over the provider boolean', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const fetch = stubNdjsonFetch([`${JSON.stringify({ message: { role: 'assistant', content: 'ok' }, done: true, done_reason: 'stop' })}\n`]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-think-level', provider: runReady({ numCtx: 16384, thinking: true }), model: 'inkling-2-mini:26b-a5b-nvfp4', effort: 'low',
+      prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).think).toBe('low');
+  });
+
   it('fails an Ollama native run whose stream reports an error frame', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

@@ -5,6 +5,7 @@
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
 import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
+import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
@@ -365,6 +366,8 @@ export function effortLevelsForProvider(provider, model = null) {
   if (harness === 'cursor' || isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (harness === 'grok' || isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (harness === 'claude' || isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
+  // An Ollama API provider's effort is the model's thinking level, where its template takes one.
+  if (provider.type === 'api' && isOllamaBackedProvider(provider)) return ollamaThinkingLevelsForModel(model);
   return null;
 }
 
