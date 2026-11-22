@@ -1096,6 +1096,9 @@ export async function checkPullRequests(app, {
   const activityByPr = {};
   const newPrs = [];
   const selfManagedHeld = [];
+  // External PRs are pr-reviewer's intake, never this task's. Reported so a
+  // quiet tick names them instead of reading as "nothing open".
+  const externalPrs = [];
   for (const pr of prs) {
     if (!Number.isInteger(pr.number) || pr.number < 1) continue;
     // Checked before the trust lookup: a held PR is skipped either way, so the
@@ -1108,7 +1111,10 @@ export async function checkPullRequests(app, {
       selfManagedHeld.push(pr.number);
       continue;
     }
-    if (!await trust.isTrusted(pr.authorLogin)) continue;
+    if (!await trust.isTrusted(pr.authorLogin)) {
+      externalPrs.push(pr.number);
+      continue;
+    }
     if (filter === 'self' && pr.authorLogin?.toLowerCase() !== selfLogin) continue;
     // Includes current head and CI transitions, so an existing PR becomes
     // actionable again when its checks complete or a collaborator pushes a fix.
@@ -1119,7 +1125,7 @@ export async function checkPullRequests(app, {
     if (!firstRun && state.activityByPr?.[pr.number] !== fingerprint) newPrs.push(pr);
   }
   const newLastSeen = Math.max(prevLastSeen || 0, ...prs.map(pr => Number.isInteger(pr.number) ? pr.number : 0));
-  return { ok: true, firstRun, newPrs, newLastSeen, activityByPr, selfManagedHeld,
+  return { ok: true, firstRun, newPrs, newLastSeen, activityByPr, selfManagedHeld, externalPrs,
     candidateCount: prs.length, repoFullName, repoHost: githubApiHost(origin.host), defaultBranch };
 
 }

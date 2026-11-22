@@ -14,6 +14,7 @@ vi.mock('../prWatcher.js', () => ({
   formatPullRequestsForPrompt: records => records.map(record => `PR #${record.number}`).join('\n'),
 }));
 import { resolvePrWatcherBlock } from './cosTaskPreStepBlocks.js';
+import { emitLog } from './cosEvents.js';
 
 describe('trusted PR scheduling after discussion screening', () => {
   const app = { id: 'example', name: 'Example', repoPath: '/repo', prWatcherState: { activityByPr: { 7: 'old' } } };
@@ -42,5 +43,11 @@ describe('trusted PR scheduling after discussion screening', () => {
     expect(metadata).not.toHaveProperty('forgeMaintenanceVersion');
     expect(metadata).not.toHaveProperty('prWatcherTargets');
     expect(recordExecution).toHaveBeenCalledOnce();
+  });
+
+  it('names external contributor PRs on a quiet tick so they do not read as unhandled', async () => {
+    mock.check.mockResolvedValue({ ok: true, firstRun: false, newPrs: [], newLastSeen: 9, activityByPr: {}, externalPrs: [9], selfManagedHeld: [], repoFullName: 'example/project' });
+    expect(await resolvePrWatcherBlock(app, 'pr-watcher', {}, { recordExecution: vi.fn() })).toEqual({ skip: true });
+    expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('1 external contributor PR(s) belong to pr-reviewer (#9)'), { appId: app.id });
   });
 });
