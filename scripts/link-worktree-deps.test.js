@@ -161,3 +161,33 @@ describe('link-worktree-deps script', () => {
     expect(result.stderr).toContain('Usage');
   });
 });
+
+describe('link-worktree-deps stale-install detection (#17511)', () => {
+  const lock = version => JSON.stringify({ lockfileVersion: 3, packages: { '': {}, 'node_modules/engine.io': { version } } });
+  const setup = installed => {
+    root = mkdtempSync(join(tmpdir(), 'portos-link-worktree-deps-'));
+    const source = join(root, 'source');
+    const worktree = join(root, 'worktree');
+    mkdirSync(join(source, 'server', 'node_modules', 'engine.io'), { recursive: true });
+    writeFileSync(join(source, 'server', 'node_modules', 'engine.io', 'package.json'), JSON.stringify({ version: installed }));
+    mkdirSync(join(worktree, 'server'), { recursive: true });
+    writeFileSync(join(worktree, 'server', 'package.json'), '{}');
+    writeFileSync(join(worktree, 'server', 'package-lock.json'), lock('6.6.12'));
+    return { source, worktree };
+  };
+
+  it('prints the stale packages without failing the link', () => {
+    const { source, worktree } = setup('6.6.11');
+    const result = runScript(source, worktree);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('server: node_modules/engine.io: expected 6.6.12, installed 6.6.11');
+    expect(result.stdout).toContain('Never run npm install/ci through the link');
+  });
+
+  it('stays quiet when the linked installs match the locks', () => {
+    const { source, worktree } = setup('6.6.12');
+    const result = runScript(source, worktree);
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('lag this worktree');
+  });
+});

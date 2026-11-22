@@ -45,6 +45,7 @@ import * as updateChecker from './updateChecker.js';
 import { describeActivityBlockers } from '../lib/systemIdle.js';
 import { resolveAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { isDependencyReconcilePending } from '../../scripts/lib/dependencyReconcile.js';
 
 const EVENT_ID = 'portos-auto-update';
 
@@ -233,6 +234,9 @@ function updateAvailableFor(channel, status, verdict) {
   // needs the same reconcile run.
   if (verdict.behind > 0) return { available: true, detail: `${verdict.behind} commit(s) behind origin/${verdict.defaultBranch}` };
   if (status.installState?.outOfSync) return { available: true, detail: 'install out of sync with the checked-out code' };
+  // A fast-forward under agent work (`ensureLatest`) moved the checkout onto new
+  // lockfiles without reinstalling; the update's install step reconciles them (#17511).
+  if (isDependencyReconcilePending(PATHS.data)) return { available: true, detail: 'dependency reconcile pending after a lockfile change' };
   return { available: false, detail: `up to date with origin/${verdict.defaultBranch || 'default'}` };
 }
 
