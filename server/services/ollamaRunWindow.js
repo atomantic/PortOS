@@ -12,12 +12,11 @@
 import { isOllamaBackedProvider, ollamaBaseFromProvider, withModelNumCtx } from '../lib/aiToolkit/internal/ollamaBacked.js'
 import { isSameOllamaDaemon } from '../lib/ollamaContext.js'
 import {
-  beginOllamaWork,
+  beginOllamaWorkAfterReload,
   getBaseUrl,
   getInFlightOllamaWorkCount,
   getResidentModelContext,
-  unloadModel,
-  waitForOllamaReload
+  unloadModel
 } from './ollamaManager.js'
 
 const noop = () => {}
@@ -46,8 +45,7 @@ export async function beginOllamaRun(provider, model) {
   if (!provider || !isOllamaBackedProvider(provider)) return { provider, release: noop }
   if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())) return { provider, release: noop }
 
-  await waitForOllamaReload()
-  const release = beginOllamaWork()
+  const release = await beginOllamaWorkAfterReload()
   const target = Number(withModelNumCtx(provider, model)?.numCtx)
   if (!model || !(target > 0)) return { provider, release }
 

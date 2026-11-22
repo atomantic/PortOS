@@ -1,15 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./ollamaManager.js', () => ({
-  beginOllamaWork: vi.fn(),
-  waitForOllamaReload: vi.fn(async () => {}),
+  beginOllamaWorkAfterReload: vi.fn(),
   ensureContextWindow: vi.fn(),
   getRuntimeContextLength: vi.fn(),
   getModelCapabilities: vi.fn(),
   getBaseUrl: vi.fn(() => 'http://localhost:11434')
 }))
 
-import { beginOllamaWork, ensureContextWindow, getModelCapabilities, getRuntimeContextLength, waitForOllamaReload } from './ollamaManager.js'
+import { beginOllamaWorkAfterReload, ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
 import { beginOllamaAgentWork, dropUnsupportedOllamaThinking, ensureOllamaAgentContext } from './ollamaAgentContext.js'
 
 const claudeOllamaTui = {
@@ -100,12 +99,11 @@ describe('ensureOllamaAgentContext', () => {
 describe('beginOllamaAgentWork', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('waits out an in-progress reload, then registers the run and hands back its release', async () => {
+  it('registers a local-daemon run once any reload settles and hands back its release', async () => {
     const release = vi.fn()
-    vi.mocked(beginOllamaWork).mockReturnValue(release)
+    vi.mocked(beginOllamaWorkAfterReload).mockResolvedValue(release)
     expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
-    expect(vi.mocked(waitForOllamaReload).mock.invocationCallOrder[0])
-      .toBeLessThan(vi.mocked(beginOllamaWork).mock.invocationCallOrder[0])
+    expect(beginOllamaWorkAfterReload).toHaveBeenCalledOnce()
   })
 
   it('does not register cloud or remote-daemon providers', async () => {
@@ -115,8 +113,7 @@ describe('beginOllamaAgentWork', () => {
       expect(typeof release).toBe('function')
       release()
     }
-    expect(beginOllamaWork).not.toHaveBeenCalled()
-    expect(waitForOllamaReload).not.toHaveBeenCalled()
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
   })
 })
 

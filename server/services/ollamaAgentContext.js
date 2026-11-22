@@ -23,12 +23,11 @@ import {
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
 import {
-  beginOllamaWork,
+  beginOllamaWorkAfterReload,
   ensureContextWindow,
   getBaseUrl,
   getModelCapabilities,
-  getRuntimeContextLength,
-  waitForOllamaReload
+  getRuntimeContextLength
 } from './ollamaManager.js'
 import { LIFECYCLE_LINES } from '../lib/agent/agentOutputMarkers.js'
 
@@ -98,8 +97,7 @@ const noop = () => {}
 export async function beginOllamaAgentWork(provider) {
   if (!provider || !isOllamaBackedProvider(provider)) return noop
   if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())) return noop
-  await waitForOllamaReload()
-  return beginOllamaWork()
+  return beginOllamaWorkAfterReload()
 }
 
 /**
