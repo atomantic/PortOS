@@ -5,6 +5,7 @@ import DuplicateModelWeights from './DuplicateModelWeights.jsx';
 import MemoryManagement from '../settings/MemoryManagement.jsx';
 import Banner from '../ui/Banner.jsx';
 import CleanupControl from '../system-resources/CleanupControl.jsx';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 
 const BACKEND_LABEL = {
@@ -203,6 +204,28 @@ export default function ModelsPanel({ report, loading, initializing = false, onR
                   <div className="text-sm font-semibold tabular-nums text-white">
                     {Number.isFinite(model.sizeBytes) ? `${model.sizeIsEstimate ? '≈' : ''}${formatBytes(model.sizeBytes)}` : 'Size unavailable'}
                   </div>
+                  {model.sourcePrune && (
+                    cleanup.isPruneConfirming?.(model.id) ? (
+                      <ConfirmButtonPair
+                        prompt="Prune source?"
+                        confirmText="Prune source"
+                        busyText="Pruning"
+                        busy={cleanup.busyId === `${model.id}:source` || cleanup.locked}
+                        ariaLabel={`Confirm prune of source weights for ${model.name}`}
+                        onConfirm={() => cleanup.confirmPrune(model)}
+                        onCancel={cleanup.cancel}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => cleanup.requestPrune(model.id)}
+                        disabled={cleanup.locked}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-port-border px-2.5 py-1.5 text-xs text-gray-200 transition-colors hover:bg-port-border/40 disabled:opacity-50"
+                      >
+                        Prune source
+                      </button>
+                    )
+                  )}
                   <CleanupControl
                     candidate={candidate}
                     busy={cleanup.busyId === candidate.id}

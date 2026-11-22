@@ -22,7 +22,7 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { purgeDataCategory, runSystemResourceReport } from '../services/apiSystem.js';
-import { deleteCachedModel, deleteModelStoreItem, deleteLora } from '../services/apiImageVideo.js';
+import { deleteCachedModel, deleteModelStoreItem, deleteLora, pruneModelStoreSource } from '../services/apiImageVideo.js';
 import { deleteLocalLlmModel } from '../services/apiLocalLlm.js';
 import toast from '../components/ui/Toast';
 import { useConfirmDelete } from './useConfirmDelete.js';
@@ -86,6 +86,28 @@ export function useSystemResourceReport() {
     setBusyId(null);
   }, [runReport]);
 
+  const pruneSource = useCallback(async (model) => {
+    const target = model?.sourcePrune;
+    if (!target?.backend || !target?.key || busyRef.current) return;
+    const busyKey = `${model.id}:source`;
+    busyRef.current = busyKey;
+    setBusyId(busyKey);
+    const result = await pruneModelStoreSource(target.backend, target.key, { silent: true }).catch((error) => {
+      toast.error(error?.message || `Could not prune the source of ${model.name}`);
+      return null;
+    });
+    if (!result) {
+      busyRef.current = null;
+      setBusyId(null);
+      return;
+    }
+    setReport(null);
+    toast.success(`Source weights pruned for ${model.name}`);
+    await runReport();
+    busyRef.current = null;
+    setBusyId(null);
+  }, [runReport]);
+
   const cleanup = useMemo(() => ({
     busyId,
     locked: busyId != null || loading,
@@ -93,7 +115,10 @@ export function useSystemResourceReport() {
     request: requestDelete,
     cancel: cancelDelete,
     confirm: (candidate) => confirmDelete(() => removeCandidate(candidate)),
-  }), [busyId, loading, isConfirming, requestDelete, cancelDelete, confirmDelete, removeCandidate]);
+    isPruneConfirming: (id) => isConfirming(`${id}:source`),
+    requestPrune: (id) => requestDelete(`${id}:source`),
+    confirmPrune: (model) => confirmDelete(() => pruneSource(model)),
+  }), [busyId, loading, isConfirming, requestDelete, cancelDelete, confirmDelete, removeCandidate, pruneSource]);
 
   return { report, setReport, loading, runReport, cleanup };
 }

@@ -46,6 +46,45 @@ const cleanup = {
   confirm: vi.fn(),
 };
 
+describe('ModelsPanel converted sources', () => {
+  it('offers prune only where the row carries a source action', () => {
+    const fastvideo = {
+      id: 'fastvideo-mlx:snap',
+      backend: 'fastvideo-mlx',
+      name: 'snap',
+      detail: 'Converted MLX checkpoint · Org/Repo@aaaaaaaa · source weights (re-downloadable; needed only to re-convert)',
+      sizeBytes: 10,
+      sourcePrune: { backend: 'fastvideo-mlx', key: 'snap' },
+      action: { type: 'model-store', backend: 'fastvideo-mlx', key: 'snap' },
+    };
+    const auk = {
+      id: 'auk-ckpts:AuK-Flash',
+      backend: 'auk-ckpts',
+      name: 'AuK-Flash',
+      detail: 'AuK voice runtime checkpoint · tencent/AuK-Flash · the AuK runtime reads these weights',
+      sizeBytes: 10,
+      action: { type: 'model-store', backend: 'auk-ckpts', key: 'AuK-Flash' },
+    };
+    const requestPrune = vi.fn();
+    render(
+      <MemoryRouter>
+        <ModelsPanel
+          report={{ ...report, models: { downloaded: [fastvideo, auk], totals: { all: 20 } } }}
+          loading={false}
+          onRunReport={vi.fn()}
+          cleanup={{ ...cleanup, requestPrune, isPruneConfirming: () => false }}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/source weights \(re-downloadable; needed only to re-convert\)/)).toBeInTheDocument();
+    expect(screen.getByText(/the AuK runtime reads these weights/)).toBeInTheDocument();
+    const prune = screen.getAllByRole('button', { name: 'Prune source' });
+    expect(prune).toHaveLength(1);
+    fireEvent.click(prune[0]);
+    expect(requestPrune).toHaveBeenCalledWith('fastvideo-mlx:snap');
+  });
+});
+
 describe('ModelsPanel live residency', () => {
   it('revokes a stale delete action when the model becomes resident', () => {
     render(

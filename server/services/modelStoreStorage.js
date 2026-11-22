@@ -20,8 +20,8 @@
  * instead of reading it as empty and pruning the manifest.
  */
 
-import { lstat, readdir, stat } from 'fs/promises';
-import { dirname, join, relative, isAbsolute } from 'path';
+import { lstat, readFile, readdir, readlink, stat } from 'fs/promises';
+import { basename, dirname, join, relative, isAbsolute, resolve } from 'path';
 import { dirSize, rmGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { MODEL_STORE_BACKENDS } from '../lib/modelInventory.js';
@@ -63,9 +63,78 @@ const isRealDirectory = (path) => lstat(path).then(
   },
 );
 
-const item = ({ key, name, detail, size, root, removePaths, risk, cleanupReason, unmanaged }) => ({
+const item = ({ key, name, detail, size, root, removePaths, risk, cleanupReason, unmanaged, sourcePrune = null }) => ({
   key, name, detail, size, root, removePaths, risk, cleanupReason, unmanaged,
+  ...(sourcePrune ? { sourcePrune } : {}),
 });
+
+/** Shown on a converted checkpoint whose source the runtime does not read. */
+const SOURCE_PRUNE_PHRASE = 'source weights (re-downloadable; needed only to re-convert)';
+const PRUNABLE_SOURCE_NAMES = new Set(['transformer', 'transformer_ref']);
+
+async function readSourceSidecar(dir) {
+  const raw = await readFile(join(dir, 'portos-source.json'), 'utf8').catch((err) => {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return null;
+  try {
+    const doc = JSON.parse(raw);
+    return doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : null;
+  } catch {
+    return null;
+  }
+}
+
+const sourceRevisionLabel = (revision) => (
+  typeof revision === 'string' && /^[0-9a-f]{40}$/i.test(revision) ? revision.slice(0, 8) : null
+);
+
+/**
+ * FastVideo records the hub snapshot it converted. The row names that source
+ * and offers prune only while the weights directory is still there. AuK is
+ * not this path: the runtime reads those source directories at start.
+ */
+async function annotateFastvideoSources(items) {
+  for (const entry of items) {
+    const doc = await readSourceSidecar(join(entry.root, entry.key));
+    if (!doc) continue;
+    const repo = typeof doc.sourceRepo === 'string' && doc.sourceRepo ? doc.sourceRepo : null;
+    const rev = sourceRevisionLabel(doc.sourceRevision);
+    const sourceLabel = repo ? `${repo}${rev ? `@${rev}` : ''}` : null;
+    entry.detail = [entry.detail, sourceLabel, SOURCE_PRUNE_PHRASE].filter(Boolean).join(' · ');
+    const weights = typeof doc.sourceWeights === 'string' ? doc.sourceWeights : '';
+    const { getHfCacheRoot } = await import('../lib/hfCache.js');
+    const insideHub = weights ? resolvedWithin(getHfCacheRoot(), weights) : null;
+    const present = insideHub && PRUNABLE_SOURCE_NAMES.has(basename(insideHub))
+      ? await stat(insideHub).then((info) => info.isDirectory(), () => false)
+      : false;
+    if (doc.prunable === true && present) {
+      entry.sourcePrune = { backend: 'fastvideo-mlx', key: entry.key };
+    }
+  }
+  return items;
+}
+
+/**
+ * AuK source directories are what the runtime opens (`config.yaml` and the
+ * Qwen preprocessor). Name the repo; never offer prune, even if a sidecar
+ * claims the directory is disposable.
+ */
+async function annotateAukSources(items) {
+  const { AUK_WEIGHT_SOURCES } = await import('./voice/aukRuntime.js');
+  const byDir = new Map(AUK_WEIGHT_SOURCES.map((row) => [row.directory, row]));
+  const repos = AUK_WEIGHT_SOURCES.map((row) => row.repo).join(', ');
+  for (const entry of items) {
+    const source = byDir.get(entry.key);
+    if (source) {
+      entry.detail = `${entry.detail} · ${source.repo} · the AuK runtime reads these weights`;
+    } else if (entry.key === 'mlx') {
+      entry.detail = `${entry.detail} · converted from ${repos}`;
+    }
+  }
+  return items;
+}
 
 const NO_WEIGHTS = { count: 0, bytes: 0 };
 
@@ -274,8 +343,8 @@ const SCANNERS = {
   'hf-xet-cache': scanXetCache,
   'pixie-forge': scanPixieForge,
   slotstream: () => scanRootEntries('slotstream', { detail: 'Slotstream checkpoint' }),
-  'fastvideo-mlx': () => scanRootEntries('fastvideo-mlx', { detail: 'Converted MLX checkpoint, rebuilt from the hub weights on the next render' }),
-  'auk-ckpts': () => scanRootEntries('auk-ckpts', { detail: 'AuK voice runtime checkpoint' }),
+  'fastvideo-mlx': async () => annotateFastvideoSources(await scanRootEntries('fastvideo-mlx', { detail: 'Converted MLX checkpoint, rebuilt from the hub weights on the next render' })),
+  'auk-ckpts': async () => annotateAukSources(await scanRootEntries('auk-ckpts', { detail: 'AuK voice runtime checkpoint' })),
   'portos-models': () => scanRootEntries('portos-models', { detail: 'Hand-placed model weights', files: true }),
   'repo-models': () => scanRootEntries('repo-models', { detail: 'Hand-placed model weights in the checkout', files: true, ownedNames: presetModelFileNames }),
   'legacy-runtime': scanLegacyRuntime,
@@ -324,4 +393,104 @@ export async function removeModelStoreItem(backend, key) {
   }
   await recordModelUninstall({ backend, key });
   return { ok: true, freedBytes: target.size };
+}
+
+const resolvedWithin = (root, target) => {
+  const base = resolve(root);
+  const candidate = resolve(target);
+  const rel = relative(base, candidate);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? candidate : null;
+};
+
+/** Repo directory (`models--…`) that contains `weights`, or null. */
+function repoDirOf(hubRoot, weights) {
+  let current = weights;
+  const hub = resolve(hubRoot);
+  while (current.startsWith(hub) && current !== hub) {
+    if (basename(current).startsWith('models--')) return current;
+    current = dirname(current);
+  }
+  return null;
+}
+
+async function symlinkTargets(dir, accept) {
+  const found = [];
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const link = await readlink(path).catch(() => null);
+      if (!link) continue;
+      const abs = resolve(dirname(path), link);
+      if (accept(abs)) found.push(abs);
+    } else if (entry.isDirectory()) {
+      found.push(...await symlinkTargets(path, accept));
+    }
+  }
+  return found;
+}
+
+async function stillLinked(dir, target) {
+  const wanted = await stat(target).then(() => resolve(target), () => null);
+  if (!wanted) return false;
+  const links = await symlinkTargets(dir, (abs) => resolve(abs) === wanted);
+  return links.length > 0;
+}
+
+/**
+ * Delete one converted checkpoint's source weights.
+ *
+ * Only FastVideo. The path comes from the sidecar this scan recorded, and it
+ * must be a `transformer` or `transformer_ref` directory inside the hub cache.
+ * The converted checkpoint is not touched. A symlink is removed as a link.
+ * Blobs that snapshot links point at are removed only when nothing else in
+ * that repo still links them.
+ *
+ * @returns {Promise<{ ok: true, freedBytes: number }>}
+ */
+export async function pruneConvertedSource(backend, key) {
+  if (backend !== 'fastvideo-mlx') {
+    throw new ServerError('This checkpoint source is not prunable — the runtime reads it.', { status: 409, code: 'SOURCE_NOT_PRUNABLE' });
+  }
+  if (!isSafeModelStoreKey(key)) throw new ServerError('Invalid model store key', { status: 400, code: 'VALIDATION_ERROR' });
+  const { path: root } = await rootFor(backend);
+  const checkpoint = join(root, key);
+  const doc = await readSourceSidecar(checkpoint);
+  if (!doc) throw new ServerError('Converted checkpoint has no recorded source', { status: 404, code: 'NOT_FOUND' });
+  if (doc.prunable !== true) {
+    throw new ServerError('This checkpoint source is not prunable — the runtime reads it.', { status: 409, code: 'SOURCE_NOT_PRUNABLE' });
+  }
+  const { getHfCacheRoot, listLinkedSharedBlobs, releaseSharedBlobs } = await import('../lib/hfCache.js');
+  const hub = getHfCacheRoot();
+  const weights = typeof doc.sourceWeights === 'string' ? resolvedWithin(hub, doc.sourceWeights) : null;
+  if (!weights || !PRUNABLE_SOURCE_NAMES.has(basename(weights))) {
+    throw new ServerError('Recorded source is not a prunable transformer directory in the hub cache', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const info = await lstat(weights).catch(() => null);
+  if (!info) return { ok: true, freedBytes: 0 };
+  const repoDir = repoDirOf(hub, weights);
+  const repoName = repoDir ? basename(repoDir) : null;
+  const shared = repoName ? await listLinkedSharedBlobs(hub, repoName).catch(() => new Map()) : new Map();
+  const localBlobs = info.isSymbolicLink() || !info.isDirectory()
+    ? []
+    : await symlinkTargets(weights, (abs) => repoDir && resolvedWithin(join(repoDir, 'blobs'), abs));
+  let freed = 0;
+  if (info.isDirectory() && !info.isSymbolicLink()) {
+    freed = await dirSize(weights).catch(() => 0);
+  }
+  console.log(`🗑️ Pruning converted-checkpoint source: fastvideo-mlx/${key}`);
+  await rmGuarded(weights, { recursive: !info.isSymbolicLink(), force: true });
+  if (repoDir) {
+    for (const blob of localBlobs) {
+      if (await stillLinked(repoDir, blob)) continue;
+      const blobInfo = await stat(blob).catch(() => null);
+      await rmGuarded(blob, { force: true });
+      if (blobInfo?.isFile()) freed += blobInfo.size;
+    }
+  }
+  if (shared.size) {
+    const released = await releaseSharedBlobs(hub, shared);
+    freed += released.freedBytes;
+  }
+  return { ok: true, freedBytes: freed };
 }

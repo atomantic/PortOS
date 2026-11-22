@@ -60,6 +60,30 @@ describe('DownloadPreflightConfirm', () => {
     expect(screen.getByText('300 MB')).toBeInTheDocument();
   });
 
+  it('names the provider and model, and offers to link an existing copy', () => {
+    render(
+      <DownloadPreflightConfirm
+        open
+        confirmLabel="Start download"
+        assessment={{
+          ...assessment,
+          provider: 'Hugging Face',
+          model: 'acme/Example',
+          linking: true,
+          requiredBytes: 0,
+          reuseNote: 'Slotstream only reads its own model directory, so this existing copy will be linked there instead of downloaded again.',
+        }}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(screen.getByText('Provider')).toBeInTheDocument();
+    expect(screen.getByText('Hugging Face')).toBeInTheDocument();
+    expect(screen.getByText('acme/Example')).toBeInTheDocument();
+    expect(screen.getByText(/linked there instead of downloaded again/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use existing copy' })).toBeEnabled();
+  });
+
   it('calls onConfirm from the Download button', () => {
     const onConfirm = vi.fn();
     render(

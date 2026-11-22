@@ -107,7 +107,7 @@ const mutateManifest = async (label, fn, fallback) => {
  */
 function storedEntry(row, { installedAt, source }) {
   const entry = { id: row.id, backend: row.backend, installedAt, source };
-  for (const field of ['name', 'detail', 'sizeBytes', 'risk', 'cleanupReason', 'managePath', 'action']) {
+  for (const field of ['name', 'detail', 'sizeBytes', 'risk', 'cleanupReason', 'managePath', 'action', 'sourcePrune']) {
     if (row[field] != null) entry[field] = row[field];
   }
   if (row.sizeIsEstimate) entry.sizeIsEstimate = true;

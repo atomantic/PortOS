@@ -210,6 +210,7 @@ const modelStoreRows = (stores) => MODEL_STORES.flatMap(({ backend }) => (stores
     risk: entry.risk,
     cleanupReason: entry.cleanupReason,
     unmanaged: entry.unmanaged,
+    sourcePrune: entry.sourcePrune,
   }),
   loaded: false,
 })));

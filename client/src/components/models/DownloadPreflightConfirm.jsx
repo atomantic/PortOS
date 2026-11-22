@@ -24,6 +24,7 @@ export default function DownloadPreflightConfirm({
   onCancel,
 }) {
   const insufficient = assessment?.verdict === 'insufficient';
+  const actionLabel = assessment?.linking ? 'Use existing copy' : confirmLabel;
   const warning = VERDICT_COPY[assessment?.verdict] || null;
   const sizeKnown = Number(assessment?.expectedBytes) > 0;
   const freeKnown = Number.isFinite(assessment?.freeBytes);
@@ -67,6 +68,18 @@ export default function DownloadPreflightConfirm({
 
         {!loading && !error && assessment && (
           <dl className="grid grid-cols-1 gap-2 text-sm">
+            {assessment.provider && (
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-gray-500">Provider</dt>
+                <dd className="font-medium text-gray-200 text-right">{assessment.provider}</dd>
+              </div>
+            )}
+            {assessment.model && (
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-gray-500">Model</dt>
+                <dd className="font-medium text-gray-200 break-all text-right">{assessment.model}</dd>
+              </div>
+            )}
             <div className="flex items-baseline justify-between gap-3">
               <dt className="text-gray-500">Size</dt>
               <dd className="font-medium tabular-nums text-white">
@@ -103,6 +116,10 @@ export default function DownloadPreflightConfirm({
           </p>
         )}
 
+        {assessment?.reuseNote && (
+          <p className="text-xs text-gray-400">{assessment.reuseNote}</p>
+        )}
+
         {assessment?.alreadyDownloaded && (
           <p className="text-xs text-port-success">This file is already on disk.</p>
         )}
@@ -122,7 +139,7 @@ export default function DownloadPreflightConfirm({
             className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-1.5 text-sm font-medium text-white hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download size={14} />
-            {confirmLabel}
+            {actionLabel}
           </button>
         </div>
       </div>

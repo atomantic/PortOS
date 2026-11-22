@@ -225,7 +225,7 @@ export const MODEL_STORE_BACKENDS = {
  * MTPLX session bank is a regenerable cache inside a backend whose checkpoints are
  * not.
  */
-export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, risk, cleanupReason, unmanaged = false }) => {
+export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, risk, cleanupReason, unmanaged = false, sourcePrune = null }) => {
   const store = MODEL_STORE_BACKENDS[backend];
   return {
     id: store ? modelInventoryId(backend, key) : null,
@@ -241,6 +241,8 @@ export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, 
     // Large weights sitting in a hand-placed directory the app does not manage;
     // the panel flags them so they can be moved into the hub cache or removed.
     ...(unmanaged ? { unmanaged: true } : {}),
+    // `{ backend, key }` only — the server re-reads the sidecar. No path leaves this process.
+    ...(sourcePrune ? { sourcePrune } : {}),
   };
 };
 

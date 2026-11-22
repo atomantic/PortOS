@@ -137,6 +137,12 @@ place that decision is made, so the manager, the model lister and the
 downloader always agree on where the cache is. A checkpoint downloaded through
 the catalog picker lands at `<cache>/<owner>__<name>` (the repo id's `/`
 flattened to `__`, since the directory name is also the id a start selects).
+Before that download, PortOS looks for the same repo in every root declared
+in `lib/modelRoots.js` (the hub cache included). A servable copy is linked
+into the cache instead of fetched again — Slotstream still starts by
+directory name, so the link has to live in this cache. The confirm step
+names the provider, the repo, and the size, and says when it will link
+rather than download.
 A directory holding a `.partial` (an in-progress or abandoned download) is not
 counted as a servable checkpoint — Slotstream reports an empty cache rather
 than trying to serve a half-downloaded one.
