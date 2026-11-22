@@ -1,0 +1,107 @@
+{
+  "name": "eidoverse.install-controller",
+  "description": "Attach a bounded controller to the private world so it keeps ticking between your wakes. `controllerId` names one of the ids eidoverse.controllers returns — a controller is never a path or code you supply. Every tick is synchronous and provider-free, and `deliverEffects` (default false) decides whether its effects reach the world at all. This is a REQUEST: the result is `outcome: \"installed\"` only when it landed, and any other outcome means nothing is running — read `reasons`. The first tick is one interval away, never immediate. Re-installing an existing id REBUILDS its state from the new config — inspect it first with eidoverse.inspect-controller if you want to keep what it has accumulated.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "controllerId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "tickIntervalMs": {
+        "default": 300000,
+        "type": "integer",
+        "minimum": 60000,
+        "maximum": 86400000
+      },
+      "placement": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "districtId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "anchorEntityId": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "districtId",
+          "anchorEntityId"
+        ],
+        "additionalProperties": false
+      },
+      "config": {
+        "default": {},
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "additionalProperties": {}
+      },
+      "deliverEffects": {
+        "default": false,
+        "type": "boolean"
+      },
+      "armed": {
+        "default": true,
+        "type": "boolean"
+      },
+      "note": {
+        "default": null,
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "controllerId",
+      "tickIntervalMs",
+      "placement",
+      "config",
+      "deliverEffects",
+      "armed",
+      "note"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

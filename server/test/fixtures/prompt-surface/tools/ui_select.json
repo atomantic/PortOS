@@ -1,0 +1,21 @@
+{
+  "name": "ui_select",
+  "description": "Pick an option from a <select> dropdown by label. \"Set status to Active\" → label=\"Status\", option=\"Active\".",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string",
+        "description": "Visible label of the select."
+      },
+      "option": {
+        "type": "string",
+        "description": "Option text or value."
+      }
+    },
+    "required": [
+      "label",
+      "option"
+    ]
+  }
+}

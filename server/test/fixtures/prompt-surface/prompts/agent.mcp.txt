@@ -1,0 +1,40 @@
+{
+  "kind": "portos-agent-context",
+  "schemaVersion": 5,
+  "protocolVersion": "2025-11-25",
+  "enabled": false,
+  "configurationValid": false,
+  "transport": {
+    "type": "streamable-http",
+    "endpoint": "/api/agent-context/mcp",
+    "loopbackOnly": true,
+    "stateful": false
+  },
+  "profile": "metadata",
+  "scopes": [
+    "navigation",
+    "workspaces"
+  ],
+  "limits": {
+    "defaultResults": 10,
+    "maxResults": 25,
+    "maxSummaryChars": 320,
+    "maxResponseChars": 20000,
+    "maxApproxTokens": 5000,
+    "maxSourceItems": 1000
+  },
+  "exclusions": [
+    "Privacy Vault and encrypted privacy records",
+    "credentials, secrets, tokens, and authentication material",
+    "federation peers, network topology, and machine identity",
+    "repository paths, branches, shell sessions, and command history",
+    "messages, browser history, health records, and raw personal exports"
+  ],
+  "actions": {
+    "readPortos": false,
+    "writePortos": false,
+    "manageEidoverse": false,
+    "visitEidoversePeers": false,
+    "callToolRecipes": false
+  }
+}

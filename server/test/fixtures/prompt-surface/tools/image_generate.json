@@ -1,0 +1,44 @@
+{
+  "name": "image_generate",
+  "description": "Generate an image from a text prompt and save it to the user's gallery. Defaults to the user's saved Image Gen backend. Pass `provider` to override per-call: \"local\", \"external\", \"codex\", \"grok\", \"agy\", or the metered (paid per image) \"fal\". Cloud providers must be enabled in Settings. Returns the saved file path.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "What to draw, in natural language. Be specific about subject, style, and mood."
+      },
+      "provider": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "external",
+          "local",
+          "codex",
+          "grok",
+          "agy",
+          "fal",
+          "runway",
+          "higgsfield",
+          "google"
+        ],
+        "description": "\"auto\" (default) uses the user's saved backend. Override only when the user explicitly asks for a specific one or the task strongly favors it."
+      },
+      "negativePrompt": {
+        "type": "string",
+        "description": "Optional list of things to avoid (e.g. \"watermark, low quality\")."
+      },
+      "width": {
+        "type": "integer",
+        "description": "Optional pixel width (64-2048)."
+      },
+      "height": {
+        "type": "integer",
+        "description": "Optional pixel height (64-2048)."
+      }
+    },
+    "required": [
+      "prompt"
+    ]
+  }
+}

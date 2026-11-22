@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.foundations",
+  "description": "List the world foundations this install authored or inherited from a peer — ownership layer (`vernacular` = local, `baseline` = promoted or an inherited copy), the recorded agent-free assay outcome, whether a gated promote candidate currently exists, provenance (opaque instance id and author kind, never a display name), any `inheritance` edge back to the peer it was pulled from, and the derived `lineage` (authored/inherited → assayed → packaged → promoted). Local style is never included.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

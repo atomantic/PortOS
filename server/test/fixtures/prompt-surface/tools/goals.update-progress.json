@@ -1,0 +1,23 @@
+{
+  "name": "goals.update-progress",
+  "description": "Update the progress percent on an active goal. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "goalQuery": {
+        "type": "string",
+        "description": "A distinctive word or phrase from the goal title (\"jacket\", \"estate property\")."
+      },
+      "progress": {
+        "type": "number",
+        "description": "New progress percentage, 0 to 100."
+      }
+    },
+    "required": [
+      "goalQuery",
+      "progress"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

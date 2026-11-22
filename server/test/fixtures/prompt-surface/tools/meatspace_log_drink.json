@@ -1,0 +1,28 @@
+{
+  "name": "meatspace_log_drink",
+  "description": "Log an alcoholic drink to MortalLoom / Meatspace tracking. Use when the user says things like \"I had a beer\", \"log a glass of wine\", \"I just had two whiskeys\". The \"name\" field takes free-form (\"IPA\", \"Cabernet\", \"Old Fashioned\") — known categories (beer/wine/whiskey/shot/cocktail) get sensible oz+ABV defaults, otherwise the user should specify oz+abv explicitly.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Drink name or category (e.g. \"beer\", \"IPA\", \"Cabernet\", \"whiskey\")."
+      },
+      "count": {
+        "type": "number",
+        "description": "How many (default 1)."
+      },
+      "oz": {
+        "type": "number",
+        "description": "Serving size in ounces. Omit to use category default."
+      },
+      "abv": {
+        "type": "number",
+        "description": "Alcohol by volume percent (e.g. 5 for 5%). Omit to use category default."
+      }
+    },
+    "required": [
+      "name"
+    ]
+  }
+}

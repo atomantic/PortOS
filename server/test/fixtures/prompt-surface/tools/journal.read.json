@@ -1,0 +1,15 @@
+{
+  "name": "journal.read",
+  "description": "Read back the full content of a Daily Log entry aloud. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "date": {
+        "type": "string",
+        "description": "YYYY-MM-DD; defaults to today."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

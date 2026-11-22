@@ -1,0 +1,50 @@
+{
+  "name": "mind.recipes.create",
+  "description": "create saved read-tool recipe definitions. Read/list return paged definitions/history only. Create/update require schemaVersion:1, recipe.* name, purpose, closed parameters, 1-5 steps with {id,tool,arguments}, and outputs. Bindings are {literal:value}, {input:parameter}, or {step:id,path:[field]}.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "definition": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "required": [
+      "definition"
+    ],
+    "additionalProperties": false,
+    "$defs": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/__schema0"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "sideEffect": "write"
+}

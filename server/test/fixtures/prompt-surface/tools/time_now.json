@@ -1,0 +1,8 @@
+{
+  "name": "time_now",
+  "description": "Report the current local date, time, and day of week. Use when the user asks \"what time is it?\", \"what day is today?\", \"what's the date?\". LLMs don't know the current time on their own — always call this tool rather than guessing.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

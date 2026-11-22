@@ -1,0 +1,24 @@
+{
+  "name": "eidoverse.arm-controller",
+  "description": "Pause or resume one installed controller without losing the state it has accumulated. Use this to resume a controller the supervisor disarmed after repeated failures, once you have fixed what it was failing on — re-installing would work too but starts its state over.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "armed": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "armed"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

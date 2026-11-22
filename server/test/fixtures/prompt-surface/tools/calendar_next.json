@@ -1,0 +1,8 @@
+{
+  "name": "calendar_next",
+  "description": "Report the next upcoming calendar event. Use when the user asks \"what's next?\", \"what's my next meeting?\", \"when's my next appointment?\". Reads from the user's synced calendar accounts and returns the soonest event starting from now.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

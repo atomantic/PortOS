@@ -1,0 +1,16 @@
+{
+  "name": "pipeline_open_stage",
+  "description": "Open a specific stage of the current pipeline issue by name. Pass `stage` as the user spoke it: \"prose\", \"comic script\", \"storyboards\", \"episode video\", etc. Only works on a /pipeline/issues/... page.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "stage": {
+        "type": "string",
+        "description": "Stage name (idea, prose, nouns, comic script, tv script, storyboards, episode video, audio)."
+      }
+    },
+    "required": [
+      "stage"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.creative-catalog",
+  "description": "List the documented creative toolkit for Eidoverse vernacular building: named materials and motifs (cosmetics for a foundation's `style`) and named generative district-template placement layouts (structure for a foundation's `body`). Deterministic and seeded — no AI provider call.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

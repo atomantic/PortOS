@@ -1,0 +1,8 @@
+{
+  "name": "code_agent_status",
+  "description": "Report the status of in-flight coding tasks the user dispatched by voice (via dispatch_code_agent). Use when the user asks how a coding agent / dispatched task is doing — e.g. \"how's that coding task going?\", \"is the agent still running?\", \"status of the PR\", \"what's happening with the refactor?\". Reads live agent state and reports phase + elapsed per running task. The completion announcement covers the done case proactively; this tool is for mid-task check-ins. Returns an empty-but-ok result when nothing is running — speak the summary verbatim.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

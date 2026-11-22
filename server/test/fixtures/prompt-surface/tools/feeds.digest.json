@@ -1,0 +1,15 @@
+{
+  "name": "feeds.digest",
+  "description": "Summarize the user's unread RSS feed items. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max items (default 5, max 10)."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

@@ -1,0 +1,164 @@
+{
+  "name": "eidoverse.record",
+  "description": "Record (or re-author) a local vernacular foundation — a durable, promotable creative build (a `schema`, `affordance`, `controller`, or `district-template`). It always lands on this install's local `vernacular` layer; the layer is not accepted from you and nothing crosses to a peer until eidoverse.promote is called separately. Use eidoverse.creative-catalog for material/motif/layout ids and eidoverse.controllers for a valid `body.controller.definitionId` first. You do not name what the promote gate replays: it derives the sandbox from this `body`, so a `controller` body must carry `controller: { definitionId, config }`, a `district-template` body must carry the layout/anchor/seed its `placement` re-derives from, and a `schema`/`affordance` body must declare `schema: { field: type }` (and, for an affordance, `affordance: { verb: { reads, writes } }` naming those fields). `style` (palette, motif, aliases) stays local forever; a cosmetic key found inside `body` refuses the write instead of being silently dropped. To build on a foundation this install inherited from a peer, pass `derivedFrom: { originInstanceId, foundationId }` naming it: an identical body with no such edge is refused rather than recorded as this install's own work.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "schema",
+          "affordance",
+          "controller",
+          "district-template"
+        ]
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 80
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 400
+      },
+      "body": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "additionalProperties": {}
+      },
+      "disclosure": {
+        "default": {},
+        "type": "object",
+        "properties": {
+          "requires": {
+            "default": [],
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          "effects": {
+            "default": [],
+            "maxItems": 12,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          "license": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "default": null,
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 600
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "requires",
+          "effects",
+          "license",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "style": {
+        "default": {},
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "additionalProperties": {}
+      },
+      "authorKind": {
+        "default": "user",
+        "type": "string",
+        "enum": [
+          "mind",
+          "cos",
+          "user"
+        ]
+      },
+      "derivedFrom": {
+        "default": null,
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "originInstanceId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              "foundationId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              }
+            },
+            "required": [
+              "originInstanceId",
+              "foundationId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "kind",
+      "title",
+      "summary",
+      "body",
+      "disclosure",
+      "id",
+      "style",
+      "authorKind",
+      "derivedFrom"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

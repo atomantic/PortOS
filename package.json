@@ -16,6 +16,7 @@
     "dev": "node scripts/checkNodeVersion.js && node scripts/checkNpmVersion.js && node scripts/dev-start.js",
     "dev:stop": "node ./node_modules/pm2/bin/pm2 stop ecosystem.config.cjs",
     "eval:agent-context": "node scripts/agent-context-eval.js",
+    "prompt-surface:render": "node scripts/prompt-surface.js render",
     "lint": "node scripts/run-ci-lint.js",
     "measure:agent-prompt": "node scripts/measure-agent-prompt.js",
     "build": "npm run build --prefix client",

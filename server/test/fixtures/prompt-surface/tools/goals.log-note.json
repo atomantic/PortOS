@@ -1,0 +1,27 @@
+{
+  "name": "goals.log-note",
+  "description": "Attach a free-form progress note to an EXISTING NAMED GOAL (without changing the percent). ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "goalQuery": {
+        "type": "string",
+        "description": "A distinctive word or phrase from the goal title."
+      },
+      "note": {
+        "type": "string",
+        "description": "The progress note in the user's words."
+      },
+      "durationMinutes": {
+        "type": "number",
+        "description": "Optional time spent on this activity (minutes)."
+      }
+    },
+    "required": [
+      "goalQuery",
+      "note"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

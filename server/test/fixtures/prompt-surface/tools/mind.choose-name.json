@@ -1,0 +1,20 @@
+{
+  "name": "mind.choose-name",
+  "description": "Choose or change your own display name. Saves one protected machine-local identity memory; preserves your stable mindId and trajectory. The successful result is authoritative over older names.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{M}\\p{N} ._'’·-]*$"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

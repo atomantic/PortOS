@@ -1,0 +1,20 @@
+{
+  "name": "eidoverse.promote",
+  "description": "Offer one local foundation to the shared PortOS baseline population. The server re-runs the agent-free resilience assay and every promote gate itself, so this is a REQUEST, not an assertion: the result is `outcome: \"promoted\"` only when it published. Any other outcome means nothing moved — read `reasons` and fix those before asking again, and never narrate a refused promote as done.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

@@ -1,0 +1,54 @@
+{
+  "name": "skills.manage",
+  "description": "Author a local skill in data/skills: action create {name, category?, content}, patch {name, oldString, newString, replaceAll?}, write_file {name, path, content}, remove_file {name, path}, delete {name}. Supporting files live under references/, templates/, scripts/ or examples/. Returns advisory lint warnings; keep skills compact, reusable procedures, not incident logs.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "create",
+          "patch",
+          "write_file",
+          "remove_file",
+          "delete"
+        ]
+      },
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 400
+      },
+      "category": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "content": {
+        "type": "string",
+        "maxLength": 262144
+      },
+      "oldString": {
+        "type": "string",
+        "maxLength": 262144
+      },
+      "newString": {
+        "type": "string",
+        "maxLength": 262144
+      },
+      "replaceAll": {
+        "type": "boolean"
+      },
+      "path": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "action",
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

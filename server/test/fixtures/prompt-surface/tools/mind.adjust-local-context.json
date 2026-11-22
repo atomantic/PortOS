@@ -1,0 +1,25 @@
+{
+  "name": "mind.adjust-local-context",
+  "description": "Adjust this mind's own local API provider numCtx within host safety clamps. Refused when it would risk OOMing PortOS.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "numCtx": {
+        "type": "integer",
+        "minimum": 512,
+        "maximum": 131072
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240
+      }
+    },
+    "required": [
+      "numCtx",
+      "reason"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

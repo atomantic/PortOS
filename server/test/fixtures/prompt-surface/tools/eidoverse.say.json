@@ -1,0 +1,19 @@
+{
+  "name": "eidoverse.say",
+  "description": "Send a message into the private Eidoverse world as the persistent PortOS CoS presence. Resolves only once the world acknowledges it (`committed: true`); if the world does not ack, the call fails instead of returning a false success — do not narrate the message as sent until this call resolves.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

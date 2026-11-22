@@ -1,0 +1,10 @@
+{
+  "name": "health.today",
+  "description": "Report today's alcohol and nicotine totals against rolling averages. ",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

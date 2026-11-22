@@ -1,0 +1,8 @@
+{
+  "name": "pipeline_next_stage",
+  "description": "Advance to the next visible stage of the current pipeline issue (Idea → Prose → Nouns → Comic → Teleplay → Storyboards → Video → Audio). Only works on a /pipeline/issues/... page.",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

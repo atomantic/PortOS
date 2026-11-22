@@ -1,0 +1,25 @@
+{
+  "name": "ui_ask",
+  "description": "Ask the user's digital twin a question that needs retrieval-augmented recall across their Brain (notes, ideas, projects, inbox), Memory (semantic + BM25), Goals, Calendar, and Autobiography. Use for cross-domain questions the cheaper tools cannot answer: \"what did I decide about X?\", \"advise me on Y given my goals\", \"draft a status update as me\", \"what's on my plate this afternoon?\", \"why did I prioritize Z?\". NOT for one-shot lookups (use brain_search / goal_list / feeds_digest / time_now); NOT for capture verbs (use brain_capture / daily_log_append). The tool returns the answer in `content` — speak `content` directly without summarizing or rephrasing it. Skip citation markers like [1] [2] when reading aloud (they reference source chips on the Ask page).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "The user's question, in their own words. Pass through the substantive question — strip leading filler like \"hey, can you\" but keep the actual content."
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "advise",
+          "draft"
+        ],
+        "description": "\"ask\" answers as the user (default). \"advise\" answers as a coach who knows the user. \"draft\" produces text in the user's voice for an external recipient (use for \"draft a Slack message\", \"write an email as me\")."
+      }
+    },
+    "required": [
+      "question"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "mind.local-context",
+  "description": "Inspect this mind's local API provider numCtx and the RAM/GPU safety ceiling for adjustments.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

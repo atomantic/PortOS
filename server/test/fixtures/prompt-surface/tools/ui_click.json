@@ -1,0 +1,25 @@
+{
+  "name": "ui_click",
+  "description": "Click a tab, button, or link on the current page by visible label. \"Select Memory tab\" → label=\"Memory\", kind=\"tab\".",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string",
+        "description": "Visible label."
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "tab",
+          "button",
+          "link"
+        ],
+        "description": "Optional kind hint."
+      }
+    },
+    "required": [
+      "label"
+    ]
+  }
+}

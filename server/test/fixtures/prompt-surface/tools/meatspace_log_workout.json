@@ -1,0 +1,37 @@
+{
+  "name": "meatspace_log_workout",
+  "description": "Log a workout / exercise session to Meatspace tracking. Use when the user says \"log a workout\", \"I went for a 30 minute run\", \"did an hour of yoga\", \"lifted weights for 45 minutes\". The `type` is free-form (run, yoga, lifting, cycling, swim, etc.). Duration and intensity are optional.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string",
+        "description": "Workout type (e.g. \"run\", \"yoga\", \"weightlifting\", \"cycling\")."
+      },
+      "durationMinutes": {
+        "type": "number",
+        "description": "How long, in minutes. Omit if unknown."
+      },
+      "intensity": {
+        "type": "string",
+        "enum": [
+          "light",
+          "moderate",
+          "vigorous"
+        ],
+        "description": "Optional perceived intensity."
+      },
+      "notes": {
+        "type": "string",
+        "description": "Optional free-form notes about the session."
+      },
+      "date": {
+        "type": "string",
+        "description": "ISO date (YYYY-MM-DD). Omit for today."
+      }
+    },
+    "required": [
+      "type"
+    ]
+  }
+}
