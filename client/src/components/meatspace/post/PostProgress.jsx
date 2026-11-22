@@ -495,7 +495,7 @@ function TrendChart({ title, data, dataKey, domainRange, unit, stroke, chartColo
       <h3 className="text-sm font-medium text-gray-400 mb-3">{title}</h3>
       {data.length > 1 ? (
         <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={data}>
+          <LineChart title={title} desc={`${title}, plotted by date${unit ? ` in ${unit}` : ''}`} data={data}>
             <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
             <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartColors.axis }} />
             <YAxis

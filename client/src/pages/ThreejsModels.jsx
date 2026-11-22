@@ -3,6 +3,8 @@ import { Box, ImagePlus, LoaderCircle, Sparkles } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import EmptyState from '../components/EmptyState';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
@@ -27,12 +29,14 @@ const statusClass = {
   draft: 'bg-port-border text-gray-400',
 };
 
+const fetchModels = () => listThreejsModels({ silent: true });
+
 export default function ThreejsModels() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const imageFromRoute = searchParams.get('image') || '';
-  const [models, setModels] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: models, state: modelsState, error: modelsError, retry: retryModels } = useListResource(fetchModels);
+  const loading = modelsState === 'loading';
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedImage, setSelectedImage] = useState(() => (
     imageFromRoute ? { filename: imageFromRoute, previewUrl: `/data/images/${encodeURIComponent(imageFromRoute)}` } : null
@@ -54,13 +58,6 @@ export default function ThreejsModels() {
     // This picker renders the effort control and sends the value, so Antigravity
     // lists base models with effort picked separately.
   } = useProviderModels({ filter: providerFilter, silent: true, withEffort: true });
-
-  useEffect(() => {
-    listThreejsModels({ silent: true })
-      .then((records) => setModels(Array.isArray(records) ? records : []))
-      .catch(() => toast.error('Failed to load Three.js models'))
-      .finally(() => setLoading(false));
-  }, []);
 
   useEffect(() => {
     const currentFilename = selectedImage?.filename || '';
@@ -218,6 +215,8 @@ export default function ThreejsModels() {
         <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Model workspaces</h2>
         {loading ? (
           <PageSkeleton header="none" label="Loading model workspaces" layout="grid" cards={3} gridColsClass="sm:grid-cols-2 lg:grid-cols-3" />
+        ) : modelsState === 'error' ? (
+          <ListLoadError what="model workspaces" error={modelsError} onRetry={retryModels} />
         ) : models.length === 0 ? (
           <EmptyState
             icon={Box}

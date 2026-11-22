@@ -1396,6 +1396,15 @@ async function executeProviderRunOnce({
       }
     }
 
+    // Registers the run so a context-window reload waits for it, and clamps the window to what a
+    // resident runner is serving. Acquired immediately before the promise so nothing can throw
+    // between acquisition and the `.finally` release. CLI runs are excluded: `executeCliRun`
+    // prepares the daemon's window first and then registers its own child (#17341), and holding a
+    // registration here would make that preparation wait out the drain timeout on this very run.
+    const ollamaRun = isOllamaBackedProvider(effectiveProvider) && effectiveProvider.type !== PROVIDER_TYPES.CLI
+      ? await import('./ollamaRunWindow.js').then(({ beginOllamaRun }) => beginOllamaRun(effectiveProvider, effectiveModel))
+      : null;
+    if (ollamaRun) effectiveProvider = ollamaRun.provider;
     return new Promise((resolve, reject) => {
     let text = '';
     let settled = false;
@@ -1566,7 +1575,7 @@ async function executeProviderRunOnce({
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }
-    });
+    }).finally(() => ollamaRun?.release());
   }).finally(() => {
     if (typeof onRunSettled !== 'function') return;
     try { onRunSettled(runId); } catch (err) {

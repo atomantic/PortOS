@@ -22,7 +22,13 @@ import {
   isSameOllamaDaemon,
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
-import { ensureContextWindow, getBaseUrl, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
+import {
+  beginOllamaWorkAfterReload,
+  ensureContextWindow,
+  getBaseUrl,
+  getModelCapabilities,
+  getRuntimeContextLength
+} from './ollamaManager.js'
 import { LIFECYCLE_LINES } from '../lib/agent/agentOutputMarkers.js'
 
 /**
@@ -65,7 +71,33 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
     ? LIFECYCLE_LINES.ollamaReloadFailed({ contextLength, error: result.error, who: providerName || 'the run' })
     : null
   if (warning) console.warn(warning)
-  return { skipped: false, contextLength, applied: !!result.applied, warning }
+  // A handled deferral, not a failure: other runs held the daemon past the drain
+  // timeout, so the harness starts on the current window rather than dropping them.
+  const deferred = result.reason === 'in-flight'
+    ? `⏭️ Ollama context reload to ${contextLength} tokens skipped: other runs are still using the daemon — ${providerName || 'the run'} continues on the current window.`
+    : null
+  if (deferred) console.log(deferred)
+  return { skipped: false, contextLength, applied: !!result.applied, warning: warning ?? deferred }
+}
+
+const noop = () => {}
+
+/**
+ * Register an agent harness run on the local daemon as in-flight Ollama work, so a
+ * later spawn's `ensureContextWindow` defers its reload instead of restarting the
+ * daemon under this run (#17341). Call AFTER `ensureOllamaAgentContext` (which
+ * must not wait on its own run) and as close to the spawn as possible; waits out
+ * a reload already in progress so the harness never starts on a daemon about to
+ * be killed. Non-Ollama and remote-daemon providers get a no-op release. Never
+ * rejects: the reload gate only resolves and the registry is in-memory.
+ *
+ * @param {object|null} provider
+ * @returns {Promise<() => void>} idempotent release; call it when the harness process exits
+ */
+export async function beginOllamaAgentWork(provider) {
+  if (!provider || !isOllamaBackedProvider(provider)) return noop
+  if (!isSameOllamaDaemon(ollamaBaseFromProvider(provider), getBaseUrl())) return noop
+  return beginOllamaWorkAfterReload()
 }
 
 /**

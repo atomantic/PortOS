@@ -25,9 +25,9 @@ export default function MonthlyUsageCard({ history: points = [], series = [], in
         <span style={{ color: tokenColor }}>━ Tokens (right axis)</span>
       </div>
       {rangeTooWide ? <p className="text-sm text-gray-500">Monthly chart unavailable for ranges over 100 years.</p> : points.length === 0 ? <p className="text-sm text-gray-500">No monthly usage recorded yet.</p> : <>
-        <div className="h-64 min-w-0" role="img" aria-label="Monthly estimated API cost stacked by provider with token trend; exact values in the table below">
+        <div className="h-64 min-w-0">
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={points} margin={{ top: 8, right: 0, bottom: 0, left: 0 }}>
+            <ComposedChart title="Monthly estimated API cost and tokens" desc="Monthly estimated API cost stacked by provider with a token trend; exact values are in the table below." data={points} margin={{ top: 8, right: 0, bottom: 0, left: 0 }}>
               <CartesianGrid stroke="rgb(var(--port-border))" strokeDasharray="3 3" />
               <XAxis dataKey="month" tickFormatter={monthLabel} minTickGap={30} tick={{ fontSize: 10 }} />
               <YAxis yAxisId="cost" tickFormatter={compactUsd} width={55} tick={{ fontSize: 10 }} domain={[0, 'auto']} />

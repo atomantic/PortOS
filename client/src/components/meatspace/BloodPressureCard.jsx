@@ -172,7 +172,7 @@ export default function BloodPressureCard() {
       ) : (
         <>
           <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+            <LineChart title="Blood pressure over time" desc="Line chart of systolic and diastolic readings in mmHg; exact readings are listed in the table below." data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
               <XAxis
                 dataKey="label"

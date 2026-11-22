@@ -52,6 +52,22 @@ describe('Error Detection', () => {
       expect(result.actionable).toBe(false);
     });
 
+    it('classifies an Ollama parser rejection of model-emitted tool markup as a response parse error', () => {
+      for (const message of [
+        'Ollama stream error: invalid Inkling2 tool name "eidoverse.chat" for header "toolCalls"',
+        'Ollama stream error: missing Inkling2 tool name for header "toolCalls"',
+        'Ollama stream error: invalid tool call JSON: unexpected end of JSON input',
+        'Ollama stream error: qwen3.5 tool call parsing failed',
+      ]) {
+        expect(analyzeError(message)).toMatchObject({ hasError: true, category: 'parse-error', requiresFallback: true });
+      }
+      // The daemon dying mid-stream is still not a response-shape failure, and
+      // prose that merely mentions a tool call outside our native-stream prefix
+      // (an agent transcript) is not one either.
+      expect(analyzeError('Ollama stream error: model runner has unexpectedly stopped').category).toBeNull();
+      expect(analyzeError('the invalid tool call was retried', 1).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('detects an Anthropic refusal stop reason', () => {
       const result = analyzeError('{"stop_reason":"refusal"}');
       expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);

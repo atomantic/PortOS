@@ -21,6 +21,7 @@ import TabPills from '../components/ui/TabPills';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useValidTab } from '../hooks/useValidTab';
 import { formatCount, formatDateTime } from '../utils/formatters';
+import socket from '../services/socket';
 
 const TABS = [
   { id: 'health', label: 'Reach & health', icon: BarChart3 },
@@ -72,6 +73,8 @@ export default function XPage() {
   const [deleteAccountId, setDeleteAccountId] = useState(null);
   const [draftBody, setDraftBody] = useState('');
   const selectedLoadRef = useRef({ posts: 0, drafts: 0 });
+  const accountsLoadRef = useRef(0);
+  const accountsLoadedRef = useRef(false);
   const currentAccountIdRef = useRef(accountId);
   const selectedAccountIdRef = useRef(null);
   const savedAccountRef = useRef(emptyAccount);
@@ -110,26 +113,39 @@ export default function XPage() {
     navigate(`/x/${account.id}/accounts?xAccount=edit`);
   };
 
-  const loadAccounts = useCallback(async () => {
-    setLoading(true);
-    setAccountsReadError('');
+  // `refresh` is a socket-driven silent reload: keep the rendered list and skip the
+  // skeleton. Callers that bind it to a DOM event must wrap it, since the event object
+  // would otherwise be truthy. Only the latest call may write, so an older response
+  // cannot restore a removed account or replace a newer read.
+  const loadAccounts = useCallback(async (refresh = false) => {
+    const requestId = ++accountsLoadRef.current;
+    if (!refresh) {
+      setLoading(true);
+      setAccountsReadError('');
+    }
     try {
       const result = await getXAccounts({ silent: true });
+      if (accountsLoadRef.current !== requestId) return;
+      accountsLoadedRef.current = true;
+      setAccountsReadError('');
       setAccounts(result.accounts || []);
     } catch (err) {
+      if (accountsLoadRef.current !== requestId) return;
+      // A silent refresh keeps a list already on screen; the next socket event retries it.
+      if (refresh && accountsLoadedRef.current) return;
       setAccountsReadError(err.message || 'Could not load X accounts.');
     } finally {
-      setLoading(false);
+      if (accountsLoadRef.current === requestId) setLoading(false);
     }
   }, []);
 
-  const loadResource = useCallback(async (kind) => {
+  const loadResource = useCallback(async (kind, refresh = false) => {
     const requestedAccountId = accountId;
     const requestId = ++selectedLoadRef.current[kind];
     const setRead = kind === 'posts' ? setPostRead : setDraftRead;
     const setItems = kind === 'posts' ? setPosts : setDrafts;
     const read = kind === 'posts' ? getXPosts : getXDrafts;
-    setRead({ status: 'loading', error: '' });
+    if (!refresh) setRead({ status: 'loading', error: '' });
     if (!requestedAccountId) return;
     try {
       const result = await read(requestedAccountId, { silent: true });
@@ -138,22 +154,34 @@ export default function XPage() {
       setRead({ status: 'ready', error: '' });
     } catch (err) {
       if (selectedLoadRef.current[kind] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
-      setRead({ status: 'error', error: err.message || `Could not load X ${kind}.` });
+      const message = err.message || `Could not load X ${kind}.`;
+      // A silent reload keeps items already shown; the error replaces only a read with no data.
+      setRead((previous) => (refresh && previous.status === 'ready' ? previous : { status: 'error', error: message }));
     }
   }, [accountId]);
 
-  const loadSelected = useCallback(() => {
+  const loadSelected = useCallback((refresh = false) => {
     setResourcesAccountId(accountId);
-    setPosts([]);
-    setDrafts([]);
-    loadResource('posts');
-    loadResource('drafts');
+    if (!refresh) {
+      setPosts([]);
+      setDrafts([]);
+    }
+    loadResource('posts', refresh);
+    loadResource('drafts', refresh);
   }, [accountId, loadResource]);
 
   const resourceError = (message, retry, label) => <div role="alert" className="mt-3 rounded border border-port-error p-3 text-sm text-port-error">{message} <button type="button" className={secondaryButton} onClick={retry}>Retry {label}</button></div>;
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadSelected(); }, [loadSelected]);
+  useEffect(() => {
+    const onChanged = (payload) => {
+      void loadAccounts(true);
+      if (accountId && (payload?.accountId == null || payload.accountId === accountId)) loadSelected(true);
+    };
+    socket.on('x:changed', onChanged);
+    return () => { socket.off('x:changed', onChanged); };
+  }, [accountId, loadAccounts, loadSelected]);
   useEffect(() => {
     if (!selected) {
       selectedAccountIdRef.current = null;
@@ -297,7 +325,7 @@ export default function XPage() {
 
   const renderDrafts = () => <div className="space-y-4"><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft a post for review</h2><p className="mt-1 text-sm text-gray-400">Drafts stay local until you submit them to Review Hub. PortOS will never publish automatically.</p><form className="mt-3 space-y-3" onSubmit={createDraft}><label htmlFor="x-draft-body" className="sr-only">X draft text</label><textarea id="x-draft-body" className={fieldClass} rows="5" maxLength="4000" placeholder="Write something you actually want to say…" value={draftBody} onChange={(event) => setDraftBody(event.target.value)} /><div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-gray-500">{draftBody.length}/4000</span><button className={buttonClass} disabled={!draftBody.trim() || Boolean(busy)}>Save draft</button></div></form></section><section className="rounded border border-port-border bg-port-card p-4"><h2 className="font-semibold text-white">Draft queue</h2>{resourcesAccountId === selected?.id && draftRead.status === 'error' ? resourceError(draftRead.error, () => loadResource('drafts'), 'drafts') : resourcesAccountId !== selected?.id || draftRead.status === 'loading' ? <div className="mt-3 text-sm text-gray-400"><BrailleSpinner text="Loading drafts…" /></div> : !visibleDrafts.length ? <p className="mt-3 text-sm text-gray-500">No drafts for @{selected.username}.</p> : <div className="mt-3 space-y-2">{visibleDrafts.map((draft) => <article key={draft.id} className="rounded border border-port-border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><StatusBadge value={draft.state === 'approved' || draft.state === 'opened'}>{stateLabel(draft.state)}</StatusBadge><span className="text-xs text-gray-500">{formatDate(draft.updatedAt)}</span></div><p className="mt-3 whitespace-pre-wrap text-sm text-gray-200">{draft.body}</p><div className="mt-3 flex flex-wrap gap-2">{draft.state === 'draft' && <button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Submit for review</button>}{draft.state === 'pending_review' && <><button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'approved')}>Approve</button><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'rejected')}>Reject</button></>}{draft.state === 'approved' && (isApprovalExpired(draft) ? <><span className="self-center text-xs text-port-warning">Approval expired</span><button type="button" className={secondaryButton} disabled={Boolean(busy)} onClick={() => reviewDraft(draft, 'pending_review')}>Re-submit for review</button></> : <button type="button" className={buttonClass} disabled={Boolean(busy)} onClick={() => openDraft(draft)}><ExternalLink size={15} className="mr-1 inline" />Open compose in X</button>)}{draft.reviewNote && <span className="self-center text-xs text-gray-500">{draft.reviewNote}</span>}</div></article>)}</div>}</section></div>;
 
-  const renderAccounts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">X accounts</h2><p className="mt-1 text-sm text-gray-400">Browser-only diagnostics and review-gated compose handoffs. No X credentials are stored.</p></div><button type="button" className={buttonClass} onClick={() => { setAccountForm(emptyAccount); openAccountForm('new'); }}><Plus size={15} className="mr-1 inline" />Add account</button></div>{accountsReadError ? resourceError(accountsReadError, loadAccounts, 'accounts') : !accounts.length ? <div className="mt-4 rounded border border-port-border p-4 text-sm text-gray-400">Add an X account to begin. Sync is manual, so nothing contacts X at boot.</div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{accounts.map((account) => <article key={account.id} className="rounded border border-port-border p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{account.label}</h3><p className="text-sm text-gray-400">@{account.username}</p></div><StatusBadge value={account.enabled}>{account.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="mt-3 text-xs text-gray-500">{account.lastSyncAt ? `Last diagnostic ${formatDate(account.lastSyncAt)}` : 'No diagnostic yet'}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryButton} onClick={() => openEditAccount(account)}>Edit</button><button type="button" className={secondaryButton} onClick={() => navigate(accountPath(account.id, 'health'))}>Open</button>{deleteAccountId === account.id ? <><button type="button" className="rounded border border-port-error px-3 py-2 text-sm text-port-error disabled:opacity-50" disabled={Boolean(busy)} onClick={() => removeAccount(account.id)}>Delete</button><button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(null)}>Cancel</button></> : <button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(account.id)}>Remove</button>}</div></article>)}</div>}</section>;
+  const renderAccounts = () => <section className="rounded border border-port-border bg-port-card p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-white">X accounts</h2><p className="mt-1 text-sm text-gray-400">Browser-only diagnostics and review-gated compose handoffs. No X credentials are stored.</p></div><button type="button" className={buttonClass} onClick={() => { setAccountForm(emptyAccount); openAccountForm('new'); }}><Plus size={15} className="mr-1 inline" />Add account</button></div>{accountsReadError ? resourceError(accountsReadError, () => loadAccounts(), 'accounts') : !accounts.length ? <div className="mt-4 rounded border border-port-border p-4 text-sm text-gray-400">Add an X account to begin. Sync is manual, so nothing contacts X at boot.</div> : <div className="mt-4 grid gap-3 md:grid-cols-2">{accounts.map((account) => <article key={account.id} className="rounded border border-port-border p-4"><div className="flex items-start justify-between gap-2"><div><h3 className="font-semibold text-white">{account.label}</h3><p className="text-sm text-gray-400">@{account.username}</p></div><StatusBadge value={account.enabled}>{account.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></div><p className="mt-3 text-xs text-gray-500">{account.lastSyncAt ? `Last diagnostic ${formatDate(account.lastSyncAt)}` : 'No diagnostic yet'}</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" className={secondaryButton} onClick={() => openEditAccount(account)}>Edit</button><button type="button" className={secondaryButton} onClick={() => navigate(accountPath(account.id, 'health'))}>Open</button>{deleteAccountId === account.id ? <><button type="button" className="rounded border border-port-error px-3 py-2 text-sm text-port-error disabled:opacity-50" disabled={Boolean(busy)} onClick={() => removeAccount(account.id)}>Delete</button><button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(null)}>Cancel</button></> : <button type="button" className={secondaryButton} onClick={() => setDeleteAccountId(account.id)}>Remove</button>}</div></article>)}</div>}</section>;
 
   const accountDrawer = <Drawer open={accountDrawerOpen} onClose={closeAccountForm} title={accountFormMode === 'edit' ? 'Edit X account' : 'Add X account'} subtitle="Read-only diagnostics with human-reviewed drafts" size="md"><form className="space-y-4" onSubmit={saveAccount}><label className="block text-sm text-gray-300" htmlFor="x-account-label">Local label<input id="x-account-label" className={`${fieldClass} mt-1`} required value={accountForm.label} onChange={(event) => updateAccountForm('label', event.target.value)} /></label><label className="block text-sm text-gray-300" htmlFor="x-account-username">X username<input id="x-account-username" className={`${fieldClass} mt-1`} required placeholder="example_user" value={accountForm.username} onChange={(event) => updateAccountForm('username', event.target.value)} /><span className="mt-1 block text-xs text-gray-500">Enter the handle without or with @. PortOS normalizes it.</span></label><label className="block text-sm text-gray-300" htmlFor="x-account-notes">Notes<textarea id="x-account-notes" className={`${fieldClass} mt-1`} rows="4" value={accountForm.notes} onChange={(event) => updateAccountForm('notes', event.target.value)} /></label><label className="flex items-center gap-2 text-sm text-gray-300" htmlFor="x-account-enabled"><input id="x-account-enabled" type="checkbox" checked={accountForm.enabled} onChange={(event) => updateAccountForm('enabled', event.target.checked)} /> Allow diagnostics and compose handoffs</label><div className="rounded border border-port-border bg-port-bg p-3 text-xs text-gray-400">The managed browser reads public X pages. PortOS does not store your X password or API token, does not run background posting, and only opens an approved draft for final manual submission.</div>{accountFormError && <p role="alert" className="text-sm text-port-error">{accountFormError}</p>}<div className="flex justify-end gap-2"><button type="button" className={secondaryButton} onClick={closeAccountForm}>Cancel</button><button className={buttonClass} disabled={Boolean(busy) || !accountForm.label.trim() || !accountForm.username.trim()}>{accountFormMode === 'edit' ? 'Save account' : 'Add account'}</button></div></form></Drawer>;
 

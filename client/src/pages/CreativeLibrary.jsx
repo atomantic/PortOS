@@ -425,7 +425,7 @@ export default function CreativeLibrary({ libraryId }) {
         ) : (
           <ul className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
             {page.items.map((it) => library.type === 'character'
-              ? <CharacterCard key={it.id} ingredient={cards.cards[it.id] || it} onUpdated={cards.update} unavailable={!!cards.error || cards.missing.includes(it.id)}
+              ? <CharacterCard key={it.id} ingredient={cards.cards[it.id] || it} onUpdated={cards.update} unavailable={!!cards.error || cards.missing.includes(it.id)} headingLevel={story ? 3 : 2}
                 to={`${ingredientPath(it)}?${new URLSearchParams({ returnTo: `${library.path}${searchParams.size ? `?${searchParams}` : ''}` })}`} />
               : <LibraryTile key={it.id} ingredient={it} />)}
           </ul>

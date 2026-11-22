@@ -67,6 +67,14 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       },
     },
   },
+  'x:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the X account list and resources for the affected account, or all accounts if omitted.',
+    payloadSchema: {
+      type: 'object', additionalProperties: false,
+      properties: { accountId: { type: 'string' } },
+    },
+  },
   'stacker-news:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate the Stacker News account list and resources for the affected account, or all accounts if omitted.',

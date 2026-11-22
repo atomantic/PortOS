@@ -35,6 +35,11 @@ vi.mock('./tuiPromptRunner.js', () => ({
   executeTuiRun: vi.fn(),
 }));
 
+// Spy on the per-run Ollama registration so its routing can be asserted without a daemon.
+vi.mock('./ollamaRunWindow.js', () => ({
+  beginOllamaRun: vi.fn(async (provider) => ({ provider, release: vi.fn() })),
+}));
+
 vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }),
 }));
@@ -853,6 +858,31 @@ describe('promptRunner — TUI provider routing', () => {
 // run goes out with no Authorization header (NVIDIA NIM 401s "Header of type
 // `authorization` was missing") despite a stored key.
 // =============================================================================
+
+// #17341: `executeCliRun` registers an Ollama-backed CLI child itself, after it
+// prepares the daemon's window. A registration held here as well would make that
+// preparation wait out the drain timeout on its own run.
+describe('promptRunner — in-flight Ollama registration', () => {
+  it('leaves Ollama-backed CLI runs to executeCliRun', async () => {
+    const { beginOllamaRun } = await import('./ollamaRunWindow.js');
+    vi.mocked(beginOllamaRun).mockClear();
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true, text: 'ok' }));
+    await runPromptThroughProvider({ provider: cliProvider({ id: 'claude-ollama', ollamaBacked: true }), prompt: 'p', source: 'test' });
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+    expect(beginOllamaRun).not.toHaveBeenCalled();
+  });
+
+  it('registers an Ollama-backed TUI run for its duration', async () => {
+    const { beginOllamaRun } = await import('./ollamaRunWindow.js');
+    vi.mocked(beginOllamaRun).mockClear();
+    const release = vi.fn();
+    vi.mocked(beginOllamaRun).mockImplementationOnce(async (provider) => ({ provider, release }));
+    tuiRunner.executeTuiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true, text: 'ok' }));
+    await runPromptThroughProvider({ provider: tuiProvider({ id: 'claude-ollama-tui', ollamaBacked: true }), prompt: 'p', source: 'test' });
+    expect(beginOllamaRun).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalled();
+  });
+});
 
 describe('promptRunner — gateway sibling-key preservation', () => {
   // Mirror of `withGatewayApiKey`: the key is readable but invisible to

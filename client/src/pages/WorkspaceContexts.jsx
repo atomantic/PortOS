@@ -10,6 +10,8 @@ import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import { pluralize } from '../lib/textUtils';
 import {
   listWorkspaceContexts,
@@ -195,26 +197,19 @@ function ContextDetail({ appId }) {
   );
 }
 
+// The endpoint returns `{ contexts }`; unwrap so useListResource sees the list.
+// A malformed body throws instead of collapsing into an empty list.
+const fetchContextRows = async () => {
+  const data = await listWorkspaceContexts({ silent: true });
+  if (!Array.isArray(data?.contexts)) throw new Error('Unexpected workspace contexts response');
+  return data.contexts;
+};
+
 function ContextList() {
   const navigate = useNavigate();
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: rows, state, error, retry } = useListResource(fetchContextRows);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    const data = await listWorkspaceContexts({ silent: true }).catch(() => null);
-    if (!data) {
-      toast.error('Could not load workspace contexts');
-      setLoading(false);
-      return;
-    }
-    setRows(data.contexts || []);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  if (loading) {
+  if (state === 'loading') {
     return (
       <PageSkeleton
         header="none"
@@ -224,6 +219,10 @@ function ContextList() {
         cards={3}
       />
     );
+  }
+
+  if (state === 'error') {
+    return <ListLoadError what="workspace projects" error={error} onRetry={retry} />;
   }
 
   if (rows.length === 0) {

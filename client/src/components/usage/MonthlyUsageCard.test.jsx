@@ -10,13 +10,13 @@ const series = [{ key: 'claude', label: 'Claude Code' }, { key: 'codex', label: 
 
 describe('monthly usage', () => {
   it('shows each month’s API cost and exact token totals without hover, including zero and partial months', () => {
-    render(<MonthlyUsageCard history={history} series={series} instanceCount={3} />);
+    const { container } = render(<MonthlyUsageCard history={history} series={series} instanceCount={3} />);
     expect(screen.getByRole('heading')).toHaveTextContent('Monthly estimated API cost & tokens');
     const rows = within(screen.getByRole('table')).getAllByRole('row');
     expect(rows[0]).toHaveTextContent('MonthClaude Code (USD)Codex (USD)Est. cost (USD)Tokens');
     expect(rows[1]).toHaveTextContent('September 2026$100.00$23.45$123.451,250,000');
     expect(rows[2]).toHaveTextContent('October 2026 (partial)$0.00$0.00$0.000');
-    expect(screen.getByRole('img')).toHaveAccessibleName(/stacked by provider with token trend/);
+    expect(container.querySelector('[role="img"]')).toBeNull();
     expect(screen.getByText(/3 instances/)).toHaveTextContent('Calendar months differ from a trailing 30-day window');
   });
 

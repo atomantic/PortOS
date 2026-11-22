@@ -1358,6 +1358,61 @@ describe('ollamaManager context window', () => {
     expect(await ensureContextWindow(null)).toEqual({ applied: false, reason: 'not-configured', contextLength: null })
   })
 
+  it('refuses a reload instead of restarting the daemon under in-flight work', async () => {
+    vi.useFakeTimers()
+    try {
+      stubPs([{ name: 'a', context_length: 4096 }])
+      const { ensureContextWindow, beginOllamaWork, CONTEXT_RELOAD_DRAIN_TIMEOUT_MS } = await loadManager()
+      const release = beginOllamaWork()
+      const pending = ensureContextWindow(131072, 'a')
+      await vi.advanceTimersByTimeAsync(CONTEXT_RELOAD_DRAIN_TIMEOUT_MS + 1)
+      expect(await pending).toMatchObject({ applied: false, reason: 'in-flight', contextLength: 131072 })
+      release()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #17341: an agent harness registers through beginOllamaWorkAfterReload; the
+  // registration must land in the same turn as the gate check, and a later
+  // spawn's reload must then defer instead of restarting the daemon under it.
+  it('registers agent work in the same turn as the reload-gate check, deferring a later reload', async () => {
+    vi.useFakeTimers()
+    try {
+      stubPs([{ name: 'a', context_length: 4096 }])
+      const { ensureContextWindow, beginOllamaWorkAfterReload, getInFlightOllamaWorkCount, CONTEXT_RELOAD_DRAIN_TIMEOUT_MS } = await loadManager()
+      const registering = beginOllamaWorkAfterReload()
+      expect(getInFlightOllamaWorkCount()).toBe(1)
+      const release = await registering
+      const pending = ensureContextWindow(131072, 'a')
+      await vi.advanceTimersByTimeAsync(CONTEXT_RELOAD_DRAIN_TIMEOUT_MS + 1)
+      expect(await pending).toMatchObject({ applied: false, reason: 'in-flight' })
+      release()
+      expect(getInFlightOllamaWorkCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waitForOllamaDrain resolves once every in-flight run releases', async () => {
+    const { beginOllamaWork, waitForOllamaDrain, getInFlightOllamaWorkCount } = await loadManager()
+    const a = beginOllamaWork()
+    const b = beginOllamaWork()
+    const drained = waitForOllamaDrain(60_000)
+    a()
+    a() // idempotent
+    expect(getInFlightOllamaWorkCount()).toBe(1)
+    b()
+    expect(await drained).toBe(true)
+  })
+
+  it('reads the window a specific resident model was loaded at', async () => {
+    stubPs([{ name: 'mlx-model', context_length: 131072 }])
+    const { getResidentModelContext } = await loadManager()
+    expect(await getResidentModelContext('mlx-model')).toBe(131072)
+    expect(await getResidentModelContext('other')).toBeNull()
+  })
+
   it('leaves a daemon alone when it already loaded a large enough window', async () => {
     stubPs([{ name: 'a', context_length: 131072 }])
     const { ensureContextWindow } = await loadManager()

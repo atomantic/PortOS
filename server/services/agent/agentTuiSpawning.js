@@ -54,7 +54,7 @@ import { agentGuardEnv } from '../../lib/agentGuard/index.js';
 import { buildCliChildEnv, composeProviderEnv } from '../../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../../lib/processEnv.js';
 import { resolveAgentApiEnv } from './agentApiAuth.js';
-import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
+import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import { isOllamaBackedProvider } from '../provider/providers.js';
 import { shellHasLiveChild } from '../../lib/shellLivenessProbe.js';
 import { appendRunEvent } from './agentRunEventLog.js';
@@ -367,6 +367,8 @@ export async function spawnTuiAgent({
   // makes the state machine drivable without a live PTY in a test.
   let maintenanceExited = false;
   let maintenanceCleaned = false;
+  // Replaced by the in-flight Ollama registration once the daemon is prepared.
+  let releaseOllamaWork = () => {};
   const settleMaintenance = () => {
     if (maintenanceExited && maintenanceCleaned) maintenance.finishResource('agent', agentId);
   };
@@ -400,6 +402,7 @@ export async function spawnTuiAgent({
       appendRunEvent,
       readRunRecord: () => activeAgents.get(agentId),
       releaseRunRecord: async (pid) => {
+        releaseOllamaWork();
         if (pid) unregisterSpawnedAgent(pid);
         activeAgents.delete(agentId);
         await import('./agentRepoStateVerification.js').then(module => module.resumeAgentCompletionRetirement(agentId))
@@ -482,6 +485,11 @@ export async function spawnTuiAgent({
   // real host/config problem a retry cannot repair.
   let session;
   try {
+    // Held while the harness can talk to the daemon, so another agent's context
+    // reload defers instead of restarting Ollama under this run (#17341). Inside
+    // the try so a registration failure is finalized as a failed start. Released
+    // (idempotently) on session exit, a failed start, and the controller's teardown.
+    if (isOllamaBackedProvider(provider)) releaseOllamaWork = await beginOllamaAgentWork(provider);
     session = await createAgentTuiSession({
       agentId,
       taskId: task.id,
@@ -497,6 +505,7 @@ export async function spawnTuiAgent({
       safetyProfile,
       onData: (...args) => maintenance.withResource('agent', agentId, () => controller.handleData(...args)),
       onExit: (...args) => {
+        releaseOllamaWork();
         if (args[0]?.killed !== true) maintenanceExited = true;
         const result = maintenance.withResource('agent', agentId, () => controller.handleExit(...args));
         settleMaintenance();
@@ -506,8 +515,9 @@ export async function spawnTuiAgent({
     });
     // killSession removes the UI record and reports a synthetic exit. Readiness
     // additionally waits for node-pty/the runner to confirm physical exit.
-    session.ptyProcess?.onExit?.(() => { maintenanceExited = true; settleMaintenance(); });
+    session.ptyProcess?.onExit?.(() => { releaseOllamaWork(); maintenanceExited = true; settleMaintenance(); });
   } catch (err) {
+    releaseOllamaWork();
     const message = err?.message || String(err);
     appendLine(LIFECYCLE_LINES.startFailed({ provider: provider.name || provider.id, message }));
     // The durable runner probes the configured executable before it opens a
