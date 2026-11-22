@@ -191,7 +191,7 @@ describe('localLlmCatalog', () => {
     it('offers the Inkling 2 Mini GGUF through LM Studio only, without featuring it', () => {
       const lmstudio = getCatalog('lmstudio').find((m) => m.key === 'inkling-2-mini');
       expect(lmstudio).toMatchObject({
-        id: 'lmstudio-community/Inkling-2-Mini-GGUF',
+        id: 'https://huggingface.co/lmstudio-community/Inkling-2-Mini-GGUF',
         category: 'general',
         contextLength: 1048576,
         capabilities: expect.arrayContaining(['tools', 'vision', 'reasoning']),

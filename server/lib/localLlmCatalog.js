@@ -637,7 +637,10 @@ export const LOCAL_LLM_CATALOG = [
     repository: 'thinkingmachines/Inkling-2-Mini',
     capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
     context: 1048576,
-    lmstudio: 'lmstudio-community/Inkling-2-Mini-GGUF'
+    // A full Hugging Face URL: LM Studio's own hub has no Inkling-2-Mini entry
+    // (`lms get lmstudio-community/inkling-2-mini-gguf` fails to resolve), but
+    // `lms get` downloads the HF repo directly from its URL.
+    lmstudio: 'https://huggingface.co/lmstudio-community/Inkling-2-Mini-GGUF'
   },
   {
     // The Ollama library's only Inkling build: `latest`, `26b-a5b` and
