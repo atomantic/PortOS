@@ -58,10 +58,17 @@ describe('trusted CI test-memo cache reuse', () => {
 
   // Related selection needs the memo records from each distinct full-run shard.
   it.each(['server', 'client'])('restores and merges each full-run %s shard lineage once', (family) => {
-    const job = jobs[family];
-    const save = step(job, 'Save the test memo');
     const count = FULL_SUITE_SHARDS[family];
-    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${count}\\n`));
+    // The expanded job inlines the merge-shards expression; scoped plans (any
+    // mode but 'full') evaluate it to the shard count, which is the
+    // configuration these assertions model.
+    const mergeExpression = `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
+    expect(jobs[family]).toContain(mergeExpression);
+    const job = jobs[family].replaceAll(`\${{ ${mergeExpression} }}`, String(count));
+    const save = step(job, 'Save the test memo');
+    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: \\$\\{\\{ fromJSON\\(needs\\.impact\\.outputs\\.plan\\)\\.${family}_mode == 'full' && '0' \\|\\| '${count}' \\}\\}\\n`));
+    // Full sharded runs restore only their own lineage; scoped plans keep the merge.
+    expect(ciYml).not.toMatch(/merge-shards: [23]\n/);
     const initial = step(job, 'Restore from the trusted memo cache');
     const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
     const fullKeys = Array.from({ length: count }, (_, index) => expand(restoreKey(initial), {

@@ -193,7 +193,9 @@ jobs:
           suite: server
           partition: server-${{ matrix.shard }}of${{ strategy.job-total }}
           # FULL_SUITE_SHARDS.server; scripts/ci-test-memo-cache.test.js pins it.
-          merge-shards: 2
+          # A full run executes only its own partition, so sibling lineages
+          # are merged only for scoped plans (recordedReach narrowing).
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).server_mode == 'full' && '0' || '2' }}
 
       - name: Run server tests
         id: server-tests
@@ -294,7 +296,9 @@ jobs:
           suite: client
           partition: client-${{ matrix.shard }}of${{ strategy.job-total }}
           # FULL_SUITE_SHARDS.client; scripts/ci-test-memo-cache.test.js pins it.
-          merge-shards: 3
+          # A full run executes only its own partition, so sibling lineages
+          # are merged only for scoped plans (recordedReach narrowing).
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).client_mode == 'full' && '0' || '3' }}
 
       - name: Run client tests
         id: client-tests
