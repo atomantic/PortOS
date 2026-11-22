@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   textHandlers: [],
   eventHandlers: {},
   sendMessage: null,
+  sendMedia: null,
   answerCallbackQuery: null,
   editMessageText: null,
   getMe: null,
@@ -32,6 +33,7 @@ vi.mock('../lib/telegramClient.js', () => ({
   createTelegramBot: vi.fn(() => ({
     getMe: (...a) => h.getMe(...a),
     sendMessage: (...a) => h.sendMessage(...a),
+    sendMedia: (...a) => h.sendMedia(...a),
     answerCallbackQuery: (...a) => h.answerCallbackQuery(...a),
     editMessageText: (...a) => h.editMessageText(...a),
     onText: (regex, fn) => h.textHandlers.push({ regex, fn }),
@@ -127,6 +129,14 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async (path, data) => { fu.writes.push({ path, data }); fu.store = data; }),
 }));
 
+// The jail itself is covered by lib/telegramDeliverables.test.js and the bridge
+// suite; here the collector hands back a canned validated attachment so the
+// direct bot's upload wiring is what's under test.
+const dl = vi.hoisted(() => ({ attachments: [] }));
+vi.mock('../lib/telegramDeliverables.js', () => ({
+  collectNotificationDeliverables: vi.fn(async (n) => ({ attachments: dl.attachments, description: n.description })),
+}));
+
 vi.mock('./agent/agentManagement.js', () => ({ getActiveAgents: vi.fn(() => []) }));
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => ({ goals: [] })) }));
 vi.mock('../lib/uuid.js', () => ({ v4: vi.fn(() => 'test-uuid') }));
@@ -155,6 +165,8 @@ describe('telegram service', () => {
     h.textHandlers = [];
     h.eventHandlers = {};
     h.sendMessage = vi.fn(async () => ({ message_id: 1 }));
+    h.sendMedia = vi.fn(async () => ({ message_id: 2 }));
+    dl.attachments = [];
     h.answerCallbackQuery = vi.fn(async () => {});
     h.editMessageText = vi.fn(async () => {});
     h.getMe = vi.fn(async () => ({ username: 'example_bot' }));
@@ -353,6 +365,24 @@ describe('telegram service', () => {
         { text: '✅ Approve', callback_data: 'mem_approve:mem-1' },
         { text: '❌ Reject', callback_data: 'mem_reject:mem-1' },
       ]);
+    });
+
+    it('uploads each validated deliverable to the authorized chat after the text (#17398)', async () => {
+      const attachment = { path: '/mock/data/images/d.png', filename: 'd.png', method: 'sendPhoto', field: 'photo', caption: null, size: 3 };
+      dl.attachments = [attachment];
+      await forward({ type: 'briefing_ready', title: 'Daily Briefing Ready', description: 'ready', priority: 'low' });
+      await vi.waitFor(() => expect(h.sendMedia).toHaveBeenCalled());
+      expect(h.sendMedia).toHaveBeenCalledWith('42', attachment, {});
+      expect(h.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(h.sendMedia.mock.invocationCallOrder[0]);
+    });
+
+    it('reports an upload failure without reconnecting the bot (#17398)', async () => {
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+      h.sendMedia = vi.fn(async () => { throw new Error('Bad Request: wrong file'); });
+      const result = await telegram.sendMedia({ filename: 'd.png', method: 'sendPhoto' });
+      expect(result).toEqual({ success: false, error: 'Send failed' });
+      expect(telegram.getStatus().connected).toBe(true);
     });
 
     it('does not produce an unhandled rejection when getDomainAutonomyMode rejects', async () => {

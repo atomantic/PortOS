@@ -16,6 +16,7 @@ import { tryReadFile } from '../lib/fileUtils.js';
 import { notificationEvents } from './notifications.js';
 import { forwardNotification as forwardToTelegram } from './telegramForward.js';
 import { createTokenBucket } from '../lib/telegramRateLimit.js';
+import { uploadMedia } from '../lib/telegramClient.js';
 
 const CHANNELS_DIR = join(homedir(), '.claude', 'channels', 'telegram');
 const ENV_FILE = join(CHANNELS_DIR, '.env');
@@ -161,6 +162,28 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
 }
 
 /**
+ * Upload one validated deliverable (a `resolveDeliverable` attachment from
+ * lib/telegramDeliverables.js) via a multipart Bot API call. Shares the text
+ * rate limiter.
+ */
+export async function sendMedia(attachment, opts = {}) {
+  if (!botToken || !chatId) {
+    return { success: false, error: !botToken ? 'No bot token' : 'No chat ID' };
+  }
+
+  if (!rateLimiter.consume()) {
+    console.log(`📱 TG Bridge: rate limit reached, skipping attachment ${attachment.filename}`);
+    return { success: false, error: 'Rate limit exceeded' };
+  }
+
+  const result = await uploadMedia(botToken, chatId, attachment, opts).catch((err) => {
+    console.error(`📱 TG Bridge: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
+    return null;
+  });
+  return result ? { success: true } : { success: false, error: 'Send failed' };
+}
+
+/**
  * Get bridge status
  */
 export function getStatus() {
@@ -183,7 +206,7 @@ export function updateCachedForwardTypes(forwardTypes) {
 // Forward a notification through the shared pipeline. An arrow (not a bound
 // reference) so the CURRENT cachedForwardTypes is read on every event.
 const forwardNotification = (notification) =>
-  forwardToTelegram(notification, { cachedForwardTypes, sendMessage });
+  forwardToTelegram(notification, { cachedForwardTypes, sendMessage, sendMedia });
 
 /**
  * Subscribe to notification events

@@ -324,6 +324,27 @@ export async function sendMessage(text, opts = { parse_mode: 'HTML' }) {
 }
 
 /**
+ * Upload one validated deliverable (a `resolveDeliverable` attachment from
+ * lib/telegramDeliverables.js) to the configured chatId. Shares the text
+ * rate limiter. An upload rejection is a per-file failure, not a lost
+ * connection, so unlike sendMessage it never arms a reconnect.
+ */
+export async function sendMedia(attachment, opts = {}) {
+  if (!bot || !authorizedChatId) return { success: false, error: !bot ? 'Bot not initialized' : 'No chatId configured' };
+
+  if (!rateLimiter.consume()) {
+    console.log(`📱 Telegram: rate limit reached, skipping attachment ${attachment.filename}`);
+    return { success: false, error: 'Rate limit exceeded' };
+  }
+
+  const result = await bot.sendMedia(authorizedChatId, attachment, opts).catch((err) => {
+    console.error(`📱 Telegram: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
+    return null;
+  });
+  return result ? { success: true } : { success: false, error: 'Send failed' };
+}
+
+/**
  * Get bot status
  */
 export function getStatus() {
@@ -392,7 +413,7 @@ async function handleCallbackQuery(query) {
 // Forward a notification through the shared pipeline. An arrow (not a bound
 // reference) so the CURRENT cachedForwardTypes is read on every event.
 const forwardNotification = (notification) =>
-  forwardToTelegram(notification, { cachedForwardTypes, sendMessage });
+  forwardToTelegram(notification, { cachedForwardTypes, sendMessage, sendMedia });
 
 /**
  * Subscribe to notification events for forwarding
