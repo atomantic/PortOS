@@ -32,7 +32,7 @@ const schemaKey = (tool) => stable(tool);
 
 function scrubber(extraRoots) {
   const roots = [...extraRoots, REPO_ROOT, homedir()]
-    .flatMap((root) => [root, root.replaceAll('\\', '/')])
+    .flatMap((root) => [root, root.replaceAll('\\', '/'), root.replaceAll('\\', '\\\\')])
     .map((root) => root.replace(/[\\/]+$/, ''))
     .filter((root) => root.length > 3);
   const placeholders = new Map(roots.map((root) => [root, extraRoots.includes(root) ? '<DATA_DIR>' : '<PORTOS_ROOT>']));
@@ -105,9 +105,10 @@ export function layoutSnapshot(surfaces, scrub = (text) => text) {
     }
   }
   for (const [name, forTool] of variants) {
-    const fileSafe = name.replace(/[^A-Za-z0-9._-]/g, '_');
+    // Injective: '%' escapes every other character and '@' (escaped in names) joins the surface.
+    const fileSafe = encodeURIComponent(name).replaceAll('*', '%2A');
     for (const [serialized, owners] of forTool) {
-      const file = forTool.size === 1 ? `tools/${fileSafe}.json` : `tools/${fileSafe}.${owners[0]}.json`;
+      const file = forTool.size === 1 ? `tools/${fileSafe}.json` : `tools/${fileSafe}@${owners[0]}.json`;
       files[file] = scrub(serialized);
     }
   }
@@ -177,12 +178,17 @@ export function diffSnapshots(base, head) {
     if (head[file] === undefined) { toolLines.push(`- \`${file}\` removed`); continue; }
     const [x, y] = [JSON.parse(base[file]), JSON.parse(head[file])];
     const [px, py] = [paramNames(x.schema), paramNames(y.schema)];
+    const [dx, dy] = [x.description ?? '', y.description ?? ''];
+    const { description: _dx, schema: sx, ...metaX } = x;
+    const { description: _dy, schema: sy, ...metaY } = y;
     const parts = [
       ...py.filter((p) => !px.includes(p)).map((p) => `param \`${p}\` added`),
       ...px.filter((p) => !py.includes(p)).map((p) => `param \`${p}\` removed`),
-      ...(x.description !== y.description ? [`description ${estimateTokens(y.description) - estimateTokens(x.description) >= 0 ? '+' : ''}${estimateTokens(y.description) - estimateTokens(x.description)} tok`] : []),
+      ...(dx !== dy ? [`description ${signed(estimateTokens(dy) - estimateTokens(dx))} tok`] : []),
+      ...(stable(sx) !== stable(sy) ? [`schema ${signed(estimateTokens(stable(sy)) - estimateTokens(stable(sx)))} tok`] : []),
+      ...(stable(metaX) !== stable(metaY) ? ['metadata changed'] : []),
     ];
-    toolLines.push(`- \`${file}\` changed: ${parts.join(', ') || 'schema details changed'}`);
+    toolLines.push(`- \`${file}\` changed: ${parts.join(', ')}`);
   }
   const promptChanged = Object.keys({ ...base, ...head }).filter((f) => f.startsWith('prompts/') && base[f] !== head[f]);
   if (!changedSurface && !toolLines.length && !promptChanged.length) return 'No prompt-surface changes.\n';

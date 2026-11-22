@@ -34,6 +34,6 @@ describe('prompt surface snapshot (#17395)', () => {
 
   it('never leaks host paths into the snapshot', () => {
     const text = Object.values(readSnapshotDir(DEFAULT_OUT_DIR)).join('\n');
-    expect(text).not.toMatch(/\/Users\/|\/home\/|[A-Za-z]:\\Users\\/);
+    expect(text).not.toMatch(/\/Users\/|\/home\/|[A-Za-z]:\\{1,2}Users/);
   });
 });
