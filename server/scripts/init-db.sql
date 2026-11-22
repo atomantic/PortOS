@@ -1423,6 +1423,20 @@ CREATE TABLE IF NOT EXISTS image_to_3d_models (
 
 CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE;
 
+CREATE TABLE IF NOT EXISTS html_page_runs (
+      id TEXT PRIMARY KEY,
+      backend VARCHAR(32) NOT NULL,
+      model_id TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    );
+
+CREATE INDEX IF NOT EXISTS idx_html_page_runs_live_created ON html_page_runs (created_at DESC) WHERE deleted = FALSE;
+
 CREATE TABLE IF NOT EXISTS music_video_projects (
       id TEXT PRIMARY KEY,
       status VARCHAR(32) NOT NULL DEFAULT 'draft',
@@ -2748,6 +2762,10 @@ CREATE TRIGGER trg_creative_director_projects_audit AFTER UPDATE OR DELETE ON cr
 DROP TRIGGER IF EXISTS trg_threejs_models_audit ON threejs_models;
 
 CREATE TRIGGER trg_threejs_models_audit AFTER UPDATE OR DELETE ON threejs_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_html_page_runs_audit ON html_page_runs;
+
+CREATE TRIGGER trg_html_page_runs_audit AFTER UPDATE OR DELETE ON html_page_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
 DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
 

@@ -58,6 +58,7 @@ const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollecti
 const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
 const SyncView = lazyWithReload(() => import('./pages/SyncView'));
 const ThreejsModels = lazyWithReload(() => import('./pages/ThreejsModels'));
+const HtmlPages = lazyWithReload(() => import('./pages/HtmlPages'));
 const Media3D = lazyWithReload(() => import('./pages/Media3D'));
 const Media3DDetail = lazyWithReload(() => import('./pages/Media3DDetail'));
 const ThreejsModelDetail = lazyWithReload(() => import('./pages/ThreejsModelDetail'));
@@ -428,6 +429,7 @@ export default function App() {
               <Route path="timeline" element={<VideoTimeline />} />
               <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
               <Route path="threejs" element={<ThreejsModels />} />
+              <Route path="pages" element={<HtmlPages />} />
               <Route path="threejs/:id" element={<ThreejsModelDetail />} />
               <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} to="/universes" />} />
             </Route>

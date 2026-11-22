@@ -1,5 +1,5 @@
 import { useNavigate, useLocation, Outlet } from 'react-router';
-import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box, Pencil, ScanEye } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box, GalleryVertical, Pencil, ScanEye } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
@@ -17,6 +17,7 @@ const TAB_PRESENTATION = {
   video: { icon: Film },
   prompt: { icon: ScanEye },
   threejs: { icon: Box },
+  pages: { icon: GalleryVertical },
   annotate: { icon: Pencil },
   timeline: { icon: Scissors },
   history: { icon: History },
