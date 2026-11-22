@@ -168,7 +168,9 @@ export default function JiraReports() {
   };
 
   const loadApps = async () => {
-    const allApps = await getApps();
+    // request() toasts a failure; a failed fetch is unknown, not an empty list, so appsLoaded stays false.
+    const allApps = await getApps().catch(() => null);
+    if (!allApps) return;
     const jiraApps = (allApps || []).filter(a => a.jira?.enabled);
     setApps(jiraApps);
     setAppsLoaded(true);
@@ -244,6 +246,7 @@ export default function JiraReports() {
           <button
             onClick={() => handleGenerate(filterAppId || null)}
             disabled={generating || noJiraApps}
+            aria-describedby={noJiraApps ? 'jira-reports-setup' : undefined}
             className="flex items-center gap-1.5 bg-port-accent hover:bg-port-accent/80 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
           >
             {generating ? <BrailleSpinner /> : <RefreshCw size={14} />}
@@ -252,6 +255,15 @@ export default function JiraReports() {
         </div>
       </div>
 
+      {noJiraApps && (
+        <p id="jira-reports-setup" className="text-sm text-gray-400 mb-4">
+          Enable JIRA on an app first:{' '}
+          <Link to="/apps" className="text-port-accent hover:underline">Apps</Link>
+          {' '}and{' '}
+          <Link to="/devtools/jira" className="text-port-accent hover:underline">JIRA Instances</Link>
+        </p>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <BrailleSpinner text="Loading" />
@@ -259,15 +271,7 @@ export default function JiraReports() {
       ) : filteredReports.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <FileText size={48} className="mb-3 opacity-30" />
-          <p>No reports yet. Generate your first report above.</p>
-          {noJiraApps && (
-            <p className="text-xs mt-2">
-              Enable JIRA on an app first:{' '}
-              <Link to="/apps" className="text-port-accent hover:underline">Apps</Link>
-              {' '}and{' '}
-              <Link to="/devtools/jira" className="text-port-accent hover:underline">JIRA Instances</Link>
-            </p>
-          )}
+          <p>{noJiraApps ? 'No reports yet.' : 'No reports yet. Generate your first report above.'}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
