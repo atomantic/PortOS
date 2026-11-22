@@ -177,6 +177,21 @@ describe('Apps Lifecycle Routes', () => {
   });
 
   describe('POST /api/apps/:id/start', () => {
+    it('returns 502 APP_PROCESS_ACTION_FAILED when PM2 fails to start', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', repoPath: '/path/to/repo', pm2ProcessNames: ['test-app'], startCommands: ['npm run dev'] });
+      pm2Service.startWithCommand.mockRejectedValue(new Error('pm2 exploded'));
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/app-001/start');
+
+      expect(response.status).toBe(502);
+      expect(response.body.code).toBe('APP_PROCESS_ACTION_FAILED');
+      expect(response.body.success).toBeUndefined();
+      expect(response.body.error).toContain('test-app: pm2 exploded');
+      expect(response.body.context.results['test-app']).toEqual({ success: false, error: 'pm2 exploded' });
+      expect(history.logAction).toHaveBeenCalledWith('start', 'app-001', 'Test App', expect.any(Object), false);
+    });
+
     it('should start an app', async () => {
       const mockApp = {
         id: 'app-001',
@@ -348,6 +363,21 @@ describe('Apps Lifecycle Routes', () => {
   });
 
   describe('POST /api/apps/:id/stop', () => {
+    it('returns 502 APP_PROCESS_ACTION_FAILED when PM2 fails to stop', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', pm2ProcessNames: ['test-app'] });
+      pm2Service.stopApp.mockResolvedValue({ success: false, error: 'pm2 exploded' });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/app-001/stop');
+
+      expect(response.status).toBe(502);
+      expect(response.body.code).toBe('APP_PROCESS_ACTION_FAILED');
+      expect(response.body.success).toBeUndefined();
+      expect(response.body.error).toContain('test-app: pm2 exploded');
+      expect(response.body.context.results['test-app']).toEqual({ success: false, error: 'pm2 exploded' });
+      expect(history.logAction).toHaveBeenCalledWith('stop', 'app-001', 'Test App', expect.any(Object), false);
+    });
+
     it('should stop an app', async () => {
       const mockApp = {
         id: 'app-001',
@@ -375,6 +405,21 @@ describe('Apps Lifecycle Routes', () => {
   });
 
   describe('POST /api/apps/:id/restart', () => {
+    it('returns 502 APP_PROCESS_ACTION_FAILED when PM2 fails to restart', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'Test App', pm2ProcessNames: ['test-app'] });
+      pm2Service.restartApp.mockRejectedValue(new Error('pm2 exploded'));
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/app-001/restart');
+
+      expect(response.status).toBe(502);
+      expect(response.body.code).toBe('APP_PROCESS_ACTION_FAILED');
+      expect(response.body.success).toBeUndefined();
+      expect(response.body.error).toContain('test-app: pm2 exploded');
+      expect(response.body.context.results['test-app']).toEqual({ success: false, error: 'pm2 exploded' });
+      expect(history.logAction).toHaveBeenCalledWith('restart', 'app-001', 'Test App', expect.any(Object), false);
+    });
+
     it('should restart an app', async () => {
       const mockApp = {
         id: 'app-001',

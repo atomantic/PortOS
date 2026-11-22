@@ -30,6 +30,20 @@ import { loadApp, pathExists, deriveUiPort } from './shared.js';
 import { EIDOVERSE_PROCESS_NAME, EIDOVERSE_MAX_MEMORY_RESTART } from '../../services/eidoverse.js';
 import { logsQuerySchema, pm2ProcessNameSchema } from '../../lib/sharedSchemas.js';
 
+// PM2 failures are caught into per-process `{ success: false, error }` results so
+// every process is attempted; surface them as an HTTP error afterwards so the
+// client's request() toasts instead of treating the 200 as finished.
+function assertProcessResultsSucceeded(action, results) {
+  const failed = Object.entries(results).filter(([, r]) => r.success === false);
+  if (failed.length === 0) return;
+  const detail = failed.map(([name, r]) => `${name}: ${r.error || 'unknown error'}`).join('; ');
+  throw new ServerError(`Failed to ${action} ${detail}`, {
+    status: 502,
+    code: 'APP_PROCESS_ACTION_FAILED',
+    context: { results }
+  });
+}
+
 const router = Router();
 
 // Delay before restarting PortOS itself so the JSON response reaches the client
@@ -159,6 +173,7 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
   await logAction('start', app.id, app.name, { processNames }, allSuccess);
   notifyAppsChanged('start');
 
+  assertProcessResultsSucceeded('start', results);
   res.json({ success: true, results });
 }));
 
@@ -182,6 +197,7 @@ router.post('/:id/stop', loadApp, asyncHandler(async (req, res) => {
   await logAction('stop', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
   notifyAppsChanged('stop');
 
+  assertProcessResultsSucceeded('stop', results);
   res.json({ success: true, results });
 }));
 
@@ -220,6 +236,7 @@ router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
   await logAction('restart', app.id, app.name, { processNames: app.pm2ProcessNames }, allSuccess);
   notifyAppsChanged('restart');
 
+  assertProcessResultsSucceeded('restart', results);
   res.json({ success: true, results });
 }));
 
