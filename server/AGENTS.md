@@ -23,7 +23,7 @@ These apply to Express/service/model code; the root `AGENTS.md` rules always app
 
 ## Async boundaries
 
-- **An `async` timer callback owns its rejections**: every `await` inside `setTimeout(async …)` / `setInterval(async …)` has an enclosing `try`/`catch` or a `.catch(…)`, because an unhandled rejection is fatal on Node ≥15 (#5668). Log and continue unless the callback owns a failure verdict. *Enforced:* `server/test/guards/runtime/timerCallbackConventions.test.js` (example: `services/mediaJobQueue/index.js` watchdog).
+- **An `async` timer callback owns its rejections**: every `await` inside `setTimeout(async …)` / `setInterval(async …)` has an enclosing `try`/`catch` or a `.catch(…)`, because an unhandled rejection is fatal on Node ≥15 (#5668). Log and continue unless the callback owns a failure verdict. *Enforced:* `server/test/guards/runtime/timerCallbackConventions.test.js` (example: `services/mediaJobQueue/execution.js` watchdog).
 - **A statement-level call to an `async` function is `await`ed, ends in `.catch(…)`, or starts with `void`** (`void` = it owns its rejections); a bare call's rejection becomes an `unhandledRejection` that `autoFixer` turns into an AI task (#12978). *Enforced:* `server/test/guards/runtime/floatingAsyncConventions.test.js`.
 - **An `async` Socket.IO handler owns its rejections** the same way (whole-body `try`/`catch` as in `voice.js`, or `.catch` on the awaited chain as in `logs.js`); an escaped rejection terminates the process (#5661). *Enforced:* `server/sockets/asyncHandlerGuard.test.js`.
 - **Attach child listeners before any `await`** ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions)). *Enforced:* `server/test/guards/runtime/childListenerOrderConventions.test.js`.
