@@ -79,7 +79,7 @@ function SceneClipMediaPreview({
       {!clipId && layer === 'footage' && (
         <div className="relative" data-testid="clip-placeholder">
           <ScenePoster src={posterSrc} scene={scene} scenes={project?.scenes} className="aspect-video w-full rounded border border-port-border" />
-          <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
+          <span className="absolute right-1.5 top-1.5 rounded port-media-overlay px-1.5 py-0.5 text-[10px]">
             {(scene.referenceImageId || sourceWindow?.referenceImageId) ? 'Still · no clip yet' : 'No clip yet'}
           </span>
         </div>

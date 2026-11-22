@@ -331,7 +331,7 @@ export default function AlbumsManager() {
                         <img src={`data:image/png;base64,${gen.currentImage}`} alt="Generating cover preview" className="w-full h-full object-cover opacity-70" />
                       ) : <Loader2 size={22} className="animate-spin text-port-accent" />}
                       {gen.totalSteps ? (
-                        <div className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">{Math.round((gen.step / gen.totalSteps) * 100)}%</div>
+                        <div className="absolute bottom-0 inset-x-0 port-media-overlay text-[9px] text-center py-0.5 font-mono">{Math.round((gen.step / gen.totalSteps) * 100)}%</div>
                       ) : null}
                     </div>
                   ) : form.coverImageUrl ? (

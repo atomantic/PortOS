@@ -1078,7 +1078,7 @@ function MoodBoardEditor({ id }) {
                       {item.type === 'text' && item.render?.status === 'queued' ? (
                         <div
                           data-testid="item-rendering"
-                          className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 bg-black/60 py-1.5 text-xs text-white"
+                          className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1.5 port-media-overlay py-1.5 text-xs"
                         >
                           <Paintbrush className="w-3.5 h-3.5 animate-pulse" aria-hidden="true" /> Rendering…
                         </div>

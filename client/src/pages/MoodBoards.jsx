@@ -115,7 +115,7 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
                     className="w-full h-full object-cover"
                   />
                   {showOverflow ? (
-                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-[11px] font-semibold">
+                    <div className="absolute inset-0 port-media-overlay flex items-center justify-center text-[11px] font-semibold">
                       +{remainingVisualsCount}
                     </div>
                   ) : null}

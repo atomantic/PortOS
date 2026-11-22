@@ -425,7 +425,7 @@ export default function MediaLightbox({
       role="dialog"
       aria-modal="true"
       aria-label={item.label || `Media viewer — ${item.filename || item.key || 'item'}`}
-      className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
+      className={`fixed inset-0 z-50 always-dark bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
       // The backdrop itself carries no tabIndex (it isn't a tab stop) and its
       // real keyboard equivalent — Escape — is already handled by the

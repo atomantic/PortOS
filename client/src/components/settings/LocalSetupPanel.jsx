@@ -270,7 +270,7 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
               )}
               {(installing || installLog.length > 0) && (
                 <pre
-                  className="mt-3 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-black/40 border border-port-border rounded p-2 whitespace-pre-wrap break-all"
+                  className="mt-3 max-h-48 overflow-y-auto text-[11px] font-mono text-port-text-muted bg-port-bg border border-port-border rounded p-2 whitespace-pre-wrap break-all"
                 >
                   {installLog.map((e, i) => (
                     <div key={i} className={e.kind === 'error' ? 'text-port-error' : e.kind === 'success' ? 'text-port-success' : ''}>
