@@ -247,6 +247,18 @@ describe('CoS Schedule Routes', () => {
       }
     });
 
+    it('passes weekdaysOnly through so a weekday-only default can be turned off', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({});
+      for (const weekdaysOnly of [false, true]) {
+        expect((await request(app).put('/api/cos/schedule/task/pr-reviewer').send({ weekdaysOnly })).status).toBe(200);
+        expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('pr-reviewer', { weekdaysOnly });
+      }
+      taskSchedule.updateTaskInterval.mockClear();
+      const response = await request(app).put('/api/cos/schedule/task/pr-reviewer').send({ weekdaysOnly: 'no' });
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+    });
+
     it('should update interval for task type', async () => {
       taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'daily' });
 
