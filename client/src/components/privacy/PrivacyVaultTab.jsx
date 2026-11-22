@@ -10,6 +10,7 @@ import {
 import toast from '../ui/Toast';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import VaultRecordDrawer from './VaultRecordDrawer';
+import WebsiteLoginsSection from './WebsiteLoginsSection';
 import { VAULT_TYPES, SENSITIVE_TYPES } from './constants';
 import useLatestRequest from '../../hooks/useLatestRequest';
 
@@ -212,6 +213,10 @@ export default function PrivacyVaultTab({ subjectId }) {
           ))}
         </div>
       )}
+
+      {/* Keyed by subject: a ?subject= switch must not carry one member's list,
+          open drawer or pending delete into another member's scope. */}
+      <WebsiteLoginsSection key={subjectId} subjectId={subjectId} />
 
       <VaultRecordDrawer
         open={drawerOpen}
