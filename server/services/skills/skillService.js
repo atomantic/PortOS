@@ -341,11 +341,12 @@ const MANAGE_ACTIONS = {
 
 /**
  * Refuse an `agent` write on a locked skill, and a delete of a pinned one by
- * anyone. Both read the usage file strictly: when it cannot be read the guard
+ * anyone; every create also needs a readable usage file. All read it strictly: when it cannot be read the guard
  * cannot be verified, so the write is refused rather than assumed allowed.
  */
 async function assertManageAllowed(action, skill, actor) {
-  if (actor !== 'agent' && action !== 'delete') return;
+  // A create must record provenance, and a delete must check the pin.
+  if (actor !== 'agent' && action !== 'delete' && action !== 'create') return;
   const doc = await readUsage();
   const record = skill ? doc.skills[skill.id] : null;
   if (actor === 'agent' && record?.locked) fail('SKILL_LOCKED', `Skill ${skill.id} is locked; only a human edit through the PortOS UI may change it`);
@@ -382,7 +383,7 @@ function noteManageUsage(action, skillId, actor) {
     record.patchCount += 1;
     record.lastPatchedAt = at;
     if (record.state === 'stale') record.state = 'active';
-  }).catch((error) => console.log(`⚠️ Skill usage for ${skillId} not updated: ${error.message}`));
+  }).catch((error) => console.warn(`⚠️ Skill usage for ${skillId} not updated: ${error.message}`));
 }
 
 /**

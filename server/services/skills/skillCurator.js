@@ -22,9 +22,10 @@
 import { dirname, join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { DAY, ensureDir, pathExists, renameGuarded } from '../../lib/fileUtils.js';
+import { isPathAtOrInsideDir } from '../../lib/pathContainment.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
 import { resolveSkillRef, SKILL_FILE, toSkillSummary } from '../../lib/skills/skillRegistry.js';
-import { ARCHIVE_DIR, captureSkillDir, rollbackLedgerEntry } from './skillLedger.js';
+import { ARCHIVE_DIR, captureSkillDir, parseLedgerPath, rollbackLedgerEntry } from './skillLedger.js';
 import {
   getCuratorConfig, recordSkillMutation, scanArchivedSkills, scanLocalSkills, withSkillWriteLock,
 } from './skillService.js';
@@ -194,12 +195,17 @@ async function restoreFromArchive(ref, { actor, now }) {
   if (!resolved.ok) fail(resolved.code, resolved.code === 'SKILL_AMBIGUOUS' ? `More than one archived skill matches '${ref}'; use its id` : `No archived skill matches '${ref}'`, resolved.code === 'SKILL_AMBIGUOUS' ? 409 : 404);
   const archived = resolved.skill;
   const originalId = doc.skills[archived.id]?.originalId;
-  const restorePath = originalId?.startsWith('local:') ? originalId.slice('local:'.length) : archived.path;
+  // The usage file is data, so its remembered path is validated like any
+  // ledger path (and must not land back inside .archive/).
+  const remembered = originalId?.startsWith('local:') ? originalId.slice('local:'.length) : null;
+  const restorePath = remembered && parseLedgerPath(`${remembered}/${SKILL_FILE}`) && !remembered.startsWith('.') ? remembered : archived.path;
   const { scanned } = await scanLocalSkills();
   if (scanned.skills.some((skill) => skill.name.toLowerCase() === archived.name.toLowerCase())) {
     fail('SKILL_EXISTS', `A local skill named '${archived.name}' already exists; rename or remove it before restoring`, 409);
   }
-  const target = join(archived.root, '..', ...restorePath.split('/'));
+  const localRoot = dirname(archived.root);
+  const target = join(localRoot, ...restorePath.split('/'));
+  if (target === localRoot || !isPathAtOrInsideDir(localRoot, target)) fail('SKILL_PATH_ESCAPE', 'Restore target escapes the local skills directory', 403);
   if (await pathExists(target)) fail('SKILL_EXISTS', `Something already occupies ${restorePath}`, 409);
   const archiveRel = `${ARCHIVE_DIR}/${archived.path}`;
   const before = await captureSkillDir(archiveRel);

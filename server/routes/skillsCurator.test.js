@@ -99,6 +99,7 @@ describe('usage telemetry', () => {
     expect(agentPatch.status).toBe(503);
     expect(agentPatch.body.code).toBe('SKILL_USAGE_UNREADABLE');
     expect((await agentCreate('another')).status).toBe(503);
+    expect((await userEdit({ action: 'create', name: 'mine', content: skillMd('mine') })).status).toBe(503);
     // A human edit proceeds; a delete cannot verify the pin, so it is refused.
     expect((await userEdit({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(200);
     expect((await userEdit({ action: 'delete', name: 'deploy' })).status).toBe(503);
@@ -234,6 +235,14 @@ describe('curator pass', () => {
     expect(restored.body.usage.state).toBe('active');
     expect(await readFile(join(skillsDir(), 'idle', 'SKILL.md'), 'utf8')).toContain('Follow the steps.');
     expect((await request(app).get('/api/skills')).body.archived).toEqual([]);
+  });
+
+  it('never restores outside the skills tree, whatever the usage file remembers', async () => {
+    await agentCreate('idle');
+    await lifecycle('idle', 'archive');
+    await editUsage('archive:idle', { originalId: 'local:../../outside' });
+    expect((await lifecycle('archive:idle', 'restore')).status).toBe(200);
+    expect(await readFile(join(skillsDir(), 'idle', 'SKILL.md'), 'utf8')).toContain('# idle');
   });
 });
 

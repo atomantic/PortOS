@@ -19,7 +19,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { lstat, readdir, readFile, realpath, rmdir, stat } from 'fs/promises';
+import { lstat, readdir, readFile, realpath, rmdir } from 'fs/promises';
 import { dirname, join, posix } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isPathAtOrInsideDir } from '../../lib/pathContainment.js';
@@ -100,10 +100,12 @@ async function listSkillFiles(root, relDir) {
   return files;
 }
 
+// Writing these bytes under their own hash is always correct, so a missing
+// or damaged blob (hash mismatch) is healed rather than trusted.
 async function storeBlob(buffer) {
   const sha = sha256Text(buffer);
-  const existing = await stat(blobPath(sha)).catch(() => null);
-  if (!existing || existing.size !== buffer.length) await atomicWrite(blobPath(sha), buffer);
+  const existing = await readFile(blobPath(sha)).catch(absentOr(null));
+  if (!existing || sha256Text(existing) !== sha) await atomicWrite(blobPath(sha), buffer);
   return sha;
 }
 
