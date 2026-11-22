@@ -12,6 +12,11 @@ import { startRetryableSave } from './completionSave';
 import useListResource from '../../../hooks/useListResource';
 import ListLoadError from '../../ui/ListLoadError';
 import { MEMORY_PRACTICE_MODES as MODES } from './trainerModes';
+import { shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard.js';
+
+// Verdict container shared by the three answer-driven modes: it stays mounted for the whole question so the polite live region exists before its text changes, and takes focus (tabIndex -1, never a button) when the answer is submitted so keyboard focus is not dropped to <body>.
+const VERDICT_REGION_PROPS = { role: 'status', 'aria-live': 'polite', tabIndex: -1 };
+const VERDICT_REGION_CLASS = 'outline-none';
 
 /**
  * Route-facing entry point: resolves `itemId` to a memory item, then renders the
@@ -102,6 +107,7 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
   const [done, setDone] = useState(false);
   const [startTime] = useState(Date.now());
   const inputRef = useRef(null);
+  const verdictRef = useRef(null);
   const spacedSavesRef = useRef([]);
   const [mastery, setMastery] = useState(item.mastery || { overallPct: 0, chunks: {}, elements: {}, retention: { status: 'learning' } });
   const [attestConfirming, setAttestConfirming] = useState(false);
@@ -170,6 +176,22 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
   useEffect(() => {
     if (mode && inputRef.current) inputRef.current.focus();
   }, [mode, currentIdx, spacedLineIdx]);
+
+  // The answer field unmounts on submit; hand focus to the verdict region (a non-button, so the still-down Enter cannot activate Next) and let a second Enter advance.
+  const answerAdvance = { spaced: advanceSpaced, sequence: nextSequenceQuestion, 'fill-blank': nextFillBlank }[mode];
+  useEffect(() => {
+    if (showResult) verdictRef.current?.focus();
+  }, [showResult]);
+  useEffect(() => {
+    if (!showResult || !answerAdvance) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Enter' || shouldIgnoreGlobalKey(e)) return;
+      e.preventDefault();
+      answerAdvance();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   // Drive terminal transitions from an effect, never during render. The render
   // fallbacks below (chunk exhausted, line exhausted, sequence exhausted) return null
@@ -438,18 +460,21 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           <div className="text-gray-400 text-xs mb-2 uppercase tracking-wide">Recall this line:</div>
           {hintText && <div className="text-gray-600 text-sm font-mono mb-3">{hintText}</div>}
 
-          {showResult ? (
-            <div className="space-y-2">
-              <div className={`text-sm p-3 rounded ${showResult === 'correct' ? 'bg-port-success/10 text-port-success' : 'bg-port-error/10 text-port-error'}`}>
-                {showResult === 'correct' ? 'Correct!' : `Your answer: ${answer}`}
-              </div>
-              {showResult === 'wrong' && (
-                <div className="text-sm p-3 rounded bg-port-success/10 text-port-success">
-                  Expected: {currentLine.text}
+          <div ref={verdictRef} {...VERDICT_REGION_PROPS} className={VERDICT_REGION_CLASS}>
+            {showResult && (
+              <div className="space-y-2">
+                <div className={`text-sm p-3 rounded ${showResult === 'correct' ? 'bg-port-success/10 text-port-success' : 'bg-port-error/10 text-port-error'}`}>
+                  {showResult === 'correct' ? 'Correct!' : `Your answer: ${answer}`}
                 </div>
-              )}
-            </div>
-          ) : (
+                {showResult === 'wrong' && (
+                  <div className="text-sm p-3 rounded bg-port-success/10 text-port-success">
+                    Expected: {currentLine.text}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {!showResult && (
             <textarea
               aria-label="Your answer"
               ref={inputRef}
@@ -581,18 +606,21 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
           <div className="text-white text-lg leading-relaxed mb-6">{promptLine.text}</div>
 
           <div className="text-gray-400 text-xs mb-2 uppercase tracking-wide">What comes next?</div>
-          {showResult ? (
-            <div className="space-y-2">
-              <div className={`text-sm p-3 rounded ${showResult === 'correct' ? 'bg-port-success/10 text-port-success' : 'bg-port-error/10 text-port-error'}`}>
-                {showResult === 'correct' ? 'Correct!' : `Your answer: ${answer}`}
-              </div>
-              {showResult === 'wrong' && (
-                <div className="text-sm p-3 rounded bg-port-success/10 text-port-success">
-                  Expected: {expectedLine.text}
+          <div ref={verdictRef} {...VERDICT_REGION_PROPS} className={VERDICT_REGION_CLASS}>
+            {showResult && (
+              <div className="space-y-2">
+                <div className={`text-sm p-3 rounded ${showResult === 'correct' ? 'bg-port-success/10 text-port-success' : 'bg-port-error/10 text-port-error'}`}>
+                  {showResult === 'correct' ? 'Correct!' : `Your answer: ${answer}`}
                 </div>
-              )}
-            </div>
-          ) : (
+                {showResult === 'wrong' && (
+                  <div className="text-sm p-3 rounded bg-port-success/10 text-port-success">
+                    Expected: {expectedLine.text}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {!showResult && (
             <textarea
               aria-label="Your answer"
               ref={inputRef}
@@ -662,12 +690,18 @@ function MemoryPracticeRunner({ item, mode, onSelectMode, onExitMode, onBack, on
         <div className="bg-port-card border border-port-border rounded-lg p-6">
           <div className="text-white text-lg leading-relaxed mb-4 font-mono">{displayText}</div>
 
-          {showResult ? (
-            <div className="space-y-2">
-              <div className="text-sm text-gray-400">Full line:</div>
-              <div className="text-port-success text-sm">{line.text}</div>
-            </div>
-          ) : (
+          <div ref={verdictRef} {...VERDICT_REGION_PROPS} className={VERDICT_REGION_CLASS}>
+            {showResult && (
+              <div className="space-y-2">
+                <div className={`text-sm ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
+                  {showResult === 'correct' ? 'Correct!' : 'Not quite.'}
+                </div>
+                <div className="text-sm text-gray-400">Full line:</div>
+                <div className="text-port-success text-sm">{line.text}</div>
+              </div>
+            )}
+          </div>
+          {!showResult && (
             <div>
               <div className="text-gray-400 text-xs mb-2">Fill the blanks (comma-separated):</div>
               <input

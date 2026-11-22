@@ -56,6 +56,7 @@ export default function PostDrillRunner({ session }) {
   const [blankValues, setBlankValues] = useState({});
   const [timeLeft, setTimeLeft] = useState(0);
   const inputRef = useRef(null);
+  const verdictRef = useRef(null);
   const timerRef = useRef(null);
   const timeExpiredRef = useRef(timeExpired);
 
@@ -122,6 +123,10 @@ export default function PostDrillRunner({ session }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [isTraining, lastAnswer, acknowledgeAnswer]);
 
+  useEffect(() => {
+    if (isTraining && lastAnswer) verdictRef.current?.focus();
+  }, [isTraining, lastAnswer]);
+
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
     if (isFillBlankQuestion) {
@@ -172,7 +177,8 @@ export default function PostDrillRunner({ session }) {
           <span>Drill {currentDrillIndex + 1} of {drillCount}</span>
         </div>
 
-        <div className="text-center py-8">
+        {/* Focus lands here on submit (a non-button, so the still-down Enter cannot activate Next) and the polite region announces the verdict. */}
+        <div ref={verdictRef} role="status" aria-live="polite" tabIndex={-1} className="text-center py-8 outline-none">
           <div className="text-2xl font-mono text-gray-400 mb-4">{lastAnswer.prompt}</div>
           {lastAnswer.correct ? (
             <div className="flex flex-col items-center gap-2">

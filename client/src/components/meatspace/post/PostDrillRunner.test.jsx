@@ -170,3 +170,27 @@ describe('PostDrillRunner estimation precision', () => {
     expect(screen.getByLabelText('Your answer')).toBeInTheDocument();
   });
 });
+
+describe('PostDrillRunner training verdict accessibility', () => {
+  it('moves focus to a status region carrying the verdict instead of dropping it to the body', () => {
+    render(<PostDrillRunner session={{
+      currentDrill: { type: 'multiplication', config: { count: 5 }, questions: [{ prompt: '12 x 13', expected: 156 }], timeLimitSec: 120 },
+      currentQuestionIndex: 0,
+      currentDrillIndex: 0,
+      drillCount: 1,
+      state: 'drilling',
+      isTraining: true,
+      lastAnswer: { prompt: '12 x 13', expected: 156, answered: 100, correct: false },
+      submitAnswer: vi.fn(),
+      skipQuestion: vi.fn(),
+      acknowledgeAnswer: vi.fn(),
+      timeExpired: vi.fn(),
+    }} />);
+
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    expect(region).toHaveTextContent('Expected');
+    expect(region).toHaveTextContent('156');
+    expect(document.activeElement).toBe(region);
+  });
+});
