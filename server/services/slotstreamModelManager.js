@@ -17,10 +17,15 @@
  * image-gen venv for a text runtime's weights would be a strange dependency to
  * take on. Each file lands under the checkpoint directory the cache walk reads,
  * so a completed download is servable with no restart.
+ *
+ * Slotstream's `--model` is a cache directory name, not an arbitrary path, so
+ * a checkpoint that already exists in another declared root is linked into
+ * that cache instead of fetched again. The link is the cache entry; the bytes
+ * stay where they already were.
  */
 
-import { mkdir, rm, stat, writeFile } from 'fs/promises';
-import { join, resolve, sep } from 'path';
+import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'fs/promises';
+import { isAbsolute, join, resolve, sep } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
@@ -99,6 +104,96 @@ const hfDownloadHttpError = (res) => {
 };
 
 const fileSize = async (path) => stat(path).then((s) => (s.isFile() ? s.size : 0), () => 0);
+
+const SLOTSTREAM_REUSE_NOTE = 'Slotstream only reads its own model directory, so this existing copy will be linked there instead of downloaded again.';
+const SLOTSTREAM_DOWNLOAD_NOTE = 'Slotstream only reads its own model directory, so this download is stored there.';
+
+/**
+ * A servable copy of `repo` already on disk, or null.
+ *
+ * The Slotstream directory is checked first. Every other declared root is
+ * checked only at the paths a download of this repo would occupy — the hub
+ * snapshot, `<owner>__<name>`, and a hub-shaped `models--…/snapshots/*` —
+ * never by walking the root. `modelRoots` is imported on use: it imports
+ * `slotstreamModels`, and a static import from this manager would cycle.
+ *
+ * @returns {Promise<{ source: string, rootId: string, alreadyInPlace: boolean }|null>}
+ */
+async function findReusableSlotstreamCheckpoint(repo, { cacheDir } = {}) {
+  const modelDir = slotstreamModelPath(repo, { cacheDir });
+  // A copy already in the Slotstream directory is NOT a reason to skip the
+  // network. Servable here means "config plus a non-empty weight", which a
+  // truncated shard still satisfies; only the Hub's advertised length can say
+  // that file is finished. This search is for a copy that lives somewhere else.
+  const { resolveModelRoots } = await import('../lib/modelRoots.js');
+  const { inspectModelCache, repoToDirName } = await import('../lib/hfCache.js');
+  const dirName = slotstreamModelDirName(repo);
+  const hfName = repoToDirName(repo);
+  const slotstreamRoot = resolve(cacheDirFor(cacheDir));
+
+  for (const root of resolveModelRoots()) {
+    if (root.id === 'slotstream' && resolve(root.path) === slotstreamRoot) continue;
+    const candidates = [];
+    if (root.id === 'hf-hub') {
+      const inspected = await inspectModelCache(repo).catch(() => null);
+      if (inspected?.cached && inspected.snapshotPath) candidates.push(inspected.snapshotPath);
+    } else {
+      candidates.push(join(root.path, dirName), join(root.path, hfName));
+      const snaps = await readdir(join(root.path, hfName, 'snapshots')).catch((err) => (
+        err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? [] : Promise.reject(err)
+      ));
+      for (const name of snaps) candidates.push(join(root.path, hfName, 'snapshots', name));
+    }
+    for (const candidate of candidates) {
+      if (resolve(candidate) === resolve(modelDir)) continue;
+      if (await isServableCheckpoint(candidate)) {
+        return { source: candidate, rootId: root.id, alreadyInPlace: false };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Point the cache entry at `source`.
+ *
+ * An existing directory at the destination is removed first, including one
+ * that already looks servable: it is a second copy (or a truncated one), and
+ * the bytes being kept are `source`. A link that already points there stays.
+ */
+async function linkSlotstreamCheckpoint(source, modelDir) {
+  if (resolve(source) === resolve(modelDir)) return;
+  const destInfo = await lstat(modelDir).catch((err) => (err?.code === 'ENOENT' ? null : Promise.reject(err)));
+  if (destInfo?.isSymbolicLink()) {
+    const current = await readlink(modelDir).catch(() => null);
+    const currentAbs = current ? (isAbsolute(current) ? current : resolve(modelDir, '..', current)) : null;
+    if (currentAbs && resolve(currentAbs) === resolve(source)) return;
+  }
+  if (destInfo) await rm(modelDir, { recursive: true, force: true });
+  await mkdir(resolve(modelDir, '..'), { recursive: true });
+  await symlink(resolve(source), modelDir, 'dir');
+}
+
+async function reuseDownloadResult(repo, found, modelDir) {
+  const { dirSize } = await import('../lib/fileUtils.js');
+  const sizeBytes = await dirSize(modelDir).catch(() => 0);
+  const label = slotstreamCatalogEntry(repo)?.label || repo;
+  console.log(`✅ Slotstream checkpoint reused: ${repo} (${found.rootId}, linked)`);
+  return {
+    label,
+    result: {
+      success: true,
+      reused: true,
+      model: slotstreamModelDirName(repo),
+      repo,
+      path: modelDir,
+      files: 0,
+      sizeBytes,
+    },
+    message: `${label} linked from an existing copy`,
+    sizeBytes,
+  };
+}
 
 /**
  * Whether a file already at `destPath` can be trusted as finished.
@@ -194,6 +289,32 @@ async function planRepoDownload({ repo, token, signal, cacheDir }) {
  */
 export async function previewSlotstreamDownload({ model = null, cacheDir } = {}) {
   const repo = requireRepo(model);
+  const found = await findReusableSlotstreamCheckpoint(repo, { cacheDir });
+  if (found) {
+    const modelDir = slotstreamModelPath(repo, { cacheDir });
+    const { dirSize } = await import('../lib/fileUtils.js');
+    const size = await dirSize(found.source).catch(() => 0);
+    // Nothing is fetched, so the disk check is against zero remaining bytes.
+    // `expectedBytes` is then the size of the copy the user is agreeing to use.
+    const assessment = await assessDownloadPreflight({ destPath: modelDir, expectedBytes: 0 });
+    return {
+      kind: 'slotstream',
+      ...assessment,
+      expectedBytes: size,
+      destPath: modelDir,
+      repo,
+      provider: 'Hugging Face',
+      model: repo,
+      linking: true,
+      reuseNote: SLOTSTREAM_REUSE_NOTE,
+      files: null,
+      // Confirm stays enabled: the link has not been made yet. A checkpoint
+      // that is already in the Slotstream directory takes the size-checked
+      // path below, which is what disables Confirm.
+      alreadyDownloaded: false,
+    };
+  }
+
   const token = await getHfToken();
   const plan = await planRepoDownload({
     repo,
@@ -212,6 +333,9 @@ export async function previewSlotstreamDownload({ model = null, cacheDir } = {})
     expectedBytes: plan.totalBytes,
     destPath: plan.modelDir,
     repo,
+    provider: 'Hugging Face',
+    model: repo,
+    reuseNote: SLOTSTREAM_DOWNLOAD_NOTE,
     files: plan.files.length,
     // Finished files only — see planRepoDownload. This flag DISABLES Confirm,
     // so counting a `.partial` here would strand a resumable download.
@@ -244,6 +368,23 @@ export async function downloadSlotstreamModel({ model = null, cacheDir, onProgre
 
   const label = slotstreamCatalogEntry(repo)?.label || repo;
   try {
+    const found = await findReusableSlotstreamCheckpoint(repo, { cacheDir });
+    if (found) {
+      await linkSlotstreamCheckpoint(found.source, modelDir);
+      if (!(await isServableCheckpoint(modelDir))) {
+        throw new Error('Existing checkpoint could not be linked into the Slotstream model directory.');
+      }
+      const reused = await reuseDownloadResult(repo, found, modelDir);
+      onProgress({
+        event: 'complete',
+        model: repo,
+        received: reused.sizeBytes,
+        total: reused.sizeBytes,
+        message: reused.message,
+      });
+      return reused.result;
+    }
+
     const token = await getHfToken();
     const headers = buildHfAuthHeaders(token);
     onProgress({ event: 'start', model: repo, message: `Resolving ${repo} on Hugging Face…` });

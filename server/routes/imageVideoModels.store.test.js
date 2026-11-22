@@ -243,4 +243,65 @@ describe('declared model roots outside the hub cache', () => {
     expect(await exists(home())).toBe(true);
     expect(recordModelUninstall).toHaveBeenCalledWith({ backend: 'legacy-runtime', key: 'hunyuan-video-mlx' });
   });
+
+  it('names a converted checkpoint source and prunes only that transformer directory', async () => {
+    const previousHub = process.env.HF_HUB_CACHE;
+    const hub = join(root, 'hub');
+    process.env.HF_HUB_CACHE = hub;
+    try {
+      const revision = 'a'.repeat(40);
+      const transformer = join(hub, 'models--Org--Repo', 'snapshots', revision, 'transformer');
+      const vae = join(hub, 'models--Org--Repo', 'snapshots', revision, 'vae', 'vae.safetensors');
+      await fill(join(transformer, 'model.safetensors'), 32);
+      await fill(vae, 8);
+      const cache = join(home(), 'fastvideo', 'mlx-checkpoints', 'snap');
+      await fill(join(cache, 'int8', 'mlx_h3_dit.safetensors'), 4);
+      await writeFile(join(cache, 'portos-source.json'), JSON.stringify({
+        sourceRepo: 'Org/Repo',
+        sourceRevision: revision,
+        sourceWeights: transformer,
+        prunable: true,
+      }));
+
+      const { items } = await listModelStore('fastvideo-mlx');
+      expect(items).toHaveLength(1);
+      expect(items[0].detail).toContain('Org/Repo@aaaaaaaa');
+      expect(items[0].detail).toContain('source weights (re-downloadable; needed only to re-convert)');
+      expect(items[0].sourcePrune).toEqual({ backend: 'fastvideo-mlx', key: 'snap' });
+
+      const res = await request(app).delete('/api/image-video/models/store/fastvideo-mlx/snap/source');
+      expect(res.status).toBe(200);
+      expect(await exists(transformer)).toBe(false);
+      expect(await exists(vae)).toBe(true);
+      expect(await exists(join(cache, 'int8', 'mlx_h3_dit.safetensors'))).toBe(true);
+      expect(recordModelUninstall).not.toHaveBeenCalled();
+    } finally {
+      if (previousHub === undefined) delete process.env.HF_HUB_CACHE;
+      else process.env.HF_HUB_CACHE = previousHub;
+    }
+  });
+
+  it('names AuK sources and does not offer to prune them', async () => {
+    const flash = join(home(), 'auk', 'ckpts', 'AuK-Flash');
+    await fill(join(flash, 'config.yaml'), 10);
+    await writeFile(join(flash, 'portos-source.json'), JSON.stringify({
+      sourceRepo: 'tencent/AuK-Flash',
+      sourceRevision: null,
+      prunable: true,
+      sourceWeights: flash,
+    }));
+    await fill(join(home(), 'auk', 'ckpts', 'mlx', 'vae.safetensors'), 4);
+
+    const { items } = await listModelStore('auk-ckpts');
+    const byKey = Object.fromEntries(items.map((entry) => [entry.key, entry]));
+    expect(byKey['AuK-Flash'].detail).toContain('tencent/AuK-Flash');
+    expect(byKey['AuK-Flash'].detail).not.toContain('re-downloadable');
+    expect(byKey['AuK-Flash'].sourcePrune).toBeUndefined();
+    expect(byKey.mlx.detail).toContain('Qwen/Qwen2.5-Omni-3B');
+    expect(byKey.mlx.sourcePrune).toBeUndefined();
+
+    const res = await request(app).delete('/api/image-video/models/store/auk-ckpts/AuK-Flash/source');
+    expect(res.status).toBe(409);
+    expect(await exists(join(flash, 'config.yaml'))).toBe(true);
+  });
 });

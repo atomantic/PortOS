@@ -16,6 +16,12 @@ import { isAppleSilicon } from '../../lib/platform.js';
 
 const run = promisify(execFile);
 const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
+// The runtime reads both of these at start (`config.yaml`, the Qwen preprocessor).
+// Neither is prunable. The converted MLX files are a separate directory.
+export const AUK_WEIGHT_SOURCES = Object.freeze([
+  { directory: 'AuK-Flash', repo: 'tencent/AuK-Flash', prunable: false },
+  { directory: 'Qwen2.5-Omni-3B', repo: 'Qwen/Qwen2.5-Omni-3B', prunable: false },
+]);
 // scripts/ml/requirements/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would need a different filelock).
 const AUK_PYTHON = '3.11';
 const INSTALL_TIMEOUT_MS = 30 * 60_000;
@@ -72,9 +78,11 @@ export function startAukSetup(notify = () => {}) {
     const timer = setTimeout(locked.kill, INSTALL_TIMEOUT_MS);
     const installed = await locked.promise.finally(() => clearTimeout(timer));
     if (!installed.ok) throw new Error('Dependency installation failed');
-    for (const [repo, directory] of [['tencent/AuK-Flash', 'AuK-Flash'], ['Qwen/Qwen2.5-Omni-3B', 'Qwen2.5-Omni-3B']]) {
+    for (const { repo, directory } of AUK_WEIGHT_SOURCES) {
       await stage(`Downloading ${directory} weights`, python, ['-c',
-        'from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id=sys.argv[1], local_dir=sys.argv[2])',
+        'from huggingface_hub import snapshot_download, HfApi; import json, sys; from pathlib import Path; repo, dest = sys.argv[1], Path(sys.argv[2]); snapshot_download(repo_id=repo, local_dir=str(dest)); rev=None\n'
+        + 'try:\n rev=HfApi().model_info(repo).sha\nexcept Exception:\n rev=None\n'
+        + '(dest / "portos-source.json").write_text(json.dumps({"sourceRepo": repo, "sourceRevision": rev, "prunable": False}))',
         repo, join(root, 'ckpts', directory)]);
     }
     for (const args of [

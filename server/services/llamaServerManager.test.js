@@ -339,6 +339,27 @@ describe('llamaServerManager', () => {
     expect(status.config.parallel).toBe(1);
   });
 
+  it('launches a preset that already points at models/<file>', async () => {
+    const relativePath = join('models', 'portos-preset-launch-17378.gguf');
+    await mkdir('models', { recursive: true });
+    await writeFile(relativePath, 'gguf');
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+    try {
+      const result = await startLlamaServer({
+        model: relativePath,
+        port: 8080,
+        host: '127.0.0.1',
+        alias: 'preset',
+      });
+      expect(result.success).toBe(true);
+      const startCall = execPm2Calls.find((call) => call[0] === 'start');
+      expect(startCall).toEqual(expect.arrayContaining(['-m', relativePath]));
+    } finally {
+      await rm(relativePath, { force: true });
+      await stopLlamaServer().catch(() => {});
+    }
+  });
+
   // The whole point of #7611: a vision-capable GGUF loads text-only unless
   // llama.cpp is handed its projector sidecar. Both halves are asserted here —
   // the flag lands when a projector is set, and the line is UNCHANGED when one

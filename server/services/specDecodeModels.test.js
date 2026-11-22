@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { homedir, tmpdir } from 'os';
-import { isAbsolute, join, relative } from 'path';
+import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { Readable } from 'stream';
 import {
   downloadSpecDecodeModel,
@@ -209,6 +209,21 @@ describe('pickGgufSibling', () => {
 });
 
 describe('getSpecDecodePresetStatus', () => {
+  let hub;
+  let previousHub;
+
+  beforeEach(async () => {
+    hub = await mkdtemp(join(tmpdir(), 'portos-spec-status-hub-'));
+    previousHub = process.env.HF_HUB_CACHE;
+    process.env.HF_HUB_CACHE = hub;
+  });
+
+  afterEach(async () => {
+    if (previousHub === undefined) delete process.env.HF_HUB_CACHE;
+    else process.env.HF_HUB_CACHE = previousHub;
+    await rm(hub, { recursive: true, force: true });
+  });
+
   it('reports each preset file as on-disk or not, without reaching Hugging Face', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const presets = await getSpecDecodePresetStatus();
@@ -244,6 +259,32 @@ describe('getSpecDecodePresetStatus', () => {
     // row out of every other preset's card.
     expect(recommended.projector).toBeNull();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports a hub snapshot of a shipped preset and prefers an existing models/ file', async () => {
+    const repoDir = join(hub, 'models--ggml-org--Qwen3.8-27B-GGUF', 'snapshots', 'deadbeef');
+    const gguf = join(repoDir, 'Qwen3.8-27B-Q4_K_M.gguf');
+    await mkdir(repoDir, { recursive: true });
+    await writeFile(gguf, 'hub-weights');
+
+    const fromHub = (await getSpecDecodePresetStatus()).find((preset) => preset.id === 'qwen3.8-27b-dspark').model;
+    expect(fromHub.exists).toBe(true);
+    expect(fromHub.path).toBe(gguf);
+
+    const relativePath = 'models/Qwen3.8-27B-Q4_K_M.gguf';
+    const legacy = resolve(relativePath);
+    const prior = await stat(legacy).catch(() => null);
+    if (!prior) {
+      await mkdir(dirname(legacy), { recursive: true });
+      await writeFile(legacy, 'legacy');
+    }
+    try {
+      const preferred = (await getSpecDecodePresetStatus()).find((preset) => preset.id === 'qwen3.8-27b-dspark').model;
+      expect(preferred.exists).toBe(true);
+      expect(preferred.path).toBe(relativePath);
+    } finally {
+      if (!prior) await rm(legacy, { force: true });
+    }
   });
 });
 
@@ -300,6 +341,58 @@ describe('downloadSpecDecodeModel', () => {
     expect(result.file).toBe('Example-Q4_K_M.gguf');
     expect(await readFile(join(dir, 'base.gguf'), 'utf8')).toBe('ggufgg');
     expect(frames.at(-1)).toMatchObject({ event: 'complete', role: 'model' });
+  });
+
+  it('downloads a shipped models/ preset into the hub cache', async () => {
+    const hub = await mkdtemp(join(tmpdir(), 'portos-spec-download-hub-'));
+    const previous = process.env.HF_HUB_CACHE;
+    process.env.HF_HUB_CACHE = hub;
+    try {
+      stubPreset({
+        model: { path: 'models/base.gguf', repo: 'acme/Example-GGUF', quant: 'Q4_K_M' },
+      });
+      vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue(siblings('Example-Q4_K_M.gguf'));
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => '6' },
+        body: Readable.toWeb(Readable.from([Buffer.from('gg'), Buffer.from('ufgg')])),
+      });
+
+      const result = await downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+      const landed = join(hub, 'models--acme--Example-GGUF', 'snapshots', 'portos', 'Example-Q4_K_M.gguf');
+      expect(result.path).toBe(landed);
+      expect(await readFile(landed, 'utf8')).toBe('ggufgg');
+      await expect(stat(resolve('models/base.gguf'))).rejects.toThrow();
+    } finally {
+      if (previous === undefined) delete process.env.HF_HUB_CACHE;
+      else process.env.HF_HUB_CACHE = previous;
+      await rm(hub, { recursive: true, force: true });
+    }
+  });
+
+  it('does not fetch again when the models/ file is already on disk', async () => {
+    const relativePath = join('models', 'portos-spec-legacy-17378.gguf');
+    const hub = await mkdtemp(join(tmpdir(), 'portos-spec-legacy-hub-'));
+    const previous = process.env.HF_HUB_CACHE;
+    process.env.HF_HUB_CACHE = hub;
+    await mkdir(dirname(resolve(relativePath)), { recursive: true });
+    await writeFile(relativePath, 'legacy');
+    try {
+      stubPreset({
+        model: { path: relativePath, repo: 'acme/Example-GGUF', quant: 'Q4_K_M' },
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+      const result = await downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+      expect(result).toMatchObject({ success: true, alreadyDownloaded: true, path: relativePath });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      await expect(stat(join(hub, 'models--acme--Example-GGUF'))).rejects.toThrow();
+    } finally {
+      await rm(relativePath, { force: true });
+      if (previous === undefined) delete process.env.HF_HUB_CACHE;
+      else process.env.HF_HUB_CACHE = previous;
+      await rm(hub, { recursive: true, force: true });
+    }
   });
 
   it('keeps the .partial on a transport failure so a retry can Range-resume', async () => {
