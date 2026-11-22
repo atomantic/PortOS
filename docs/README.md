@@ -46,6 +46,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [CATALOG_SHARED_IDENTITY.md](./CATALOG_SHARED_IDENTITY.md) | Two-owner canonical identity agreements, preparation, adoption, owner refresh, and coordinated recovery |
 | [API.md](./API.md) | API conventions, security model, peer-probe contract, route-domain index, Socket.IO events, error envelope (endpoint reference: API Explorer / OpenAPI) |
 | [API_TOOL_CONTRACT.md](./API_TOOL_CONTRACT.md) | Unified semantic tool, Persistent Mind, and Agent Tools MCP contract |
+| [ACP.md](./ACP.md) | Agent Client Protocol stdio adapter: Ask Yourself and the Persistent Mind in Zed, VS Code, JetBrains and Neovim |
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |
 | [SETUP.md](./SETUP.md) | First install: Tailscale, MagicDNS, trusted HTTPS, exact launch URL, and AI-provider readiness |
 | [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md) | PortDeck VNC broker security, host setup, and session flow |

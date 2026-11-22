@@ -52,6 +52,9 @@ const PRE_INSTALL_ENTRYPOINTS = [
  * same. Both would otherwise be one careless import away from making the
  * required check — or the thing that recovers a cancelled one — unloadable.
  *
+ * `portos-acp.js` is launched directly by an ACP editor (docs/ACP.md), often
+ * from a checkout whose dependencies were never installed for that user.
+ *
  * `setup.js` and the two helpers it calls (`ensure-ffmpeg.js`,
  * `install-slashdo.js`) are the first-run install pipeline (#16820): they run
  * on a fresh clone before `npm install` has created any node_modules, so one
@@ -67,6 +70,7 @@ const BARE_CHECKOUT_SCRIPTS = [
   'scripts/update.mjs',
   'scripts/ensure-ffmpeg.js',
   'scripts/install-slashdo.js',
+  'scripts/portos-acp.js',
 ];
 
 const BUILTINS = new Set(builtinModules);
