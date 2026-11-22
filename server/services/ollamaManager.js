@@ -738,6 +738,53 @@ async function getRuntimeContextLength(selectedModel = null) {
   return windows.length ? Math.min(...windows) : null
 }
 
+// In-flight work registry. A daemon restart drops every request on every model,
+// so callers that hold a request or agent run open on this daemon register here
+// and `ensureContextWindow` waits for them to drain instead of killing them.
+const inFlightWork = new Set()
+let drainWaiters = []
+export const CONTEXT_RELOAD_DRAIN_TIMEOUT_MS = 120_000
+
+/**
+ * Mark a unit of work (API request, prompt run, agent run) as using the daemon.
+ * @returns {() => void} idempotent release
+ */
+function beginOllamaWork() {
+  const token = {}
+  inFlightWork.add(token)
+  return () => {
+    if (!inFlightWork.delete(token) || inFlightWork.size > 0) return
+    const waiters = drainWaiters
+    drainWaiters = []
+    for (const resolve of waiters) resolve(true)
+  }
+}
+
+const getInFlightOllamaWorkCount = () => inFlightWork.size
+
+/** Resolves true once nothing is in flight, false after `timeoutMs`. */
+function waitForOllamaDrain(timeoutMs = CONTEXT_RELOAD_DRAIN_TIMEOUT_MS) {
+  if (inFlightWork.size === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const waiter = (drained) => { clearTimeout(timer); resolve(drained) }
+    const timer = setTimeout(() => {
+      drainWaiters = drainWaiters.filter((w) => w !== waiter)
+      resolve(false)
+    }, timeoutMs)
+    drainWaiters.push(waiter)
+  })
+}
+
+/** The window a resident model was actually loaded at (`/api/ps`), or null when not resident/unknown. */
+async function getResidentModelContext(model) {
+  const wanted = typeof model === 'string' ? model.trim() : ''
+  if (!wanted) return null
+  const models = await getRuntimeModels()
+  const hit = models?.find((m) => modelNames(m).includes(wanted))
+  const n = Number(hit?.context_length)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 /**
  * Hold the Ollama daemon at (at least) `contextLength` tokens, reloading it with
  * that window when it is running at a smaller one.
@@ -784,6 +831,14 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   const runtime = await getRuntimeContextLength(selectedModel)
   if (runtime != null && runtime >= target) {
     return { applied: false, reason: 'already-large-enough', contextLength: target, runtimeContextLength: runtime }
+  }
+
+  if (inFlightWork.size > 0) {
+    console.log(`⏳ Ollama reload to ${target} tokens waiting for ${inFlightWork.size} in-flight run(s)`)
+    if (!(await waitForOllamaDrain())) {
+      console.log(`⏭️ Ollama reload to ${target} tokens skipped: ${inFlightWork.size} run(s) still in flight after ${CONTEXT_RELOAD_DRAIN_TIMEOUT_MS}ms`)
+      return { applied: false, reason: 'in-flight', contextLength: target, runtimeContextLength: runtime }
+    }
   }
 
   console.log(`🪟 Reloading Ollama at a ${target}-token context window (was ${runtime ?? 'unknown'})`)
@@ -2260,6 +2315,10 @@ export {
   startServer,
   stopServer,
   ensureContextWindow,
+  beginOllamaWork,
+  getInFlightOllamaWorkCount,
+  waitForOllamaDrain,
+  getResidentModelContext,
   restartWithEnv,
   getRuntimeContextLength,
   startPersistentService,
