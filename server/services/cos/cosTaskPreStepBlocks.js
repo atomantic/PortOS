@@ -1096,9 +1096,12 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   const held = check.selfManagedHeld?.length
     ? `; leaving ${check.selfManagedHeld.length} self-managed PR(s) to their author until stale (#${check.selfManagedHeld.join(', #')})`
     : '';
+  const external = check.externalPrs?.length
+    ? `; ${check.externalPrs.length} external contributor PR(s) belong to pr-reviewer (#${check.externalPrs.join(', #')})`
+    : '';
   if (check.newPrs.length === 0) {
     await recordPoll();
-    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})${held}`, { appId: app.id });
+    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})${held}${external}`, { appId: app.id });
     return { skip: true };
   }
 
