@@ -187,19 +187,15 @@ export async function spawnViaRunner(agentId, task, opts) {
   await waitForRunnerStability();
 
   // The runner-hosted harness talks to the local Ollama daemon on its own, so it
-  // gets the same pre-spawn window preparation and in-flight hold as the direct
-  // and TUI paths (#17342). Acquired before the entry is tracked so the hold is
-  // never attached to an entry a concurrent teardown already dropped; every
-  // teardown releases it through `dropRunnerAgent`.
-  let releaseOllamaWork = null;
-  if (isOllamaBackedProvider(provider)) {
-    // Deferred so the Ollama context module stays out of the boot closure.
-    const { beginOllamaAgentWork, ensureOllamaAgentContext } = await import('../ollamaAgentContext.js');
-    const ollamaContext = await ensureOllamaAgentContext(provider, { model });
+  // gets the same pre-spawn window preparation as the direct and TUI paths, and
+  // an in-flight hold taken just before the spawn rpc below (#17342). Deferred
+  // import keeps the Ollama context module out of the boot closure.
+  const ollamaAgentContext = isOllamaBackedProvider(provider) ? await import('../ollamaAgentContext.js') : null;
+  if (ollamaAgentContext) {
+    const ollamaContext = await ollamaAgentContext.ensureOllamaAgentContext(provider, { model });
     if (ollamaContext.warning) {
       emitLog('warn', `Agent ${agentId} Ollama context preparation: ${ollamaContext.warning}`, { agentId, taskId: task.id });
     }
-    releaseOllamaWork = await beginOllamaAgentWork(provider);
   }
 
   const agentInfo = {
@@ -211,8 +207,7 @@ export async function spawnViaRunner(agentId, task, opts) {
     hasStartedWorking: false,
     startedAt: Date.now(),
     initializationTimeout: null,
-    workspacePath,
-    releaseOllamaWork
+    workspacePath
   };
   trackRunnerAgent(agentId, agentInfo);
 
@@ -263,6 +258,15 @@ export async function spawnViaRunner(agentId, task, opts) {
   // view first and RESOLVES (with `adopted: true`) when the spawn had in fact
   // landed, so the `runnerAgents` entry set above survives and this run is never
   // finalized as a rejection it cannot know occurred (#4615).
+  // Held from here until a teardown drops the entry through `dropRunnerAgent`
+  // (completion, rejection, kill, pause, orphan sweep). A teardown that already
+  // dropped this entry while the lookups above awaited gets the hold back at once.
+  if (ollamaAgentContext) {
+    const releaseOllamaWork = await ollamaAgentContext.beginOllamaAgentWork(provider);
+    if (runnerAgents.get(agentId) === agentInfo) agentInfo.releaseOllamaWork = releaseOllamaWork;
+    else releaseOllamaWork();
+  }
+
   let result;
   try {
     result = await spawnAgentViaRunner({

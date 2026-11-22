@@ -549,6 +549,14 @@ describe('spawnViaRunner — Ollama-backed harnesses hold the daemon (#17342)', 
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it('returns the hold at once when a teardown dropped the entry before the rpc', async () => {
+    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    vi.mocked(resolveAgentApiEnv).mockImplementationOnce(async () => { runnerAgents.delete('agent-1'); return {}; });
+    vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
+    await spawnViaRunner('agent-1', { id: 'task-1' }, ollamaOpts());
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it('leaves a non-Ollama provider untouched', async () => {
     vi.mocked(spawnAgentViaRunner).mockResolvedValueOnce({ pid: 4242 });
     await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());

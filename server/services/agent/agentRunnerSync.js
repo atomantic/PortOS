@@ -49,23 +49,6 @@ async function stopInterruptedStartup(agentId) {
   }
 }
 
-/**
- * Sync running agents from the runner (recovery after server restart).
- * This allows us to receive completion events for agents spawned before restart.
- *
- * Recovery adopts only agents this process does NOT already own — see
- * `isAgentOwnedLocally` for why that question needs both maps, and why asking
- * `runnerAgents` alone silently hoisted live TUI runs. `cleanupOrphanedAgents`
- * calls this every 15 minutes, so the bug reached any TUI run that outlived a
- * single health-check tick: once hoisted, the `agent:completed` the runner emits
- * when the TUI spawner's own `finish()` kills the session passed subAgentSpawner's
- * `if (!agent) return` guard and ran a SECOND `finalizeAgent`, overwriting a
- * sentinel-signalled success with `success: false, exitCode: 143` and a bogus
- * `startup-failure` analysis — which flipped the agent card to Failed and requeued
- * the finished task. Observed on a 55-min release-check run that had already
- * published its release and merged all of its PRs.
- */
-
 const noOllamaHold = () => {};
 
 /**
@@ -85,6 +68,22 @@ export const holdRecoveredRunnerOllamaWork = (record) => (record?.metadata?.prov
     })
   : Promise.resolve(noOllamaHold));
 
+/**
+ * Sync running agents from the runner (recovery after server restart).
+ * This allows us to receive completion events for agents spawned before restart.
+ *
+ * Recovery adopts only agents this process does NOT already own — see
+ * `isAgentOwnedLocally` for why that question needs both maps, and why asking
+ * `runnerAgents` alone silently hoisted live TUI runs. `cleanupOrphanedAgents`
+ * calls this every 15 minutes, so the bug reached any TUI run that outlived a
+ * single health-check tick: once hoisted, the `agent:completed` the runner emits
+ * when the TUI spawner's own `finish()` kills the session passed subAgentSpawner's
+ * `if (!agent) return` guard and ran a SECOND `finalizeAgent`, overwriting a
+ * sentinel-signalled success with `success: false, exitCode: 143` and a bogus
+ * `startup-failure` analysis — which flipped the agent card to Failed and requeued
+ * the finished task. Observed on a 55-min release-check run that had already
+ * published its release and merged all of its PRs.
+ */
 export async function syncRunnerAgents() {
   const agents = await getActiveAgentsFromRunner().catch(err => {
     console.error(`❌ Failed to get active agents from runner: ${err.message}`);
