@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 
 const openClawApi = vi.hoisted(() => ({
   getOpenClawStatus: vi.fn(),
@@ -22,10 +22,22 @@ vi.mock('../components/settings/SettingsTabsHeader', () => ({
 
 import OpenClaw from './OpenClaw';
 
-const renderPage = async () => {
+const LocationProbe = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="search">{location.search}</output>
+      <button onClick={() => navigate(-1)}>history-back</button>
+    </>
+  );
+};
+
+const renderPage = async (entry = '/openclaw') => {
   const result = render(
-    <MemoryRouter initialEntries={['/openclaw']}>
+    <MemoryRouter initialEntries={[entry]}>
       <OpenClaw />
+      <LocationProbe />
     </MemoryRouter>,
   );
   await act(async () => {});
@@ -90,5 +102,39 @@ describe('OpenClaw app context picker', () => {
 
     expect(await screen.findByRole('option', { name: 'Example App' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('OpenClaw ?session= deep link', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    coreApi.getApps.mockResolvedValue([]);
+    openClawApi.getOpenClawStatus.mockResolvedValue({ configured: true, enabled: true, reachable: true, defaultSession: 'session-1' });
+    openClawApi.getOpenClawSessions.mockResolvedValue({
+      sessions: [{ id: 'session-1', title: 'Example one', messageCount: 3 }, { id: 'session-2', title: 'Example two', messageCount: 2 }],
+    });
+    openClawApi.getOpenClawMessages.mockResolvedValue({ messages: [] });
+  });
+
+  it('restores the session from the URL on load', async () => {
+    await renderPage('/openclaw?session=session-2');
+    expect(await screen.findByText('Session ID: session-2')).toBeInTheDocument();
+  });
+
+  it('normalizes an unknown session id back to the default without adding history', async () => {
+    await renderPage('/openclaw?session=gone');
+    expect(await screen.findByText('Session ID: session-1')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('?session=session-1');
+  });
+
+  it('pushes history on selection and follows Browser Back', async () => {
+    await renderPage();
+    expect(await screen.findByText('Session ID: session-1')).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', { name: /Example two/ })[0]);
+    expect(await screen.findByText('Session ID: session-2')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('?session=session-2');
+
+    await userEvent.click(screen.getByRole('button', { name: 'history-back' }));
+    expect(await screen.findByText('Session ID: session-1')).toBeInTheDocument();
   });
 });

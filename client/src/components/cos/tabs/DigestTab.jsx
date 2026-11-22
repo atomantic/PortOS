@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   Calendar,
   RefreshCw,
@@ -34,6 +35,8 @@ export default function DigestTab() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlWeek = searchParams.get('week') || null;
   const [selectedWeek, setSelectedWeek] = useState(null);
   const selectedWeekRef = useRef(null);
   const loadVersion = useRef(0);
@@ -44,13 +47,38 @@ export default function DigestTab() {
     insights: true
   });
 
-  useEffect(() => { loadData(); }, []);
+  // ?week=<weekId> is the source of truth; follow it on mount and on Back/Forward.
+  useEffect(() => {
+    if (loadVersion.current === 0) {
+      // First load also needs the week list and live progress, even for a deep-linked week.
+      selectedWeekRef.current = urlWeek;
+      setSelectedWeek(urlWeek);
+      loadData(urlWeek);
+    } else if (urlWeek !== selectedWeekRef.current) {
+      if (urlWeek) loadWeek(urlWeek); else resetToLatest();
+    }
+  }, [urlWeek]);
 
-  const loadData = async () => {
+
+  const resetToLatest = () => {
+    selectedWeekRef.current = null;
+    setSelectedWeek(null);
+    return loadData();
+  };
+
+  const selectWeek = (weekId) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('week', weekId);
+      return next;
+    });
+  };
+
+  const loadData = async (weekId = null) => {
     const version = ++loadVersion.current;
     setLoading(true);
     const [digestResult, progressResult, listResult] = await Promise.allSettled([
-      getCosWeeklyDigest(), getCosWeekProgress(), listCosWeeklyDigests()
+      weekId ? getCosWeeklyDigest(weekId) : getCosWeeklyDigest(), getCosWeekProgress(), listCosWeeklyDigests()
     ]);
     if (loadVersion.current !== version) return false;
     setLoadFailed(digestResult.status === 'rejected');
@@ -96,6 +124,13 @@ export default function DigestTab() {
         selectedWeekRef.current = null;
         setSelectedWeek(null);
         setCurrentDigest(digest);
+        if (urlWeek) {
+          setSearchParams(prev => {
+            const next = new URLSearchParams(prev);
+            next.delete('week');
+            return next;
+          }, { replace: true });
+        }
         await loadData();
       } else {
         await loadWeek(selectedWeekRef.current);
@@ -161,7 +196,7 @@ export default function DigestTab() {
             <select
               aria-label="Week"
               value={selectedWeek || currentDigest?.weekId || ''}
-              onChange={(e) => loadWeek(e.target.value)}
+              onChange={(e) => selectWeek(e.target.value)}
               className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-gray-300"
             >
               {digestList.map(d => (
