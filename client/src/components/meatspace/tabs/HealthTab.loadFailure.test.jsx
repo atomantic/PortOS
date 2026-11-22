@@ -23,8 +23,8 @@ import {
 } from '../../../services/apiHealth.js';
 import HealthTab from './HealthTab';
 
-const renderTab = () => render(
-  <MemoryRouter>
+const renderTab = (entry = '/') => render(
+  <MemoryRouter initialEntries={[entry]}>
     <HealthTab />
   </MemoryRouter>
 );
@@ -50,6 +50,17 @@ describe('HealthTab metric catalog load', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Core Vitals')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('expands the deep-linked section once a retried catalog load succeeds', async () => {
+    getAvailableHealthMetrics.mockRejectedValueOnce(new Error('boom'));
+    renderTab('/?section=sleep');
+    expect(await screen.findByRole('alert')).toBeTruthy();
+
+    getAvailableHealthMetrics.mockResolvedValueOnce([{ name: 'sleep_analysis' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Sleep', { selector: 'h2' })).toBeTruthy();
+    await waitFor(() => expect(getAppleHealthMetrics).toHaveBeenCalledWith('sleep_analysis', expect.any(String), expect.any(String), expect.anything()));
   });
 
   it('shows no category sections and no alert for a successful empty catalog', async () => {
