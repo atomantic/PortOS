@@ -78,9 +78,11 @@ import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import {
   appleGpuBudgetGib,
+  CODING_AGENT_MODELS,
+  GPU_HEADROOM_GIB,
   hardwareLlmRecommendation,
-  qwen38ResidentGib,
-  QWEN38_MAX_CONTEXT_TOKENS,
+  launchContextTokens,
+  residentGib,
 } from './HardwareLlmRecommendation.jsx';
 
 // A realistically long HF model id — the shape that got ellipsised to
@@ -256,10 +258,10 @@ describe('runtime selection workflow', () => {
 describe('hardware coding-agent profiles', () => {
   it('selects the benchmarked Apple profile by unified-memory tier', () => {
     expect(hardwareLlmRecommendation({ platform: 'darwin', appleSilicon: true, totalMemoryGb: 48 })).toMatchObject({
-      id: 'apple-48', runtime: 'MTPLX', harness: 'OpenCode MTPLX TUI', contextTokens: 131_072,
+      id: 'apple-48', runtime: 'MTPLX', harness: 'OpenCode MTPLX TUI', modelLabel: 'Inkling 2 Mini',
     });
     expect(hardwareLlmRecommendation({ platform: 'darwin', appleSilicon: true, totalMemoryGb: 128 })).toMatchObject({
-      id: 'apple-128', model: expect.stringMatching(/Quality/),
+      id: 'apple-128', model: 'Inkling 2 Mini MTPLX Optimized-Speed',
     });
   });
 
@@ -267,21 +269,26 @@ describe('hardware coding-agent profiles', () => {
   // tier's weights + KV cache have to fit the GPU's default share of unified
   // memory with room left for PortOS, the harness and macOS. Pinning the
   // arithmetic rather than the strings is what stops the next edit from
-  // promising a window the machine cannot load — a 1M-token window alone needs
-  // 65.5 GiB of KV cache, past every tier here.
+  // promising a window the machine cannot load.
   it.each([
-    [48, 131_072],
-    [64, 262_144],
-    [128, 262_144],
-  ])('offers %i GB a launch context its GPU budget can actually reserve', (totalMemoryGb, expected) => {
+    [48, 262_144, '256K'],
+    [64, 524_288, '512K'],
+    [128, 1_048_576, '1M'],
+  ])('offers %i GB a launch context its GPU budget can actually reserve', (totalMemoryGb, expected, window) => {
     const profile = hardwareLlmRecommendation({ platform: 'darwin', appleSilicon: true, totalMemoryGb });
+    const model = Object.values(CODING_AGENT_MODELS).find((entry) => entry.label === profile.modelLabel);
 
     expect(profile.contextTokens).toBe(expected);
-    expect(profile.contextTokens).toBeLessThanOrEqual(QWEN38_MAX_CONTEXT_TOKENS);
-    // 8 GiB of the GPU budget stays free for prefill buffers and the local
-    // image/video runtimes sharing it. That reserve is what rules 256K out at
-    // 48 GB (it would leave 4.6 GiB) while leaving it available at 64 GB.
-    expect(appleGpuBudgetGib(totalMemoryGb) - qwen38ResidentGib(profile.contextTokens)).toBeGreaterThanOrEqual(8);
+    expect(profile.contextTokens).toBeLessThanOrEqual(model.maxContextTokens);
+    expect(appleGpuBudgetGib(totalMemoryGb) - residentGib(model, profile.contextTokens)).toBeGreaterThanOrEqual(GPU_HEADROOM_GIB);
+    expect(profile.note).toContain(`${window} KV cache`);
+  });
+
+  it('halves the window until the headroom holds, and refuses a model that cannot fit', () => {
+    const model = { weightsGib: 15, kvKbPerToken: 65.5, maxContextTokens: 262_144 };
+    // 256K leaves 4.6 GiB of a 48 GB machine's 36 GiB budget, under the 8 GiB reserve.
+    expect(launchContextTokens(model, appleGpuBudgetGib(48))).toBe(131_072);
+    expect(launchContextTokens({ ...model, weightsGib: 40 }, appleGpuBudgetGib(48))).toBeNull();
   });
 
   it('selects the llama.cpp path only for the configured RTX 3090 machine', () => {
