@@ -22,6 +22,7 @@ it.each(['image', 'endImage'])('refines an unselected %s take with optional shot
   fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
   expect(screen.getByRole('button', { name: 'View refinement source full size' }).querySelector('img').getAttribute('src')).toBe('/data/images/candidate.png');
   const input = screen.getByRole('textbox', { name: /What to change/ });
+  expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: '  Raise the hand\nKeep the lighting  ' } });
   const include = screen.getByRole('checkbox', { name: 'Include shot reference images' });
   expect(include.checked).toBe(true);
