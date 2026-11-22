@@ -65,7 +65,13 @@ export async function ensureOllamaAgentContext(provider, { env = process.env, mo
     ? LIFECYCLE_LINES.ollamaReloadFailed({ contextLength, error: result.error, who: providerName || 'the run' })
     : null
   if (warning) console.warn(warning)
-  return { skipped: false, contextLength, applied: !!result.applied, warning }
+  // A handled deferral, not a failure: other runs held the daemon past the drain
+  // timeout, so the harness starts on the current window rather than dropping them.
+  const deferred = result.reason === 'in-flight'
+    ? `⏭️ Ollama context reload to ${contextLength} tokens skipped: other runs are still using the daemon — ${providerName || 'the run'} continues on the current window.`
+    : null
+  if (deferred) console.log(deferred)
+  return { skipped: false, contextLength, applied: !!result.applied, warning: warning ?? deferred }
 }
 
 /**

@@ -738,6 +738,57 @@ async function getRuntimeContextLength(selectedModel = null) {
   return windows.length ? Math.min(...windows) : null
 }
 
+// In-flight work registry. A daemon restart drops every request on every model,
+// so callers that hold a request or agent run open on this daemon register here
+// and `ensureContextWindow` waits for them to drain instead of killing them.
+const inFlightWork = new Set()
+let drainWaiters = []
+let reloadGate = null
+export const CONTEXT_RELOAD_DRAIN_TIMEOUT_MS = 120_000
+
+/**
+ * Mark a unit of work (API request, prompt run, agent run) as using the daemon.
+ * @returns {() => void} idempotent release
+ */
+function beginOllamaWork() {
+  const token = {}
+  inFlightWork.add(token)
+  return () => {
+    if (!inFlightWork.delete(token) || inFlightWork.size > 0) return
+    const waiters = drainWaiters
+    drainWaiters = []
+    for (const resolve of waiters) resolve(true)
+  }
+}
+
+/** Resolves when no daemon reload is in progress. */
+const waitForOllamaReload = async () => { while (reloadGate) await reloadGate }
+
+const getInFlightOllamaWorkCount = () => inFlightWork.size
+
+/** Resolves true once nothing is in flight, false after `timeoutMs`. */
+function waitForOllamaDrain(timeoutMs = CONTEXT_RELOAD_DRAIN_TIMEOUT_MS) {
+  if (inFlightWork.size === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const waiter = (drained) => { clearTimeout(timer); resolve(drained) }
+    const timer = setTimeout(() => {
+      drainWaiters = drainWaiters.filter((w) => w !== waiter)
+      resolve(false)
+    }, timeoutMs)
+    drainWaiters.push(waiter)
+  })
+}
+
+/** The window a resident model was actually loaded at (`/api/ps`), or null when not resident/unknown. */
+async function getResidentModelContext(model) {
+  const wanted = typeof model === 'string' ? model.trim() : ''
+  if (!wanted) return null
+  const models = await getRuntimeModels()
+  const hit = models?.find((m) => modelNames(m).includes(wanted))
+  const n = Number(hit?.context_length)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 /**
  * Hold the Ollama daemon at (at least) `contextLength` tokens, reloading it with
  * that window when it is running at a smaller one.
@@ -786,6 +837,23 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
     return { applied: false, reason: 'already-large-enough', contextLength: target, runtimeContextLength: runtime }
   }
 
+  // Drain, then re-read the window: the wait can be long enough for another caller to have
+  // reloaded the daemon already, and work that started meanwhile must be waited for too.
+  let currentRuntime = runtime
+  const drainDeadline = Date.now() + CONTEXT_RELOAD_DRAIN_TIMEOUT_MS
+  while (inFlightWork.size > 0) {
+    console.log(`⏳ Ollama reload to ${target} tokens waiting for ${inFlightWork.size} in-flight run(s)`)
+    const remaining = drainDeadline - Date.now()
+    if (remaining <= 0 || !(await waitForOllamaDrain(remaining))) {
+      console.log(`⏭️ Ollama reload to ${target} tokens skipped: ${inFlightWork.size} run(s) still in flight after ${CONTEXT_RELOAD_DRAIN_TIMEOUT_MS}ms`)
+      return { applied: false, reason: 'in-flight', contextLength: target, runtimeContextLength: currentRuntime }
+    }
+    currentRuntime = await getRuntimeContextLength(selectedModel)
+    if (currentRuntime != null && currentRuntime >= target) {
+      return { applied: false, reason: 'already-large-enough', contextLength: target, runtimeContextLength: currentRuntime }
+    }
+  }
+
   console.log(`🪟 Reloading Ollama at a ${target}-token context window (was ${runtime ?? 'unknown'})`)
 
   // The restart ladder itself — including the rule that a launch-at-login daemon
@@ -793,7 +861,16 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   // The checks ABOVE are what is specific to a context window: a resident model
   // already big enough, and the >= latch that keeps an agent spawn from bouncing
   // the daemon. Everything below was the same ladder written twice.
-  return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target, runtimeContextLength: runtime }
+  // The gate holds new runs (`waitForOllamaReload`) until the restart settles, so none starts on a
+  // daemon that is about to be killed.
+  let openGate
+  reloadGate = new Promise((resolve) => { openGate = resolve })
+  try {
+    return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target, runtimeContextLength: currentRuntime }
+  } finally {
+    reloadGate = null
+    openGate()
+  }
 }
 
 /**
@@ -2260,6 +2337,11 @@ export {
   startServer,
   stopServer,
   ensureContextWindow,
+  beginOllamaWork,
+  waitForOllamaReload,
+  getInFlightOllamaWorkCount,
+  waitForOllamaDrain,
+  getResidentModelContext,
   restartWithEnv,
   getRuntimeContextLength,
   startPersistentService,
