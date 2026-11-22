@@ -10,8 +10,7 @@ import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
-import { isOllamaBackedProvider, withModelNumCtx } from './internal/ollamaBacked.js';
-import { ollamaThinkLevel } from './internal/ollamaThinkingLevels.js';
+import { isOllamaBackedProvider, ollamaThinkLevel, withModelNumCtx } from './internal/ollamaBacked.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound

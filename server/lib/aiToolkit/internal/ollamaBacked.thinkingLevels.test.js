@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ollamaThinkLevel, ollamaThinkingLevelsForModel } from './ollamaThinkingLevels.js';
+import { ollamaThinkLevel, ollamaThinkingLevelsForModel } from './ollamaBacked.js';
 import { buildOllamaNativeChatBody } from './ollamaNativeChat.js';
 import { effortLevelsForProvider } from '../../provider/providerModels.js';
 

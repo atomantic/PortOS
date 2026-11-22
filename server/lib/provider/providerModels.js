@@ -5,8 +5,7 @@
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
 import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
-import { isOllamaBackedProvider } from '../aiToolkit/internal/ollamaBacked.js';
-import { ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaThinkingLevels.js';
+import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
