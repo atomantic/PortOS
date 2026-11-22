@@ -34,10 +34,25 @@ describe('JSON-RPC framing', () => {
     expect(lines).toEqual(['{"a":1}', '{"b":2}', '{"c":3}']);
   });
 
+  it('keeps a multi-byte character split across chunks intact', () => {
+    const lines = [];
+    const decoder = createLineDecoder({ onLine: (line) => lines.push(line) });
+    const bytes = Buffer.from('{"text":"café ☕"}\n');
+    decoder.push(bytes.subarray(0, 13));
+    decoder.push(bytes.subarray(13));
+    expect(lines).toEqual(['{"text":"café ☕"}']);
+    const frames = [];
+    const parser = createSseParser((frame) => frames.push(frame));
+    const sseBytes = Buffer.from('data: {"text":"☕"}\n\n');
+    parser.push(sseBytes.subarray(0, 16));
+    parser.push(sseBytes.subarray(16));
+    expect(frames).toEqual([{ event: 'message', data: { text: '☕' } }]);
+  });
+
   it('refuses an over-long line once and resumes at the next newline', () => {
     const lines = [];
     const onOverflow = vi.fn();
-    const decoder = createLineDecoder({ onLine: (line) => lines.push(line), onOverflow, maxBytes: 8 });
+    const decoder = createLineDecoder({ onLine: (line) => lines.push(line), onOverflow, maxChars: 8 });
     decoder.push('0123456789');
     decoder.push('abc\n{"ok":1}\n');
     expect(onOverflow).toHaveBeenCalledTimes(1);

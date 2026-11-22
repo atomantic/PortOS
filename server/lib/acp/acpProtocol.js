@@ -8,9 +8,11 @@
  * Yourself and the Persistent Mind keep every capability boundary server-side,
  * and the translation here only re-shapes what those routes already stream.
  *
- * Builtins only (none, in fact): the adapter must load from a bare checkout,
- * because an editor launches it directly (see scripts/pre-install-entrypoints.test.js).
+ * Builtins only: the adapter must load from a bare checkout, because an editor
+ * launches it directly (see scripts/pre-install-entrypoints.test.js).
  */
+
+import { StringDecoder } from 'node:string_decoder';
 
 /** The ACP protocol major version this adapter speaks. */
 export const ACP_PROTOCOL_VERSION = 1;
@@ -48,8 +50,8 @@ export const ACP_SESSION_MODES = Object.freeze([
 export const ACP_MODE_IDS = Object.freeze(ACP_SESSION_MODES.map((mode) => mode.id));
 export const DEFAULT_ACP_MODE = 'ask';
 
-/** One JSON-RPC message per line; a longer line is refused instead of buffered without bound. */
-export const MAX_ACP_LINE_BYTES = 8 * 1024 * 1024;
+/** One JSON-RPC message per line; a longer line (in UTF-16 code units) is refused instead of buffered without bound. */
+export const MAX_ACP_LINE_CHARS = 8 * 1024 * 1024;
 /** Session records the adapter keeps on disk; the oldest fall off first. */
 export const MAX_ACP_SESSION_RECORDS = 200;
 /** Mind message ids remembered per session, enough to replay its recent exchange on `session/load`. */
@@ -116,18 +118,29 @@ export const parseAcpLine = (line) => {
   return { kind: 'request', id: message.id, method: message.method, params };
 };
 
+// A stateful decoder keeps a multi-byte UTF-8 character that straddles two
+// chunks intact; per-chunk `toString` would turn both halves into U+FFFD.
+const createTextDecoder = () => {
+  const decoder = new StringDecoder('utf8');
+  return {
+    write: (chunk) => (typeof chunk === 'string' ? chunk : decoder.write(chunk)),
+    end: () => decoder.end(),
+  };
+};
+
 /**
  * Split a byte stream into lines. `onLine` gets each complete line (CR
- * stripped); `onOverflow` fires once when a line exceeds `maxBytes`, and that
+ * stripped); `onOverflow` fires once when a line exceeds `maxChars`, and that
  * line is discarded up to its terminating newline.
  */
-export const createLineDecoder = ({ onLine, onOverflow, maxBytes = MAX_ACP_LINE_BYTES }) => {
+export const createLineDecoder = ({ onLine, onOverflow, maxChars = MAX_ACP_LINE_CHARS }) => {
+  const text = createTextDecoder();
   let buffer = '';
   let discarding = false;
   const emit = (line) => onLine(line.endsWith('\r') ? line.slice(0, -1) : line);
   return {
     push(chunk) {
-      buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      buffer += text.write(chunk);
       let newline = buffer.indexOf('\n');
       while (newline >= 0) {
         const line = buffer.slice(0, newline);
@@ -136,7 +149,7 @@ export const createLineDecoder = ({ onLine, onOverflow, maxBytes = MAX_ACP_LINE_
         else emit(line);
         newline = buffer.indexOf('\n');
       }
-      if (!discarding && Buffer.byteLength(buffer) > maxBytes) {
+      if (!discarding && buffer.length > maxChars) {
         discarding = true;
         buffer = '';
         onOverflow?.();
@@ -145,6 +158,7 @@ export const createLineDecoder = ({ onLine, onOverflow, maxBytes = MAX_ACP_LINE_
       }
     },
     end() {
+      buffer += text.end();
       if (!discarding && buffer) emit(buffer);
       buffer = '';
     },
@@ -161,6 +175,7 @@ export const createLineDecoder = ({ onLine, onOverflow, maxBytes = MAX_ACP_LINE_
  * (`: keep-alive`) and frames without data are skipped.
  */
 export const createSseParser = (onEvent) => {
+  const text = createTextDecoder();
   let buffer = '';
   let event = '';
   let dataLines = [];
@@ -187,7 +202,7 @@ export const createSseParser = (onEvent) => {
   };
   return {
     push(chunk) {
-      buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+      buffer += text.write(chunk);
       let newline = buffer.indexOf('\n');
       while (newline >= 0) {
         const line = buffer.slice(0, newline);
@@ -197,6 +212,7 @@ export const createSseParser = (onEvent) => {
       }
     },
     end() {
+      buffer += text.end();
       if (buffer) field(buffer);
       buffer = '';
       dispatch();

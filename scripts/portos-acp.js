@@ -306,7 +306,6 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
 
   const promptAsk = async (session, text, signal) => {
     let terminal = null;
-    let sourceCalls = 0;
     try {
       const { done } = await client.stream({
         method: 'POST',
@@ -314,7 +313,7 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
         body: { question: text, mode: 'ask', ...(session.conversationId ? { conversationId: session.conversationId } : {}) },
         signal,
         onEvent: (frame) => {
-          const out = translateAskEvent(frame, { toolCallId: `ask-sources-${Date.now()}-${(sourceCalls += 1)}` });
+          const out = translateAskEvent(frame, { toolCallId: `ask-sources-${randomUUID()}` });
           if (out.conversationId && !session.conversationId) {
             session.conversationId = out.conversationId;
             session.title = session.title || sessionTitle(text);
