@@ -117,7 +117,15 @@ export function mergeArtistRecord(local, remoteRaw) {
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
-  const next = remoteWins ? remote : local;
+  let next = remoteWins ? remote : local;
+  // A peer on artist wire version 1 never sent the press & submission keys, so
+  // an absent key is "unknown", not "cleared". Keep the local value for each
+  // absent key; a present '' (sanitized above) still applies the clear. Tombstones
+  // stay whole-record: a deleted row must not regain the profile.
+  if (remoteWins && !remote.deleted && !local.deleted) {
+    const absent = SUBMISSION_FIELDS.filter((key) => !(key in remoteRaw));
+    if (absent.length) next = { ...remote, ...Object.fromEntries(absent.map((key) => [key, local[key]])) };
+  }
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }

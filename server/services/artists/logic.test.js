@@ -171,4 +171,49 @@ describe('artists logic', () => {
       expect(result.markdown).not.toContain('Contact email:');
     });
   });
+
+  describe('merge keeps the press profile when a peer omits the submission keys', () => {
+    const base = sanitizeArtist({
+      id: 'artist-1', name: 'Nova', genre: 'folk', bio: 'Old bio',
+      creditName: 'N. Vale', bioShort: 'Short.', artistStatement: 'Statement.',
+      updatedAt: '2026-06-01T00:00:00.000Z',
+    });
+    // A version-1 peer's record: no submission keys at all.
+    const v1Edit = (patch) => ({
+      id: 'artist-1', name: 'Nova', genre: 'folk', bio: 'Old bio',
+      createdAt: base.createdAt, updatedAt: '2099-01-01T00:00:00.000Z', ...patch,
+    });
+
+    it('keeps local submission values when the newer remote omits them, and applies the remote edit', () => {
+      const r = mergeArtistRecord(base, v1Edit({ genre: 'dream pop', bio: 'New bio' }));
+      expect(r.remoteWins).toBe(true);
+      expect(r.next.genre).toBe('dream pop');
+      expect(r.next.bio).toBe('New bio');
+      expect(r.next.creditName).toBe('N. Vale');
+      expect(r.next.bioShort).toBe('Short.');
+      expect(r.next.artistStatement).toBe('Statement.');
+    });
+
+    it('applies an explicit empty string as a clear for only that field', () => {
+      const r = mergeArtistRecord(base, v1Edit({ creditName: '', bioShort: 'Short.', artistStatement: 'Statement.' }));
+      expect(r.next.creditName).toBe('');
+      expect(r.next.bioShort).toBe('Short.');
+      expect(r.next.artistStatement).toBe('Statement.');
+    });
+
+    it('does not copy the profile back onto a row the remote tombstoned', () => {
+      const r = mergeArtistRecord(base, v1Edit({ deleted: true, deletedAt: '2099-01-01T00:00:00.000Z' }));
+      expect(r.next.deleted).toBe(true);
+      expect(r.next.creditName).toBe('');
+      expect(r.next.bioShort).toBe('');
+    });
+
+    it('leaves a remote that already carries every submission key unchanged', () => {
+      const remote = { ...base, genre: 'dream pop', updatedAt: '2099-01-01T00:00:00.000Z', creditName: '', bioShort: 'Remote short.', artistStatement: '' };
+      const r = mergeArtistRecord(base, remote);
+      expect(r.next.creditName).toBe('');
+      expect(r.next.bioShort).toBe('Remote short.');
+      expect(r.next.artistStatement).toBe('');
+    });
+  });
 });
