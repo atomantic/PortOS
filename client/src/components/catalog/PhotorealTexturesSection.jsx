@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Download, Loader2, Search, X } from 'lucide-react';
 import toast from '../ui/Toast';
+import { useEscLayer } from '../ui/Modal';
+import useFocusTrap from '../../hooks/useFocusTrap';
 import {
   getCatalogPhotorealTextures, installCatalogPhotorealTexture, saveCatalogPhotorealLook, searchCatalogPhotorealTextures,
 } from '../../services/apiCatalog';
@@ -23,6 +25,9 @@ export default function PhotorealTexturesSection({ record, look, readOnly = fals
   const [results, setResults] = useState(null);
   const [searchError, setSearchError] = useState('');
   const [busyId, setBusyId] = useState('');
+  const dialogRef = useRef(null);
+  useFocusTrap(Boolean(picking), dialogRef);
+  useEscLayer(Boolean(picking), () => setPicking(''));
 
   useEffect(() => {
     let live = true;
@@ -112,7 +117,7 @@ export default function PhotorealTexturesSection({ record, look, readOnly = fals
       </ul>
 
       {picking && (
-        <div className="rounded-lg border border-port-border p-2 space-y-2" role="dialog" aria-label={`Photo textures for ${picking}`}>
+        <div ref={dialogRef} className="rounded-lg border border-port-border p-2 space-y-2" role="dialog" aria-modal="true" aria-label={`Photo textures for ${picking}`}>
           <div className="flex items-center gap-2">
             <label htmlFor="photoreal-texture-search" className="sr-only">Search textures</label>
             <input id="photoreal-texture-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Search ${picking} textures`}
