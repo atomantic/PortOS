@@ -96,7 +96,7 @@ vi.mock('../codeReview.js', () => ({
 }));
 
 import { resolveCompletionMode } from '../../lib/agent/agentCompletionMode.js';
-import { buildLightContextPrompt, buildAgentPrompt, getAppWorkspace, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, getAppWorkspace, buildUiAuditRuntimeRule, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 
 import { getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates } from '../promptSections/instructions.js';
 import { reconcileSplitContext } from '../promptSections/taskContext.js';
@@ -932,9 +932,16 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { analysisType } }),
         '/repo',
         null,
+        { agentId: 'agent-ui-1' },
       );
 
-      expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
+      expect(prompt).toContain(buildUiAuditRuntimeRule('agent-ui-1'));
+      expect(prompt).toContain('window.name === "portos-ui-quality-audit:agent-ui-1"');
+      expect(prompt).toContain('Target.closeTarget {targetId}');
+      expect(prompt).toContain('Never close a target you did not create in this run');
+      expect(prompt).toContain('another agent\'s marker');
+      expect(prompt).not.toContain('leave the tab open');
+      expect(prompt).not.toContain('window.name === "portos-ui-quality-audit"');
       expect(prompt).toContain('Network.setCookie');
       expect(prompt).toContain('$PORTOS_API_TOKEN');
       expect(prompt).toContain('not browserless');
@@ -971,10 +978,11 @@ describe('buildLightContextPrompt', () => {
         {},
         '/repo',
         null,
-        { providerType: 'api' },
+        { providerType: 'api', agentId: 'agent-ui-2' },
       );
 
-      expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
+      expect(prompt).toContain(buildUiAuditRuntimeRule('agent-ui-2'));
+      expect(prompt).toContain('window.name === "portos-ui-quality-audit:agent-ui-2"');
     });
 
     it('recognizes the legacy self-improvement task marker', () => {
@@ -982,9 +990,10 @@ describe('buildLightContextPrompt', () => {
         makeTask({ metadata: { selfImprovementType: 'mobile-responsive' } }),
         '/repo',
         null,
+        { agentId: 'agent-ui-3' },
       );
 
-      expect(prompt).toContain(UI_AUDIT_RUNTIME_RULE);
+      expect(prompt).toContain(buildUiAuditRuntimeRule('agent-ui-3'));
     });
 
     it('does not add UI runtime guidance to a non-UI scheduled task', () => {
