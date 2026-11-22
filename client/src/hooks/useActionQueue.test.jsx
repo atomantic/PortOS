@@ -53,6 +53,19 @@ it('shares event-driven reads, reconciles reconnect/re-show, and stops on unmoun
   await settle(() => document.dispatchEvent(new Event('visibilitychange')));
   expect(mocks.getReviewQueue).toHaveBeenCalledTimes(5);
 });
+it('refetches the shared Actions snapshot when X or Stacker News review state changes', async () => {
+  const view = render(<Consumer name="first" />);
+  await settle();
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(1);
+  mocks.getReviewQueue.mockResolvedValue(snapshot('X draft submitted'));
+  await settle(() => mocks.handlers.get('x:changed')({ accountId: 'example' }));
+  expect(screen.getByTestId('first')).toHaveTextContent('X draft submitted');
+  mocks.getReviewQueue.mockResolvedValue(snapshot('Stacker action created'));
+  await settle(() => mocks.handlers.get('stacker-news:changed')({ accountId: 'example' }));
+  expect(screen.getByTestId('first')).toHaveTextContent('Stacker action created');
+  expect(mocks.getReviewQueue).toHaveBeenCalledTimes(3);
+  view.unmount();
+});
 it('reconciles invalidation during a pending shared read instead of publishing stale data', async () => {
   let resolve;
   mocks.getReviewQueue.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));

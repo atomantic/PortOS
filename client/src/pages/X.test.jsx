@@ -30,6 +30,9 @@ vi.mock('../services/apiX.js', () => ({
   openXDraft: api.openXDraft,
 }));
 
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
+vi.mock('../services/socket', () => ({ default: socket }));
+
 const { default: XPage } = await import('./X.jsx');
 
 const account = {
@@ -229,6 +232,90 @@ describe('X page', () => {
     expect(await screen.findByText('Recovered captured post')).toBeInTheDocument();
     expect(api.getXDrafts).toHaveBeenCalledTimes(1);
     expect(api.syncXAccount).not.toHaveBeenCalled();
+  });
+
+  it('reloads accounts always and the selected drafts only for a matching or omitted x:changed accountId', async () => {
+    const { unmount } = renderPage(`/x/${account.id}/drafts`);
+    expect(await screen.findByText(/No drafts for/)).toBeInTheDocument();
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXDrafts.mockResolvedValue({ drafts: [{ id: 'submitted', body: 'Submitted from another tab', state: 'pending_review' }] });
+
+    await act(async () => onChanged({ accountId: 'some-other-account' }));
+    expect(api.getXAccounts).toHaveBeenCalledTimes(2);
+    expect(api.getXDrafts).toHaveBeenCalledTimes(1);
+
+    await act(async () => onChanged({ accountId: account.id }));
+    expect(await screen.findByText('Submitted from another tab')).toBeInTheDocument();
+    expect(api.getXDrafts).toHaveBeenCalledTimes(2);
+    expect(api.getXDrafts).toHaveBeenLastCalledWith(account.id, { silent: true });
+
+    api.getXDrafts.mockResolvedValue({ drafts: [] });
+    await act(async () => onChanged());
+    await waitFor(() => expect(screen.queryByText('Submitted from another tab')).not.toBeInTheDocument());
+    expect(api.getXDrafts).toHaveBeenCalledTimes(3);
+
+    unmount();
+    expect(socket.off).toHaveBeenCalledWith('x:changed', onChanged);
+  });
+
+  it('keeps the accounts read error until a silent refresh succeeds and drops a superseded accounts response', async () => {
+    const secondAccount = { ...account, id: 'second-account', label: 'Second X', username: 'second_user' };
+    let resolveStale;
+    api.getXAccounts.mockRejectedValueOnce(new Error('Accounts unavailable'));
+    renderPage('/x');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Accounts unavailable');
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXAccounts.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce({ accounts: [secondAccount] });
+    await act(async () => onChanged());
+    expect(screen.getByRole('alert')).toHaveTextContent('Accounts unavailable');
+    expect(screen.queryByText(/Add an X account to begin/)).not.toBeInTheDocument();
+    await act(async () => onChanged());
+    expect(await screen.findByRole('heading', { name: 'Second X' })).toBeInTheDocument();
+    await act(async () => { resolveStale({ accounts: [account] }); });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: account.label })).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Second X' })).toBeInTheDocument();
+  });
+
+  it('keeps loaded drafts on screen when a silent x:changed reload fails', async () => {
+    api.getXDrafts.mockResolvedValueOnce({ drafts: [{ id: 'kept', body: 'Already loaded draft', state: 'draft' }] });
+    renderPage(`/x/${account.id}/drafts`);
+    expect(await screen.findByText('Already loaded draft')).toBeInTheDocument();
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXDrafts.mockRejectedValueOnce(new Error('Drafts blip'));
+    await act(async () => onChanged({ accountId: account.id }));
+    expect(api.getXDrafts).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Already loaded draft')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps loaded accounts on screen when a silent x:changed accounts reload fails', async () => {
+    renderPage('/x');
+    expect(await screen.findByRole('heading', { name: account.label })).toBeInTheDocument();
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXAccounts.mockRejectedValueOnce(new Error('Accounts blip'));
+    await act(async () => onChanged());
+    expect(api.getXAccounts).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('heading', { name: account.label })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('drops a pending x:changed drafts reload that resolves after the account was switched', async () => {
+    const user = userEvent.setup();
+    const secondAccount = { ...account, id: 'second-account', username: 'second_user' };
+    let resolveStale;
+    api.getXAccounts.mockResolvedValue({ accounts: [account, secondAccount] });
+    renderPage(`/x/${account.id}/drafts`);
+    await screen.findByText(/No drafts for/);
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXDrafts.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce({ drafts: [{ id: 'second-draft', body: 'Second account draft', state: 'draft' }] });
+    await act(async () => onChanged({ accountId: account.id }));
+    await user.selectOptions(screen.getByLabelText('X account in scope'), secondAccount.id);
+    expect(await screen.findByText('Second account draft')).toBeInTheDocument();
+    await act(async () => { resolveStale({ drafts: [{ id: 'stale-draft', body: 'Stale first account draft', state: 'draft' }] }); });
+    await waitFor(() => expect(screen.queryByText('Stale first account draft')).not.toBeInTheDocument());
+    expect(screen.getByText('Second account draft')).toBeInTheDocument();
   });
 
   it('retries failed drafts independently and drops a retry superseded by an account switch', async () => {
