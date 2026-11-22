@@ -24,6 +24,8 @@ export const TELEGRAM_MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const TELEGRAM_MAX_CAPTION_CHARS = 1024;
 /** Bound how many uploads a single notification may fan out into. */
 export const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+/** Bound how many candidates (accepted or refused) one notification may make us stat, so a long path list can't delay the text. */
+export const MAX_RESOLVE_ATTEMPTS = 2 * MAX_ATTACHMENTS_PER_MESSAGE;
 
 /** PortOS artifact directories a deliverable may live in. */
 const DELIVERABLE_ROOTS = Object.freeze([
@@ -38,7 +40,13 @@ const DELIVERABLE_ROOTS = Object.freeze([
   PATHS.runs
 ]);
 
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+// The Bot API accepts only some formats per media method; every other
+// allowlisted format still goes out, as a document (#17398 review):
+// sendPhoto → jpeg/png/webp, sendAnimation → gif, sendAudio → mp3/m4a,
+// sendVoice → ogg/opus (only when promoted), sendVideo → mp4.
+const PHOTO_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const IMAGE_EXTS = new Set([...PHOTO_EXTS, '.gif']);
+const AUDIO_PLAYER_EXTS = new Set(['.mp3', '.m4a']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.ogg', '.opus', '.m4a', '.flac']);
 const VOICE_EXTS = new Set(['.ogg', '.opus']);
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.webm']);
@@ -53,7 +61,8 @@ const METHOD_FIELD = {
   sendDocument: 'document',
   sendAudio: 'audio',
   sendVoice: 'voice',
-  sendVideo: 'video'
+  sendVideo: 'video',
+  sendAnimation: 'animation'
 };
 
 // A path-shaped token ending in an allowlisted extension: absolute (`/…`),
@@ -64,7 +73,9 @@ const METHOD_FIELD = {
 // (`see /data/images/x.png.`) but `x.png.bak` does not.
 const PATH_END = '(?!\\w|\\.\\w)';
 const EXT_ALTERNATION = [...ALLOWED_EXTS].map(e => e.slice(1)).join('|');
-const PATH_TOKEN = new RegExp(`(?:~?/|\\bdata/)[^\\s()<>"'\`\\[\\]]+?\\.(?:${EXT_ALTERNATION})${PATH_END}`, 'gi');
+// The lookbehind refuses a start mid-token, so `https://host/x.png` (every
+// slash follows `:`, `/` or a word char) is never mined as a local path.
+const PATH_TOKEN = new RegExp(`(?<![\\w:/.~])(?:~?/|data/)[^\\s()<>"'\`\\[\\]]+?\\.(?:${EXT_ALTERNATION})${PATH_END}`, 'gi');
 
 /**
  * Split text into prose and code segments. Fenced blocks (```…```) and inline
@@ -171,9 +182,11 @@ export function classifyAttachment(filePath, { kind = 'auto', asDocument = false
   if (!ALLOWED_EXTS.has(ext)) return null;
   let method;
   if (kind === 'document' || asDocument) method = 'sendDocument';
-  else if (IMAGE_EXTS.has(ext)) method = size > TELEGRAM_MAX_PHOTO_BYTES ? 'sendDocument' : 'sendPhoto';
-  else if (AUDIO_EXTS.has(ext)) method = (audioAsVoice || kind === 'voice') && VOICE_EXTS.has(ext) ? 'sendVoice' : 'sendAudio';
-  else if (VIDEO_EXTS.has(ext)) method = 'sendVideo';
+  else if (PHOTO_EXTS.has(ext)) method = size > TELEGRAM_MAX_PHOTO_BYTES ? 'sendDocument' : 'sendPhoto';
+  else if (ext === '.gif') method = 'sendAnimation';
+  else if (VOICE_EXTS.has(ext) && (audioAsVoice || kind === 'voice')) method = 'sendVoice';
+  else if (AUDIO_PLAYER_EXTS.has(ext)) method = 'sendAudio';
+  else if (ext === '.mp4') method = 'sendVideo';
   else method = 'sendDocument';
   return { method, field: METHOD_FIELD[method] };
 }
@@ -239,45 +252,48 @@ export async function resolveDeliverable(spec, { asDocument = false, audioAsVoic
  * Refusals log one non-failure line each and never throw, so text delivery is
  * unaffected by a vanished or disallowed artifact.
  *
+ * Nothing is stripped here: each attachment carries the prose tokens
+ * (`rawTokens`) that located it, and the caller strips only the tokens of an
+ * upload that actually succeeded, so a failed upload keeps its path visible.
+ *
  * @param {object} notification
  * @param {{ roots?: string[], dataRoot?: string }} [opts] - test seams
- * @returns {Promise<{ attachments: object[], description: string }>} the
- *   accepted uploads and the description with the delivered text paths removed
+ * @returns {Promise<object[]>} accepted uploads, each `{ ...attachment, rawTokens: string[] }`
  */
 export async function collectNotificationDeliverables(notification, opts = {}) {
   const metadata = notification?.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
   const flags = { asDocument: metadata.asDocument === true, audioAsVoice: metadata.audioAsVoice === true, ...opts };
-  const description = typeof notification?.description === 'string' ? notification.description : '';
 
   const structured = Array.isArray(metadata.attachments)
     ? metadata.attachments.filter(entry => entry && typeof entry === 'object' && typeof entry.path === 'string')
     : [];
-  const textPaths = extractDeliverablePaths(description);
   const requests = [
     ...structured.map(spec => ({ spec, raw: null })),
-    ...textPaths.map(raw => ({ spec: { path: raw }, raw }))
+    ...extractDeliverablePaths(notification?.description).map(raw => ({ spec: { path: raw }, raw }))
   ];
+  if (requests.length > MAX_RESOLVE_ATTEMPTS) {
+    console.log(`📎 Telegram: ${requests.length} attachment candidates — checking only the first ${MAX_RESOLVE_ATTEMPTS}`);
+  }
 
-  const attachments = [];
-  const seen = new Set();
-  const deliveredRaw = [];
-  for (const { spec, raw } of requests) {
-    if (attachments.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-      console.log(`📎 Telegram: attachment cap (${MAX_ATTACHMENTS_PER_MESSAGE}) reached — skipping the rest`);
-      break;
-    }
+  const byPath = new Map();
+  for (const { spec, raw } of requests.slice(0, MAX_RESOLVE_ATTEMPTS)) {
     const result = await resolveDeliverable(spec, flags);
     if (!result.ok) {
       console.log(`📎 Telegram: skipping attachment ${basename(spec.path)} — ${result.reason}`);
       continue;
     }
-    // A path already covered (structured entry repeated in the text) still
-    // leaves the text so the message never shows a raw path we uploaded.
-    if (raw) deliveredRaw.push(raw);
-    if (seen.has(result.attachment.path)) continue;
-    seen.add(result.attachment.path);
-    attachments.push(result.attachment);
+    // A repeat of an accepted file only contributes its prose token, so the
+    // text never shows a raw path we uploaded.
+    let entry = byPath.get(result.attachment.path);
+    if (!entry) {
+      if (byPath.size >= MAX_ATTACHMENTS_PER_MESSAGE) {
+        console.log(`📎 Telegram: attachment cap (${MAX_ATTACHMENTS_PER_MESSAGE}) reached — skipping ${result.attachment.filename}`);
+        continue;
+      }
+      entry = { ...result.attachment, rawTokens: [] };
+      byPath.set(entry.path, entry);
+    }
+    if (raw) entry.rawTokens.push(raw);
   }
-
-  return { attachments, description: stripDeliverablePaths(description, deliveredRaw) };
+  return [...byPath.values()];
 }

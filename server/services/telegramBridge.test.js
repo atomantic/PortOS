@@ -100,7 +100,7 @@ async function forwardAdded(notification) {
   await listeners[0](notification);
 }
 
-function mockTelegramFetch({ getMeOk = true, sendOk = true } = {}) {
+function mockTelegramFetch({ getMeOk = true, sendOk = true, uploadOk = true } = {}) {
   const fetchSpy = vi.fn(async (url) => {
     if (url.endsWith('/getMe')) {
       return {
@@ -112,7 +112,10 @@ function mockTelegramFetch({ getMeOk = true, sendOk = true } = {}) {
     }
     if (url.endsWith('/sendPhoto') || url.endsWith('/sendDocument')) {
       // uploadMedia reads the body via readResponseJson (.text()).
-      return { ok: true, text: async () => JSON.stringify({ ok: true, result: { message_id: 2 } }) };
+      return {
+        ok: true,
+        text: async () => JSON.stringify(uploadOk ? { ok: true, result: { message_id: 2 } } : { ok: false, description: 'Bad Request: wrong file' })
+      };
     }
     if (url.endsWith('/sendMessage')) {
       return {
@@ -457,19 +460,39 @@ describe('telegramBridge service', () => {
       });
 
       const urls = fetchSpy.mock.calls.map(([url]) => url.split('/').pop());
-      expect(urls).toEqual(['sendMessage', 'sendPhoto']);
-      const text = JSON.parse(fetchSpy.mock.calls[0][1].body).text;
+      expect(urls).toEqual(['sendPhoto', 'sendMessage']);
+      const text = JSON.parse(fetchSpy.mock.calls[1][1].body).text;
       expect(text).toContain('Image:\n');
       expect(text).not.toContain('Image: /data/images/daily.png');
       expect(text).toContain('/data/settings.json');
       expect(text).toContain('`/data/images/daily.png`');
 
-      const form = fetchSpy.mock.calls[1][1].body;
+      const form = fetchSpy.mock.calls[0][1].body;
       expect(form).toBeInstanceOf(FormData);
       expect(form.get('chat_id')).toBe(String(CHAT_ID));
       const photo = form.get('photo');
       expect(photo.name).toBe('daily.png');
       expect(await photo.text()).toBe('png-bytes');
+    });
+
+    it('keeps the path in the text when its upload fails (#17398)', async () => {
+      seedCredentials();
+      const fetchSpy = mockTelegramFetch({ uploadOk: false });
+      vi.stubGlobal('fetch', fetchSpy);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      await init();
+      fetchSpy.mockClear();
+
+      await forwardAdded({
+        type: NOTIFICATION_TYPES.BRIEFING_READY,
+        title: 'Daily Briefing Ready',
+        description: 'Image: /data/images/daily.png',
+        priority: PRIORITY_LEVELS.LOW
+      });
+
+      expect(fetchSpy.mock.calls.map(([url]) => url.split('/').pop())).toEqual(['sendPhoto', 'sendMessage']);
+      expect(JSON.parse(fetchSpy.mock.calls[1][1].body).text).toContain('Image: /data/images/daily.png');
     });
 
     it('still sends the text when every deliverable is refused or missing (#17398)', async () => {

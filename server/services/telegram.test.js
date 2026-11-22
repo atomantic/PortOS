@@ -134,7 +134,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 // direct bot's upload wiring is what's under test.
 const dl = vi.hoisted(() => ({ attachments: [] }));
 vi.mock('../lib/telegramDeliverables.js', () => ({
-  collectNotificationDeliverables: vi.fn(async (n) => ({ attachments: dl.attachments, description: n.description })),
+  collectNotificationDeliverables: vi.fn(async () => dl.attachments),
+  stripDeliverablePaths: vi.fn((text) => text),
 }));
 
 vi.mock('./agent/agentManagement.js', () => ({ getActiveAgents: vi.fn(() => []) }));
@@ -367,13 +368,13 @@ describe('telegram service', () => {
       ]);
     });
 
-    it('uploads each validated deliverable to the authorized chat after the text (#17398)', async () => {
-      const attachment = { path: '/mock/data/images/d.png', filename: 'd.png', method: 'sendPhoto', field: 'photo', caption: null, size: 3 };
+    it('uploads each validated deliverable to the authorized chat before the text (#17398)', async () => {
+      const attachment = { path: '/mock/data/images/d.png', filename: 'd.png', method: 'sendPhoto', field: 'photo', caption: null, size: 3, rawTokens: [] };
       dl.attachments = [attachment];
       await forward({ type: 'briefing_ready', title: 'Daily Briefing Ready', description: 'ready', priority: 'low' });
       await vi.waitFor(() => expect(h.sendMedia).toHaveBeenCalled());
       expect(h.sendMedia).toHaveBeenCalledWith('42', attachment);
-      expect(h.sendMessage.mock.invocationCallOrder[0]).toBeLessThan(h.sendMedia.mock.invocationCallOrder[0]);
+      expect(h.sendMedia.mock.invocationCallOrder[0]).toBeLessThan(h.sendMessage.mock.invocationCallOrder[0]);
     });
 
     it('reports an upload failure without reconnecting the bot (#17398)', async () => {

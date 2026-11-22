@@ -11,7 +11,8 @@ import {
   collectNotificationDeliverables,
   TELEGRAM_MAX_UPLOAD_BYTES,
   TELEGRAM_MAX_PHOTO_BYTES,
-  MAX_ATTACHMENTS_PER_MESSAGE
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_RESOLVE_ATTEMPTS
 } from './telegramDeliverables.js';
 
 describe('extractDeliverablePaths', () => {
@@ -34,6 +35,10 @@ describe('extractDeliverablePaths', () => {
 
   it('pulls the target out of a markdown image and ignores disallowed extensions', () => {
     expect(extractDeliverablePaths('![daily](/data/images/d.png) and /data/settings.json and /x/.env')).toEqual(['/data/images/d.png']);
+  });
+
+  it('never mines a local path out of an http(s) URL or mid-token', () => {
+    expect(extractDeliverablePaths('see https://example.com/files/x.png and host/data/images/y.png or /data/images/z.png')).toEqual(['/data/images/z.png']);
   });
 
   it('handles empty and non-string input', () => {
@@ -62,11 +67,16 @@ describe('stripDeliverablePaths', () => {
 });
 
 describe('classifyAttachment', () => {
-  it('routes by extension lane', () => {
+  it('routes by extension lane, using only formats each Bot API method accepts', () => {
     expect(classifyAttachment('/a/x.PNG')).toEqual({ method: 'sendPhoto', field: 'photo' });
+    expect(classifyAttachment('/a/x.gif')).toEqual({ method: 'sendAnimation', field: 'animation' });
     expect(classifyAttachment('/a/x.mp3')).toEqual({ method: 'sendAudio', field: 'audio' });
-    expect(classifyAttachment('/a/x.mov')).toEqual({ method: 'sendVideo', field: 'video' });
+    expect(classifyAttachment('/a/x.m4a').method).toBe('sendAudio');
+    expect(classifyAttachment('/a/x.mp4')).toEqual({ method: 'sendVideo', field: 'video' });
     expect(classifyAttachment('/a/x.pdf')).toEqual({ method: 'sendDocument', field: 'document' });
+    for (const name of ['x.wav', 'x.flac', 'x.ogg', 'x.opus', 'x.mov', 'x.webm']) {
+      expect(classifyAttachment(`/a/${name}`).method, name).toBe('sendDocument');
+    }
   });
 
   it('sends images as documents for asDocument, kind:document, or over the photo limit', () => {
@@ -158,7 +168,7 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
     expect((await resolveDeliverable({ path: join(images, 'big.zip') }, opts)).reason).toMatch(/exceeds 50 MB/);
   });
 
-  it('collects structured attachments and text paths, strips delivered text paths, and fails open', async () => {
+  it('collects structured attachments and text paths with the prose tokens that located them, and fails open', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await collectNotificationDeliverables({
       description: `Today: /data/images/daily.png\nMissing: /data/images/gone.png\nCode: \`/data/images/clip.ogg\``,
@@ -169,13 +179,15 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
     }, opts);
     log.mockRestore();
 
-    expect(result.attachments.map(a => [a.filename, a.method])).toEqual([['clip.ogg', 'sendVoice'], ['daily.png', 'sendPhoto']]);
-    expect(result.description).toBe('Today:\nMissing: /data/images/gone.png\nCode: `/data/images/clip.ogg`');
+    expect(result.map(a => [a.filename, a.method, a.rawTokens])).toEqual([
+      ['clip.ogg', 'sendVoice', []],
+      ['daily.png', 'sendPhoto', ['/data/images/daily.png']]
+    ]);
   });
 
   it('applies metadata.asDocument to every attachment', async () => {
     const result = await collectNotificationDeliverables({ description: '', metadata: { asDocument: true, attachments: [{ path: join(images, 'daily.png') }] } }, opts);
-    expect(result.attachments[0].method).toBe('sendDocument');
+    expect(result[0].method).toBe('sendDocument');
   });
 
   it('caps the attachments per notification', async () => {
@@ -184,6 +196,24 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
     await Promise.all(many.map(({ path }) => writeFile(path, 'x')));
     const result = await collectNotificationDeliverables({ metadata: { attachments: many } }, opts);
     log.mockRestore();
-    expect(result.attachments).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
+    expect(result).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
+  });
+
+  it('still credits a prose token to an already-accepted file once the upload cap is hit', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const many = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE }, (_, i) => ({ path: join(images, `n${i}.png`) }));
+    await Promise.all(many.map(({ path }) => writeFile(path, 'x')));
+    const result = await collectNotificationDeliverables({ description: 'again /data/images/n0.png', metadata: { attachments: many } }, opts);
+    log.mockRestore();
+    expect(result).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
+    expect(result[0].rawTokens).toEqual(['/data/images/n0.png']);
+  });
+
+  it('bounds resolve attempts, refusals included', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const refused = Array.from({ length: MAX_RESOLVE_ATTEMPTS }, (_, i) => ({ path: join(images, `missing${i}.png`) }));
+    const result = await collectNotificationDeliverables({ metadata: { attachments: [...refused, { path: join(images, 'daily.png') }] } }, opts);
+    log.mockRestore();
+    expect(result).toEqual([]);
   });
 });
