@@ -1,7 +1,7 @@
 /**
  * The media queue's in-memory state: the waiting queue, each lane's running
  * jobs, the archive, video holds, the event bus, and the terminal-operation
- * tracker. The dispatcher (index.js), persistence and SSE share it from here.
+ * tracker. The facade, scheduler, execution, persistence and SSE share it from here.
  * The containers are mutated in place and never reassigned; the GPU lane's
  * single `running` slot is reached through getRunningJob/setRunningJob.
  */
@@ -43,6 +43,24 @@ export function getRunningJob() {
 export function setRunningJob(job) {
   running = job;
 }
+
+// Once quiesced, no path promotes a waiting job or re-arms the worker.
+// Waiting jobs stay durably queued for the next process.
+export const workerState = {
+  started: false,
+  operation: null,
+  wake: null,
+  quiesced: false,
+  resettingForTests: false,
+};
+
+export const recoveryState = { initPromise: null, inventoryReady: false };
+export const testLifecycleDisposals = new Set();
+export const laneOperations = new Set();
+
+// Track async pre-dispatch work separately so the test drain can wait for
+// provider invocation without waiting for provider settlement (#9029).
+export const dispatchOperations = new Set();
 
 export const terminalOperations = new Set();
 

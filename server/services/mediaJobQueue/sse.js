@@ -12,7 +12,7 @@ import {
   closeJobAfterDelay,
   SSE_CLEANUP_DELAY_MS,
 } from '../../lib/sseUtils.js';
-import { queue, videoHolds, findJob, swimlanePositions } from './queueState.js';
+import { queue, videoHolds, findJob, swimlanePositions } from './state.js';
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
 // closeJobAfterDelay}. Each entry carries `clients: []` and `lastPayload`,

@@ -218,7 +218,7 @@ Users can customize what the Verifier inspects. Profiles are stored in user sett
 ```
 
 ### Flow 1: New Image Generation Pipeline
-1. **Queue Intercept:** When an image job finishes rendering in `server/services/mediaJobQueue/index.js`, the verification hook intercepts the completion transition before marking the job `completed`.
+1. **Queue Intercept:** When an image job finishes rendering in `server/services/mediaJobQueue/jobLifecycle.js`, the verification hook intercepts the completion transition before marking the job `completed`.
 2. **Execute Evaluation:** The Verifier runs the active profile's enabled dimensions against the newly rendered image and its input prompt.
 3. **Branching Verdict:**
    * **Pass:** The job is admitted as `completed`, and the verification summary is stored in the job's result and image sidecar.
@@ -346,6 +346,6 @@ Verification results are saved alongside the image in its `.metadata.json` sidec
 | Phase | Milestone | Deliverables |
 | :--- | :--- | :--- |
 | **Phase 1** | **Core Verification Engine** | Extract and expand `server/services/imageVerifier/` from `imageRenderInspection.js`. Implement profile schema, multi-aspect prompt builder, and structured JSON parser. |
-| **Phase 2** | **Generation Hook & Re-Roll Loop** | Wire verification interceptor into `server/services/mediaJobQueue/index.js`. Add automated seed re-roll and retry budget accounting. |
+| **Phase 2** | **Generation Hook & Re-Roll Loop** | Wire verification interceptor into `server/services/mediaJobQueue/jobLifecycle.js`. Add automated seed re-roll and retry budget accounting. |
 | **Phase 3** | **Import & Upload Integration** | Connect `saveUploadedGalleryImage` to an async verification worker. Persist `verification` metadata to `.metadata.json` and broadcast WebSocket events. |
 | **Phase 4** | **UI Profile Editor & Gallery Integration** | Build Verifier settings panel, gallery status badges, and the defect inspector drawer with manual override controls. |

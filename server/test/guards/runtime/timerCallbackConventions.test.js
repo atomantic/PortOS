@@ -113,7 +113,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
     const { sites } = scanTree();
     expect(sites).toEqual(expect.arrayContaining([
       'cos-runner/index.js',
-      'services/mediaJobQueue/index.js',
+      'services/mediaJobQueue/execution.js',
       'services/tuiPromptRunner.js',
     ]));
   });
@@ -128,7 +128,7 @@ describe('async timer callbacks own their rejections (#5668)', () => {
       + 'becomes an unhandled rejection — fatal on Node >= 15, which is how the CoS runner died '
       + 'at boot on a corrupt state file (#5668).\n'
       + 'Fix: wrap the body in `try { … } catch (err) { console.error(`❌ …: ${err.message}`); }`, '
-      + 'or append `.catch(…)` to the awaited expression. See services/mediaJobQueue/index.js for '
+      + 'or append `.catch(…)` to the awaited expression. See services/mediaJobQueue/execution.js for '
       + 'the worked example.\n'
       + `Offenders:\n  ${violations.join('\n  ')}`,
     ).toEqual([]);

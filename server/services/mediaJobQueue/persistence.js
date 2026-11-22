@@ -33,7 +33,7 @@ import { snapshotQuotaCooldowns, restoreQuotaCooldowns } from './limits.js';
 import {
   queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
   getRunningJob, findJob, listJobs, swimlanePositions, trackTerminalOperation, isTopazUpscale,
-} from './queueState.js';
+} from './state.js';
 import { broadcastTerminalSse, closeArchivedJobSse } from './sse.js';
 
 // Boot restoration is the second way a job enters the queue, so it needs the
