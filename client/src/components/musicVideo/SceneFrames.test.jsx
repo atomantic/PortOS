@@ -290,3 +290,16 @@ it('Use end frame off hides the end frame and keeps its selection for switching 
   expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null });
   expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
 });
+
+// Catches a Refine box that can only render on the project's image service.
+it('switches the image service from inside the Refine form and sends it with the refine', () => {
+  const onGenerate = vi.fn();
+  const shot = { ...scene, takes: [{ takeId: 'candidate', kind: 'image', assetId: 'candidate.png', status: 'candidate' }] };
+  frames({ project: { id: 'mv-example' }, scene: shot, onGenerateFrame: onGenerate });
+  fireEvent.click(within(screen.getAllByRole('listitem').find((item) => item.querySelector('img')?.getAttribute('src') === '/data/images/candidate.png')).getByRole('button', { name: 'Refine take' }));
+  const form = within(screen.getByRole('textbox', { name: /What to change/ }).closest('form'));
+  fireEvent.change(form.getAllByRole('combobox')[0], { target: { value: 'grok' } });
+  fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Raise the hand' } });
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, expect.objectContaining({ refine: 'Raise the hand', imageTarget: { mode: 'grok' } }));
+});

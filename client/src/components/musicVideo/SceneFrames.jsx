@@ -237,6 +237,8 @@ export default function SceneFrames({
                 <Wand2 size={14} /> Render
               </button>
             </div>
+            <SceneFrameRenderTarget id={id(`${which}-refine-render`)} value={framePick} options={frameOptions} project={project}
+              disabled={!!generatingFrame || !!generatingEndFrame} onChange={setFramePick} onOptionsChange={setFrameOptions} />
             <label htmlFor={id(`${which}-refine-references`)} className="flex items-center gap-2 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               <input id={id(`${which}-refine-references`)} type="checkbox" checked={includeReferences} onChange={(e) => setIncludeReferences(e.target.checked)} />
               Include shot reference images
