@@ -71,14 +71,14 @@ export default function BeeperCreatePersonForm({
         required
         placeholder="Name"
         aria-label="Name"
-        className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-1.5 py-1 text-[11px] text-gray-200 placeholder:text-gray-500 focus:outline-none disabled:opacity-50"
+        className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-1.5 py-1 text-[11px] text-gray-200 placeholder:text-gray-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
       />
       <select
         value={ring}
         onChange={(event) => setRing(event.target.value)}
         disabled={disabled}
         aria-label="Ring"
-        className="shrink-0 rounded border border-port-border bg-port-bg px-1 py-1 text-[11px] text-gray-200 focus:outline-none disabled:opacity-50"
+        className="shrink-0 rounded border border-port-border bg-port-bg px-1 py-1 text-[11px] text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
       >
         {RINGS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
       </select>
@@ -89,7 +89,7 @@ export default function BeeperCreatePersonForm({
         disabled={disabled}
         placeholder="Relationship (optional)"
         aria-label="Relationship"
-        className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-1.5 py-1 text-[11px] text-gray-200 placeholder:text-gray-500 focus:outline-none disabled:opacity-50"
+        className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-1.5 py-1 text-[11px] text-gray-200 placeholder:text-gray-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent disabled:opacity-50"
       />
       <button
         type="button"

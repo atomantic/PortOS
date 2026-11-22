@@ -102,7 +102,7 @@ export default function ThemeChips({ series, arc, onSeriesUpdate }) {
           autoFocus
           maxLength={THEME_MAX}
           aria-label={`Edit theme ${i + 1}`}
-          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent text-white outline-none"
+          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent text-white outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
           style={{ width: `${Math.max(draft.length + 1, 5)}ch` }}
         />
       ) : (
@@ -141,7 +141,7 @@ export default function ThemeChips({ series, arc, onSeriesUpdate }) {
           maxLength={THEME_MAX}
           placeholder="new theme"
           aria-label="New theme"
-          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent text-white outline-none placeholder:text-gray-600"
+          className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent text-white outline-none focus-visible:ring-2 focus-visible:ring-port-accent placeholder:text-gray-600"
           style={{ width: `${Math.max(draft.length + 1, 10)}ch` }}
         />
       ) : !atMax ? (
