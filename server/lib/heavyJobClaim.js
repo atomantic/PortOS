@@ -245,6 +245,181 @@ async function findSurvivingTrainer({ root = PATHS.trainingRuns, ignorePid = nul
 }
 export { findSurvivingTrainer as __findSurvivingTrainer };
 
+const CLAIM_UNLINK_ATTEMPTS = 3;
+const CLAIM_UNLINK_RETRY_MS = 100;
+
+const clearLocalCompletion = (claimPath, token) => {
+  if (locallyCompletedClaims.get(claimPath) === token) locallyCompletedClaims.delete(claimPath);
+};
+
+/**
+ * Bounded unlink-with-fallback shared by withdraw and release: run `remove`
+ * up to three times (100ms apart); once every attempt fails, `onExhausted`
+ * records the failure (completion marker) instead of leaving the claim
+ * silently behind. Returns true when `remove` succeeded.
+ */
+async function unlinkOwnedClaim({ remove, wait, onExhausted }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await remove();
+      return true;
+    } catch (err) {
+      if (attempt < CLAIM_UNLINK_ATTEMPTS - 1) { await wait(CLAIM_UNLINK_RETRY_MS); continue; }
+      await onExhausted(err);
+      return false;
+    }
+  }
+}
+
+// Called while holding the local mutation lock.
+async function withdrawClaim({ claimPath, token, pid, wait, pidIsAlive, unlinkClaim, writeCompletion }) {
+  if (pid === process.pid) {
+    locallyCompletedClaims.set(claimPath, token);
+    scheduleCompletedCleanup(claimPath, token);
+  }
+  const current = await readHolder(claimPath);
+  if (current?.token !== token) return clearLocalCompletion(claimPath, token);
+  // A recovery claimant can itself be a live detached trainer. Keep its
+  // durable PID rather than withdraw evidence of work that already exists.
+  if (pid !== process.pid && pidIsAlive(pid)) return;
+  const removed = await unlinkOwnedClaim({
+    remove: () => unlinkClaim(claimPath).catch(err => { if (err?.code !== 'ENOENT') throw err; }),
+    wait,
+    onExhausted: () => writeCompletion(`${claimPath}.completed.json`, JSON.stringify({ token, pid, ownerPid: process.pid, finishedAt: new Date().toISOString() })),
+  });
+  if (removed) clearLocalCompletion(claimPath, token);
+}
+
+function createClaimHandle(ctx) {
+  const { claimPath, token, ours, wait, unlinkClaim, writeClaim, writeCompletion, permit } = ctx;
+  let releasePromise;
+  let handoffAttempted = false;
+  const releaseUnderLock = async childSettled => {
+    await unlinkOwnedClaim({
+      remove: async () => {
+        const current = await readHolder(claimPath);
+        if (current?.token === token) await unlinkClaim(claimPath).catch(err => { if (err?.code !== 'ENOENT') throw err; });
+      },
+      wait,
+      onExhausted: async err => {
+        console.warn(`⚠️ Accelerator claim cleanup remains incomplete: ${err.message}`);
+        if (ours.pid === process.pid && (!handoffAttempted || childSettled)) {
+          locallyCompletedClaims.set(claimPath, token);
+          scheduleCompletedCleanup(claimPath, token);
+        }
+        try {
+          // Completion evidence is bound to this random claim token;
+          // it does not claim anything about generated output.
+          await writeCompletion(`${claimPath}.completed.json`, JSON.stringify({ token, pid: ours.pid,
+            ownerPid: handoffAttempted && !childSettled ? null : process.pid, finishedAt: new Date().toISOString() }));
+        } catch (markerError) {
+          permit?.markUnsettled();
+          await permit?.finish();
+          throw markerError;
+        }
+      },
+    });
+  };
+  return {
+    ok: true,
+    holder: publicHolder(ours),
+    // Detached media children outlive a server restart. Transfer the PID
+    // recorded on disk once one exists so process-exit cleanup does not
+    // release a claim while that child is still consuming the accelerator.
+    async handoffTo(childPid) {
+      if (!Number.isInteger(childPid) || childPid <= 0) return;
+      handoffAttempted = true;
+      heldClaims.delete(claimPath);
+      const unlockHandoff = await lockMutation(claimPath);
+      try {
+        const current = await readHolder(claimPath);
+        if (current?.token !== token) throw Object.assign(new Error('Accelerator claim ownership changed.'), { code: 'HEAVY_CLAIM_CHANGED' });
+        await writeClaim(claimPath, { ...ours, pid: childPid });
+        ours.pid = childPid;
+      } finally { unlockHandoff(); }
+    },
+    release({ childSettled = false } = {}) {
+      if (releasePromise) return releasePromise;
+      heldClaims.delete(claimPath);
+      releasePromise = (async () => {
+        const unlockRelease = await lockMutation(claimPath);
+        try { await releaseUnderLock(childSettled); } finally { unlockRelease(); }
+        await permit?.finish();
+      })();
+      return releasePromise;
+    },
+  };
+}
+
+const recoveryBusy = () => ({ ok: false, message: 'Local accelerator is in use by a recovering job.', release: async () => {} });
+const recoveryBlocked = id => [...recoveringClaims.values()].some(owner => owner !== id);
+
+/**
+ * One acquisition attempt while holding the local mutation lock. Returns
+ * { result } to finish, { again } to retry immediately, or
+ * { retryMs, onDeadline } to wait (onDeadline supplies the outcome once the
+ * caller's deadline has passed; it may throw).
+ */
+async function tryClaimLocked(ctx, handleState) {
+  const { claimPath, token, ours, id, pid, createClaim, survivorCheck } = ctx;
+  if (recoveryBlocked(id)) return { retryMs: 250, onDeadline: recoveryBusy };
+  try {
+    await createClaim(claimPath, JSON.stringify(ours), { flag: 'wx' });
+  } catch (err) {
+    if (err?.code !== 'EEXIST') throw err;
+    return resolveExistingClaim(ctx);
+  }
+  let observedSurvivor = false;
+  let blocked;
+  try {
+    blocked = recoveryBlocked(id);
+    if (!blocked) observedSurvivor = Boolean(await survivorCheck({ ignorePid: pid }));
+    blocked = blocked || observedSurvivor || recoveryBlocked(id);
+  } catch (err) {
+    await withdrawClaim(ctx);
+    return { retryMs: 250, onDeadline: () => { throw err; } };
+  }
+  if (blocked) {
+    await withdrawClaim(ctx);
+    return { retryMs: observedSurvivor ? 2000 : 250, onDeadline: recoveryBusy };
+  }
+  if (pid === process.pid) heldClaims.set(claimPath, token);
+  installExitCleanup();
+  handleState.retained = true;
+  return { result: createClaimHandle(ctx) };
+}
+
+// The claim file already exists: reap it when its owner is gone, else report or wait.
+async function resolveExistingClaim({ claimPath, now, deadline, pidIsAlive, unlinkClaim }) {
+  const holder = await readHolder(claimPath);
+  // The same process knows it finished this exact token. Claim this
+  // one-shot cleanup synchronously so another local request cannot unlink
+  // a successor; other processes still see the live PID and leave it alone.
+  if (holder?.pid === process.pid && holder.token && locallyCompletedClaims.get(claimPath) === holder.token) {
+    locallyCompletedClaims.delete(claimPath);
+    try { await unlinkClaim(claimPath); }
+    catch (err) {
+      if (err?.code !== 'ENOENT') {
+        locallyCompletedClaims.set(claimPath, holder.token);
+        scheduleCompletedCleanup(claimPath, holder.token);
+        throw err;
+      }
+    }
+    return { again: true };
+  }
+  if (!holder || !pidIsAlive(holder.pid)) {
+    await unlink(claimPath).catch((err) => {
+      if (err?.code !== 'ENOENT') throw err;
+    });
+    return { again: true };
+  }
+  const stale = now() - holder.startedAt > HEAVY_LOCAL_JOB_STALE_MS;
+  return {
+    retryMs: 250,
+    onDeadline: () => ({ ok: false, holder: publicHolder(holder), stale, message: holderMessage(holder, { stale }), release: async () => {} }),
+  };
+}
+
 /**
  * Claim the machine-local accelerator.
  *
@@ -272,191 +447,42 @@ export async function claimHeavyLocalJob({
   if (typeof kind !== 'string' || !kind.trim() || typeof id !== 'string' || !id.trim()) {
     throw new Error('A heavy local job claim requires non-empty kind and id.');
   }
-  const recoveryBlocked = () => [...recoveringClaims.values()].some(owner => owner !== id);
-  const recoveryBusy = () => ({ ok: false, message: 'Local accelerator is in use by a recovering job.', release: async () => {} });
   if (continuationOwned) admission.assertCurrent();
   const permit = continuationOwned ? null : admission.admit('heavy-job', id.slice(0, 256), { continuation: true });
-  let retained = false;
+  const handleState = { retained: false };
   try {
     const deadline = now() + Math.max(0, timeoutMs);
     const token = randomUUID();
     const ours = { kind, id, pid, startedAt: now(), token };
+    const ctx = { id, pid, claimPath, token, ours, now, deadline, wait, pidIsAlive, unlinkClaim, writeClaim, createClaim, writeCompletion, survivorCheck, permit };
+    // Sleep at most `intervalMs`, never past the caller's deadline.
+    const waitRemaining = intervalMs => wait(Math.min(intervalMs, Math.max(1, deadline - now())));
     await mkdir(dirname(claimPath), { recursive: true });
-    // Called while holding the local mutation lock.
-    const withdraw = async () => {
-      if (pid === process.pid) {
-        locallyCompletedClaims.set(claimPath, token);
-        scheduleCompletedCleanup(claimPath, token);
-      }
-      const current = await readHolder(claimPath);
-      if (current?.token !== token) { if (locallyCompletedClaims.get(claimPath) === token) locallyCompletedClaims.delete(claimPath); return; }
-      // A recovery claimant can itself be a live detached trainer. Keep its
-      // durable PID rather than withdraw evidence of work that already exists.
-      if (pid !== process.pid && pidIsAlive(pid)) return;
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await unlinkClaim(claimPath);
-          if (locallyCompletedClaims.get(claimPath) === token) locallyCompletedClaims.delete(claimPath);
-          return;
-        }
-        catch (err) {
-          if (err?.code === 'ENOENT') { if (locallyCompletedClaims.get(claimPath) === token) locallyCompletedClaims.delete(claimPath); return; }
-          if (attempt < 2) { await wait(100); continue; }
-          await writeCompletion(`${claimPath}.completed.json`, JSON.stringify({ token, pid, ownerPid: process.pid, finishedAt: new Date().toISOString() }));
-          return;
-        }
-      }
-    };
 
     for (;;) {
-      const recovering = recoveryBlocked() || localMutations.has(claimPath);
-      let survivor;
-      try { survivor = !recovering && await survivorCheck({ ignorePid: pid }); }
-      catch (err) {
-        if (now() >= deadline) throw err;
-        await wait(Math.min(250, Math.max(1, deadline - now())));
-        continue;
-      }
-      if (recovering || survivor) {
-        if (now() >= deadline) return recoveryBusy();
-        await wait(Math.min(recovering ? 250 : 2000, Math.max(1, deadline - now())));
-        continue;
-      }
-      const unlock = tryLockMutation(claimPath);
-      if (!unlock) {
-        if (now() >= deadline) return recoveryBusy();
-        await wait(Math.min(250, Math.max(1, deadline - now())));
-        continue;
-      }
-      try {
-        if (recoveryBlocked()) {
-          unlock();
-          if (now() >= deadline) return recoveryBusy();
-          await wait(Math.min(250, Math.max(1, deadline - now())));
-          continue;
-        }
-        let created = false;
-        try {
-          await createClaim(claimPath, JSON.stringify(ours), { flag: 'wx' });
-          created = true;
-          let blocked, observedSurvivor = false;
-          try {
-            blocked = recoveryBlocked();
-            if (!blocked) observedSurvivor = Boolean(await survivorCheck({ ignorePid: pid }));
-            blocked = blocked || observedSurvivor || recoveryBlocked();
-          }
-          catch (err) {
-            await withdraw();
-            if (now() >= deadline) throw err;
-            unlock();
-            await wait(Math.min(250, Math.max(1, deadline - now())));
-            continue;
-          }
-          if (blocked) {
-            await withdraw();
-            unlock();
-            if (now() >= deadline) return recoveryBusy();
-            await wait(Math.min(observedSurvivor ? 2000 : 250, Math.max(1, deadline - now())));
-            continue;
-          }
-          if (pid === process.pid) heldClaims.set(claimPath, token);
-          installExitCleanup();
-          let releasePromise;
-          let handoffAttempted = false;
-          retained = true;
-          return {
-            ok: true,
-            holder: publicHolder(ours),
-            // Detached media children outlive a server restart. Transfer the PID
-            // recorded on disk once one exists so process-exit cleanup does not
-            // release a claim while that child is still consuming the accelerator.
-            async handoffTo(childPid) {
-              if (!Number.isInteger(childPid) || childPid <= 0) return;
-              handoffAttempted = true;
-              heldClaims.delete(claimPath);
-              const unlockHandoff = await lockMutation(claimPath);
-              try {
-                const current = await readHolder(claimPath);
-                if (current?.token !== token) throw Object.assign(new Error('Accelerator claim ownership changed.'), { code: 'HEAVY_CLAIM_CHANGED' });
-                await writeClaim(claimPath, { ...ours, pid: childPid });
-                ours.pid = childPid;
-              } finally { unlockHandoff(); }
-            },
-            release({ childSettled = false } = {}) {
-              if (releasePromise) return releasePromise;
-              heldClaims.delete(claimPath);
-              releasePromise = (async () => {
-                const unlockRelease = await lockMutation(claimPath);
-                try {
-                  const removeOwnClaim = async () => {
-                    const current = await readHolder(claimPath);
-                    if (current?.token === token) await unlinkClaim(claimPath).catch(err => { if (err?.code !== 'ENOENT') throw err; });
-                  };
-                  for (let attempt = 0; ; attempt++) {
-                    try {
-                      await removeOwnClaim();
-                      break;
-                    } catch (err) {
-                      if (attempt < 2) { await wait(100); continue; }
-                      console.warn(`⚠️ Accelerator claim cleanup remains incomplete: ${err.message}`);
-                      if (ours.pid === process.pid && (!handoffAttempted || childSettled)) {
-                        locallyCompletedClaims.set(claimPath, token);
-                        scheduleCompletedCleanup(claimPath, token);
-                      }
-                      try {
-                        // Completion evidence is bound to this random claim token;
-                        // it does not claim anything about generated output.
-                        await writeCompletion(`${claimPath}.completed.json`, JSON.stringify({ token, pid: ours.pid,
-                          ownerPid: handoffAttempted && !childSettled ? null : process.pid, finishedAt: new Date().toISOString() }));
-                      } catch (markerError) {
-                        permit?.markUnsettled();
-                        await permit?.finish();
-                        throw markerError;
-                      }
-                      break;
-                    }
-                  }
-                } finally { unlockRelease(); }
-                await permit?.finish();
-              })();
-              return releasePromise;
-            },
-          };
-        } catch (err) {
-          if (created || err?.code !== 'EEXIST') throw err;
-        }
-
-        const holder = await readHolder(claimPath);
-        // The same process knows it finished this exact token. Claim this
-        // one-shot cleanup synchronously so another local request cannot unlink
-        // a successor; other processes still see the live PID and leave it alone.
-        if (holder?.pid === process.pid && holder.token && locallyCompletedClaims.get(claimPath) === holder.token) {
-          locallyCompletedClaims.delete(claimPath);
-          try { await unlinkClaim(claimPath); }
-          catch (err) {
-            if (err?.code !== 'ENOENT') {
-              locallyCompletedClaims.set(claimPath, holder.token);
-              scheduleCompletedCleanup(claimPath, holder.token);
-              throw err;
-            }
-          }
-          continue;
-        }
-        if (!holder || !pidIsAlive(holder.pid)) {
-          await unlink(claimPath).catch((err) => {
-            if (err?.code !== 'ENOENT') throw err;
-          });
-          continue;
-        }
-        const stale = now() - holder.startedAt > HEAVY_LOCAL_JOB_STALE_MS;
-        if (now() >= deadline) {
-          return { ok: false, holder: publicHolder(holder), stale, message: holderMessage(holder, { stale }), release: async () => {} };
-        }
-        unlock();
-        await wait(Math.min(250, Math.max(1, deadline - now())));
-      } finally { unlock(); }
+      const step = await nextClaimStep(ctx, handleState);
+      if ('result' in step) return step.result;
+      if (step.again) continue;
+      if (now() >= deadline) return step.onDeadline();
+      await waitRemaining(step.retryMs);
     }
-  } finally { if (!retained) await permit?.finish(); }
+  } finally { if (!handleState.retained) await permit?.finish(); }
+}
+
+// Pre-lock checks (recovery, surviving trainer, mutation lock), then one locked attempt.
+async function nextClaimStep(ctx, handleState) {
+  const { id, pid, claimPath, survivorCheck } = ctx;
+  const recovering = recoveryBlocked(id) || localMutations.has(claimPath);
+  let survivor;
+  try { survivor = !recovering && await survivorCheck({ ignorePid: pid }); }
+  catch (err) {
+    return { retryMs: 250, onDeadline: () => { throw err; } };
+  }
+  if (recovering || survivor) return { retryMs: recovering ? 250 : 2000, onDeadline: recoveryBusy };
+  const unlock = tryLockMutation(claimPath);
+  if (!unlock) return { retryMs: 250, onDeadline: recoveryBusy };
+  try { return await tryClaimLocked(ctx, handleState); }
+  finally { unlock(); }
 }
 
 /**
