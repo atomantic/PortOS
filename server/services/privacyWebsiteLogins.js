@@ -66,7 +66,14 @@ function parseTotp(setupKey) {
   }
 }
 
-const encodeSecrets = ({ username, password, totp }) => encryptValue(JSON.stringify({ v: PAYLOAD_VERSION, username, password, totp: totp ?? null }));
+// Refuses anything decodeSecrets could not read back, so no write can leave a
+// row that every later fill and secret update would reject as unreadable.
+function encodeSecrets({ username, password, totp }) {
+  if (typeof username !== 'string' || !username || typeof password !== 'string' || !password) {
+    throw new ServerError('A website login needs a username and a password', { status: 400, code: 'WEBSITE_LOGIN_INVALID' });
+  }
+  return encryptValue(JSON.stringify({ v: PAYLOAD_VERSION, username, password, totp: totp ?? null }));
+}
 
 function decodeSecrets(valueEnc) {
   let parsed = null;
@@ -83,8 +90,14 @@ export async function createWebsiteLogin(input) {
   const totp = input.totpSecret ? parseTotp(input.totpSecret) : null;
   const origins = normalizeOrigins(input.origins);
   await ensureVaultKey();
+  const valueEnc = encodeSecrets({ username: input.username, password: input.password, totp });
   const subjectId = (await assertSubject(input.subjectId)).id;
-  const needsConsent = await needsPiiVaultConsent(subjectId);
+  // Consent precedes the secret it covers: a failed consent write stores no
+  // credential, and a failed insert after it leaves only the audit fact, which
+  // a retry reuses rather than duplicating.
+  if (await needsPiiVaultConsent(subjectId)) {
+    await recordConsent({ subjectId, scope: 'pii_vault', method: 'website-login-create' });
+  }
   const id = randomUUID();
   const { rows } = await query(
     `INSERT INTO privacy_vault_records
@@ -94,11 +107,9 @@ export async function createWebsiteLogin(input) {
      RETURNING ${LOGIN_COLUMNS}`,
     [
       id, subjectId, PRIVACY_WEBSITE_LOGIN_TYPE, input.label,
-      encodeSecrets({ username: input.username, password: input.password, totp }),
-      maskUsername(input.username), input.notes ?? '', origins, totp !== null,
+      valueEnc, maskUsername(input.username), input.notes ?? '', origins, totp !== null,
     ],
   );
-  if (needsConsent) await recordConsent({ subjectId, scope: 'pii_vault', method: 'website-login-create' });
   console.log(`🔐 Created website login ${id} (subject=${subjectId}, origins=${origins.length}, totp=${totp ? 'yes' : 'no'})`);
   return rowToLogin(rows[0]);
 }

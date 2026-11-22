@@ -113,8 +113,11 @@ export async function createVaultRecord(input) {
   // First record FOR THIS SUBJECT without local-vault consent ⇒ write the
   // `pii_vault` consent row. Scoped per subject so a household member added
   // directly through the vault still gets a consent row of their own rather than
-  // riding on `self`'s.
-  const needsConsent = await needsPiiVaultConsent(subjectId);
+  // riding on `self`'s. Recorded before the value it covers is stored, so a
+  // failed consent write never leaves a record without its audit fact.
+  if (await needsPiiVaultConsent(subjectId)) {
+    await recordConsent({ subjectId, scope: 'pii_vault', method: 'vault-record-create' });
+  }
   const { rows } = await query(
     `INSERT INTO privacy_vault_records
        (id, subject_id, type, label, value_enc, masked_value, status, valid_from, valid_to,
@@ -130,9 +133,6 @@ export async function createVaultRecord(input) {
       input.notes ?? '',
     ],
   );
-  if (needsConsent) {
-    await recordConsent({ subjectId, scope: 'pii_vault', method: 'vault-record-create' });
-  }
   console.log(`🔐 Created vault record ${id} (subject=${subjectId}, type=${input.type})`);
   return rowToRecord(rows[0]);
 }

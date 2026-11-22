@@ -14,9 +14,11 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: vi.fn() }));
 
+// A known test key, set only while this suite actually runs (before any service
+// import, so ensureVaultKey never provisions the install's real .env) and
+// restored even when cleanup fails.
 const HEX_KEY = 'd'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = HEX_KEY;
 
 let dbReady = false;
 let skipReason = '';
@@ -44,21 +46,27 @@ describe.skipIf(!runDb)('privacy website logins DB round-trip', () => {
   let logins;
   let vault;
   let changes;
+  let loginId = '';
   const created = [];
 
   beforeAll(async () => {
+    process.env.PRIVACY_VAULT_KEY = HEX_KEY;
     logins = await import('./privacyWebsiteLogins.js');
     vault = await import('./privacyVault.js');
     changes = await import('./privacyChanges.js');
   });
 
   afterAll(async () => {
-    for (const id of created) {
-      await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+    try {
+      // Only rows this file created: portos_test is shared across suites.
+      for (const id of created) {
+        await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+      }
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
     }
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
   });
 
   it('stores only ciphertext plus non-secret metadata and lists metadata only', async () => {
@@ -67,6 +75,7 @@ describe.skipIf(!runDb)('privacy website logins DB round-trip', () => {
       username: USERNAME, password: PASSWORD, totpSecret: SEED,
     });
     created.push(login.id);
+    loginId = login.id;
     expect(login).toMatchObject({
       label: 'Example portal', origins: ['https://example.com', 'https://id.example.com'], hasTotp: true,
     });
@@ -88,36 +97,37 @@ describe.skipIf(!runDb)('privacy website logins DB round-trip', () => {
   });
 
   it('decrypts only through the fill reader', async () => {
-    const [login] = await logins.listWebsiteLogins({ origin: 'https://example.com' });
-    const forFill = await logins.readWebsiteLoginForFill(login.id);
+    const forFill = await logins.readWebsiteLoginForFill(loginId);
     expect(forFill).toMatchObject({ username: USERNAME, password: PASSWORD, totp: { secret: SEED, digits: 6, period: 30 } });
   });
 
   it('keeps website logins out of every generic vault path', async () => {
-    const [login] = await logins.listWebsiteLogins({ origin: 'https://example.com' });
-    expect((await vault.listVaultRecords()).map((row) => row.id)).not.toContain(login.id);
-    await expect(vault.revealValue(login.id)).rejects.toMatchObject({ code: 'WEBSITE_LOGIN_NOT_REVEALABLE' });
-    await expect(vault.updateVaultRecord(login.id, { shareWithTwin: true })).rejects.toMatchObject({ code: 'WEBSITE_LOGIN_MANAGED_SEPARATELY' });
-    await expect(changes.declareChange({ vaultRecordId: login.id, replacement: { label: 'x', value: 'y' } }))
+    expect((await vault.listVaultRecords()).map((row) => row.id)).not.toContain(loginId);
+    await expect(vault.revealValue(loginId)).rejects.toMatchObject({ code: 'WEBSITE_LOGIN_NOT_REVEALABLE' });
+    await expect(vault.updateVaultRecord(loginId, { shareWithTwin: true })).rejects.toMatchObject({ code: 'WEBSITE_LOGIN_MANAGED_SEPARATELY' });
+    await expect(changes.declareChange({ vaultRecordId: loginId, replacement: { label: 'x', value: 'y' } }))
       .rejects.toMatchObject({ code: 'WEBSITE_LOGIN_CHANGE_FORBIDDEN' });
   });
 
   it('merges partial secret updates and clears the seed on null', async () => {
-    const [login] = await logins.listWebsiteLogins({ origin: 'https://example.com' });
-    const renamed = await logins.updateWebsiteLogin(login.id, { label: 'Renamed', origins: ['https://example.com/login'] });
+    const renamed = await logins.updateWebsiteLogin(loginId, { label: 'Renamed', origins: ['https://example.com/login'] });
     expect(renamed).toMatchObject({ label: 'Renamed', origins: ['https://example.com'], hasTotp: true });
 
-    const rotated = await logins.updateWebsiteLogin(login.id, { password: 'pw-rotated-0042', totpSecret: null });
+    const rotated = await logins.updateWebsiteLogin(loginId, { password: 'pw-rotated-0042', totpSecret: null });
     expect(rotated.hasTotp).toBe(false);
-    const forFill = await logins.readWebsiteLoginForFill(login.id);
+    const forFill = await logins.readWebsiteLoginForFill(loginId);
     expect(forFill).toMatchObject({ username: USERNAME, password: 'pw-rotated-0042', totp: null });
   });
 
+  it('refuses to store a payload it could not read back', async () => {
+    await expect(logins.createWebsiteLogin({ label: 'Broken', origins: ['https://example.com'], username: USERNAME }))
+      .rejects.toMatchObject({ code: 'WEBSITE_LOGIN_INVALID', status: 400 });
+  });
+
   it('refuses an unreadable payload without echoing its plaintext', async () => {
-    const [login] = await logins.listWebsiteLogins({ origin: 'https://example.com' });
     const { encryptValue } = await import('../lib/vaultCrypto.js');
-    await query(`UPDATE privacy_vault_records SET value_enc = $1 WHERE id = $2`, [encryptValue('not-json-plaintext-7731'), login.id]);
-    const error = await logins.readWebsiteLoginForFill(login.id).catch((e) => e);
+    await query(`UPDATE privacy_vault_records SET value_enc = $1 WHERE id = $2`, [encryptValue('not-json-plaintext-7731'), loginId]);
+    const error = await logins.readWebsiteLoginForFill(loginId).catch((e) => e);
     expect(error.code).toBe('WEBSITE_LOGIN_UNREADABLE');
     expect(error.message).not.toContain('not-json-plaintext-7731');
   });
@@ -126,8 +136,7 @@ describe.skipIf(!runDb)('privacy website logins DB round-trip', () => {
     const other = await vault.createVaultRecord({ type: 'custom', label: 'Not a login', value: 'plain fact' });
     created.push(other.id);
     await expect(logins.deleteWebsiteLogin(other.id)).rejects.toMatchObject({ code: 'WEBSITE_LOGIN_NOT_FOUND' });
-    const [login] = await logins.listWebsiteLogins({ origin: 'https://example.com' });
-    await logins.deleteWebsiteLogin(login.id);
-    expect(await logins.getWebsiteLogin(login.id)).toBeNull();
+    await logins.deleteWebsiteLogin(loginId);
+    expect(await logins.getWebsiteLogin(loginId)).toBeNull();
   });
 });
