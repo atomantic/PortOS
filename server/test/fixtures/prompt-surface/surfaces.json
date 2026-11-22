@@ -2,7 +2,7 @@
   "clock": "2026-01-01T00:00:00.000Z",
   "surfaces": {
     "mind.baseline": {
-      "promptTokens": 2625,
+      "promptTokens": 2734,
       "toolCount": 3,
       "toolTokens": 1042,
       "tools": [
@@ -12,9 +12,9 @@
       ]
     },
     "mind.all-families": {
-      "promptTokens": 11944,
-      "toolCount": 70,
-      "toolTokens": 17229,
+      "promptTokens": 12431,
+      "toolCount": 73,
+      "toolTokens": 17939,
       "tools": [
         "brain.capture",
         "brain.recent",
@@ -80,6 +80,9 @@
         "mind.thinking-presets",
         "sandbox.delegate",
         "sandbox.models",
+        "skills.list",
+        "skills.manage",
+        "skills.view",
         "system.processes.status",
         "time.now",
         "tools.activate",
@@ -151,8 +154,8 @@
     },
     "ui.semantic": {
       "promptTokens": 0,
-      "toolCount": 34,
-      "toolTokens": 5572,
+      "toolCount": 36,
+      "toolTokens": 5903,
       "tools": [
         "brain.capture",
         "brain.recent",
@@ -184,6 +187,8 @@
         "journal.append",
         "journal.read",
         "music.artist-profile",
+        "skills.list",
+        "skills.view",
         "system.processes.status",
         "time.now",
         "user-actions.query",
