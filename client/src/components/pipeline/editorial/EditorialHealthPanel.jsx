@@ -85,7 +85,7 @@ function Sparkline({ points, selectedIndex = null, onSelect }) {
             aria-pressed={active}
             aria-label={`Revision ${i + 1} of ${coords.length}, score ${c.score}${active ? ' (selected)' : ''}`}
             onClick={select}
-            className={`cursor-pointer outline-none transition-all ${active ? 'fill-port-warning' : isLast ? 'fill-port-accent' : 'fill-port-accent/50 hover:fill-port-accent'}`}
+            className={`cursor-pointer outline-none focus-visible:stroke-white focus-visible:stroke-1 transition-all ${active ? 'fill-port-warning' : isLast ? 'fill-port-accent' : 'fill-port-accent/50 hover:fill-port-accent'}`}
           >
             <title>{`Revision ${i + 1} · score ${c.score}`}</title>
           </circle>

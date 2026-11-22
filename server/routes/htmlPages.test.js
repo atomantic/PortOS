@@ -24,21 +24,24 @@ const model = { backend: 'ollama', modelId: 'example-coder:7b' };
 beforeEach(() => vi.clearAllMocks());
 
 describe('POST /api/html-pages/runs', () => {
-  it('queues the validated models with the page count and answers 202 with the queued runs', async () => {
+  it('queues the validated models with the briefs exactly as typed and answers 202 with the queued runs', async () => {
     mocks.startRuns.mockResolvedValue([{ id: 'run-1', status: 'queued' }]);
-    const res = await request(app).post('/api/html-pages/runs').send({ models: [model], pageCount: '3' });
+    const res = await request(app).post('/api/html-pages/runs').send({ models: [model], pages: ['  A lighthouse at dusk \n', 'A tide-pool'] });
     expect(res.status).toBe(202);
     expect(res.body).toEqual([{ id: 'run-1', status: 'queued' }]);
-    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [model], pageCount: 3 });
+    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [model], pages: ['  A lighthouse at dusk \n', 'A tide-pool'] });
   });
 
   it.each([
-    ['no models', { models: [] }],
-    ['a repeated model', { models: [model, model] }],
-    ['an unknown runtime', { models: [{ backend: 'cloud', modelId: 'x' }] }],
-    ['more pages than the brief has', { models: [model], pageCount: 99 }],
-    ['zero pages', { models: [model], pageCount: 0 }],
-    ['too many models at once', { models: Array.from({ length: 9 }, (_, i) => ({ backend: 'ollama', modelId: `m${i}` })) }],
+    ['no models', { models: [], pages: ['A'] }],
+    ['a repeated model', { models: [model, model], pages: ['A'] }],
+    ['an unknown runtime', { models: [{ backend: 'cloud', modelId: 'x' }], pages: ['A'] }],
+    ['no pages', { models: [model] }],
+    ['an empty page list', { models: [model], pages: [] }],
+    ['more pages than the cap', { models: [model], pages: Array.from({ length: 6 }, (_, i) => `page ${i}`) }],
+    ['a blank brief', { models: [model], pages: ['   '] }],
+    ['a brief over the length limit, which is refused rather than cut', { models: [model], pages: ['x'.repeat(2001)] }],
+    ['too many models at once', { models: Array.from({ length: 9 }, (_, i) => ({ backend: 'ollama', modelId: `m${i}` })), pages: ['A'] }],
   ])('refuses %s before reaching any model', async (_label, body) => {
     const res = await request(app).post('/api/html-pages/runs').send(body);
     expect(res.status).toBe(400);
@@ -47,7 +50,7 @@ describe('POST /api/html-pages/runs', () => {
 
   it('maps a model that is not installed to the 409 the service raises', async () => {
     mocks.startRuns.mockRejectedValue(new ServerError('missing:1b is not installed', { status: 409, code: 'HTML_PAGES_MODEL_UNAVAILABLE' }));
-    const res = await request(app).post('/api/html-pages/runs').send({ models: [model] });
+    const res = await request(app).post('/api/html-pages/runs').send({ models: [model], pages: ['A'] });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('HTML_PAGES_MODEL_UNAVAILABLE');
   });
