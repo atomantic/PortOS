@@ -113,7 +113,7 @@ import { getToolsSummaryForPrompt } from '../tools.js';
 import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
-import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen } from '../promptSections/claimOnDemand.js';
+import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen, buildClaimMergeSection, buildClaimCleanupSection } from '../promptSections/claimOnDemand.js';
 import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
@@ -5167,12 +5167,16 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
   const stagedPath = (name) => `/install/data/cos/slashdo-resolved/${name}-0123abcd.md`;
   const resolveRoot = (text) => text.replaceAll('{portosRoot}', () => PATHS.installRoot);
   const githubPrompt = resolveRoot(composeClaimIssuePrompt({ forge: 'github' }));
+  const githubLocalReview = githubPrompt.match(/(?:^|\n)(## Phase 5 — Review locally \(BEFORE any PR exists\)\n[\s\S]*?)(?=\n## |$)/)[1];
   const githubSections = [
     ['claim-issue-filing-github', mandatoryDispatchHintGuidance({ cli: 'gh' })],
     ['claim-epic-github', buildClaimEpicSection('github', false)],
     ['claim-handoff-github', buildClaimGithubHandoff(false)],
     ['claim-linked-screen-github', resolveRoot(buildClaimLinkedScreen('github'))],
     ['claim-ci-recovery-github', buildClaimCheckRecovery('github', false)],
+    ['claim-merge-github', buildClaimMergeSection('github')],
+    ['claim-cleanup-github', buildClaimCleanupSection('github')],
+    ['claim-local-review', githubLocalReview],
   ];
   const claimTask = (prompt, field) => makeTask(field === 'description'
     ? { description: prompt, metadata: { claimFlow: true } }
@@ -5202,12 +5206,14 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
 
   it('defers the GitLab procedures when the claim is carried in the description', async () => {
     const composed = resolveRoot(composeClaimIssuePrompt({ forge: 'gitlab', target: 42, prCompletion: 'leave-open' }));
+    const gitlabLocalReview = composed.match(/(?:^|\n)(## Phase 5 — Review locally \(BEFORE any MR exists\)\n[\s\S]*?)(?=\n## |$)/)[1];
     const prompt = await render(composed, 'cli', 'description');
     expect(stagedSections()).toEqual([
       ['claim-issue-filing-gitlab', mandatoryDispatchHintGuidance({ cli: 'glab' })],
       ['claim-epic-gitlab', buildClaimEpicSection('gitlab', true)],
       ['claim-linked-screen-gitlab', resolveRoot(buildClaimLinkedScreen('gitlab'))],
       ['claim-ci-recovery-gitlab', buildClaimCheckRecovery('gitlab', true)],
+      ['claim-local-review', gitlabLocalReview],
     ]);
     expect(prompt).toContain('When a linked MR is by a non-collaborator');
     expect(prompt).toContain('For a claimant, verify project assignment eligibility');
@@ -5238,6 +5244,29 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(prompt).toContain('Produce 2–6 slices');
     expect(prompt).not.toContain('When Phase 1 lands on an epic');
     expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
+  });
+
+  it('defers missing workflow-scope handoff on file-tool hosts and keeps it inline on API hosts', async () => {
+    const taskWithMissingScope = makeTask({
+      description: 'Claim #42',
+      metadata: {
+        claimFlow: true,
+        claimServerCheckout: true,
+        prompt: githubPrompt,
+        forgeWorkflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' },
+      },
+    });
+    const cliPrompt = await buildAgentPrompt(taskWithMissingScope, {}, '/r', null,
+      { providerType: 'cli', providerId: 'codex', providerCommand: 'codex', agentId: 'agent-1' });
+    expect(cliPrompt).toContain(`READ \`${stagedPath('claim-workflow-scope')}\``);
+    expect(cliPrompt).not.toContain('## Claim ownership binding');
+    expect(cliPrompt).toContain('do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`');
+
+    vi.mocked(writeResolvedSlashdoBody).mockClear();
+    const apiPrompt = await buildAgentPrompt(taskWithMissingScope, {}, '/r', null,
+      { providerType: 'api', providerId: 'openai', agentId: 'agent-1' });
+    expect(stagedSections()).toEqual([]);
+    expect(apiPrompt).toContain('gh auth refresh -h github.com -s workflow');
   });
 });
 

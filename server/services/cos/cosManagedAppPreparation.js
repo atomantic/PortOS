@@ -3,7 +3,7 @@
 import { newAuditMetadata } from '../../lib/auditWorkflow.js';
 import { auditQualityInstructions } from '../../lib/auditQuality.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../../lib/privateSecurityPolicy.js';
-import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
+import { sanitizeTaskMetadata, SWARM_COUNT_MIN } from '../../lib/cos/cosTaskMetadata.js';
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { emitLog } from './cosEvents.js';
@@ -465,6 +465,44 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const currentStageIndex = metadata.pipeline?.currentStage ?? 0;
   const forgeClaim = promptTaskType === 'claim-issue' || promptTaskType === 'claim-issue-gitlab';
   const scheduledClaimPolicy = metadata.prCompletion ?? resolveAppPrCompletion(app, metadata);
+
+  // For non-swarm perpetual forge claims, reuse the candidate list the work
+  // detector already fetched: pre-pin and preflight the oldest eligible issue
+  // so PortOS provisions its worktree/markers and injects its content instead
+  // of making the agent repeat Phase 1's 500-issue scan.
+  const isSwarm = Number.isInteger(metadata.swarmCount) && metadata.swarmCount >= SWARM_COUNT_MIN;
+  let scheduledPreflight = null;
+  if (forgeClaim && !isSwarm && !hookPrompt && !metadata.pipeline?.stages && !interval.prompt && perpetualGate.candidates?.length) {
+    const tracker = promptTaskType === 'claim-issue-gitlab' ? 'gitlab' : 'github';
+    const { prepareAppIssueClaim } = await import('../appIssues.js');
+    for (const candidate of perpetualGate.candidates) {
+      const targetRef = String(candidate.number);
+      try {
+        const preflight = await prepareAppIssueClaim(app, targetRef, tracker, { includePreflight: true });
+        const authorFilter = metadata.issueAuthorFilter || 'self';
+        // Only stamp @me + in-progress eagerly on trusted/self-authored issues;
+        // an unscreened third-party issue under `any` waits for the agent's
+        // cognitive security check before claiming markers on the forge.
+        const trustedAuthor = authorFilter !== 'any'
+          || Boolean(preflight.issueAuthor && preflight.forgeContext?.me && preflight.issueAuthor === preflight.forgeContext.me.toLowerCase());
+        scheduledPreflight = {
+          target: targetRef,
+          epic: preflight.epic === true,
+          serverCheckout: preflight.epic !== true && trustedAuthor,
+          issueContext: preflight.issueContext || null,
+          forgeContext: preflight.forgeContext || null,
+          commentsClear: preflight.commentsClear === true,
+          linkedWorkClear: preflight.linkedWorkClear === true,
+          linkedItems: preflight.linkedItems || null,
+        };
+        break;
+      } catch (err) {
+        if (err?.code === 'ISSUE_IN_FLIGHT' || err?.status === 409) continue;
+        break;
+      }
+    }
+  }
+
   const promptResult = hookPrompt
     ? hookPrompt
     : (metadata.pipeline?.stages
@@ -472,10 +510,25 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
       : await getTaskPrompt(promptKeyForBody, forgeClaim ? {
         claimFlow: true,
         withSource: true,
-        claimIssueOptions: { prCompletion: scheduledClaimPolicy },
+        claimIssueOptions: scheduledPreflight ? {
+          target: scheduledPreflight.target,
+          prCompletion: scheduledClaimPolicy,
+          preverified: true,
+          nonEpic: !scheduledPreflight.epic,
+          serverCheckout: scheduledPreflight.serverCheckout,
+          commentsClear: scheduledPreflight.commentsClear,
+          linkedWorkClear: scheduledPreflight.linkedWorkClear,
+          forgeContext: scheduledPreflight.forgeContext,
+          linkedItems: scheduledPreflight.linkedItems,
+        } : { prCompletion: scheduledClaimPolicy },
       } : {}));
+  const promptComposed = typeof promptResult === 'object' && promptResult.composed;
+  if (scheduledPreflight && promptComposed) {
+    metadata.claimTarget = scheduledPreflight.target;
+    if (scheduledPreflight.serverCheckout) metadata.claimServerCheckout = true;
+  }
   const promptTemplate = typeof promptResult === 'string' ? promptResult
-    : `${promptResult.composed ? '' : `## Claim target and completion policy\n\nTarget: selected from the configured tracker. Effective PR completion policy: ${scheduledClaimPolicy}. Follow the runtime safety and completion contracts for this run.\n\n`}${promptResult.prompt}`;
+    : `${promptResult.composed ? '' : `## Claim target and completion policy\n\nTarget: ${scheduledPreflight?.target || 'selected from the configured tracker'}. Effective PR completion policy: ${scheduledClaimPolicy}. Follow the runtime safety and completion contracts for this run.\n\n`}${promptResult.prompt}`;
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
@@ -531,12 +584,19 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.
   applyAppWorktreeDefault(metadata, app);
+  const { appendPrefetchedIssueContext } = scheduledPreflight
+    ? await import('./cosTaskPrompts.js')
+    : { appendPrefetchedIssueContext: null };
+  const prefetchedIssueBlock = scheduledPreflight && promptComposed
+    ? appendPrefetchedIssueContext(promptTaskType, scheduledPreflight.target, scheduledPreflight.issueContext)
+    : '';
   let baseDescription;
   try {
     baseDescription = await buildImprovementTaskDescription({
       promptTemplate: applyAuditModeWrapper(applyDepfreeMode(applyReleaseOptions(promptTemplate, promptTaskType, metadata), promptTaskType, metadata), modeInstructions),
       app, promptTaskType, metadata,
       reviewerTaskType: taskType, reviewerOverrideMetadata: appOverride?.taskMetadata,
+      commentsClear: scheduledPreflight?.commentsClear === true,
       blocks: {
         referenceData: referenceDataBlock,
         trackerInstructions: trackerFiling.trackerInstructions,
@@ -547,7 +607,8 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
         repoSyncReport: repoSyncReportBlock,
         repoFullName: prRepoFullName,
         defaultBranch: prDefaultBranch,
-        planConstraint: planConstraintBlock
+        planConstraint: planConstraintBlock,
+        prefetchedIssue: prefetchedIssueBlock,
       }
     });
   } catch (err) {

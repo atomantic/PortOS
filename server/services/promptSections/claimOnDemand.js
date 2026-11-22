@@ -10,6 +10,7 @@
 
 import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLabelFlags, formatVolunteerClaimCommands, mandatoryDispatchHintGuidance } from '../../lib/dispatchLabels.js';
 import { TASK_PROMPT_KEY } from '../../lib/cos/cosTaskPrompt.js';
+import { MANAGED_WORKTREE_CLEANUP_CONTRACT, buildManagedGithubMergeScript } from '../../lib/mergeGateContract.js';
 import { GITHUB_HOST_SETUP } from './constants.js';
 
 // The epic marker and its idempotent `label create` line come from the shared
@@ -154,6 +155,48 @@ export function buildClaimCheckRecovery(forge, leaveOpen) {
   return `If a required check fails, inspect the failing job logs and identify the failure and affected head. Before reporting a hold, make a feasible bounded evidence-driven diagnosis or recovery attempt: reproduce with a focused test, fix and validate a cause, or perform one diagnostic rerun when justified. A failure that predates this branch or sits outside the diff (for example a repository-wide size ceiling or lint rule) is still this run's to fix in the ${change} when the fix is bounded and safe; "pre-existing" alone is never grounds to report blocked. Filing a follow-up alone is not an attempt; a passing rerun alone does not diagnose a flake. Never blindly retry until green or weaken tests. Respect configured retry budgets. If logs or a necessary prerequisite are unavailable, recovery is unsafe, or evidenced attempts are exhausted, report the concrete blocker and attempts, preserve the open ${change}, claim and checkout, and remain incomplete or blocked. After a fix or rerun, wait for required checks and reviews on the exact current head, then replace \`CI_VERIFIED_HEAD\` with that full verified SHA before the equality and merge gates. ${leaveOpen ? "Continue to the human handoff when they pass." : "Continue to the authorized merge when they pass."}`;
 }
 
+export function buildClaimMergeSection(forge) {
+  if (forge === 'github') {
+    return `5. **Merge immediately via \`gh pr merge\`** — NEVER a local \`git merge\`. A queued provider auto-merge remains pending until MERGED is confirmed. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
+   \`\`\`bash
+${buildManagedGithubMergeScript()}
+   \`\`\`
+   The exact comparison MUST succeed. \`OPEN\` means CI, review, or branch protection still blocks the merge; investigate, fix, and retry. \`CLOSED\` is also not success. Do not enter Phase 7 until remote GitHub state is exactly \`MERGED\`.`;
+  }
+  return 'Resolve the exact MR IID and confirm its head equals `CI_VERIFIED_HEAD` with `glab mr view "${MR_IID}" --output json`. After current-head required checks and applicable approvals pass, merge with `glab mr merge "${MR_IID}" --yes --sha "$CI_VERIFIED_HEAD"`. Never delete the source branch. Read the MR back and require its state, normalized with `ascii_downcase`, to be `merged`; an unreadable, queued, open or closed state is not success. If the operation cannot be pinned or confirmed, preserve the claim and stop; do not retry a failed mutation using another method.';
+}
+
+const SERVER_PROVISIONED_WORKTREE_CLEANUP_CONTRACT = MANAGED_WORKTREE_CLEANUP_CONTRACT.replace(
+  '—or you may remove your own merged claim worktree cleanly.',
+  '; never remove this worktree or branch yourself.',
+);
+
+export function buildClaimCleanupSection(forge, { provisioned = false } = {}) {
+  const github = forge === 'github';
+  const pr = github ? 'PR' : 'MR';
+  const cli = github ? 'gh' : 'glab';
+  return `## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the ${pr} merged via Phase 6.
+
+${provisioned ? SERVER_PROVISIONED_WORKTREE_CLEANUP_CONTRACT : MANAGED_WORKTREE_CLEANUP_CONTRACT}
+
+**Reconcile the issue — is its whole scope delivered?** This run owns the issue until it is resolved, however many ${github ? 'PRs' : 'MRs'} that takes.
+- **Yes** — the \`Closes #\${NUM}\` ${github ? 'trailer' : 'line'} already auto-closed it${github ? '' : ' on merge to the default branch'}; if it's somehow still open, close it (\`${cli} issue close "\${NUM}"\`) and remove the label (\`${cli} issue ${github ? 'edit' : 'update'} "\${NUM}" ${github ? '--remove-label' : '--unlabel'} in-progress\`).
+- **No** — keep the assignee, \`in-progress\` and this worktree, and start the next slice on the same branch from the merged default branch:
+  \`\`\`bash
+  git fetch origin ${github ? 'main' : '"${DEFAULT_BRANCH}"'}
+  git checkout -B "claim/issue-\${NUM}" ${github ? 'origin/main' : '"origin/${DEFAULT_BRANCH}"'}
+  \`\`\`
+  If the forge kept the remote branch, its head is the ${pr} you just merged: publish over it only with \`--force-with-lease="claim/issue-\${NUM}:<that merged head>"\`, never a bare force.
+  Then run Phases 4–7 again for the next coherent slice, sized by the Phase 4 slice rule.
+- **Blocked on the operator** — only when the next slice needs something only a human can supply (a goal-changing decision, access, credentials, hardware, a purchase); size, effort and ${pr} count never qualify. ${github ? 'Comment' : 'Post a note naming'} what shipped, what remains and exactly what is needed, \`${cli} issue ${github ? 'edit' : 'update'} "\${NUM}" ${github ? '--add-label' : '--label'} needs-input\`, then release the claim${github ? ` — the label and every current assignee, not only the authenticated account:
+  \`ASSIGNEES="$(gh issue view "\${NUM}" --json assignees -q '[.assignees[].login] | join(",")')"\`
+  \`gh issue edit "\${NUM}" --remove-label in-progress --remove-assignee "\${ASSIGNEES:-@me}"\`.` : ': `glab issue update "${NUM}" --unassign --unlabel in-progress` (`--unassign` clears every current assignee).'}
+
+The run ends only with the issue closed or parked \`needs-input\` with its claim released; an OPEN issue left \`in-progress\` is a zombie the queue never re-picks.`;
+}
+
 // Only text emitted by the composer is eligible. Each exact variant carries
 // its own staged body, even if the task's two fields contain different variants.
 const CLAIM_SECTIONS = [
@@ -183,18 +226,60 @@ When Phase 1 lands on an epic (the second-pass undecomposed epic, or a selected 
     trigger: `- When a linked ${forge === 'github' ? 'PR' : 'MR'} is by a non-collaborator and is open or closed without merging`,
     instruction: 'screen its diff before reading it.',
   })),
-  ...['github', 'gitlab'].map((forge) => ({
-    name: `claim-issue-filing-${forge}`,
-    text: mandatoryDispatchHintGuidance({ cli: forge === 'github' ? 'gh' : 'glab' }),
-    trigger: 'Before filing any issue or epic slice',
-    instruction: 'follow it (and `.claude/skills/portos-file-issue/SKILL.md` when present) for dispatch, quality, and batching rules.',
-  })),
   ...['github', 'gitlab'].flatMap((forge) => [false, true].map((leaveOpen) => ({
     name: `claim-ci-recovery-${forge}`,
     text: buildClaimCheckRecovery(forge, leaveOpen),
     trigger: 'When a required check fails',
     instruction: 'follow the recovery steps.',
   }))),
+  ...['github', 'gitlab'].map((forge) => ({
+    name: `claim-merge-${forge}`,
+    text: buildClaimMergeSection(forge),
+    trigger: forge === 'github'
+      ? '5. **Merge immediately via `gh pr merge`** — once required checks pass and `CI_VERIFIED_HEAD` matches `HEAD`'
+      : 'Once required checks and applicable approvals pass and `CI_VERIFIED_HEAD` matches `HEAD`',
+    instruction: 'follow the verified merge procedure.',
+  })),
+  ...['github', 'gitlab'].flatMap((forge) => [false, true].map((provisioned) => ({
+    name: `claim-cleanup-${forge}`,
+    text: buildClaimCleanupSection(forge, { provisioned }),
+    trigger: `## Phase 7 — Clean up (post-merge ONLY)
+
+After the ${forge === 'github' ? 'PR' : 'MR'} is confirmed MERGED in Phase 6`,
+    instruction: 'follow it to reconcile the issue and finish.',
+  }))),
+];
+
+// Dynamic heading-delimited sections (their body embeds substituted reviewers
+// or token remedies, so exact static string matching would miss them).
+// Do NOT add the `/m` flag: `$` must anchor to end-of-string so the non-greedy
+// capture spans the whole section until the next `\n## ` heading or EOF.
+const DYNAMIC_CLAIM_HEADINGS = [
+  {
+    name: 'claim-local-review',
+    pattern: /(?:^|\n)(## Phase 5 — Review locally \(BEFORE any (?:PR|MR) exists\)\n[\s\S]*?)(?=\n## |$)/,
+    // Keep customized Phase 5 text inline; defer only the shipped template shape.
+    matchesShipped: (body) => body.includes('**Required-review publication rule:**')
+      && body.includes('Unresolved accepted findings, failed build/tests, unpublished review fixes'),
+    pointer: (body, path) => {
+      const heading = body.split('\n')[0];
+      return `${heading}\n\nWhen implementation and tests are ready and before opening the change request, READ \`${path}\` and follow the required local review procedure.`;
+    },
+  },
+  {
+    name: 'claim-local-reviewer-procedure',
+    pattern: /(?:^|\n)(## Local Reviewer Procedure\n[\s\S]*?)(?=\n## |$)/,
+    matchesShipped: (body) => body.includes('Configured provider and local-model reviews run before standalone CLI reviewers.'),
+    pointer: (_body, path) =>
+      `## Local Reviewer Procedure\n\nWhen Phase 5 runs local reviewers, READ \`${path}\` and execute each configured reviewer command in order.`,
+  },
+  {
+    name: 'claim-workflow-scope',
+    pattern: /(?:^|\n)(## Forge token lacks the `workflow` scope\n[\s\S]*?)(?=\n## |$)/,
+    matchesShipped: (body) => body.includes('The GitHub token PortOS gave this run has no `workflow` scope'),
+    pointer: (_body, path) =>
+      `## Forge token lacks the \`workflow\` scope\n\nIf your PR touches \`.github/workflows/**\`, READ \`${path}\` and follow its human-merge handoff (PRs that do not touch workflow files merge normally).`,
+  },
 ];
 
 /**
@@ -212,6 +297,7 @@ export async function deferClaimSections(task, stage, portosRoot = '{portosRoot}
   let prompt = typeof inlinePrompt === 'string' ? inlinePrompt : undefined;
   let deferred = false;
 
+  // Stage each exact template match once across both fields so both get the same pointer.
   for (const { name, text: template, trigger, instruction } of CLAIM_SECTIONS) {
     const text = template.replaceAll('{portosRoot}', () => portosRoot);
     if (!description?.includes(text) && !prompt?.includes(text)) continue;
@@ -228,6 +314,28 @@ export async function deferClaimSections(task, stage, portosRoot = '{portosRoot}
     description = description?.replaceAll(text, () => pointer);
     prompt = prompt?.replaceAll(text, () => pointer);
   }
+
+  for (const { name, pattern, matchesShipped, pointer } of DYNAMIC_CLAIM_HEADINGS) {
+    const descBody = typeof description === 'string' ? pattern.exec(description)?.[1] : null;
+    const promptBody = typeof prompt === 'string' ? pattern.exec(prompt)?.[1] : null;
+    const body = promptBody || descBody;
+    if (!body || body.includes('READ `') || !matchesShipped(body)) continue;
+    let path;
+    try {
+      path = await stage(name, body);
+    } catch (err) {
+      console.log(`⏭️ Could not stage ${name}, inlining it: ${err.message}`);
+    }
+    if (!path) continue;
+    deferred = true;
+    if (descBody && !descBody.includes('READ `') && matchesShipped(descBody)) {
+      description = description.replace(descBody, () => pointer(descBody, path));
+    }
+    if (promptBody && !promptBody.includes('READ `') && matchesShipped(promptBody)) {
+      prompt = prompt.replace(promptBody, () => pointer(promptBody, path));
+    }
+  }
+
   if (!deferred) return task;
   return {
     ...task,

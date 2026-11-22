@@ -1258,7 +1258,7 @@ describe('CoS Routes', () => {
         });
 
       expect(response.status).toBe(200);
-      expect(prepareAppIssueClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), '412', 'github');
+      expect(prepareAppIssueClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'my-app' }), '412', 'github', { includePreflight: true });
       expect(prepareAppIssueClaim.mock.invocationCallOrder[0]).toBeLessThan(addTask.mock.invocationCallOrder[0]);
       expect(buildClaimWorkTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'my-app' }),

@@ -23,7 +23,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import { homedir } from 'os';
-import { fileForgeIssue, listAppIssues, markAppIssueClaimed, prepareAppIssueClaim, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
+import { fileForgeIssue, listAppIssues, markAppIssueClaimed, prepareAppIssueClaim, probeForgeReachability, releaseAppIssueClaim, scrubForgeIssueText } from './appIssues.js';
 import { execGh } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
@@ -654,6 +654,117 @@ describe('prepareAppIssueClaim', () => {
       ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state,title'], undefined,
       expect.objectContaining({ cwd: '/repo', env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }) }),
     );
+  });
+
+  it('collects authoritative issue context, forge identity, comment clearance and empty timeline when includePreflight is set', async () => {
+    execGh
+      .mockResolvedValueOnce(issue([], {
+        title: 'Fix widget crash',
+        body: 'Full body from GitHub',
+        url: 'https://github.com/acme/widget/issues/42',
+        author: { login: 'Alice' },
+      }))
+      .mockResolvedValueOnce(prs())
+      .mockResolvedValueOnce('alice\n')
+      // Comments: only self + bot comments => commentsClear: true
+      .mockResolvedValueOnce(JSON.stringify([[
+        { user: { login: 'alice', type: 'User' }, body: 'my note' },
+        { user: { login: 'dependabot[bot]', type: 'Bot' }, body: 'bot note' },
+      ]]))
+      // Timeline: no cross-referenced items => linkedWorkClear: true
+      .mockResolvedValueOnce(JSON.stringify([[{ event: 'labeled' }]]));
+
+    const result = await prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true });
+    expect(result).toEqual({
+      epic: false,
+      issueContext: {
+        number: 42,
+        title: 'Fix widget crash',
+        body: 'Full body from GitHub',
+        url: 'https://github.com/acme/widget/issues/42',
+      },
+      issueAuthor: 'alice',
+      forgeContext: { repo: 'acme/widget', host: 'github.com', me: 'alice' },
+      commentsClear: true,
+      linkedWorkClear: true,
+      linkedItems: [],
+    });
+  });
+
+  it('fails closed on third-party human comments and returns structured cross-referenced items', async () => {
+    execGh
+      .mockResolvedValueOnce(issue([], { title: 'Fix crash', body: 'Details', author: { login: 'alice' } }))
+      .mockResolvedValueOnce(prs())
+      .mockResolvedValueOnce('alice\n')
+      .mockResolvedValueOnce(JSON.stringify([[
+        { user: { login: 'contributor', type: 'User' }, body: 'Taking this!' },
+      ]]))
+      .mockResolvedValueOnce(JSON.stringify([[
+        {
+          event: 'cross-referenced',
+          source: {
+            issue: {
+              number: 99,
+              state: 'open',
+              repository: { full_name: 'acme/widget' },
+              user: { login: 'bob' },
+              pull_request: { merged_at: null },
+            },
+          },
+        },
+      ]]));
+
+    const result = await prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true });
+    expect(result.commentsClear).toBe(false);
+    expect(result.linkedWorkClear).toBe(false);
+    expect(result.linkedItems).toEqual([
+      { number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false },
+    ]);
+  });
+
+  it('fails closed when comment or timeline preflight lookups fail', async () => {
+    execGh
+      .mockResolvedValueOnce(issue([], { title: 'Fix crash', body: 'Details' }))
+      .mockResolvedValueOnce(prs())
+      .mockResolvedValueOnce('alice\n')
+      .mockRejectedValueOnce(new Error('rate limited'))
+      .mockRejectedValueOnce(new Error('timeout'));
+
+    const result = await prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true });
+    expect(result.commentsClear).toBe(false);
+    expect(result.linkedWorkClear).toBe(false);
+    expect(result.linkedItems).toBeNull();
+  });
+});
+
+describe('releaseAppIssueClaim', () => {
+  it('removes @me and in-progress when self is the sole assignee on an open GitHub issue', async () => {
+    execGh
+      .mockResolvedValueOnce(JSON.stringify({ state: 'OPEN', assignees: [{ login: 'Alice' }], labels: [{ name: 'in-progress' }, { name: 'bug' }] }))
+      .mockResolvedValueOnce('alice\n')
+      .mockResolvedValueOnce('');
+    await expect(releaseAppIssueClaim(APP, '42')).resolves.toEqual({ released: true });
+    expect(execGh).toHaveBeenLastCalledWith(
+      ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-assignee', '@me', '--remove-label', 'in-progress'],
+      undefined,
+      expect.any(Object),
+    );
+  });
+
+  it('refuses to release markers when assigned to another user (volunteer handoff)', async () => {
+    execGh
+      .mockResolvedValueOnce(JSON.stringify({ state: 'OPEN', assignees: [{ login: 'volunteer' }], labels: [{ name: 'in-progress' }] }))
+      .mockResolvedValueOnce('alice\n');
+    await expect(releaseAppIssueClaim(APP, '42')).resolves.toEqual({ released: false, reason: 'assigned-to-other' });
+    expect(execGh).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not touch a closed issue', async () => {
+    execGh
+      .mockResolvedValueOnce(JSON.stringify({ state: 'CLOSED', assignees: [{ login: 'alice' }], labels: [{ name: 'in-progress' }] }))
+      .mockResolvedValueOnce('alice\n');
+    await expect(releaseAppIssueClaim(APP, '42')).resolves.toEqual({ released: false, reason: 'not-open' });
+    expect(execGh).toHaveBeenCalledTimes(2);
   });
 });
 

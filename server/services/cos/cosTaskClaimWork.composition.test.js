@@ -135,11 +135,49 @@ describe('assembled forge claim prompts', () => {
     expect(claim.taskMetadata.claimServerCheckout).toBe(true);
     const prompt = renderAgent(claim);
     expect(prompt).toContain('## Phase 2 — Claim (already provisioned by PortOS)');
-    expect(prompt).toContain('must print claim/issue-42');
-    expect(prompt).toContain('checkout for THIS run (Phase 2)');
+    expect(prompt).toContain('on `claim/issue-42`');
+    expect(prompt).toContain('begin checking current need and implementing directly without re-verifying provisioning');
+    expect(prompt).not.toContain('## Before claim mutation');
+    expect(prompt).not.toContain('## Claim ownership binding');
+    expect(prompt).toContain('do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`');
     expect(prompt).not.toContain('git worktree add');
     expect(prompt).not.toContain('link-worktree-deps.js');
     expect(prompt).toContain('Never remove this worktree or its branch yourself');
+    expect(prompt).not.toContain('or you may remove your own merged claim worktree cleanly');
+  });
+
+  it('surfaces prefetched issue context near the top and drops redundant comment/timeline phases when preflighted', async () => {
+    const claim = await buildClaimWorkTask(app, {
+      target: '42',
+      issueContext,
+      preverified: true,
+      nonEpic: true,
+      commentsClear: true,
+      linkedWorkClear: true,
+      forgeContext: { repo: 'acme/widget', host: 'github.com', me: 'alice' },
+      reviewers: ['ollama'],
+    });
+    const prompt = renderAgent(claim);
+    expect(prompt.indexOf('<portos-prefetched-issue>')).toBeLessThan(prompt.indexOf('## Selection exit'));
+    expect(prompt).toContain('`REPO="acme/widget"`, `GH_HOST="github.com"`, `ME="alice"`');
+    expect(prompt).toContain('no third-party human comments; skip contributor-comment screening');
+    expect(prompt).not.toContain('COMMENTS_FILE=');
+    expect(prompt).not.toContain('## Tool-Free Public Comment Gate');
+    expect(prompt).not.toContain('## Phase 3b — Check linked issues and PRs');
+    expect(prompt).not.toContain('gh repo view --json nameWithOwner');
+  });
+
+  it('inlines prefetched linked items in Phase 3b instead of querying the timeline endpoint', async () => {
+    const claim = await buildClaimWorkTask(app, {
+      target: '42',
+      preverified: true,
+      nonEpic: true,
+      linkedItems: [{ number: 99, state: 'open', repo: 'acme/widget', author: 'bob', isPullRequest: true, merged: false }],
+    });
+    expect(claim.prompt).toContain('## Phase 3b — Check linked issues and PRs');
+    expect(claim.prompt).toContain('PortOS prefetched the cross-referenced items below');
+    expect(claim.prompt).toContain('"number": 99');
+    expect(claim.prompt).not.toContain('issues/${NUM}/timeline');
   });
 
   it('keeps the agent-cut checkout for an epic or an unverified target', async () => {
@@ -302,7 +340,7 @@ describe('assembled claim merge authority', () => {
 // Measure independently of the checkout path, matching claimPromptSize.test.js.
 describe('claim procedures on demand', () => {
   // Shrink-only cap for the largest file-capable claim that may land on an epic.
-  const ON_DEMAND_CAP_BYTES = 61_500;
+  const ON_DEMAND_CAP_BYTES = 50_000;
   const stagedPath = (name) => `/install/data/cos/slashdo-resolved/${name}-${'a'.repeat(64)}.md`;
   const bytes = (text) => Buffer.byteLength(text.replaceAll(PATHS.root, '<repo-root>'), 'utf8');
   const renderOnDemand = async (claim) => {
@@ -318,12 +356,15 @@ describe('claim procedures on demand', () => {
       for (const prCompletion of ['review-then-merge', 'merge-on-green', 'leave-open', 'draft']) {
         const claim = await buildClaimWorkTask(app, { target, prCompletion });
         const { prompt, staged } = await renderOnDemand(claim);
+        const leaveOpen = prCompletion === 'leave-open' || prCompletion === 'draft';
         const names = [
           `claim-issue-filing-${tracker}`,
           `claim-epic-${tracker}`,
           ...(tracker === 'github' ? ['claim-handoff-github'] : []),
           `claim-linked-screen-${tracker}`,
           `claim-ci-recovery-${tracker}`,
+          ...(!leaveOpen ? [`claim-merge-${tracker}`, `claim-cleanup-${tracker}`] : []),
+          ...(prCompletion !== 'merge-on-green' ? ['claim-local-review'] : []),
         ];
         expect(staged.map(({ name }) => name)).toEqual(names);
         expect(bytes(prompt), `${tracker} ${target ?? 'unpinned'} ${prCompletion}`).toBeLessThanOrEqual(ON_DEMAND_CAP_BYTES);
@@ -341,6 +382,29 @@ describe('claim procedures on demand', () => {
 
   it('skips only the epic phase for a verified non-epic claim', async () => {
     const { staged } = await renderOnDemand(await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true }));
-    expect(staged.map(({ name }) => name)).toEqual(['claim-issue-filing-github', 'claim-handoff-github', 'claim-linked-screen-github', 'claim-ci-recovery-github']);
+    expect(staged.map(({ name }) => name)).toEqual([
+      'claim-issue-filing-github',
+      'claim-handoff-github',
+      'claim-linked-screen-github',
+      'claim-ci-recovery-github',
+      'claim-merge-github',
+      'claim-cleanup-github',
+      'claim-local-review',
+    ]);
+  });
+
+  it('also defers Local Reviewer Procedure and skips comment/linked phases when preflighted', async () => {
+    const { prompt, staged } = await renderOnDemand(await buildClaimWorkTask(app, {
+      target: '42', preverified: true, nonEpic: true, commentsClear: true, linkedWorkClear: true, reviewers: ['ollama'],
+    }));
+    expect(staged.map(({ name }) => name)).toEqual([
+      'claim-issue-filing-github',
+      'claim-ci-recovery-github',
+      'claim-merge-github',
+      'claim-cleanup-github',
+      'claim-local-review',
+      'claim-local-reviewer-procedure',
+    ]);
+    expect(prompt).toContain('When Phase 5 runs local reviewers, READ');
   });
 });
