@@ -1,0 +1,16 @@
+{
+  "name": "browser.vault.list",
+  "description": "List saved Privacy Vault website logins that browser.vault.fill can use: id, label, exact allowed origins, masked username, and whether a TOTP setup key is saved (hasTotp). Never returns a password, setup key or code. Pass origin to list only logins allowed on that exact origin.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "origin": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

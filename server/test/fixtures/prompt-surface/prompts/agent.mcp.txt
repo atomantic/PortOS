@@ -35,6 +35,7 @@
     "writePortos": false,
     "manageEidoverse": false,
     "visitEidoversePeers": false,
-    "callToolRecipes": false
+    "callToolRecipes": false,
+    "browserVaultFill": false
   }
 }
