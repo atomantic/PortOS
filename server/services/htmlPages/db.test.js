@@ -36,6 +36,8 @@ describe.skipIf(!ready)('html_page_runs store', () => {
 
   it('lists newest first, hides a deleted run, and 404s a mutation of a missing one', async () => {
     const first = await createRun({ backend: 'ollama', modelId: 'example-first', pageCount: 1, themes: ['A: one'] });
+    // created_at orders the list; two inserts inside one millisecond would tie.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const second = await createRun({ backend: 'ollama', modelId: 'example-second', pageCount: 1, themes: ['A: one'] });
     const ids = (await listRuns()).map((r) => r.id);
     expect(ids.indexOf(second.id)).toBeLessThan(ids.indexOf(first.id));
