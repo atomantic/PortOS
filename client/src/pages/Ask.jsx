@@ -191,8 +191,6 @@ function PromoteBar({ conversationId, turn, goals, onPromoted }) {
           icon={Target}
           savedRef={saved.goal}
           pending={false}
-          disabled
-          onClick={() => {}}
           href={`/digital-twin/goals?id=${encodeURIComponent(saved.goal.id)}`}
         />
       ) : (
