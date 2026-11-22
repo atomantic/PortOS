@@ -282,6 +282,8 @@ async function generateNarrative(template, date, settings) {
     model,
     toolFree: true,
     allowFallback: false,
+    // Same provider only: a saved model the provider no longer lists is retried on another listed one.
+    allowModelCorrection: true,
   }).catch((err) => {
     console.error(`🗓️  Activity digest LLM narrative failed for ${date}: ${err.message}`);
     return null;

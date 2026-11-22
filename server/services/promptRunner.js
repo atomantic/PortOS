@@ -459,6 +459,64 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
   return { suppress, recoverAll, releaseForExistingInvestigation, escalateAndRelease, closeUnexpectedFailure };
 }
 
+/**
+ * Tier 1 — config/env correction (#2342). A model-not-found/model-not-supported failure is
+ * request-specific: retry the SAME provider with a valid model it lists, cheaper than a Tier-3
+ * provider fallback. No config is persisted. Resolves with the recovered result, or null when Tier 1
+ * declines or its retry fails (that retry's key is then suppressed in `investigation`, so the caller
+ * still owns escalation). Re-throws only a terminal request error via `stopOnTerminalRequest`.
+ *
+ * Gated on `providerHonorsModelOverride`: a model flag baked into CLI/TUI args ignores the per-call
+ * `model`, so the "corrected" retry would be the same failed model.
+ * Compare against string literals: `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` does NOT exist
+ * (`undefined` would match a category-less failure and wrongly engage Tier 1).
+ * 'model-not-supported' is autoFixer's own Tier-1 category, matched for parity.
+ */
+async function attemptConfigCorrection({ args, source, failed, failedModel, category, investigation, primaryKey, stopOnTerminalRequest }) {
+  if (category !== ERROR_CATEGORIES.MODEL_NOT_FOUND && category !== 'model-not-supported') return null;
+  if (!providerHonorsModelOverride(failed)) return null;
+  const correctedModel = pickConfigCorrectedModel(failed, failedModel);
+  if (!correctedModel) return null;
+
+  console.log(`🔧 Tier 1 (config/env) retry: ${source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
+  // Suppress the primary's investigation task while the corrected retry runs so a slow
+  // (>TASK_DEFER_MS) but SUCCESSFUL retry can't leave a task behind for a recovered failure.
+  await investigation.suppress(primaryKey);
+  let tier1Result;
+  try {
+    tier1Result = await executeProviderRunOnce({
+      ...args,
+      provider: failed,
+      model: correctedModel,
+      runId: undefined, // fresh run so the failed primary's record stays intact
+    });
+  } catch (tier1Error) {
+    await stopOnTerminalRequest(tier1Error);
+    // The corrected retry failed. If it reached the execution layer, its onRunFailed queued a task
+    // keyed on the EFFECTIVE provider/model (createRun may have proactively swapped) — record and
+    // suppress that key too, so a slow later recovery can't let its backstop fire. A pre-execution
+    // throw (no effectiveProvider) queued NO task, so leave ownership with the primary for explicit
+    // escalation.
+    if (tier1Error?.effectiveProvider) {
+      await investigation.suppress({
+        provider: tier1Error.effectiveProvider.name || tier1Error.effectiveProvider.id,
+        model: tier1Error.effectiveModel || correctedModel,
+      });
+    }
+    console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message}`);
+    return null;
+  }
+  await investigation.recoverAll();
+  return {
+    ...tier1Result,
+    usedFallback: true,
+    fixTier: 1, // FIX_TIERS.CONFIG_ENV (mirrored; kept decoupled from the lazy autoFixer import)
+    fixStrategy: 'config/env',
+    fallbackFrom: { id: failed.id, name: failed.name },
+    fallbackProvider: failed,
+  };
+}
+
 // The `runPromptThroughProvider` arguments a `completion` request implements.
 // Every other argument is refused there, so an option added to the streamed
 // path later cannot silently do nothing on a completion.
@@ -520,6 +578,10 @@ const COMPLETION_ARGS = new Set([
  *   feature contract: disables proactive substitution and every retry tier. Provider-health
  *   bookkeeping still runs (a failure that benches the provider still benches it), except usage
  *   limits, whose observed-block ledger a pinned caller records itself.
+ * @param {boolean} [args.allowModelCorrection=false] — with `allowFallback: false`, still run Tier 1:
+ *   on model-not-found/model-not-supported, retry the SAME provider once with another model it
+ *   lists. For callers that pin the provider (a tool-free admission) but not the model, so a stale
+ *   saved model id doesn't fail every scheduled run. No effect when fallback is allowed.
  * @param {boolean} [args.toolFree=false] — the prompt carries text this caller does not control
  *   (#9008). A headless CLI run gets no approval-bypass flag and, where the vendor has one, its
  *   tool-disable switch (`toolFreeOneShotArgs`). Rides every fallback tier; does not reach TUI runs,
@@ -671,29 +733,6 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     throw stripFallbackContext(firstError);
   }
 
-  if (rawArgs.allowFallback === false) {
-    // A pinned caller takes no retry tier, but provider HEALTH is not routing: without the mark a
-    // provider failing every call stays green on the Providers page, unpinned callers keep routing
-    // to it, and the pinned caller burns the full timeout per wake. With it, createRun refuses the
-    // next pinned call in milliseconds until the cooldown expires.
-    //
-    // `resolveProviderBench` still declines request-specific categories, so a prompt-specific failure
-    // never benches a healthy provider. Only `unavailable` markers: a usage limit is left alone because
-    // `markProviderUsageLimit` writes the observed-block ledger and the pinned caller records it itself.
-    if (firstError?.effectiveProvider) {
-      await markProviderUnavailableFromError(
-        firstError.effectiveProvider,
-        firstError.message,
-        firstError.errorAnalysis,
-        firstError.effectiveModel ?? null,
-        { skipUsageLimit: true },
-      ).catch((err) => {
-        console.error(`❌ markUnavailable failed for ${firstError.effectiveProvider.id}: ${err.message}`);
-      });
-    }
-    throw stripFallbackContext(firstError);
-  }
-
   {
     // Only retry when the failure came from the execution layer (annotated
     // by safeReject with effectiveProvider) or is a synthetic schema/type
@@ -735,62 +774,49 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
       throw stripFallbackContext(error);
     };
 
-    try {
-      // ── Tier 1 — config/env correction (#2342) ──
-      // A model-not-found/model-not-supported failure is request-specific: retry the SAME provider
-      // with a valid model it lists, cheaper than a Tier-3 provider fallback. No config is persisted.
-      //
-      // Gated on `providerHonorsModelOverride`: a model flag baked into CLI/TUI args ignores the per-call
-      // `model`, so the "corrected" retry would be the same failed model.
-      // Compare against string literals: `ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` does NOT exist
-      // (`undefined` would match a category-less failure and wrongly engage Tier 1).
-      // 'model-not-supported' is autoFixer's own Tier-1 category, matched for parity.
-      if ((category === ERROR_CATEGORIES.MODEL_NOT_FOUND || category === 'model-not-supported')
-        && providerHonorsModelOverride(failed)) {
-        const correctedModel = pickConfigCorrectedModel(failed, failedModel);
-        if (correctedModel) {
-          console.log(`🔧 Tier 1 (config/env) retry: ${rawArgs.source} on ${failed.name} with model ${correctedModel} (requested ${failedModel} → ${category})`);
-          // Suppress the primary's investigation task while the corrected retry
-          // runs so a slow (>TASK_DEFER_MS) but SUCCESSFUL retry can't leave a
-          // task behind for a recovered failure.
-          await investigation.suppress(primaryKey);
-          let tier1Result;
-          try {
-            tier1Result = await executeProviderRunOnce({
-              ...args,
-              provider: failed,
-              model: correctedModel,
-              runId: undefined, // fresh run so the failed primary's record stays intact
-            });
-          } catch (tier1Error) {
-            await stopOnTerminalRequest(tier1Error);
-            // The corrected retry failed. If it reached the execution layer, its
-            // onRunFailed queued a task keyed on the EFFECTIVE provider/model
-            // (createRun may have proactively swapped) — record and suppress that
-            // key too, so a slow Tier-3 recovery below can't let its backstop
-            // fire. A pre-execution throw (no effectiveProvider) queued NO task,
-            // so leave ownership with the primary for explicit escalation.
-            if (tier1Error?.effectiveProvider) {
-              await investigation.suppress({
-                provider: tier1Error.effectiveProvider.name || tier1Error.effectiveProvider.id,
-                model: tier1Error.effectiveModel || correctedModel,
-              });
-            }
-            console.log(`↪️ Tier 1 correction failed on ${failed.name} (${correctedModel}): ${tier1Error.message} — escalating to constrained-agent-retry`);
-          }
-          if (tier1Result) {
-            await investigation.recoverAll();
-            return {
-              ...tier1Result,
-              usedFallback: true,
-              fixTier: 1, // FIX_TIERS.CONFIG_ENV (mirrored; kept decoupled from the lazy autoFixer import)
-              fixStrategy: 'config/env',
-              fallbackFrom: { id: failed.id, name: failed.name },
-              fallbackProvider: failed,
-            };
-          }
+    if (rawArgs.allowFallback === false) {
+      // A pinned provider still corrects a stale model on that SAME provider when the caller opts in
+      // (`allowModelCorrection`): the pin protects provider identity (e.g. a tool-free admission),
+      // and a model the provider no longer lists cannot succeed on any retry. No other tier runs.
+      if (rawArgs.allowModelCorrection === true) {
+        try {
+          const tier1Result = await attemptConfigCorrection({
+            args, source: rawArgs.source, failed, failedModel, category, investigation, primaryKey, stopOnTerminalRequest,
+          });
+          if (tier1Result) return tier1Result;
+          // A declined or failed correction leaves exactly one investigation (no-op when nothing
+          // was suppressed, so the hook's own queued task still owns the failure).
+          await investigation.escalateAndRelease();
+        } finally {
+          await investigation.closeUnexpectedFailure();
         }
       }
+      // Otherwise a pinned caller takes no retry tier, but provider HEALTH is not routing: without
+      // the mark a provider failing every call stays green on the Providers page, unpinned callers
+      // keep routing to it, and the pinned caller burns the full timeout per wake. With it, createRun
+      // refuses the next pinned call in milliseconds until the cooldown expires.
+      //
+      // `resolveProviderBench` still declines request-specific categories, so a prompt-specific
+      // failure never benches a healthy provider. Only `unavailable` markers: a usage limit is left
+      // alone because `markProviderUsageLimit` writes the observed-block ledger and the pinned caller
+      // records it itself.
+      await markProviderUnavailableFromError(
+        failed,
+        firstError.message,
+        firstError.errorAnalysis,
+        firstError.effectiveModel ?? null,
+        { skipUsageLimit: true },
+      ).catch((err) => {
+        console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
+      });
+      throw stripFallbackContext(firstError);
+    }
+
+    try {
+      const tier1Result = await attemptConfigCorrection({
+        args, source: rawArgs.source, failed, failedModel, category, investigation, primaryKey, stopOnTerminalRequest,
+      });
+      if (tier1Result) return tier1Result;
 
       // ── Tier 2 — schema/type request correction (issue #2350) ──────────────
       // Reached for a schema/type-category failure — the synthetic

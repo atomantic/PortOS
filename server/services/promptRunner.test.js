@@ -2062,6 +2062,71 @@ describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
       .toBeLessThan(autoFixer.noteFallbackFailed.mock.invocationCallOrder[0]);
   });
 
+  it('a pinned caller (allowFallback:false) opting into allowModelCorrection recovers a stale model on the SAME provider only', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ model, onData, onComplete }) => {
+      if (model === 'stale-model') {
+        onComplete({ success: false, error: "model 'stale-model' not found", errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('corrected content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: primary, prompt: 'p', source: 'test', model: 'stale-model',
+      toolFree: true, allowFallback: false, allowModelCorrection: true,
+    });
+
+    expect(out.text).toBe('corrected content');
+    expect(out.fixTier).toBe(1);
+    expect(out.model).toBe('good-model');
+    expect(out.fallbackProvider).toMatchObject({ id: 'primary-api' });
+    // The pin still holds: no fallback provider was ever consulted.
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(2);
+    expect(runner.executeApiRun.mock.calls.every(([a]) => a.provider.id === 'primary-api')).toBe(true);
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'stale-model' });
+    expect(autoFixer.escalateProviderFailure).not.toHaveBeenCalled();
+  });
+
+  it('a pinned caller whose corrected retry also fails escalates once and never reaches Tier 3', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ model, onComplete }) => {
+      onComplete({ success: false, error: `gone (${model})`, errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primary, prompt: 'p', source: 'test', model: 'stale-model', allowFallback: false, allowModelCorrection: true,
+    })).rejects.toThrow(/gone \(stale-model\)/);
+
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(2);
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'stale-model' });
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('a pinned caller WITHOUT allowModelCorrection keeps the model pinned (no Tier-1 retry)', async () => {
+    mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primary, prompt: 'p', source: 'test', model: 'stale-model', allowFallback: false,
+    })).rejects.toThrow(/model gone/);
+    expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackStarted).not.toHaveBeenCalled();
+  });
+
   it('skips Tier 1 for a CLI provider whose model flag is baked into args (override ignored)', async () => {
     // providerHonorsModelOverride is false when the CLI has a baked --model, so
     // the "corrected" model would silently be the same failed one. Tier 1 must
