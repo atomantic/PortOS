@@ -1,6 +1,6 @@
 # Build-only hash constraints for LTX-2/2.5 MLX and MLX-Gen on Apple Silicon.
 # Regenerate from the repository root with PortOS-private uv 0.13.6 and a UTC
-# cutoff at least seven days before regeneration (2026-11-03 for this lock):
+# cutoff at least three days before regeneration (2026-11-03 for this lock):
 #   uv --no-config pip compile scripts/ml/requirements/requirements-mlx-video-build.txt \
 #     --python-version 3.11 --python-platform aarch64-apple-darwin \
 #     --only-binary :all: --exclude-newer 2026-11-03 --generate-hashes \

@@ -5,7 +5,7 @@
 # markers. Patched torch publishes no Intel macOS wheel, so that host is refused.
 #
 # Regenerate after editing requirements-lyric-align.txt (uv 0.13.1), with a
-# cutoff at least seven days back so new releases are not adopted on release:
+# cutoff at least three days back so new releases are not adopted on release:
 #   uv pip compile scripts/ml/requirements/requirements-lyric-align.txt --universal \
 #     --python-version 3.11 --generate-hashes --only-binary :all: \
 #     --index-url https://pypi.org/simple --no-header --annotation-style line \

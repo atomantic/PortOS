@@ -264,10 +264,14 @@ control on the same card; LM Studio through its app).
 
 MTPLX 2.13 serves Inkling 2 Mini through its native MTP head
 (`Youssofal/Inkling-2-Mini-MTPLX-{Bare-Speed,Optimized-Speed,Optimized-Quality}`).
-Packs need 2.13 or newer; the pinned 2.12.2 cannot load them, and the pin
-moves only once a 2.13.x release clears the seven-day lock cooldown (2.13.0 was
-published 2026-11-22). Optimized-Speed is the balanced pick; Bare-Speed fits
-24 GB hosts.
+Packs need 2.13 or newer, so the lock pins 2.13.0 as a cooldown exception
+(see `docs/PYTHON_RUNTIME_REFRESH.md`). A private runtime installed from an
+older lock keeps working; the MTPLX card shows its version beside the shipped
+one with an **Update MTPLX runtime** button, which re-syncs the private venv
+from the lock (restart a running server to pick it up). A Homebrew or pip
+install is upgraded where it was installed. Find the packs by searching
+"Inkling" in the checkpoint search: Optimized-Speed is the balanced pick;
+Bare-Speed fits 24 GB hosts.
 
 On the MTPLX API provider an Inkling model's run effort reaches the server as
 `chat_template_kwargs.reasoning_effort` (and `reasoning_effort`), merged with

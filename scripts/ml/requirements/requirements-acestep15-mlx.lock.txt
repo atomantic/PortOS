@@ -18,7 +18,7 @@
 #   printf '[project]\nname = "acestep15-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-acestep15-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 # The bounded AnyIO refresh uses uv 0.13.7 and cutoff 2026-11-05T00:00:00Z;
 # preserve all other versions, markers and hash blocks. See

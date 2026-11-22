@@ -12,7 +12,7 @@
 # Mac, with a cooldown so brand-new releases are not adopted the day they publish:
 #   uv pip compile scripts/ml/requirements/requirements-musicgen-mlx.txt --python <venv-musicgen>/bin/python3 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o scripts/ml/requirements/requirements-musicgen-mlx.lock.txt
+#     --exclude-newer <UTC date at least 3 days ago> -o scripts/ml/requirements/requirements-musicgen-mlx.lock.txt
 # then check the result against OSV (including MAL- malicious-package records).
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \

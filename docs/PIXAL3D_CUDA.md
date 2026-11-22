@@ -66,7 +66,7 @@ not a guarantee that every input fits in the minimum memory.
 ## Regeneration and audit
 
 Use uv **0.13.6** or a reviewed patched successor. Choose a UTC cutoff at least
-seven days before regeneration and update `registryCutoff`. The initial cutoff
+three days before regeneration and update `registryCutoff`. The initial cutoff
 is **2026-11-04T00:00:00Z**. Shared locks constrain the known Torch/native ABI;
 review their changes together when upgrading it.
 

@@ -5,7 +5,7 @@
  */
 
 import { constants } from 'fs';
-import { access, readFile, stat } from 'fs/promises';
+import { access, readdir, readFile, stat } from 'fs/promises';
 import { isAbsolute, join } from 'path';
 import { PATHS } from './paths.js';
 import { findCommandOnPath } from './processEnv.js';
@@ -67,4 +67,28 @@ export function resolveMtplxBinary() {
   // uv writes console scripts before its whole sync finishes. Polls, cache
   // reads and starts must keep using any existing external runtime until then.
   return (!mtplxInstallInProgress && findCommandOnPath(mtplxManagedBinary())) || findCommandOnPath('mtplx');
+}
+
+const MTPLX_DIST_INFO = /^mtplx-([^-]+)\.dist-info$/i;
+
+/**
+ * The MTPLX version installed in PortOS's private venv, read from its
+ * `mtplx-<version>.dist-info` directory rather than by running the binary (a
+ * status poll must not execute it). `null` when there is no private runtime or
+ * it cannot be read.
+ */
+export async function readManagedMtplxVersion({ venvDir = mtplxVenvDir() } = {}) {
+  const lib = join(venvDir, 'lib');
+  const pythons = await readdir(lib).catch(() => []);
+  for (const python of pythons.filter((name) => name.startsWith('python')).sort()) {
+    const entries = await readdir(join(lib, python, 'site-packages')).catch(() => []);
+    const match = entries.map((name) => MTPLX_DIST_INFO.exec(name)).find(Boolean);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/** The `mtplx==<version>` pin of a lock file's text, or `null`. */
+export function lockedMtplxVersion(lockText) {
+  return /^mtplx==([^\s;\\]+)/m.exec(String(lockText || ''))?.[1] || null;
 }

@@ -16,7 +16,7 @@
 # Copy requirements-demucs.txt and the existing lock into that project and run:
 # MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile requirements-demucs.txt --universal \
 #   --python-version 3.11 --only-binary :all: --generate-hashes --no-header --annotation-style line \
-#   --exclude-newer <UTC date at least 7 days ago> -o requirements-demucs.lock.txt
+#   --exclude-newer <UTC date at least 3 days ago> -o requirements-demucs.lock.txt
 # Generated with uv 0.13.7; --exclude-newer 2026-11-04T00:00:00Z.
 # Existing pins were reused unless the changed direct requirement required a move.
 # Check every pin, including every platform marker, against OSV/MAL after regeneration.

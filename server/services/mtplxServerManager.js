@@ -22,7 +22,7 @@
  *     outside PortOS.
  */
 
-import { unlink, writeFile } from 'fs/promises';
+import { readFile, unlink, writeFile } from 'fs/promises';
 import { release, tmpdir } from 'os';
 import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
@@ -30,7 +30,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
-import { describeMtplxRuntime, mtplxManagedBinary, mtplxVenvDir, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
+import { describeMtplxRuntime, lockedMtplxVersion, mtplxManagedBinary, mtplxVenvDir, readManagedMtplxVersion, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
 import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
@@ -345,6 +345,15 @@ export async function getMtplxServerStatus() {
   // as `[]` (read, and empty). Only the latter blocks a start.
   const cache = installed && runtimeReady ? await listMtplxCachedModels() : { models: null, error: null };
 
+  // Only PortOS's private runtime follows the lock; a Homebrew or pip install is
+  // the user's own and is upgraded where it was installed. A private runtime
+  // older than the lock keeps working, so this offers an update, never blocks.
+  const managedRuntime = installed && binaryPath === mtplxManagedBinary();
+  const runtimeVersion = managedRuntime ? await readManagedMtplxVersion() : null;
+  const lockedVersion = managedRuntime
+    ? lockedMtplxVersion(await readFile(LOCK_PROFILES['mtplx-mlx'].lockFile, 'utf8').catch(() => ''))
+    : null;
+
   return {
     ...base,
     supported,
@@ -353,6 +362,9 @@ export async function getMtplxServerStatus() {
     // real runtime on first use. The card needs the two apart so it offers the
     // download instead of a Start button that is guaranteed to fail.
     runtimeReady,
+    runtimeVersion,
+    lockedVersion,
+    runtimeOutdated: Boolean(runtimeVersion && lockedVersion && runtimeVersion !== lockedVersion),
     // The tuning flags the running daemon was LAUNCHED with, rendered by the
     // catalog that owns the transport rather than re-derived in the UI. A
     // measured assessment relaunches this daemon and leaves its flags on, so a

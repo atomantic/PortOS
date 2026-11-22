@@ -1,4 +1,4 @@
-# MTPLX server 2.12.2 — complete hash-pinned wheel set for native CPython
+# MTPLX server 2.13.0 — complete hash-pinned wheel set for native CPython
 # 3.11 on Apple Silicon, macOS 14+. No install-time resolution or source builds.
 # server/services/mtplxServerManager.js creates that exact interpreter profile,
 # then runs uv pip sync --require-hashes --only-binary :all: against this file.
@@ -7,10 +7,13 @@
 #   MACOSX_DEPLOYMENT_TARGET=14.0 uv pip compile scripts/ml/requirements/requirements-mtplx-mlx.txt \
 #     --python-version 3.11 --python-platform aarch64-apple-darwin \
 #     --generate-hashes --only-binary :all: --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o scripts/ml/requirements/requirements-mtplx-mlx.lock.txt
-# This target-specific lock was generated with --exclude-newer 2026-11-03T00:00:00Z.
+#     --exclude-newer <UTC date at least 3 days ago> -o scripts/ml/requirements/requirements-mtplx-mlx.lock.txt
+# This target-specific lock was generated with --exclude-newer 2026-11-19T00:00:00Z
+# and the cooldown exception --exclude-newer-package mtplx=2026-11-23T00:00:00Z
+# (MTPLX 2.13.0, published 2026-11-22, is the first release that loads Inkling 2 Mini packs).
+# Regenerated with the previous lock as the seed, so only mtplx moved.
 # Review every pin against OSV (including MAL records) after regeneration.
-# OSV querybatch: 46 pinned packages, zero findings, 2026-11-10.
+# OSV querybatch: 46 pinned packages, zero findings, 2026-11-10 (the 45 unchanged pins).
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
@@ -326,10 +329,14 @@ mlx-metal==0.32.2 \
     --hash=sha256:55a369250d220b2cf10213a87a2ac1b1a420608c5b35b1df4e7147ac8e32f121 \
     --hash=sha256:e6abeac9ac5265830c9c1541b6f96e9be37a85c2446763a46ad466c63a3837ab
     # via mlx
-mtplx==2.12.2 \
-    --hash=sha256:05108d761b8f678bdbefba1d32af1faf44fc9d5afa02ff4e55f6f06c6cd884f0 \
-    --hash=sha256:6f77365395d5574316be5d521a16d23681cd9c44622ce555d5d7242e00d8a91f
-    # via -r requirements-mtplx-mlx.txt
+mtplx==2.13.0 \
+    --hash=sha256:1923d913af930ac8af75c31e2537233950675492271cfde3442eab0f68c0dc8b \
+    --hash=sha256:2c5a37acc02efb7e543d729024f59615e979f4b6c043ad60dc1b59aa23fbb3d4 \
+    --hash=sha256:88665ee15d9d5b9c3abe62fc52875338a360f52f59d30f5d46986eafc10d6db0 \
+    --hash=sha256:9018b19f781d88b149d1b9869df241387bd35bc94c59c07ad109b560fe3bc665 \
+    --hash=sha256:91a0eb66cec722d75212db389aef485e3f4f5419736ce21e496bba4033b6d538 \
+    --hash=sha256:f8d1011d5e28ca288d9298c8fb8bb68ed17792dd1dcf2dbcf94787fa8fce67a2
+    # via -r scripts/ml/requirements/requirements-mtplx-mlx.txt
 nanobind==3.1.0 \
     --hash=sha256:6661e3dc1434d78781ccf7913442d90361dab395c3424efadb63bbb6ddea7ea3 \
     --hash=sha256:96984dbe8154ffb86e653b1b60aaeed6985c710c5e75ad0279eb87943c66292d

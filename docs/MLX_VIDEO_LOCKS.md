@@ -24,7 +24,7 @@ unconstrained build-time resolution. Hatchling
 1.32+ rejects the workspace-relative README in the pinned LTX-2.3 sources.
 Hatchling 1.31.0 and its editable-build dependency are locked for that reason.
 MLX-Gen's build backend is `uv-build` 0.7.22, within its upstream declared range.
-The build lock header documents regeneration with a seven-day release cutoff.
+The build lock header documents regeneration with a three-day release cutoff.
 The Wan build stages the pinned Git source in a temporary directory and
 replaces a private Pillow typing import with the equivalent stdlib annotation.
 This keeps Pillow 13 usable on CPython 3.11 and preserves the upstream checkout.
@@ -128,7 +128,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 uv --no-config pip compile "$inputs" \
 ```
 
 The November 2026 refresh additionally used `-P requests -P torch -P urllib3`
-for Wan. Set the UTC cutoff at least seven days in the past and choose the
+for Wan. Set the UTC cutoff at least three days in the past and choose the
 packages to upgrade from the new audit. Review the updated native pins and
 build constraints, query OSV for every output pin, and repeat fresh Install,
 Repair and model smoke checks.

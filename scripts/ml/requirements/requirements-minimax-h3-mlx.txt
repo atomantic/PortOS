@@ -2,7 +2,7 @@
 # This file is the INPUT; requirements-minimax-h3-mlx.lock.txt is its hash-pinned compile
 # (installed with `uv pip sync --require-hashes`). Bump versions here, then regenerate:
 #   uv --no-config pip compile scripts/ml/requirements/requirements-minimax-h3-mlx.txt --generate-hashes --python-version 3.11 \
-#     --only-binary :all: --exclude-newer <timestamp ≥7 days ago> --no-header -o scripts/ml/requirements/requirements-minimax-h3-mlx.lock.txt
+#     --only-binary :all: --exclude-newer <timestamp ≥3 days ago> --no-header -o scripts/ml/requirements/requirements-minimax-h3-mlx.lock.txt
 # Run it on an Apple Silicon Mac (mlx ships macOS-only wheels for this resolve).
 #
 # `torch` and `torchvision` are deliberately absent: the port is MLX-native and

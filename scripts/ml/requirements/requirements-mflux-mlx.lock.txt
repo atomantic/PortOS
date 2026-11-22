@@ -19,7 +19,7 @@
 #   printf '[project]\nname = "mflux-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-mflux-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 annotated-doc==0.0.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \

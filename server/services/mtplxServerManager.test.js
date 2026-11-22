@@ -154,6 +154,23 @@ describe('mtplxServerManager', () => {
       expect(status.endpoint).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
     });
 
+    it('offers an update when the private runtime is older than the shipped lock, and ignores external installs', async () => {
+      const locked = mtplxRuntime.lockedMtplxVersion(await readFile(LOCK_PROFILES['mtplx-mlx'].lockFile, 'utf8'));
+      await createManagedEntry();
+      await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'lib', 'python3.11', 'site-packages', 'mtplx-0.0.1.dist-info'), { recursive: true });
+      vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation((cmd) => (cmd === mtplxRuntime.mtplxManagedBinary() ? cmd : null));
+      const stale = await getMtplxServerStatus();
+      expect(stale).toMatchObject({ runtimeVersion: '0.0.1', lockedVersion: locked, runtimeOutdated: true });
+
+      await rm(join(mtplxRuntime.mtplxVenvDir(), 'lib', 'python3.11', 'site-packages', 'mtplx-0.0.1.dist-info'), { recursive: true });
+      await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'lib', 'python3.11', 'site-packages', `mtplx-${locked}.dist-info`), { recursive: true });
+      expect((await getMtplxServerStatus()).runtimeOutdated).toBe(false);
+
+      // A Homebrew or pip install is upgraded where it was installed, not from this lock.
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      expect(await getMtplxServerStatus()).toMatchObject({ runtimeVersion: null, lockedVersion: null, runtimeOutdated: false });
+    });
+
     it('reports the platform gate only when nothing is installed here', async () => {
       vi.spyOn(platform, 'isAppleSilicon').mockReturnValue(false);
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(null);
