@@ -8,6 +8,7 @@ vi.mock('../services/apiAsk.js', async (importOriginal) => ({
   listAskConversations: vi.fn(async () => ({ conversations: [] })),
   getAskConversation: vi.fn(),
   promoteAskConversation: vi.fn(async (id, promoted) => ({ conversation: { id, promoted } })),
+  promoteAskTurn: vi.fn(),
   streamAskTurn: vi.fn(async () => {}),
 }));
 vi.mock('../services/apiGoals.js', async (importOriginal) => ({
@@ -15,7 +16,8 @@ vi.mock('../services/apiGoals.js', async (importOriginal) => ({
   getGoals: vi.fn(async () => ({ goals: [] })),
 }));
 
-import { getAskConversation, streamAskTurn, promoteAskConversation } from '../services/apiAsk.js';
+import { getAskConversation, streamAskTurn, promoteAskConversation, promoteAskTurn } from '../services/apiAsk.js';
+import { getGoals } from '../services/apiGoals.js';
 import Ask from './Ask';
 
 const conversation = (id, text, promoted = true) => ({
@@ -106,5 +108,27 @@ describe('Ask across conversation route changes', () => {
       { conversationId: undefined, question: 'A new question', mode: 'ask' },
       expect.any(Object),
     );
+  });
+});
+
+describe('Ask attached goal pill', () => {
+  it('navigates to the goal route when clicked', async () => {
+    getGoals.mockResolvedValue({ goals: [{ id: 'goal 1', title: 'Ship it' }] });
+    promoteAskTurn.mockResolvedValue({ ok: true, ref: { id: 'goal 1' } });
+    getAskConversation.mockResolvedValue(conversation('ask_333333333_cccccccc', 'Answer C'));
+    const router = createMemoryRouter(
+      [{ path: '/ask/:conversationId', element: <Ask /> }, { path: '/digital-twin/goals', element: <div>Goals page</div> }],
+      { initialEntries: ['/ask/ask_333333333_cccccccc'] },
+    );
+    render(<RouterProvider router={router} />);
+    await screen.findByText('Answer C');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Attach to goal…' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Attach to goal' }), 'goal 1');
+    const pill = await screen.findByRole('button', { name: /Attached: Ship it/ });
+    expect(pill).toBeEnabled();
+    await user.click(pill);
+    expect(router.state.location.pathname).toBe('/digital-twin/goals');
+    expect(router.state.location.search).toBe('?id=goal%201');
   });
 });
