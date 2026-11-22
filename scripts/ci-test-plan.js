@@ -23,7 +23,7 @@ import {
   uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
-  FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, fansOut, serverReachCount, shardIndexes,
+  FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, fansOut, reachCount, shardIndexes,
   suiteReasonsFor,
 } from './lib/ciPlanOutput.js';
 import { collectPlanInputs } from './lib/ciPlanInputs.js';
@@ -111,7 +111,7 @@ export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
     forceFull = false, linuxContainmentInputs = null, supercolliderLiveInputs = null,
-    dockerContainmentLiveInputs = null, serverReach = null, trackedFiles = [],
+    dockerContainmentLiveInputs = null, serverReach = null, clientReach = null, trackedFiles = [],
     gatedChangedFiles = null, gatedDependencyChanges = {},
   } = options;
   const gatedFull = forceFull && Array.isArray(gatedChangedFiles);
@@ -120,7 +120,10 @@ export function buildCiTestPlan(changedFiles, options = {}) {
   const gate = (decide) => (forceFull && !gatedFull) || decide(gateFiles);
   // Informational: names the changed source behind a large related selection
   // (#12285). It never changes what runs.
-  const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
+  const reachNote = (runner, report) => (!plan.full && plan[runner].mode === 'related' ? formatReachSummary(report) : '');
+  const reachNotes = { server: reachNote('server', serverReach), client: reachNote('client', clientReach) };
+  const suiteReasons = Object.fromEntries(Object.entries(plan.suiteReasons).map(([suite, reason]) => [suite,
+    reachNotes[suite] ? `${reason}; ${reachNotes[suite]}` : reason]));
   let gatedWindows = {};
   if (gatedFull) {
     const { windows, windowsNote } = windowsSelectionFor(gateFiles, gatedDependencyChanges);
@@ -131,12 +134,12 @@ export function buildCiTestPlan(changedFiles, options = {}) {
       windowsNote: [`native jobs gated on ${gateFiles.length} file(s) changed since the last green main run`, windowsNote]
         .filter(Boolean).join('; '),
     };
-    gatedWindows = { ...fields, suiteReasons: { ...plan.suiteReasons, windows: suiteReasonsFor({ ...plan, ...fields }).windows } };
+    gatedWindows = { ...fields, suiteReasons: { ...suiteReasons, windows: suiteReasonsFor({ ...plan, ...fields }).windows } };
   }
   return {
     ...plan,
+    suiteReasons,
     ...gatedWindows,
-    ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
     // A gated push still is not complete-run evidence: ci.yml withholds the
     // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
     nativeGated: gatedFull,
@@ -150,9 +153,11 @@ export function buildCiTestPlan(changedFiles, options = {}) {
 
 function buildSuitePlan(changedFiles, {
   trackedFiles = [],
-  // measureRepoImportReach() report; its `selected` count can fan a server
-  // related plan out (see fansOut). null keeps the explicit-selector cap only.
+  // measureRepoImportReach() reports; each `selected` count can fan its
+  // runner's related plan out (see fansOut). null keeps the explicit-selector
+  // cap only.
   serverReach = null,
+  clientReach = null,
   forceFull = false,
   forceFullReason = 'full CI requested',
   appRouteOnly = false,
@@ -407,14 +412,14 @@ function buildSuitePlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
-  }, { appRouteOnly, serverReach });
+  }, { appRouteOnly, serverReach, clientReach });
 }
 
 /** The derived fields every plan carries: per-suite reasons and shard matrices. */
 const finishPlan = (plan, options = {}) => {
-  const reachSelected = serverReachCount(options.serverReach);
+  const reachSelected = { server: reachCount(options.serverReach), client: reachCount(options.clientReach) };
   const linuxShards = (runner) => shardIndexes(
-    fansOut(runner, plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
+    fansOut(runner, plan[runner], reachSelected[runner]) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {
@@ -494,7 +499,7 @@ function main() {
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
-    gatedChangedFiles, gatedDependencyChanges,
+    clientReach, gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
@@ -518,6 +523,7 @@ function main() {
     supercolliderLiveInputs,
     dockerContainmentLiveInputs,
     serverReach,
+    clientReach,
     gatedChangedFiles,
     gatedDependencyChanges,
   });

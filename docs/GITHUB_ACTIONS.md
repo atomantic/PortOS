@@ -690,10 +690,11 @@ native selectors and never repeats a related-graph traversal. A scoped Linux pla
 (`fansOut()` in the planner) only when its explicit selection exceeds its cap: `MAX_TARGETED_TEST_FILES` (125) for the server,
 `CLIENT_FANOUT_TEST_FILES` (400) for the client, since one client runner absorbs 400 files at about 0.4 s each (#16805). That cap keeps the scoped selection and only partitions it, so a server-only
 overflow does not start three client shards, the DB/browser
-suites, and a Windows run (#11871). A server `related` plan also fans out
-when its measured import reach (`serverReach.selected`, the suites the related
-walk will select) exceeds the same cap, even with few explicit selectors: one
-runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+suites, and a Windows run (#11871). A `related` plan also fans out
+when its measured import reach (`serverReach.selected` / `clientReach.selected`,
+the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
+runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
+(a shared module such as `client/src/services/apiCore.js`, #17456).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.
