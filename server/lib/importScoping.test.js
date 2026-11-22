@@ -148,6 +148,15 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets(entry)).not.toContainEqual(typeof target === 'string' ? target : expect.stringMatching(target));
   });
 
+  it('keeps worktree modules on the shared ownership fence', () => {
+    const entries = readdirSync(abs('services/worktree')).filter(file => file.endsWith('.js') && !file.endsWith('.test.js'));
+    expect(entries.length).toBeGreaterThan(0);
+    for (const file of entries) {
+      const entry = `services/worktree/${file}`;
+      expect(importTargets(entry), entry).not.toContain('services/cos/cosClaimOwnership.js');
+    }
+  });
+
   it('the leaves the cut entries import stay import-free', () => {
     expect(importTargets('services/readinessSignal.js')).toEqual([]);
     expect(importTargets('services/provider/providerRecoveryHooks.js')).toEqual([]);
@@ -359,6 +368,9 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   );
   it('arms local model subscriptions before either HTTP router loads', () => {
     expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
+  });
+  it('loads the worktree manager on demand', () => {
+    expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
   it('loads at most half of the original 3,023 local modules before boot', () => {
     expect(closure.files.size).toBeLessThanOrEqual(1511);

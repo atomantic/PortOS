@@ -14,7 +14,6 @@ import { spawn } from '../../lib/childProcess.js'
 import { DAY, PATHS, rmGuarded } from '../../lib/fileUtils.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.js'
 import { runGoalCheckIn } from '../goalCheckIn.js'
-import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
 import { getActiveAgentIds } from '../agent/agentState.js'
 import { sweepStaleDoneSentinels, checkoutDirsOf } from '../agent/agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
@@ -207,6 +206,7 @@ async function agentDataCleanup() {
   // This is the bulk of the cleanup and cannot lose work (merged+clean ⇒ nothing
   // pending). It guards active agents and holds every human `claim-*` worktree
   // (the third pass below retires the ones proven shipped).
+  const { cleanupOrphanedWorktrees, reapMergedWorktrees } = await import('../worktreeManager.js')
   const merged = await reapMergedWorktrees(scope.app.repoPath, { activeAgentIds: getLiveProtectedIds, appId: scope.app.id }).catch((err) => {
     console.warn(`⚠️ Merged-worktree reap failed: ${err.message}`)
     return null

@@ -1788,14 +1788,19 @@ describe('CI test impact planner', () => {
     expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
   });
 
-  it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
-    const plan = buildCiTestPlan(['server/services/worktreeManager.js'], { trackedFiles: TRACKED });
-    expect(plan.full).toBe(true);
-    expect(plan.reason).toMatch(/worktree manager source changed/);
-    expect(plan.server.mode).toBe('full');
-    expect(plan.client.mode).toBe('full');
-    expect(plan.windowsMode).toBe('files');
-    // Its test file alone stays a scoped plan.
+  it.each(['server/services/worktreeManager.js', 'server/services/worktree/create.js'])(
+    'routes %s to a full plan instead of a broad nominal scoped plan (#9999)',
+    (path) => {
+      const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
+      expect(plan.full).toBe(true);
+      expect(plan.reason).toMatch(/worktree manager source changed/);
+      expect(plan.server.mode).toBe('full');
+      expect(plan.client.mode).toBe('full');
+      expect(plan.windowsMode).toBe('files');
+    },
+  );
+
+  it('keeps the worktree manager facade test on a scoped plan', () => {
     expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
   });
 
