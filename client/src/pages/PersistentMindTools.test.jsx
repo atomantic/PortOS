@@ -117,7 +117,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 12, createTasks: true, fileIssues: false, auditReports: false, manageMind: false, manageToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, promoteEidoverseFoundations: false, installEidoverseControllers: false, callUser: false, adjustLocalContext: false, manageSkills: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -148,6 +148,7 @@ describe('PersistentMindTools', () => {
         installEidoverseControllers: false,
         callUser: false,
         adjustLocalContext: false,
+        manageSkills: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -187,6 +188,7 @@ describe('PersistentMindTools', () => {
         installEidoverseControllers: false,
         callUser: false,
         adjustLocalContext: false,
+        manageSkills: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -323,6 +325,7 @@ describe('PersistentMindTools', () => {
         installEidoverseControllers: false,
         callUser: true,
         adjustLocalContext: false,
+        manageSkills: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
