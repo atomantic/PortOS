@@ -174,7 +174,7 @@ function Comparison({ ids, onRemove }) {
     { events: RUN_EVENTS, resourceKey: key, matchesEvent: (payload) => ids.includes(payload?.id), requestTimeoutMs: 30_000 },
   );
   if (error) return <ListLoadError what="the selected runs" error={error} />;
-  if (loading || !runs) return <PageSkeleton />;
+  if (loading || !runs) return <PageSkeleton label="Loading the selected runs" />;
 
   const themes = runs.reduce((longest, run) => (run.themes.length > longest.length ? run.themes : longest), []);
   const columns = { gridTemplateColumns: `repeat(${runs.length}, minmax(17rem, 1fr))` };
@@ -266,14 +266,14 @@ export default function HtmlPages() {
 
       {catalogError
         ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
-        : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton />)}
+        : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton label="Loading installed models" />)}
 
       {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
 
       <section>
         <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h3>
         {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
-        {!error && loading && <PageSkeleton />}
+        {!error && loading && <PageSkeleton label="Loading runs" />}
         {!error && !loading && runs && runs.length === 0 && (
           <EmptyState icon={GalleryVertical} title="No runs yet" message="Select one or more models above and run the brief." />
         )}
