@@ -136,6 +136,21 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'hf.co/orcarouter/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M',
     lmstudio: 'orcarouter/Qwen3.8-27B-Uncensored-GGUF@Q4_K_M',
   },
+  {
+    // Same `inkling2_loop` runtime constraint as `inkling-2-mini`: no Ollama id,
+    // because Ollama's `hf.co/…` path runs its bundled llama.cpp, and the card
+    // requires llama.cpp b12600+. The full HF URL is used because LM Studio's own
+    // hub has no entry; `lms get` downloads the repo's quant picker from it.
+    key: 'inkling-2-mini-uncensored-gguf',
+    name: 'Inkling 2 Mini Uncensored (GGUF)',
+    category: 'security-uncensored', recommendedFor: ['security-uncensored'],
+    params: '26B / 3.4B active', size: '16.5 GB', family: 'inkling',
+    description: 'AtomicChat’s refusal-direction edit of Inkling 2 Mini (rank-1 LoRA baked into Q4_K, IQ3_S and IQ2_M GGUFs; the Q4_K is 16.5 GB, 0.0115 KLD to BF16), with vision, tools and a 1M context. Apache-2.0. Prefer Q4_K; IQ2_M drifts noticeably from the original.',
+    note: 'Needs llama.cpp b12600 or newer with the merged Inkling 2 loop architecture. Sandbox required for assessment; security benchmark results for this exact build remain unverified, and the publisher’s own measurements are not independent.',
+    repository: 'AtomicChat/Inkling-2-Mini-Uncensored-GGUF',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'], context: 1048576,
+    lmstudio: 'https://huggingface.co/AtomicChat/Inkling-2-Mini-Uncensored-GGUF',
+  },
 
   // ── Small & fast tier ──
   // Sub-4B models for classification, routing, and the voice agent's tool turns,
@@ -1096,21 +1111,6 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'unsloth/North-Mini-Code-1.0-GGUF'
   },
   {
-    key: 'ornith-35b',
-    benchmarkModel: 'ornith-1.0-35b',
-    name: 'Ornith 1.0 35B',
-    category: 'coding',
-    recommendedFor: ['coding'],
-    params: '35B',
-    size: '21 GB',
-    family: 'ornith',
-    description: 'The larger Ornith for agentic coding — more headroom on long-horizon repo tasks, still a 256K context.',
-    capabilities: ['chat', 'code', 'tools'],
-    context: 262144,
-    ollama: 'ornith:35b',
-    lmstudio: 'lmstudio-community/Ornith-1.0-35B-GGUF'
-  },
-  {
     key: 'ornith-1.5-35b-a3b',
     name: 'Ornith 1.5 35B-A3B',
     category: 'coding',
@@ -1403,7 +1403,7 @@ export const LOCAL_LLM_CATALOG = [
 // dead HuggingFace repo to the mapping table (both `lmstudio-community/llava-v1.5-7b-GGUF`
 // and `lmstudio-community/CodeLlama-7b-Instruct-GGUF` 404 as of this refresh,
 // so LLaVA 1.5 and Code Llama are omitted rather than mapped to a broken repo).
-const RETIRED_MODEL_MAPPINGS = [
+export const RETIRED_MODEL_MAPPINGS = [
   // Preserve installed-model migration without recommending an unreviewed publisher.
   {
     key: 'nex-n2-mini',
@@ -1453,7 +1453,11 @@ const RETIRED_MODEL_MAPPINGS = [
     ollama: 'nemotron-3-nano:30b',
     lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF'
   },
-  { ollama: 'ornith:9b', lmstudio: 'lmstudio-community/Ornith-1.0-9B-GGUF' }
+  { ollama: 'ornith:9b', lmstudio: 'lmstudio-community/Ornith-1.0-9B-GGUF' },
+  // Retired from installs in favour of Ornith 1.5 35B-A3B, but a copy someone already
+  // runs still plots against its sourced Ornith 1.0 evidence (`benchmarkModel` is read
+  // from retired entries by `comparisonModelScope.js`).
+  { ollama: 'ornith:35b', lmstudio: 'lmstudio-community/Ornith-1.0-35B-GGUF', benchmarkModel: 'ornith-1.0-35b' }
 ];
 
 // Strip only the implicit `:latest` tag (`llama3.2:latest` → `llama3.2`) and

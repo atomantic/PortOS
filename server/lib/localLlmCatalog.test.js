@@ -21,10 +21,10 @@ describe('localLlmCatalog', () => {
       const models = getCatalog('lmstudio');
       expect(models.every(m => m.publisherReview !== 'unreviewed')).toBe(true);
       const security = models.filter(m => m.reducedSafeguards);
-      expect(security).toHaveLength(2);
+      expect(security).toHaveLength(3);
       for (const model of security) {
         expect(model.recommendedFor).toEqual(['security-uncensored']);
-        expect(model.provenance).toMatchObject({ checkedAt: '2026-09-06', baseModel: 'Qwen/Qwen3.8-27B' });
+        expect(model.provenance).toMatchObject({ checkedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), baseModel: expect.stringMatching(/^(Qwen\/Qwen3\.8-27B|thinkingmachines\/Inkling-2-Mini)$/) });
         expect(model.warning).toContain('sandbox');
       }
     });
