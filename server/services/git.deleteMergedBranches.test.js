@@ -6,19 +6,18 @@ vi.mock('../lib/execGit.js', () => {
 });
 vi.mock('./worktreeManager.js', () => ({ isGitLockError: vi.fn(), listWorktrees: vi.fn(async () => []) }));
 vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/repo', forgeAccount: 'example-account' } })) }));
-vi.mock('./branchReconcile.js', () => ({ cleanupMerged: vi.fn() }));
 vi.mock('./cos/cosClaimOwnershipState.js', () => ({ withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: vi.fn(async () => []) }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: vi.fn(async () => null) }));
 import { execGit } from '../lib/execGit.js';
-import { cleanupMerged } from './branchReconcile.js';
 import { readClaimOwnershipAgents } from './cos/cosClaimOwnershipState.js';
 import { readBranchCompletionHold } from './branchCompletionPolicy.js';
 import { listWorktrees } from './worktreeManager.js';
 import { deleteMergedBranches, deleteMergedRemoteBranches } from './git.js';
-import { registerBootHooks } from './bootHooks.js';
+import { registerMergedBranchCleanup } from './mergedBranchCleanupHook.js';
 
-// Production wiring: git.js reaches the mocked cleanupMerged only through the boot-registered hook.
-registerBootHooks();
+// git.js reaches branch retirement only through the hook bootHooks.js fills at boot.
+const cleanupMerged = vi.fn();
+registerMergedBranchCleanup(cleanupMerged);
 const HEAD = 'a'.repeat(40);
 const REMOTE = 'https://example.com/team/repo.git';
 const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
