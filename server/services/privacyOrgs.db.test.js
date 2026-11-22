@@ -18,7 +18,6 @@ vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: vi.fn() })
 
 const HEX_KEY = 'd'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = HEX_KEY;
 
 let dbReady = false;
 let skipReason = '';
@@ -45,20 +44,25 @@ describe.skipIf(!runDb)('privacy orgs DB round-trip', () => {
   const createdVaultRecords = [];
 
   beforeAll(async () => {
+    // Set only while the suite runs, before any service import, so a skipped suite never leaks it.
+    process.env.PRIVACY_VAULT_KEY = HEX_KEY;
     orgs = await import('./privacyOrgs.js');
     vault = await import('./privacyVault.js');
   });
 
   afterAll(async () => {
-    for (const id of createdOrgs) {
-      await query(`DELETE FROM privacy_orgs WHERE id = $1`, [id]).catch(() => {});
+    try {
+      for (const id of createdOrgs) {
+        await query(`DELETE FROM privacy_orgs WHERE id = $1`, [id]).catch(() => {});
+      }
+      for (const id of createdVaultRecords) {
+        await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+      }
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
     }
-    for (const id of createdVaultRecords) {
-      await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
-    }
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
   });
 
   it('creates an org, attaches vault holdings, and queries both directions', async () => {
