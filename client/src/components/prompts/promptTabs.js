@@ -1,11 +1,13 @@
-// The Prompt Manager's three editors and the URL shape that selects one:
-// `/prompts/:tab`, with the open record in `?stage=` / `?var=` / `?skill=`.
-import { Briefcase, FileText, Variable } from 'lucide-react';
+// The Prompt Manager's editors and the URL shape that selects one:
+// `/prompts/:tab`, with the open record in `?stage=` / `?var=` / `?skill=` /
+// `?agentSkill=`.
+import { Briefcase, FileText, Sparkles, Variable } from 'lucide-react';
 
 export const PROMPT_TABS = [
   { id: 'stages', label: 'Stages', icon: FileText },
   { id: 'variables', label: 'Variables', icon: Variable },
   { id: 'job-skills', label: 'Job Skills', icon: Briefcase },
+  { id: 'agent-skills', label: 'Agent Skills', icon: Sparkles },
 ];
 
 export const DEFAULT_PROMPT_TAB = 'stages';
