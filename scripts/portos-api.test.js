@@ -326,3 +326,45 @@ describe('FableLoom export CLI handoff', () => {
     }
   });
 });
+
+describe('job notepad CLI', () => {
+  it('maps each action to its notepad route and rejects malformed invocations', () => {
+    expect(parseArgs(['notepad', 'list', 'job-1'])).toMatchObject({ method: 'GET', path: '/api/cos/jobs/job-1/notepad', body: null });
+    expect(parseArgs(['notepad', 'get', 'job-1', 'cursor'])).toMatchObject({ method: 'GET', path: '/api/cos/jobs/job-1/notepad/cursor' });
+    expect(parseArgs(['notepad', 'delete', 'job-1', 'cursor'])).toMatchObject({ method: 'DELETE', path: '/api/cos/jobs/job-1/notepad/cursor' });
+    expect(parseArgs(['notepad', 'clear', 'job-1'])).toMatchObject({ method: 'DELETE', path: '/api/cos/jobs/job-1/notepad' });
+    expect(parseArgs(['notepad', 'set', 'job-1', 'cursor', '42'])).toMatchObject({ method: 'PUT', path: '/api/cos/jobs/job-1/notepad/cursor' });
+    expect(() => parseArgs(['notepad', 'set', 'job-1', 'cursor'])).toThrow(/needs a value/);
+    expect(() => parseArgs(['notepad', 'get', 'job-1'])).toThrow(/needs a key/);
+    expect(() => parseArgs(['notepad', 'bogus', 'job-1'])).toThrow(/needs an action/);
+    expect(() => parseArgs(['notepad', 'list', 'job-1', 'extra'])).toThrow(/Unexpected/);
+  });
+
+  it('sends raw text and file contents as a JSON { value } body', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-notepad-cli-'));
+    await writeFile(join(dir, 'note.txt'), 'line one\n"quoted"');
+    const received = [];
+    const server = createServer((request, response) => {
+      const chunks = [];
+      request.on('data', (chunk) => chunks.push(chunk));
+      request.on('end', () => {
+        received.push({ method: request.method, path: request.url, body: Buffer.concat(chunks).toString('utf8') });
+        response.writeHead(200, { 'Content-Type': 'application/json' }); response.end('{}');
+      });
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const env = { PORTOS_URL: `http://127.0.0.1:${server.address().port}`, PORTOS_API_TOKEN: 'synthetic-token', PORTOS_AGENT_KEY_FILE: join(dir, 'absent') };
+    try {
+      expect(await main(['notepad', 'set', 'job-1', 'cursor', '{"not":"json-body"}'], env)).toBe(0);
+      expect(await main(['notepad', 'set', 'job-1', 'doc', `@${join(dir, 'note.txt')}`], env)).toBe(0);
+      expect(received).toEqual([
+        { method: 'PUT', path: '/api/cos/jobs/job-1/notepad/cursor', body: JSON.stringify({ value: '{"not":"json-body"}' }) },
+        { method: 'PUT', path: '/api/cos/jobs/job-1/notepad/doc', body: JSON.stringify({ value: 'line one\n"quoted"' }) },
+      ]);
+    } finally {
+      server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+      log.mockRestore(); await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

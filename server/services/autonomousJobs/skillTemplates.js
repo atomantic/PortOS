@@ -17,6 +17,8 @@ import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.j
 import { appendJobFormValues } from '../../lib/jobFormFields.js'
 import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
 import { ServerError } from '../../lib/errorHandler.js'
+import { formatNotepadPromptSection } from '../../lib/autonomousJobNotepad.js'
+import { listJobNotes } from './notepad.js'
 
 const KNOWN_SKILL_NAMES = new Set(Object.values(JOB_SKILL_MAP))
 
@@ -180,7 +182,7 @@ async function generateTaskFromJob(job) {
   const inputs = selectedInputs.length > 0
     ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
-  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job)
+  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job) + formatNotepadPromptSection(job.id, await listJobNotes(job.id))
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
   const meta = newAuditMetadata(job.taskMetadata || {})
   return {

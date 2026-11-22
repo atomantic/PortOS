@@ -14,6 +14,7 @@ import FormField from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import TaskDataInputs from './TaskDataInputs';
 import ScheduleAnchorSelect from './ScheduleAnchorSelect';
+import JobNotepad from './JobNotepad';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
 
 // Footer actions beside Run now — same shape, quieter than the accent trigger.
@@ -683,6 +684,7 @@ export default function JobCard({
                   <pre className="mt-2 p-3 bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">{job.promptTemplate}</pre>
                 </details>
               )}
+              <JobNotepad jobId={job.id} />
               {isConfirming(job.id) ? (
                 <InlineConfirmRow
                   question="Delete this job? This cannot be undone."

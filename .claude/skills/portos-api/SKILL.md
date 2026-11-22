@@ -30,6 +30,8 @@ Details: [docs/AGENT_API_KEY.md](../../../docs/AGENT_API_KEY.md).
 
 For an outside terminal agent, use the assigned GitHub/GitLab repository and your authorized forge identity. The hosting provider enforces merge eligibility; pin the PR head and confirm its merged state. Do not require a PortOS admission lease, local attestation, preparation turn or additional configuration as merge certification. Never invent or borrow a CoS `agentId`. Local cleanup still uses authenticated PortOS APIs and verifies the exact target, active ownership and unique content.
 
+For durable state across runs of a recurring Autonomous Job (a watermark, cursor or digest hash), use the job's machine-local notepad: `notepad list|get|set|delete|clear JOB_ID [KEY] [VALUE|@file|-]`. Caps: 128-char key, 16 KB value, 64 KB per job; an overflow is a 400 that changes nothing. A job's non-empty notepad is appended to its prompt.
+
 For FableLoom static package handoff, use `fableloom-export preflight|start LOOM`
 with `--episodes EP1,EP2`, `--player true`, `--characters true`, `--voice true`,
 `--allow-draft true`, `--profile source|web-720p|web-1080p`, and `--webm true`

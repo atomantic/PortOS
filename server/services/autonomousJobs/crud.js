@@ -14,6 +14,7 @@ import { cosEvents } from '../cos/cosEvents.js'
 import { withLock, resolveIntervalMs } from './constants.js'
 import { loadJobs, saveJobs } from './store.js'
 import { getNextDueJob } from './scheduler.js'
+import { clearJobNotes } from './notepad.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { deriveScheduleAnchor, isValidScheduleAnchor, needsScheduleAnchor, scheduleAnchorKind } from '../../lib/scheduleAnchor.js'
 
@@ -275,6 +276,7 @@ async function deleteJob(jobId) {
 
     const deleted = data.jobs.splice(idx, 1)[0]
     await saveJobs(data)
+    await clearJobNotes(jobId)
 
     console.log(`🗑️ Autonomous job deleted: ${deleted.name}`)
     cosEvents.emit('jobs:deleted', { id: jobId })
