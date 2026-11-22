@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { Suspense, useCallback, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
@@ -18,10 +18,15 @@ import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import { lastRenderTarget } from './SceneRenderTarget.jsx';
 import SceneHeaderControls from './SceneHeaderControls.jsx';
 import { ScenePromptField } from './ScenePromptField.jsx';
-import SceneSettingsGroups from './SceneSettingsGroups.jsx';
 import SceneVideoTakesSection from './SceneVideoTakesSection.jsx';
+import { lazyWithReload } from '../../utils/lazyWithReload.js';
 import { DOWNLOAD_FIELDS, normalizeSceneCardProps } from './sceneCardProps.js';
 import { buildSceneRenderPlan } from './sceneCardRenderPlan.js';
+
+// The settings groups are the card's heaviest half and sit beside the picture, so they ship as their own
+// chunk fetched with the card. The clip preview stays static: its <video> must be mounted with the card
+// to deliver its metadata to this card's playback hook.
+const SceneSettingsGroups = lazyWithReload(() => import('./SceneSettingsGroups.jsx'));
 
 function SceneAboveBodyNotices({
   scene, project, layer, locked, songChange, storyboardId, storyboardShot,
@@ -321,14 +326,14 @@ export default function SceneCard({
                     </>
                   )}
                 </div>
-                <SceneSettingsGroups
+                <Suspense fallback={<p className="text-xs text-port-text-muted">Loading shot settings…</p>}><SceneSettingsGroups
                   scene={scene} project={project} layer={layer} codeShot={codeShot} fromSheet={fromSheet} loops={loops}
                   sourceWindow={sourceWindow} renderPlan={renderPlan}
                   position={position} composition={composition} actions={actions} fieldId={fieldId}
                   applyPatch={applyPatch} applySaved={applySaved} markDirty={markDirty} saveIfDirty={saveIfDirty}
                   moveStart={moveStart} moveEnd={moveEnd}
                   setSpeakerDirty={setSpeakerDirty} setSpeakerSaving={setSpeakerSaving}
-                />
+                /></Suspense>
               </div>
             </div>
           </fieldset>

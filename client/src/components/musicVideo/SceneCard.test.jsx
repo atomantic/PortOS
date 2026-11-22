@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, beforeAll } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets: [], loaded: true, save: vi.fn(), remove: vi.fn() }) }));
@@ -13,6 +13,8 @@ import SceneCard from './SceneCard.jsx';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { previewVideoPrompt } from '../../services/apiImageVideo.js';
+import { warmSceneCard } from './sceneCardTestWarmup.jsx';
+beforeAll(warmSceneCard, 30000);
 
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // The editor shows the still or the clip, one at a time.

@@ -23,7 +23,8 @@
  * command to run, never run from here.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
+import { readdir, readFile } from 'fs/promises';
 import { homedir, userInfo } from 'os';
 // nvm, launchd and systemd paths are POSIX-only; Windows never reaches an update.
 import { posix } from 'path';
@@ -74,10 +75,10 @@ function resolveNvm({ env = process.env, exists = existsSync, home = homedir() }
 
 const nvmNodeBinary = (dir, version) => join(dir, 'versions', 'node', version, 'bin', 'node');
 
-function listNvmVersions(dir) {
+async function listNvmVersions(dir) {
   let entries = [];
   try {
-    entries = readdirSync(join(dir, 'versions', 'node'));
+    entries = await readdir(join(dir, 'versions', 'node'));
   } catch {
     return [];
   }
@@ -85,10 +86,10 @@ function listNvmVersions(dir) {
 }
 
 /** nvm's default alias when it names an exact version; `lts/*`-style aliases read as null. */
-function readNvmDefault(dir) {
+async function readNvmDefault(dir) {
   let alias = '';
   try {
-    alias = readFileSync(join(dir, 'alias', 'default'), 'utf8').trim();
+    alias = (await readFile(join(dir, 'alias', 'default'), 'utf8')).trim();
   } catch {
     return null;
   }
@@ -182,9 +183,9 @@ async function cachedFetch(key, url, pickValue) {
 const getNodeReleaseIndex = () => cachedFetch('node', NODE_INDEX_URL, (body) => (Array.isArray(body) ? body : null));
 const getLatestPm2Version = () => cachedFetch('pm2', PM2_LATEST_URL, (body) => (typeof body?.version === 'string' ? body.version : null));
 
-function readPackageVersion(packageJsonPath) {
+async function readPackageVersion(packageJsonPath) {
   try {
-    const version = JSON.parse(readFileSync(packageJsonPath, 'utf8')).version;
+    const version = JSON.parse(await readFile(packageJsonPath, 'utf8')).version;
     return typeof version === 'string' ? version : null;
   } catch {
     return null;
@@ -205,10 +206,10 @@ function nodeGlobalPrefix(nodeBinary) {
 }
 
 /** Distinguish a missing global CLI from an unreadable or unparseable one. */
-function globalPm2Status(nodeBinary, { readText = readFileSync, isWindows = IS_WIN } = {}) {
+async function globalPm2Status(nodeBinary, { readText = readFile, isWindows = IS_WIN } = {}) {
   if (!nodeBinary || isWindows) return { version: null, state: 'unsupported' };
   try {
-    const version = JSON.parse(readText(join(nodeGlobalPrefix(nodeBinary), 'lib', 'node_modules', 'pm2', 'package.json'), 'utf8')).version;
+    const version = JSON.parse(await readText(join(nodeGlobalPrefix(nodeBinary), 'lib', 'node_modules', 'pm2', 'package.json'), 'utf8')).version;
     return typeof version === 'string' && /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(version)
       ? { version, state: 'available' }
       : { version: null, state: 'unverified' };
@@ -244,12 +245,12 @@ function startupFileFor(system, home, user) {
  * paths itself (`fixable`); anything else gets the sudo command that
  * regenerates it. Null where PortOS can't tell (Windows, no supported init).
  */
-function getStartupStatus({ nodeBinary, platform = process.platform, home = homedir(), user = safeUserName(), readText = readTextOrNull } = {}) {
+async function getStartupStatus({ nodeBinary, platform = process.platform, home = homedir(), user = safeUserName(), readText = readTextOrNull } = {}) {
   const system = platform === 'darwin' ? 'launchd' : platform === 'linux' ? 'systemd' : null;
   if (!system || !nodeBinary || !user) return null;
   const binDir = dirname(nodeBinary);
   const globalBin = join(nodeGlobalPrefix(nodeBinary), 'bin');
-  const contents = readText(startupFileFor(system, home, user));
+  const contents = await readText(startupFileFor(system, home, user));
   const current = contents === null ? null : contents.includes(binDir) || contents.includes(globalBin);
   return {
     system,
@@ -268,10 +269,10 @@ function getStartupStatus({ nodeBinary, platform = process.platform, home = home
  */
 export async function repairStartup(nodeBinary = resolvePinnedNodeInterpreter() || process.execPath) {
   const user = safeUserName();
-  const status = getStartupStatus({ nodeBinary, user });
+  const status = await getStartupStatus({ nodeBinary, user });
   if (!status?.fixable) return null;
   const file = startupFileFor(status.system, homedir(), user);
-  const previous = readTextOrNull(file);
+  const previous = await readTextOrNull(file);
   const next = rewriteLaunchAgent(previous, dirname(nodeBinary));
   if (next === null) return null;
   await atomicWrite(file, next);
@@ -286,9 +287,9 @@ function safeUserName() {
   }
 }
 
-function readTextOrNull(file) {
+async function readTextOrNull(file) {
   try {
-    return readFileSync(file, 'utf8');
+    return await readFile(file, 'utf8');
   } catch {
     return null;
   }
@@ -310,9 +311,8 @@ export async function getNodeRuntimeStatus() {
     readDaemonIdentity(),
   ]);
   const summary = releases ? summarizeNodeReleases(releases, running) : null;
-  const shipped = shippedPm2Version();
   const cliNode = pinned || process.execPath;
-  const cliStatus = globalPm2Status(cliNode);
+  const [shipped, cliStatus] = await Promise.all([shippedPm2Version(), globalPm2Status(cliNode)]);
   const cli = cliStatus.version;
 
   const blockedReason = IS_WIN
@@ -340,8 +340,8 @@ export async function getNodeRuntimeStatus() {
     },
     nvm: nvm ? {
       dir: nvm.dir,
-      defaultVersion: readNvmDefault(nvm.dir),
-      installed: listNvmVersions(nvm.dir),
+      defaultVersion: await readNvmDefault(nvm.dir),
+      installed: await listNvmVersions(nvm.dir),
     } : null,
     releases: summary,
     releasesError: releases ? null : 'Could not reach nodejs.org for the release list.',
@@ -355,7 +355,7 @@ export async function getNodeRuntimeStatus() {
       daemonStale,
     },
     // The command runs that Node's global pm2, so offer it only where one exists.
-    startup: cli === null ? null : getStartupStatus({ nodeBinary: cliNode }),
+    startup: cli === null ? null : await getStartupStatus({ nodeBinary: cliNode }),
     canUpdate: blockedReason === null,
     blockedReason,
     job: currentJob ? { kind: currentJob.kind, startedAt: currentJob.startedAt } : null,
