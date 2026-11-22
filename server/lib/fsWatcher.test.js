@@ -150,10 +150,12 @@ describe('watchPaths file targets', () => {
     await waitFor(() => events.some(([, p]) => p === branch));
     expect(events.some(([, p]) => p.endsWith('.lock'))).toBe(false);
     // Unrelated siblings of a watched file are not reported.
-    events.length = 0;
-    await writeFile(join(gitDir, 'index'), 'x');
+    // Trailing events from the branch write can land late on loaded Linux
+    // inotify, so assert on the sibling's path rather than an empty list.
+    const index = join(gitDir, 'index');
+    await writeFile(index, 'x');
     await settle(250);
-    expect(events).toEqual([]);
+    expect(events.some(([, p]) => p === index)).toBe(false);
   });
 });
 
