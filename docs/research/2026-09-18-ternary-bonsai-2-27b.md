@@ -105,10 +105,14 @@ detects that the active `llama-server` is not the linked keg and declines to
 touch it rather than overwriting the fork.
 
 Then fetch the weights from **Models → Runtimes** by selecting the
-**Ternary Bonsai 2 27B** preset and using its Download button, or by hand:
+**Ternary Bonsai 2 27B** preset and using its Download button, or by hand into
+the same place the button writes: the checkout's `models/` directory, which is
+the path the preset launches from. (An earlier version of this recipe used
+`~/.portos/models/`, a directory the preset never reads and the Models panel can
+only list as unmanaged weights.) From the PortOS checkout root:
 
 ```bash
-curl -L -o ~/.portos/models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
+curl -L -o models/Ternary-Bonsai-2-27B-PQ2_0.gguf \
   https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-PQ2_0.gguf
 ```
 
@@ -126,7 +130,7 @@ next Start puts `--mmproj` on the launch line. Clearing that field launches the
 model text-only, which is what a preset with no projector on disk does. By hand:
 
 ```bash
-curl -L -o ~/.portos/models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf \
+curl -L -o models/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf \
   https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf/resolve/main/Ternary-Bonsai-2-27B-mmproj-Q8_0.gguf
 ```
 

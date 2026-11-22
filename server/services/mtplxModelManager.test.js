@@ -232,21 +232,21 @@ describe('mtplxModelManager', () => {
       await expect(removeMtplxModel('Example/Qwen-MTP')).rejects.toThrow(/error: model not cached/);
     });
   });
-  // MTPLX pulls through huggingface_hub into the standard HF hub cache, so a
-  // checkpoint it fetches shows up in the Models → Status inventory like any other
-  // `models--org--name` directory. Recording lives in this manager because BOTH
+  // `mtplx pull` writes to MTPLX's own store (`~/.mtplx/models/<org>--<name>`), so a
+  // checkpoint it fetches is recorded under the `mtplx` backend, the same identity
+  // the store scan gives it. Recording lives in this manager because BOTH
   // entry points reach it — the model-pull route and the readiness checklist's
   // default-checkpoint fetch — and neither would have recorded on its own.
   describe('model manifest', () => {
-    it('records a named pull under its HF cache directory', async () => {
+    it('records a named pull under its MTPLX store directory name', async () => {
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
 
       await pullMtplxModel({ model: 'Example/Qwen-MTP' });
 
       expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
-        id: 'hf:models--Example--Qwen-MTP',
-        backend: 'huggingface',
-        action: { type: 'hf-model', dirName: 'models--Example--Qwen-MTP' },
+        id: 'mtplx:Example--Qwen-MTP',
+        backend: 'mtplx',
+        action: { type: 'model-store', backend: 'mtplx', key: 'Example--Qwen-MTP' },
         source: 'download',
       }));
     });
@@ -260,7 +260,7 @@ describe('mtplxModelManager', () => {
       await pullMtplxModel({});
 
       expect(modelManifest.recordModelInstall).toHaveBeenCalledWith(expect.objectContaining({
-        id: 'hf:models--Example--Default-MTP',
+        id: 'mtplx:Example--Default-MTP',
       }));
     });
 
@@ -278,8 +278,8 @@ describe('mtplxModelManager', () => {
       await removeMtplxModel('Example/Qwen-MTP');
 
       expect(modelManifest.recordModelUninstall).toHaveBeenCalledWith({
-        backend: 'huggingface',
-        key: 'models--Example--Qwen-MTP',
+        backend: 'mtplx',
+        key: 'Example--Qwen-MTP',
       });
     });
   });

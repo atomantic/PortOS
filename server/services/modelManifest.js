@@ -29,6 +29,7 @@ import { join } from 'path';
 import { createCachedStore, PATHS } from '../lib/fileUtils.js';
 import {
   MODEL_INVENTORY_BACKENDS,
+  MODEL_STORE_BACKENDS,
   modelInventoryId,
   presentInventoryRow,
 } from '../lib/modelInventory.js';
@@ -197,7 +198,7 @@ export function trustedInventoryBackends({ sourceErrors = [], disabledSources = 
   if (failed.has('huggingface')) trusted.delete('huggingface');
   if (failed.has('loras')) trusted.delete('lora');
   // The file-system model stores report as storage areas under their backend id.
-  for (const backend of ['mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']) {
+  for (const backend of Object.keys(MODEL_STORE_BACKENDS)) {
     if (failed.has(backend)) trusted.delete(backend);
   }
   for (const backend of ['ollama', 'lmstudio']) {

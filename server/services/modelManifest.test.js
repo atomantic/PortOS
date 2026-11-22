@@ -51,6 +51,9 @@ beforeEach(() => {
 });
 afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
+// Every file-system model store reports as a storage area under its backend id.
+const FILE_SYSTEM_STORES = ['mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge', 'slotstream', 'fastvideo-mlx', 'auk-ckpts', 'portos-models', 'repo-models', 'legacy-runtime'];
+
 describe('install and uninstall records', () => {
   it('tracks a model across install, re-install, and uninstall', async () => {
     const row = loraInventoryRow({ filename: 'lora-example-v1.safetensors', name: 'Example LoRA', sizeBytes: 100 });
@@ -147,7 +150,7 @@ describe('reconciliation against a scan', () => {
       sourceErrors: ['lmstudio-backend', 'loras'],
       disabledSources: ['ollama'],
     });
-    expect(result).toMatchObject({ added: 0, removed: 0, trusted: ['huggingface', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge'] });
+    expect(result).toMatchObject({ added: 0, removed: 0, trusted: ['huggingface', ...FILE_SYSTEM_STORES] });
     expect((await getModelManifest()).models).toHaveLength(3);
   });
 
@@ -175,7 +178,7 @@ describe('reconciliation against a scan', () => {
   });
 
   it('maps every scan source error to the backend it actually invalidates', () => {
-    expect([...trustedInventoryBackends({})]).toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']);
+    expect([...trustedInventoryBackends({})]).toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', ...FILE_SYSTEM_STORES]);
     expect([...trustedInventoryBackends({ sourceErrors: ['huggingface'] })]).not.toContain('huggingface');
     expect([...trustedInventoryBackends({ sourceErrors: ['loras'] })]).not.toContain('lora');
     expect([...trustedInventoryBackends({ sourceErrors: ['ollama-inventory'] })]).not.toContain('ollama');
@@ -184,9 +187,9 @@ describe('reconciliation against a scan', () => {
     // A residency probe failure says nothing about what is ON DISK, so it must
     // not stop a reconcile — the inventory read is a separate source.
     expect([...trustedInventoryBackends({ sourceErrors: ['ollama-residency', 'lmstudio-residency'] })])
-      .toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']);
+      .toEqual(['huggingface', 'lora', 'ollama', 'lmstudio', ...FILE_SYSTEM_STORES]);
     // The file-system model stores report as storage areas under their backend id.
-    for (const backend of ['mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge']) {
+    for (const backend of FILE_SYSTEM_STORES) {
       expect([...trustedInventoryBackends({ sourceErrors: [backend] })]).not.toContain(backend);
     }
   });

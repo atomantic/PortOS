@@ -130,6 +130,8 @@ export const FASTVIDEO_REPO_DIR = join(homedir(), '.portos', 'fastvideo');
 // layout underneath. Both are plain caches the user can delete at any time —
 // but the converted DiT is multi-GB per (snapshot, format), so leaving PortOS
 // with no name for it is what makes it unreclaimable.
+// Pinned to the model-root registry (`lib/modelRoots.js`, id `fastvideo-mlx`) by
+// `lib/modelRoots.test.js`; the registry is not imported here because it would join the boot closure.
 export const FASTVIDEO_MLX_CHECKPOINT_DIR = join(homedir(), '.portos', 'fastvideo', 'mlx-checkpoints');
 export const FASTVIDEO_PROMPT_CACHE_DIR = join(homedir(), '.portos', 'fastvideo', 'prompt-cache');
 

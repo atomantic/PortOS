@@ -70,6 +70,7 @@ The contract draws a single line:
 
 - **PostgreSQL owns** app-native records, relationships, indexes, sync cursors, tombstones, lineage, status, and searchable metadata.
 - **Files own** large binary payloads, long externally-editable prose bodies, model weights, temporary uploads, and iCloud-backed health/life stores.
+- **Model weights belong in the shared Hugging Face hub cache.** A runtime that cannot use it (its own layout, converted artifacts, hand-placed files) declares its directory in `server/lib/modelRoots.js` and gets an inventory backend in `lib/modelInventory.js`; `lib/modelRoots.test.js` fails when the two drift. Docs and installers download by repo id (no `--local-dir`), so Models can size, flag and reclaim every copy. Large weights in a hand-placed root are reported as **unmanaged**.
 - **File assets referenced from the DB** get a stable `asset_key` / `media_key` row plus integrity metadata. The DB points to files; it does not absorb the bytes.
 
 Defaulting a new Create feature to a fresh `data/*.json` file is the anti-pattern this contract exists to stop. Monolithic JSON in hot paths (`media-jobs.json`, `video-history.json` — and `creative-director-projects.json` before #997 moved it to Postgres) causes write contention and growth risk; string-id cross-references across separate JSON stores drift with no integrity check. New relational surfaces should be `db-primary` from the start.
