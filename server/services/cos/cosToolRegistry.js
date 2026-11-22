@@ -1391,8 +1391,10 @@ const queueMindTaskRequest = async (tool, args, context) => {
 const runSkillsTool = async (tool, args) => {
   const skills = await import('../skills/skillService.js');
   if (tool.adapter.kind === 'skills.list') return skills.listSkills(args);
-  if (tool.adapter.kind === 'skills.view') return skills.viewSkill(args);
-  return skills.manageSkill(Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined)));
+  // A tool read loads the skill into an agent's context, so it counts as a use;
+  // a tool write is an agent write and honors the skill's lock (#17391).
+  if (tool.adapter.kind === 'skills.view') return skills.viewSkill(args, { actor: 'agent' });
+  return skills.manageSkill(Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined)), { actor: 'agent' });
 };
 
 const ADAPTER_HANDLERS = {
