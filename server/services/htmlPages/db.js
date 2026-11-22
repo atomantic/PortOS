@@ -42,7 +42,7 @@ export async function getRun(id, { includeDeleted = false } = {}) {
   return run;
 }
 
-export async function createRun({ backend, modelId, pageCount, themes }) {
+export async function createRun({ backend, modelId, pageCount, themes, prompts }) {
   const now = new Date().toISOString();
   const run = {
     id: `htmlpages-${randomUUID()}`,
@@ -50,8 +50,9 @@ export async function createRun({ backend, modelId, pageCount, themes }) {
     backend,
     modelId,
     pageCount,
-    // The exact themes asked for, so a later change to the shipped list never rewrites what an old run was given.
+    // The person's brief for each page, and the full prompt each one sent (the brief inside PortOS's fixed text).
     themes,
+    prompts,
     status: 'queued',
     // Pages finished so far; `pages` fills in as each one returns.
     progress: { done: 0, total: pageCount },
