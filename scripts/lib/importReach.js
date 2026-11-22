@@ -101,17 +101,22 @@ export function importReachReport(graph, sources, isTest) {
   return { rows, selected: union.size };
 }
 
-/** Test files the server Vitest runner collects, as a repo-relative predicate. */
-export function serverRunnerTestPredicate() {
-  const { include, exclude } = workspaceTestGlobs('server', { env: {} });
+const runnerTestPredicate = (workspace, ownsPath) => {
+  const { include, exclude } = workspaceTestGlobs(workspace, { env: {} });
   const includes = include.map(globToRegExp);
   const excludes = exclude.map(globToRegExp);
   return (repoRel) => {
-    if (repoRel.startsWith('client/')) return false;
-    const rel = toWorkspacePath('server', repoRel);
+    if (!ownsPath(repoRel)) return false;
+    const rel = toWorkspacePath(workspace, repoRel);
     return includes.some((re) => re.test(rel)) && !excludes.some((re) => re.test(rel));
   };
-}
+};
+
+/** Test files the server Vitest runner collects, as a repo-relative predicate. */
+export const serverRunnerTestPredicate = () => runnerTestPredicate('server', (path) => !path.startsWith('client/'));
+
+/** Test files the client Vitest runner collects (`client/src` only), as a repo-relative predicate. */
+export const clientRunnerTestPredicate = () => runnerTestPredicate('client', (path) => path.startsWith('client/'));
 
 /**
  * One-line summary for the CI plan: the widest changed source first, so a

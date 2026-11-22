@@ -15,9 +15,9 @@ import { WINDOWS_CONTRACT_TESTS } from './ciPlanRules.js';
 // selection now stays exactly as computed and only execution is partitioned
 // (#11871). 125 is that former full-plan threshold (#10312).
 export const MAX_TARGETED_TEST_FILES = 125;
-// The client runner has no reach measure and its cold-memo cost is about 0.4s per
-// file including overhead (#16805 measurements), so one runner absorbs 400 client
-// files inside the existing critical path. Fanning out earlier only adds three
+// A client runner's cold-memo cost is about 0.4s per file including overhead
+// (#16805 measurements), so one runner absorbs 400 client files, explicit or
+// reached through a related walk, inside the existing critical path. Fanning out earlier only adds three
 // runner starts, Chrome warm-ups and memo restores.
 export const CLIENT_FANOUT_TEST_FILES = 400;
 
@@ -37,10 +37,10 @@ export const shardIndexes = (mode, count) => (
  *
  * - Over the runner's cap of explicit selectors (MAX_TARGETED_TEST_FILES for the
  *   server, CLIENT_FANOUT_TEST_FILES for the client): either mode.
- * - A server `related` plan whose measured import reach (`serverReach.selected`,
- *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
- *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
- *   The client has no reach measure, so only the cap applies there.
+ * - A `related` plan whose measured import reach (`serverReach.selected` /
+ *   `clientReach.selected`, the suites Vitest's related walk will select)
+ *   exceeds the same cap (#16547 server, #17456 client): its explicit selectors
+ *   stay few, yet one runner would execute ~1,000 suites.
  * - Everything else stays on one runner. Record-aware selection
  *   (`recordedReach` in lib/testMemo/analyzer.js, #16424) narrows what a selected test
  *   actually runs; reach is measured, not assumed, so a small graph stays put.
@@ -50,9 +50,10 @@ export const shardIndexes = (mode, count) => (
  */
 const runnerFanOutCap = (runner) => (runner === 'client' ? CLIENT_FANOUT_TEST_FILES : MAX_TARGETED_TEST_FILES);
 export const fansOut = (runner, { mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
-  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > runnerFanOutCap(runner)));
 
-export const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
+/** The suites a measureRepoImportReach() report selects; 0 when it was not measured. */
+export const reachCount = (report) => (Number.isFinite(report?.selected) ? report.selected : 0);
 
 // A scoped runner spread over several shards says why, so the summary never
 // reads as a full run.
@@ -61,7 +62,7 @@ const fanOutNote = (plan, runner) => {
   if (plan.full || count === 1) return '';
   const cap = runnerFanOutCap(runner);
   if (plan[runner].files.length <= cap) {
-    return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
+    return `; related import reach of ${plan.reachSelected[runner]} suites exceeds the ${cap}-file cap, sharded ${count} ways`;
   }
   return `; ${plan[runner].files.length} selected test files exceed the ${cap}-file cap, sharded ${count} ways`;
 };

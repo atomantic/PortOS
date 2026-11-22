@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { fansOut } from './lib/ciPlanOutput.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
@@ -610,6 +611,70 @@ it('resolves local client imports of present untracked modules and still fails c
     const missing = inspect();
     expect(missing.full).toBe(true);
     expect(missing.reason).toBe('client dependency discovery unresolved');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('measures client related import reach and fans a broad shared client module out across the client shards (#17456)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-client-reach-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const shared = 'client/src/services/apiCore.js';
+  const narrow = 'client/src/components/lonely/Lonely.jsx';
+  const leaf = 'server/lib/shared/leaf.js';
+  const consumers = CLIENT_FANOUT_TEST_FILES + 1;
+  const inspect = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: root });
+    return { inputs, plan: buildCiTestPlan(inputs.changedFiles, inputs) };
+  };
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(shared, "export { value } from '../../../server/lib/shared/leaf.js';\n");
+    write(narrow, 'export const Lonely = () => null;\n');
+    write('client/src/components/lonely/Lonely.test.jsx', "import './Lonely.jsx';\n");
+    for (let i = 0; i < consumers; i += 1) {
+      const dir = `client/src/pages/p${String(i).padStart(3, '0')}`;
+      // A lazy edge: the related walk follows it, so the reach is dynamic-aware.
+      write(`${dir}/Page.jsx`, "export const load = () => import('../../services/apiCore.js');\n");
+      write(`${dir}/Page.test.jsx`, "import './Page.jsx';\n");
+    }
+    // A guard check lives in the client tree but no client runner collects it.
+    write('client/src/test/guards/structure/apiCore.guard.test.js', "import '../../../services/apiCore.js';\n");
+    git('add', '--all');
+
+    const broad = inspect([shared]);
+    expect(broad.inputs.serverReach).toBeNull();
+    expect(broad.inputs.clientReach).toMatchObject({ selected: consumers, rows: [{ source: shared, staticReach: 0, dynamicReach: consumers }] });
+    expect(broad.plan).toMatchObject({ full: false, client: { mode: 'related', sources: [shared] } });
+    // Explicit selectors stay few; only the measured reach fans the runner out.
+    expect(broad.plan.client.files.length).toBeLessThanOrEqual(CLIENT_FANOUT_TEST_FILES);
+    expect(broad.plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    expect(broad.plan.shards.server).toEqual([1]);
+    expect(broad.plan.suiteReasons.client).toMatch(new RegExp(
+      `related import reach of ${consumers} suites exceeds the ${CLIENT_FANOUT_TEST_FILES}-file cap, sharded ${FULL_SUITE_SHARDS.client} ways`));
+    expect(broad.plan.suiteReasons.client).toContain(`dynamic-aware fan-out ${consumers} suite(s): ${shared} ${consumers} (static 0)`);
+    // The step summary carries the reach-based fan-out.
+    const summary = formatPlanSummary(githubPlanOutput(broad.plan), broad.plan.shards);
+    expect(summary).toContain(`related import reach of ${consumers} suites exceeds the ${CLIENT_FANOUT_TEST_FILES}-file cap`);
+    expect(summary).toContain(`Client tests: \`related\` (shards \`${JSON.stringify(broad.plan.shards.client)}\`)`);
+
+    const small = inspect([narrow]);
+    expect(small.inputs.clientReach).toMatchObject({ selected: 1 });
+    expect(small.plan.client.mode).toBe('related');
+    expect(small.plan.shards.client).toEqual([1]);
+    expect(small.plan.suiteReasons.client).not.toMatch(/sharded/);
+
+    // A shared server/lib module the browser bundle imports is a client related
+    // source too, so its client reach is measured alongside the server reach.
+    const sharedServer = inspect([leaf]);
+    expect(sharedServer.inputs.clientReach).toMatchObject({ selected: consumers });
+    expect(sharedServer.plan.client.sources).toContain(leaf);
+    expect(sharedServer.plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1684,6 +1749,35 @@ describe('CI test impact planner', () => {
       const exact = buildCiTestPlan(tests, { trackedFiles, serverReach: reach(1069) });
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
+    });
+
+    it('fans a client related plan out on measured import reach over the client cap, never at or under it (#17456)', () => {
+      const source = 'client/src/services/apiShared.js';
+      const tests = featureTests('client/src/components/sharedfeature', 2, 'jsx');
+      const trackedFiles = [...TRACKED, source, ...tests];
+      const reach = (selected) => ({ selected, rows: [{ source, dynamicReach: selected, staticReach: 10 }] });
+
+      const broad = buildCiTestPlan([source], { trackedFiles, clientReach: reach(1042) });
+      expect(broad.client).toMatchObject({ mode: 'related', sources: [source] });
+      expect(broad.shards).toEqual({ server: [1], client: CLIENT_FANOUT, browser: [1], windows: [1] });
+      expect(broad.suiteReasons.client).toMatch(/related import reach of 1042 suites exceeds the 400-file cap, sharded 3 ways/);
+      expect(broad.suiteReasons.client).toContain(`dynamic-aware fan-out 1042 suite(s): ${source} 1042 (static 10)`);
+
+      // The server's lower cap never applies to client reach.
+      for (const selected of [MAX_TARGETED_TEST_FILES + 1, CLIENT_FANOUT_TEST_FILES]) {
+        const low = buildCiTestPlan([source], { trackedFiles, clientReach: reach(selected) });
+        expect(low.shards.client).toEqual([1]);
+        expect(low.suiteReasons.client).not.toMatch(/sharded/);
+      }
+      expect(fansOut('client', { mode: 'related', files: [] }, CLIENT_FANOUT_TEST_FILES + 1)).toBe(true);
+      expect(fansOut('client', { mode: 'files', files: [] }, CLIENT_FANOUT_TEST_FILES + 1)).toBe(false);
+
+      // Each runner reads only its own reach.
+      const serverOnly = buildCiTestPlan([source], { trackedFiles, serverReach: reach(1042) });
+      expect(serverOnly.shards.client).toEqual([1]);
+      const exact = buildCiTestPlan(tests, { trackedFiles, clientReach: reach(1042) });
+      expect(exact.client.mode).toBe('files');
+      expect(exact.shards.client).toEqual([1]);
     });
   });
 
