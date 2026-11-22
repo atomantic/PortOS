@@ -7,7 +7,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dropRunnerAgent, runnerAgents, trackRunnerAgent } from './agentState.js';
 
-afterEach(() => runnerAgents.clear());
+afterEach(() => {
+  for (const agentId of [...runnerAgents.keys()]) dropRunnerAgent(agentId);
+});
 
 describe('runner-agent tracking helpers', () => {
   it('dropRunnerAgent removes the entry and releases its hold exactly once', () => {
@@ -26,12 +28,16 @@ describe('runner-agent tracking helpers', () => {
     trackRunnerAgent('agent-1', { releaseOllamaWork: second });
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).not.toHaveBeenCalled();
+    dropRunnerAgent('agent-1');
+    expect(second).toHaveBeenCalledTimes(1);
   });
 
-  it('a throwing release still drops the entry', () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    trackRunnerAgent('agent-1', { releaseOllamaWork: () => { throw new Error('boom'); } });
-    expect(() => dropRunnerAgent('agent-1')).not.toThrow();
-    expect(runnerAgents.has('agent-1')).toBe(false);
+  it('trackRunnerAgent keeps a hold the replacement carries over', () => {
+    const hold = vi.fn();
+    trackRunnerAgent('agent-1', { taskId: 'task-1', releaseOllamaWork: hold });
+    trackRunnerAgent('agent-1', { description: 'stub', releaseOllamaWork: hold });
+    expect(hold).not.toHaveBeenCalled();
+    dropRunnerAgent('agent-1');
+    expect(hold).toHaveBeenCalledTimes(1);
   });
 });

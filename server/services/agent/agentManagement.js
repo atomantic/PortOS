@@ -1262,25 +1262,31 @@ async function runCleanupOrphanedAgents() {
         const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
         if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
       }
-      dropRunnerAgent(agent.id);
-
-      // Before marking as orphaned, check if the process is actually still running
+      // Before marking as orphaned, check if the process is actually still running.
+      // Any leftover entry stays until the pid is known dead: a live Ollama-backed
+      // harness must never be uncounted as in-flight daemon work (#17342).
       if (agent.pid) {
         const stillAlive = await isPidAlive(agent.pid);
         if (stillAlive) {
           console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
           const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
-          // The drop above released any earlier hold; a live Ollama-backed
-          // harness must stay counted as in-flight daemon work (#17342).
-          const releaseOllamaWork = await holdRecoveredRunnerOllamaWork(agent);
+          const current = runnerAgents.get(agent.id);
+          const acquired = current?.releaseOllamaWork ? null : await holdRecoveredRunnerOllamaWork(agent);
+          // Another sweep or spawn re-tracked or dropped it while this one awaited.
+          if (runnerAgents.get(agent.id) !== current) {
+            acquired?.();
+            continue;
+          }
+          // The stub carries the existing hold over, so replacing the entry keeps it.
           trackRunnerAgent(agent.id, {
             id: agent.id, pid: agent.pid, taskId: agent.taskId,
             task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' },
-            releaseOllamaWork
+            releaseOllamaWork: current?.releaseOllamaWork ?? acquired
           });
           continue;
         }
       }
+      dropRunnerAgent(agent.id);
 
       // Recheck after the awaited pid probes: completion owns its terminal write.
       if (completingAgents.has(agent.id)) continue;

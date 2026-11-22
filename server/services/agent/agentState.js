@@ -16,19 +16,18 @@ export const runnerAgents = new Map();
 // live harness (#17342). Mutate the map ONLY through these two helpers so every
 // teardown and overwrite releases that hold; a bare `runnerAgents.delete` leaks
 // it and defers every later reload until the drain timeout.
-const releaseEntryHold = (entry) => {
-  try {
-    entry?.releaseOllamaWork?.();
-  } catch (err) {
-    console.error(`❌ Ollama work release failed: ${err.message}`);
-  }
-};
+//
+// A release is `ollamaManager`'s idempotent registry delete (or a no-op), so it
+// cannot throw.
 
-/** Track a runner-hosted agent; an entry it replaces has its hold released. */
+/**
+ * Track a runner-hosted agent. An entry it replaces has its hold released,
+ * unless the replacement carries that same hold over.
+ */
 export const trackRunnerAgent = (agentId, entry) => {
   const previous = runnerAgents.get(agentId);
   runnerAgents.set(agentId, entry);
-  if (previous && previous !== entry) releaseEntryHold(previous);
+  if (previous && previous.releaseOllamaWork !== entry.releaseOllamaWork) previous.releaseOllamaWork?.();
   return entry;
 };
 
@@ -36,7 +35,7 @@ export const trackRunnerAgent = (agentId, entry) => {
 export const dropRunnerAgent = (agentId) => {
   const entry = runnerAgents.get(agentId);
   const deleted = runnerAgents.delete(agentId);
-  releaseEntryHold(entry);
+  entry?.releaseOllamaWork?.();
   return deleted;
 };
 

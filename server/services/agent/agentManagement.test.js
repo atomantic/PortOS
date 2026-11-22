@@ -172,7 +172,7 @@ import { pauseAgentViaRunner, killAgentViaRunner, getActiveAgentsFromRunner } fr
 import * as shellService from '../shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../../lib/hostShutdown.js';
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
-import { readRunnerCompletionReceipt } from './agentRunnerSync.js';
+import { holdRecoveredRunnerOllamaWork, readRunnerCompletionReceipt } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
@@ -491,6 +491,45 @@ describe('cleanupOrphanedAgents — startup recovery coordination', () => {
     await cleanupOrphanedAgents();
 
     expect(markAgentComplete).not.toHaveBeenCalled();
+  });
+
+  // #17342: a still-live pid is re-synced, never left uncounted as Ollama work.
+  describe('pid re-sync keeps the in-flight Ollama hold', () => {
+    const liveRecord = () => ({
+      id: 'agent-alive', status: 'running', pid: process.pid, taskId: 'task-1',
+      metadata: { useRunner: true, executionMode: 'runner', providerId: 'claude-ollama' },
+    });
+    // Absent from the runner's listing, but this test process's own pid is alive.
+    const staleListing = () => [];
+
+    it('carries an existing hold over to the re-synced stub', async () => {
+      const hold = vi.fn();
+      runnerAgents.set('agent-alive', { taskId: 'task-1', releaseOllamaWork: hold });
+      // The reverse pass keeps tracking that a live record backs.
+      readAgentRecordOrUnreadable.mockResolvedValueOnce(liveRecord());
+      getAgents.mockResolvedValueOnce([liveRecord()]);
+      getActiveAgentsFromRunner.mockResolvedValueOnce(staleListing());
+
+      await cleanupOrphanedAgents();
+
+      expect(hold).not.toHaveBeenCalled();
+      expect(holdRecoveredRunnerOllamaWork).not.toHaveBeenCalled();
+      expect(runnerAgents.get('agent-alive')).toMatchObject({ pid: process.pid, releaseOllamaWork: hold });
+      runnerAgents.clear();
+    });
+
+    it('acquires a hold for an untracked live survivor', async () => {
+      const hold = vi.fn();
+      holdRecoveredRunnerOllamaWork.mockResolvedValueOnce(hold);
+      getAgents.mockResolvedValueOnce([liveRecord()]);
+      getActiveAgentsFromRunner.mockResolvedValueOnce(staleListing());
+
+      await cleanupOrphanedAgents();
+
+      expect(holdRecoveredRunnerOllamaWork).toHaveBeenCalledWith(expect.objectContaining({ id: 'agent-alive' }));
+      expect(runnerAgents.get('agent-alive')?.releaseOllamaWork).toBe(hold);
+      runnerAgents.clear();
+    });
   });
 
   it('reaps a stale listing even if runnerAgents already adopted the id', async () => {
