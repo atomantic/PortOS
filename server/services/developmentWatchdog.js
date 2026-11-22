@@ -88,7 +88,7 @@ async function participatingPeerTasks() {
   const { peerFetch } = await import('../lib/peerHttpClient.js');
   const { peerBaseUrl } = await import('../lib/peerUrl.js');
   const { peerCosTasksSchema } = await import('../lib/peerSyncValidation.js');
-  const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
+  const { PLATFORM_SCHEMA_VERSIONS } = await import('../lib/schemaVersions/platform.js');
   let peers;
   try { peers = (await getPeers()).filter(p => p.enabled !== false && p.fullSync === true); }
   catch { return { tasks: [], blockers: [{ source: 'peer-ownership', reason: 'peer-registry-unavailable' }] }; }
@@ -101,7 +101,7 @@ async function participatingPeerTasks() {
       }, peer);
       if (!response.ok) throw new Error('unavailable');
       const parsed = peerCosTasksSchema.safeParse(await response.json());
-      if (!parsed.success || parsed.data.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosTasks
+      if (!parsed.success || parsed.data.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosTasks
         || parsed.data.tasks.length >= 50000) throw new Error('incomplete');
       tasks.push(...parsed.data.tasks);
     } catch {

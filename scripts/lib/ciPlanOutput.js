@@ -18,14 +18,14 @@ export const MAX_TARGETED_TEST_FILES = 125;
 // A client runner's cold-memo cost is about 0.4s per file including overhead
 // (#16805 measurements), so one runner absorbs 400 client files, explicit or
 // reached through a related walk, inside the existing critical path. Fanning
-// out earlier only adds three runner starts, Chrome warm-ups and memo restores.
+// out earlier adds runner starts, Chrome warm-ups and memo restores.
 export const CLIENT_FANOUT_TEST_FILES = 400;
 
 // Parallel runners per test job on a full plan. Decided here rather than in
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 1 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 4, windows: 1 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (

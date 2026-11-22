@@ -6,7 +6,7 @@ import { query } from '../lib/db.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { AUDIT_EXECUTION_TASK_TYPES, LEGACY_AUDIT_TASK_TYPE_ALIASES, normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { auditQualityReportSchema, historicalQualityReportSchema, AUDIT_FRESHNESS_MS, numericQualityReport } from '../lib/auditQuality.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { readBodyCapped } from '../lib/safeUrlFetch.js';
@@ -38,7 +38,7 @@ const READABLE_CATEGORY_PARAM = encodeURIComponent([
 ].join(','));
 
 const payloadSchema = z.object({
-  schemaVersion: z.literal(PORTOS_SCHEMA_VERSIONS.appQuality),
+  schemaVersion: z.literal(PLATFORM_SCHEMA_VERSIONS.appQuality),
   repository: z.string().regex(/^[a-f0-9]{64}$/),
   measurements: z.array(z.unknown()).max(10000),
 }).strict();
@@ -161,7 +161,7 @@ export async function buildQualitySnapshot(app = { id: PORTOS_APP_ID }, days = 3
       assessedAt: record.assessedAt, report: record.report });
     return parsed.success && parsed.data.report.category === record.category ? [parsed.data] : [];
   });
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.appQuality, repository, measurements };
+  return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.appQuality, repository, measurements };
 }
 
 /** No persistence or forwarding: disabled/offline peers cannot leave a hidden stale contribution. */

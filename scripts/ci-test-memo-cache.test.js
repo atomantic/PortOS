@@ -94,6 +94,8 @@ describe('trusted CI test-memo cache reuse', () => {
       const park = step(job, `Park full-run shard ${shard}`);
       expect(park).toContain(`if: steps.restore-shard-${shard}.outcome == 'success'`);
       expect(park).toContain(`portos-test-memo-shards/${shard}`);
+      expect(job.indexOf(`- name: Park full-run shard ${shard}\n`))
+        .toBeLessThan(job.indexOf('- name: Merge the full-run shard lineages\n'));
       return skipPrefix;
     });
 
@@ -109,7 +111,10 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(additionalKeys(fallback)).toEqual(fullKeys.slice(0, -1));
     expect(additionalKeys(restoreFrom(initial, [fallback, scopedKey], scopedContext))).toEqual(fullKeys);
     expect(additionalKeys(restoreFrom(initial, [], scopedContext))).toEqual(fullKeys);
-    // The delimiter distinguishes, for example, client-3of3 from client-3of30.
+    // A cache from an older shard layout must still fetch every current lineage.
+    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${count - 1}-`);
+    expect(additionalKeys(restoreFrom(initial, [previousLayout], scopedContext))).toEqual(fullKeys);
+    // The delimiter distinguishes, for example, client-4of4 from client-4of40.
     expect(additionalKeys(fallback.replace(`of${count}-`, `of${count}0-`))).toEqual(fullKeys);
 
     expect(memoPath(initial)).toBe(memoPath(save));

@@ -20,7 +20,7 @@
  * is replicated. Relationship data is instance-local.
  */
 
-import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
 import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
@@ -37,7 +37,7 @@ import { dedupeByKey } from '../lib/arrayUtils.js';
  * @returns {Promise<{memories: Array, maxSequence: string, hasMore: boolean}>}
  */
 export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVersion = 0) {
-  if (schemaVersion > PORTOS_SCHEMA_VERSIONS.memoryHistory) {
+  if (schemaVersion > PLATFORM_SCHEMA_VERSIONS.memoryHistory) {
     throw new ServerError('Unsupported memory schema version', { status: 409 });
   }
   // Fetch limit+1 rows to detect whether more records exist beyond this batch
@@ -66,7 +66,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
   // not replicated — omitted from sync payload intentionally.
   const memories = rows.map(row => ({
     id: row.id,
-    ...(schemaVersion === PORTOS_SCHEMA_VERSIONS.memoryHistory ? { version: row.version } : {}),
+    ...(schemaVersion === PLATFORM_SCHEMA_VERSIONS.memoryHistory ? { version: row.version } : {}),
     type: row.type,
     content: row.content,
     summary: row.summary,
@@ -106,7 +106,7 @@ export async function getChangesSince(sinceSequence = '0', limit = 100, schemaVe
  *   skipped  - rows rejected by last-writer-wins (local was newer)
  */
 export async function applyRemoteChanges(incomingMemories, schemaVersion = 0) {
-  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > PORTOS_SCHEMA_VERSIONS.memoryHistory) {
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > PLATFORM_SCHEMA_VERSIONS.memoryHistory) {
     throw new ServerError('Unsupported memory schema version', { status: 409 });
   }
   // Never import a peer's revision counter into the local history PK. The

@@ -60,7 +60,7 @@ import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron, isValidRecurrence } from '../eventScheduler.js';
-import { preserveLegacyRenderPins } from '../../lib/schemaVersions.js';
+import { preserveLegacyRenderPins } from '../../lib/schemaVersions/creativeMedia.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import {
   contentHashForRecord,

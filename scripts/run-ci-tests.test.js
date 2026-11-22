@@ -419,10 +419,14 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
       expect(new Set(slices.flat()).size).toBe(expected.length);
       selections[profile] = slices;
     }
-    const [firstCount, secondCount] = selections.full.map(files => files.length);
-    expect(Math.abs(firstCount - secondCount)).toBeLessThanOrEqual(1);
+    const firstCount = selections.full[0].length;
     const owner = file => selections.full.findIndex(files => files.includes(file));
     expect(owner('services/musicVideo/documentRender.browser.test.js')).not.toBe(owner('services/htmlComposition/index.test.js'));
+    // The serial capture and parallel parity suite share an owner so the other
+    // runner can absorb the rich authoring and catalog capture workload.
+    const animaticOwner = owner('services/musicVideo/animaticCapture.browser.test.js');
+    expect(animaticOwner).toBe(owner('services/musicVideo/documentTemplateParity.browser.test.js'));
+    expect(animaticOwner).not.toBe(owner('routes/musicVideoRichAuthoring.browser.test.js'));
     for (const [index, files] of selections.smoke.entries()) for (const file of files) expect(owner(file)).toBe(index);
     // A scoped list must retain the canonical owners rather than re-numbering
     // its entries. Memo entries in only one shard must not move another file.

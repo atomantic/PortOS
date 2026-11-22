@@ -37,7 +37,7 @@ import { isStr } from '../../lib/textUtils.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { peerEidoverseFoundationsSchema } from '../../lib/peerSyncValidation.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { getPeers } from '../instances.js';
@@ -106,7 +106,7 @@ const offeringListHash = (candidates, tombstones) => createHash('sha256')
  */
 export async function buildEidoverseFoundationOffering() {
   const offering = (candidates, tombstones = []) => ({
-    schemaVersion: PORTOS_SCHEMA_VERSIONS.eidoverseFoundations,
+    schemaVersion: PLATFORM_SCHEMA_VERSIONS.eidoverseFoundations,
     listHash: offeringListHash(candidates, tombstones),
     candidates,
     tombstones,
@@ -191,8 +191,8 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
         // Schema gate — GENTLE skip, not a rejection: wait for the local PortOS to upgrade rather
         // than store a foundation shape it cannot interpret (the ledger has no re-fetch path to
         // correct a mis-applied envelope later).
-    if (payload.schemaVersion > PORTOS_SCHEMA_VERSIONS.eidoverseFoundations) {
-      console.log(`⏸️ peerSync: ${peerLabel(peer)} eidoverse-foundations offering is schema v${payload.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.eidoverseFoundations} — skipping until this instance updates`);
+    if (payload.schemaVersion > PLATFORM_SCHEMA_VERSIONS.eidoverseFoundations) {
+      console.log(`⏸️ peerSync: ${peerLabel(peer)} eidoverse-foundations offering is schema v${payload.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.eidoverseFoundations} — skipping until this instance updates`);
       return { inherited: 0, skipped: 'schema-ahead' };
     }
         // Unchanged short-circuit with a periodic forced re-pull, so a LOCAL loss (hand-deleted

@@ -58,6 +58,15 @@ const responses = {
   { family: 'codex', label: 'Example codex', supported: true, fetchedAt: '2025-12-20T00:00:00.000Z',
     origin: { self: false, instanceId: 'synthetic-offline-peer', name: 'synthetic-offline-peer' }, quotaStatus: 'expired',
     limits: [], error: 'Every window in this reading has since reset — refresh for a current one.' }] },
+  '/html-pages/models': {
+    models: [{ backend: 'example', runtimeLabel: 'Example runtime', modelId: 'example-model' }],
+    defaultPages: ['Example brief one.', 'Example brief two.', 'Example brief three.'],
+    promptParts: { before: 'Before. ', after: ' After.' }, briefMaxChars: 2000, pageCountMax: 6,
+  },
+  '/html-pages/runs': Array.from({ length: 24 }, (_, i) => ({
+    id: `run-${i}`, modelId: `example-model-${i}`, backend: 'example', status: 'complete', pageCount: 3, pages: [],
+    createdAt: '2026-01-01T00:00:00.000Z', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:01:00.000Z',
+  })),
 };
 
 // Real route components and Tailwind, synthetic API only. Layout's classification
@@ -80,7 +89,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       viteConfig: temp => ({
         configFile: false, root, cacheDir: join(temp, 'vite-cache'),
         optimizeDeps: {
-          entries: ['src/pages/ChiefOfStaff.jsx', 'src/pages/CodeAnimation.jsx', 'src/pages/UsagePage.jsx', 'src/pages/SystemHealthPage.jsx'],
+          entries: ['src/pages/ChiefOfStaff.jsx', 'src/pages/CodeAnimation.jsx', 'src/pages/UsagePage.jsx', 'src/pages/SystemHealthPage.jsx', 'src/pages/HtmlPages.jsx'],
           include: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react-router', 'lucide-react'],
         },
         plugins: [react(), {
@@ -100,6 +109,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
               import CodeAnimation from '/src/pages/CodeAnimation.jsx';
               import UsagePage from '/src/pages/UsagePage.jsx';
               import SystemHealthPage from '/src/pages/SystemHealthPage.jsx';
+              import HtmlPages from '/src/pages/HtmlPages.jsx';
               import '/src/index.css';
               const path = new URLSearchParams(location.search).get('route') || '/cos/agents';
               const rail = innerWidth >= 768 ? 256 : 0;
@@ -113,7 +123,8 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
                       h(Route, { path: '/cos/:tab', element: h(ChiefOfStaff) }),
                       h(Route, { path: '/code-animation/gallery', element: h(CodeAnimation) }),
                       h(Route, { path: '/devtools/usage', element: h(UsagePage) }),
-                      h(Route, { path: '/system-resources/:tab', element: h(SystemHealthPage) })))));
+                      h(Route, { path: '/system-resources/:tab', element: h(SystemHealthPage) }),
+                      h(Route, { path: '/html-pages', element: h(HtmlPages) })))));
 
             `;
           },
@@ -236,6 +247,29 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         }
       }
       expect(errors).toEqual([]);
+    } finally { await page.close(); }
+  }, 60000);
+
+  // A page without its own scroll body is clipped by FullWidthMain's overflow and cannot scroll at all.
+  it.each([1440, 390])('scrolls a long HTML Pages run list inside its own body at %i px', async width => {
+    const page = await fixture.browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    await page.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== new URL(fixture.origin).origin) return route.abort();
+      if (!url.pathname.startsWith('/api/')) return route.continue();
+      const key = url.pathname.slice(4);
+      return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
+    });
+    try {
+      await page.goto(`${fixture.origin}layout-test?route=/html-pages`, { waitUntil: 'domcontentloaded' });
+      await page.getByText('example-model-23', { exact: true }).waitFor();
+      const body = page.locator('main > div > div').last();
+      const before = await page.locator('h1').boundingBox();
+      expect(await body.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+      await page.mouse.move(width / 2, 800);
+      await page.mouse.wheel(0, 4000);
+      await expect.poll(() => body.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+      expect((await page.locator('h1').boundingBox()).y).toBe(before.y);
     } finally { await page.close(); }
   }, 60000);
 });

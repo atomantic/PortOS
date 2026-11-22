@@ -83,7 +83,10 @@ const FULL_TRIGGER_RULES = [
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
   // Widely imported, but pure cross-platform schema logic: no spawn, path or
-  // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
+  // filesystem semantics that pinPlatform() stubs cannot cover on Linux. Only
+  // the composer (category registry and gate helpers) is a full trigger; the
+  // per-domain version slices under server/lib/schemaVersions/ take the
+  // related plan so a routine bump does not run the full matrix (#17460).
   { re: /^server\/lib\/schemaVersions\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
