@@ -116,3 +116,65 @@ it('confirms duplicate linking and refreshes the inventory', async () => {
     sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors',
   }] }, { silent: true });
 });
+
+it('names the repos and bytes before a hub clone can be armed', async () => {
+  const refresh = vi.fn();
+  const blob = 'ab'.repeat(32);
+  const sourcePath = `/cache/models--example--base/blobs/${blob}`;
+  const targetPath = `/cache/models--example--distilled/blobs/${blob}`;
+  render(<MemoryRouter><ModelsPanel report={{ ...report, modelDuplicates: {
+    items: [],
+    hub: {
+      cloneSupported: true,
+      apparentSizeNote: 'Finder and du count each clone at its full size.',
+      totalReclaimableBytes: 2048,
+      groups: [{
+        blobName: blob,
+        sizeBytes: 2048,
+        repos: ['models--example--base', 'models--example--distilled'],
+        logicalDuplicateBytes: 2048,
+        reclaimableBytes: 2048,
+        canClone: true,
+        sourcePath,
+        replacements: [{ repo: 'models--example--distilled', path: targetPath, reclaimableBytes: 2048 }],
+      }],
+    },
+  } }} loading={false} onRunReport={refresh} cleanup={cleanup} /></MemoryRouter>);
+  expect(screen.getByText(/Finder and du count each clone/)).toBeInTheDocument();
+  expect(screen.getByText(/models--example--base, models--example--distilled/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Clone duplicates' }));
+  expect(rectifyModelDuplicates).not.toHaveBeenCalled();
+  const confirm = screen.getByRole('button', { name: 'Clone and reclaim' });
+  expect(confirm).toBeDisabled();
+  expect(screen.getByRole('checkbox', { name: /models--example--base, models--example--distilled and reclaim 2 KB/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(confirm).toBeEnabled();
+  fireEvent.click(confirm);
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(rectifyModelDuplicates).toHaveBeenCalledWith({ mode: 'clone', pairs: [{ sourcePath, targetPath }] }, { silent: true });
+});
+
+it('explains hub duplicates that cannot be cloned', () => {
+  const blob = 'cd'.repeat(32);
+  render(<MemoryRouter><ModelsPanel report={{ ...report, modelDuplicates: {
+    items: [],
+    hub: {
+      cloneSupported: false,
+      apparentSizeNote: 'Finder and du count each clone at its full size.',
+      totalReclaimableBytes: 0,
+      groups: [{
+        blobName: blob,
+        sizeBytes: 4096,
+        repos: ['models--example--base', 'models--example--small'],
+        logicalDuplicateBytes: 4096,
+        reclaimableBytes: 0,
+        canClone: false,
+        reason: 'clones-unavailable',
+        sourcePath: '/cache/a',
+        replacements: [],
+      }],
+    },
+  } }} loading={false} onRunReport={vi.fn()} cleanup={cleanup} /></MemoryRouter>);
+  expect(screen.getByText(/Hardlinks are not used/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Clone duplicates' })).not.toBeInTheDocument();
+});
