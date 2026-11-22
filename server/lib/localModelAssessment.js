@@ -746,3 +746,36 @@ export function reconcileFit(estimatedFit, measurement) {
   if (!measuredFit || measurement?.stale) return base;
   return { ...base, fit: measuredFit, fitSource: 'measured' };
 }
+
+/**
+ * This machine's measured decode speed per `runtime:modelId`, for the Models › Comparison speed axis.
+ * The backend-default (untuned) reading wins over a tuned one, then the newest; a record without a
+ * token rate is left out rather than read as zero.
+ *
+ * @param {Array<object>} assessments stored assessment records
+ * @returns {Map<string, {value: number, estimated: boolean, method: string, source: object}>}
+ */
+export function localSpeedFromAssessments(assessments) {
+  const best = new Map();
+  for (const assessment of Array.isArray(assessments) ? assessments : []) {
+    const value = assessment?.performance?.meanTokensPerSecond;
+    if (!isMeasured(value) || value <= 0 || !assessment.backend || !assessment.modelId) continue;
+    const key = `${assessment.backend}:${assessment.modelId}`;
+    const rank = (a) => [a.tuningKey ? 0 : 1, Date.parse(a.assessedAt || '') || 0];
+    const prior = best.get(key);
+    const [untuned, at] = rank(assessment);
+    const [priorUntuned, priorAt] = prior ? rank(prior) : [-1, 0];
+    if (untuned > priorUntuned || (untuned === priorUntuned && at > priorAt)) best.set(key, assessment);
+  }
+  return new Map([...best].map(([key, assessment]) => {
+    const perf = assessment.performance;
+    const tuning = assessment.tuningKey ? ` under tuning ${assessment.tuningLabel || assessment.tuningKey}` : '';
+    const methodology = `Measured on this machine in Models › Performance: mean output tokens per second across ${perf.samplesOk ?? 'the'} successful context sizes${tuning}${perf.tokensEstimated ? '; token counts estimated from streamed frames' : ''}.`;
+    return [key, {
+      value: perf.meanTokensPerSecond,
+      estimated: perf.tokensEstimated === true,
+      method: methodology,
+      source: { url: '/models/performance/results', retrievedAt: assessment.assessedAt || null, methodology },
+    }];
+  }));
+}

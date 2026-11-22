@@ -63,7 +63,7 @@ it('merges newer installed evidence with shipped evidence and includes only sele
   expect(result.body.observations.find(row => row.id === observation.id).quality.value).toBe(1);
   expect(result.body.observations.find(row => row.id === observation.id).notes).toBe(localObservation.notes);
   expect(result.body.observations).toHaveLength(seed.observations.length);
-  expect(result.body.inventory).toEqual([{ id: 'example-provider', name: 'Example provider', gateway: null, localInference: false, models: [{ model: observation.model, efforts: [] }] }]);
+  expect(result.body.inventory).toEqual([{ id: 'example-provider', name: 'Example provider', gateway: null, localInference: false, runtime: null, models: [{ model: observation.model, efforts: [] }] }]);
   expect(result.body.composite.rows.length).toBeGreaterThan(0);
   expect(result.body.composite.rows.every(row => row.providerId === 'example-provider')).toBe(true);
   for (const path of ['/comparison/discover', '/comparison/run']) expect((await request(app).post(path).send({})).status).toBe(404);
@@ -388,4 +388,32 @@ it('loads shipped Hydrogen effort scores and workload costs for an existing Anti
     expect(result.body.currentComposite.sources[row.costPerTask.sourceIds[0]].url).toMatch(/^https:\/\/artificialanalysis.ai\/models\/gemini-4-hydrogen/);
   }
   expect(result.body.composite.rows.every(row => row.costPerTask === null)).toBe(true);
+});
+
+it('plots published speed for API routes and this machine\'s measured speed for local runtimes, never a public figure for a local build', async () => {
+  const fast = seed.observations.find(row => row.quality && row.tokensPerSecond?.value > 0);
+  await mkdir(join(dir, 'local-llm'), { recursive: true });
+  await writeFile(join(dir, 'local-llm', 'assessments.json'), JSON.stringify({ schemaVersion: 1, assessments: [
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: '', assessedAt: '2026-11-20T00:00:00.000Z', performance: { meanTokensPerSecond: 120.5, samplesOk: 3, tokensEstimated: false } },
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: 'depth=7', assessedAt: '2026-11-21T00:00:00.000Z', performance: { meanTokensPerSecond: 140, samplesOk: 3 } },
+  ] }));
+  app = express();
+  app.use(express.json());
+  app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'example-provider', name: 'Example provider', models: [fast.model], enabled: true },
+    { id: 'mtplx', name: 'MTPLX', servicePlan: 'local', models: ['example-local', 'unmeasured-local'], enabled: true },
+  ] }) }));
+  app.use(errorMiddleware);
+
+  const body = (await request(app).get('/comparison')).body;
+  const rows = body.composite.rows;
+  const api = rows.find(row => row.providerId === 'example-provider' && row.tokensPerSecond);
+  expect(api.tokensPerSecond.value).toBeGreaterThan(0);
+  expect(api.tokensPerSecond.estimated).toBe(false);
+
+  const local = rows.find(row => row.model === 'example-local');
+  // The untuned reading wins over a newer tuned one: the axis describes the runtime as configured.
+  expect(local.tokensPerSecond).toMatchObject({ value: 120.5, estimated: false });
+  expect(body.composite.sources[local.tokensPerSecond.sourceIds[0]].url).toBe('/models/performance/results');
+  expect(rows.find(row => row.model === 'unmeasured-local').tokensPerSecond).toBeNull();
 });
