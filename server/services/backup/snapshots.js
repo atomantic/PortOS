@@ -18,6 +18,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { isSafeSnapshotSource } from '../../lib/sharedSchemas.js';
 import { watchBackupProcess } from './rsync.js';
 import { isOsMetadataFile, isRestorePreservedPath } from './excludes.js';
+
 // A snapshot mid-assembly is a truncated tree that looks like a finished backup.
 // Two signals guard it, because neither alone is sufficient:
 //   - `activeSnapshotId` catches the in-process case with no I/O.
@@ -38,8 +39,8 @@ export const BACKUP_PROCESS_START_ID = randomUUID();
 const INTERRUPTED_FAILURE_REASON = 'interrupted by restart';
 const MARKER_UNREADABLE = Symbol('marker-unreadable');
 let activeSnapshotId = null;
-// The backup run owns this binding, but importers cannot assign an ES module
-// binding, so the run sets it here.
+// runBackup (backup.js) owns this value, but an importer cannot assign an ES
+// module binding, so the run sets it through setActiveSnapshotId().
 export const setActiveSnapshotId = (id) => {
   activeSnapshotId = id;
 };
