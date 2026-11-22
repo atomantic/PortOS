@@ -272,7 +272,6 @@ describe('a11y conventions: routeHeadings', () => {
   // that really jumps — the staleness check below fails on a stale entry, so
   // the list only shrinks.
   const HEADING_ORDER_ALLOWLIST = new Set([
-    'src/pages/Security.jsx',      // h1 → h3 section headings in the settings panel (#17323)
     'src/pages/Browser.jsx',       // h1 → h3 section headings (#17323-class)
     'src/pages/CapabilityMap.jsx', // h1 → h3 section headings (#17323-class)
     'src/pages/FeatureAgents.jsx', // h1 → h3 empty-state heading (#17323-class)
