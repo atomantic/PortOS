@@ -21,6 +21,12 @@ const api = vi.hoisted(() => ({
   updateProviderService: vi.fn(),
   deleteProviderService: vi.fn(),
   refreshProviderServiceCatalog: vi.fn(),
+  getServiceCredentialPool: vi.fn(),
+  updateServiceCredentialPool: vi.fn(),
+  addServiceCredentialPoolKey: vi.fn(),
+  updateServiceCredentialPoolKey: vi.fn(),
+  removeServiceCredentialPoolKey: vi.fn(),
+  resetServiceCredentialPoolCooldowns: vi.fn(),
 }));
 vi.mock('../../services/apiProviders.js', () => ({
   getProviderCatalog: api.getProviderCatalog,
@@ -31,6 +37,12 @@ vi.mock('../../services/apiProviders.js', () => ({
   updateProviderService: api.updateProviderService,
   deleteProviderService: api.deleteProviderService,
   refreshProviderServiceCatalog: api.refreshProviderServiceCatalog,
+  getServiceCredentialPool: api.getServiceCredentialPool,
+  updateServiceCredentialPool: api.updateServiceCredentialPool,
+  addServiceCredentialPoolKey: api.addServiceCredentialPoolKey,
+  updateServiceCredentialPoolKey: api.updateServiceCredentialPoolKey,
+  removeServiceCredentialPoolKey: api.removeServiceCredentialPoolKey,
+  resetServiceCredentialPoolCooldowns: api.resetServiceCredentialPoolCooldowns,
 }));
 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }));
@@ -100,6 +112,17 @@ beforeEach(() => {
   __resetProviderCatalogCache();
   api.getProviderCatalog.mockResolvedValue({ harnesses: [], services: [], bootstraps: [], compatibility: {}, effortLevels: {}, effortLevelsByModel: {}, presets: [] });
   api.getProviderServices.mockResolvedValue({ services: [nvidia, ollama] });
+  api.getServiceCredentialPool.mockResolvedValue(poolOf([]));
+});
+
+// The display-safe pool DTO the server answers with (#17384).
+const poolEntry = (overrides) => ({
+  label: 'Primary key', source: 'stored', envVar: null, auto: false, enabled: true, boundOrigin: null, withheld: null,
+  dead: false, cooldown: null, cooledModels: [], uses: 0, lastUsedAt: null, ...overrides,
+});
+const PRIMARY_ENTRY = poolEntry({ id: 'primary', priority: 0, fingerprint: 'nvapi-…0001' });
+const poolOf = (extra, overrides = {}) => ({
+  service: 'nvidia-nim', revision: 3, strategy: 'fill_first', active: extra.length > 0, entries: [PRIMARY_ENTRY, ...extra], ...overrides,
 });
 
 describe('ProviderServicesTab', () => {
@@ -168,6 +191,58 @@ describe('ProviderServicesTab', () => {
       credentials: { apiKey: 'nvapi-example' },
     }, { silent: true }));
     expect(await screen.findByText('Key stored on this service')).toBeInTheDocument();
+  });
+
+  it('adds a pooled key, shows only its fingerprint, and carries the bumped revision into the next save', async () => {
+    const added = poolEntry({ id: 'key-1', label: 'Second key', priority: 1, fingerprint: 'nvapi-…0002' });
+    api.addServiceCredentialPoolKey.mockResolvedValue(poolOf([added], { revision: 4 }));
+    api.updateProviderService.mockResolvedValue({ service: { ...nvidia, revision: 5 } });
+    renderTab('/ai/services/nvidia-nim');
+    const card = await screen.findByRole('article', { name: /NVIDIA NIM/ });
+    expect(await within(card).findByText(/Credential pool \(1 key\)/)).toBeInTheDocument();
+    expect(api.getServiceCredentialPool).toHaveBeenCalledWith('nvidia-nim', { silent: true });
+
+    fireEvent.change(within(card).getByLabelText('Additional key'), { target: { value: 'nvapi-example-second' } });
+    fireEvent.change(within(card).getByLabelText('Label (optional)'), { target: { value: 'Second key' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Add to pool' }));
+    await waitFor(() => expect(api.addServiceCredentialPoolKey).toHaveBeenCalledWith('nvidia-nim', { apiKey: 'nvapi-example-second', label: 'Second key' }));
+    expect(await within(card).findByText('nvapi-…0002')).toBeInTheDocument();
+    expect(within(card).getByLabelText('Additional key')).toHaveValue('');
+
+    // A half-typed name survives the pool write, and the save is not stale.
+    fireEvent.change(within(card).getByLabelText('Name'), { target: { value: 'NVIDIA pooled' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save service' }));
+    await waitFor(() => expect(api.updateProviderService).toHaveBeenCalledWith('nvidia-nim', expect.objectContaining({ expectedRevision: 4, label: 'NVIDIA pooled' }), { silent: true }));
+  });
+
+  it('reorders, re-binds a withheld key, and resets a cooling one', async () => {
+    const moved = poolEntry({ id: 'key-1', label: 'Old host key', priority: 1, fingerprint: 'nvapi-…0002', withheld: 'origin-mismatch', boundOrigin: 'https://old.example.com' });
+    const cooling = poolEntry({ id: 'env:NVIDIA_API_KEY_2', label: 'NVIDIA_API_KEY_2', source: 'env', envVar: 'NVIDIA_API_KEY_2', auto: true, priority: 2, fingerprint: 'nvapi-…0003', cooldown: { reason: 'quota', until: '2030-01-01T10:00:00.000Z' } });
+    api.getServiceCredentialPool.mockResolvedValue(poolOf([moved, cooling]));
+    api.updateServiceCredentialPool.mockResolvedValue(poolOf([cooling, moved]));
+    api.updateServiceCredentialPoolKey.mockResolvedValue(poolOf([{ ...moved, withheld: null }, cooling]));
+    api.resetServiceCredentialPoolCooldowns.mockResolvedValue(poolOf([moved, { ...cooling, cooldown: null }]));
+    renderTab('/ai/services/nvidia-nim');
+    const card = await screen.findByRole('article', { name: /NVIDIA NIM/ });
+    expect(await within(card).findByText('Withheld: endpoint moved')).toBeInTheDocument();
+    expect(within(card).getByText(/Cooling \(quota\) until/)).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Move NVIDIA_API_KEY_2 up' }));
+    await waitFor(() => expect(api.updateServiceCredentialPool).toHaveBeenCalledWith('nvidia-nim', { order: ['primary', 'env:NVIDIA_API_KEY_2', 'key-1'] }));
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Re-bind to current endpoint' }));
+    await waitFor(() => expect(api.updateServiceCredentialPoolKey).toHaveBeenCalledWith('nvidia-nim', 'key-1', { rebindOrigin: true }));
+
+    fireEvent.click(await within(card).findByRole('button', { name: 'Reset cooldown' }));
+    await waitFor(() => expect(api.resetServiceCredentialPoolCooldowns).toHaveBeenCalledWith('nvidia-nim', { credentialId: 'env:NVIDIA_API_KEY_2' }));
+    await waitFor(() => expect(within(card).queryByText(/Cooling \(quota\)/)).not.toBeInTheDocument());
+  });
+
+  it('offers no pool on a local runtime', async () => {
+    renderTab('/ai/services/ollama');
+    const card = await screen.findByRole('article', { name: /Ollama/ });
+    expect(within(card).queryByText(/Credential pool/)).not.toBeInTheDocument();
+    expect(api.getServiceCredentialPool).not.toHaveBeenCalled();
   });
 
   it('deletes an unused instance and returns to the list', async () => {

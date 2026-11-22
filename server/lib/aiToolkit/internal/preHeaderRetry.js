@@ -214,3 +214,51 @@ export async function fetchWithPreHeaderRetry(fetchAttempt, {
     }
   }
 }
+
+/**
+ * Send one request through an optional host credential session (#17384),
+ * resending on another key of the same service when the session says the
+ * failure was the key's. A sibling of the replay policy above: that one resends
+ * the SAME request after a transport failure; this one resends it with a
+ * different key after an HTTP answer the key earned.
+ *
+ * The session contract is the host's (PortOS:
+ * `services/provider/credentialPoolRuntime.js`, reached through
+ * `hooks.openCredentialSession`): `apiKey` is the key to send now,
+ * `onFailure({ status, body, headers }, { signal })` records a failed attempt
+ * and resolves `true` to resend with the (possibly rotated) `apiKey`, and
+ * `onSuccess()` accounts a success. The toolkit knows nothing about pools,
+ * ledgers or cooldowns — only this loop.
+ *
+ * A failed response's body is read once and handed back on a replay object
+ * whose `text()` still answers, so the caller's existing error handling (the
+ * run finalizer, the provider bench) reads the LAST failure exactly as it would
+ * have read the only one.
+ *
+ * @param {object|null} session - a host credential session, or null (send once with `fallbackKey`)
+ * @param {string} fallbackKey - the provider record's own key
+ * @param {(apiKey: string) => Promise<object>} send - one attempt; resolves to a fetch-like response
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<object>} the successful response, or the last failure
+ */
+export async function sendWithCredentialSession(session, fallbackKey, send, signal) {
+  if (!session) return send(fallbackKey);
+  for (;;) {
+    const response = await send(session.apiKey);
+    if (response?.ok) {
+      session.onSuccess();
+      return response;
+    }
+    const body = typeof response?.text === 'function' ? await response.text().catch(() => '') : (response?.error || '');
+    const replay = {
+      ok: false,
+      status: response?.status ?? 0,
+      statusText: response?.statusText,
+      headers: response?.headers,
+      error: response?.error,
+      text: async () => body,
+    };
+    const retry = await session.onFailure({ status: replay.status, body, headers: replay.headers }, { signal });
+    if (!retry) return replay;
+  }
+}

@@ -11,7 +11,7 @@ import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
 import { apiGenerationOptions, openRouterBodyFragment } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
 import { isOllamaBackedProvider, ollamaThinkLevel, withModelNumCtx } from './internal/ollamaBacked.js';
-import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
+import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest, sendWithCredentialSession } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound
 // without dragging this file's fs/child_process closure with it.
@@ -839,12 +839,18 @@ export function createRunnerService(config = {}) {
             ...(thinkLevel ? { reasoning_effort: thinkLevel } : {}),
             ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
           };
-      const response = !endpointGuard.allowed
-        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
-        : ready.success
-        ? await fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
+      // A host credential pool (#17384) may rotate this request onto another key
+      // of the same service after a 429/402/401, before the provider-wide bench
+      // and fallback chain see the failure. `null` = send the record's own key.
+      const credentialSession = endpointGuard.allowed && ready.success && provider.apiKey && hooks.openCredentialSession
+        ? await Promise.resolve(hooks.openCredentialSession(provider, requestModel)).catch((err) => {
+          console.log(`🔑 Run ${runId} credential pool unavailable: ${err.message}`);
+          return null;
+        })
+        : null;
+      const sendOnce = (apiKey) => fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
             method: 'POST',
-            headers,
+            headers: apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers,
             signal: controller.signal,
             // Hands the request undici's ceilings disabled, leaving `stallTimeout`
             // / `absoluteTimeout` above as the run's only bounds — see
@@ -856,7 +862,11 @@ export function createRunnerService(config = {}) {
             // A caller-owned budget/admission hook accounts for one invocation;
             // do not silently replay a possibly processed local generation.
             allowReplay: !beforeExecute && isReplaySafeLocalRequest(provider),
-          }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }))
+          }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }));
+      const response = !endpointGuard.allowed
+        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
+        : ready.success
+        ? await sendWithCredentialSession(credentialSession, provider.apiKey, sendOnce, controller.signal)
         : { ok: false, error: ready.error || 'Provider readiness check failed', status: 0 };
 
       if (!response.ok) {

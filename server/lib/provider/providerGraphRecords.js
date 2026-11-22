@@ -260,12 +260,29 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
 }
 
 /**
+ * The `credentials` key a service's credential pool (#17384) is stored under —
+ * the one entry of that map that is not itself a secret string. Its shape and
+ * rules live in `credentialPool.js`; it is declared here, with the other facts
+ * about a connection's `credentials` map, so this boot-path module need not
+ * load the pool logic.
+ */
+export const CREDENTIAL_POOL_KEY = 'credentialPool';
+
+/** The stored pool keys' values, for redaction — tolerant of a hand-edited row. */
+const pooledSecrets = (credentials) => {
+  const entries = credentials?.[CREDENTIAL_POOL_KEY]?.entries;
+  return Array.isArray(entries) ? entries.map((entry) => entry?.apiKey) : [];
+};
+
+/**
  * Whether a row holds a secret. Only a `stored` instance does (#7563): a
  * `bootstrap` one is supplied at spawn and an `env` / `cli-login` one is
  * held by something else, so a key left on such a row is not the credential.
+ * The credential pool (#17384) holds EXTRA keys beside the primary, so a row
+ * carrying only a pool still has no key of its own to run under.
  */
 export const connectionHasCredentials = ({ credentials, credentialVia = 'stored' }) =>
-  credentialVia === 'stored' && Object.keys(credentials || {}).length > 0;
+  credentialVia === 'stored' && Object.keys(credentials || {}).some((name) => name !== CREDENTIAL_POOL_KEY);
 
 /**
  * One connection row, sanitized exactly as `GET /api/providers/management`
@@ -721,7 +738,7 @@ const CATALOG_ERROR_MAX = 300;
 export function sanitizeCatalogError(error, credentials = {}) {
   const raw = (error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error || ''))
     || 'The model refresh failed';
-  const redacted = Object.values(credentials)
+  const redacted = [...Object.values(credentials), ...pooledSecrets(credentials)]
     .filter((secret) => typeof secret === 'string' && secret.length > 0)
     .reduce((text, secret) => text.split(secret).join(REDACTED_CREDENTIAL), raw);
   return redacted.length > CATALOG_ERROR_MAX ? `${redacted.slice(0, CATALOG_ERROR_MAX)}…` : redacted;
