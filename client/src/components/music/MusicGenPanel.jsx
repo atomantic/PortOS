@@ -21,114 +21,30 @@
  * without the user having to find a second button.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import ModelInputPreview from '../media/ModelInputPreview';
 import SentPromptPanel from '../media/SentPromptPanel';
-import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import { useSocketResource } from '../../hooks/useSocketResource';
-import { Loader2, Wand2, Download, X } from 'lucide-react';
+import { Loader2, Wand2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import { analyzeMusicLyrics } from '../../lib/musicDuration.js';
-import { formatDurationSec } from '../../utils/formatters.js';
-import {
-  listMusicEngines,
-  generateMusic,
-  previewMusicPrompt,
-  installAudioModel,
-  removeAudioModel,
-} from '../../services/apiMusic.js';
-import { getActiveProcessing } from '../../services/apiSystem.js';
-import { getMediaJob, cancelMediaJob } from '../../services/apiMediaJobs.js';
-import { getTrack } from '../../services/apiTracks.js';
-import { formatDownloadGb } from '../../utils/formatters';
+import { generateMusic, previewMusicPrompt } from '../../services/apiMusic.js';
 import { useFederatedMediaTarget } from '../../hooks/useFederatedMediaTarget.js';
 import RemoteMediaTargetPicker from '../federatedMedia/RemoteMediaTargetPicker';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
+import useMusicGenerationJob from './useMusicGenerationJob.js';
+import useMusicEngineSelection from './useMusicEngineSelection.js';
+import useMusicModelInstall from './useMusicModelInstall.js';
+import MusicDurationControls from './MusicDurationControls.jsx';
+import MusicGenerationStatus from './MusicGenerationStatus.jsx';
+import { DEFAULT_REMOTE_PROFILE, ExecutionProfileNote, InstrumentalToggle, ModelInstallForm, RemoteProfileFields, SetupBanner } from './MusicGenSections.jsx';
+import { buildGenerateBody, engineSetupState, isEngineModelReady, supportsAutoDuration } from './musicEngineModels.js';
+import { engineOptionLabel, generateButtonTitle } from './musicGenLabels.js';
 
-/**
- * What an engine still needs, the sentence explaining it, and the label for the
- * one button that fixes it. Single derivation so the banner text and the button
- * can't disagree, and so the handlers branch on the same flags the UI shows
- * rather than re-deriving them.
- *
- * `label` is null when there's nothing to install — the engine is provisioned,
- * or it's CUDA-only on a host with no usable NVIDIA GPU, where an install button
- * would just be a slower way to fail.
- */
-function engineSetupState(engine, selectedModelReady = null, selectedModelSizeGb = null) {
-  if (!engine) return null;
-  const needsRuntime = engine.runtimeReady !== true;
-  const needsWeights = engine.fixedModelInstall === true
-    && (selectedModelReady === null ? engine.modelReady === false : selectedModelReady === false);
-  // Older servers do not send a VRAM verdict. Preserve their CUDA-only
-  // behavior during rolling upgrades; a new explicit verdict is authoritative.
-  const vramBlocked = engine.cudaRequired === true
-    && engine.vramState != null
-    && engine.vramState !== 'sufficient';
-  const blocked = engine.platformSupported === false
-    || (engine.cudaRequired === true && engine.cudaState !== 'available')
-    || vramBlocked;
-
-  let message;
-  if (engine.platformSupported === false) message = `${engine.name} requires ${engine.platformLabel || 'a different host'} and is unavailable on this machine.`;
-  else if (engine.cudaRequired === true && engine.cudaState === 'unknown') message = `${engine.name} is disabled because CUDA availability could not be determined.`;
-  else if (engine.cudaRequired === true && engine.cudaState !== 'available') message = `${engine.name} requires an NVIDIA CUDA GPU and is unavailable on this host.`;
-  else if (engine.cudaRequired === true && engine.vramState === 'insufficient') message = `${engine.name} requires at least ${engine.minVramGb} GB of VRAM for the ${engine.vramProfileLabel || 'selected'} profile; this host reports ${engine.maxVramGb} GB.`;
-  else if (engine.cudaRequired === true && engine.vramState === 'unknown-size') message = `${engine.name} cannot run because the GPU VRAM requirement has not been measured for the ${engine.vramProfileLabel || 'selected'} execution profile.`;
-  else if (engine.runtimeReady === false && needsWeights) message = `${engine.name} needs its runtime and model weights before generation.`;
-  else if (engine.runtimeReady === false) message = `${engine.name} needs its runtime before generation.`;
-  else if (needsWeights) message = `${engine.name} ${engine.modelReadyById && selectedModelReady === false ? 'selected model weights' : 'model weights'} are not installed yet.`;
-  else message = `${engine.name} is not installed yet. Install the runtime to enable generation.`;
-
-  const size = formatDownloadGb(selectedModelSizeGb ?? engine.modelSizeGb);
-  const suffix = size ? ` (${size})` : '';
-  let label = null;
-  if (!blocked && needsRuntime && needsWeights) label = `Install runtime + weights${suffix}`;
-  else if (!blocked && needsRuntime) label = 'Install runtime';
-  else if (!blocked && needsWeights) label = `Download model weights${suffix}`;
-
-  return { needsRuntime, needsWeights, blocked, message, label };
-}
-
-function supportsAutoDuration(engine) {
-  // The server capability is authoritative: an older server may know the
-  // MiniMax engine but will silently fall back to its fixed default when it
-  // receives no lyric-aware duration implementation.
-  return engine?.autoDuration === true;
-}
-
-function formatExecutionProfile(profile) {
-  if (profile === 'cuda-bf16-full') return 'CUDA BF16 (full GPU)';
-  if (profile === 'cuda-bf16-component-offload') return 'CUDA BF16 (component offload)';
-  return profile || '';
-}
-
-const MUSIC_QUEUE_EVENTS = ['media-jobs:changed'];
-
-const REMOTE_AUDIO_OPTIONS = Object.freeze({
-  style: ['ambient', 'cinematic', 'classical', 'electronic', 'folk', 'hip-hop', 'jazz', 'metal', 'orchestral', 'pop', 'rock', 'synthwave'],
-  mood: ['bright', 'calm', 'dark', 'dreamy', 'energetic', 'hopeful', 'melancholic', 'mysterious', 'playful', 'tense', 'triumphant', 'warm'],
-  tempo: ['slow', 'moderate', 'fast'],
-  energy: ['low', 'medium', 'high'],
-});
-
-const DEFAULT_REMOTE_PROFILE = Object.freeze({
-  style: 'ambient',
-  mood: 'calm',
-  tempo: 'moderate',
-  energy: 'medium',
-  instruments: [],
-});
-
-const formatRemoteOption = (value) => value.replaceAll('-', ' ');
+const SELECT_CLASS = 'w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm';
 
 export default function MusicGenPanel({ track, title = '', artistId = '', artist = '', albumId = '', prompt, lyrics, onGenerated, remix }) {
-  const [engines, setEngines] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [engineId, setEngineId] = useState('');
-  const [modelId, setModelId] = useState('');
   // Peer list, per-kind allowlist intersection, readiness verdict and the
   // submit-time re-check all live in the shared hook (#4348), so this panel,
   // Image Gen and Video Gen cannot read the same peer three different ways.
@@ -139,137 +55,29 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   // Lyric text and vocal intent are independent: a lyricless prompt can still
   // ask for wordless vocals, so instrumental mode is always an explicit choice.
   const [instrumentalOnly, setInstrumentalOnly] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [activeJob, setActiveJob] = useState(null);
-  const [activeJobId, setActiveJobId] = useState(null);
-  const [generationElapsedSec, setGenerationElapsedSec] = useState(0);
-  // Inline HF model install.
-  const [installRepo, setInstallRepo] = useState('');
-  const [installing, setInstalling] = useState(false);
-  const [installProgress, setInstallProgress] = useState(null);
-  // Progress for the setup action (runtime/fixed weights), rendered under the
-  // setup banner. Kept apart from `installProgress`, which belongs to the
-  // custom-HuggingFace-repo field further down.
-  const [setupProgress, setSetupProgress] = useState(null);
-  const [runtimeInstallEngine, setRuntimeInstallEngine] = useState(null);
   const [userSelectedEngine, setUserSelectedEngine] = useState(false);
   const mountedRef = useMounted();
+  const job = useMusicGenerationJob({ track, onGenerated, onDiscoveredInstrumental: setInstrumentalOnly });
+  const { isGenerating } = job;
 
-  // Queue discovery and per-job progress have separate lifetimes. An empty
-  // active queue must not detach the job before its terminal event is handled.
-  const settledJobRef = useRef(null);
-  const { data: discoveredJob } = useSocketResource(async () => {
-    const snapshot = await getActiveProcessing({ silent: true });
-    return (snapshot?.jobs || []).find((job) => {
-      const tag = job.params?.musicStudio;
-      return job.kind === 'audio' && (track?.id ? tag?.trackId === track.id : tag && !tag.trackId);
-    }) || null;
-  }, { events: MUSIC_QUEUE_EVENTS, resourceKey: track?.id || null });
-
-  useEffect(() => {
-    setActiveJob(null);
-    setActiveJobId(null);
-    setGenerating(false);
-    settledJobRef.current = null;
-  }, [track?.id]);
-
-  useEffect(() => {
-    if (!discoveredJob || discoveredJob.id === settledJobRef.current) return;
-    setActiveJob(discoveredJob);
-    setActiveJobId(discoveredJob.id);
-    if (typeof discoveredJob.params?.musicStudio?.instrumentalOnly === 'boolean') {
-      setInstrumentalOnly(discoveredJob.params.musicStudio.instrumentalOnly);
-    }
-    setGenerating(true);
-  }, [discoveredJob]);
-
-  const progress = useMediaJobProgress(activeJobId, { kind: 'audio' });
-  const isGenerating = generating || ['queued', 'running'].includes(activeJob?.status) || ['queued', 'running'].includes(progress.status);
-
-  useEffect(() => {
-    if (!activeJobId || progress.status !== 'completed') return undefined;
-    let canceled = false;
-    const finish = async () => {
-      let targetId = track?.id || progress.trackId;
-      if (!targetId) {
-        const job = await getMediaJob(activeJobId).catch(() => null);
-        targetId = job?.result?.trackId;
-      }
-      if (canceled) return;
-      let updated = null;
-      for (let attempt = 0; targetId && attempt < 4 && !updated && !canceled; attempt += 1) {
-        updated = await getTrack(targetId, { silent: true }).catch(() => null);
-        if (!updated && attempt < 3) await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      if (canceled || !mountedRef.current) return;
-      settledJobRef.current = activeJobId;
-      setGenerating(false);
-      setActiveJob(null);
-      setActiveJobId(null);
-      if (updated) onGenerated?.(updated);
-      toast.success('Track generated');
-    };
-    finish();
-    return () => { canceled = true; };
-  }, [activeJobId, progress.status, progress.trackId, track?.id]);
-
-  useEffect(() => {
-    if (!activeJobId || !['failed', 'canceled'].includes(progress.status)) return;
-    settledJobRef.current = activeJobId;
-    setGenerating(false);
-    setActiveJob(null);
-    setActiveJobId(null);
-    if (progress.status === 'failed') toast.error(progress.error || 'Music generation failed');
-  }, [activeJobId, progress.status, progress.error]);
-
-  // Returns the freshly-fetched list as well as storing it: the post-runtime
-  // chain below needs the NEW engine record, and reading `engine` off state
-  // right after setEngines() would still see the pre-install one.
-  const loadEngines = async () => {
-    const data = await listMusicEngines({ silent: true }).catch(() => null);
-    if (!mountedRef.current) return [];
-    const list = Array.isArray(data?.engines) ? data.engines : [];
-    setEngines(list);
-    setLoading(false);
-    // Default to the first READY engine, else the server default, else the first.
-    if (!engineId && list.length) {
-      const ready = list.find((e) => e.ready);
-      const pick = ready || list.find((e) => e.id === data.defaultEngine) || list[0];
-      setEngineId(pick.id);
-    }
-    return list;
-  };
-
-  useEffect(() => { loadEngines(); }, []);
-
-  useEffect(() => {
-    if (!isGenerating) return undefined;
-    const startedAt = activeJob?.startedAt ? Date.parse(activeJob.startedAt) : Date.now();
-    setGenerationElapsedSec(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
-    const timer = setInterval(() => {
-      if (mountedRef.current) setGenerationElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isGenerating, activeJob?.startedAt]);
-
-  const engine = useMemo(() => engines.find((e) => e.id === engineId) || null, [engines, engineId]);
-  const selectedModel = engine?.models?.find((item) => item.id === modelId)
-    || engine?.models?.find((item) => item.id === engine.defaultModelId)
-    || engine?.models?.[0]
-    || null;
-  // A native <select> displays its first option while React is applying the
-  // engine's default id. Use that effective option for readiness and generation
-  // too, so the first paint cannot briefly disable an otherwise ready engine.
-  const selectedModelId = selectedModel?.id || modelId;
-  const selectedRemotePeer = remoteTarget.peer;
   const selectedRemoteModel = remoteTarget.model;
+  useEffect(() => {
+    if (!selectedRemoteModel) return;
+    setDurationSec((current) => current == null
+      || current < selectedRemoteModel.minDurationSec
+      || current > selectedRemoteModel.maxDurationSec
+      ? selectedRemoteModel.defaultDurationSec
+      : current);
+  }, [selectedRemoteModel?.engine, selectedRemoteModel?.modelId]);
+
+  // A render-level choice must not leak into another track in the master-detail
+  // editor. Each destination starts in the backward-compatible vocal-capable mode.
+  useEffect(() => { setInstrumentalOnly(false); }, [track?.id]);
+  const { engines, loading, engineId, setEngineId, modelId, setModelId, engine, selectedModelId, loadEngines, handleRemoveModel } = useMusicEngineSelection({ remix, setDurationSec, setDurationMode, setInstrumentalOnly });
+  const selectedRemotePeer = remoteTarget.peer;
   const isRemote = remoteTarget.isRemote;
   const generationEngine = isRemote ? selectedRemoteModel : engine;
-  const selectedModelReady = !engine?.fixedModelInstall
-    ? true
-    : engine?.modelReadyById
-      ? engine.modelReadyById[selectedModelId] === true
-      : engine.modelReady === true;
+  const selectedModelReady = isEngineModelReady(engine, selectedModelId);
   const autoDurationAvailable = supportsAutoDuration(generationEngine);
   const hasLyrics = typeof lyrics === 'string' && lyrics.trim().length > 0;
   // Two independent facts, and the server refuses the combination where they
@@ -300,60 +108,6 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   }), [conditioningLyrics, generationEngine?.defaultDurationSec, generationEngine?.maxDurationSec]);
   const usingAutoDuration = autoDurationAvailable && durationMode === 'auto';
 
-  useEffect(() => {
-    if (!selectedRemoteModel) return;
-    setDurationSec((current) => current == null
-      || current < selectedRemoteModel.minDurationSec
-      || current > selectedRemoteModel.maxDurationSec
-      ? selectedRemoteModel.defaultDurationSec
-      : current);
-  }, [selectedRemoteModel?.engine, selectedRemoteModel?.modelId]);
-
-  // A render-level choice must not leak into another track in the master-detail
-  // editor. Each destination starts in the backward-compatible vocal-capable mode.
-  useEffect(() => { setInstrumentalOnly(false); }, [track?.id]);
-
-  // Remix: seed the engine / model / duration from a past render. Keyed on
-  // `remix.nonce` (bumped per Remix click) so re-clicking the SAME render
-  // re-applies even when its values are unchanged. An uploaded render carries no
-  // engineId — skip the engine swap then and just keep the user's current
-  // selection (the parent still prefills the prompt/lyrics form fields). Setting
-  // engineId + modelId together lets the engine-validity effect below keep the
-  // seeded model (it's in the engine's list because the engine produced it).
-  useEffect(() => {
-    if (!remix) return;
-    if (remix.engineId) setEngineId(remix.engineId);
-    if (remix.modelId) setModelId(remix.modelId);
-    // Legacy/uploaded renders have no explicit mode. Do not infer vocal intent
-    // from an empty lyric snapshot; start those remixes vocal-capable.
-    setInstrumentalOnly(remix.instrumentalOnly === true);
-    if (remix.durationSec != null) {
-      setDurationSec(remix.durationSec);
-      // Remix means "recreate this take"; preserve its exact manual ceiling.
-      setDurationMode('manual');
-    }
-  }, [remix?.nonce]);
-
-  // Keep the model selection valid for the current engine: reset to the engine
-  // default ONLY when the selected model isn't in this engine's list. Keying on
-  // engine.id (not the object) + this guard means a list refresh after installing
-  // a model (which replaces the engines array but keeps the same engine id) does
-  // NOT clobber a freshly-selected model — it stays selected because it's now in
-  // the list. Switching to a different engine still resets (the old model isn't
-  // in the new engine's list). Duration seeds once.
-  // Functional updater, not a read of `modelId`: this effect is keyed on the
-  // ENGINE, so the `modelId` its closure captured is whatever the render that
-  // queued it saw. React drains passive effects on its own scheduler task, so a
-  // pick made after that commit but before the drain would be read as absent
-  // and silently reset to the engine default — reverting a selection the user
-  // had already made and quietly re-enabling every gate hanging off it. Reading
-  // the value at flush time cannot go stale. (#4348 / PR #4819 CI failure.)
-  useEffect(() => {
-    if (!engine) return;
-    const ids = (engine.models || []).map((m) => m.id);
-    setModelId((current) => (ids.includes(current) ? current : (engine.defaultModelId || ids[0] || '')));
-    setDurationSec((d) => (d == null ? engine.defaultDurationSec : d));
-  }, [engine?.id, engine?.models]);
 
   const canGenerate = (isRemote ? remoteTarget.canSubmit : !!engine?.ready && selectedModelReady)
     && !!prompt?.trim() && !isGenerating;
@@ -363,56 +117,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
   const effectiveExecutionProfile = activeRender && activeRender.engine === engine?.id
     ? activeRender.executionProfile
     : null;
-
-  // `target` is the engine record to install for — passed explicitly by the
-  // post-runtime chain, which holds a fresher record than component state does.
-  const installFixedModel = async (target) => {
-    const eng = target || engine;
-    const selectedId = eng?.id === engine?.id ? selectedModelId : '';
-    const model = eng?.models?.find((item) => item.id === selectedId)
-      || eng?.models?.find((item) => item.id === eng.defaultModelId)
-      || eng?.models?.[0];
-    if (!eng || !model?.repo) return;
-    setInstalling(true);
-    setSetupProgress({ message: `Starting ${model.name}…` });
-    let failed = false;
-    await installAudioModel({ engine: eng.id, repo: model.repo }, (ev) => {
-      if (!mountedRef.current) return;
-      if (ev.type === 'progress') setSetupProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
-      else if (ev.type === 'stage') setSetupProgress({ message: ev.stage });
-    }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
-    if (!mountedRef.current) return;
-    setInstalling(false);
-    setSetupProgress(null);
-    if (!failed) { await loadEngines(); toast.success(`${model.name} installed`); }
-  };
-
-  // The banner's one setup action. Runtime first when it's missing — weights are
-  // useless without an interpreter to load them — otherwise straight to weights.
-  const handleSetupInstall = async () => {
-    if (!setup || setup.blocked) return;
-    if (setup.needsRuntime) { setRuntimeInstallEngine(engine); return; }
-    await installFixedModel(engine);
-  };
-
-  // Runtime installer closed: refresh, then continue into the weights — but only
-  // once the refreshed record shows the venv actually landed, so a cancelled or
-  // failed runtime install can't kick off a multi-GB pull with nothing to run it.
-  const handleRuntimeInstallClose = async () => {
-    setRuntimeInstallEngine(null);
-    const list = await loadEngines();
-    if (!mountedRef.current) return;
-    const fresh = list.find((e) => e.id === engineId);
-    const freshSelectedModelReady = !fresh?.fixedModelInstall
-      ? true
-      : fresh?.modelReadyById
-        ? fresh.modelReadyById[selectedModelId] === true
-        : fresh.modelReady === true;
-    const freshSetup = engineSetupState(fresh, freshSelectedModelReady, fresh?.modelSizeGbById?.[selectedModelId] ?? null);
-    if (freshSetup && !freshSetup.blocked && !freshSetup.needsRuntime && freshSetup.needsWeights) {
-      await installFixedModel(fresh);
-    }
-  };
+  const install = useMusicModelInstall({ engine, engineId, selectedModelId, setup, loadEngines, setModelId });
 
   const handleGenerate = async () => {
     if (!generationEngine) return;
@@ -426,90 +131,31 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       const fresh = remoteTarget.verify();
       if (!fresh.ok) { toast.error(fresh.message); return; }
     }
-    setGenerating(true);
-    const body = {
-      prompt,
-      engine: generationEngine.id || generationEngine.engine,
-      modelId: isRemote ? generationEngine.modelId : selectedModelId,
-      instrumentalOnly: effectiveInstrumentalOnly,
-    };
-    if (isRemote) {
-      body.mediaProviderPeerId = selectedRemotePeer.id;
-      body.remoteMusicProfile = remoteProfile;
-      // Only when the resolved capability says the peer carries them. Sending
-      // otherwise is the 400 `forcedInstrumental` exists to avoid.
-      if (remoteLyricsAvailable) body.lyrics = lyrics || '';
-    } else if (engine.lyrics) {
-      // Keep authored lyrics available to the track record even when the server
-      // deliberately excludes them from this render's engine conditioning.
-      body.lyrics = lyrics || '';
-    }
-    if (track?.id) body.trackId = track.id;
-    else {
-      body.title = title.trim();
-      body.artistId = artistId;
-      body.artist = artist;
-      body.albumId = albumId;
-    }
-    if (usingAutoDuration) body.durationMode = 'auto';
-    else if (Number.isFinite(durationSec)) body.durationSec = durationSec;
+    job.setGenerating(true);
+
+    const body = buildGenerateBody({
+      prompt, lyrics, track, title, artistId, artist, albumId, generationEngine, engine, selectedModelId, isRemote,
+      selectedRemotePeer, remoteProfile, remoteLyricsAvailable, effectiveInstrumentalOnly, usingAutoDuration, durationSec,
+    });
     const res = await generateMusic(body, { silent: true }).catch((err) => { toast.error(err.message || 'Generation failed'); return null; });
     if (!mountedRef.current) return;
     if (res?.track) {
       // Compatibility with an older server during a rolling upgrade. New
       // servers always return the queued job acknowledgement below.
-      setGenerating(false);
+      job.setGenerating(false);
       onGenerated?.(res.track);
       toast.success('Track generated');
     } else if (res?.jobId) {
-      setActiveJob({
+      job.trackQueuedJob({
         id: res.jobId,
         status: res.status,
         queuedAt: new Date().toISOString(),
         params: { musicStudio: { trackId: track?.id || null, instrumentalOnly } },
       });
-      setActiveJobId(res.jobId);
     } else {
-      setGenerating(false);
+      job.setGenerating(false);
       toast.error('Music generation did not return a job');
     }
-  };
-
-  const handleCancel = async () => {
-    if (!activeJobId) return;
-    await cancelMediaJob(activeJobId, { silent: true }).catch((err) => toast.error(err.message || 'Cancel failed'));
-    // Keep observing until the server confirms cancellation. A failed request
-    // or an in-flight cancellation must not re-enable a duplicate paid render.
-  };
-
-  const handleInstall = async () => {
-    const repo = installRepo.trim();
-    if (!repo || !engine) return;
-    setInstalling(true);
-    setInstallProgress({ message: `Starting ${repo}…` });
-    // The terminal promise rejects errors and interrupted streams; keep retry
-    // input and selection unchanged until completion is confirmed.
-    let failed = false;
-    await installAudioModel({ engine: engine.id, repo }, (ev) => {
-      if (!mountedRef.current) return;
-      if (ev.type === 'progress') setInstallProgress({ message: `${ev.file || 'downloading'} — ${Math.round((ev.progress || 0) * 100)}%`, progress: ev.progress });
-      else if (ev.type === 'stage') setInstallProgress({ message: ev.stage });
-    }).catch((err) => { failed = true; if (mountedRef.current) toast.error(err.message || 'Install failed'); });
-    if (!mountedRef.current) return;
-    setInstalling(false);
-    setInstallProgress(null);
-    if (failed) return; // leave the repo field intact so the user can retry/fix
-    setInstallRepo('');
-    await loadEngines(); // refresh model list (the new repo is now registered)
-    setModelId(repo);
-    toast.success(`Installed ${repo}`);
-  };
-
-  const handleRemoveModel = async (id) => {
-    if (!engine) return;
-    await removeAudioModel(engine.id, id, { silent: true }).catch((err) => { toast.error(err.message || 'Remove failed'); return null; });
-    await loadEngines();
-    if (modelId === id) setModelId(engine.defaultModelId || '');
   };
 
   if (loading) return <div className="text-xs text-gray-500">Loading generators…</div>;
@@ -525,31 +171,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
       </div>
 
       <RemoteMediaTargetPicker target={remoteTarget} kind="audio">
-        {/* Audio's fixed-vocabulary conditioning profile — the only musical
-            direction allowed across the peer boundary (ADR
-            docs/decisions/2026-08-20-federated-visual-prompts.md). Rendered as
-            the picker's children so it sits inside the remote block without
-            the shared component knowing anything about audio. */}
-        <div className="grid grid-cols-2 gap-2">
-          {(['style', 'mood', 'tempo', 'energy']).map((field) => (
-            <label key={field} className="block">
-              <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">{field}</span>
-              <select
-                aria-label={`Remote ${field}`}
-                value={remoteProfile[field]}
-                onChange={(e) => setRemoteProfile((current) => ({ ...current, [field]: e.target.value }))}
-                className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-              >
-                {REMOTE_AUDIO_OPTIONS[field].map((option) => <option key={option} value={option}>{formatRemoteOption(option)}</option>)}
-              </select>
-            </label>
-          ))}
-        </div>
-        <p className="text-[10px] text-gray-500">
-          {remoteLyricsAvailable
-            ? 'This fixed musical profile crosses the peer boundary in place of your prompt, which stays on this instance. Lyrics are sent as written — they are the words the model sings.'
-            : 'Only this fixed musical profile crosses the peer boundary; your prompt and lyrics remain on this instance.'}
-        </p>
+        <RemoteProfileFields remoteProfile={remoteProfile} setRemoteProfile={setRemoteProfile} remoteLyricsAvailable={remoteLyricsAvailable} />
       </RemoteMediaTargetPicker>
 
       {!isRemote && (
@@ -562,11 +184,9 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
                 setUserSelectedEngine(true);
                 setEngineId(e.target.value);
               }}
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+              className={SELECT_CLASS}
             >
-              {engines.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}{e.platformSupported === false ? ' (unavailable on this host)' : e.cudaRequired && e.cudaState !== 'available' ? ' (CUDA unavailable)' : e.vramState === 'insufficient' ? ' (insufficient VRAM)' : e.vramState === 'unknown-size' ? ' (VRAM unknown)' : e.ready ? '' : ' (setup required)'}</option>
-              ))}
+              {engines.map((e) => <option key={e.id} value={e.id}>{engineOptionLabel(e)}</option>)}
             </select>
           </label>
           <label className="block">
@@ -576,11 +196,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
                 when no option matches its value — so the raw state would let
                 the control display one snapshot while every readiness gate
                 below reads another, for as long as that gap lasts. */}
-            <select
-              value={selectedModelId}
-              onChange={(e) => setModelId(e.target.value)}
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-            >
+            <select value={selectedModelId} onChange={(e) => setModelId(e.target.value)} className={SELECT_CLASS}>
               {(engine?.models || []).map((m) => (
                 <option key={m.id} value={m.id}>{m.name}{m.userAdded ? ' (installed)' : ''}</option>
               ))}
@@ -589,128 +205,29 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
         </div>
       )}
 
-      {effectiveExecutionProfile ? (
-        <p className="text-[11px] text-gray-400">
-          Active render profile: <span className="text-gray-300">{formatExecutionProfile(effectiveExecutionProfile)}</span>
-        </p>
-      ) : engine?.executionProfile ? (
-        <p className="text-[11px] text-gray-500">
-          Execution profile: {engine.vramProfileLabel || formatExecutionProfile(engine.executionProfile)}
-        </p>
-      ) : null}
+      <ExecutionProfileNote activeProfile={effectiveExecutionProfile} engine={engine} />
 
-      <div className={autoDurationAvailable ? 'grid grid-cols-2 gap-2' : undefined}>
-        {autoDurationAvailable ? (
-          <label className="block">
-            <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Duration mode</span>
-            <select
-              id="musicgen-duration-mode"
-              value={durationMode}
-              onChange={(e) => setDurationMode(e.target.value)}
-              className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-            >
-              <option value="auto">Auto — let MiniMax choose</option>
-              <option value="manual">Manual</option>
-            </select>
-          </label>
-        ) : null}
-        <label className="block">
-          <span className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">
-            Duration (s){generationEngine ? ` — ${generationEngine.minDurationSec}–${generationEngine.maxDurationSec}` : ''}
-          </span>
-          <input
-            id="musicgen-duration"
-            type="number"
-            value={usingAutoDuration ? lyricDuration.suggestedDurationSec : (durationSec ?? '')}
-            min={generationEngine?.minDurationSec}
-            max={generationEngine?.maxDurationSec}
-            disabled={usingAutoDuration}
-            onChange={(e) => {
-              setDurationMode('manual');
-              setDurationSec(e.target.value === '' ? null : Number(e.target.value));
-            }}
-            className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-70"
-          />
-        </label>
-      </div>
+      <MusicDurationControls
+        engine={generationEngine}
+        autoDurationAvailable={autoDurationAvailable}
+        usingAutoDuration={usingAutoDuration}
+        durationMode={durationMode}
+        setDurationMode={setDurationMode}
+        durationSec={durationSec}
+        setDurationSec={setDurationSec}
+        lyricDuration={lyricDuration}
+      />
 
-      {autoDurationAvailable ? (
-        <div className="rounded-lg border border-port-accent/20 bg-port-accent/5 px-3 py-2 text-[11px]">
-          {lyricDuration.hasLyrics ? (
-            <p className="text-gray-300">
-              Auto sets a <span className="font-medium text-port-accent">{formatDurationSec(lyricDuration.suggestedDurationSec)}</span> ceiling from {lyricDuration.wordCount} lyric words {lyricDuration.sectionCount > 0 ? <>across {lyricDuration.sectionCount} tagged section{lyricDuration.sectionCount === 1 ? '' : 's'}</> : 'with no tagged sections detected'}, with room for the ending. MiniMax may finish earlier when the composition resolves.
-            </p>
-          ) : (
-            <p className="text-gray-300">
-              Auto uses a {formatDurationSec(lyricDuration.suggestedDurationSec)} ceiling because there is no lyric text to measure; MiniMax may finish earlier.
-            </p>
-          )}
-          {lyricDuration.sectionCount === 0 && lyricDuration.hasLyrics ? (
-            <p className="mt-1 text-gray-500">No structured lyric sections detected. Add tags such as [intro], [verse], [chorus], and [outro] so MiniMax can pace the composition more reliably.</p>
-          ) : null}
-          {lyricDuration.sectionCount > 0 && !lyricDuration.hasOutro && lyricDuration.hasLyrics ? (
-            <p className="mt-1 text-gray-500">No [outro] section detected. The closing cue is shown below; adding your own [outro] marker gives you control over exactly where the ending lands.</p>
-          ) : null}
-          {lyricDuration.isCapped ? (
-            <p className="mt-1 text-port-warning">These lyrics estimate beyond MiniMax’s five-minute limit, so the final lines may still need to be shortened or split into another render.</p>
-          ) : null}
-        </div>
+      {showRuntimeInstallHint ? <SetupBanner setup={setup} installing={install.installing} onInstall={install.handleSetupInstall} /> : null}
+      {install.setupProgress ? (
+        <p className="truncate text-[11px] text-gray-500">{install.setupProgress.message}</p>
       ) : null}
-      {autoDurationAvailable && !usingAutoDuration && lyricDuration.hasLyrics && Number.isFinite(durationSec) && durationSec < lyricDuration.suggestedDurationSec ? (
-        <p className="text-[11px] text-port-warning">
-          This manual ceiling is shorter than the lyric estimate ({formatDurationSec(lyricDuration.suggestedDurationSec)}); the last section or outro may be cut off.
-        </p>
-      ) : null}
-
-      {showRuntimeInstallHint ? (
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-port-warning/30 bg-port-warning/10 px-3 py-2">
-          <p className="text-[11px] text-port-warning">
-            {setup.message}
-          </p>
-          {setup.label ? <button
-            type="button"
-            onClick={handleSetupInstall}
-            disabled={installing}
-            className="inline-flex items-center justify-center gap-2 whitespace-nowrap px-3 py-1.5 rounded-lg bg-port-bg border border-port-warning/50 text-port-warning text-xs font-medium hover:border-port-warning disabled:opacity-50"
-          >
-            {installing ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
-            {setup.label}
-          </button>
-          : null}
-        </div>
-      ) : null}
-      {setupProgress ? (
-        <p className="truncate text-[11px] text-gray-500">{setupProgress.message}</p>
-      ) : null}
-      <div className="rounded-lg border border-port-border bg-port-bg px-3 py-2">
-        <div className="flex items-center gap-2">
-          <input
-            id="musicgen-instrumental-only"
-            type="checkbox"
-            checked={effectiveInstrumentalOnly}
-            onChange={(event) => setInstrumentalOnly(event.target.checked)}
-            disabled={isGenerating || forcedInstrumental}
-            aria-describedby="musicgen-instrumental-only-hint"
-            className="h-4 w-4 accent-port-accent"
-          />
-          <label htmlFor="musicgen-instrumental-only" className="text-sm font-medium text-gray-300">
-            Instrumental only
-          </label>
-        </div>
-        <p id="musicgen-instrumental-only-hint" className="mt-1 text-[11px] text-gray-500">
-          {forcedInstrumental
-            ? generationEngine?.lyrics
-              ? 'This peer runs a PortOS build that cannot carry lyrics, so this render is instrumental. Your prompt and lyrics stay on this instance.'
-              : 'The selected remote model is instrumental-only. Your prompt and lyrics stay on this instance.'
-            : effectiveInstrumentalOnly
-            ? `An explicit no-vocals instruction will be added${hasLyrics ? '; saved lyrics will not condition this render' : ''}.`
-            : generationEngine?.lyrics && hasLyrics
-              ? isRemote
-                ? 'The track’s lyrics will be sent to this peer as conditioning; your prompt stays on this instance.'
-                : 'This engine will use the track’s lyrics as conditioning.'
-              : 'No lyric text will condition this render, but vocals may still follow the prompt unless instrumental mode is enabled.'}
-        </p>
-      </div>
+      <InstrumentalToggle
+        checked={effectiveInstrumentalOnly}
+        onChange={setInstrumentalOnly}
+        disabled={isGenerating || forcedInstrumental}
+        hintArgs={{ forcedInstrumental, generationEngine, effectiveInstrumentalOnly, hasLyrics, isRemote }}
+      />
 
       {!isRemote && <ModelInputPreview preview={captionPreview} prompt={prompt} />}
       {!isRemote && typeof captionPreview.preview?.sentLyrics === 'string' && (
@@ -729,7 +246,7 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
           type="button"
           onClick={handleGenerate}
           disabled={!canGenerate}
-          title={!prompt?.trim() ? 'Add a generation prompt' : isRemote && !remoteTarget.canSubmit ? (remoteTarget.blockedReason || 'Wait for the remote peer to report ready capacity') : !isRemote && !engine?.ready ? 'Complete engine setup first' : !isRemote && !selectedModelReady ? 'Install the selected model first' : track?.id ? 'Generate audio' : 'Generate and create a standalone track'}
+          title={generateButtonTitle({ prompt, isRemote, remoteTarget, engine, selectedModelReady, track })}
           className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
         >
           {isGenerating ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
@@ -747,65 +264,32 @@ export default function MusicGenPanel({ track, title = '', artistId = '', artist
         ) : null}
       </div>
       {isGenerating ? (
-        <div role="status" className="rounded-lg border border-port-accent/30 bg-port-accent/10 px-3 py-2">
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="text-gray-300">
-              {activeJob?.status === 'queued' ? `Queued${activeJob.position ? ` · position ${activeJob.position}` : ''}` : generationEngine?.cudaRequired ? 'Processing on the GPU' : 'Rendering audio'}
-            </span>
-            <span className="font-mono tabular-nums text-port-accent">
-              {Math.floor(generationElapsedSec / 60)}:{String(generationElapsedSec % 60).padStart(2, '0')} elapsed
-            </span>
-          </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-port-border" aria-hidden="true">
-            <div className="h-full w-1/3 animate-pulse rounded-full bg-port-accent" />
-          </div>
-          <p className="mt-1.5 text-[11px] text-gray-500">
-            {generationEngine?.id === 'minimax-music3'
-              ? 'MiniMax Music 3 does not report an exact percentage yet; a 60-second track can take tens of minutes on a 24 GB GPU.'
-              : generationEngine?.id === 'minimax-music3-mlx'
-                ? 'MiniMax Music 3 MLX does not report an exact percentage yet; the first render includes model loading.'
-                : 'Generation is still active. Longer requested durations take more time.'}
-          </p>
-          {activeJobId ? <button type="button" onClick={handleCancel} className="mt-2 text-[11px] text-port-warning hover:text-white">Cancel render</button> : null}
-        </div>
+        <MusicGenerationStatus
+          activeJob={job.activeJob}
+          activeJobId={job.activeJobId}
+          generationEngine={generationEngine}
+          elapsedSec={job.elapsedSec}
+          onCancel={job.cancel}
+        />
       ) : null}
 
-      {/* Install an additional model from HuggingFace — only for engines that
-          can render an arbitrary checkpoint (musicgen/audioldm2). ACE-Step uses
-          a fixed foundation checkpoint, so the install affordance is hidden. */}
       {engine?.customModels ? (
-      <div className="pt-2 border-t border-port-border/60">
-        <label htmlFor="musicgen-install-repo" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1">Install a model from HuggingFace</label>
-        <div className="flex items-center gap-2">
-          <input
-            id="musicgen-install-repo"
-            value={installRepo}
-            onChange={(e) => setInstallRepo(e.target.value)}
-            placeholder="org/model-repo"
-            disabled={installing}
-            className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
-          />
-          <button
-            type="button"
-            onClick={handleInstall}
-            disabled={installing || !installRepo.trim()}
-            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-bg border border-port-border text-white text-sm hover:border-port-accent disabled:opacity-50"
-          >
-            {installing ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            Install
-          </button>
-        </div>
-        {installProgress ? <p className="text-[11px] text-gray-500 mt-1 truncate">{installProgress.message}</p> : null}
-      </div>
+        <ModelInstallForm
+          installRepo={install.installRepo}
+          setInstallRepo={install.setInstallRepo}
+          installing={install.installing}
+          installProgress={install.installProgress}
+          onInstall={install.handleInstall}
+        />
       ) : null}
       <RuntimeInstallModal
-        open={!!runtimeInstallEngine}
-        runtime={runtimeInstallEngine?.id}
-        label={runtimeInstallEngine?.name}
+        open={!!install.runtimeInstallEngine}
+        runtime={install.runtimeInstallEngine?.id}
+        label={install.runtimeInstallEngine?.name}
         installUrlBase="/api/music/setup/runtime-install"
         streamMethod="POST"
         description="Installing the music runtime and python packages. Large downloads may take several minutes."
-        onClose={handleRuntimeInstallClose}
+        onClose={install.handleRuntimeInstallClose}
       />
     </div>
   );
