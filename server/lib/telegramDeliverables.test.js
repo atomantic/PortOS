@@ -58,7 +58,21 @@ describe('firstImagePath', () => {
 describe('stripDeliverablePaths', () => {
   it('removes delivered paths (and wrapping markdown) from prose but leaves code untouched', () => {
     const text = 'Image: ![d](/data/images/d.png)\nAlso /data/images/d.png here\n`/data/images/d.png`';
-    expect(stripDeliverablePaths(text, ['/data/images/d.png'])).toBe('Image:\nAlso  here\n`/data/images/d.png`');
+    expect(stripDeliverablePaths(text, ['/data/images/d.png'])).toBe('Image:\nAlso here\n`/data/images/d.png`');
+  });
+
+  it('removes a titled markdown image as one unit', () => {
+    expect(stripDeliverablePaths('A ![d](/data/images/d.png "Daily") B', ['/data/images/d.png'])).toBe('A B');
+  });
+
+  it('never chops a longer path or URL that merely contains the token', () => {
+    const text = 'keep /tmp/export/data/images/a.png and https://example.com/data/images/a.png; drop data/images/a.png.';
+    expect(stripDeliverablePaths(text, ['data/images/a.png'])).toBe('keep /tmp/export/data/images/a.png and https://example.com/data/images/a.png; drop.');
+  });
+
+  it('leaves whitespace outside the removed gap untouched', () => {
+    const text = '  lead\n\n\n\nmid /data/images/d.png\ntrail  \n';
+    expect(stripDeliverablePaths(text, ['/data/images/d.png'])).toBe('  lead\n\n\n\nmid\ntrail  \n');
   });
 
   it('is a no-op when nothing was delivered', () => {

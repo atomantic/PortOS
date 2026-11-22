@@ -75,7 +75,8 @@ const PATH_END = '(?!\\w|\\.\\w)';
 const EXT_ALTERNATION = [...ALLOWED_EXTS].map(e => e.slice(1)).join('|');
 // The lookbehind refuses a start mid-token, so `https://host/x.png` (every
 // slash follows `:`, `/` or a word char) is never mined as a local path.
-const PATH_TOKEN = new RegExp(`(?<![\\w:/.~])(?:~?/|data/)[^\\s()<>"'\`\\[\\]]+?\\.(?:${EXT_ALTERNATION})${PATH_END}`, 'gi');
+const PATH_START = '(?<![\\w:/.~])';
+const PATH_TOKEN = new RegExp(`${PATH_START}(?:~?/|data/)[^\\s()<>"'\`\\[\\]]+?\\.(?:${EXT_ALTERNATION})${PATH_END}`, 'gi');
 
 /**
  * Split text into prose and code segments. Fenced blocks (```…```) and inline
@@ -128,12 +129,18 @@ export function firstImagePath(text) {
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
- * Remove delivered paths from the prose of `text` (a markdown link/image
- * wrapping one goes with it), leaving code segments byte-identical.
+ * Remove delivered paths from the prose of `text`, leaving code segments and
+ * all other whitespace byte-identical. A markdown link/image whose destination
+ * is the token (optionally with a `"title"`) goes as one unit. Each removal
+ * also takes the horizontal whitespace directly before it, so only the gap the
+ * token occupied closes. A token is matched only with the same boundaries
+ * `PATH_TOKEN` extracts it with, so a longer path or URL that merely contains
+ * it (`/tmp/export/data/images/a.png`, `https://host/data/images/a.png`) is
+ * never chopped.
  *
  * @param {string} text
  * @param {string[]} paths - the raw strings `extractDeliverablePaths` returned
- *   that were actually accepted for upload
+ *   whose upload succeeded
  * @returns {string}
  */
 export function stripDeliverablePaths(text, paths) {
@@ -144,12 +151,11 @@ export function stripDeliverablePaths(text, paths) {
     for (const raw of paths) {
       const escaped = escapeRegExp(raw);
       prose = prose
-        .replace(new RegExp(`!?\\[[^\\]\\n]*\\]\\(\\s*<?${escaped}>?\\s*\\)`, 'g'), '')
-        .replace(new RegExp(`${escaped}${PATH_END}`, 'g'), '');
+        .replace(new RegExp(`[ \\t]*!?\\[[^\\]\\n]*\\]\\([ \\t]*<?${escaped}>?(?:[ \\t]+"[^"\\n]*")?[ \\t]*\\)`, 'g'), '')
+        .replace(new RegExp(`[ \\t]*${PATH_START}${escaped}${PATH_END}`, 'g'), '');
     }
-    // Tidy the holes: trailing spaces and runs of blank lines a removed path left.
-    return prose.replace(/[ \t]+(?=\n)/g, '').replace(/\n{3,}/g, '\n\n');
-  }).join('').trim();
+    return prose;
+  }).join('');
 }
 
 /**
