@@ -258,6 +258,25 @@ describe('X page', () => {
     expect(socket.off).toHaveBeenCalledWith('x:changed', onChanged);
   });
 
+  it('keeps the accounts read error until a silent refresh succeeds and drops a superseded accounts response', async () => {
+    const secondAccount = { ...account, id: 'second-account', label: 'Second X', username: 'second_user' };
+    let resolveStale;
+    api.getXAccounts.mockRejectedValueOnce(new Error('Accounts unavailable'));
+    renderPage('/x');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Accounts unavailable');
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXAccounts.mockImplementationOnce(() => new Promise((resolve) => { resolveStale = resolve; }))
+      .mockResolvedValueOnce({ accounts: [secondAccount] });
+    await act(async () => onChanged());
+    expect(screen.getByRole('alert')).toHaveTextContent('Accounts unavailable');
+    expect(screen.queryByText(/Add an X account to begin/)).not.toBeInTheDocument();
+    await act(async () => onChanged());
+    expect(await screen.findByRole('heading', { name: 'Second X' })).toBeInTheDocument();
+    await act(async () => { resolveStale({ accounts: [account] }); });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: account.label })).not.toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Second X' })).toBeInTheDocument();
+  });
+
   it('drops a pending x:changed drafts reload that resolves after the account was switched', async () => {
     const user = userEvent.setup();
     const secondAccount = { ...account, id: 'second-account', username: 'second_user' };

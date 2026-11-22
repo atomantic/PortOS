@@ -73,6 +73,7 @@ export default function XPage() {
   const [deleteAccountId, setDeleteAccountId] = useState(null);
   const [draftBody, setDraftBody] = useState('');
   const selectedLoadRef = useRef({ posts: 0, drafts: 0 });
+  const accountsLoadRef = useRef(0);
   const currentAccountIdRef = useRef(accountId);
   const selectedAccountIdRef = useRef(null);
   const savedAccountRef = useRef(emptyAccount);
@@ -113,17 +114,24 @@ export default function XPage() {
 
   // `refresh` is a socket-driven silent reload: keep the rendered list and skip the
   // skeleton. Callers that bind it to a DOM event must wrap it, since the event object
-  // would otherwise be truthy.
+  // would otherwise be truthy. Only the latest call may write, so an older response
+  // cannot restore a removed account or replace a newer read.
   const loadAccounts = useCallback(async (refresh = false) => {
-    if (!refresh) setLoading(true);
-    setAccountsReadError('');
+    const requestId = ++accountsLoadRef.current;
+    if (!refresh) {
+      setLoading(true);
+      setAccountsReadError('');
+    }
     try {
       const result = await getXAccounts({ silent: true });
+      if (accountsLoadRef.current !== requestId) return;
+      setAccountsReadError('');
       setAccounts(result.accounts || []);
     } catch (err) {
+      if (accountsLoadRef.current !== requestId) return;
       setAccountsReadError(err.message || 'Could not load X accounts.');
     } finally {
-      setLoading(false);
+      if (accountsLoadRef.current === requestId) setLoading(false);
     }
   }, []);
 
