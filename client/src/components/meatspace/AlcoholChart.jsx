@@ -146,7 +146,7 @@ export default function AlcoholChart({ sex = 'male', onRefreshKey, onViewChange 
         />
       ) : (
         <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+          <BarChart title="Daily alcohol consumption" desc="Bar chart of standard drinks per day over the selected period." data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
             <XAxis
               dataKey="label"

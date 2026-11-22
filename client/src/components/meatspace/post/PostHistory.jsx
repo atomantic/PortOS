@@ -170,7 +170,7 @@ export default function PostHistory({ onBack }) {
             <h3 className="text-sm font-medium text-gray-400 mb-3">Score Trend</h3>
             {chartData.length > 1 ? (
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={chartData}>
+                <LineChart title="Score trend" desc="Line chart of POST session scores from 0 to 100 over time; sessions are listed below." data={chartData}>
                   <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
                   <XAxis dataKey="date" tick={{ fontSize: 11, fill: chartColors.axis }} />
                   <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
@@ -192,7 +192,7 @@ export default function PostHistory({ onBack }) {
             <h3 className="text-sm font-medium text-gray-400 mb-3">Avg by Domain</h3>
             {domainData.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={domainData} layout="vertical" margin={{ left: 8, right: 16 }}>
+                <BarChart title="Average score by domain" desc="Bar chart of the average POST score from 0 to 100 for each domain." data={domainData} layout="vertical" margin={{ left: 8, right: 16 }}>
                   <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" horizontal={false} />
                   <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11, fill: chartColors.axis }} />
                   <YAxis

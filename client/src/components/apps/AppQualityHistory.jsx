@@ -60,9 +60,9 @@ export default function AppQualityHistory({ appId, categories = [] }) {
       </div>
       <QualityPeerWarning federation={state.data?.federation} subject="history" />
       {state.loading ? <p role="status">Loading quality history…</p> : state.error ? <p role="alert">Quality history could not be loaded. Use Refresh history to retry.</p> : !measured.length ? <p className="text-sm text-gray-400">No scored assessments in this period. Run an audit to start the history.</p> : <>
-        <div className="h-56 w-full" role="img" aria-label="Daily quality scores from 0 to 100; values and evidence are available in the history table below">
+        <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={points} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
+            <LineChart title="Daily quality score" desc="Daily quality scores from 0 to 100; values and evidence are in the history table below." data={points} margin={{ top: 8, right: 12, bottom: 8, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} minTickGap={40} />
               <YAxis domain={[0, 100]} tick={{ fill: '#9ca3af', fontSize: 11 }} width={35} />

@@ -56,7 +56,7 @@ export default function SleepCard({ data = [], loading = false }) {
           </div>
           {hasStages ? (
             <ResponsiveContainer width="100%" height={150}>
-              <BarChart data={last7} layout="vertical" margin={{ top: 2, right: 8, bottom: 2, left: 16 }}>
+              <BarChart title="Sleep over the last 7 nights" desc="Stacked bar chart of hours per night by sleep stage (deep, REM, core, awake) for the last seven nights." data={last7} layout="vertical" margin={{ top: 2, right: 8, bottom: 2, left: 16 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} horizontal={false} />
                 <XAxis type="number" tick={{ fill: chartColors.axis, fontSize: 11 }} unit="h" />
                 <YAxis type="category" dataKey="date" tick={{ fill: chartColors.axis, fontSize: 10 }} width={36} />

@@ -85,7 +85,7 @@ export default function BodyCompChart() {
         Body Composition Over Time
       </h3>
       {data.length > 0 && <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
+        <LineChart title="Body composition over time" desc="Line chart of body composition measurements over time; exact entries are listed in the table below." data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
           <XAxis
             dataKey="label"
