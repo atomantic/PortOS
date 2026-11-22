@@ -110,6 +110,7 @@ describe('isToolFreeOneShotProvider / toolFreeOneShotRefusal', () => {
     expect(isToolFreeOneShotProvider(cli('grok'))).toBe(true);
     expect(isToolFreeOneShotProvider(cli('pi'))).toBe(true);
     expect(isToolFreeOneShotProvider(cli('agy'))).toBe(false);
+    expect(isToolFreeOneShotProvider(cli('hermes'))).toBe(false);
     expect(isToolFreeOneShotProvider(cli('codex'))).toBe(false);
     expect(isToolFreeOneShotProvider({ type: 'tui', command: 'claude' })).toBe(false);
   });

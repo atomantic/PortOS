@@ -25,6 +25,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
+import { skillsSettingsSchema } from '../lib/skillsValidation.js';
 import { agentContextSettingsSchema } from '../lib/agent/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { federationSettingsSchema } from '../lib/federatedMediaValidation.js';
@@ -496,6 +497,12 @@ const validateSettingsPatch = async (body) => {
   }
   if (body?.untrustedContent !== undefined) {
     validateRequest(untrustedContentSettingsSchema, body.untrustedContent);
+  }
+  // External skill directories are read from disk and fed to agents; the
+  // dedicated PUT /api/skills/config owns them, but a whole-form save must not
+  // be a way around their absolute-path validation.
+  if (body?.skills !== undefined) {
+    validateRequest(skillsSettingsSchema, body.skills);
   }
   // Per-harness enablement and the credential-bootstrap app table (#7564):
   // both are read at composite-provider resolve time, so a malformed entry

@@ -5,12 +5,13 @@
  *
  *   shot hash     = the shot's dependency files (path + content) plus its start and end
  *   settings hash = engine, pixel size, frame rate, scale and samples of one quality
- *   song hash     = the song context staged into the job
+ *   song hash     = the song context staged into the job, less the project's display name and
+ *                   where this install keeps the audio files (see blenderSongHash)
  *   options hash  = the film options the render was built with (`ctx.options`)
  */
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
-import { dirname, join, normalize, sep } from 'node:path';
+import { basename, dirname, join, normalize, sep } from 'node:path';
 import { sha256File } from '../../lib/fileCore.js';
 import { blenderRenderFrame } from '../../lib/musicVideo/musicVideoBlender.js';
 import { staticImportSpecifiersFromSource } from '../../lib/staticImportGraph.js';
@@ -175,5 +176,20 @@ export function blenderImportsChanged(imports, files) {
 /** Missing-at-start imports stay stale even if created while Blender is running. */
 export const blenderImportHashes = (paths, files) => Object.fromEntries(paths.map((path) => [path, files.get(path) ?? null]));
 
-/** The canonical song projection built by song.js, exactly as staged for the driver. */
-export const blenderSongHash = (song) => sha(JSON.stringify(song));
+const audioName = (path) => (typeof path === 'string' && path ? basename(path) : null);
+
+/**
+ * The song context a render depends on: what song.js stages for the driver, except the
+ * project's display name (renaming a project must not put every shot out of date) and the
+ * audio files' directories (a moved install is the same song; a replaced file has a new name).
+ */
+export function blenderSongHash(song) {
+  const { title: _title, audio, ...rest } = song || {};
+  return sha(JSON.stringify({ ...rest, audio: { master: audioName(audio?.master), vocalStem: audioName(audio?.vocalStem) } }));
+}
+
+/**
+ * The hashes a current render of `song` may carry: blenderSongHash, and the whole staged
+ * context as renders recorded it before that (so they stay current until the song changes).
+ */
+export const blenderSongHashes = (song) => [blenderSongHash(song), sha(JSON.stringify(song))];

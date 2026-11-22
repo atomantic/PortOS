@@ -40,7 +40,8 @@ import { resolvePersistentMindPlaybookPhase } from '../services/persistent/persi
 import { publicPersistentMindState } from '../lib/persistent/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistent/persistentMindTrajectory.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agent/agentRunEventLog.js';
+import { readPersistentMindEvents, readPersistentMindHistory, runEventLogEvents } from '../services/agent/agentRunEventLog.js';
+import { openSseStream } from '../lib/sseDownload.js';
 import { loadState } from '../services/cos/cosState.js';
 import {
   appendPersistentMindAnnotation,
@@ -260,6 +261,36 @@ router.get('/mind', asyncHandler(async (req, res) => {
   });
 }));
 
+// Live trajectory push for a loopback client that holds no Socket.IO
+// connection: the ACP stdio adapter (scripts/portos-acp.js, docs/ACP.md). It
+// carries exactly the envelopes the `cos:mind:event` broadcast sends, behind
+// the same /api auth gate, and replays nothing; history comes from GET /mind.
+// The listener runs synchronously inside the supervisor's appendMindEvent, so
+// a dead socket's write must never throw back into the mind's turn.
+const MIND_STREAM_KEEPALIVE_MS = 25_000;
+router.get('/mind/stream', (_req, res) => {
+  const { send } = openSseStream(res);
+  const onEvent = (event) => {
+    try {
+      if (!res.destroyed) send(event);
+    } catch (error) {
+      console.log(`⏭️ Persistent mind stream subscriber dropped a frame: ${error?.message || error}`);
+    }
+  };
+  runEventLogEvents.on('mind:event', onEvent);
+  const keepAlive = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) res.write(': keep-alive\n\n');
+  }, MIND_STREAM_KEEPALIVE_MS);
+  keepAlive.unref?.();
+  res.on('close', () => {
+    clearInterval(keepAlive);
+    runEventLogEvents.off('mind:event', onEvent);
+  });
+  // Flush the headers now: a client may only post its message once it knows
+  // the subscription is live, or it could miss its own turn's first events.
+  res.write(': open\n\n');
+});
+
 router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
   res.json(await cancelPersistentMindThinkingRequest());
 }));
@@ -308,12 +339,18 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
     memories,
     reflection,
   });
+  const { readPersistentMindContextBreakdown } = await import('../services/persistent/persistentMindContextBreakdownService.js');
+  const breakdown = await readPersistentMindContextBreakdown({
+    preview, provider, profile,
+    capabilities: normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities),
+  });
   res.json({
     prompt,
     playbook,
     playbookPhase,
     playbookCatalog: PERSISTENT_MIND_PLAYBOOK_CATALOG,
     preview,
+    breakdown,
     memories,
     rollups,
     harness: persistentMindHarnessInfo(provider),

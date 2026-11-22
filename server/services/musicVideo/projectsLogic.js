@@ -378,6 +378,8 @@ export function cloneProjectRecord(source, {
     ...(source.dcpExports ? { dcpExports: [] } : {}),
     // Finished outside PortOS describes the source's video; the new version is made here.
     ...(source.finishedOutside ? { finishedOutside: null } : {}),
+    // The director's completion mark judged the source's video.
+    ...(source.completion ? { completion: null } : {}),
     // #9010: the source's in-flight render mark is not the clone's.
     renderingOn: null,
     renderPartialFilename: null,

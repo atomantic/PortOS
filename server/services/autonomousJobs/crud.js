@@ -275,6 +275,7 @@ async function deleteJob(jobId) {
 
     const deleted = data.jobs.splice(idx, 1)[0]
     await saveJobs(data)
+    await (await import('./notepad.js')).clearJobNotes(jobId) // loaded at use to keep the boot closure small
 
     console.log(`🗑️ Autonomous job deleted: ${deleted.name}`)
     cosEvents.emit('jobs:deleted', { id: jobId })

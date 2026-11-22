@@ -44,6 +44,8 @@ const CASES = [
   { harnessId: 'opencode', mode: 'cli', sample: 'opencode-ollama', connection: OPENAI_CONNECTION },
   { harnessId: 'opencode', mode: 'tui', sample: 'opencode-ollama-tui', connection: OPENAI_CONNECTION },
   { harnessId: 'codex', mode: 'cli', sample: 'codex-ollama', connection: OPENAI_CONNECTION },
+  { harnessId: 'hermes', mode: 'cli', sample: 'hermes-cli', connection: OPENAI_CONNECTION },
+  { harnessId: 'hermes', mode: 'tui', sample: 'hermes-tui', connection: OPENAI_CONNECTION },
 ];
 
 const mint = ({ harnessId, mode, connection, sample }) =>

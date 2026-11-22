@@ -18,8 +18,9 @@ import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import spendRoutes from './musicVideoSpend.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoCatalogCompletionSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoCompletionSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoCatalogCompletionSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOutside.js';
+import { musicVideoCompletionBlocker, musicVideoCompletionOverride } from '../lib/musicVideo/musicVideoCompletion.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
@@ -105,7 +106,7 @@ router.get('/', asyncHandler(async (req, res) => {
       ? new Set((await listProjectCompletion({ matchesName })).filter(({ isCompleted }) => !isCompleted).map(({ id }) => id))
       : null;
     const matchesStatus = query.statusFilter
-      ? (project) => (project.status === 'complete' && !stale?.has(project.id)) === (query.statusFilter === 'completed')
+      ? (project) => (musicVideoCompletionOverride(project) ?? (project.status === 'complete' && !stale?.has(project.id))) === (query.statusFilter === 'completed')
       : null;
     const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
     const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
@@ -236,6 +237,18 @@ router.put('/:id/finished-outside', asyncHandler(async (req, res) => {
   }
   const finishedOutside = finished ? { markedAt: new Date().toISOString(), ...(note ? { note } : {}) } : null;
   await updateProject(req.params.id, { finishedOutside });
+  res.json(await presentProjectForRead(await getProject(req.params.id)));
+}));
+
+// The director's own word on whether the video is finished: `complete` or `in-progress` decides
+// over the final render's evidence; `auto` clears the mark so the evidence decides again.
+router.put('/:id/completion', asyncHandler(async (req, res) => {
+  const { state } = validateRequest(musicVideoCompletionSchema, req.body);
+  if (state !== 'auto') {
+    const blocker = musicVideoCompletionBlocker(await requireProject(req.params.id), state);
+    if (blocker) throw new ServerError(blocker, { status: 409, code: 'MUSIC_VIDEO_NO_FINAL_RENDER' });
+  }
+  await updateProject(req.params.id, { completion: state === 'auto' ? null : { state, markedAt: new Date().toISOString() } });
   res.json(await presentProjectForRead(await getProject(req.params.id)));
 }));
 

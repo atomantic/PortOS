@@ -38,10 +38,15 @@ const mocks = vi.hoisted(() => ({
   correctPersistentMindJournalEvent: vi.fn(),
 }));
 
-vi.mock('../services/agent/agentRunEventLog.js', () => ({
-  readPersistentMindEvents: mocks.readPersistentMindEvents,
-  readPersistentMindHistory: mocks.readPersistentMindHistory,
-}));
+vi.mock('../services/agent/agentRunEventLog.js', async () => {
+  const { EventEmitter } = await import('node:events');
+  mocks.runEventLogEvents = new EventEmitter();
+  return {
+    readPersistentMindEvents: mocks.readPersistentMindEvents,
+    readPersistentMindHistory: mocks.readPersistentMindHistory,
+    runEventLogEvents: mocks.runEventLogEvents,
+  };
+});
 vi.mock('../services/cos/cosState.js', () => ({ loadState: mocks.loadState }));
 vi.mock('../services/persistent/persistentMindContext.js', () => ({
   appendPersistentMindAnnotation: mocks.appendPersistentMindAnnotation,
@@ -121,6 +126,33 @@ const post = (path, body) => request(app()).post(`/api/cos${path}`).send(body);
 const put = (path, body) => request(app()).put(`/api/cos${path}`).send(body);
 
 describe('persistent mind routes', () => {
+  it('pushes live trajectory events over SSE and unsubscribes when the client leaves', async () => {
+    const server = app().listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const { get: httpGet } = await import('node:http');
+      const response = await new Promise((resolve, reject) => {
+        httpGet(`http://127.0.0.1:${server.address().port}/api/cos/mind/stream`, resolve).on('error', reject);
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toBe('text/event-stream');
+      let body = '';
+      response.on('data', (chunk) => { body += chunk; });
+      await vi.waitFor(() => expect(body).toContain(': open'));
+      expect(mocks.runEventLogEvents.listenerCount('mind:event')).toBe(1);
+      const event = { kind: 'mind.reply', turnId: 'turn-1', data: { displayText: 'Hello' } };
+      mocks.runEventLogEvents.emit('mind:event', event);
+      await vi.waitFor(() => expect(body).toContain(`data: ${JSON.stringify(event)}\n\n`));
+      response.destroy();
+      await vi.waitFor(() => expect(mocks.runEventLogEvents.listenerCount('mind:event')).toBe(0));
+      // A late event after the client left reaches no one and throws nothing back into the supervisor.
+      expect(() => mocks.runEventLogEvents.emit('mind:event', event)).not.toThrow();
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   it('uses the live manageMind grant for inspect-only reflection and includes the same projection in context preview', async () => {
     expect((await get('/mind/reflection')).body).toMatchObject({ state: 'empty' });
     expect(mocks.readPersistentMindReflection).toHaveBeenLastCalledWith({ enabled: false });

@@ -32,7 +32,7 @@
  * things a shipped sample pins that a fresh materialization would not know
  * (display name, model catalog/tiers, `enabled`, timeouts, generation
  * params). A handful of records have no recipe or no service definition at
- * all (Kilo, OpenChamber, Pi's two generic un-configured samples) and stay
+ * all (Kilo, OpenChamber, Pi's and Hermes's generic un-configured samples) and stay
  * LITERAL — `providerHarnesses.js` already says why each one cannot be
  * composed (`connectionBlocker`).
  *
@@ -673,11 +673,19 @@ const LITERALS = {
     id: 'pi-tui', name: 'Pi Coding Agent TUI', type: 'tui', command: 'pi', args: ['--approve'],
     models: [], defaultModel: null, timeout: 600000, enabled: false, envVars: {}, secretEnvVars: [],
   },
+  'hermes-cli': {
+    id: 'hermes-cli', name: 'Hermes Agent CLI', type: 'cli', command: 'hermes', args: ['chat', '--oneshot', '--quiet', '--yolo'],
+    models: [], defaultModel: null, timeout: 600000, enabled: false, envVars: {}, secretEnvVars: [], headlessArgs: [],
+  },
+  'hermes-tui': {
+    id: 'hermes-tui', name: 'Hermes Agent TUI', type: 'tui', command: 'hermes', args: ['--tui', '--yolo'],
+    models: [], defaultModel: null, timeout: 600000, enabled: false, envVars: {}, secretEnvVars: [], tuiPromptDelayMs: 2500,
+  },
 };
 
 /** The canonical order every provider id is emitted in — shared by both files. */
 export const PROVIDER_ORDER = [
-  'kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui',
+  'kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui', 'hermes-cli', 'hermes-tui',
   'claude-code', 'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
   'opencode-ollama', 'opencode-ollama-tui', 'opencode-lmstudio', 'opencode-lmstudio-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-llama-tui',
