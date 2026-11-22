@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { parseJsonText } from '../../utils/parseJsonText';
 import { useSearchParams } from 'react-router';
 import {
   getMindRecipe,
@@ -82,14 +83,14 @@ function RecipeEditor({ id, onChanged, onSelect }) {
   };
 
   const save = () => run(async () => {
-    const definition = JSON.parse(text);
+    const definition = parseJsonText(text);
     const saved = recipe
       ? await updateMindRecipe(id, { expectedRevision: recipe.activeRevision, definition }, { silent: true })
       : await createMindRecipe(definition, { silent: true });
     apply(saved);
   });
   const validate = () => run(async () => {
-    const result = await validateMindRecipe(JSON.parse(text), { silent: true });
+    const result = await validateMindRecipe(parseJsonText(text), { silent: true });
     if (active.current) setValidation(result);
   });
 

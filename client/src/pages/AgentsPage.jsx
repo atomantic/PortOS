@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, Fragment } from 'react';
+import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import { RefreshCw, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import { getAgents, killAgent } from '../services/apiAgents.js';
@@ -33,9 +34,20 @@ export function AgentsPage() {
 
   const handleKill = async (pid) => {
     setKilling(prev => ({ ...prev, [pid]: true }));
-    const result = await killAgent(pid).catch(() => null);
+    let result = null;
+    let failure = null;
+    try {
+      result = await killAgent(pid, { silent: true });
+    } catch (err) {
+      failure = err;
+    }
     if (!mounted.current) return;
-    if (result?.success) updateData(previous => (previous ?? []).filter(agent => agent.pid !== pid));
+    if (result?.success) {
+      toast.success('Agent process stopped');
+      updateData(previous => (previous ?? []).filter(agent => agent.pid !== pid));
+    } else {
+      toast.error(failure?.message || result?.error || 'Failed to stop agent process');
+    }
     setKilling(prev => ({ ...prev, [pid]: false }));
   };
 

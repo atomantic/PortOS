@@ -13,7 +13,7 @@ import { request } from './apiCore.js';
 
 // Running Agents (Process Management)
 const getRunningAgents = (options) => request('/agents', options);
-const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+const killRunningAgent = (pid, options = {}) => request(`/agents/${pid}`, { method: 'DELETE', ...options });
 // Legacy aliases
 export const getAgents = getRunningAgents;
 export const killAgent = killRunningAgent;

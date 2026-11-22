@@ -1,4 +1,5 @@
 import * as filmApi from '../../services/apiCodeAnimationFilm.js';
+import { parseJsonText } from '../../utils/parseJsonText';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import BrailleSpinner from '../BrailleSpinner';
 import { lazyWithReload } from '../../utils/lazyWithReload';
@@ -86,7 +87,7 @@ function PackageProjects() {
     if (!file) return;
     act(async () => {
       if (file.size > 55 * 1024 * 1024) throw new Error('Package file exceeds the import size limit');
-      const result = await importCodeAnimationPackage(projectId, JSON.parse(await file.text()), { silent: true });
+      const result = await importCodeAnimationPackage(projectId, parseJsonText(await file.text()), { silent: true });
       applyProject(result.project);
       history.setItems(previous => [{
         id: result.runId, status: 'completed', revisionId: result.revision.id,
