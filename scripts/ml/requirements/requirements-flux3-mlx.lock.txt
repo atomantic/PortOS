@@ -8,7 +8,7 @@
 # Preserve this output to reuse unrelated pins. On Apple Silicon with Python 3.12:
 #   uv --no-config pip compile scripts/ml/requirements/requirements-flux3-mlx.txt --python <python3.12> \
 #     --generate-hashes --no-header --annotation-style line --only-binary :all: \
-#     --exclude-newer <UTC date at least 7 days ago> \
+#     --exclude-newer <UTC date at least 3 days ago> \
 #     --upgrade-package anyio==4.16.0 --upgrade-package filelock==4.2.7 \
 #     --upgrade-package platformdirs==4.14.3 -o scripts/ml/requirements/requirements-flux3-mlx.lock.txt
 # Then audit the entire lock with OSV, including MAL- records.

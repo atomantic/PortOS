@@ -34,7 +34,7 @@ version, source build or floating dependency fallback is attempted.
 ## Regeneration and advisory audit
 
 Use a private **uv 0.13.7** (minimum security-patched version 0.13.4). Choose a
-cutoff at least seven days before the maintenance date; this profile uses
+cutoff at least three days before the maintenance date; this profile uses
 **2026-11-04T00:00:00Z**. Resolve the source requirements, never install them directly:
 
 ```sh
