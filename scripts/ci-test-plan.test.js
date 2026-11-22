@@ -1657,7 +1657,7 @@ describe('CI test impact planner', () => {
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
-      client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      client: [1, 2, 3, 4],
       browser: [1, 2],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
@@ -1724,7 +1724,7 @@ describe('CI test impact planner', () => {
       expect(plan.client.files).toEqual(expect.arrayContaining(tests));
       expect(plan.shards.client).toEqual(CLIENT_FANOUT);
       expect(plan.shards.server).toEqual([1]);
-      expect(plan.suiteReasons.client).toMatch(/exceed the 400-file cap, sharded 3 ways/);
+      expect(plan.suiteReasons.client).toContain(`exceed the 400-file cap, sharded ${CLIENT_FANOUT.length} ways`);
 
       // TRACKED adds client selectors of its own, so size the boundary case from the measured floor.
       const floor = plan.client.files.length - tests.length;
@@ -1778,7 +1778,7 @@ describe('CI test impact planner', () => {
       const broad = buildCiTestPlan([source], { trackedFiles, clientReach: reach(1042) });
       expect(broad.client).toMatchObject({ mode: 'related', sources: [source] });
       expect(broad.shards).toEqual({ server: [1], client: CLIENT_FANOUT, browser: [1], windows: [1] });
-      expect(broad.suiteReasons.client).toMatch(/related import reach of 1042 suites exceeds the 400-file cap, sharded 3 ways/);
+      expect(broad.suiteReasons.client).toContain(`related import reach of 1042 suites exceeds the 400-file cap, sharded ${CLIENT_FANOUT.length} ways`);
       expect(broad.suiteReasons.client).toContain(`dynamic-aware fan-out 1042 suite(s): ${source} 1042 (static 10)`);
 
       // The server's lower cap never applies to client reach.
@@ -2392,8 +2392,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(['package.json'], { trackedFiles });
 
     expect(plan.full).toBe(true);
-    // Planning sorts selectors; the registry separately preserves execution
-    // order so adding coverage need not rebalance existing browser shards.
+    // Planning sorts selectors. The registry assigns shard owners by path.
     expect(plan.browserFiles).toEqual([...BROWSER_SUITES].sort());
   });
 

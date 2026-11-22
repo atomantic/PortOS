@@ -294,7 +294,7 @@ jobs:
           suite: client
           partition: client-${{ matrix.shard }}of${{ strategy.job-total }}
           # FULL_SUITE_SHARDS.client; scripts/ci-test-memo-cache.test.js pins it.
-          merge-shards: 3
+          merge-shards: 4
 
       - name: Run client tests
         id: client-tests
