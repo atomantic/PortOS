@@ -87,6 +87,8 @@ export const auditedTables = [
     'catalog_user_types', 'creative_director_projects', 'threejs_models', 'html_page_runs', 'image_to_3d_models', 'sprite_records', 'games', 'code_animation_jobs', 'mood_boards', 'fableloom_stories', 'storyboards', 'storyboard_recipes',
     'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
     'tribe_identities',
+    'music_video_projects', 'creative_commissions', 'code_animation_projects', 'code_animation_project_revisions',
+    'decks', 'deck_cards', 'mind_tool_recipes', 'mind_tool_recipe_versions', 'voice_profiles', 'writers_room_exercises',
 ];
 
 // Build the per-table DROP/CREATE audit-trigger statements in the original
