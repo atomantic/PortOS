@@ -8,7 +8,7 @@ import { localRuntimeKind } from '../lib/modelPinMembership.js';
 import { gatewayIdForProvider } from '../lib/provider/providerGateways.js';
 import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
 import { modelComparisonImportSchema } from '../lib/modelComparisonValidation.js';
-import { loadAssessments } from '../services/localModelAssessmentStore.js';
+import { captureLiveEnvironments, loadAssessments } from '../services/localModelAssessmentStore.js';
 import { localSpeedFromAssessments } from '../lib/localModelAssessment.js';
 
 export function createModelComparisonRoutes(providerService = { getSelectableProviders }) {
@@ -24,7 +24,9 @@ export function createModelComparisonRoutes(providerService = { getSelectablePro
         model, efforts: effortLevelsForProvider(provider, model) || [],
       })),
     }));
-    const localSpeed = localSpeedFromAssessments(assessments);
+    // Staleness needs the live machine state; the backend-version probe is one cached loopback GET.
+    const liveEnvironments = await captureLiveEnvironments({ backends: [...new Set(assessments.map(a => a?.backend).filter(Boolean))] });
+    const localSpeed = localSpeedFromAssessments(assessments, liveEnvironments);
     const composite = buildModelComparisonComposite(catalog.observations, inventory, undefined, { localSpeed });
     const currentComposite = buildModelComparisonComposite(catalog.observations, inventory, CURRENT_COMPARISON_ANCHOR, { localSpeed });
     res.json({ ...catalog, inventory, composite, currentComposite });

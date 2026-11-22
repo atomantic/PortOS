@@ -417,3 +417,21 @@ it('plots published speed for API routes and this machine\'s measured speed for 
   expect(body.composite.sources[local.tokensPerSecond.sourceIds[0]].url).toBe('/models/performance/results');
   expect(rows.find(row => row.model === 'unmeasured-local').tokensPerSecond).toBeNull();
 });
+
+it('marks a local speed measured before the machine changed as an estimate and names the change', async () => {
+  await mkdir(join(dir, 'local-llm'), { recursive: true });
+  await writeFile(join(dir, 'local-llm', 'assessments.json'), JSON.stringify({ schemaVersion: 1, assessments: [
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: '', assessedAt: '2026-11-20T00:00:00.000Z', environment: { platform: 'example-os', arch: 'example-arch' }, performance: { meanTokensPerSecond: 90, samplesOk: 3 } },
+  ] }));
+  app = express();
+  app.use(express.json());
+  app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'mtplx', name: 'MTPLX', servicePlan: 'local', models: ['example-local'], enabled: true },
+  ] }) }));
+  app.use(errorMiddleware);
+
+  const { rows } = (await request(app).get('/comparison')).body.composite;
+  const local = rows.find(row => row.model === 'example-local');
+  expect(local.tokensPerSecond).toMatchObject({ value: 90, estimated: true });
+  expect(local.tokensPerSecond.method).toMatch(/different machine state.*Re-run the assessment/);
+});

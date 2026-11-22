@@ -749,31 +749,35 @@ export function reconcileFit(estimatedFit, measurement) {
 
 /**
  * This machine's measured decode speed per `runtime:modelId`, for the Models › Comparison speed axis.
- * The backend-default (untuned) reading wins over a tuned one, then the newest; a record without a
+ * A reading that still matches the live machine wins over a stale one, then the backend-default
+ * (untuned) reading over a tuned one, then the newest. A stale reading (RAM, CPU, OS or backend
+ * version changed since) is kept but marked estimated with the change named; a record without a
  * token rate is left out rather than read as zero.
  *
  * @param {Array<object>} assessments stored assessment records
+ * @param {Record<string, object>} [liveEnvironments] live environment per backend (`captureLiveEnvironments`)
  * @returns {Map<string, {value: number, estimated: boolean, method: string, source: object}>}
  */
-export function localSpeedFromAssessments(assessments) {
+export function localSpeedFromAssessments(assessments, liveEnvironments = {}) {
   const best = new Map();
   for (const assessment of Array.isArray(assessments) ? assessments : []) {
     const value = assessment?.performance?.meanTokensPerSecond;
     if (!isMeasured(value) || value <= 0 || !assessment.backend || !assessment.modelId) continue;
+    const staleness = compareEnvironments(assessment.environment, liveEnvironments?.[assessment.backend]);
+    const candidate = { assessment, staleness, rank: [staleness.stale ? 0 : 1, assessment.tuningKey ? 0 : 1, Date.parse(assessment.assessedAt || '') || 0] };
     const key = `${assessment.backend}:${assessment.modelId}`;
-    const rank = (a) => [a.tuningKey ? 0 : 1, Date.parse(a.assessedAt || '') || 0];
     const prior = best.get(key);
-    const [untuned, at] = rank(assessment);
-    const [priorUntuned, priorAt] = prior ? rank(prior) : [-1, 0];
-    if (untuned > priorUntuned || (untuned === priorUntuned && at > priorAt)) best.set(key, assessment);
+    const differs = prior ? candidate.rank.findIndex((part, i) => part !== prior.rank[i]) : -1;
+    if (!prior || (differs !== -1 && candidate.rank[differs] > prior.rank[differs])) best.set(key, candidate);
   }
-  return new Map([...best].map(([key, assessment]) => {
+  return new Map([...best].map(([key, { assessment, staleness }]) => {
     const perf = assessment.performance;
     const tuning = assessment.tuningKey ? ` under tuning ${assessment.tuningLabel || assessment.tuningKey}` : '';
-    const methodology = `Measured on this machine in Models › Performance: mean output tokens per second across ${perf.samplesOk ?? 'the'} successful context sizes${tuning}${perf.tokensEstimated ? '; token counts estimated from streamed frames' : ''}.`;
+    const stale = describeStaleness(staleness);
+    const methodology = `Measured on this machine in Models › Performance: mean output tokens per second across ${perf.samplesOk ?? 'the'} successful context sizes${tuning}${perf.tokensEstimated ? '; token counts estimated from streamed frames' : ''}.${stale ? ` ${stale} Re-run the assessment to refresh it.` : ''}`;
     return [key, {
       value: perf.meanTokensPerSecond,
-      estimated: perf.tokensEstimated === true,
+      estimated: perf.tokensEstimated === true || staleness.stale,
       method: methodology,
       source: { url: '/models/performance/results', retrievedAt: assessment.assessedAt || null, methodology },
     }];
