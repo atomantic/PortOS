@@ -43,6 +43,10 @@ vi.mock('../services/apiPrivacy.js', () => ({
   deleteVaultRecord: vi.fn().mockResolvedValue({ ok: true }),
   updateVaultRecord: vi.fn(),
   createVaultRecord: vi.fn(),
+  getWebsiteLogins: vi.fn().mockResolvedValue([]),
+  createWebsiteLogin: vi.fn(),
+  updateWebsiteLogin: vi.fn(),
+  deleteWebsiteLogin: vi.fn(),
   getPrivacyOrgs: vi.fn().mockResolvedValue([
     { id: 'org-1', name: 'Acme Bank', category: 'bank', trust: 'trusted', status: 'active', website: '', contact: {} },
   ]),
@@ -93,6 +97,7 @@ describe('Privacy TABS ↔ nav manifest', () => {
 import {
   revealVaultRecord,
   getVaultRecords,
+  getWebsiteLogins,
   getPrivacyStatus,
   getPrivacySubjects,
   createPrivacySubject,
@@ -203,6 +208,7 @@ describe('Privacy Center', () => {
       renderAt('/privacy/vault?subject=sub-2');
       await waitFor(() => expect(getVaultRecords).toHaveBeenCalledWith(undefined, { subjectId: 'sub-2' }));
       expect(getPrivacyStatus).toHaveBeenCalledWith({ subjectId: 'sub-2' });
+      await waitFor(() => expect(getWebsiteLogins).toHaveBeenCalledWith({ subjectId: 'sub-2', silent: true }));
     });
 
     it('flags when the view is scoped to someone other than self', async () => {
