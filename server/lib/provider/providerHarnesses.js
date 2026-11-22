@@ -361,7 +361,7 @@ export const PROVIDER_HARNESSES = Object.freeze([
     modes: CLI_TUI_MODES,
     protocol: 'openai',
     // Headless runs read the prompt from stdin (`--query-file -`, added at spawn
-    // time by `prepareHermesPrompt`), so no argv ceiling applies. See hermes.js.
+    // time by `prepareHermesPrompt`), so no argv ceiling applies. See the hermes block in providerVendors.js.
     recipe: recipe({
       command: 'hermes',
       cli: ['chat', '--oneshot', '--quiet', '--yolo'],

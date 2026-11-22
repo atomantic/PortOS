@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
-import { buildVendorSpawnConfig, applyCommandDefaults, toolFreeOneShotArgs, toolFreeOneShotRefusal } from './provider/providerVendors.js';
-import { effortLevelsForProvider } from './provider/providerModels.js';
-import { harnessForProvider } from './provider/providerHarnesses.js';
-import { buildSafeCliBaseEnv } from './processEnv.js';
-import { HERMES_COMMAND, ensureHermesHeadlessArgs, ensureHermesTuiArgs, isHermesCommand, prepareHermesPrompt } from './hermes.js';
+import { buildCliArgs, prepareCliPrompt } from '../cliProviderArgs.js';
+import { buildVendorSpawnConfig, applyCommandDefaults, toolFreeOneShotArgs, toolFreeOneShotRefusal } from './providerVendors.js';
+import { effortLevelsForProvider } from './providerModels.js';
+import { harnessForProvider } from './providerHarnesses.js';
+import { buildSafeCliBaseEnv } from '../processEnv.js';
+import { isHermesCommand } from './providerModels.js';
 
-const SHIPPED = JSON.parse(readFileSync(new URL('../../data.reference/providers.json', import.meta.url), 'utf8')).providers;
+const SHIPPED = JSON.parse(readFileSync(new URL('../../../data.reference/providers.json', import.meta.url), 'utf8')).providers;
 const cli = (extra = {}) => ({ id: 'hermes-cli', type: 'cli', command: 'hermes', args: SHIPPED['hermes-cli'].args, ...extra });
 
-describe('hermes.js', () => {
+describe('hermes argv conventions', () => {
   it('recognizes the binary by basename, including a path and a Windows .exe', () => {
-    expect(isHermesCommand(HERMES_COMMAND)).toBe(true);
+    expect(isHermesCommand('hermes')).toBe(true);
     expect(isHermesCommand('/opt/bin/hermes')).toBe(true);
     expect(isHermesCommand('C:\\tools\\Hermes.exe')).toBe(true);
     expect(isHermesCommand('hermes-agent')).toBe(false);
@@ -20,25 +20,23 @@ describe('hermes.js', () => {
   });
 
   it('builds the headless argv with the model, and leaves a baked model pin alone', () => {
-    expect(ensureHermesHeadlessArgs([], 'anthropic/claude-sonnet-4.6'))
+    expect(buildCliArgs(cli({ args: [], defaultModel: 'anthropic/claude-sonnet-4.6' })))
       .toEqual(['chat', '--oneshot', '--quiet', '--yolo', '--model', 'anthropic/claude-sonnet-4.6']);
-    expect(ensureHermesHeadlessArgs(['chat', '-m', 'pinned'], 'other')).toEqual(['chat', '-m', 'pinned', '--oneshot', '--quiet', '--yolo']);
-    expect(ensureHermesHeadlessArgs(SHIPPED['hermes-cli'].args)).toEqual(SHIPPED['hermes-cli'].args);
+    expect(buildCliArgs(cli({ args: ['chat', '-m', 'pinned'], defaultModel: 'other' })))
+      .toEqual(['chat', '-m', 'pinned', '--oneshot', '--quiet', '--yolo']);
   });
 
   it('delivers the prompt over stdin so a large prompt never rides argv', () => {
     const prompt = 'x'.repeat(500000);
-    const prepared = prepareHermesPrompt(['chat', '--oneshot', '--query-file', 'stale.txt', '--model', 'm']);
+    const prepared = prepareCliPrompt('hermes', ['chat', '--oneshot', '--query-file', 'stale.txt', '--model', 'm'], prompt);
     expect(prepared).toMatchObject({ args: ['chat', '--oneshot', '--model', 'm', '--query-file', '-'], useStdin: true });
-    expect(prepared.args.join(' ')).not.toContain(prompt.slice(0, 20));
-    expect(prepareCliPrompt('hermes', ['chat'], prompt)).toMatchObject({ args: ['chat', '--query-file', '-'], useStdin: true });
+    expect(prepared.args.every((arg) => arg.length < 100)).toBe(true);
   });
 
   it('builds the TUI argv idempotently and respects a pinned posture', () => {
-    expect(ensureHermesTuiArgs([])).toEqual(['--tui', '--yolo']);
-    expect(ensureHermesTuiArgs(['--tui', '--yolo'])).toEqual(['--tui', '--yolo']);
-    expect(ensureHermesTuiArgs(['--cli'])).toEqual(['--cli', '--yolo']);
     expect(applyCommandDefaults('hermes', [])).toEqual(['--tui', '--yolo']);
+    expect(applyCommandDefaults('hermes', ['--tui', '--yolo'])).toEqual(['--tui', '--yolo']);
+    expect(applyCommandDefaults('hermes', ['--cli'])).toEqual(['--cli', '--yolo']);
   });
 });
 
