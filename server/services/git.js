@@ -5,7 +5,6 @@ import { mkdtemp, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
 import { safeJSONParse, sleep, rmGuarded, pathExists } from '../lib/fileUtils.js';
-import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { readRepoBranchSnapshot, repoObservationEnv } from './repoBranchSnapshot.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -362,7 +361,7 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
       recordFetchSuccess(dir);
       return true;
     },
-    (err) => {
+    async (err) => {
       // A concurrent fetch that already wrote the exact refs this one wanted is
       // a SUCCESS reported as a failure — git exits non-zero on the lost
       // compare-and-swap even though the remote-tracking refs now hold the
@@ -374,7 +373,9 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
         return true;
       }
       // Another PortOS surface or agent may advance the same remote ref mid-fetch.
-      if (attempt >= FETCH_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
+      if (attempt >= FETCH_MAX_ATTEMPTS) throw err;
+      const { isGitLockError } = await import('./worktreeManager.js');
+      if (!isGitLockError(err.message)) throw err;
       return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1, prune));
     }
   );
@@ -1514,6 +1515,7 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
  * @returns {Promise<Set<string>>} Set of branch names in active worktrees
  */
 export async function getWorktreeBranches(dir) {
+  const { listWorktrees } = await import('./worktreeManager.js');
   const worktrees = await listWorktrees(dir).catch(() => []);
   return new Set(
     worktrees
@@ -1622,6 +1624,7 @@ async function deletePinnedLocalBranch(dir, branch, expectedHead) {
       if (existing.exitCode === 0 && existing.stdout.trim() !== head) throw new Error('Branch source preservation changed');
       if (existing.exitCode !== 0) await execGit(['update-ref', backup, head, '0'.repeat(head.length)], dir);
     };
+    const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
     const deleted = await deleteCompletedLocalBranch(dir, branch, head, { beforeMutation });
     return { exitCode: deleted ? 0 : 1, stderr: deleted ? '' : 'branch head or holder changed' };
   });
@@ -2086,6 +2089,7 @@ async function prepareRemoteRetirement(dir, defaultBranch) {
 // recovery ref. Re-read immediately before the leased push, inside the same
 // ownership fence used to register managed claims.
 async function remoteRetirementLocalHold(dir, name) {
+  const { listWorktrees } = await import('./worktreeManager.js');
   const [refs, trees] = await Promise.all([
     execGitSafe(['for-each-ref', '--format=%(refname:short)%09%(upstream:short)', 'refs/heads/'], dir),
     listWorktrees(dir).catch(() => null),

@@ -367,6 +367,9 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('arms local model subscriptions before either HTTP router loads', () => {
     expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
   });
+  it('loads the worktree manager on demand', () => {
+    expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
+  });
   it('loads at most half of the original 3,023 local modules before boot', () => {
     expect(closure.files.size).toBeLessThanOrEqual(1511);
   });
