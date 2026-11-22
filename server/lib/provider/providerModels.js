@@ -300,6 +300,17 @@ export function isKimiProvider(provider) {
 }
 
 /**
+ * True when a provider is Hermes-Agent-flavored — the shipped `hermes-cli`/`hermes-tui` ids or any
+ * provider whose launch command basename is `hermes` (path/exe tolerant).
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isHermesProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'hermes-cli' || id === 'hermes-tui' || commandBasename(provider?.command) === 'hermes';
+}
+
+/**
  * True when a provider is Antigravity-flavored — the shipped `antigravity-cli`/`antigravity-tui`
  * ids or any provider whose launch command basename is `agy`/`antigravity` (path/exe tolerant).
  * @param {{id?:string, command?:string}|null|undefined} provider

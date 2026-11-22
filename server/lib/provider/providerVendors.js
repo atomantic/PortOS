@@ -129,6 +129,7 @@ import {
   ensureCursorHeadlessArgs,
 } from '../cursor.js';
 import { PI_COMMAND, isPiCommand, ensurePiTuiArgs, ensurePiHeadlessArgs, preparePiPrompt } from '../pi.js';
+import { HERMES_COMMAND, isHermesCommand, ensureHermesTuiArgs, ensureHermesHeadlessArgs, prepareHermesPrompt } from '../hermes.js';
 import { KILO_COMMAND, KILO_COMMAND_ALIASES, isKiloCommand, ensureKiloTuiArgs, ensureKiloHeadlessArgs } from '../kilo.js';
 import {
   OPENCHAMBER_COMMAND,
@@ -867,6 +868,25 @@ const PI = {
   },
 };
 
+// ─── hermes ─────────────────────────────────────────────────────────────────
+
+const hermesCliArgs = (baseArgs, { model }) => ensureHermesHeadlessArgs(baseArgs, model);
+const HERMES = {
+  id: 'hermes',
+  idFragment: 'hermes',
+  inferredCommand: HERMES_COMMAND,
+  matchCommand: isHermesCommand,
+  // No dedicated matchCliProvider — matches by command, same as matchCommand.
+  tuiArgs: ensureHermesTuiArgs,
+  cliArgs: hermesCliArgs,
+  preparePrompt: prepareHermesPrompt,
+  spawnArgs: defaultSpawnArgs(hermesCliArgs, HERMES_COMMAND),
+  // `--toolsets` only enables sets; no switch disables every tool, so a one-shot
+  // is never tool-free (fails closed through toolFreeOneShotRefusal). Only the
+  // `--yolo` bypass is stripped.
+  toolFreeOneShot: { matchCommand: isHermesCommand },
+};
+
 // ─── claude (default fallback — MUST stay last) ────────────────────────────
 
 function claudeCliArgs(baseArgs, { model, effort, provider }) {
@@ -1084,7 +1104,7 @@ const CLAUDE = {
  * exclusive by construction (distinct binary basenames, or a provider-id
  * check that doesn't overlap with a command-basename check).
  */
-export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, PI, CLAUDE];
+export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, PI, HERMES, CLAUDE];
 
 /**
  * A row's `matchCliProvider` may be absent when it's identical to

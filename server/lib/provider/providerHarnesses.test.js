@@ -41,7 +41,7 @@ describe('harness rows say why they cannot be minted from a connection', () => {
     for (const harness of PROVIDER_HARNESSES.filter((row) => row.id !== 'direct')) {
       expect(Boolean(harness.connectionBlocker), `${harness.id}`).toBe(!CREATABLE_HARNESS_IDS.includes(harness.id));
     }
-    expect(CREATABLE_HARNESS_IDS).toEqual(['claude', 'opencode', 'codex']);
+    expect(CREATABLE_HARNESS_IDS).toEqual(['claude', 'opencode', 'codex', 'hermes']);
   });
 
   // Since #7562 a row with no bindings is exactly a row nothing can be
@@ -82,8 +82,8 @@ describe('harness rows say why they cannot be minted from a connection', () => {
 });
 
 describe('capability bindings (#7562)', () => {
-  it('has eleven rows, and direct is the harness of an api record', () => {
-    expect(PROVIDER_HARNESSES).toHaveLength(11);
+  it('has twelve rows, and direct is the harness of an api record', () => {
+    expect(PROVIDER_HARNESSES).toHaveLength(12);
     expect(harnessForProvider({ type: 'api', endpoint: 'https://api.example.com/v1' })?.id).toBe('direct');
     expect(harnessForProvider({ type: 'cli', command: 'not-a-harness' })).toBeNull();
     expect(harnessById('direct').modes).toEqual(['api']);
@@ -123,6 +123,11 @@ describe('capability bindings (#7562)', () => {
     ['antigravity', 'openai', false],
     ['antigravity', 'antigravity', true],
     ['kilo', OLLAMA, false],
+    // Hermes reaches any OpenAI-compatible endpoint through OPENAI_BASE_URL, and nothing else.
+    ['hermes', OLLAMA, true],
+    ['hermes', 'nvidia-nim', true],
+    ['hermes', 'anthropic', false],
+    ['hermes', 'kimi', false],
     // `harnessOnly`: Kimi's service is reachable through Kimi Code alone.
     ['direct', 'kimi', false],
     ['kimi', 'kimi', true],
