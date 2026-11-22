@@ -1638,6 +1638,30 @@ describe('record-aware related selection (#16424)', () => {
 });
 
 describe('extractFileFacts', () => {
+  it('keys a defaulted path parameter only where every call relies on the default', () => {
+    const head = ["import { readdirSync } from 'fs';", "import { join } from 'path';", "const FIXTURES = join(__dirname, 'fixtures');", "const OTHER = join(__dirname, 'other');"];
+    const keyed = (...lines) => {
+      const facts = extractFileFacts([...head, ...lines].join('\n'), { fileRel: 'server/x.test.js', cwdRel: 'server' });
+      return [facts.dirs.map((dir) => dir.rel).sort(), facts.handedDirs.slice().sort()];
+    };
+    const plain = 'function read(dir = FIXTURES) { return readdirSync(dir); }';
+    // Every call omits the argument: the default is keyed, as before.
+    expect(keyed(plain, 'read();')).toEqual([['server/fixtures'], []]);
+    // Calls that disagree leave the read open (guessed and unbounded), never the default alone as if it were the value.
+    const disagreeing = extractFileFacts([...head, plain, 'read(OTHER);', 'read();'].join('\n'), { fileRel: 'server/x.test.js', cwdRel: 'server' });
+    expect(disagreeing.dirs).toEqual([expect.objectContaining({ rel: 'server/fixtures', guessed: true, open: true })]);
+    // The issue's snippet: the default is never read, the passed path is.
+    const swapped = keyed(plain, 'read(OTHER);');
+    expect(swapped[0]).toContain('server/other');
+    expect(swapped[0]).not.toContain('server/fixtures');
+    // Destructured property: same rule per call's object literal.
+    const destructured = 'function read({ dir = FIXTURES } = {}) { return readdirSync(dir); }';
+    expect(keyed(destructured, 'read({});')).toEqual([['server/fixtures'], []]);
+    const other = keyed(destructured, 'read({ dir: OTHER });');
+    expect(other[0]).toContain('server/other');
+    expect(other[0]).not.toContain('server/fixtures');
+  });
+
   it('reads a module\'s literal string and frozen array exports, and nothing else', () => {
     const exported = literalExports([
       "export const A = 'a.json';",

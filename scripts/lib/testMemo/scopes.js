@@ -110,7 +110,7 @@ function bindParameter(s, arr, m, [from, to], extent, role, index) {
   const plain = to === from + 1 && arr[from].t === 'id';
   if (plain) { bind(s, arr[from], extent, { kind: 'param', role, index }); return; }
   if (arr[from]?.t === 'id' && isPunct(arr[from + 1], '=') && from + 2 < to) {
-    bind(s, arr[from], extent, { kind: 'opaque', defaultExpr: { arr, m, from: from + 2, to } });
+    bind(s, arr[from], extent, { kind: 'defaulted', role, index, defaultExpr: { arr, m, from: from + 2, to } });
     return;
   }
   if (isPunct(arr[from], '{') && m[from] !== undefined) { bindDestructured(s, arr, m, [from, to], extent, role, index); return; }
@@ -725,8 +725,12 @@ function callSiteDomain(s, nameToken, index) {
   return unionOf(parts);
 }
 
-/** The one complete path every call passes as parameter `index` (or destructured property `prop`) of `nameToken`, or null. */
-function callSitePath(s, nameToken, index, prop = null) {
+/**
+ * The one complete path every call passes as parameter `index` (or destructured property `prop`) of `nameToken`, or null.
+ * A call that leaves the parameter out (or the property out of its object literal) contributes `fallback`, the
+ * parameter's default, when there is one: the default is the value only where every call agrees with it.
+ */
+function callSitePath(s, nameToken, index, prop = null, fallback = null) {
   const uses = usesOf(s, nameToken);
   if (uses === null) return null;
   let passed = null;
@@ -734,13 +738,29 @@ function callSitePath(s, nameToken, index, prop = null) {
     if (!isPunct(arr[at + 1], '(') || m[at + 1] === undefined) return null; // not every caller is in view
     const range = argumentRange(arr, m, at + 1, index);
     const expr = range === null ? null : prop === null ? range : propertyRange(arr, m, range, prop);
-    if (expr === null) return null;
-    const { value, end } = evaluate(arr, m, expr[0], s.ctx);
-    if (end !== expr[1] || value.k !== 'path' || value.partial) return null;
+    let value = fallback !== null && omitsArgument(arr, m, at + 1, index, prop, range) ? fallback : null;
+    if (value === null) {
+      if (expr === null) return null;
+      const evaluated = evaluate(arr, m, expr[0], s.ctx);
+      if (evaluated.end !== expr[1] || evaluated.value.k !== 'path' || evaluated.value.partial) return null;
+      value = evaluated.value;
+    }
     if (passed !== null && JSON.stringify(passed) !== JSON.stringify(value)) return null;
     passed = value;
   }
   return passed;
+}
+
+/** True when the call opened at `open` provably leaves parameter `index` (or its property `prop`) out. */
+function omitsArgument(arr, m, open, index, prop, range) {
+  const ranges = listRanges(arr, m, open);
+  if (prop === null || range === null) {
+    return prop === null && range === null && index >= ranges.length && !ranges.some(([from]) => isPunct(arr[from], '...'));
+  }
+  const [from, to] = range;
+  if (!isPunct(arr[from], '{') || m[from] === undefined || m[from] + 1 !== to) return false;
+  const entries = listRanges(arr, m, from);
+  return entries.every(([pf]) => !isPunct(arr[pf], '...')) && !entries.some(([pf, pt]) => arr[pf]?.t === 'id' && arr[pf].v === prop && (pf + 1 === pt || isPunct(arr[pf + 1], ':')));
 }
 
 /** The value range of property `prop` in the object literal that is the whole argument `[from, to)`, or null. */
@@ -778,15 +798,17 @@ function pathOf(s, binder) {
   if (binder.path !== undefined) return binder.path;
   binder.path = null; // a value that flows back into itself resolves to nothing
   if (!settled(s, binder)) return null;
+  let fallback = null;
   if (binder.defaultExpr !== undefined) {
     const { value, end } = evaluate(binder.defaultExpr.arr, binder.defaultExpr.m, binder.defaultExpr.from, s.ctx);
-    if (end === binder.defaultExpr.to && value.k === 'path' && !value.partial && !value.unfollowed) binder.path = value;
+    if (end === binder.defaultExpr.to && value.k === 'path' && !value.partial && !value.unfollowed) fallback = value;
   }
-  if (binder.path === null && binder.kind === 'param' && binder.role.kind === 'named') {
-    binder.path = callSitePath(s, binder.role.nameToken, binder.index);
-  } else if (binder.path === null && binder.kind === 'destructured' && binder.prop !== null && binder.role.kind === 'named') {
-    binder.path = callSitePath(s, binder.role.nameToken, binder.index, binder.prop);
-  }
+  binder.fallback = fallback;
+  const named = binder.role?.kind === 'named';
+  // A default is the value only where every call relies on it; another call's path would go unkeyed.
+  if (named && (binder.kind === 'param' || binder.kind === 'defaulted')) binder.path = callSitePath(s, binder.role.nameToken, binder.index, null, fallback);
+  else if (named && binder.kind === 'destructured' && binder.prop !== null) binder.path = callSitePath(s, binder.role.nameToken, binder.index, binder.prop, fallback);
+  else binder.path = fallback;
   return binder.path;
 }
 
