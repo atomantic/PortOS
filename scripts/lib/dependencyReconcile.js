@@ -13,6 +13,7 @@ import { join } from 'path';
 
 export const DEPENDENCY_LOCKFILES = ['package-lock.json', 'server/package-lock.json', 'client/package-lock.json', 'browser/package-lock.json'];
 
+// scripts/update.mjs clears this same file name inline; keep the two in step.
 export const pendingReconcilePath = dataDir => join(dataDir, 'dependency-reconcile-pending.json');
 
 /** Lockfiles among `changedPaths` (git `--name-only` output, `/`-separated). */

@@ -4,7 +4,6 @@ import { accessSync, appendFileSync, closeSync, constants, existsSync, lstatSync
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { clearDependencyReconcilePending } from './lib/dependencyReconcile.js';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -236,7 +235,9 @@ async function install(previous) {
     log('❌ Critical dependency missing: client/node_modules/vite. Try npm run install:all.');
     fail();
   }
-  clearDependencyReconcilePending(dataDir);
+  // The updater runs without application imports (headless-install guard), so it
+  // clears the marker scripts/lib/dependencyReconcile.js writes by file name (#17511).
+  rmSync(join(dataDir, 'dependency-reconcile-pending.json'), { force: true });
   step('npm-install', 'done', 'Dependencies installed');
 }
 
