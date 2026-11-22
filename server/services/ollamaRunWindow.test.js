@@ -1,12 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mgr = vi.hoisted(() => ({
-  beginOllamaWork: vi.fn(),
+  beginOllamaWorkAfterReload: vi.fn(),
   getBaseUrl: vi.fn(() => 'http://localhost:11434'),
   getInFlightOllamaWorkCount: vi.fn(),
   getResidentModelContext: vi.fn(),
-  unloadModel: vi.fn(),
-  waitForOllamaReload: vi.fn(async () => {})
+  unloadModel: vi.fn()
 }))
 vi.mock('./ollamaManager.js', () => mgr)
 
@@ -19,7 +18,7 @@ describe('beginOllamaRun', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     release = vi.fn()
-    mgr.beginOllamaWork.mockReturnValue(release)
+    mgr.beginOllamaWorkAfterReload.mockResolvedValue(release)
     mgr.getInFlightOllamaWorkCount.mockReturnValue(1)
     mgr.unloadModel.mockResolvedValue({ unloaded: true })
   })
@@ -28,7 +27,7 @@ describe('beginOllamaRun', () => {
     const cloud = { id: 'x', type: 'api', endpoint: 'https://api.example.com/v1' }
     const run = await beginOllamaRun(cloud, 'm')
     expect(run.provider).toBe(cloud)
-    expect(mgr.beginOllamaWork).not.toHaveBeenCalled()
+    expect(mgr.beginOllamaWorkAfterReload).not.toHaveBeenCalled()
   })
 
   it('unloads an idle resident model serving a smaller window than configured', async () => {
@@ -36,7 +35,7 @@ describe('beginOllamaRun', () => {
     const run = await beginOllamaRun(provider, 'mlx')
     expect(mgr.unloadModel).toHaveBeenCalledWith('mlx')
     expect(run.provider).toBe(provider)
-    expect(mgr.beginOllamaWork).toHaveBeenCalledOnce()
+    expect(mgr.beginOllamaWorkAfterReload).toHaveBeenCalledOnce()
   })
 
   it('budgets against the resident window when other runs keep the model busy', async () => {

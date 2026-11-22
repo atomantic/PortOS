@@ -41,7 +41,7 @@ import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from 
 import { resolvePrOwnership } from '../../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../../lib/agent/agentSentinel.js';
 import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
-import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
+import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import { isOllamaBackedProvider } from '../provider/providers.js';
 import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 
@@ -503,15 +503,30 @@ export async function spawnDirectly({
   if (!prepared) return null;
   const { launch, env, cwd, processGroup, cleanupPromptFile, writePromptToStdin, ollamaContext } = prepared;
 
-  const claudeProcess = spawn(launch.command, launch.args, {
-    cwd,
-    shell: false,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-    // Never `unref()`ed — this stays an ordinary awaited child, just one in
-    // its own signalable process group. See needsProcessGroup.
-    detached: processGroup
-  });
+  // Registered immediately before spawn (no await in between) and held for the
+  // child's lifetime, so another agent's context reload waits for this harness
+  // instead of restarting the daemon under it (#17341).
+  const releaseOllamaWork = isOllamaBackedProvider(provider) ? await beginOllamaAgentWork(provider) : null;
+  let claudeProcess;
+  try {
+    claudeProcess = spawn(launch.command, launch.args, {
+      cwd,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+      // Never `unref()`ed — this stays an ordinary awaited child, just one in
+      // its own signalable process group. See needsProcessGroup.
+      detached: processGroup
+    });
+  } catch (err) {
+    releaseOllamaWork?.();
+    throw err;
+  }
+  // A failed spawn leaves `pid` unset and may never emit `exit`.
+  if (releaseOllamaWork) {
+    if (claudeProcess.pid == null) releaseOllamaWork();
+    else claudeProcess.once('exit', releaseOllamaWork);
+  }
   watchWindowsAgentProcess(claudeProcess, launch);
 
   // Remember the detached group so the graceful-shutdown sweep can reach it:

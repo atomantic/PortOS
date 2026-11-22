@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./ollamaManager.js', () => ({
+  beginOllamaWorkAfterReload: vi.fn(),
   ensureContextWindow: vi.fn(),
   getRuntimeContextLength: vi.fn(),
   getModelCapabilities: vi.fn(),
   getBaseUrl: vi.fn(() => 'http://localhost:11434')
 }))
 
-import { ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
-import { dropUnsupportedOllamaThinking, ensureOllamaAgentContext } from './ollamaAgentContext.js'
+import { beginOllamaWorkAfterReload, ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
+import { beginOllamaAgentWork, dropUnsupportedOllamaThinking, ensureOllamaAgentContext } from './ollamaAgentContext.js'
 
 const claudeOllamaTui = {
   id: 'claude-ollama-tui',
@@ -95,6 +96,27 @@ describe('ensureOllamaAgentContext', () => {
 // `gemma3:27b` (capabilities `["completion","vision"]`) failed three times with
 // `Error: "gemma3:27b" does not support thinking` — Ollama rejects the whole
 // request rather than ignoring the level.
+describe('beginOllamaAgentWork', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('registers a local-daemon run once any reload settles and hands back its release', async () => {
+    const release = vi.fn()
+    vi.mocked(beginOllamaWorkAfterReload).mockResolvedValue(release)
+    expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
+    expect(beginOllamaWorkAfterReload).toHaveBeenCalledOnce()
+  })
+
+  it('does not register cloud or remote-daemon providers', async () => {
+    const remote = { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
+    for (const provider of [null, { id: 'claude-code-tui', type: 'tui' }, remote]) {
+      const release = await beginOllamaAgentWork(provider)
+      expect(typeof release).toBe('function')
+      release()
+    }
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
+  })
+})
+
 describe('dropUnsupportedOllamaThinking', () => {
   const opencodeOllama = { id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', ollamaBacked: true }
 

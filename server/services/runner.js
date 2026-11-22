@@ -514,14 +514,31 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
     }
   }
 
-  childProcess = spawn(spawnCommand, spawnArgs, {
-    cwd: runCwd,
-    env: childEnv,
-    // Own process group ONLY for a bootstrap-wrapped spawn — see
-    // needsProcessGroup. Never `unref()`ed: the child must still keep this
-    // run's lifecycle observable exactly as a non-detached one does.
-    detached: processGroup,
-  });
+  // Held for the child's lifetime so another agent's context reload waits for
+  // this harness instead of restarting the daemon under it (#17341). Same
+  // predicate-gated lazy import as the context preparation above; no await
+  // between registration and spawn.
+  const releaseOllamaWork = isOllamaBackedProvider(provider)
+    ? await import('./ollamaAgentContext.js').then(({ beginOllamaAgentWork }) => beginOllamaAgentWork(provider))
+    : null;
+  try {
+    childProcess = spawn(spawnCommand, spawnArgs, {
+      cwd: runCwd,
+      env: childEnv,
+      // Own process group ONLY for a bootstrap-wrapped spawn — see
+      // needsProcessGroup. Never `unref()`ed: the child must still keep this
+      // run's lifecycle observable exactly as a non-detached one does.
+      detached: processGroup,
+    });
+  } catch (err) {
+    releaseOllamaWork?.();
+    throw err;
+  }
+  // A failed spawn leaves `pid` unset and may never emit `exit`.
+  if (releaseOllamaWork) {
+    if (childProcess.pid == null) releaseOllamaWork();
+    else childProcess.once('exit', releaseOllamaWork);
+  }
 
   // Remember the detached group so the graceful-shutdown sweep can reach it:
   // detaching moved this child out of the server's own process group, and a
