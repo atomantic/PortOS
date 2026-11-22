@@ -53,6 +53,7 @@ import {
 const PortosModelBenchmarkPanel = lazyWithReload(() => import('./PortosModelBenchmarkPanel'));
 const ModelCapabilityTests = lazyWithReload(() => import('./ModelCapabilityTests.jsx'));
 const AssessmentSweepPanel = lazyWithReload(() => import('./AssessmentSweepPanel'));
+const LocalBenchmarkPanel = lazyWithReload(() => import('./LocalBenchmarkPanel'));
 const PANEL_FALLBACK = <BrailleSpinner text="Loading panel" />;
 
 const INTENTS = [
@@ -1201,6 +1202,11 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
             onSweepFinished={() => load(intent)}
             tuningRequest={tuningSweepRequest}
             onTuningRequestClose={closeSweepTarget}
+          />
+          <LocalBenchmarkPanel
+            report={report}
+            runtimeLabelFor={runtimeLabelFor}
+            disabled={busy}
           />
         </Suspense>
         <ModelThroughputReport

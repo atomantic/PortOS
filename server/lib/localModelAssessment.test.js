@@ -18,6 +18,10 @@ import {
   describeStaleness,
   measuredFitVerdict,
   reconcileFit,
+  BENCHMARK_PROFILE,
+  benchmarkContexts,
+  localPerformanceFromAssessments,
+  selectBenchmarkTargets,
 } from './localModelAssessment.js';
 
 const okSample = (contextTokens, charsPerSecond, ttftMs = 300) => ({
@@ -814,5 +818,80 @@ describe('summarizeSweepScopes', () => {
       unassessed: [{ backend: 'ollama', modelId: 'b' }, { backend: 'ollama', modelId: 'c' }],
     });
     expect(counts).toEqual({ unmeasured: 2, stale: 1, all: 3 });
+  });
+});
+
+describe('side-by-side benchmark profile', () => {
+  const warm = (tokensPerSecond, promptTokensPerSecond, ttftMs) => ({
+    ...okSample(BENCHMARK_PROFILE.contextTokens, tokensPerSecond * 4, ttftMs), tokensPerSecond, promptTokensPerSecond, timingSource: 'daemon',
+  });
+
+  it('repeats one context and never reports run-to-run noise as context falloff', () => {
+    expect(benchmarkContexts()).toEqual([4096, 4096, 4096]);
+    const perf = summarizePerformance([warm(60, 900, 400), warm(54, 880, 420), warm(57, 910, 410)]);
+    expect(perf.meanTokensPerSecond).toBe(57);
+    expect(perf.contextDegradation).toBeNull();
+  });
+
+  it('collapses repeated runs into one throughput point per context', () => {
+    const report = buildThroughputReport([{
+      backend: 'mtplx', modelId: 'example-mtp', profile: 'benchmark',
+      samples: [warm(60, 900, 400), warm(54, 880, 420), { ...failSample(4096, 'Timed out'), tokensPerSecond: null }],
+      performance: { meanTokensPerSecond: 57 },
+    }]);
+    expect(report.contexts).toEqual([4096]);
+    expect(report.rows[0].profile).toBe('benchmark');
+    expect(report.rows[0].points).toEqual([expect.objectContaining({ contextTokens: 4096, ok: true, tokensPerSecond: 57, promptTokensPerSecond: 890, ttftMs: 410, runs: 3, runsOk: 2, error: null })]);
+  });
+
+  it('resolves picks to backend-default targets in request order and names what cannot run', () => {
+    const { targets, missing } = selectBenchmarkTargets({
+      assessments: [{ backend: 'ollama', modelId: 'example-mlx', tuningKey: 'num_ctx=8192' }],
+      unassessed: [{ backend: 'mtplx', modelId: 'example-mtp' }],
+      models: [
+        { backend: 'mtplx', modelId: 'example-mtp' },
+        { backend: 'ollama', modelId: 'example-mlx' },
+        { backend: 'mtplx', modelId: 'example-mtp' },
+        { backend: 'llama', modelId: 'absent' },
+        { backend: 'ollama', modelId: 'nomic-embed-text:latest' },
+      ],
+    });
+    expect(targets.map((t) => [t.backend, t.modelId, t.tuning, t.tuningKey])).toEqual([
+      ['mtplx', 'example-mtp', {}, ''],
+      ['ollama', 'example-mlx', {}, ''],
+    ]);
+    expect(missing.map((m) => m.modelId)).toEqual(['absent', 'nomic-embed-text:latest']);
+  });
+});
+
+describe('localPerformanceFromAssessments', () => {
+  const live = { mtplx: { platform: 'example-os', backendVersion: null } };
+  const record = (overrides) => ({ backend: 'mtplx', modelId: 'example-mtp', tuningKey: '', environment: { platform: 'example-os' }, ...overrides });
+
+  it('picks each measured axis from its own best record, with when, where and how it was measured', () => {
+    const byModel = localPerformanceFromAssessments([
+      record({ assessedAt: '2026-11-20T00:00:00.000Z', performance: { meanTokensPerSecond: 80, meanPromptTokensPerSecond: null, meanTtftMs: 300, samplesOk: 3 } }),
+      record({ tuningKey: 'depth=7', tuningLabel: 'depth 7', assessedAt: '2026-11-21T00:00:00.000Z', performance: { meanTokensPerSecond: 95, meanPromptTokensPerSecond: 1200, meanTtftMs: 250, samplesOk: 3 } }),
+    ], live).get('mtplx:example-mtp');
+    // The untuned reading wins where it has the metric; prefill falls through to the tuned record.
+    expect(byModel.tokensPerSecond).toMatchObject({ value: 80, estimated: false, measurement: { runtime: 'mtplx', tuningLabel: null, stale: false, profile: 'context-sweep' } });
+    expect(byModel.ttftMs).toMatchObject({ value: 300, measurement: { assessedAt: '2026-11-20T00:00:00.000Z' } });
+    expect(byModel.prefillTokensPerSecond).toMatchObject({ value: 1200, measurement: { tuningLabel: 'depth 7' } });
+    expect(byModel.prefillTokensPerSecond.method).toMatch(/prompt \(prefill\) tokens per second.*under tuning depth 7/);
+  });
+
+  it('marks a stale reading estimated and names the change; first-token time ignores estimated token counts', () => {
+    const benchmark = record({
+      profile: 'benchmark', benchmark: { ...BENCHMARK_PROFILE }, environment: { platform: 'older-os' }, assessedAt: '2026-11-19T00:00:00.000Z',
+      performance: { meanTokensPerSecond: 70, meanTtftMs: 420, samplesOk: 3, tokensEstimated: true },
+    });
+    const fresh = localPerformanceFromAssessments([{ ...benchmark, environment: { platform: 'example-os' } }], live).get('mtplx:example-mtp');
+    expect(fresh.tokensPerSecond.estimated).toBe(true);
+    expect(fresh.ttftMs.estimated).toBe(false);
+    expect(fresh.tokensPerSecond.method).toMatch(/3 warm runs at 4,096 tokens of context/);
+    expect(fresh.prefillTokensPerSecond).toBeNull();
+    const stale = localPerformanceFromAssessments([benchmark], live).get('mtplx:example-mtp');
+    expect(stale.ttftMs).toMatchObject({ estimated: true, measurement: { stale: true, profile: 'benchmark' } });
+    expect(stale.ttftMs.measurement.staleReason).toMatch(/operating system older-os → example-os/);
   });
 });

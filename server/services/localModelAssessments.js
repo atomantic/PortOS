@@ -30,6 +30,8 @@
 
 import {
   ASSESSMENT_INTENTS,
+  BENCHMARK_PROFILE,
+  benchmarkContexts,
   buildThroughputReport,
   classifyFitVerdict,
   classifySampleFailure,
@@ -105,7 +107,7 @@ const CHARS_PER_TOKEN = 4;
 // Fixed output budget: the point is prefill + decode at a context, comparable across models. Long
 // enough that a thinking model's reasoning and a multi-token-prediction runtime's draft acceptance
 // average over many decode steps rather than a handful (#17430).
-const SAMPLE_MAX_TOKENS = 256;
+const SAMPLE_MAX_TOKENS = BENCHMARK_PROFILE.maxTokens;
 
 // One short generation before the measured samples. A runtime's first request pays one-off costs
 // (weights paging in, kernel compilation, a speculative-decoding draft head warming up) that are not
@@ -283,6 +285,8 @@ function describeVerdict(verdict, samples) {
  * @param {'ollama'|'lmstudio'|'llama'|'mtplx'|'vllm'} options.backend
  * @param {string} options.modelId
  * @param {number[]} [options.contextTokens] nominal context sizes to sample
+ * @param {'benchmark'|null} [options.profile] `'benchmark'` runs `BENCHMARK_PROFILE` instead
+ *   (repeated warm runs at one context) and ignores `contextTokens`
  * @param {object} [options.tuning] launch/runtime knobs (`lib/localModelTuning.js`). Launch knobs apply
  *   where PortOS starts the daemon (llama.cpp); the rest are recorded. The tuning is part of the
  *   record's identity: a second tuning is a NEW record.
@@ -293,7 +297,7 @@ function describeVerdict(verdict, samples) {
  *   Frames carry `backend` + `modelId` to tell this run from unrelated installs on the same event.
  * @returns {Promise<object>} the persisted assessment record
  */
-export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, tuning, resetTuning = false, signal, onProgress, claimTimeoutMs = 0 } = {}) {
+export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, profile = null, tuning, resetTuning = false, signal, onProgress, claimTimeoutMs = 0 } = {}) {
   // Refused before the heavy-job claim: an embedding-only model answers every sample with a 400
   // and each one raises an investigation task. Covers the direct run route.
   if (isEmbeddingModel(modelId)) {
@@ -302,7 +306,12 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
       { status: 400, code: 'MODEL_NOT_ASSESSABLE', context: { backend, modelId } },
     );
   }
-  const contexts = [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  // A benchmark repeats ONE context on purpose (warm runs to average); a context sweep samples
+  // each size once, so its list is deduped.
+  const benchmark = profile === 'benchmark';
+  const contexts = benchmark
+    ? benchmarkContexts()
+    : [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
   // A broken progress consumer must never abort a measurement.
   const emit = (frame) => {
     if (typeof onProgress !== 'function') return;
@@ -332,7 +341,7 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
         performance: summarizePerformance([]),
       };
     }
-    return await measureModel({ backend, modelId, contexts, tuning, resetTuning, signal, emit });
+    return await measureModel({ backend, modelId, contexts, benchmark, tuning, resetTuning, signal, emit });
   } finally {
     await claim.release();
   }
@@ -483,7 +492,7 @@ async function applyLaunchTuning({ backend, modelId, launch, reset }) {
 // The measurement itself, with the accelerator already claimed by the caller
 // above. Split out so the claim's release is one `finally` around one call
 // rather than wrapped around a 100-line body.
-async function measureModel({ backend, modelId, contexts, tuning, resetTuning, signal, emit }) {
+async function measureModel({ backend, modelId, contexts, benchmark = false, tuning, resetTuning, signal, emit }) {
   const normalizedTuning = normalizeTuning(backend, tuning);
   const tuningKey = tuningSignature(normalizedTuning);
   const tuningLabel = describeTuning(backend, normalizedTuning);
@@ -656,6 +665,10 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
     residentGb: verdict === 'fits' ? await residentGbFor(backend, modelId) : null,
     // The discarded first request's time (load and warm-up costs), kept apart from `performance`.
     warmup,
+    // `benchmark` = the fixed side-by-side profile (repeated warm runs at one context);
+    // `context-sweep` = one sample per context size. Both feed the comparison axes.
+    profile: benchmark ? 'benchmark' : 'context-sweep',
+    benchmark: benchmark ? { ...BENCHMARK_PROFILE } : null,
     assessedAt: new Date().toISOString(),
     environment,
     verdict,
@@ -819,6 +832,8 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     intent: resolvedIntent,
     intents: ASSESSMENT_INTENTS,
     defaultContextTokens: DEFAULT_CONTEXT_TOKENS,
+    // The fixed side-by-side benchmark, so its consent gate names the generations that run.
+    benchmarkProfile: BENCHMARK_PROFILE,
     assessments,
     unassessed,
     // Every assessable runtime with its label, reachability, and knob catalog —

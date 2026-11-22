@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 import ModelComparison from './ModelComparison';
 import * as api from '../../services/apiModelComparison';
 import { triggerCosOnDemandTask } from '../../services/apiAgents';
@@ -238,8 +239,49 @@ it('plots intelligence against output speed and leaves unmeasured models off the
   await screen.findByTestId('scatter-example:gpt-6-luna');
   fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'tokensPerSecond' } });
   expect(screen.getByRole('heading', { name: 'Speed vs. intelligence' })).toBeTruthy();
-  expect(screen.getByTestId('xaxis').dataset.label).toBe('Output tokens / second');
+  expect(screen.getByTestId('xaxis').dataset.label).toBe('Output tokens / second (higher is better)');
   expect(JSON.parse(screen.getByTestId('scatter-example:example-local').dataset.values)).toEqual([[120.5, 30]]);
   expect(screen.queryByTestId('scatter-example:unmeasured-local')).toBeNull();
   expect(screen.getByLabelText('Log speed scale')).toBeTruthy();
+});
+
+const measuredMetric = (value, { stale = false, profile = 'benchmark' } = {}) => ({
+  value, estimated: stale, method: 'Measured on this machine', sources: [{ url: '/models/performance/results', retrievedAt: '2026-11-20T00:00:00.000Z', methodology: 'Measured' }],
+  measurement: { assessedAt: '2026-11-20T00:00:00.000Z', runtime: 'mtplx', tuningLabel: null, stale, staleReason: stale ? 'Measured on a different machine state — installed memory 32 → 64.' : null, profile },
+});
+const localRow = (model, quality, metrics = {}) => ({ ...row(model, 'high', quality, 0), provider: 'MTPLX', providerId: 'mtplx', modelKey: `mtplx:${model}`, localInference: true, runtime: 'mtplx', ...metrics });
+
+it('plots measured first-token time with lower-is-better copy and sends unmeasured local rows to their Measure drawer', async () => {
+  const route = { ...row('gpt-6-luna', 'low', 21, 0.2), tokensPerSecond: metric(140), localInference: false };
+  const measured = localRow('example-mtp', 30, { ttftMs: measuredMetric(380), prefillTokensPerSecond: measuredMetric(1500) });
+  const stale = localRow('example-mlx', 28, { ttftMs: measuredMetric(520, { stale: true, profile: 'context-sweep' }) });
+  const unmeasured = localRow('unmeasured-local', 25);
+  api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows: [route, measured, stale, unmeasured] } });
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'ttftMs' } });
+  expect(screen.getByRole('heading', { name: 'Latency vs. intelligence' })).toBeTruthy();
+  expect(screen.getByTestId('xaxis').dataset.label).toBe('Milliseconds to first token (lower is better)');
+  expect(JSON.parse(screen.getByTestId('scatter-mtplx:example-mtp').dataset.values)).toEqual([[380, 30]]);
+  // A stale reading still plots, as an estimate.
+  expect(JSON.parse(screen.getByTestId('scatter-mtplx:example-mlx').dataset.labels)).toEqual(['example-mlx (high) ≈']);
+  // Never plotted at an estimate: no published latency for the API route, no reading for the unmeasured one.
+  expect(screen.queryByTestId('scatter-example:gpt-6-luna')).toBeNull();
+  expect(screen.queryByTestId('scatter-mtplx:unmeasured-local')).toBeNull();
+
+  const table = screen.getByText(/Selected configurations and evidence/).closest('details');
+  const unmeasuredRow = within(table).getByText('unmeasured-local').closest('tr');
+  expect(within(unmeasuredRow).getAllByText('Not measured').length).toBeGreaterThan(0);
+  expect(within(unmeasuredRow).getByRole('link', { name: 'Run an assessment' })).toHaveAttribute('href', '/models/performance/results?measureBackend=mtplx&measureModel=unmeasured-local');
+  const staleRow = within(table).getByText('example-mlx').closest('tr');
+  expect(staleRow).toHaveTextContent('≈ 520 ms');
+  expect(staleRow).toHaveTextContent(/on mtplx/);
+  expect(staleRow).toHaveTextContent('Stale: Measured on a different machine state — installed memory 32 → 64.');
+  expect(within(table).getByText('gpt-6-luna').closest('tr')).toHaveTextContent('Not published');
+  expect(screen.getByRole('link', { name: 'Benchmark local models side by side' })).toHaveAttribute('href', '/models/performance/tuning');
+
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'prefillTokensPerSecond' } });
+  expect(screen.getByTestId('xaxis').dataset.label).toBe('Prompt tokens / second (higher is better)');
+  expect(JSON.parse(screen.getByTestId('scatter-mtplx:example-mtp').dataset.values)).toEqual([[1500, 30]]);
+  expect(screen.queryByTestId('scatter-mtplx:example-mlx')).toBeNull();
 });

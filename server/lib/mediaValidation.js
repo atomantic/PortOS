@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
-import { SWEEP_SCOPES } from './localModelAssessment.js';
+import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
@@ -378,6 +378,16 @@ export const localLlmAssessmentSweepSchema = z.object({
   // every installed model — hours of work nobody asked for.
   message: 'backend and modelId must be given together',
   path: ['modelId'],
+});
+// Side-by-side benchmark: the user's picked models, each under the fixed `BENCHMARK_PROFILE`.
+// Only the model list travels; prompt size, run count and output budget are server-fixed so the
+// generations the consent gate names are the ones that run. The cap bounds one click's work.
+export const localLlmAssessmentBenchmarkSchema = z.object({
+  models: z.array(z.object({ backend: localLlmRuntimeSchema, modelId: localLlmModelIdSchema }))
+    .min(BENCHMARK_PROFILE.minModels).max(BENCHMARK_PROFILE.maxModels)
+    .refine((models) => new Set(models.map((m) => `${m.backend}:${m.modelId}`)).size === models.length, {
+      message: 'each model may appear only once',
+    }),
 });
 export const localLlmAssessmentIntentSchema = z.object({
   intent: z.enum(['balanced', 'smartest', 'fastest', 'lightweight']).optional().default('balanced'),
