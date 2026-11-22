@@ -75,7 +75,7 @@ pass. `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
 worker caps still apply.
 
 Before lint or tests, pregate checks installed package versions against all
-four workspace lockfiles without modifying dependency trees. Stale, missing or
+three workspace lockfiles without modifying dependency trees. Stale, missing or
 unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate
 requires development dependencies (`npm ci --include=dev` in an owning
 workspace); a production-only installation cannot run its checks. A fresh
