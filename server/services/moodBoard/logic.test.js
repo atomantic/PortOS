@@ -298,6 +298,70 @@ describe('mergeBoardRecord (LWW)', () => {
     const { changed } = mergeBoardRecord(local, board());
     expect(changed).toBe(false);
   });
+
+  const image = { id: 'img-1', type: 'image', mediaKey: 'image:a.png' };
+  const note = { id: 'txt-1', type: 'text', text: 'from peer' };
+  const video = { id: 'vid-1', type: 'video', mediaKey: 'video:clip.mp4' };
+  const localOnlyImage = { id: 'img-local', type: 'image', mediaKey: 'image:local.png' };
+
+  it('keeps local video pins when a moodBoards v1 sender wins (#17366)', () => {
+    const local = board({
+      name: 'Local',
+      updatedAt: '2026-06-23T00:00:00.000Z',
+      items: [localOnlyImage, video, image],
+    });
+    const remote = board({
+      name: 'Remote title',
+      updatedAt: '2026-06-24T00:00:00.000Z',
+      items: [image, note],
+    });
+    const { remoteWins, next } = mergeBoardRecord(local, remote, { senderSchemaVersions: { moodBoards: 1 } });
+    expect(remoteWins).toBe(true);
+    expect(next.name).toBe('Remote title');
+    // Remote image/text items apply. The local-only image is a real delete
+    // the older peer can represent. The video pin is not, so it stays.
+    expect(next.items).toEqual([image, note, video]);
+  });
+
+  it('does not duplicate a video pin the pre-v2 remote already carries', () => {
+    const remoteVideo = { id: 'vid-1', type: 'video', mediaKey: 'video:peer.mp4' };
+    const local = board({ items: [video], updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({ items: [note, remoteVideo], updatedAt: '2026-06-24T00:00:00.000Z' });
+    const { next } = mergeBoardRecord(local, remote, { senderSchemaVersions: { moodBoards: 0 } });
+    expect(next.items).toEqual([note, remoteVideo]);
+  });
+
+  it.each([2, 3])('lets a moodBoards v%s sender remove a video pin (#17366)', (moodBoards) => {
+    const local = board({ name: 'Local', items: [image, video], updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({ name: 'Edited', items: [image], updatedAt: '2026-06-24T00:00:00.000Z' });
+    const { next } = mergeBoardRecord(local, remote, { senderSchemaVersions: { moodBoards } });
+    expect(next.name).toBe('Edited');
+    expect(next.items).toEqual([image]);
+  });
+
+  it('does not keep video pins on a remote tombstone (#17366)', () => {
+    const local = board({ items: [video, image], updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({
+      name: 'Gone',
+      updatedAt: '2026-06-24T00:00:00.000Z',
+      deleted: true,
+      deletedAt: '2026-06-24T00:00:00.000Z',
+      items: [image],
+    });
+    const { next } = mergeBoardRecord(local, remote, { senderSchemaVersions: { moodBoards: 1 } });
+    expect(next.deleted).toBe(true);
+    expect(next.name).toBe('Gone');
+    expect(next.items.map((item) => item.id)).not.toContain('vid-1');
+    expect(next.items).toEqual([image]);
+  });
+
+  it('treats a missing sender schema as version 0 and keeps local video pins (#17366)', () => {
+    const local = board({ items: [video], updatedAt: '2026-06-23T00:00:00.000Z' });
+    const remote = board({ name: 'Peer', items: [note], updatedAt: '2026-06-24T00:00:00.000Z' });
+    const { next } = mergeBoardRecord(local, remote);
+    expect(next.name).toBe('Peer');
+    expect(next.items).toEqual([note, video]);
+  });
 });
 
 describe('imageUrlToAppAsset', () => {
