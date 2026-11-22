@@ -146,6 +146,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/code-animation/projects/:id/sound-assets',
     '/api/cos/agents/:id/release-candidate',
     '/api/cos/mind/maintainer/watchdog',
+    // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.
+    '/api/cos/mind/stream',
     '/api/cos/schedule/deep-audits/:id',
     '/api/cos/schedule/maintenance-runs/:id/resume',
     '/api/cos/schedule/maintenance-runs/:id/steps/:stepId',
