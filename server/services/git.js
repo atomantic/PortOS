@@ -4,7 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
-import { safeJSONParse, sleep, rmGuarded, pathExists } from '../lib/fileUtils.js';
+import { safeJSONParse, sleep, rmGuarded, pathExists, PATHS } from '../lib/fileUtils.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { readRepoBranchSnapshot, repoObservationEnv } from './repoBranchSnapshot.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -1396,6 +1396,7 @@ async function ensureLatestUnserialized(dir) {
   const mergeOk = mergeResult.exitCode === 0;
 
   if (mergeOk) {
+    await noteLockfileChanges(dir, localHead);
     return { success: true, branch: currentBranch, conflict: false, error: null };
   }
 
@@ -1428,7 +1429,22 @@ async function ensureLatestUnserialized(dir) {
     };
   }
 
+  await noteLockfileChanges(dir, localHead);
   return { success: true, branch: currentBranch, conflict: false, error: null };
+}
+
+// Advancing the PortOS source checkout never reinstalls, so a range that changes
+// a workspace lockfile leaves node_modules stale for every linked claim. Record
+// it for the idle updater (#17511); managed apps' checkouts are not ours to reconcile.
+async function noteLockfileChanges(dir, before) {
+  if (await realpath(dir).catch(() => resolve(dir)) !== await realpath(PATHS.root).catch(() => resolve(PATHS.root))) return;
+  // Deferred: the boot import closure is capped (lib/importScoping.test.js).
+  const { changedDependencyLockfiles, markDependencyReconcilePending } = await import('../../scripts/lib/dependencyReconcile.js');
+  const diff = await execGit(['diff', '--name-only', before, 'HEAD'], dir, { ignoreExitCode: true });
+  const lockfiles = diff.exitCode === 0 ? changedDependencyLockfiles(diff.stdout.split(/\r?\n/)) : [];
+  if (!lockfiles.length) return;
+  markDependencyReconcilePending(PATHS.data, lockfiles);
+  console.log(`📦 Source checkout lockfiles changed (${lockfiles.join(', ')}) — dependency reconcile queued for the next idle update`);
 }
 
 /**

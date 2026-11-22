@@ -16,7 +16,9 @@ const deps = vi.hoisted(() => ({
   recordRuntime: vi.fn(),
   schedule: vi.fn(),
   cancel: vi.fn(),
+  reconcilePending: vi.fn(),
 }));
+vi.mock('../../scripts/lib/dependencyReconcile.js', () => ({ isDependencyReconcilePending: deps.reconcilePending }));
 
 vi.mock('../lib/fsWatcher.js', () => ({ watchPaths: deps.watch }));
 vi.mock('../lib/execGit.js', () => ({ execGit: deps.git }));
@@ -73,6 +75,7 @@ beforeEach(() => {
   deps.processing.mockResolvedValue(idleSnapshot);
   deps.selfUpdate.mockResolvedValue({ started: true, tag: 'v9.9.9' });
   deps.appUpdate.mockResolvedValue({ ok: true });
+  deps.reconcilePending.mockReturnValue(false);
 });
 
 describe('automatic update dispatch', () => {
@@ -190,6 +193,14 @@ describe('automatic update gates', () => {
     });
     await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: false, reason: 'up-to-date' });
     expect(deps.appUpdate).not.toHaveBeenCalled();
+  });
+
+  it('updates an up-to-date main checkout when a lockfile-driven dependency reconcile is pending (#17511)', async () => {
+    deps.settings.mockResolvedValue({ autoUpdate: { enabled: true, channel: 'main', minIntervalHours: 6 } });
+    deps.readRepo.mockResolvedValue({ ...readyVerdict, behind: 0 });
+    deps.reconcilePending.mockReturnValue(true);
+    await expect(runAutoUpdateTick({ io: {} })).resolves.toMatchObject({ ran: true, channel: 'main' });
+    expect(deps.appUpdate).toHaveBeenCalledTimes(1);
   });
 });
 
