@@ -24,11 +24,11 @@ import {
 } from '../lib/ollamaContext.js'
 import {
   beginOllamaWork,
+  beginOllamaWorkAfterReload,
   ensureContextWindow,
   getBaseUrl,
   getModelCapabilities,
-  getRuntimeContextLength,
-  waitForOllamaReload
+  getRuntimeContextLength
 } from './ollamaManager.js'
 import { LIFECYCLE_LINES } from '../lib/agent/agentOutputMarkers.js'
 
@@ -90,19 +90,18 @@ const usesLocalOllamaDaemon = (provider) => !!provider
 /**
  * Register an agent harness run on the local daemon as in-flight Ollama work, so a
  * later spawn's `ensureContextWindow` defers its reload instead of restarting the
- * daemon under this run. Call AFTER `ensureOllamaAgentContext` (which must not
- * wait on its own run); waits out a reload already in progress so the harness
- * never starts on a daemon about to be killed. Non-Ollama and remote-daemon
- * providers get a no-op release. Never rejects: the reload gate only resolves and
- * the registry is in-memory.
+ * daemon under this run (#17341). Call AFTER `ensureOllamaAgentContext` (which
+ * must not wait on its own run) and as close to the spawn as possible; waits out
+ * a reload already in progress so the harness never starts on a daemon about to
+ * be killed. Non-Ollama and remote-daemon providers get a no-op release. Never
+ * rejects: the reload gate only resolves and the registry is in-memory.
  *
  * @param {object|null} provider
  * @returns {Promise<() => void>} idempotent release; call it when the harness run ends
  */
 export async function beginOllamaAgentWork(provider) {
   if (!usesLocalOllamaDaemon(provider)) return noop
-  await waitForOllamaReload()
-  return beginOllamaWork()
+  return beginOllamaWorkAfterReload()
 }
 
 /**

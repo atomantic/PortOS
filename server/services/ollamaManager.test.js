@@ -1373,6 +1373,27 @@ describe('ollamaManager context window', () => {
     }
   })
 
+  // #17341: an agent harness registers through beginOllamaWorkAfterReload; the
+  // registration must land in the same turn as the gate check, and a later
+  // spawn's reload must then defer instead of restarting the daemon under it.
+  it('registers agent work in the same turn as the reload-gate check, deferring a later reload', async () => {
+    vi.useFakeTimers()
+    try {
+      stubPs([{ name: 'a', context_length: 4096 }])
+      const { ensureContextWindow, beginOllamaWorkAfterReload, getInFlightOllamaWorkCount, CONTEXT_RELOAD_DRAIN_TIMEOUT_MS } = await loadManager()
+      const registering = beginOllamaWorkAfterReload()
+      expect(getInFlightOllamaWorkCount()).toBe(1)
+      const release = await registering
+      const pending = ensureContextWindow(131072, 'a')
+      await vi.advanceTimersByTimeAsync(CONTEXT_RELOAD_DRAIN_TIMEOUT_MS + 1)
+      expect(await pending).toMatchObject({ applied: false, reason: 'in-flight' })
+      release()
+      expect(getInFlightOllamaWorkCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('waitForOllamaDrain resolves once every in-flight run releases', async () => {
     const { beginOllamaWork, waitForOllamaDrain, getInFlightOllamaWorkCount } = await loadManager()
     const a = beginOllamaWork()

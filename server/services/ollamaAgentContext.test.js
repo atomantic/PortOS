@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./ollamaManager.js', () => ({
   beginOllamaWork: vi.fn(),
-  waitForOllamaReload: vi.fn(async () => {}),
+  beginOllamaWorkAfterReload: vi.fn(),
   ensureContextWindow: vi.fn(),
   getRuntimeContextLength: vi.fn(),
   getModelCapabilities: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('./provider/providers.js', async (importOriginal) => ({
   getProviderById: vi.fn()
 }))
 
-import { beginOllamaWork, ensureContextWindow, getModelCapabilities, getRuntimeContextLength, waitForOllamaReload } from './ollamaManager.js'
+import { beginOllamaWork, beginOllamaWorkAfterReload, ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
 import { getProviderById } from './provider/providers.js'
 import {
   beginOllamaAgentWork,
@@ -108,6 +108,27 @@ describe('ensureOllamaAgentContext', () => {
 // `gemma3:27b` (capabilities `["completion","vision"]`) failed three times with
 // `Error: "gemma3:27b" does not support thinking` — Ollama rejects the whole
 // request rather than ignoring the level.
+describe('beginOllamaAgentWork', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('registers a local-daemon run once any reload settles and hands back its release', async () => {
+    const release = vi.fn()
+    vi.mocked(beginOllamaWorkAfterReload).mockResolvedValue(release)
+    expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
+    expect(beginOllamaWorkAfterReload).toHaveBeenCalledOnce()
+  })
+
+  it('does not register cloud or remote-daemon providers', async () => {
+    const remote = { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
+    for (const provider of [null, { id: 'claude-code-tui', type: 'tui' }, remote]) {
+      const release = await beginOllamaAgentWork(provider)
+      expect(typeof release).toBe('function')
+      release()
+    }
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
+  })
+})
+
 describe('dropUnsupportedOllamaThinking', () => {
   const opencodeOllama = { id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', ollamaBacked: true }
 
@@ -174,29 +195,6 @@ describe('dropUnsupportedOllamaThinking', () => {
   })
 })
 
-describe('beginOllamaAgentWork', () => {
-  beforeEach(() => { vi.clearAllMocks() })
-
-  it('waits out a reload in progress, then registers in-flight work', async () => {
-    const release = vi.fn()
-    const order = []
-    waitForOllamaReload.mockImplementationOnce(async () => { order.push('wait') })
-    beginOllamaWork.mockImplementationOnce(() => { order.push('begin'); return release })
-    expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
-    expect(order).toEqual(['wait', 'begin'])
-  })
-
-  it('returns a no-op release for non-Ollama and remote-daemon providers', async () => {
-    const remote = { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
-    for (const provider of [null, { id: 'claude-code', type: 'cli' }, remote]) {
-      const release = await beginOllamaAgentWork(provider)
-      expect(typeof release).toBe('function')
-      release()
-    }
-    expect(beginOllamaWork).not.toHaveBeenCalled()
-  })
-})
-
 describe('holdRecoveredOllamaAgentWork', () => {
   beforeEach(() => { vi.clearAllMocks() })
 
@@ -206,7 +204,7 @@ describe('holdRecoveredOllamaAgentWork', () => {
     getProviderById.mockResolvedValueOnce(claudeOllamaTui)
     expect(await holdRecoveredOllamaAgentWork({ metadata: { providerId: 'claude-ollama-tui' } })).toBe(release)
     expect(getProviderById).toHaveBeenCalledWith('claude-ollama-tui')
-    expect(waitForOllamaReload).not.toHaveBeenCalled()
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
   })
 
   it.each([

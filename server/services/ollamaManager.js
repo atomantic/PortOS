@@ -761,8 +761,16 @@ function beginOllamaWork() {
   }
 }
 
-/** Resolves when no daemon reload is in progress. */
-const waitForOllamaReload = async () => { while (reloadGate) await reloadGate }
+/**
+ * `beginOllamaWork` once no reload is in progress. Registers in the same turn as the
+ * final gate check: registering after a separate awaited wait resumes microtasks later,
+ * long enough for another caller to see an empty registry and start a new reload.
+ * @returns {Promise<() => void>} idempotent release
+ */
+async function beginOllamaWorkAfterReload() {
+  while (reloadGate) await reloadGate
+  return beginOllamaWork()
+}
 
 const getInFlightOllamaWorkCount = () => inFlightWork.size
 
@@ -861,7 +869,7 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   // The checks ABOVE are what is specific to a context window: a resident model
   // already big enough, and the >= latch that keeps an agent spawn from bouncing
   // the daemon. Everything below was the same ladder written twice.
-  // The gate holds new runs (`waitForOllamaReload`) until the restart settles, so none starts on a
+  // The gate holds new runs (`beginOllamaWorkAfterReload`) until the restart settles, so none starts on a
   // daemon that is about to be killed.
   let openGate
   reloadGate = new Promise((resolve) => { openGate = resolve })
@@ -2338,7 +2346,7 @@ export {
   stopServer,
   ensureContextWindow,
   beginOllamaWork,
-  waitForOllamaReload,
+  beginOllamaWorkAfterReload,
   getInFlightOllamaWorkCount,
   waitForOllamaDrain,
   getResidentModelContext,
