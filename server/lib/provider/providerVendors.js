@@ -1142,7 +1142,7 @@ const CLAUDE = {
  * exclusive by construction (distinct binary basenames, or a provider-id
  * check that doesn't overlap with a command-basename check).
  */
-export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, PI, HERMES, CLAUDE];
+export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, HERMES, PI, CLAUDE];
 
 /**
  * A row's `matchCliProvider` may be absent when it's identical to
