@@ -104,7 +104,7 @@ export const TimelineBlock = memo(function TimelineBlock({
       <div className="absolute bottom-1 left-1.5 right-1.5 text-[10px] text-white truncate font-medium">
         {isMissing ? '(missing)' : label}
       </div>
-      <div className="absolute top-1 left-1.5 text-[9px] text-white bg-black/60 px-1 rounded">
+      <div className="absolute top-1 left-1.5 text-[9px] port-media-overlay px-1 rounded">
         {isStill ? `still · ${dur.toFixed(2)}s` : `${dur.toFixed(2)}s`}
       </div>
       <button
@@ -227,7 +227,7 @@ export const LibraryTile = memo(function LibraryTile({ clip, onAdd }) {
             <Film className="w-6 h-6" />
           </div>
         )}
-        <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.5 bg-black/70 text-white rounded">
+        <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.5 port-media-overlay-strong rounded">
           {dur.toFixed(1)}s
         </span>
       </div>

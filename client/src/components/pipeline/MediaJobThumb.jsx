@@ -208,7 +208,7 @@ export default function MediaJobThumb({
           load, text encode) is minutes long and is exactly when the bar was
           previously blank. */}
       {(pct > 0 || remainingMs != null) && (
-        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">
+        <div className="absolute bottom-0 left-0 right-0 port-media-overlay text-[9px] text-center py-0.5 font-mono">
           {pct}%{remainingMs != null ? ` · ~${formatDurationMs(remainingMs)} left` : ''}
         </div>
       )}

@@ -98,7 +98,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
         {references.map((filename, index) => (
           <div key={filename} className="relative shrink-0">
             <MediaImage src={thumbUrl(filename)} fallbackSrc={`/data/image-refs/${encodeURIComponent(filename)}`} alt={`Reference image ${index + 2}`} loading="lazy" className="h-16 w-16 rounded object-cover border border-port-border" />
-            <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-1 text-[10px] text-white">{index + 2}</span>
+            <span className="absolute bottom-0.5 left-0.5 rounded port-media-overlay-strong px-1 text-[10px]">{index + 2}</span>
             <button type="button" onClick={() => removeReference(filename)} disabled={busy}
               aria-label={`Remove reference image ${index + 2}`}
               className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
