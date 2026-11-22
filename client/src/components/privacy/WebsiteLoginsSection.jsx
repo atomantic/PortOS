@@ -9,7 +9,8 @@ import WebsiteLoginDrawer from './WebsiteLoginDrawer';
 
 // Website Logins (#17397): origin-bound credentials the model-blind browser
 // fill types into a matching tab. The list only ever holds metadata (label,
-// exact origins, masked username, hasTotp); there is no reveal.
+// exact origins, masked username, hasTotp, notes); there is no reveal. The
+// parent keys this section by subject, so a subject switch starts fresh.
 export default function WebsiteLoginsSection({ subjectId }) {
   const [logins, setLogins] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +19,7 @@ export default function WebsiteLoginsSection({ subjectId }) {
   const [editing, setEditing] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [removing, setRemoving] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   // A `?subject=` switch reuses this mounted section; drop a slower read for
   // the previous subject so its logins never show under the new one.
@@ -41,9 +43,14 @@ export default function WebsiteLoginsSection({ subjectId }) {
     setLogins((prev) => (wasEditing ? prev.map((row) => (row.id === saved.id ? saved : row)) : [saved, ...prev]));
   };
 
+  // The confirm row stays up until the request settles; a repeat confirm while
+  // one is in flight is ignored so a login is never deleted twice.
   const handleDelete = async (login) => {
-    setConfirmDelete(null);
+    if (deletingId) return;
+    setDeletingId(login.id);
     const ok = await deleteWebsiteLogin(login.id, { silent: true }).catch(() => null);
+    setDeletingId(null);
+    setConfirmDelete(null);
     if (ok) {
       setRemoving(login.id);
       toast.success('Website login deleted');
@@ -119,9 +126,10 @@ export default function WebsiteLoginsSection({ subjectId }) {
                     <button
                       type="button"
                       onClick={() => setConfirmDelete(login.id)}
+                      disabled={deletingId === login.id || removing === login.id}
                       title="Delete website login"
                       aria-label={`Delete ${login.label}`}
-                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 disabled:opacity-40"
                     >
                       <Trash2 size={16} />
                     </button>

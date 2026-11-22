@@ -35,7 +35,9 @@ export default function WebsiteLoginDrawer({ open, login, subjectId, onClose, on
     if (origins.length === 0) { toast.error('Add at least one origin, such as https://example.com'); return null; }
     if (!editing && (!form.username || !form.password)) { toast.error('Username and password are required'); return null; }
 
-    const payload = { label: form.label.trim(), origins, notes: form.notes };
+    const payload = { label: form.label.trim(), origins };
+    // Notes go out on create, and on edit only when changed from the loaded value.
+    if (!editing || form.notes !== (login.notes ?? '')) payload.notes = form.notes;
     // Send a secret only when the user typed one; absent keeps the stored value.
     if (form.username) payload.username = form.username;
     if (form.password) payload.password = form.password;

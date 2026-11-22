@@ -214,7 +214,9 @@ export default function PrivacyVaultTab({ subjectId }) {
         </div>
       )}
 
-      <WebsiteLoginsSection subjectId={subjectId} />
+      {/* Keyed by subject: a ?subject= switch must not carry one member's list,
+          open drawer or pending delete into another member's scope. */}
+      <WebsiteLoginsSection key={subjectId} subjectId={subjectId} />
 
       <VaultRecordDrawer
         open={drawerOpen}

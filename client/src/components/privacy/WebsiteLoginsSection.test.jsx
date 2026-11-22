@@ -66,19 +66,37 @@ describe('WebsiteLoginsSection (#17397)', () => {
     fireEvent.click(form.getByLabelText('Remove the saved 2FA setup key'));
     fireEvent.click(form.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(api.updateWebsiteLogin).toHaveBeenCalled());
+    // Untouched notes and blank secrets are not resent.
     expect(api.updateWebsiteLogin.mock.calls[0].slice(0, 2)).toEqual(['login-1', {
-      label: 'Distributor portal', origins: ['https://example.com', 'https://id.example.com'], notes: '', totpSecret: null,
+      label: 'Distributor portal', origins: ['https://example.com', 'https://id.example.com'], totpSecret: null,
     }]);
     await waitFor(() => expect(screen.queryByText('2FA Auto')).toBeNull());
   });
 
-  it('deletes only after the inline confirmation', async () => {
-    api.deleteWebsiteLogin.mockResolvedValue({ ok: true });
+  it('deletes once, only after the inline confirmation, even when confirmed twice', async () => {
+    let settle;
+    api.deleteWebsiteLogin.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
     render(<WebsiteLoginsSection subjectId="subject-a" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Distributor portal' }));
     expect(api.deleteWebsiteLogin).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
-    await waitFor(() => expect(api.deleteWebsiteLogin).toHaveBeenCalledWith('login-1', { silent: true }));
+    const confirm = screen.getByRole('button', { name: /^delete$/i });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(api.deleteWebsiteLogin).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Delete Distributor portal' })).toBeDisabled();
+    settle({ ok: true });
     await waitFor(() => expect(screen.queryByText('Distributor portal')).toBeNull());
+    expect(api.deleteWebsiteLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends changed notes on edit', async () => {
+    api.updateWebsiteLogin.mockResolvedValue({ ...LOGIN, notes: 'Use the EU region' });
+    render(<WebsiteLoginsSection subjectId="subject-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Distributor portal' }));
+    const form = await openDrawerForm();
+    fireEvent.change(form.getByLabelText('Notes'), { target: { value: 'Use the EU region' } });
+    fireEvent.click(form.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(api.updateWebsiteLogin).toHaveBeenCalled());
+    expect(api.updateWebsiteLogin.mock.calls[0][1]).toMatchObject({ notes: 'Use the EU region' });
   });
 });
