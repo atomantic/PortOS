@@ -3,7 +3,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { describeMtplxRuntime, lockedMtplxVersion, readManagedMtplxVersion } from './mtplxRuntime.js';
+import { compareMtplxVersions, describeMtplxRuntime, lockedMtplxVersion, readExternalMtplxVersion, readManagedMtplxVersion } from './mtplxRuntime.js';
 
 // The real Homebrew shim, trimmed to the two lines the probe reads.
 const wrapperScript = (venv) => `#!/bin/bash
@@ -107,5 +107,22 @@ describe('MTPLX runtime versions', () => {
   it('reads the mtplx pin from a hashed lock entry', () => {
     expect(lockedMtplxVersion('mlx==0.32.2 \\\n    --hash=sha256:aa\nmtplx==2.13.0 \\\n    --hash=sha256:bb\n')).toBe('2.13.0');
     expect(lockedMtplxVersion('mlx==0.32.2\n')).toBeNull();
+  });
+});
+
+describe('external MTPLX versions', () => {
+  it('reads a pip console script\'s version from the venv it lives in', async () => {
+    const venv = await mkdtemp(join(tmpdir(), 'portos-mtplx-pip-'));
+    await mkdir(join(venv, 'bin'), { recursive: true });
+    await writeFile(join(venv, 'bin', 'mtplx'), '#!/bin/sh\n');
+    await mkdir(join(venv, 'lib', 'python3.12', 'site-packages', 'mtplx-2.12.3.dist-info'), { recursive: true });
+    expect(await readExternalMtplxVersion(join(venv, 'bin', 'mtplx'))).toBe('2.12.3');
+    await rm(venv, { recursive: true, force: true });
+  });
+
+  it('orders dotted versions numerically', () => {
+    expect(compareMtplxVersions('2.12.3', '2.13.0')).toBe(-1);
+    expect(compareMtplxVersions('2.13.0', '2.9.9')).toBe(1);
+    expect(compareMtplxVersions('2.13', '2.13.0')).toBe(0);
   });
 });

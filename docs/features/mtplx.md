@@ -268,8 +268,11 @@ Packs need 2.13 or newer, so the lock pins 2.13.0 as a cooldown exception
 (see `docs/PYTHON_RUNTIME_REFRESH.md`). A private runtime installed from an
 older lock keeps working; the MTPLX card shows its version beside the shipped
 one with an **Update MTPLX runtime** button, which re-syncs the private venv
-from the lock (restart a running server to pick it up). A Homebrew or pip
-install is upgraded where it was installed. Find the packs by searching
+from the lock (restart a running server to pick it up). When the `mtplx` on
+PATH is a Homebrew or pip install older than the shipped version (read from its
+venv's dist-info, never by running it), the card says so and offers **Install
+PortOS's MTPLX runtime**; the private runtime then takes precedence and the
+external install is left untouched. Find the packs by searching
 "Inkling" in the checkpoint search: Optimized-Speed is the balanced pick;
 Bare-Speed fits 24 GB hosts.
 
