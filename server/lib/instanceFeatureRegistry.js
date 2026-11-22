@@ -11,7 +11,7 @@
 //   1. add a descriptor here;
 //   2. tag its pages in navManifest.js (`feature: '<id>'`, or a SECTION_FEATURE
 //      entry when a whole sidebar section belongs to it). Destination icons
-//      live in NAV_DESTINATION_PRESENTATION in client/src/lib/navPresentation.js.
+//      live in NAV_PRESENTATION in client/src/lib/navPresentation.js.
 //      Layout inherits the feature, section, and label from NAV_COMMANDS;
 //   3. add a `detect` hook in services/instanceFeatures.js when a fresh install
 //      should infer the default from whether the integration is configured.
