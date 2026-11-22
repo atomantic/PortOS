@@ -137,6 +137,10 @@ it('validates duplicate requests and replaces a verified weight through the rout
   const app = makeApp();
   const invalid = await request(app).post('/api/system-resources/duplicates/rectify').send({ pairs: [] });
   expect(invalid.status).toBe(400);
+  const badMode = await request(app).post('/api/system-resources/duplicates/rectify').send({
+    pairs: [{ sourcePath, targetPath }], mode: 'symlink',
+  });
+  expect(badMode.status).toBe(400);
   const escaped = await request(app).post('/api/system-resources/duplicates/rectify').send({
     pairs: [{ sourcePath, targetPath: join(root, 'outside.gguf') }],
   });

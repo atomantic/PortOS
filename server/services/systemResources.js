@@ -457,7 +457,9 @@ export async function buildSystemResourceReport() {
     getAllTasks().catch(() => null),
     getStatus().catch(() => null),
     readAgentCensus(),
-    scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
+    scanModelDuplicates().catch(() => ({
+      pinokioDetected: null, items: [], totalReclaimableBytes: 0, hub: null, error: 'Duplicate model scan unavailable',
+    })),
   ]);
 
   const parsedFilesystem = parseFilesystemStats(diskStats);
