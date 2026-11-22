@@ -89,7 +89,8 @@ const noop = () => {}
  * daemon under this run (#17341). Call AFTER `ensureOllamaAgentContext` (which
  * must not wait on its own run) and as close to the spawn as possible; waits out
  * a reload already in progress so the harness never starts on a daemon about to
- * be killed. Non-Ollama and remote-daemon providers get a no-op release.
+ * be killed. Non-Ollama and remote-daemon providers get a no-op release. Never
+ * rejects: the reload gate only resolves and the registry is in-memory.
  *
  * @param {object|null} provider
  * @returns {Promise<() => void>} idempotent release; call it when the harness process exits

@@ -1155,6 +1155,17 @@ describe('spawnTuiAgent runtime', () => {
       expect(release).toHaveBeenCalled();
     });
 
+    it('finalizes a failed registration as a failed start', async () => {
+      vi.mocked(beginOllamaAgentWork).mockRejectedValueOnce(new Error('registry unavailable'));
+      await expect(runSpawn({ provider: ollamaProvider })).resolves.toBeNull();
+      expect(shellService.createShellSession).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        completionReason: 'spawn-error',
+        error: 'Failed to start TUI session: registry unavailable',
+      }));
+    });
+
     it('does not register a cloud-provider run', async () => {
       const spawnPromise = runSpawn();
       await flushMicrotasks();

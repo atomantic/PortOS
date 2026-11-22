@@ -466,10 +466,6 @@ export async function spawnTuiAgent({
     : null;
   if (ollamaContext?.warning) appendLine(ollamaContext.warning);
   if (ollamaContext?.applied) appendLine(LIFECYCLE_LINES.ollamaContextApplied({ contextLength: ollamaContext.contextLength }));
-  // Held while the harness can talk to the daemon, so another agent's context
-  // reload defers instead of restarting Ollama under this run (#17341). Released
-  // (idempotently) on session exit, a failed start, and the controller's teardown.
-  if (isOllamaBackedProvider(provider)) releaseOllamaWork = await beginOllamaAgentWork(provider);
 
   // A spawn failure here (a runner 400 for a command missing from its allowlist,
   // an unreachable runner, a PTY that won't open) used to propagate raw out of
@@ -489,6 +485,11 @@ export async function spawnTuiAgent({
   // real host/config problem a retry cannot repair.
   let session;
   try {
+    // Held while the harness can talk to the daemon, so another agent's context
+    // reload defers instead of restarting Ollama under this run (#17341). Inside
+    // the try so a registration failure is finalized as a failed start. Released
+    // (idempotently) on session exit, a failed start, and the controller's teardown.
+    if (isOllamaBackedProvider(provider)) releaseOllamaWork = await beginOllamaAgentWork(provider);
     session = await createAgentTuiSession({
       agentId,
       taskId: task.id,
