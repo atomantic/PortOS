@@ -1,0 +1,22 @@
+{
+  "name": "journal.append",
+  "description": "Append a text segment to a Daily Log entry (does NOT enter dictation mode — one-shot). ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The exact text to append, in the user's words."
+      },
+      "date": {
+        "type": "string",
+        "description": "YYYY-MM-DD; defaults to today."
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

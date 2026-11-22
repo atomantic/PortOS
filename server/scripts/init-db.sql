@@ -435,6 +435,14 @@ CREATE TABLE IF NOT EXISTS review_queue_triage (
 
 ALTER TABLE review_queue_triage ADD COLUMN IF NOT EXISTS delivery JSONB;
 
+CREATE TABLE IF NOT EXISTS autonomous_job_notepads (
+    job_id TEXT NOT NULL,
+    key TEXT COLLATE "C" NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (job_id, key)
+  );
+
 CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
     agent_id TEXT PRIMARY KEY,
     archive_date TEXT

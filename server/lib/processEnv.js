@@ -72,6 +72,8 @@ const CLI_PROVIDER_AUTH_RULES = Object.freeze({
   grok: { keys: ['XAI_API_KEY', 'GROK_API_KEY'], prefixes: [] },
   kimi: { keys: ['KIMI_API_KEY', 'MOONSHOT_API_KEY'], prefixes: [] },
   cursor: { keys: ['CURSOR_API_KEY'], prefixes: [] },
+  // Hermes keeps its credentials in its own `$HERMES_HOME/.env`; only the home selector crosses.
+  hermes: { keys: ['HERMES_HOME'], prefixes: [] },
 });
 
 const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked'];
@@ -114,6 +116,7 @@ function cliProviderAuthRule(provider) {
   if (command === 'agy' || command === 'antigravity' || id.startsWith('antigravity')) return CLI_PROVIDER_AUTH_RULES.agy;
   if (command === 'grok' || id.startsWith('grok-')) return CLI_PROVIDER_AUTH_RULES.grok;
   if (command === 'kimi' || id.startsWith('kimi-')) return CLI_PROVIDER_AUTH_RULES.kimi;
+  if (command === 'hermes' || id.startsWith('hermes-')) return CLI_PROVIDER_AUTH_RULES.hermes;
   if (command === 'cursor-agent' || id.startsWith('cursor-')) return CLI_PROVIDER_AUTH_RULES.cursor;
   return null;
 }

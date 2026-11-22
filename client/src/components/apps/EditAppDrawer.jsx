@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router';
-import { BarChart3, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
+import { BarChart3, BookOpen, Brain, GitBranch, GitMerge, GitPullRequest, Info, Lock, Copy, Network, ShieldCheck, SquareTerminal, ToggleLeft } from 'lucide-react';
 import IconPicker from '../IconPicker';
 import { getDatadogInstances } from '../../services/apiSystem.js';
 import {
@@ -97,6 +97,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // Opt-in: publishing writes to the app's own repo, so an app that has never
     // been saved must render unchecked.
     publishQualitySnapshot: app.publishQualitySnapshot === true,
+    // Opt-in: repo skills are third-party prompt text, so default unchecked.
+    skillDiscovery: app.skillDiscovery === true,
     deploymentModel: typeof app.deploymentModel === 'string' ? app.deploymentModel : '',
     featureOverrides: Object.fromEntries(
       APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
@@ -300,6 +302,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       adminMerge: formData.adminMerge,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
       publishQualitySnapshot: formData.publishQualitySnapshot,
+      skillDiscovery: formData.skillDiscovery,
       // Empty string clears it, so audits fall back to the repository's docs.
       deploymentModel: formData.deploymentModel.trim(),
     };
@@ -809,6 +812,20 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               </label>
               <p className="ml-6 text-xs text-gray-500">
                 After each audit, PortOS writes the app’s numeric quality scores to .quality.json, opens a pull request, and merges it immediately so the live checkout never diverges from origin. Off by default.
+              </p>
+              <label htmlFor="edit-app-skill-discovery" className="flex items-center gap-2 cursor-pointer">
+                <input
+                  id="edit-app-skill-discovery"
+                  type="checkbox"
+                  checked={formData.skillDiscovery}
+                  onChange={e => setFormData(prev => ({ ...prev, skillDiscovery: e.target.checked }))}
+                  className="rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+                />
+                <BookOpen size={14} className="text-sky-400" />
+                <span className="text-sm text-white">Discover repo skills for agents</span>
+              </label>
+              <p className="ml-6 text-xs text-gray-500">
+                Offers the repo’s .agents/skills and .claude/skills to agents working on this app. Each skill is security-scanned first, and one that hides instructions or asks for secrets is quarantined. Off by default.
               </p>
               <div className="pt-2">
                 <label htmlFor="edit-app-deployment-model" className="block text-sm text-gray-400 mb-1">Deployment model for quality audits</label>

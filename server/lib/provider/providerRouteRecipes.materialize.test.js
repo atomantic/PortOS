@@ -258,11 +258,11 @@ describe('the shipped samples are reproduced by their (harness, service) composi
     mapped.push({ id, sample, profile, harness, serviceInstance });
   }
 
-  // Kilo and OpenChamber bind to nothing; the two Pi samples name no service
+  // Kilo and OpenChamber bind to nothing; the Pi and Hermes samples name no service
   // at all (Pi's default provider is whatever the user last logged into), so
   // they are pinned by `providerRouteRecipes.sampleParity.test.js` instead.
   it('maps every sample except the ones that name no service', () => {
-    expect(unmapped.sort()).toEqual(['kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui']);
+    expect(unmapped.sort()).toEqual(['hermes-cli', 'hermes-tui', 'kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui']);
     expect(mapped.length + unmapped.length).toBe(Object.keys(SAMPLES).length);
   });
 

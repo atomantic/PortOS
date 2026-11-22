@@ -198,6 +198,41 @@ describe('musicVideo routes', () => {
     expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { finishedOutside: null });
   });
 
+  it('PUT /:id/completion stamps the mark server-side, refuses complete without a final render, and clears it', async () => {
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: 'final-1' });
+    const r = await request(app).put('/api/music-video/mv-1/completion').send({ state: 'complete' });
+    expect(r.status).toBe(200);
+    expect(svc.updateProject.mock.calls[0][1]).toEqual({ completion: { state: 'complete', markedAt: expect.any(String) } });
+    expect(r.body.productionReadiness).toBeDefined();
+    await request(app).put('/api/music-video/mv-1/completion').send({ state: 'in-progress' });
+    expect(svc.updateProject.mock.calls[1][1].completion.state).toBe('in-progress');
+    await request(app).put('/api/music-video/mv-1/completion').send({ state: 'auto' });
+    expect(svc.updateProject.mock.calls[2][1]).toEqual({ completion: null });
+    expect((await request(app).put('/api/music-video/mv-1/completion').send({ state: 'complete', markedAt: '2020-01-01' })).status).toBe(400);
+    expect((await request(app).put('/api/music-video/mv-1/completion').send({ state: 'done' })).status).toBe(400);
+
+    svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: null });
+    const refused = await request(app).put('/api/music-video/mv-1/completion').send({ state: 'complete' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('MUSIC_VIDEO_NO_FINAL_RENDER');
+    expect((await request(app).put('/api/music-video/mv-1/completion').send({ state: 'in-progress' })).status).toBe(200);
+  });
+
+  it('lists a marked project by its mark, whatever its final render says', async () => {
+    const markedAt = '2026-03-02T00:00:00.000Z';
+    svc.listProjects.mockResolvedValue([
+      { id: 'stale-marked', status: 'complete', renderHistoryId: 'r1', completion: { state: 'complete', markedAt }, createdAt: '2026-03-01' },
+      { id: 'done-reopened', status: 'complete', renderHistoryId: 'r2', completion: { state: 'in-progress', markedAt }, createdAt: '2026-02-01' },
+      { id: 'no-final', status: 'draft', completion: { state: 'complete', markedAt }, createdAt: '2026-01-01' },
+    ]);
+    svc.listProjectCompletion.mockResolvedValue([{ id: 'stale-marked', isCompleted: true }, { id: 'done-reopened', isCompleted: false }]);
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'stale-marked', isCompleted: true }] });
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress');
+    expect(progress.body.items.map(({ id }) => id)).toEqual(['done-reopened', 'no-final']);
+    svc.listProjectCompletion.mockReset();
+  });
+
   it('GET /midi-sources returns only the newest transcription per track, trimmed (#10203)', async () => {
     const mk = (id, trackId, createdAt) => ({
       id, name: id, trackId, scenes: [{ big: true }],

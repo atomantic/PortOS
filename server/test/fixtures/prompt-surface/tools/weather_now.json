@@ -1,0 +1,17 @@
+{
+  "name": "weather_now",
+  "description": "Report the current weather (temperature + conditions) for a location. Use when the user asks \"what's the weather?\", \"is it raining?\", \"how hot is it outside?\". Pass `lat`/`lon` for a specific place; with no coordinates it uses a saved location if one is configured, otherwise a default location. Uses the free Open-Meteo service (no API key).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "lat": {
+        "type": "number",
+        "description": "Latitude (-90 to 90). Omit to use the configured/default location."
+      },
+      "lon": {
+        "type": "number",
+        "description": "Longitude (-180 to 180). Omit to use the configured/default location."
+      }
+    }
+  }
+}

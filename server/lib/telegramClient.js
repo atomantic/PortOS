@@ -5,17 +5,28 @@
 
 import { EventEmitter } from 'events';
 import { readResponseJson } from './readResponseJson.js';
+import { readFile } from 'fs/promises';
 import { sleep } from './fileCore.js';
 
 const BASE_URL = 'https://api.telegram.org/bot';
 const POLL_TIMEOUT_SEC = 30;
 const API_TIMEOUT_MS = 10_000; // regular calls: sendMessage, editMessageText, etc.
+const UPLOAD_TIMEOUT_MS = 120_000; // multipart media uploads up to the 50 MB Bot API ceiling
 const POLL_CLIENT_TIMEOUT_MS = (POLL_TIMEOUT_SEC + 15) * 1000; // client-side deadline for long-poll requests
 const RETRY_DELAY_API_ERROR_MS = 5_000;
 const RETRY_DELAY_NETWORK_ERROR_MS = 2_000;
 
 function buildUrl(token, method) {
   return `${BASE_URL}${token}/${method}`;
+}
+
+function unwrapResult(json, method) {
+  if (!json.ok) {
+    const err = new Error(json.description || `Telegram API error: ${method}`);
+    if (json.error_code !== undefined) err.error_code = json.error_code;
+    throw err;
+  }
+  return json.result;
 }
 
 async function apiCall(token, method, body = {}) {
@@ -31,15 +42,34 @@ async function apiCall(token, method, body = {}) {
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(API_TIMEOUT_MS)
   });
-  const json = await readResponseJson(res);
-  if (!json.ok) {
-    const err = new Error(json.description || `Telegram API error: ${method}`);
-    if (json.error_code !== undefined) {
-      err.error_code = json.error_code;
-    }
-    throw err;
-  }
-  return json.result;
+  return unwrapResult(await readResponseJson(res), method);
+}
+
+/**
+ * Upload one file through a multipart Bot API media method using Node's
+ * built-in FormData/Blob. `attachment` is a `resolveDeliverable` result from
+ * `lib/telegramDeliverables.js` — callers must never pass an unvalidated path.
+ * Throws like `apiCall` on an API error.
+ *
+ * @param {string} token
+ * @param {string|number} chatId
+ * @param {{ path: string, filename: string, method: string, field: string, caption?: string|null }} attachment
+ */
+export async function uploadMedia(token, chatId, attachment) {
+  const bytes = await readFile(attachment.path);
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  // Plain-text caption: it comes from a filename or producer text, so no
+  // parse_mode — an unescaped `<` would otherwise make Telegram reject the upload.
+  if (attachment.caption) form.append('caption', attachment.caption);
+  form.append(attachment.field, new Blob([bytes]), attachment.filename);
+
+  const res = await fetch(buildUrl(token, attachment.method), {
+    method: 'POST',
+    body: form,
+    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS)
+  });
+  return unwrapResult(await readResponseJson(res), attachment.method);
 }
 
 /**
@@ -130,6 +160,9 @@ export function createTelegramBot(token, opts = {}) {
     },
     sendMessage(chatId, text, extra = {}) {
       return apiCall(token, 'sendMessage', { chat_id: chatId, text, ...extra });
+    },
+    sendMedia(chatId, attachment) {
+      return uploadMedia(token, chatId, attachment);
     },
     answerCallbackQuery(callbackQueryId, extra = {}) {
       return apiCall(token, 'answerCallbackQuery', { callback_query_id: callbackQueryId, ...extra });

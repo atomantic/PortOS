@@ -1,0 +1,32 @@
+{
+  "name": "mind.cleanup",
+  "description": "Archive only unprotected Persistent Mind-owned memories, or clear trajectory history and derived context. Core identity and important memories always survive. Protect critical knowledge using mind.protect-memory before cleanup.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "scopes": {
+        "minItems": 1,
+        "maxItems": 3,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "context",
+            "history",
+            "memories"
+          ]
+        }
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    },
+    "required": [
+      "scopes"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "destructive"
+}

@@ -16,6 +16,7 @@ const normalizeCapabilities = (value) => ({
   installEidoverseControllers: value?.installEidoverseControllers === true,
   callUser: value?.callUser === true,
   adjustLocalContext: value?.adjustLocalContext === true,
+  manageSkills: value?.manageSkills === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
   taskModelAllowlist: Array.isArray(value?.taskModelAllowlist)
@@ -29,6 +30,7 @@ const OPTIONS = [
   { group: 'work', key: 'createTasks', label: 'Allow mind to queue CoS agent tasks', hint: 'Queue a task on an authorized app. Budget, review, CI, and landing policy still apply. Model choice is the allowlist below, or every configured coding model when that list is empty.' },
   { group: 'work', key: 'fileIssues', label: 'Allow mind to read and file GitHub/GitLab issues', hint: 'Read and file issues on authorized trackers. No edits, comments, or closes.' },
   { group: 'work', key: 'auditReports', label: 'Allow private CoS process audits', hint: 'Review up to three finished jobs per turn. Filing a finding needs the issue grant.' },
+  { group: 'work', key: 'manageSkills', label: 'Allow mind to author procedural skills', hint: 'Create and edit skills in the local data/skills library. Reading skills needs only bounded PortOS reads.' },
   { group: 'work', key: 'manageToolRecipes', label: 'Allow mind to manage saved tool recipes', hint: 'Lets the mind edit recipes. You can edit the library with this off. Reads still need their own grants.' },
   { group: 'records', key: 'readPortos', label: 'Allow bounded PortOS reads', hint: 'Brain, goals, journal, calendar, health, feed, catalog, and runtime.' },
   { group: 'records', key: 'writePortos', label: 'Allow bounded PortOS updates', hint: 'Typed updates to Brain, journal, goals, health logs, and feed state.' },
@@ -71,7 +73,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.fileIssues, capabilities?.auditReports, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.fileIssues, capabilities?.auditReports, capabilities?.manageMind, capabilities?.manageToolRecipes, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.manageSkills, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

@@ -325,6 +325,7 @@ export default function App() {
             <Route path="ai/presets" element={<AIProviders />} />
             <Route path="ai/presets/new" element={<AIProviders />} />
             <Route path="ai/presets/:presetId" element={<AIProviders />} />
+            <Route path="ai/presets/moa/:moaId" element={<AIProviders />} />
             <Route path="ai/edit/:providerId" element={<AIProviders />} />
             <Route path="ai/fleet" element={<AIProviders />} />
             <Route path="ai/harnesses" element={<AIProviders />} />

@@ -81,3 +81,28 @@ it('does not attribute an unattested note to the mind', async () => {
   expect(note).toHaveTextContent('Author unknown');
   expect(note).not.toHaveTextContent('Written by the mind');
 });
+
+it('renders the context window breakdown bar, provenance badges and pin notice without polling', async () => {
+  getPersistentMindReflection.mockResolvedValue({ state: 'empty', source: null });
+  getPersistentMindContext.mockResolvedValue({
+    memories: [], prompt: {}, preview: {},
+    breakdown: {
+      contextUsed: 9000, contextMax: 10000, contextPercent: 92, highOccupancy: true,
+      occupancySource: 'local_estimate', windowSource: 'pinned',
+      pinnedWindow: 10000, advertisedWindow: 131072, pinDisagreesWithAdvertised: true, promptCache: null,
+      categories: [
+        { id: 'identity', label: 'Identity', tokens: 100, percent: 1 },
+        { id: 'tool_definitions', label: 'Tool definitions', tokens: 800, percent: 8, detail: [{ id: 'recipes', label: 'recipes', tokens: 700, tools: 2 }] },
+        { id: 'free', label: 'Free headroom', tokens: 0, percent: 0 },
+      ],
+    },
+  });
+  render(<MemoryRouter><PersistentMindContextPanel view="context" /></MemoryRouter>);
+  expect(await screen.findByText('Estimated')).toBeInTheDocument();
+  expect(screen.getByText('Pinned window')).toBeInTheDocument();
+  expect(screen.getByText(/differs from the model's advertised window/)).toBeInTheDocument();
+  expect(screen.getByText('Context window nearly full')).toBeInTheDocument();
+  expect(screen.getAllByText('Tool definitions').length).toBeGreaterThan(0);
+  expect(screen.getByText(/recipes \(2 tools\)/)).toBeInTheDocument();
+  expect(getPersistentMindContext).toHaveBeenCalledTimes(1);
+});

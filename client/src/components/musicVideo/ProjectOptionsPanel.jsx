@@ -13,7 +13,9 @@ import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft 
 import { musicVideoMediaMode } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { formatUsd } from '../../utils/formatters.js';
 import { finishedOutsideBlocker } from '../../../../server/lib/musicVideo/musicVideoFinishedOutside.js';
-import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
+import { setMusicVideoCompletion, setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
+import { musicVideoCompletionBlocker, musicVideoCompletionMark } from '../../../../server/lib/musicVideo/musicVideoCompletion.js';
+import { isMusicVideoCompleted } from '../../../../server/lib/musicVideo/musicVideoSummary.js';
 
 const TOOL_GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];
 const rowCls = 'grid min-w-0 grid-cols-1 gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start sm:gap-3';
@@ -29,7 +31,8 @@ const headCls = 'pt-1.5 text-xs font-medium text-port-text-muted';
  * project through the same paths the Shots step's controls use. A project made
  * elsewhere can be marked finished outside PortOS, so Song through Shots stop
  * asking for approvals that were never given here (`onProjectUpdated` gets the
- * saved record).
+ * saved record). The director can also call the video complete, or put it back in
+ * progress, whatever its final render's evidence says.
  */
 export default function ProjectOptionsPanel({
   project, videoSettings, generatingVideos = false, onMediaMode, onRenderStyle, onSaveAutomation, onSavePolicy, onProjectUpdated,
@@ -46,6 +49,23 @@ export default function ProjectOptionsPanel({
       .then((next) => { setOutsideNote(''); onProjectUpdated?.(next); })
       .catch(() => {}) // request() already toasted
       .finally(() => setOutsideSaving(false));
+  };
+  const completionMark = musicVideoCompletionMark(project);
+  const completionValue = completionMark?.state || 'auto';
+  // What the final render's evidence says on its own, for the Automatic choice.
+  const evidenceComplete = isMusicVideoCompleted({ ...project, completion: null, isCompleted: undefined });
+  const [completionSaving, setCompletionSaving] = useState(false);
+  const [completionError, setCompletionError] = useState('');
+  const changeCompletion = (state) => {
+    if (completionSaving || state === completionValue) return;
+    const blocker = state === 'auto' ? null : musicVideoCompletionBlocker(project, state);
+    setCompletionError(blocker || '');
+    if (blocker) return;
+    setCompletionSaving(true);
+    setMusicVideoCompletion(project.id, state)
+      .then((next) => onProjectUpdated?.(next))
+      .catch(() => {}) // request() already toasted
+      .finally(() => setCompletionSaving(false));
   };
   const [styleNotice, setStyleNotice] = useState('');
   const changeRenderStyle = (mode) => {
@@ -150,6 +170,24 @@ export default function ProjectOptionsPanel({
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <PlateReviewerSetting project={project} onProjectUpdated={onProjectUpdated} />
           <span className="text-xs text-port-text-muted">The vision model a frame take's Check button uses.</span>
+        </div>
+      </div>
+      <div className={rowCls}>
+        <label htmlFor="mv-setup-completion" className={headCls}>Status</label>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <select id="mv-setup-completion" value={completionValue} disabled={completionSaving}
+            onChange={(e) => changeCompletion(e.target.value)}
+            className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0">
+            <option value="auto">Automatic ({evidenceComplete ? 'complete' : 'in progress'})</option>
+            <option value="complete">Complete</option>
+            <option value="in-progress">In progress</option>
+          </select>
+          <p className="w-full text-xs text-port-text-muted">
+            {completionMark
+              ? `Marked ${completionMark.state === 'complete' ? 'complete' : 'in progress'} ${new Date(completionMark.markedAt).toLocaleDateString()}. Automatic goes back to following the final render.`
+              : 'Automatic: complete once the final render is current. Choose Complete or In progress to decide it yourself.'}
+          </p>
+          {completionError && <p role="alert" className="w-full text-xs text-port-error">{completionError}</p>}
         </div>
       </div>
       <div className={rowCls}>

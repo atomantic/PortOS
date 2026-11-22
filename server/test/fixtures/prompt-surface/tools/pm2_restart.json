@@ -1,0 +1,16 @@
+{
+  "name": "pm2_restart",
+  "description": "Restart a PortOS PM2 process by name. Use when the user says \"restart the whisper server\", \"restart portos-api\", \"bounce the cos runner\". Only restart — never kill or delete.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "PM2 process name (or a distinctive substring)."
+      }
+    },
+    "required": [
+      "name"
+    ]
+  }
+}

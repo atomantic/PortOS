@@ -65,6 +65,11 @@ vi.mock('../services/apiLocalLlm.js', async (importOriginal) => ({
   getContextPlans: vi.fn(async () => ({ budgetBytes: null, plans: [] })),
 }));
 vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+// The Mixture of Agents section mounts on the presets view; it has its own suite.
+vi.mock('../services/apiMoaPresets', () => ({
+  listMoaPresets: vi.fn(async () => ({ presets: [], maxReferenceModels: 5, instructions: null })),
+  createMoaPreset: vi.fn(), updateMoaPreset: vi.fn(), deleteMoaPreset: vi.fn(),
+}));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
 vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
 vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));

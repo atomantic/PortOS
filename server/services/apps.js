@@ -337,6 +337,7 @@ async function createAppUnlocked(appData) {
     ...(typeof appData.useAutoMerge === 'boolean' ? { useAutoMerge: appData.useAutoMerge } : {}),
     ...(typeof appData.autoApprovePR === 'boolean' ? { autoApprovePR: appData.autoApprovePR } : {}),
     ...(typeof appData.adminMerge === 'boolean' ? { adminMerge: appData.adminMerge } : {}),
+    ...(appData.skillDiscovery === true ? { skillDiscovery: true } : {}),
     ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
       ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
       : {}),

@@ -288,6 +288,21 @@ describe('EditAppDrawer work tracker selector', () => {
     expect(updateApp.mock.calls[0][1].publishQualitySnapshot).toBe(false);
   });
 
+  // Repo skills are third-party prompt text (#17387): unchecked until opted in,
+  // and the opt-in reaches the server as an explicit boolean.
+  it('opts an app into repo skill discovery', async () => {
+    renderDrawer();
+    await openTab('Workflow');
+
+    const toggle = await screen.findByLabelText(/Discover repo skills for agents/);
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(updateApp).toHaveBeenCalled());
+    expect(updateApp.mock.calls[0][1].skillDiscovery).toBe(true);
+  });
+
   it('leaves repo snapshot publishing off for an app that never opted in', async () => {
     renderDrawer();
     await openTab('Workflow');

@@ -1,0 +1,51 @@
+{
+  "name": "eidoverse.augment",
+  "description": "Propose bounded construction operations to the private Eidoverse world. Each operation is {verb,args}. spawn requires args {id,lib,pos:[x,y,z],yaw,scale}; use a lib path returned by eidoverse.status. place takes {id,pos:[x,y,z]} and/or yaw/scale; light takes {id,pos:[x,y,z],color:16767136,intensity:16,range:10}; remove takes {id}. Use your own new entity IDs and preserve existing projected content. No code execution or paid generation. These are proposals, not guarantees: the response's `operations` array reports one outcome per operation — `accepted` (landed as proposed), `rewritten` (the world accepted it with different committed args than proposed), or `refused` (nothing landed, with a reason). Only narrate a build as done for operations whose outcome is accepted or rewritten; a refused operation never happened in the world even though you asked for it.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "operations": {
+        "minItems": 1,
+        "maxItems": 100,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "verb": {
+              "type": "string",
+              "enum": [
+                "spawn",
+                "place",
+                "remove",
+                "comp",
+                "light",
+                "terrain",
+                "grass",
+                "sky",
+                "grant"
+              ]
+            },
+            "args": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "maxLength": 80
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "verb",
+            "args"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "operations"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

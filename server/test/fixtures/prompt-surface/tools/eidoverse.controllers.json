@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.controllers",
+  "description": "List the executable world controllers PortOS ships and the ones installed here — each install's cadence, whether it is armed, whether its effects reach the world, its tick count, and why the supervisor disarmed it if it did. Read this before installing: `controllerId` must be one of the registry ids it returns. Read `lastCompletedDelivery` for the last completed outbound verdict and its tick/time age; it is historical acknowledgement, not current world state or visible rendering. `lastDelivery` describes only the latest tick and is unknown on quiet ticks. This list never carries `config`/`state` — use eidoverse.inspect-controller for one install's full record.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

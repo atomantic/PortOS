@@ -176,6 +176,33 @@ export const refreshProviderServiceCatalog = (slug, options) => request(
   `/providers/services/${encodeURIComponent(slug)}/refresh-catalog`,
   { method: 'POST', ...options },
 ).then(invalidateAfter);
+// A service's credential pool (#17384): extra keys for the same backend,
+// tried before the cross-provider fallback chain. Every response is the
+// display-safe pool (masked fingerprints, cooldowns) — never a key value. The
+// GET is a peek: it never rotates or benches a key.
+const poolPath = (slug, rest = '') => `/providers/services/${encodeURIComponent(slug)}/credential-pool${rest}`;
+export const getServiceCredentialPool = (slug, options) => request(poolPath(slug), options);
+/** Strategy (`fill_first` | `round_robin` | `least_used`) and/or priority `order` (credential ids). */
+export const updateServiceCredentialPool = (slug, body, options) => request(poolPath(slug), {
+  method: 'PATCH', body: JSON.stringify(body), ...options,
+});
+/** Add a stored key (`apiKey`, bound to the service's current origin) or an env reference (`envVar`). */
+export const addServiceCredentialPoolKey = (slug, body, options) => request(poolPath(slug, '/keys'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+/** Label / enabled, or `rebindOrigin: true` after the service's endpoint moved. */
+export const updateServiceCredentialPoolKey = (slug, credentialId, body, options) => request(
+  poolPath(slug, `/keys/${encodeURIComponent(credentialId)}`),
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+export const removeServiceCredentialPoolKey = (slug, credentialId, options) => request(
+  poolPath(slug, `/keys/${encodeURIComponent(credentialId)}`),
+  { method: 'DELETE', ...options },
+);
+/** Clear cooldowns on one key (`credentialId`) or all of them. In memory only; nothing is written. */
+export const resetServiceCredentialPoolCooldowns = (slug, body = {}, options) => request(poolPath(slug, '/reset'), {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 export const refreshProviderModels = (id, options) => request(`/providers/${id}/refresh-models`, { method: 'POST', ...options }).then(invalidateAfter);
 // Stored model pins naming a model their provider no longer lists (#7315).
 // Derived on read, so it reflects a pin cleared a moment ago without a refresh.

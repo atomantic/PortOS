@@ -1,0 +1,10 @@
+{
+  "name": "cos.agents.status",
+  "description": "Report the status of in-flight coding tasks the user dispatched by voice (via dispatch_code_agent). ",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

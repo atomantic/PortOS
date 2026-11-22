@@ -1,0 +1,16 @@
+{
+  "name": "music.artist-profile",
+  "description": "Read the artist-curated press & submission profile (bios in several lengths, credit name, statements, AI process statement, platform links, notes) for filling festival or distributor forms. Fields listed under missing are not filled in: leave them for the artist, never invent them.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

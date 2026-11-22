@@ -103,6 +103,10 @@ export const applyMusicVideoStoryBeats = (id, body, options = {}) => request(`/m
 export const setMusicVideoFinishedOutside = (id, { finished, note } = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/finished-outside`, {
   method: 'PUT', body: JSON.stringify({ finished, ...(note ? { note } : {}) }), ...options,
 });
+/** `state`: 'complete' | 'in-progress' marks the project; 'auto' lets its final render decide again. */
+export const setMusicVideoCompletion = (id, state, options = {}) => request(`/music-video/${encodeURIComponent(id)}/completion`, {
+  method: 'PUT', body: JSON.stringify({ state }), ...options,
+});
 export const deleteMusicVideoProject = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'DELETE', ...options,
 });

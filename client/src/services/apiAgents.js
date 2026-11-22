@@ -447,7 +447,21 @@ export const triggerCosJob = (id, { formValues = null, ...options } = {}) => req
   ...(formValues ? { body: JSON.stringify({ formValues }) } : {}),
   ...options
 });
+export const getCosJobIncidents = (options = {}) => request('/cos/jobs/incidents', options);
+export const acknowledgeCosJobIncident = (id, options = {}) => request(`/cos/jobs/incidents/${id}/ack`, { method: 'POST', ...options });
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
+
+// Per-job durable KV notepad (machine-local). Every response is the full notepad:
+// `{ notes: [{ key, value, updatedAt }], usedBytes, maxBytes, remainingBytes }`.
+const notepadPath = (id, key) => `/cos/jobs/${encodeURIComponent(id)}/notepad${key === undefined ? '' : `/${encodeURIComponent(key)}`}`;
+export const getCosJobNotepad = (id, options = {}) => request(notepadPath(id), options);
+export const setCosJobNote = (id, key, value, options = {}) => request(notepadPath(id, key), {
+  method: 'PUT',
+  body: JSON.stringify({ value }),
+  ...options
+});
+export const deleteCosJobNote = (id, key, options = {}) => request(notepadPath(id, key), { method: 'DELETE', ...options });
+export const clearCosJobNotepad = (id, options = {}) => request(notepadPath(id), { method: 'DELETE', ...options });
 
 // Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
 export const getCosWorkflow = (hours = 168, options) => request(`/cos/workflow?hours=${hours}`, options);

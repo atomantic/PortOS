@@ -1,0 +1,10 @@
+{
+  "name": "eidoverse.destinations",
+  "description": "List connected registered peers accepting Eidoverse guest visits.",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

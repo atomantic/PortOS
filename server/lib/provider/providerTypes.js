@@ -12,6 +12,16 @@ export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI
 export const isApiProvider = (provider) => provider?.type === PROVIDER_TYPES.API;
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
+/**
+ * A Mixture of Agents preset's virtual record (`lib/moaConfig.js`), addressed
+ * as `moa:<presetId>`. Here rather than in moaConfig so the run dispatchers
+ * that only need to recognize one stay off its scrub/prompt closure.
+ */
+export const MOA_PROVIDER_TYPE = 'moa';
+export const MOA_ID_PREFIX = 'moa:';
+export const isMoaProvider = (provider) => provider?.type === MOA_PROVIDER_TYPE;
+export const isMoaProviderId = (id) => typeof id === 'string' && id.startsWith(MOA_ID_PREFIX);
+
 /** Blank process commands default to Claude; API records never launch a harness. */
 export const isClaudeHarnessProvider = (provider) => isProcessProvider(provider) && isClaudeCommand(provider?.command);
 

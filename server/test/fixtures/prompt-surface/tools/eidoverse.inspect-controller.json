@@ -1,0 +1,20 @@
+{
+  "name": "eidoverse.inspect-controller",
+  "description": "Read one installed controller's full record by its install id, including its `config` and its accumulated `state` — the detail eidoverse.controllers deliberately omits. Read `lastCompletedDelivery` for the last completed outbound verdict and its tick/time age; historical acknowledgement does not prove current world state or visible rendering. `lastDelivery` describes only the latest tick. Read this before deciding whether to arm-controller, retire-controller, or re-install over an id you did not author.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

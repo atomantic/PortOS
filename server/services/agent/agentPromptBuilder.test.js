@@ -94,6 +94,10 @@ vi.mock('../jira.js', () => ({
 vi.mock('../codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
+// Skill Registry index (#17387): empty by default so unrelated cases see no
+// section; the dedicated case below supplies one.
+const skillIndex = vi.hoisted(() => ({ build: vi.fn(async () => '') }));
+vi.mock('../skills/skillService.js', () => ({ buildSkillIndexPromptSection: skillIndex.build }));
 
 import { resolveCompletionMode } from '../../lib/agent/agentCompletionMode.js';
 import { buildLightContextPrompt, buildAgentPrompt, getAppWorkspace, buildUiAuditRuntimeRule, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
@@ -5234,5 +5238,22 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(prompt).toContain('Produce 2–6 slices');
     expect(prompt).not.toContain('When Phase 1 lands on an epic');
     expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
+  });
+});
+
+describe('Skill Registry index (#17387)', () => {
+  it('adds the Level 0 index to the full briefing for the task app and stays out of light mode', async () => {
+    skillIndex.build.mockResolvedValueOnce('## Procedural Skills\n- `local:deploy` (deploy) — Deploy to staging');
+    const task = makeTask({ metadata: { app: 'app-example' } });
+    const prompt = await buildAgentPrompt(task, {}, '/r', null, { providerType: 'api' });
+    expect(prompt).toContain('## Procedural Skills\n- `local:deploy` (deploy) — Deploy to staging');
+    expect(skillIndex.build).toHaveBeenCalledWith({ appId: 'app-example' });
+    expect(buildLightContextPrompt(task, '/r', null, { providerId: 'codex-tui', providerCommand: 'codex' })).not.toContain('## Procedural Skills');
+  });
+
+  it('never blocks a briefing when the skill tree cannot be read', async () => {
+    skillIndex.build.mockRejectedValueOnce(new Error('unreadable'));
+    const prompt = await buildAgentPrompt(makeTask(), {}, '/r', null, { providerType: 'api' });
+    expect(prompt).not.toContain('## Procedural Skills');
   });
 });

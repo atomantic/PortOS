@@ -1,0 +1,26 @@
+{
+  "name": "mind.request-thinking-preset",
+  "description": "Request one approved local preset for the next self-directed wake, without changing this turn or the default.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "presetId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      }
+    },
+    "required": [
+      "presetId",
+      "reason"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

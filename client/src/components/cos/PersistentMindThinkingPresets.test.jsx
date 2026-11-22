@@ -8,10 +8,12 @@ const api = vi.hoisted(() => ({
   updateCosConfig: vi.fn(),
 }));
 const localLlm = vi.hoisted(() => ({ getToolUseModels: vi.fn() }));
+const moa = vi.hoisted(() => ({ listMoaPresets: vi.fn() }));
 
 vi.mock('../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../services/apiAgents.js', () => ({ updateCosConfig: api.updateCosConfig }));
 vi.mock('../../services/apiLocalLlm', () => localLlm);
+vi.mock('../../services/apiMoaPresets.js', () => moa);
 
 import PersistentMindThinkingPresets from './PersistentMindThinkingPresets.jsx';
 
@@ -46,6 +48,7 @@ describe('PersistentMindThinkingPresets', () => {
     });
     api.updateCosConfig.mockResolvedValue({ success: true });
     localLlm.getToolUseModels.mockResolvedValue({ models: [] });
+    moa.listMoaPresets.mockResolvedValue({ presets: [] });
   });
 
   it('keeps an in-progress edit when the host re-derives an unchanged preset list', async () => {
@@ -72,5 +75,27 @@ describe('PersistentMindThinkingPresets', () => {
 
     await waitFor(() => expect(screen.getByText('That preset is no longer saved.')).toBeTruthy());
     expect(screen.queryByDisplayValue('Deep think')).toBeNull();
+  });
+
+  it('offers a Mixture of Agents preset as a moa: route pinned to its aggregator model', async () => {
+    const user = userEvent.setup();
+    moa.listMoaPresets.mockResolvedValue({
+      presets: [{ id: 'council', providerId: 'moa:council', name: 'Council', aggregator: { providerId: 'example-cloud' } }],
+    });
+    api.getProviders.mockResolvedValue({
+      activeProvider: 'example-cloud',
+      providers: [{ id: 'example-cloud', name: 'Example Cloud', enabled: true, type: 'api', hasApiKey: true, models: ['example-large'], defaultModel: 'example-large' }],
+    });
+    render(<PersistentMindThinkingPresets presets={[]} editingPresetId="new" onEditPreset={() => {}} />);
+
+    await waitFor(() => expect(screen.getByRole('option', { name: 'MoA: Council' })).toBeTruthy());
+    await user.type(screen.getByLabelText('Preset name'), 'Council turn');
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'moa:council');
+    await user.selectOptions(screen.getByLabelText('Model'), 'example-large');
+    expect(screen.getByText('Mixture of Agents')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Add preset' }));
+
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalled());
+    expect(JSON.stringify(api.updateCosConfig.mock.calls[0][0])).toContain('"providerId":"moa:council","model":"example-large"');
   });
 });

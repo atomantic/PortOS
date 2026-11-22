@@ -83,6 +83,42 @@
       "envVars": {},
       "secretEnvVars": []
     },
+    "hermes-cli": {
+      "id": "hermes-cli",
+      "name": "Hermes Agent CLI",
+      "type": "cli",
+      "command": "hermes",
+      "args": [
+        "chat",
+        "--oneshot",
+        "--quiet",
+        "--yolo"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "hermes-tui": {
+      "id": "hermes-tui",
+      "name": "Hermes Agent TUI",
+      "type": "tui",
+      "command": "hermes",
+      "args": [
+        "--tui",
+        "--yolo"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500
+    },
     "claude-code": {
       "id": "claude-code",
       "name": "Claude Code CLI",

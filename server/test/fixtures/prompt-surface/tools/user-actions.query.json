@@ -1,0 +1,75 @@
+{
+  "name": "user-actions.query",
+  "description": "Query the machine-local operator-action ledger — what the user, a schedule, or PortOS itself recently did in the app — filtered by time range, event type, and actor.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "from": {
+        "type": "string",
+        "minLength": 1
+      },
+      "to": {
+        "type": "string",
+        "minLength": 1
+      },
+      "type": {
+        "type": "string",
+        "enum": [
+          "cos.task.create",
+          "cos.task.update",
+          "cos.task.delete",
+          "cos.task.approve",
+          "cos.task.spawn",
+          "cos.agent.feedback",
+          "cos.schedule.trigger",
+          "cos.schedule.update",
+          "settings.update",
+          "instance-feature.toggle",
+          "instance-feature-group.toggle",
+          "media.image.enqueue",
+          "media.video.enqueue",
+          "brain.capture"
+        ]
+      },
+      "types": {
+        "maxItems": 14,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "cos.task.create",
+            "cos.task.update",
+            "cos.task.delete",
+            "cos.task.approve",
+            "cos.task.spawn",
+            "cos.agent.feedback",
+            "cos.schedule.trigger",
+            "cos.schedule.update",
+            "settings.update",
+            "instance-feature.toggle",
+            "instance-feature-group.toggle",
+            "media.image.enqueue",
+            "media.video.enqueue",
+            "brain.capture"
+          ]
+        }
+      },
+      "actor": {
+        "type": "string",
+        "enum": [
+          "user",
+          "mind",
+          "schedule",
+          "system"
+        ]
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

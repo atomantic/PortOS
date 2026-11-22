@@ -1,0 +1,30 @@
+{
+  "name": "health.log.drink",
+  "description": "Log an alcoholic drink to MortalLoom / Meatspace tracking. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Drink name or category (e.g. \"beer\", \"IPA\", \"Cabernet\", \"whiskey\")."
+      },
+      "count": {
+        "type": "number",
+        "description": "How many (default 1)."
+      },
+      "oz": {
+        "type": "number",
+        "description": "Serving size in ounces. Omit to use category default."
+      },
+      "abv": {
+        "type": "number",
+        "description": "Alcohol by volume percent (e.g. 5 for 5%). Omit to use category default."
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

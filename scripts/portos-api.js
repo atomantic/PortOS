@@ -8,6 +8,7 @@
  *   node scripts/portos-api.js post /api/image-gen/generate '{"prompt":"a lighthouse at dusk"}'
  *   node scripts/portos-api.js post /api/music-video/autonomous @brief.json
  *   echo '{"description":"…"}' | node scripts/portos-api.js post /api/cos/tasks -
+ *   node scripts/portos-api.js notepad set <job-id> last-pr 12345
  *   node scripts/portos-api.js task "Fix the flaky upload test" --app portos --priority HIGH
  *
  * Credentials, first match wins:
@@ -55,6 +56,7 @@ export const USAGE = `Usage:
   portos-api whoami [--timeout <seconds>]
   portos-api <get|post|put|patch|delete> <path> [json | @file | -] [--timeout <seconds>]
   portos-api fableloom-export <preflight|start|status|watch|download> <loom-id> [job-id] [--episodes id1,id2] [--player true|false] [--characters true|false] [--voice true|false] [--allow-draft true|false] [--profile source|web-720p|web-1080p] [--webm true|false] [--output file.zip] [--timeout seconds]
+  portos-api notepad <list|get|set|delete|clear> <job-id> [key] [value | @file | -] [--timeout <seconds>]
   portos-api task "<description>" [--app <id>] [--priority LOW|MEDIUM|HIGH|CRITICAL] [--context "<note>"] [--timeout <seconds>]
 
 Requests wait up to 30 minutes by default, including the response body.
@@ -127,6 +129,21 @@ export const parseArgs = (argv) => {
       body: starts ? JSON.stringify(options) : null, ...(action === 'download' ? { output: flags.output } : {}),
       ...(action === 'watch' ? { watch: true } : {}), ...timeout };
   }
+  if (command === 'notepad') {
+    const [action, jobId, key, value, ...extra] = rest;
+    const needsKey = ['get', 'set', 'delete'].includes(action);
+    if (!['list', 'get', 'set', 'delete', 'clear'].includes(action) || !jobId) throw new Error('notepad needs an action (list, get, set, delete, clear) and a job ID');
+    if (needsKey && !key) throw new Error(`notepad ${action} needs a key`);
+    if (action === 'set' && value === undefined) throw new Error('notepad set needs a value (text, @file or -)');
+    if (extra.length || (!needsKey && key !== undefined) || (action !== 'set' && value !== undefined)) throw new Error('Unexpected notepad arguments');
+    const base = `/api/cos/jobs/${encodeURIComponent(jobId)}/notepad`;
+    const path = needsKey ? `${base}/${encodeURIComponent(key)}` : base;
+    const method = action === 'set' ? 'PUT' : action === 'delete' || action === 'clear' ? 'DELETE' : 'GET';
+    // The value is raw text (not JSON); resolveBody wraps it as { value }.
+    const body = action !== 'set' ? null : value === '-' ? { stdin: true, asValue: true }
+      : value.startsWith('@') ? { file: value.slice(1), asValue: true } : { text: value, asValue: true };
+    return { method, path, body, ...timeout };
+  }
   if (command === 'whoami') return { method: 'GET', path: '/api/auth/whoami', body: null, ...timeout };
   if (command === 'task') {
     const description = rest.join(' ').trim();
@@ -169,6 +186,10 @@ const readStdin = async () => {
 
 const resolveBody = async (body) => {
   if (body === null) return null;
+  if (body.asValue) {
+    const raw = body.stdin ? await readStdin() : body.file ? await readFile(body.file, 'utf8') : body.text;
+    return JSON.stringify({ value: raw });
+  }
   const text = typeof body === 'string' ? body
     : body.stdin ? await readStdin()
       : await readFile(body.file, 'utf8');

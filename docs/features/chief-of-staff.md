@@ -506,7 +506,13 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | GET /api/cos/learning | Get learning insights |
 | GET /api/cos/digest | Get weekly digest |
 | GET /api/cos/mind/journal | Persistent Mind decision journal, filterable by `kind` and `status` |
+| GET /api/cos/jobs/incidents | Deduplicated autonomous-job failure incidents, newest first |
+| POST /api/cos/jobs/incidents/:id/ack | Acknowledge an open incident (silences reminders for that signature) |
 | POST /api/cos/mind/journal/:id/correct | Settle (`resolve`) or retire (`retire`) one journal entry the mind got wrong — a status transition, never a delete |
+
+### Autonomous job reliability
+
+Preflight, deduplicated failure incidents and the zero-spend unreachable retry ladder are documented in [autonomous-job-reliability](./autonomous-job-reliability.md).
 
 ## Prompt Templates
 

@@ -39,6 +39,7 @@ import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from '../lib/provider/providerVendors.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { isMoaProvider, isMoaProviderId } from '../lib/provider/providerTypes.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -434,6 +435,13 @@ export async function buildPrompt({ question, mode = 'ask', sources = [], histor
 // =============================================================================
 
 async function pickProvider(providerId) {
+  // An MoA preset (lib/moaConfig.js). A missing one falls through like an
+  // unknown preset id; an invalid stored one throws its reason.
+  if (isMoaProviderId(providerId)) {
+    const { resolveMoaProvider } = await import('./moaPresets.js');
+    const moa = await resolveMoaProvider(providerId);
+    if (moa) return moa;
+  }
   if (providerId) {
     const p = await getProviderById(providerId).catch(() => null);
     if (p?.enabled) return p;
@@ -442,6 +450,10 @@ async function pickProvider(providerId) {
   if (active?.enabled) return active;
   throw new Error('No AI provider available');
 }
+
+// Every MoA member must be an API provider (lib/moaConfig.js#moaMemberRefusal,
+// checked again at run time), so a preset is tool-free by construction.
+const runsToolFree = (provider) => isMoaProvider(provider) || isToolFreeOneShotProvider(provider);
 
 /**
  * The provider an Ask turn will run on, resolved up front so an HTTP caller can
@@ -459,7 +471,7 @@ async function pickProvider(providerId) {
 export async function resolveAskProvider(providerId, { hasHostControl = false } = {}) {
   const provider = await pickProvider(providerId).catch(() => null);
   if (!provider) return null;
-  const refusal = toolFreeOneShotRefusal(provider, hasHostControl);
+  const refusal = isMoaProvider(provider) ? null : toolFreeOneShotRefusal(provider, hasHostControl);
   if (refusal) throw new ServerError(refusal.message, { status: refusal.status, code: refusal.code });
   return provider;
 }
@@ -473,6 +485,15 @@ export async function resolveAskProvider(providerId, { hasHostControl = false } 
  * cancelled so we stop wasting tokens/CPU on a stream nobody's reading.
  */
 async function* streamCompletion(provider, model, prompt, signal) {
+  if (isMoaProvider(provider)) {
+    // Advisors then aggregator, each a tracked bounded completion sharing
+    // `signal`, so a client disconnect cancels every member. The answer
+    // arrives whole: MoA has nothing to stream until the aggregator replies.
+    const { runPromptThroughProvider } = await import('./promptRunner.js');
+    const result = await runPromptThroughProvider({ provider, prompt, source: 'ask', signal, completion: { temperature: 0.4 } });
+    yield result.text;
+    return;
+  }
   if (provider.type === 'api') {
     // Never send the API key to an arbitrary/metadata host (SSRF / key
     // exfiltration). Keyless local-LLM calls skip this guard entirely.
@@ -488,9 +509,17 @@ async function* streamCompletion(provider, model, prompt, signal) {
     if (!ready.success) {
       throw new Error(ready.error);
     }
+    // A pooled service may rotate this request onto another of its keys
+    // (#17384). Deferred: only a record naming a service instance can have one.
+    const credentialSession = typeof provider.serviceId === 'string' && provider.apiKey
+      ? await import('./provider/credentialPoolRuntime.js')
+        .then(({ openCredentialSession }) => openCredentialSession(provider, model))
+        .catch(() => null)
+      : null;
     for await (const chunk of iterateOpenAiChat({
       endpoint: provider.endpoint,
       apiKey: provider.apiKey,
+      credentialSession,
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.4,
@@ -716,7 +745,7 @@ export async function* runAsk({
     }
     // Authority is asked for only when it matters: a voice turn re-verifies
     // its session on every call.
-    if (!isToolFreeOneShotProvider(provider) && await hasHostControl?.() !== true) {
+    if (!runsToolFree(provider) && await hasHostControl?.() !== true) {
       const refusal = toolFreeOneShotRefusal(provider, false);
       yield { type: 'error', error: refusal.message, code: refusal.code };
       return;

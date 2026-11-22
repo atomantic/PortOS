@@ -29,6 +29,11 @@ vi.mock('../services/autonomousJobs.js', () => ({
   generateTaskFromJob: vi.fn()
 }));
 
+vi.mock('../services/autonomousJobs/incidents.js', () => ({
+  listJobIncidents: vi.fn(async () => []),
+  acknowledgeJobIncident: vi.fn(),
+}));
+
 vi.mock('../services/jobGates.js', () => ({
   checkJobGate: vi.fn(),
   hasGate: vi.fn(),
@@ -55,6 +60,7 @@ import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.
 import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
+import { listJobIncidents, acknowledgeJobIncident } from '../services/autonomousJobs/incidents.js';
 
 describe('CoS Job Routes', () => {
   let app;
@@ -97,6 +103,44 @@ describe('CoS Job Routes', () => {
       expect(response.status).toBe(200);
       expect(computeNextJobRun).toHaveBeenCalledWith(expect.objectContaining({ id: 'j1' }), 'UTC');
       expect(response.body.jobs[0].nextRunAt).toBe('2026-08-31T02:00:00.000Z');
+    });
+  });
+
+  describe('autonomous job incidents', () => {
+    it('attaches the most recent open incident to its job in the list', async () => {
+      autonomousJobs.getAllJobs.mockResolvedValue([{ id: 'j1', name: 'A' }, { id: 'j2', name: 'B' }]);
+      autonomousJobs.getJobStats.mockResolvedValue({ total: 2 });
+      hasGate.mockReturnValue(false);
+      getRegisteredGates.mockReturnValue([]);
+      listJobIncidents.mockResolvedValueOnce([
+        { id: 'new', jobId: 'j1', state: 'alerted' },
+        { id: 'old', jobId: 'j1', state: 'acknowledged' },
+      ]);
+
+      const response = await request(app).get('/api/cos/jobs');
+
+      expect(listJobIncidents).toHaveBeenCalledWith({ openOnly: true });
+      expect(response.body.jobs.map(job => job.openIncident?.id ?? null)).toEqual(['new', null]);
+    });
+
+    it('lists incidents without colliding with GET /jobs/:id', async () => {
+      listJobIncidents.mockResolvedValueOnce([{ id: 'i1', jobId: 'j1' }]);
+      const response = await request(app).get('/api/cos/jobs/incidents');
+      expect(response.status).toBe(200);
+      expect(response.body.incidents).toEqual([{ id: 'i1', jobId: 'j1' }]);
+      expect(autonomousJobs.getJob).not.toHaveBeenCalled();
+    });
+
+    it('acknowledges an open incident and 404s an unknown one', async () => {
+      acknowledgeJobIncident.mockResolvedValueOnce({ id: 'i1', state: 'acknowledged' });
+      const ok = await request(app).post('/api/cos/jobs/incidents/i1/ack');
+      expect(ok.status).toBe(200);
+      expect(acknowledgeJobIncident).toHaveBeenCalledWith('i1');
+      expect(ok.body.incident.state).toBe('acknowledged');
+
+      acknowledgeJobIncident.mockResolvedValueOnce(null);
+      const missing = await request(app).post('/api/cos/jobs/incidents/nope/ack');
+      expect(missing.status).toBe(404);
     });
   });
 

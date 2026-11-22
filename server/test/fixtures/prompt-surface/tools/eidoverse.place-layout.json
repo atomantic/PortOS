@@ -1,0 +1,56 @@
+{
+  "name": "eidoverse.place-layout",
+  "description": "Compute a named layout's placement (from eidoverse.creative-catalog) into ready-to-submit eidoverse.augment `spawn` operations. Deterministic and seeded: the same {layoutId, anchor, seed} always yields the same operations. This only computes — it never places anything; pass the returned `operations` to eidoverse.augment to actually build.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "layoutId": {
+        "type": "string",
+        "enum": [
+          "radial-ring",
+          "grid-plot",
+          "arc-row",
+          "grove-cluster"
+        ]
+      },
+      "anchor": {
+        "minItems": 3,
+        "maxItems": 3,
+        "type": "array",
+        "items": {
+          "type": "number"
+        }
+      },
+      "propCount": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 16
+      },
+      "seed": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "facing": {
+        "type": "number"
+      },
+      "assetPath": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "idPrefix": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    "required": [
+      "layoutId",
+      "anchor",
+      "assetPath"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

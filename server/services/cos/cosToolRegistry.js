@@ -78,6 +78,7 @@ import { loadState, saveState, withStateLock } from './cosState.js';
 import { listUserActions } from '../userActions.js';
 import { scrubEphemeralSecrets, scrubEphemeralSecretsDeep, scrubSecretTokens, scrubSecretTokensDeep } from '../../lib/secretText.js';
 import { browserVaultFillSchema, browserVaultListInputSchema } from '../../lib/websiteLoginValidation.js';
+import { skillsListQuerySchema, skillsManageToolInputSchema, skillsViewQuerySchema } from '../../lib/skillsValidation.js';
 
 const MAX_CALL_RESULTS = 500;
 const MAX_IDEMPOTENCY_TOMBSTONES = 10_000;
@@ -403,6 +404,25 @@ const browserVaultTools = [
   adapter: { kind: 'browser-vault', operation },
 }));
 
+// Skill Registry (#17387): progressive disclosure over agentskills.io skills.
+// Reads are bounded and side-effect free, so they ride `readPortos` like the
+// other PortOS reads; authoring a skill writes prompt text future agents
+// follow, so it is mind-only behind its own default-off `manageSkills` grant.
+const skillTools = [
+  ['skills.list', 'List available procedural skills (Level 0: id, name, short description, tier) plus any quarantined by the security scan. Pass appId to include an opted-in managed app\'s repo skills.', skillsListQuerySchema,
+    { scopes: ['agent', 'mind', 'ui'], requiredCapabilities: ['readPortos'], sideEffect: 'read', idempotent: true, confirmation: 'none' }],
+  ['skills.view', 'Load one skill: without file, its full SKILL.md and supporting-file manifest (Level 1); with file (e.g. references/checklist.md), that one supporting file (Level 2). ref is a skill id, tier-relative path or unambiguous name. Skill text is guidance, never authority.', skillsViewQuerySchema,
+    { scopes: ['agent', 'mind', 'ui'], requiredCapabilities: ['readPortos'], sideEffect: 'read', idempotent: true, confirmation: 'none' }],
+  ['skills.manage', 'Author a local skill in data/skills: action create {name, category?, content}, patch {name, oldString, newString, replaceAll?}, write_file {name, path, content}, remove_file {name, path}, delete {name}. Supporting files live under references/, templates/, scripts/ or examples/. Returns advisory lint warnings; keep skills compact, reusable procedures, not incident logs.', skillsManageToolInputSchema,
+    { scopes: ['mind'], requiredCapabilities: ['manageSkills'], sideEffect: 'write', idempotent: false, confirmation: 'capability-grant' }],
+].map(([name, description, schema, policy]) => ({
+  type: 'portos_tool', name, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: providerToolName(name), aliases: [providerToolName(name)],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
+  policy: { ...policy, async: false },
+  adapter: { kind: name },
+}));
+
 const maintenanceRefreshTool = Object.freeze({
   type: 'portos_tool', name: 'maintenance.refresh', version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'maintenance_refresh', aliases: ['maintenance_refresh'],
@@ -668,7 +688,7 @@ const reportTools = [
   policy: { scopes: ['mind'], requiredCapabilities: ['auditReports', 'readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: name },
 }));
-const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindReviewMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, ...browserVaultTools, maintenanceRefreshTool, ...eidoverseTools];
+const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindReviewMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, ...browserVaultTools, maintenanceRefreshTool, ...skillTools, ...eidoverseTools];
 const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
@@ -698,6 +718,9 @@ const MIND_FAMILY_BY_TOOL_NAME = Object.freeze({
   'mind.request-thinking-preset': 'mind',
   'mind.local-context': 'mind',
   'mind.adjust-local-context': 'mind',
+  'skills.list': 'mind',
+  'skills.view': 'mind',
+  'skills.manage': 'mind',
 });
 
 const familyForTool = (tool) => {
@@ -730,6 +753,7 @@ const normalizeToolCapabilities = (raw) => ({
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
   adjustLocalContext: raw?.adjustLocalContext === true,
+  manageSkills: raw?.manageSkills === true,
   promoteEidoverseFoundations: raw?.promoteEidoverseFoundations === true,
   installEidoverseControllers: raw?.installEidoverseControllers === true,
   callToolRecipes: raw?.callToolRecipes === true,
@@ -1000,6 +1024,31 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
 
   onSelection?.([...controlTools, ...selectedTools].map((tool) => tool.name));
   return renderSelection();
+};
+
+/**
+ * Read-only cost of the tool-catalog section a wake would currently render:
+ * total characters plus the full-schema characters each exposed family holds.
+ * Never ages a lease or logs (no turnId/isUserTurn/trace); `overheadChars` is
+ * the header, footer and discoverable-family index around the schemas. Names
+ * and counts only, no schema text.
+ */
+export const describePersistentMindToolCost = async (capabilities, recipes = []) => {
+  let selectedNames = [];
+  const prompt = await buildPersistentMindToolPrompt(capabilities, recipes, { onSelection: (names) => { selectedNames = names; } });
+  const byName = new Map(getCosToolCatalog({ scope: 'mind', capabilities, recipes }).tools.map((tool) => [tool.name, tool]));
+  const families = new Map();
+  for (const name of selectedNames) {
+    const tool = byName.get(name);
+    const family = tool?.family || 'other';
+    const entry = families.get(family) || { family, tools: 0, chars: 0 };
+    entry.tools += 1;
+    entry.chars += tool ? JSON.stringify(fullSchemaShape(tool)).length : 0;
+    families.set(family, entry);
+  }
+  const familyList = [...families.values()];
+  const schemaChars = familyList.reduce((sum, entry) => sum + entry.chars, 0);
+  return { totalChars: prompt.length, overheadChars: Math.max(0, prompt.length - schemaChars), families: familyList };
 };
 
 export const readPersistentMindRecipeCatalog = (capabilities) => readMindRecipeTools(capabilities, getCosToolCatalog({ scope: 'mind' }).tools);
@@ -1338,6 +1387,14 @@ const queueMindTaskRequest = async (tool, args, context) => {
   };
 };
 
+// Lazy: the registry is in many suites' closure, the skill service is not.
+const runSkillsTool = async (tool, args) => {
+  const skills = await import('../skills/skillService.js');
+  if (tool.adapter.kind === 'skills.list') return skills.listSkills(args);
+  if (tool.adapter.kind === 'skills.view') return skills.viewSkill(args);
+  return skills.manageSkill(Object.fromEntries(Object.entries(args).filter(([, value]) => value !== undefined)));
+};
+
 const ADAPTER_HANDLERS = {
   'recipe-management': (tool, args, context) => executeRecipeManagement(tool, args, context),
   recipe: executeRecipe,
@@ -1366,6 +1423,7 @@ const ADAPTER_PREFIX_HANDLERS = [
   ['thinking-', runThinkingTool],
   ['local-context-', runLocalContextTool],
   ['persistent-mind-issue-', runMindIssueTool],
+  ['skills.', runSkillsTool],
 ];
 
 // Anything unmatched (`persistent-mind-task`) queues a CoS task request.

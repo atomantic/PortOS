@@ -1,0 +1,21 @@
+{
+  "name": "ui_check",
+  "description": "Toggle a checkbox or radio by label. checked=true to check, false to uncheck.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "label": {
+        "type": "string",
+        "description": "Visible label."
+      },
+      "checked": {
+        "type": "boolean",
+        "description": "Desired state."
+      }
+    },
+    "required": [
+      "label",
+      "checked"
+    ]
+  }
+}

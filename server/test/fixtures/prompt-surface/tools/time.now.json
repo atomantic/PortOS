@@ -1,0 +1,10 @@
+{
+  "name": "time.now",
+  "description": "Report the current local date, time, and day of week. ",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

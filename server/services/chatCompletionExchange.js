@@ -31,6 +31,7 @@ import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { openRouterBodyFragment } from '../lib/aiToolkit/internal/generationOptions.js';
 import { estimateTokens } from '../lib/contextBudget.js';
+import { sendWithCredentialSession } from '../lib/aiToolkit/internal/preHeaderRetry.js';
 
 /**
  * The provider's reported token counts as usage-ledger fields, or `null` when
@@ -105,6 +106,17 @@ function completionWire(provider, model, prompt, { temperature, max_tokens }) {
 }
 
 /**
+ * The credential pool session for this request (#17384), or null. Deferred:
+ * only a provider record that names a service instance can have a pool, and
+ * every other completion must not pay for the graph store's closure.
+ */
+async function openPoolSession(provider, model) {
+  if (typeof provider.serviceId !== 'string' || !provider.apiKey) return null;
+  const { openCredentialSession } = await import('./provider/credentialPoolRuntime.js');
+  return openCredentialSession(provider, model);
+}
+
+/**
  * POST one completion and classify the reply.
  *
  * @returns {Promise<
@@ -127,6 +139,7 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
     }
     headers['Authorization'] = `Bearer ${provider.apiKey}`;
   }
+  const session = provider.apiKey ? await openPoolSession(provider, model).catch(() => null) : null;
 
   const controller = new AbortController();
   // Distinguishes the deadline from a caller cancel, and records how far the
@@ -143,12 +156,12 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
   let response;
   try {
     controller.signal.throwIfAborted();
-    response = await fetch(wire.url, {
+    response = await sendWithCredentialSession(session, provider.apiKey, (apiKey) => fetch(wire.url, {
       method: 'POST',
-      headers,
+      headers: apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers,
       signal: controller.signal,
       body: JSON.stringify(wire.body)
-    });
+    }), controller.signal);
     stallPhase = 'response-body';
 
     if (!response.ok) {

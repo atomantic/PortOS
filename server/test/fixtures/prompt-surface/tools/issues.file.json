@@ -1,0 +1,67 @@
+{
+  "name": "issues.file",
+  "description": "File one issue on a managed app's GitHub/GitLab tracker to queue concrete work. Write a body someone can pick up cold, and choose the model and effort dispatch axes independently. An exact title match reuses the existing issue instead of filing a duplicate.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "title": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "body": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12000
+      },
+      "model": {
+        "type": "string",
+        "enum": [
+          "light",
+          "medium",
+          "heavy",
+          "ultra"
+        ]
+      },
+      "effort": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "labels": {
+        "maxItems": 4,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "plan",
+            "bug",
+            "tests",
+            "ux",
+            "docs",
+            "chore"
+          ]
+        }
+      }
+    },
+    "required": [
+      "appId",
+      "title",
+      "body",
+      "model",
+      "effort"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

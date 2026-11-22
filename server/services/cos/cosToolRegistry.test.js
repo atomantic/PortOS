@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   ensureInstanceId: vi.fn(),
   delegateSandbox: vi.fn(),
   interactRiddle: vi.fn(),
+  skills: { listSkills: vi.fn(), viewSkill: vi.fn(), manageSkill: vi.fn() },
   // Characterization handlers for the per-kind dispatch cases below.
   adapter: Object.fromEntries([
     'describeSandbox', 'auditFix', 'auditNext', 'auditRead', 'auditRecord', 'assertAuditAccess',
@@ -38,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   ].map((name) => [name, vi.fn()])),
 }));
 
+vi.mock('../skills/skillService.js', () => mocks.skills);
 vi.mock('../persistent/persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
 
 vi.mock('../sandboxDelegation.js', () => ({
@@ -204,6 +206,31 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('serves skill reads under readPortos and gates skills.manage on the default-off manageSkills grant (#17387)', async () => {
+    mocks.skills.viewSkill.mockResolvedValue({ ok: true, level: 2, content: 'steps' });
+    mocks.skills.manageSkill.mockResolvedValue({ ok: true, action: 'delete', warnings: [] });
+    const view = { requestId: 'skill-view', name: 'skills.view', arguments: { ref: 'local:deploy', file: 'references/a.md' } };
+    await expect(executeCosToolCall({ call: view, authority: { scope: 'agent', capabilities: {} } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    const viewed = await executeCosToolCall({ call: view, authority: { scope: 'mind', capabilities: { readPortos: true } } });
+    expect(viewed.result).toMatchObject({ level: 2, content: 'steps' });
+    expect(mocks.skills.viewSkill).toHaveBeenCalledWith({ ref: 'local:deploy', file: 'references/a.md' });
+
+    const manage = { requestId: 'skill-delete', name: 'skills.manage', arguments: { action: 'delete', name: 'deploy' } };
+    await expect(executeCosToolCall({ call: manage, authority: { scope: 'mind', capabilities: { readPortos: true, writePortos: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    expect(mocks.skills.manageSkill).not.toHaveBeenCalled();
+    await expect(executeCosToolCall({ call: { ...manage, requestId: 'skill-agent' }, authority: { scope: 'agent', capabilities: { manageSkills: true } } }))
+      .rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+    const managed = await executeCosToolCall({ call: manage, authority: { scope: 'mind', capabilities: { manageSkills: true } } });
+    expect(managed.state).toBe('completed');
+    expect(mocks.skills.manageSkill).toHaveBeenCalledWith({ action: 'delete', name: 'deploy' });
+
+    const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
+    expect(catalog.tools.filter((tool) => tool.name.startsWith('skills.')).map((tool) => [tool.name, tool.granted, tool.family]))
+      .toEqual([['skills.list', true, 'mind'], ['skills.view', true, 'mind'], ['skills.manage', false, 'mind']]);
+  });
+
   it('gates explicit riddle actions on both controller grants and returns the runtime delivery verdict', async () => {
     const call = { requestId: 'example-riddle', name: 'eidoverse.riddle', arguments: {
       id: 'example-game', action: 'reveal', expectedRevision: 2,
@@ -496,6 +523,9 @@ describe('cosToolRegistry', () => {
       'mind.choose-name',
       'user-actions.query',
       'maintenance.refresh',
+      'skills.list',
+      'skills.view',
+      'skills.manage',
       'eidoverse.observe',
       'eidoverse.chat',
       'eidoverse.destinations',
@@ -532,6 +562,8 @@ describe('cosToolRegistry', () => {
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'tools_deactivate' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'user_actions_query' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'maintenance_refresh' }) }),
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'skills_list' }) }),
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'skills_view' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_chat' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),

@@ -99,6 +99,27 @@ export async function getBriefing(date) {
   return { date, content };
 }
 
+/**
+ * The Daily Briefing's generated image (`dailyImage`, #17398) as a structured
+ * notification attachment, so Telegram delivers it inline. The briefing agent
+ * writes the image-gen result path (`/data/images/<file>.png`) into the report;
+ * only that path is surfaced here, and the Telegram forward still jails it
+ * before any upload. Best-effort: a missing/unreadable report or no image
+ * yields no attachment, never a lost notification.
+ *
+ * @param {string} date - YYYY-MM-DD
+ * @returns {Promise<Array<{ path: string, kind: 'photo', caption: string }>>}
+ */
+export async function getBriefingImageAttachments(date) {
+  const briefing = await getBriefing(date).catch((err) => {
+    console.log(`📋 Daily briefing image lookup skipped: ${err.message}`);
+    return null;
+  });
+  const { firstImagePath } = await import('../../lib/telegramDeliverables.js');
+  const imagePath = firstImagePath(briefing?.content);
+  return imagePath ? [{ path: imagePath, kind: 'photo', caption: `Daily Image — ${date}` }] : [];
+}
+
 export async function getLatestBriefing() {
   const briefings = await listBriefings();
   if (briefings.length === 0) return null;

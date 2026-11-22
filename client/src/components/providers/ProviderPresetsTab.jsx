@@ -12,6 +12,7 @@ import DefaultProviderHelper from './DefaultProviderHelper';
 import FleetHostSetup from './FleetHostSetup';
 import ProviderCard from './ProviderCard';
 import ProviderCompatibilityMatrix from './ProviderCompatibilityMatrix';
+import MoaPresetsSection from './MoaPresetsSection';
 import ProviderEnvVars from './ProviderEnvVars';
 import RetiredModelPinsPanel from './RetiredModelPinsPanel';
 
@@ -470,6 +471,9 @@ export default function ProviderPresetsTab({
           </>
         )}
       </div>
+
+      {/* Virtual presets composed from the API presets above (#17386). */}
+      {!loadError && <MoaPresetsSection providers={providers} />}
 
       {/* Full run history lives on the Chief of Staff → Runs tab; this page
           only configures providers. */}

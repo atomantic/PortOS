@@ -1,0 +1,15 @@
+{
+  "name": "goals.list",
+  "description": "List the user's active goals with their current progress percent. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max goals to return (default 10)."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}
