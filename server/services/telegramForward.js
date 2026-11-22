@@ -69,8 +69,11 @@ async function shouldForward(notification, cachedForwardTypes) {
  * @param {(text: string, options: object) => Promise<any>} deps.sendMessage -
  *   the transport's own sender; it must forward `options` (`parse_mode`,
  *   `reply_markup`) to the Telegram API call
+ * @param {(attachment: object) => Promise<any>} [deps.sendMedia] - the
+ *   transport's multipart uploader for a validated deliverable; when absent the
+ *   notification goes out as text only and its paths stay visible
  */
-export async function forwardNotification(notification, { cachedForwardTypes, sendMessage }) {
+export async function forwardNotification(notification, { cachedForwardTypes, sendMessage, sendMedia }) {
   try {
     if (!await shouldForward(notification, cachedForwardTypes)) return;
     // Only proven references participate. Legacy uncorrelated forwards retain
@@ -92,11 +95,27 @@ export async function forwardNotification(notification, { cachedForwardTypes, se
         .catch(() => null)
       : null;
 
-    const { text, options } = buildNotificationMessage(notification, { approvalBody });
-
     // Count the forward (and its wall-clock) against the messages daily budget
     // (#711) so both the actions and minutes caps are enforced for this domain.
+    // Its attachments are part of the same one forward.
     const startTime = Date.now();
+
+    // Deliverables (#17398): structured `metadata.attachments` plus jailed
+    // artifact paths in the description. They upload BEFORE the text so only a
+    // path whose upload succeeded is stripped from it — a rate-limited or
+    // rejected upload leaves the path visible instead of losing both.
+    // Lazy: keeps the fs-touching jail out of the server boot closure.
+    let description = notification.description;
+    if (sendMedia) {
+      const deliverables = await import('../lib/telegramDeliverables.js');
+      const delivered = [];
+      for (const attachment of await deliverables.collectNotificationDeliverables(notification)) {
+        if ((await sendMedia(attachment))?.success) delivered.push(...attachment.rawTokens);
+      }
+      description = deliverables.stripDeliverablePaths(description, delivered);
+    }
+
+    const { text, options } = buildNotificationMessage({ ...notification, description }, { approvalBody });
     await sendMessage(text, options);
     await recordDomainUsage(DOMAIN, { actions: 1, ms: Date.now() - startTime })
       .catch(err => console.error(`❌ Failed to record messages budget usage: ${err.message}`));
