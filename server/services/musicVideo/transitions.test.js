@@ -12,6 +12,12 @@ import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, varySceneWipes } from './projectsLogic.js';
 
 const ffmpeg = await findFfmpeg();
+// ffmpeg 7.1 added "-/vf <file>" and 8.0 removed "-filter_script:v"; Ubuntu 24.04 ships 6.1, which has only the latter.
+const filterFileOption = (() => {
+  if (!ffmpeg) return '-/vf';
+  const m = /version n?(\d+)\.(\d+)/.exec(execFileSync(ffmpeg, ['-version'], { encoding: 'utf8' }));
+  return m && (+m[1] < 7 || (+m[1] === 7 && +m[2] < 1)) ? '-filter_script:v' : '-/vf';
+})();
 const ffprobe = await findFfprobe();
 const dir = mkdtempSync(join(tmpdir(), 'portos-mv-transitions-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -363,7 +369,7 @@ describe.skipIf(!ffmpeg)('effects on every cut of a long edit', () => {
     const filter = musicVideoTransitionFilter(transitionGlitchFrames(pieces), { width: W, height: H });
     const graph = join(dir, 'many-cuts.txt');
     writeFileSync(graph, filter);
-    run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=0.1,format=yuv420p`, '-/vf', graph, '-f', 'null', '-']);
+    run(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:r=${FPS}:d=0.1,format=yuv420p`, filterFileOption, graph, '-f', 'null', '-']);
   });
 
   it('passes the filter graph to ffmpeg in a file and renders every frame', async () => {
