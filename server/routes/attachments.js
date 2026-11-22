@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
-import { extname, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, isPathInsideDir, unlinkGuarded,
@@ -74,7 +74,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
 
   await unlinkGuarded(filepath);
 
-  console.log(`🗑️ Attachment deleted (${extname(safeFilename) || 'no ext'})`);
+  console.log(`🗑️ Attachment deleted`);
 
   res.json({ success: true, filename: safeFilename });
 })));

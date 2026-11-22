@@ -1,6 +1,5 @@
 import express from 'express';
 import { z } from 'zod';
-import { extname } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
@@ -256,7 +255,7 @@ router.get('/downloads/:name', asyncHandler(async (req, res) => {
 router.delete('/downloads/:name', asyncHandler(async (req, res) => {
   const removed = await browserService.deleteDownload(req.params.name);
   if (!removed) throw new ServerError('File not found', { status: 404 });
-  console.log(`🗑️ Browser download deleted (${extname(req.params.name) || 'no ext'})`);
+  console.log(`🗑️ Browser download deleted`);
   res.json({ success: true });
 }));
 
