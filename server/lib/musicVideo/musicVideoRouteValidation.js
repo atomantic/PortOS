@@ -1338,6 +1338,10 @@ export const musicVideoProjectUpdateSchema = z.object({
 
 // Mark a project finished outside PortOS (or clear the marker). The server
 // stamps `markedAt`; the note says where it was made (musicVideoFinishedOutside.js).
+export const musicVideoCompletionSchema = z.object({
+  state: z.enum(['complete', 'in-progress', 'auto']),
+}).strict();
+
 export const musicVideoFinishedOutsideSchema = z.object({
   finished: z.boolean(),
   note: z.string().trim().max(500).optional(),

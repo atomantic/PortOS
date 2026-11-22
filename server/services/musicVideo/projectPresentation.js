@@ -12,9 +12,12 @@ import { presentProjectCastAndSets } from './castAndSetsService.js';
 import { presentProjectAutonomousRun } from './autonomousService.js';
 
 import { withCatalogCheckin } from './catalogCheckin.js';
+import { musicVideoCompletionOverride } from '../../lib/musicVideo/musicVideoCompletion.js';
 
 /** Classify only final render evidence, without projecting historical takes or reading unrelated ledgers. */
 export async function readProjectCompletion(project, { reads, requireCatalog = false } = {}) {
+  const marked = musicVideoCompletionOverride(project);
+  if (marked !== null) return marked;
   const usesCatalog = project.castAndSets?.source === 'catalog'
     && Array.isArray(project.renderDependencies?.references)
     && project.renderDependencies.references.some(({ role }) => role === 'clipReferences');
