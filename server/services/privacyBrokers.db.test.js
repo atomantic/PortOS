@@ -20,7 +20,6 @@ import { join } from 'path';
 // A valid vault key BEFORE privacyVault is imported so the runScanPass test can
 // create a scan-eligible name without touching the repo's real .env.
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = 'd'.repeat(64);
 
 let dbReady = false;
 let skipReason = '';
@@ -53,6 +52,8 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   const testStart = new Date().toISOString();
 
   beforeAll(async () => {
+    // Set only while the suite runs, before any service import, so a skipped suite never leaks it.
+    process.env.PRIVACY_VAULT_KEY = 'd'.repeat(64);
     svc = await import('./privacyBrokers.js');
     scan = await import('./privacyScan.js');
     vault = await import('./privacyVault.js');
@@ -63,19 +64,22 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
   });
 
   afterAll(async () => {
-    for (const id of createdVaultIds) {
-      await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+    try {
+      for (const id of createdVaultIds) {
+        await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+      }
+      await query(`DELETE FROM privacy_consents WHERE scope IN ('pii_vault', 'broker_scan') AND granted_at >= $1`, [testStart]).catch(() => {});
+      for (const id of autoBrokerIds) {
+        await query(`DELETE FROM privacy_broker_cases WHERE broker_id = $1`, [id]).catch(() => {});
+        await query(`DELETE FROM privacy_brokers WHERE id = $1`, [id]).catch(() => {});
+      }
+      // Drop the curated brokers' cases this suite created so a re-run starts clean.
+      await query(`DELETE FROM privacy_broker_cases`).catch(() => {});
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
     }
-    await query(`DELETE FROM privacy_consents WHERE scope IN ('pii_vault', 'broker_scan') AND granted_at >= $1`, [testStart]).catch(() => {});
-    for (const id of autoBrokerIds) {
-      await query(`DELETE FROM privacy_broker_cases WHERE broker_id = $1`, [id]).catch(() => {});
-      await query(`DELETE FROM privacy_brokers WHERE id = $1`, [id]).catch(() => {});
-    }
-    // Drop the curated brokers' cases this suite created so a re-run starts clean.
-    await query(`DELETE FROM privacy_broker_cases`).catch(() => {});
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
   });
 
   it('seeds the curated brokers idempotently with the cluster wired up', async () => {
