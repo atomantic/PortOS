@@ -17,8 +17,6 @@ import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.j
 import { appendJobFormValues } from '../../lib/jobFormFields.js'
 import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
 import { ServerError } from '../../lib/errorHandler.js'
-import { formatNotepadPromptSection } from '../../lib/autonomousJobNotepad.js'
-import { listJobNotes } from './notepad.js'
 
 const KNOWN_SKILL_NAMES = new Set(Object.values(JOB_SKILL_MAP))
 
@@ -168,6 +166,10 @@ async function getJobEffectivePrompt(job) {
   return appendJobFormValues(job, prompt)
 }
 
+// Loaded at use: the notepad store is only needed when a job fires, and a static
+// import would grow the server boot closure (lib/importScoping.test.js budget).
+const buildNotepadPromptSection = async (jobId) => (await import('./notepad.js')).buildJobNotepadPromptSection(jobId)
+
 /**
  * Generate a CoS task from a due job
  * @param {Object} job - The job to generate a task for
@@ -182,7 +184,7 @@ async function generateTaskFromJob(job) {
   const inputs = selectedInputs.length > 0
     ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
-  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job) + formatNotepadPromptSection(job.id, await listJobNotes(job.id))
+  const taskPrompt = appendTaskDataInputs(prompt, inputs) + await prepareClaimWorkflowAudit(job) + await buildNotepadPromptSection(job.id)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
   const meta = newAuditMetadata(job.taskMetadata || {})
   return {

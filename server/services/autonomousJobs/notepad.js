@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { atomicWrite, PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
-import { assertNoteFits, sortNotes, summarizeNotepad } from '../../lib/autonomousJobNotepad.js';
+import { assertNoteFits, formatNotepadPromptSection, sortNotes, summarizeNotepad } from '../../lib/autonomousJobNotepad.js';
 
 const notepadFile = () => join(PATHS.data, 'autonomous-job-notepads.json');
 const queueFileWrite = createFileWriteQueue();
@@ -86,6 +86,11 @@ const getBackend = () => backendFacade.getBackend();
 /** Notes for a job, key-sorted. */
 export async function listJobNotes(jobId) {
   return sortNotes(await (await getBackend()).list(jobId));
+}
+
+/** The prompt section for a job's notes, '' when it has none. */
+export async function buildJobNotepadPromptSection(jobId) {
+  return formatNotepadPromptSection(jobId, await listJobNotes(jobId));
 }
 
 /** `{ notes, usedBytes, maxBytes, remainingBytes }` for the API and UI. */
