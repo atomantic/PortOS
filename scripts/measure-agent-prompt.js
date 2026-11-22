@@ -14,12 +14,22 @@
  *
  * Runs against the shipped defaults with placeholder app/reviewer values and
  * NO database (NODE_ENV=test + MEMORY_BACKEND=file are forced), so the numbers
- * are the prompt's own cost, not this install's. Install paths print as
- * `<repo-root>`, so a long checkout path (a CoS worktree) does not inflate them.
+ * are the prompt's own cost, not this install's. It renders against a disposable
+ * temporary data root, so staged on-demand procedures and seeds never touch the
+ * live `data/` tree and a test runner's data guard cannot force them inline.
+ * Install paths print as `<repo-root>`, so a long checkout path does not inflate them.
  * Set REPO=<path> to point the api path's instruction-file walk at a real checkout.
  */
-import { writeFileSync } from 'fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { DATA_ROOT_ENV, DISPOSABLE_ROOT_MARKER } from '../server/lib/dataRoot.js';
 
+// Set before any server import: path constants resolve at module load.
+const dataRoot = realpathSync(mkdtempSync(join(tmpdir(), 'measure-agent-prompt-')));
+writeFileSync(join(dataRoot, DISPOSABLE_ROOT_MARKER), 'Disposable measure-agent-prompt root; deleted on exit.\n');
+process.on('exit', () => rmSync(dataRoot, { recursive: true, force: true }));
+process.env[DATA_ROOT_ENV] = dataRoot;
 process.env.NODE_ENV = 'test';
 process.env.MEMORY_BACKEND ||= 'file';
 
@@ -36,6 +46,8 @@ const { buildImprovementTaskDescription } = await import('../server/services/cos
 const { buildAgentPrompt } = await import('../server/services/agent/agentPromptBuilder.js');
 const { estimateTokens } = await import('../server/lib/contextBudget.js');
 const { PATHS } = await import('../server/lib/paths.js');
+// Every write below must land in the disposable root, never a live install's data/.
+if (PATHS.installRoot !== dataRoot) throw new Error(`Refusing to measure: data root resolved to ${PATHS.installRoot}, not the disposable ${dataRoot}`);
 
 const app = { id: 'example-app', name: 'Example App', repoPath: process.env.REPO || '/repo/example' };
 const template = await getShippedTaskPrompt(taskType, { claimFlow: true });

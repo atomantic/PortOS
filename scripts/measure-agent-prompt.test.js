@@ -16,7 +16,9 @@ describe('scripts/measure-agent-prompt.js', () => {
     const { stdout } = await execFileAsync(
       process.execPath,
       [join(PATHS.installRoot, 'scripts', 'measure-agent-prompt.js'), 'claim-issue', 'tui'],
-      { cwd: PATHS.installRoot, timeout: 15000 },
+      // A standalone CLI run, like the boot smoke: the script stages into its own disposable data
+      // root, which the runner's live-data write guard (keyed on VITEST) would otherwise refuse.
+      { cwd: PATHS.installRoot, timeout: 15000, env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'VITEST')) },
     );
 
     expect(stdout).toContain('claim-issue via tui:');
