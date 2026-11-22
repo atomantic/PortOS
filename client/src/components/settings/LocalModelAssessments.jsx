@@ -36,7 +36,7 @@ import useUrlParams from '../../hooks/useUrlParams';
 import { TestCell } from './ModelTestCell.jsx';
 import { lazyWithReload } from '../../utils/lazyWithReload';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
-import ModelThroughputReport, { REASONING_HIDDEN_TITLE } from './ModelThroughputReport';
+import ModelThroughputReport, { reasoningHiddenTitle } from './ModelThroughputReport';
 import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
@@ -575,10 +575,10 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
               a tokens/s figure divided out of it. */}
           <div className="text-gray-200">
             {throughputLabel(perf) || (perf.reasoningHidden === true
-              ? <span className="text-gray-600 italic" title={REASONING_HIDDEN_TITLE}>n/a (reasoning)</span>
+              ? <span className="text-gray-600 italic" title={reasoningHiddenTitle(perf.meanTokensPerSecond)}>n/a (reasoning)</span>
               : <span className="text-gray-600 italic">not measured</span>)}
             {Number.isFinite(perf.meanTokensPerSecond) && (
-              <span className="text-gray-600 ml-1.5 text-[10px]" title={perf.reasoningHidden === true ? REASONING_HIDDEN_TITLE : undefined}>
+              <span className="text-gray-600 ml-1.5 text-[10px]" title={perf.reasoningHidden === true ? reasoningHiddenTitle(perf.meanTokensPerSecond) : undefined}>
                 {perf.reasoningHidden === true
                   ? 'chars/s n/a (reasoning)'
                   : <Measured value={perf.meanCharsPerSecond} suffix=" chars/s" />}

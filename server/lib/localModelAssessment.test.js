@@ -386,6 +386,15 @@ describe('rankByIntent', () => {
     expect(buildThroughputReport([legacy]).rows[0].reasoningHidden).toBe(true);
   });
 
+  it('drops a legacy thinking-model record\'s chars/s fidelity trend in favor of its samples', () => {
+    // Saved before reasoningHidden: its stored trend came from a flat ~0.2 chars/s answer.
+    const samples = [512, 4096].map((contextTokens) => ({
+      contextTokens, ok: true, chars: 1, charsPerSecond: 0.2, completionTokens: 70, tokensPerSecond: null, error: null,
+    }));
+    const legacy = assessment('example-thinker:30b', 'fits', { meanCharsPerSecond: 0.2, contextDegradation: 1 }, { samples });
+    expect(scoreAssessment(legacy).fidelity).toBeNull();
+  });
+
   it('favors the lightest resident footprint for "lightweight"', () => {
     const models = [
       assessment('example-large:70b', 'fits', { meanCharsPerSecond: 60, contextDegradation: 1 }, { residentGb: 38 }),

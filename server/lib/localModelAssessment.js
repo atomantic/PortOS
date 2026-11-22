@@ -134,14 +134,17 @@ function reasoningHiddenIn(samples) {
 }
 
 /**
- * A stored record's performance with `reasoningHidden` filled in from its samples when the record
- * predates the field, so older thinking-model readings are read the same way as new ones.
+ * A stored record's performance as the current `summarizePerformance` reads it. A record saved
+ * before `reasoningHidden` existed also trended `contextDegradation` on chars/s, which for a
+ * thinking model is a flat near-zero answer, so its summary is recomputed from its stored samples.
  */
 function performanceOf(assessment) {
   const perf = assessment?.performance || {};
-  return typeof perf.reasoningHidden === 'boolean' || perf.reasoningHidden === null
-    ? perf
-    : { ...perf, reasoningHidden: reasoningHiddenIn(assessment?.samples) };
+  if (typeof perf.reasoningHidden === 'boolean' || perf.reasoningHidden === null) return perf;
+  const samples = assessment?.samples;
+  return Array.isArray(samples) && samples.length
+    ? { ...perf, ...summarizePerformance(samples) }
+    : { ...perf, reasoningHidden: null };
 }
 
 /**

@@ -75,6 +75,13 @@ describe('ModelThroughputReport', () => {
     expect(screen.getByText('n/a (reasoning)')).toBeInTheDocument();
     expect(screen.queryByText('0.2')).not.toBeInTheDocument();
     expect(toMarkdown(report([thinker]))).toContain('| 50.0 | n/a (reasoning) |');
+    expect(screen.getByText('n/a (reasoning)').title).toMatch(/Read tok\/s instead/);
+  });
+
+  it('does not point at tok/s in the n/a tooltip when no tok/s was measured', () => {
+    const thinker = row('example-thinker:30b', { meanTokensPerSecond: null, meanCharsPerSecond: 0.2, reasoningHidden: true });
+    render(<ModelThroughputReport report={report([thinker])} />);
+    expect(screen.getByText('n/a (reasoning)').title).not.toMatch(/tok\/s/);
   });
 
   it('marks a frame-counted figure with a ~ and explains it', () => {

@@ -262,7 +262,12 @@ export function toSample(contextTokens, result) {
 // serves the model it was launched with, so the whole process is what that model costs to hold.
 const MANAGED_DAEMON_APPS = { llama: LLAMA_APP, mtplx: MTPLX_APP, slotstream: SLOTSTREAM_APP };
 
-const toGb = (bytes) => (Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : null);
+// A reading that rounds to 0.00 GB (a wrapper-only tree) is not a measured footprint of the model;
+// stored as `0` it would score the memory axis as free.
+const toGb = (bytes) => {
+  const gb = Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : 0;
+  return gb > 0 ? gb : null;
+};
 
 /**
  * A measured model's resident footprint and where it came from, `{ residentGb: null, residentSource: null }`

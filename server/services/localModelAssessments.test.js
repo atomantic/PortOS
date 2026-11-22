@@ -911,6 +911,15 @@ describe('endpoint runtimes', () => {
     expect((await svc.loadAssessments())[0].residentGb).toBe(26);
   });
 
+  it('treats a footprint that rounds to 0 GB as unknown, never as a free model', async () => {
+    probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['example-mtp'], error: null });
+    runEndpointLlmTest.mockResolvedValue(okRun());
+    getAppStatus.mockImplementation(async (name) => ({ name, status: 'online', pid: 4321 }));
+    readProcessTreeResidentBytes.mockResolvedValue({ bytes: 3 * 2 ** 20, source: 'rss', pids: 1 });
+    const result = await svc.runAssessment({ backend: 'mtplx', modelId: 'example-mtp', contextTokens: [512] });
+    expect(result).toMatchObject({ residentGb: null, residentSource: null });
+  });
+
   it('leaves memory unknown when the managed daemon\'s process cannot be read', async () => {
     probeOpenAiModels.mockResolvedValue({ reachable: true, models: ['example-mtp'], error: null });
     runEndpointLlmTest.mockResolvedValue(okRun());

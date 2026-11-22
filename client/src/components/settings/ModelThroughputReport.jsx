@@ -32,7 +32,8 @@ const rateText = (value, estimated) =>
 
 // A thinking model's visible answer is a character or two after many hidden reasoning tokens, so its
 // chars/s measures the answer's length, not speed (`reasoningHidden` from the server). Shown as n/a.
-export const REASONING_HIDDEN_TITLE = 'Most generated tokens were reasoning that is not in the visible answer, so chars/s does not measure speed here. Read tok/s instead.';
+export const reasoningHiddenTitle = (meanTokensPerSecond) =>
+  `Most generated tokens were reasoning that is not in the visible answer, so chars/s does not measure speed here.${Number.isFinite(meanTokensPerSecond) ? ' Read tok/s instead.' : ''}`;
 const charsRateText = (row) => (row.reasoningHidden === true ? 'n/a (reasoning)' : rateText(row.meanCharsPerSecond, false));
 
 const Rate = ({ value, estimated, suffix = '' }) => (
@@ -191,7 +192,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanTokensPerSecond} estimated={row.tokensEstimated} /></td>
                   <td className="px-2 py-1.5 text-right">
                     {row.reasoningHidden === true
-                      ? <span className="text-gray-600 whitespace-nowrap" title={REASONING_HIDDEN_TITLE}>{charsRateText(row)}</span>
+                      ? <span className="text-gray-600 whitespace-nowrap" title={reasoningHiddenTitle(row.meanTokensPerSecond)}>{charsRateText(row)}</span>
                       : <Rate value={row.meanCharsPerSecond} estimated={false} />}
                   </td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanPromptTokensPerSecond} estimated={row.tokensEstimated} /></td>
