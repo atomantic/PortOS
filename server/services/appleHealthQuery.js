@@ -12,6 +12,8 @@ import { healthPointOrigin } from '../lib/appleHealthPoints.js';
 import { getDailyAlcohol } from './meatspaceAlcohol.js';
 import { getDailyNicotine } from './meatspaceNicotine.js';
 import { getBloodTests } from './meatspaceHealth.js';
+import { ymdShift } from '../lib/postStreak.js';
+import { userLocalToday } from './userTimezone.js';
 
 // Fallback aliases for metrics stored under old names (e.g. JSON ingest before normalization)
 const METRIC_ALIASES = {
@@ -98,14 +100,14 @@ export function pickDaySumPoints(points, getValue) {
 /**
  * Compute default date range: last 7 days from today.
  *
- * @returns {{ from: string, to: string }}
+ * Day files are named from the health export's local timestamp prefix, and this
+ * process runs UTC, so the window is the user's local calendar — not `toISOString()`.
+ *
+ * @returns {Promise<{ from: string, to: string }>}
  */
-function defaultDateRange() {
-  const to = new Date().toISOString().substring(0, 10);
-  const fromDate = new Date();
-  fromDate.setDate(fromDate.getDate() - 7);
-  const from = fromDate.toISOString().substring(0, 10);
-  return { from, to };
+async function defaultDateRange() {
+  const to = await userLocalToday();
+  return { from: ymdShift(to, -7), to };
 }
 
 /**
@@ -119,7 +121,7 @@ function defaultDateRange() {
  */
 export async function getMetrics(metricName, from, to) {
   const dates = await listDayFiles();
-  const range = from && to ? { from, to } : defaultDateRange();
+  const range = from && to ? { from, to } : await defaultDateRange();
 
   const filtered = dates.filter(d => d >= range.from && d <= range.to);
   const allPoints = [];
@@ -142,7 +144,7 @@ export async function getMetrics(metricName, from, to) {
  * @returns {Promise<Object>} Summary: { metricName, count, latest, average, from, to, dataPoints }
  */
 export async function getMetricSummary(metricName, from, to) {
-  const range = from && to ? { from, to } : defaultDateRange();
+  const range = from && to ? { from, to } : await defaultDateRange();
   const dataPoints = await getMetrics(metricName, range.from, range.to);
 
   const count = dataPoints.length;
@@ -177,7 +179,7 @@ export async function getMetricSummary(metricName, from, to) {
  */
 export async function getDailyAggregates(metricName, from, to) {
   const dates = await listDayFiles();
-  const range = from && to ? { from, to } : defaultDateRange();
+  const range = from && to ? { from, to } : await defaultDateRange();
   const filtered = dates.filter(d => d >= range.from && d <= range.to);
   const results = [];
 
@@ -328,7 +330,7 @@ export async function getLatestMetricValues(metricNames) {
  * @returns {Promise<Object>} { dailyData: Array<{ date, hrv, hr, restingHr, alcoholGrams, nicotineMg, steps }>, bloodTests }
  */
 export async function getCorrelationData(from, to) {
-  const range = from && to ? { from, to } : defaultDateRange();
+  const range = from && to ? { from, to } : await defaultDateRange();
 
   const [hrvData, hrData, restingHrData, stepsData, alcoholEntries, nicotineEntries, bloodData] = await Promise.all([
     getDailyAggregates('heart_rate_variability_sdnn', range.from, range.to),
