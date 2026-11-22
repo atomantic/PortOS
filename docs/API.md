@@ -140,7 +140,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/feeds` | RSS/content feeds |
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
-| `/api/user-actions` | Operator-action ledger — read-only log of what the user did (machine-local) |
+| `/api/user-actions` | Read-only, machine-local operator-action ledger |
+| `/api/skills` | Agent skill registry |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |
 | `/api/messages` | Messages (email) integration |

@@ -210,6 +210,20 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'skills.manage',
+    capability: 'manageSkills',
+    name: 'Author procedural skills',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    description: 'Create, patch, and delete agentskills.io skills in this install\'s local data/skills library so later agents can reuse a learned procedure.',
+    guardrails: [
+      'Writes only the local data/skills tier; project, shipped, and external skills are read-only',
+      'Supporting files are path-jailed to references/, templates/, scripts/, or examples/ inside the skill, and symlinks are refused',
+      'Advisory lint warnings flag oversized bodies, incident-log narration, and reference sprawl without blocking a valid skill',
+      'Reading skills (skills.list / skills.view) needs only readPortos',
+    ],
+  }),
+  Object.freeze({
     id: 'mind.cleanup',
     capability: 'manageMind',
     name: 'Maintain mindspace',
@@ -288,6 +302,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
   adjustLocalContext: z.boolean().optional(),
+  manageSkills: z.boolean().optional(),
   // Progressive tool exposure (#7624): how many ADDITIONAL user turns after
   // the one that called tools.activate a family's full schemas stay shown.
   // 0 is deliberately one-turn-only. This is a selection hint, never an
@@ -379,6 +394,7 @@ export function createDefaultPersistentMindCapabilities() {
     callUser: false,
     chooseThinkingPreset: false,
     adjustLocalContext: false,
+    manageSkills: false,
     toolExposureRetentionTurns: DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS,
     toolExposureAllSchemas: false,
     thinkingPresetAllowlist: [],
@@ -445,6 +461,7 @@ export function normalizePersistentMindCapabilities(raw) {
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
     adjustLocalContext: source.adjustLocalContext === true,
+    manageSkills: source.manageSkills === true,
     toolExposureRetentionTurns: Number.isSafeInteger(source.toolExposureRetentionTurns)
       && source.toolExposureRetentionTurns >= TOOL_ACTIVATION_LIMITS.MIN_RETENTION_TURNS
       && source.toolExposureRetentionTurns <= TOOL_ACTIVATION_LIMITS.MAX_RETENTION_TURNS
