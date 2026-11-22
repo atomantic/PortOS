@@ -707,11 +707,6 @@ because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
 free, so the fan-out costs only concurrency.
 
-The browser job uses its own two-shard assignments in
-`scripts/lib/browserSuites.js`. To rebalance, use per-file timings from an
-uncached hosted full-profile run and recent memo-miss runs. Account for the
-capture project's serial time and the parallel project's worker limit.
-
 `npm run pregate -- --full` reuses the same split locally: a full unit plan
 becomes one stage per shard (server 2, client 4, from `FULL_SUITE_SHARDS`), run
 sequentially with the env `resolvePlanStages` builds once per scope. Each shard
