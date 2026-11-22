@@ -10,6 +10,13 @@ describe('noFabricationClause', () => {
     expect(clause).toContain('Only the generate_image tool may produce this image');
   });
 
+  it('allows an optional built-in subagent alongside the tool', () => {
+    const clause = noFabricationClause('generate_image', { subagent: 'image-generator' });
+    expect(clause).toContain('Only the built-in image-generator subagent or generate_image tool may produce this image');
+    expect(clause).toContain('If both image-generator and generate_image are unavailable, rate-limited, refuse, or error');
+    expect(clause).toContain('Reporting the failure is the correct outcome');
+  });
+
   it('names the empty-handed outcome as correct', () => {
     // Without this half the agent is still measured on "a file exists", which
     // is exactly what drove it to draw one with code when the tool 429'd.

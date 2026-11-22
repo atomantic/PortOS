@@ -19,12 +19,21 @@ const CODE_EXTENSIONS = new Set([
 const CODE_DIRS = new Set(['__pycache__', 'node_modules', 'venv', '.venv']);
 
 /**
- * The clause that forbids producing the image by any means other than the named tool.
+ * The clause that forbids producing the image by any means other than the named tool
+ * (or built-in image subagent when the CLI delegates image generation there).
  * Naming failure as the correct outcome is what makes the prohibition followable.
  * @param {string} toolName - the provider's image tool (`generate_image`, `image_gen`)
+ * @param {{ subagent?: string }} [options]
  */
-export const noFabricationClause = (toolName) =>
-  `Only the ${toolName} tool may produce this image. Do not draw, render, or assemble it by any other means — no code, no scripts, no plotting or imaging libraries, no HTML/SVG/canvas rendering, and no placeholder, mock-up or diagram standing in for the image. If ${toolName} is unavailable, rate-limited, refuses, or errors, write nothing at that path and report what went wrong. Reporting the failure is the correct outcome; an image produced any other way is a failed run.`;
+export const noFabricationClause = (toolName, { subagent } = {}) => {
+  const producer = subagent
+    ? `built-in ${subagent} subagent or ${toolName} tool`
+    : `${toolName} tool`;
+  const failureCondition = subagent
+    ? `both ${subagent} and ${toolName} are unavailable, rate-limited, refuse, or error`
+    : `${toolName} is unavailable, rate-limited, refuses, or errors`;
+  return `Only the ${producer} may produce this image. Do not draw, render, or assemble it by any other means — no code, no scripts, no plotting or imaging libraries, no HTML/SVG/canvas rendering, and no placeholder, mock-up or diagram standing in for the image. If ${failureCondition}, write nothing at that path and report what went wrong. Reporting the failure is the correct outcome; an image produced any other way is a failed run.`;
+};
 
 /**
  * Scan a finished scratch dir for evidence the agent drew the image with code. Only source
