@@ -488,9 +488,17 @@ async function* streamCompletion(provider, model, prompt, signal) {
     if (!ready.success) {
       throw new Error(ready.error);
     }
+    // A pooled service may rotate this request onto another of its keys
+    // (#17384). Deferred: only a record naming a service instance can have one.
+    const credentialSession = typeof provider.serviceId === 'string' && provider.apiKey
+      ? await import('./provider/credentialPoolRuntime.js')
+        .then(({ openCredentialSession }) => openCredentialSession(provider, model))
+        .catch(() => null)
+      : null;
     for await (const chunk of iterateOpenAiChat({
       endpoint: provider.endpoint,
       apiKey: provider.apiKey,
+      credentialSession,
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.4,

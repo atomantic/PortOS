@@ -56,6 +56,21 @@ Each card also shows readiness (*Ready*, *Needs a credential*, *Needs an endpoin
 
 **Add Service** walks definition → plan → credential / endpoint. A subscription needs neither (the harness signs in); a hosted API takes a key you store, a conventional environment variable, or a bootstrap wrapper; a local runtime needs the endpoint this install reaches it at. A service still named by a preset cannot be deleted.
 
+#### Credential pools
+
+A hosted-API service that runs on a key (stored or env) can hold more than one (#17384). The card's **Credential pool** section lists the primary key, keys added to the pool, and numbered env siblings of the definition's variable (`OPENROUTER_API_KEY_2`, `_3`, … up to the first gap), each with a masked fingerprint and its status. Before a request fails over to another provider, it rotates within the pool:
+
+| Failure | What cools | Default window |
+|---|---|---|
+| 429 on a per-model provider (Anthropic, OpenRouter) | That model on that key, after one same-key retry. Other models keep using the key. | `Retry-After` / reset hint, else 5m |
+| 429 elsewhere | The whole key | `Retry-After` / reset hint, else 5m |
+| 402, or a quota/billing body | The whole key | Reset hint, else 1h |
+| 401 | The whole key; a key rejected twice in a row stays out until **Reset cooldown** | 15m |
+
+Once every key is cooling, the last failure reaches the existing provider bench and fallback chain unchanged. Strategy is **Fill first** (default: the top healthy key, so a provider prompt cache stays warm, and the next request returns to it once its cooldown ends), **Round robin**, or **Least used**. Rotation runs only for a preset or composite that names the service (`serviceId`) and still runs under its primary key, with at least two keys usable for that endpoint.
+
+Pool keys are stored in `credentials.credentialPool` on the `ai_connections` row. An env entry stores only the variable's name, which must be the definition's own variable or a numbered sibling of it, and is read from the process at request time. A stored pool key is bound to the endpoint origin it was added under: once the service's endpoint moves to another origin, the key is withheld until you **Re-bind** it. Env siblings are used only on the definition's shipped host. Cooldowns are kept in memory and clear on restart. The status read never rotates or benches a key, and no response carries a key value. API: `GET|PATCH /api/providers/services/:slug/credential-pool`, `POST …/keys`, `PATCH|DELETE …/keys/:credentialId`, `POST …/reset`.
+
 This view is what the Backend Connections drawer (#6369) used to be — a connection *is* a service instance, addressed by the same UUID or slug, so `/ai/connections/:id` redirects here. What it no longer offers is binding link/unlink and per-route rows: a preset names its service outright (`serviceId`), and a preset's own settings live on its editor.
 
 ## Reaching the views

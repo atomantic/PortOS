@@ -254,6 +254,10 @@ function composeStreamSignal(signal, timeoutMs) {
  *   this to preserve its established AbortError plus partial-output contract.
  * @param {(stats: object) => void} [options.onStats] registering one asks the
  *   daemon for a terminal usage frame (`stream_options.include_usage`).
+ * @param {object|null} [options.credentialSession] a host credential-pool
+ *   session (#17384, `services/provider/credentialPoolRuntime.js`): a
+ *   429/402/401 before the stream starts may resend on another key of the same
+ *   service. Absent, `apiKey` is sent once as before.
  * @returns {AsyncGenerator<{text:string,kind:'content'|'reasoning'}>}
  */
 export async function* iterateOpenAiChat({
@@ -268,6 +272,7 @@ export async function* iterateOpenAiChat({
   timeoutMs,
   stopOnAbort = true,
   onStats,
+  credentialSession = null,
 }) {
   const composed = composeStreamSignal(signal, timeoutMs);
   const requestSignal = composed.signal;
@@ -278,9 +283,9 @@ export async function* iterateOpenAiChat({
   // told us it does not understand the key.
   const includeUsage = typeof onStats === 'function' && !usageUnsupportedEndpoints.has(url);
 
-  const post = (withUsage) => fetchWithPreHeaderRetry(() => fetch(url, {
+  const post = (withUsage, sessionKey = null) => fetchWithPreHeaderRetry(() => fetch(url, {
     method: 'POST',
-    headers,
+    headers: sessionKey ? { ...headers, Authorization: `Bearer ${sessionKey}` } : headers,
     signal: requestSignal,
     body: JSON.stringify({
       model,
@@ -300,7 +305,7 @@ export async function* iterateOpenAiChat({
   }).catch((err) => ({ ok: false, status: 0, error: describeTransportError(err) }));
 
   try {
-    let response = await post(includeUsage);
+    let response = await post(includeUsage, credentialSession?.apiKey ?? null);
     // `stream_options` is standard OpenAI, but a stricter daemon (or an older
     // build) can reject an unknown body key outright. Token counts are a
     // nice-to-have; the generation is not — so drop the ask and retry once rather
@@ -326,9 +331,22 @@ export async function* iterateOpenAiChat({
         // Drain the rejected response so its socket is released before the retry.
         await response.body?.cancel?.().catch(() => {});
         responseErrorBody = '';
-        response = await post(false);
+        response = await post(false, credentialSession?.apiKey ?? null);
       }
     }
+
+    // A key-specific failure rotates within the service's pool before it
+    // becomes the run's failure; the session answers false once no other key is
+    // ready, and the last failure is thrown below exactly as a lone one was.
+    while (!response.ok && credentialSession && !requestSignal?.aborted) {
+      const failureBody = responseErrorBody || (response.text ? await response.text().catch(() => '') : response.error || '');
+      const retry = await credentialSession.onFailure({ status: response.status || 0, body: failureBody, headers: response.headers }, { signal: requestSignal });
+      responseErrorBody = failureBody;
+      if (!retry) break;
+      responseErrorBody = '';
+      response = await post(includeUsage && !usageUnsupportedEndpoints.has(url), credentialSession.apiKey);
+    }
+    if (response.ok) credentialSession?.onSuccess();
 
     if (!response.ok) {
       const body = responseErrorBody || (response.text ? await response.text().catch(() => '') : response.error || '');

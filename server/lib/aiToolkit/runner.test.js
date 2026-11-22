@@ -76,6 +76,48 @@ describe('AI Toolkit runner service', () => {
     }
   });
 
+  it('resends on the key a host credential session rotates to, and hands the last failure to the finalizer', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const provider = { id: 'pooled', type: 'api', endpoint: 'https://api.example.com/v1', apiKey: 'example-primary-key', allowCustomEndpoint: true, defaultModel: 'example-model' };
+    // The toolkit's half of the contract only: a session names the key to send
+    // and answers whether a failure should be resent (#17384).
+    const keys = ['example-primary-key', 'example-backup-key'];
+    const session = {
+      get apiKey() { return keys[0]; },
+      onFailure: vi.fn(async ({ status }) => { if (status !== 429 || keys.length < 2) return false; keys.shift(); return true; }),
+      onSuccess: vi.fn(),
+    };
+    const openCredentialSession = vi.fn(async () => session);
+    const runner = createRunnerService({ dataDir, providerService: {}, hooks: { openCredentialSession } });
+    const reader = { read: async () => ({ done: true }), cancel: async () => {}, releaseLock() {} };
+    const providerFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'slow down' })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => reader } });
+    vi.stubGlobal('fetch', providerFetch);
+    try {
+      const { runId } = await runner.createRun({ providerId: provider.id, provider, prompt: 'hello' });
+      const settled = Promise.withResolvers();
+      await runner.executeApiRun({ runId, provider, prompt: 'hello', onSettled: settled.resolve });
+      await settled.promise;
+      expect(openCredentialSession).toHaveBeenCalledWith(provider, 'example-model');
+      expect(providerFetch.mock.calls.map(([, init]) => init.headers.Authorization)).toEqual(['Bearer example-primary-key', 'Bearer example-backup-key']);
+      expect(session.onSuccess).toHaveBeenCalledTimes(1);
+
+      // Exhausted: the run fails on the LAST response, as a lone failure would.
+      providerFetch.mockReset().mockResolvedValue({ ok: false, status: 429, text: async () => 'still slow' });
+      const second = await runner.createRun({ providerId: provider.id, provider, prompt: 'hello' });
+      const done = Promise.withResolvers();
+      await runner.executeApiRun({ runId: second.runId, provider, prompt: 'hello', onComplete: done.resolve });
+      const metadata = await done.promise;
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(metadata.success).toBe(false);
+      expect(metadata.error).toContain('429');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reports settled only after API stream cleanup and asynchronous output hooks', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

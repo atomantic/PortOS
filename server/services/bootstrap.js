@@ -199,6 +199,10 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
   const aiToolkitHooks = attachLlmActivityHooks({
     trackRunOutput: (path, prompt) => trackPrivateRunOutput(path, prompt, withRuntimeFileTurn),
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
+    // Same-service key rotation before the provider bench + fallback chain
+    // (#17384). Deferred: the graph store loads only when a run reaches it.
+    openCredentialSession: (provider, model) => import('./provider/credentialPoolRuntime.js')
+      .then(({ openCredentialSession }) => openCredentialSession(provider, model)),
     onRunCreated: (metadata) => {
       recordSession(metadata.providerId, metadata.providerName, metadata.model).catch(err => {
         logBootstrapFailure('❌ Failed to record usage session', err);

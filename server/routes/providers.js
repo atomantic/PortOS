@@ -81,6 +81,7 @@ import {
   codexLoginStartSchema, modelPinClearSchema, providerVisionTestSchema, providerVisionSuiteSchema,
   providerBindingCreateSchema, providerBindingUpdateSchema, providerConnectionCreateSchema,
   providerConnectionUpdateSchema, providerServiceCreateSchema, providerServiceUpdateSchema,
+  credentialPoolKeyCreateSchema, credentialPoolKeyUpdateSchema, credentialPoolResetSchema, credentialPoolSettingsSchema,
   providerRouteSettingsUpdateSchema, providerPresetCreateSchema, credentialBootstrapsSettingsSchema,
   harnessEnablementUpdateSchema, harnessIdParamSchema
 } from '../lib/providerValidation.js';
@@ -582,6 +583,44 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
    */
   router.post('/services/:slug/refresh-catalog', asyncHandler(async (req, res) => {
     res.json(await refreshServiceCatalog(req.params.slug));
+  }));
+
+  /**
+   * The instance's credential pool (#17384): extra keys for the same backend,
+   * tried before the cross-provider fallback chain. Every response is the
+   * display-safe pool — masked fingerprints, cooldowns, origin bindings — and
+   * the GET is a pure peek: it never rotates, benches or expires a key.
+   * Machine-local like the row itself; nothing here federates. Deferred: the
+   * pool service and its ledger load on first use, not with every boot
+   * (server/AGENTS.md "Import scoping").
+   */
+  const credentialPools = () => import('../services/provider/providerCredentialPools.js');
+  router.get('/services/:slug/credential-pool', asyncHandler(async (req, res) => {
+    res.set('Cache-Control', 'no-store').json(await (await credentialPools()).getCredentialPool(req.params.slug));
+  }));
+
+  router.patch('/services/:slug/credential-pool', asyncHandler(async (req, res) => {
+    const input = validateRequest(credentialPoolSettingsSchema, req.body ?? {});
+    res.json(await (await credentialPools()).updatePoolSettings(req.params.slug, input));
+  }));
+
+  router.post('/services/:slug/credential-pool/keys', asyncHandler(async (req, res) => {
+    const input = validateRequest(credentialPoolKeyCreateSchema, req.body ?? {});
+    res.status(201).json(await (await credentialPools()).addPoolCredential(req.params.slug, input));
+  }));
+
+  router.patch('/services/:slug/credential-pool/keys/:credentialId', asyncHandler(async (req, res) => {
+    const input = validateRequest(credentialPoolKeyUpdateSchema, req.body ?? {});
+    res.json(await (await credentialPools()).updatePoolCredential(req.params.slug, req.params.credentialId, input));
+  }));
+
+  router.delete('/services/:slug/credential-pool/keys/:credentialId', asyncHandler(async (req, res) => {
+    res.json(await (await credentialPools()).removePoolCredential(req.params.slug, req.params.credentialId));
+  }));
+
+  router.post('/services/:slug/credential-pool/reset', asyncHandler(async (req, res) => {
+    const input = validateRequest(credentialPoolResetSchema, req.body ?? {});
+    res.json(await (await credentialPools()).resetPoolCredentialCooldowns(req.params.slug, input));
   }));
 
   /**

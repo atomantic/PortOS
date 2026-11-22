@@ -25,6 +25,7 @@ import { pluralize } from '../../lib/textUtils';
 import { formatCount } from '../../utils/formatters';
 import ProviderReadiness from './ProviderReadiness';
 import ProviderServiceForm from './ProviderServiceForm';
+import ProviderCredentialPool from './ProviderCredentialPool';
 import { presetEditPath } from '../../utils/providerHarnesses';
 
 /**
@@ -60,7 +61,7 @@ const draftFrom = (service) => ({ label: service.label || '', transports: draftF
 
 function ServiceCard({
   service, open, busy, presets, subject, readiness, servingModel, onAutoSetup, onUseServedModel, onServeWantedModel,
-  onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete, onCreatePreset,
+  onSelect, onToggle, onRefresh, onSave, onClearKey, onDelete, onCreatePreset, onPoolRevision,
 }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -87,6 +88,15 @@ function ServiceCard({
   const definition = service.definition;
   const category = serviceCategoryById(classifyServiceCategory(service));
   const presetAction = servicePresetAction(service);
+  // Only a hosted-API service running on a key (stored or env) can pool keys.
+  const poolable = definition?.family === 'api-key' && (service.credentialVia === 'stored' || service.credentialVia === 'env');
+  // A pool edit bumps the row's revision. Recording it as seen first keeps the
+  // re-seed effect above from wiping a half-typed edit for a change the user
+  // made in this very card.
+  const handlePoolRevision = (revision) => {
+    draftVersionRef.current = { id: service.id, revision };
+    onPoolRevision?.(service, revision);
+  };
 
   return (
     <article
@@ -216,6 +226,8 @@ function ServiceCard({
               onCancel={() => setConfirmingDelete(false)}
             />
           )}
+
+          {poolable && <ProviderCredentialPool service={service} onRevision={handlePoolRevision} />}
 
           {/* Local-daemon readiness is computed per PRESET; `subject` is the
               first derived preset on this instance, standing for the daemon
@@ -398,6 +410,10 @@ export default function ProviderServicesTab({
     select(null);
   };
 
+  const handlePoolRevision = (service, revision) => {
+    setServices((current) => (current || []).map((row) => (row.id === service.id ? { ...row, revision } : row)));
+  };
+
   const handleCreated = (service) => {
     setServices((current) => [...(current || []), service]);
     invalidateProviderCatalog();
@@ -504,6 +520,7 @@ export default function ProviderServicesTab({
                     onClearKey={handleClearKey}
                     onDelete={handleDelete}
                     onCreatePreset={onCreatePreset}
+                    onPoolRevision={handlePoolRevision}
                   />
                 );
               })}
