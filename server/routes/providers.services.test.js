@@ -56,6 +56,15 @@ vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: probe }));
 const harnessModels = vi.fn();
 vi.mock('../services/harnesses.js', () => ({ refreshHarnessModels: harnessModels, harnessCatalogRuntime: vi.fn(() => null) }));
 
+const mtplxManager = vi.hoisted(() => ({
+  ensureMtplxRunning: vi.fn(),
+  getMtplxSavedLaunch: vi.fn(),
+}));
+vi.mock('../services/mtplxServerManager.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...mtplxManager,
+}));
+
 vi.mock('../services/credentialInventory.js', async (importOriginal) => ({
   ...(await importOriginal()),
   loadInstallEnvFile: async () => new Map([['CEREBRAS_API_KEY', 'example-env-file-key']]),
@@ -379,6 +388,75 @@ describe('POST /api/providers/services/:slug/refresh-catalog', () => {
     expect(res.body.code).toBe('SERVICE_DEFINITION_UNKNOWN');
     expect((await request(app()).post('/api/providers/services/nobody/refresh-catalog')).status).toBe(404);
     expect(probe).not.toHaveBeenCalled();
+  });
+});
+
+describe('managed MTPLX before a derived-preset catalog refresh', () => {
+  const MTPLX = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+  const mtplxFixture = (overrides = {}) => ({
+    connections: [instance({
+      id: MTPLX, kind: 'api', slug: 'mtplx', definitionId: 'mtplx', plan: 'local',
+      transports: { openai: { baseUrl: 'http://127.0.0.1:8000/v1' } },
+      catalog: { state: 'unknown', models: [] },
+      ...overrides,
+    })],
+    bindings: [],
+    routes: [],
+  });
+
+  const preset = () => ({
+    id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode',
+    models: ['mtplx-served'], harnessId: 'opencode', method: 'cli', serviceId: 'mtplx',
+  });
+
+  beforeEach(() => {
+    store.readGraph.mockResolvedValue(mtplxFixture());
+    providerService.getProviderById.mockResolvedValue(preset());
+    probe.mockResolvedValue({ reachable: true, models: ['mtplx-served'], contextWindows: {} });
+    mtplxManager.ensureMtplxRunning.mockResolvedValue({ ready: true, reason: null });
+    mtplxManager.getMtplxSavedLaunch.mockResolvedValue({ model: 'qwen3.8', port: 8000, raw: { model: 'qwen3.8', port: 8000 } });
+  });
+
+  it('wakes the managed daemon before probing, and returns the served catalog', async () => {
+    const res = await request(app()).post('/api/providers/opencode-mtplx/refresh-models');
+    expect(res.status).toBe(200);
+    expect(mtplxManager.ensureMtplxRunning).toHaveBeenCalledTimes(1);
+    expect(probe).toHaveBeenCalled();
+    expect(res.body.models).toEqual(['mtplx-served']);
+    expect(store.saveConnectionSettings).toHaveBeenCalledWith(expect.objectContaining({
+      id: MTPLX, catalog: expect.objectContaining({ state: 'known', models: ['mtplx-served'] }),
+    }));
+  });
+
+  it('refuses with a typed stopped result when no launch line was ever saved, and logs nothing on stderr', async () => {
+    mtplxManager.getMtplxSavedLaunch.mockResolvedValue({ model: null, port: null, raw: {} });
+    const res = await request(app()).post('/api/providers/opencode-mtplx/refresh-models');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('MTPLX_STOPPED');
+    expect(res.body.error).toContain('Models → Runtimes');
+    expect(mtplxManager.ensureMtplxRunning).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('reports a wake failure instead of probing a dead server', async () => {
+    mtplxManager.ensureMtplxRunning.mockResolvedValue({ ready: false, reason: 'MTPLX exited while loading' });
+    const res = await request(app()).post('/api/providers/opencode-mtplx/refresh-models');
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('MTPLX_START_FAILED');
+    expect(res.body.error).toContain('MTPLX exited while loading');
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('leaves a remote MTPLX endpoint to the probe, never waking this install\'s daemon for it', async () => {
+    store.readGraph.mockResolvedValue(mtplxFixture({
+      transports: { openai: { baseUrl: 'http://192.0.2.10:8000/v1' } },
+    }));
+    const res = await request(app()).post('/api/providers/opencode-mtplx/refresh-models');
+    expect(res.status).toBe(200);
+    expect(mtplxManager.ensureMtplxRunning).not.toHaveBeenCalled();
+    expect(probe).toHaveBeenCalled();
   });
 });
 
