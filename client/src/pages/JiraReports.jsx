@@ -128,6 +128,7 @@ export default function JiraReports() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [apps, setApps] = useState([]);
+  const [appsLoaded, setAppsLoaded] = useState(false);
 
   const filterAppId = searchParams.get('app') || '';
   // The open report lives in the URL (`?reportApp=&reportDate=`) so it's
@@ -170,6 +171,7 @@ export default function JiraReports() {
     const allApps = await getApps();
     const jiraApps = (allApps || []).filter(a => a.jira?.enabled);
     setApps(jiraApps);
+    setAppsLoaded(true);
   };
 
   const loadReports = async () => {
@@ -205,18 +207,21 @@ export default function JiraReports() {
     setSearchParams(appId ? { app: appId } : {});
   };
 
+  // appsLoaded keeps the button enabled until the app list resolves, so a slow fetch is not mistaken for "no JIRA apps".
+  const noJiraApps = !loading && appsLoaded && apps.length === 0;
+
   const filteredReports = filterAppId
     ? reports.filter(r => r.appId === filterAppId)
     : reports;
 
   return (
     <div className="p-4 max-w-5xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           <FileText size={20} className="text-port-accent" />
           <h1 className="text-lg font-bold text-white">Weekly Status Reports</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {apps.length > 1 && (
             <select
               aria-label="Filter by app"
@@ -238,7 +243,7 @@ export default function JiraReports() {
           </Link>
           <button
             onClick={() => handleGenerate(filterAppId || null)}
-            disabled={generating}
+            disabled={generating || noJiraApps}
             className="flex items-center gap-1.5 bg-port-accent hover:bg-port-accent/80 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50"
           >
             {generating ? <BrailleSpinner /> : <RefreshCw size={14} />}
@@ -255,8 +260,13 @@ export default function JiraReports() {
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <FileText size={48} className="mb-3 opacity-30" />
           <p>No reports yet. Generate your first report above.</p>
-          {apps.length === 0 && (
-            <p className="text-xs mt-2">Enable JIRA on an app first (Apps &rarr; Edit &rarr; JIRA)</p>
+          {noJiraApps && (
+            <p className="text-xs mt-2">
+              Enable JIRA on an app first:{' '}
+              <Link to="/apps" className="text-port-accent hover:underline">Apps</Link>
+              {' '}and{' '}
+              <Link to="/devtools/jira" className="text-port-accent hover:underline">JIRA Instances</Link>
+            </p>
           )}
         </div>
       ) : (
