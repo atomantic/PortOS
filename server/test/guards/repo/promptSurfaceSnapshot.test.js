@@ -5,7 +5,7 @@
  * description or schema edit costs every turn (#17395).
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,10 +21,12 @@ describe('prompt surface snapshot (#17395)', () => {
   it('matches a fresh deterministic render byte for byte', () => {
     const out = mkdtempSync(join(tmpdir(), 'prompt-surface-guard-'));
     tempRoots.push(out);
-    execFileSync(process.execPath, [join(REPO_ROOT, 'scripts/prompt-surface.js'), 'render', '--out', out], {
+    // spawnSync so a render crash reports its stderr instead of a bare exit status.
+    const render = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts/prompt-surface.js'), 'render', '--out', out], {
       cwd: REPO_ROOT,
-      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
     });
+    expect(render.status, render.stderr).toBe(0);
     const committed = readSnapshotDir(DEFAULT_OUT_DIR);
     const fresh = readSnapshotDir(out);
     const drift = Object.keys({ ...committed, ...fresh }).filter((file) => committed[file] !== fresh[file]);
