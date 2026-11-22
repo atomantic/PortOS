@@ -3,7 +3,8 @@
  *
  * `buildModelComparisonComposite(observations, inventory, anchor)` derives a versioned sourced index
  * with calibrated and effort estimates, matching task-workload costs, route-specific price references,
- * zero API charges for local-inference inventory and explicit research gaps.
+ * zero API charges for local-inference inventory, output speed (published for API routes,
+ * measured on this install for local runtimes) and explicit research gaps.
  */
 import { catalogSlugForProviderModel } from './comparisonModelScope.js';
 
@@ -110,7 +111,7 @@ const isLocalBuild = (provider, model) => provider.localInference || /gguf|mlx|:
 function internSources(rows) {
   const sources = [];
   const sourceIds = new Map();
-  for (const row of rows) for (const field of ['quality', 'inputPerMillion', 'outputPerMillion', 'blendedPerMillion', 'costPerTask']) {
+  for (const row of rows) for (const field of ['quality', 'inputPerMillion', 'outputPerMillion', 'blendedPerMillion', 'costPerTask', 'tokensPerSecond']) {
     const metric = row[field];
     if (!metric) continue;
     metric.sourceIds = metric.sources.map(source => {
@@ -123,8 +124,23 @@ function internSources(rows) {
   return sources;
 }
 
+/**
+ * Output speed for one row. A local runtime's speed is this machine's own measurement and never a
+ * published figure (public numbers describe other hardware); an API route uses the published speed
+ * of this exact model, preferring the same effort. Absent stays null, never zero.
+ */
+function speedFor(provider, entry, effort, modelRows, localSpeed) {
+  if (provider.localInference) {
+    const measured = provider.runtime ? localSpeed?.get(`${provider.runtime}:${entry.model}`) : null;
+    return measured ? { value: measured.value, estimated: measured.estimated === true, method: measured.method, sources: [measured.source] } : null;
+  }
+  const withSpeed = modelRows.filter(row => row.tokensPerSecond?.value > 0);
+  const row = latest(withSpeed.filter(row => effortKey(row.effort) === effort), 'tokensPerSecond') || latest(withSpeed, 'tokensPerSecond');
+  return evidenceMetric(row, 'tokensPerSecond', row ? `Published output speed from ${row.provider}${effortKey(row.effort) === effort ? '' : ` (${row.effort} effort)`}: ${row.tokensPerSecond.source.methodology}` : '', false);
+}
+
 /** Never average raw scores from unlike evaluations. Calibrate only with >=3 shared configurations. */
-export function buildModelComparisonComposite(observations, inventory, anchor = COMPARISON_ANCHOR) {
+export function buildModelComparisonComposite(observations, inventory, anchor = COMPARISON_ANCHOR, { localSpeed = null } = {}) {
   const slugCache = new Map();
   const modelSlug = model => {
     if (!slugCache.has(model)) slugCache.set(model, slug(model));
@@ -213,6 +229,7 @@ export function buildModelComparisonComposite(observations, inventory, anchor = 
         model: entry.model, comparisonModel: modelSlug(entry.model), modelKey: `${provider.id}:${entry.model}`, effort, quality, incomparableReason,
         inputPerMillion: input, outputPerMillion: output, blendedPerMillion: blended,
         costPerTask: incomparableReason ? null : provider.localInference ? localCost() : evidenceMetric(taskRow, 'costPerTask', `${anchor} task cost; API reference`, false),
+        tokensPerSecond: speedFor(provider, entry, effort, modelRows, localSpeed),
         needsResearch: !quality || quality.estimated || !input || !output || input.estimated || output.estimated,
       });
     }
