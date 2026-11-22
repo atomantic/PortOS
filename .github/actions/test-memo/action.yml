@@ -19,7 +19,7 @@ inputs:
       The family's full-run shard count (FULL_SUITE_SHARDS in
       scripts/ci-test-plan.js), or 0. When set, restore and merge every
       distinct full-run shard lineage so related selection can use records
-      from all shards. Up to 3.
+      from all shards. Up to 4.
     required: false
     default: '0'
 
@@ -129,6 +129,27 @@ runs:
         if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
           mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
           mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/3"
+        fi
+
+    - name: Restore full-run shard 4 of the memo
+      id: restore-shard-4
+      if: >-
+        fromJSON(inputs.merge-shards) >= 4 &&
+        !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-4of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-test-memo
+        key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-4of${{ inputs.merge-shards }}-
+        restore-keys: |
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-4of${{ inputs.merge-shards }}-
+
+    - name: Park full-run shard 4
+      if: steps.restore-shard-4.outcome == 'success'
+      shell: bash
+      run: |
+        if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
+          mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
+          mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/4"
         fi
 
     - name: Merge the full-run shard lineages
