@@ -1879,11 +1879,17 @@ CREATE TABLE IF NOT EXISTS privacy_vault_records (
       share_with_twin BOOLEAN NOT NULL DEFAULT FALSE,
       use_for_scans BOOLEAN NOT NULL DEFAULT FALSE,
       notes TEXT NOT NULL DEFAULT '',
+      login_origins TEXT[] NOT NULL DEFAULT '{}',
+      has_totp BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
 CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type);
+
+ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS login_origins TEXT[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS has_totp BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS privacy_consents (
       id UUID PRIMARY KEY,

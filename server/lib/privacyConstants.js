@@ -26,9 +26,17 @@ export const PRIVACY_VAULT_TYPES = Object.freeze([
   'ssn', 'passport', 'drivers_license', 'financial_account', 'custom',
 ]);
 
-// Types that may NEVER be used for broker scans (`use_for_scans` forced false).
+// Origin-bound website credentials (#17397). Managed only through the
+// website-login endpoints (services/privacyWebsiteLogins.js): the encrypted
+// payload is a JSON credential, never a generic string value, so it is NOT in
+// PRIVACY_VAULT_TYPES and the generic create/update/reveal paths refuse it.
+export const PRIVACY_WEBSITE_LOGIN_TYPE = 'website_login';
+
+// Types that may NEVER be used for broker scans (`use_for_scans` forced false),
+// never injected into the twin's prompt, and never decrypted for draft or prompt
+// scrubbing. Every reader that excludes these by type covers website logins too.
 export const PRIVACY_SENSITIVE_TYPES = Object.freeze([
-  'ssn', 'passport', 'drivers_license', 'financial_account',
+  'ssn', 'passport', 'drivers_license', 'financial_account', PRIVACY_WEBSITE_LOGIN_TYPE,
 ]);
 
 // Types whose `use_for_scans` defaults to true.

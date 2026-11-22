@@ -61,8 +61,8 @@ export const privacyDdl = [
     // services/sharing/privacyNeverFederates.test.js. A delete is a
     // hard DELETE. `use_for_scans` gates which facts the broker scan engine
     // may disclose (hard-false for ssn/passport/drivers_license/
-    // financial_account — enforced app-side). Mirrors the privacy blocks in
-    // init-db.sql.
+    // financial_account/website_login — enforced app-side). Mirrors the
+    // privacy blocks in init-db.sql.
     `CREATE TABLE IF NOT EXISTS privacy_vault_records (
       id UUID PRIMARY KEY,
       subject_id UUID NOT NULL DEFAULT '00000000-0000-4000-8000-000000000001' REFERENCES privacy_subjects (id) ON DELETE CASCADE,
@@ -76,11 +76,19 @@ export const privacyDdl = [
       share_with_twin BOOLEAN NOT NULL DEFAULT FALSE,
       use_for_scans BOOLEAN NOT NULL DEFAULT FALSE,
       notes TEXT NOT NULL DEFAULT '',
+      login_origins TEXT[] NOT NULL DEFAULT '{}',
+      has_totp BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
     // Type is the primary list filter (all addresses, all emails, ...).
     `CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type)`,
+    // Non-secret lookup metadata for `website_login` records (#17397): the exact
+    // origins the login may be filled into and whether its encrypted payload
+    // carries a TOTP seed, so listing fill candidates never decrypts a secret.
+    // Empty / false for every other type. Additive for pre-#17397 installs.
+    `ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS login_origins TEXT[] NOT NULL DEFAULT '{}'`,
+    `ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS has_totp BOOLEAN NOT NULL DEFAULT FALSE`,
     // Explicit consent audit rows, one per (subject, purpose) grant; the scan
     // and opt-out engines REFUSE to act for a subject without an ACTIVE row of
     // the exact purpose scope (privacySubjects.assertSubjectConsent, #3658,

@@ -68,7 +68,9 @@ export const VAULT_TYPES = [
 ];
 
 // Mirrors PRIVACY_SENSITIVE_TYPES — these can never be used for broker scans.
-export const SENSITIVE_TYPES = ['ssn', 'passport', 'drivers_license', 'financial_account'];
+// `website_login` is managed by the Website Logins section, not VAULT_TYPES.
+export const WEBSITE_LOGIN_TYPE = 'website_login';
+export const SENSITIVE_TYPES = ['ssn', 'passport', 'drivers_license', 'financial_account', WEBSITE_LOGIN_TYPE];
 
 export const VAULT_STATUSES = [
   { id: 'current', label: 'Current' },

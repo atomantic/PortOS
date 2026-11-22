@@ -142,20 +142,20 @@ describe('createVaultRecord', () => {
 });
 
 describe('listVaultRecords', () => {
-  it('scopes to the subject and binds the type filter as $2 (not a literal)', async () => {
+  it('scopes to the subject, hides website logins and binds the type filter (not a literal)', async () => {
     queryMock.mockResolvedValue({ rows: [] });
     await listVaultRecords({ type: 'email' });
     const [sql, params] = queryMock.mock.calls[0];
-    expect(sql).toMatch(/WHERE subject_id = \$1 AND type = \$2/);
-    expect(params).toEqual([SELF, 'email']);
+    expect(sql).toMatch(/WHERE subject_id = \$1 AND type <> \$2 AND type = \$3/);
+    expect(params).toEqual([SELF, 'website_login', 'email']);
   });
 
-  it('omits the type clause when no type is given', async () => {
+  it('omits the type clause when no type is given but still hides website logins', async () => {
     queryMock.mockResolvedValue({ rows: [] });
     await listVaultRecords({ subjectId: 'subject-2' });
     const [sql, params] = queryMock.mock.calls[0];
-    expect(sql).toMatch(/WHERE subject_id = \$1 ORDER BY/);
-    expect(params).toEqual(['subject-2']);
+    expect(sql).toMatch(/WHERE subject_id = \$1 AND type <> \$2 ORDER BY/);
+    expect(params).toEqual(['subject-2', 'website_login']);
   });
 });
 

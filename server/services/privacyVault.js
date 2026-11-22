@@ -21,6 +21,11 @@
  *
  * The first vault record creation writes an explicit consent row (scope
  * `pii_vault`) — the audit trail the later broker opt-out engine builds on.
+ *
+ * Website logins (`website_login`, #17397) share this table but are managed by
+ * services/privacyWebsiteLogins.js: their payload is an encrypted JSON
+ * credential, so the generic list hides them and the generic update and reveal
+ * refuse them. No endpoint ever returns a login's decrypted password or seed.
  */
 
 import { randomUUID } from 'crypto';
@@ -29,7 +34,9 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
-import { PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES, PRIVACY_SELF_SUBJECT_ID } from '../lib/privacyConstants.js';
+import {
+  PRIVACY_SENSITIVE_TYPES, PRIVACY_SCAN_DEFAULT_TYPES, PRIVACY_SELF_SUBJECT_ID, PRIVACY_WEBSITE_LOGIN_TYPE,
+} from '../lib/privacyConstants.js';
 import { resolveSubjectId, assertSubject, recordConsent } from './privacySubjects.js';
 
 // Re-exported so the pre-#3658 deep import `privacyVault.recordConsent` keeps
@@ -76,6 +83,27 @@ export function resolveUseForScans(type, requested) {
   return PRIVACY_SCAN_DEFAULT_TYPES.includes(type);
 }
 
+/**
+ * True when the subject has no local-vault consent row yet, so the caller's
+ * first vault write must record one. This grant is LOCAL-ONLY — it never unlocks
+ * broker scans or opt-outs, which need their own explicit grants (#8332) — so
+ * keying the check on the scope (not "any row") keeps a broker grant from
+ * standing in for the vault's own audit fact.
+ */
+export async function needsPiiVaultConsent(subjectId) {
+  const { rows } = await query(
+    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1 AND scope = 'pii_vault'`, [subjectId],
+  );
+  return rows[0].n === 0;
+}
+
+const refuseWebsiteLogin = (type, action) => {
+  if (type !== PRIVACY_WEBSITE_LOGIN_TYPE) return;
+  throw action === 'reveal'
+    ? new ServerError('Website logins are fill-only; their secrets are never revealed', { status: 403, code: 'WEBSITE_LOGIN_NOT_REVEALABLE' })
+    : new ServerError('Website logins are managed through /api/privacy/logins', { status: 400, code: 'WEBSITE_LOGIN_MANAGED_SEPARATELY' });
+};
+
 export async function createVaultRecord(input) {
   await ensureVaultKey(); // self-heal a missing key on first write
   // A bogus subjectId must 404 up front rather than trip a raw FK violation.
@@ -85,14 +113,8 @@ export async function createVaultRecord(input) {
   // First record FOR THIS SUBJECT without local-vault consent ⇒ write the
   // `pii_vault` consent row. Scoped per subject so a household member added
   // directly through the vault still gets a consent row of their own rather than
-  // riding on `self`'s. This grant is LOCAL-ONLY — it never unlocks broker scans
-  // or opt-outs, which need their own explicit grants (#8332) — so keying the
-  // check on the scope (not "any row") keeps a broker grant from standing in for
-  // the vault's own audit fact.
-  const { rows: countRows } = await query(
-    `SELECT COUNT(*)::int AS n FROM privacy_consents WHERE subject_id = $1 AND scope = 'pii_vault'`, [subjectId],
-  );
-  const needsConsent = countRows[0].n === 0;
+  // riding on `self`'s.
+  const needsConsent = await needsPiiVaultConsent(subjectId);
   const { rows } = await query(
     `INSERT INTO privacy_vault_records
        (id, subject_id, type, label, value_enc, masked_value, status, valid_from, valid_to,
@@ -120,8 +142,9 @@ export async function listVaultRecords({ type, subjectId } = {}) {
   // members' identity facts into one table, which is exactly what this scoping
   // exists to prevent. Omitting subjectId means `self`, so every pre-#3658
   // caller is unchanged.
-  const params = [resolveSubjectId(subjectId)];
-  const clauses = ['subject_id = $1'];
+  // Website logins are listed by privacyWebsiteLogins.js, never as generic facts.
+  const params = [resolveSubjectId(subjectId), PRIVACY_WEBSITE_LOGIN_TYPE];
+  const clauses = ['subject_id = $1', 'type <> $2'];
   if (type) { params.push(type); clauses.push(`type = $${params.length}`); }
   const { rows } = await query(
     `SELECT ${RECORD_COLUMNS} FROM privacy_vault_records
@@ -151,6 +174,7 @@ export async function updateVaultRecord(id, patch) {
     );
     const existing = sel.rows[0];
     if (!existing) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+    refuseWebsiteLogin(existing.type, 'update');
     if (patch.useForScans === true && PRIVACY_SENSITIVE_TYPES.includes(existing.type)) {
       throw new ServerError(
         `useForScans cannot be true for sensitive type "${existing.type}"`,
@@ -226,6 +250,7 @@ export async function deleteVaultRecord(id) {
 export async function revealValue(id) {
   const { rows } = await query(`SELECT id, type, value_enc FROM privacy_vault_records WHERE id = $1`, [id]);
   if (!rows[0]) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+  refuseWebsiteLogin(rows[0].type, 'reveal');
   const value = decryptValue(rows[0].value_enc);
   console.log(`🔓 Revealed vault record ${id} (type=${rows[0].type})`);
   return { id: rows[0].id, type: rows[0].type, value };
