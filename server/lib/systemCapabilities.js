@@ -85,7 +85,6 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
   'qwen3-coder-30b': Object.freeze({ minMemoryGb: 32 }),
   'devstral-small-2-24b': Object.freeze({ minMemoryGb: 32 }),
   'north-mini-code-1.0': Object.freeze({ minMemoryGb: 32 }),
-  'ornith-35b': Object.freeze({ minMemoryGb: 32 }),
   'ornith-1.5-35b-a3b': Object.freeze({ minMemoryGb: 32 }),
   'flint-40b-a2b': Object.freeze({ minMemoryGb: 32 }),
   'nex-n2-mini': Object.freeze({ minMemoryGb: 32 }),
