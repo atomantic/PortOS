@@ -2291,8 +2291,10 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
  * and `branchReconcile` is the module that computes both, per branch, with the
  * remote-head listing to back it. This reaper knows only "merged + clean", which
  * is also true of a claim a human paused ten minutes ago. So the claim window
- * stays in ONE place: branch-reconcile reaps a shipped or abandoned claim on its
- * own pass, and the claim flow's Phase 7 self-cleans the ordinary case. (Under
+ * stays in ONE place: branchReconcile's merged-branch retirement reaps a shipped
+ * or abandoned claim (on a branch-reconcile run, and daily through
+ * `agent-data-cleanup` via `retireMergedCheckouts`), and the claim flow's
+ * Phase 7 self-cleans the ordinary case. (Under
  * `WORKTREES_DIR` the skip is doubly enforced: that root sets
  * `requireAgentId: true`, so a `claim-*` basename is refused as
  * `worktree-missing-agent-id` before the claim test is even reached.)

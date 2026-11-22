@@ -139,12 +139,12 @@ import {
   branchPriorityRank, prioritizeBranches, describeIdleReconcilePark,
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
-  reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped
+  reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped, retireMergedCheckouts
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
-import { hasCompletedCheckoutEvidence } from './completedCheckoutEvidence.js';
+import { hasCompletedCheckoutEvidence, readMergedClaimEvidence } from './completedCheckoutEvidence.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
@@ -169,6 +169,7 @@ beforeEach(() => {
   git.readBranchLineage.mockReset().mockResolvedValue('patch');
   git.readBranchPublished.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
+  readMergedClaimEvidence.mockReset().mockResolvedValue(null);
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
   worktreeMtimeMs = 0;
@@ -1451,6 +1452,69 @@ describe('reconcile', () => {
     expect(res.cleaned).toEqual([]);
     expect(res.skipped[0]).toMatchObject({ branch: 'claim/issue-4348', reason: 'claim-completion-unverified' });
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+  });
+
+  // The daily agent-data-cleanup job retires shipped claims through this entry
+  // point (#17377). It is reconcile itself, so every hold a manual
+  // branch-reconcile run applies applies here too.
+  describe('retireMergedCheckouts', () => {
+    const HOUR = 60 * 60 * 1000;
+    const CLAIM_PATH = '/repo/data/cos/worktrees/claim-issue-4348';
+    const arrangeManualClaim = ({ idleMs = 4 * HOUR, status = '', locked = false, forgeMerge = { mergedAt: new Date(Date.now() - 3 * HOUR).toISOString() }, openPr = false } = {}) => {
+      // No run receipt: a `/claim` run outside CoS, proven only by the forge.
+      hasCompletedCheckoutEvidence.mockResolvedValue(false);
+      readMergedClaimEvidence.mockResolvedValue(forgeMerge);
+      git.getBranches.mockResolvedValue([
+        { name: 'claim/issue-4348', isDefault: false, current: false, tracking: 'origin/claim/issue-4348', merged: true }
+      ]);
+      wt.listWorktrees.mockResolvedValue([
+        { head: RETIRE_HEAD, path: CLAIM_PATH, branch: 'refs/heads/claim/issue-4348', locked }
+      ]);
+      execGh.mockResolvedValue(openPr
+        ? JSON.stringify([{ number: 7, headRefName: 'claim/issue-4348', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }])
+        : '[]');
+      // Origin lost the claim branch when its PR merged; a merged orphan remote
+      // sits beside main to prove the remote reap stays report-only.
+      execGit.mockImplementation(async (args) => pinnedRef(args) ? { stdout: RETIRE_HEAD, exitCode: 0 }
+        : args[0] === 'rev-parse' && args[1] === '--absolute-git-dir' ? { stdout: '/repo/.git/worktrees/claim-issue-4348', exitCode: 0 }
+        : args[0] === 'ls-remote' ? { stdout: `abc123\trefs/heads/main\n${'b'.repeat(40)}\trefs/heads/old-merged\n`, exitCode: 0 }
+        : args[0] === 'status' ? { stdout: status, exitCode: 0 }
+        : { stdout: '', exitCode: 0 });
+      worktreeMtimeMs = Date.now() - idleMs;
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
+    };
+    const retire = (activeAgentIds = new Set()) => retireMergedCheckouts('/repo', {
+      appId: 'app-1', activeAgentIds, claimOwners: { agents: [], readAgents: async () => [] }
+    });
+
+    it('removes a clean, idle claim whose PR merged at its exact head without touching any pull request', async () => {
+      arrangeManualClaim();
+      const res = await retire();
+      expect(res.cleaned).toEqual(['claim/issue-4348']);
+      expect(wt.forceRemoveWorktreeDir).toHaveBeenCalledWith('/repo', CLAIM_PATH, expect.any(Object));
+      expect(wt.deleteCompletedLocalBranch).toHaveBeenCalled();
+      // Forge reads only: no PR is opened, merged or edited, and remotes stay.
+      expect(execGh.mock.calls.some(([args]) => args[0] === 'pr' && ['create', 'merge', 'edit', 'review'].includes(args[1]))).toBe(false);
+      expect(git.deleteMergedRemoteBranches).not.toHaveBeenCalled();
+      expect(res.orphanRemotes.reported).toEqual([{ branch: 'old-merged', reason: 'reap-disabled' }]);
+    });
+
+    it.each([
+      ['idle only ten minutes', { idleMs: 10 * 60 * 1000 }, new Set(), { reason: 'claim-completion-unverified' }],
+      // Uncommitted work is not MERGED at all: it is reported in-flight, and this
+      // caller never dispatches the agent that would finish it.
+      ['dirty', { status: ' M server/index.js' }, new Set(), { state: 'ABANDONED_WIP' }],
+      ['locked', { locked: true }, new Set(), { reason: 'worktree-locked' }],
+      ['owned by a live session', {}, new Set(['claim-issue-4348']), { reason: 'worktree-active-agent' }],
+      ['without a forge merge at its exact head', { forgeMerge: null, openPr: true }, new Set(), { reason: 'claim-completion-unverified' }],
+    ])('leaves a merged claim in place when %s', async (_label, arrangement, activeAgentIds, expected) => {
+      arrangeManualClaim(arrangement);
+      const res = await retire(activeAgentIds);
+      expect(res.cleaned).toEqual([]);
+      expect([...res.skipped, ...res.inFlight].find(entry => entry.branch === 'claim/issue-4348')).toMatchObject(expected);
+      expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
+      expect(git.deleteBranch).not.toHaveBeenCalled();
+    });
   });
 
   it('cleans merged, returns in-flight + wip partitions', async () => {

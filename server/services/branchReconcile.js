@@ -1772,6 +1772,23 @@ export async function reconcile(repoPath = PATHS.root, { cleanup = true, reapSup
 }
 
 /**
+ * Retire already-merged local work for a caller that has no authority to drive
+ * pull requests: the daily `agent-data-cleanup` job (#17377). It is `reconcile`
+ * itself, so a manual branch-reconcile run and this pass share every hold (live
+ * owner, lock, dirty tree, unmerged tip, unreadable forge, issue reservation, the
+ * exact-merged-head and SHIPPED_CLAIM_IDLE_MS proofs for claims). Only the two
+ * steps that remove work not on the default branch, superseded branches and
+ * remote orphans, are forced off. The returned `inFlight` set is information:
+ * nothing here opens, reviews or merges a pull request or dispatches an agent.
+ *
+ * @param {string} repoPath
+ * @param {{ appId: string, activeAgentIds: Set<string>|null, claimOwners: { agents: object[]|null, readAgents?: () => Promise<object[]|null> }, forgeAccount?: string|null, pendingMergeBranches?: Set<string>|null }} opts
+ */
+export function retireMergedCheckouts(repoPath, opts) {
+  return reconcile(repoPath, { ...opts, cleanup: true, reapSuperseded: false, reapRemotes: false });
+}
+
+/**
  * Resolve each cached SUPERSEDED verdict against the repo as it stands now and
  * split the in-flight set accordingly. A verdict survives only while its
  * `replacedBy` commits are still reachable from the default branch — a revert of
