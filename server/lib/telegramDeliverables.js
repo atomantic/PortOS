@@ -15,6 +15,7 @@
 import { realpath, stat } from 'fs/promises';
 import { basename, extname, isAbsolute, join, relative, sep } from 'path';
 import { PATHS } from './paths.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 /** Telegram's Bot API ceiling for any multipart upload. */
 export const TELEGRAM_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -36,9 +37,20 @@ const DELIVERABLE_ROOTS = Object.freeze([
   PATHS.audio,
   PATHS.music,
   PATHS.screenshots,
-  PATHS.reports,
-  PATHS.runs
+  PATHS.reports
 ]);
+
+// Raw agent prompts/outputs live in `data/runs/` and are deliberately not a
+// root. Prose path mining only runs for these producer-owned types: their
+// descriptions are written by PortOS itself. Every other type (GitHub audit,
+// monitor summaries, agent warnings, ...) can carry external or model-written
+// text, so a path in its prose must never trigger an upload. Explicit
+// `metadata.attachments` stay honored for every type.
+const PROSE_DELIVERABLE_TYPES = Object.freeze(new Set([
+  NOTIFICATION_TYPES.BRIEFING_READY,
+  NOTIFICATION_TYPES.CREATIVE_COMMISSION,
+  NOTIFICATION_TYPES.MUSIC_VIDEO_ATTENTION
+]));
 
 // The Bot API accepts only some formats per media method; every other
 // allowlisted format still goes out, as a document (#17398 review):
@@ -275,7 +287,7 @@ export async function collectNotificationDeliverables(notification, opts = {}) {
     : [];
   const requests = [
     ...structured.map(spec => ({ spec, raw: null })),
-    ...extractDeliverablePaths(notification?.description).map(raw => ({ spec: { path: raw }, raw }))
+    ...(PROSE_DELIVERABLE_TYPES.has(notification?.type) ? extractDeliverablePaths(notification?.description) : []).map(raw => ({ spec: { path: raw }, raw }))
   ];
   if (requests.length > MAX_RESOLVE_ATTEMPTS) {
     console.log(`📎 Telegram: ${requests.length} attachment candidates — checking only the first ${MAX_RESOLVE_ATTEMPTS}`);
