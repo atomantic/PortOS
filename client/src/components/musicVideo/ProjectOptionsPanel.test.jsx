@@ -5,8 +5,8 @@ import ProjectOptionsPanel from './ProjectOptionsPanel.jsx';
 vi.mock('./VideoRenderSettings.jsx', () => ({ default: () => null }));
 vi.mock('../imageGen/RecordRenderPinRow.jsx', () => ({ default: () => null }));
 vi.mock('./PlateReviewerSetting.jsx', () => ({ default: () => null }));
-vi.mock('../../services/apiMusicVideo.js', () => ({ setMusicVideoFinishedOutside: vi.fn() }));
-import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
+vi.mock('../../services/apiMusicVideo.js', () => ({ setMusicVideoFinishedOutside: vi.fn(), setMusicVideoCompletion: vi.fn() }));
+import { setMusicVideoCompletion, setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 
 const open = (project = {}, onSavePolicy = vi.fn(async () => {}), onProjectUpdated = vi.fn()) => {
   render(<ProjectOptionsPanel project={{ id: 'mv1', ...project }} videoSettings={{ changeFramePin: vi.fn() }}
@@ -15,6 +15,40 @@ const open = (project = {}, onSavePolicy = vi.fn(async () => {}), onProjectUpdat
 };
 
 describe('ProjectOptionsPanel', () => {
+  it('marks a project complete over a stale final and shows what Automatic would say', async () => {
+    const saved = { id: 'mv1', renderHistoryId: 'r1', completion: { state: 'complete', markedAt: '2026-01-02T00:00:00.000Z' } };
+    setMusicVideoCompletion.mockResolvedValueOnce(saved);
+    const onProjectUpdated = vi.fn();
+    open({ status: 'complete', renderHistoryId: 'r1', renderDependencyState: { status: 'stale', reasons: ['x'] } }, undefined, onProjectUpdated);
+    const select = screen.getByLabelText('Status');
+    expect(select).toHaveValue('auto');
+    expect(screen.getByRole('option', { name: 'Automatic (in progress)' })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: 'complete' } });
+    expect(setMusicVideoCompletion).toHaveBeenCalledWith('mv1', 'complete');
+    await waitFor(() => expect(onProjectUpdated).toHaveBeenCalledWith(saved));
+  });
+
+  it('will not mark a project without a final render complete', () => {
+    setMusicVideoCompletion.mockClear();
+    open({ status: 'draft' });
+    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'complete' } });
+    expect(setMusicVideoCompletion).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Render the final video first');
+  });
+
+  it('shows a stored mark and returns to Automatic', async () => {
+    setMusicVideoCompletion.mockClear();
+    setMusicVideoCompletion.mockResolvedValueOnce({ id: 'mv1' });
+    const onProjectUpdated = vi.fn();
+    open({ status: 'complete', renderHistoryId: 'r1', completion: { state: 'in-progress', markedAt: '2026-01-02T00:00:00.000Z' } }, undefined, onProjectUpdated);
+    const select = screen.getByLabelText('Status');
+    expect(select).toHaveValue('in-progress');
+    expect(screen.getByRole('option', { name: 'Automatic (complete)' })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: 'auto' } });
+    expect(setMusicVideoCompletion).toHaveBeenCalledWith('mv1', 'auto');
+    await waitFor(() => expect(onProjectUpdated).toHaveBeenCalledWith({ id: 'mv1' }));
+  });
+
   it('states what the chosen render style means, including that footage mode drops typography', () => {
     open({ composition: { mode: 'concat' } });
     expect(screen.getByText(/Typography cues do not render/)).toBeInTheDocument();

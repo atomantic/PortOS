@@ -17,9 +17,14 @@ import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 import { blenderShotsReady } from './musicVideoBlender.js';
 import { projectSpend } from './musicVideoSpend.js';
+import { musicVideoCompletionOverride } from './musicVideoCompletion.js';
 
-/** A verified stale export returns to In Progress; legacy exports keep their stored status. */
+/**
+ * A verified stale export returns to In Progress; legacy exports keep their stored status.
+ * The director's completion mark (musicVideoCompletion.js) decides over both.
+ */
 export const isMusicVideoCompleted = (project) => project?.isCompleted
+  ?? musicVideoCompletionOverride(project)
   ?? (project?.status === 'complete' && project.renderDependencyState?.status !== 'stale');
 
 /**
