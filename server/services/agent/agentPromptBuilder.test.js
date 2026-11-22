@@ -113,7 +113,9 @@ import { getToolsSummaryForPrompt } from '../tools.js';
 import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
-import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen, buildClaimMergeSection, buildClaimCleanupSection } from '../promptSections/claimOnDemand.js';
+import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen, buildClaimMergeSection, buildClaimCleanupSection, buildClaimPrSideReview, buildClaimReleasePaths } from '../promptSections/claimOnDemand.js';
+import { CLAIM_GITHUB_COMMENT_FALLBACK, CLAIM_GITLAB_COMMENT_FALLBACK } from '../taskPromptDefaults/catalog/claimEvidence.js';
+import { ISSUE_BLOCKER_RECONCILIATION_GH, REQUIRED_CI_LATE_REGISTRATION_NOTE } from '../taskPromptDefaults/catalog/guidance.js';
 import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
@@ -713,7 +715,7 @@ describe('claim-flow completion handoff', () => {
 
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
     expect(prompt).not.toContain('PR completion policy: LEAVE OPEN');
-    expect(prompt).toMatch(/owns its claim worktree, branch, PR\/MR, review, merge or human-handoff, and cleanup/);
+    expect(prompt).toMatch(/owns its worktree, branch, PR\/MR, review, merge or human-handoff, and cleanup/);
     expect(prompt).toMatch(/\.agent-done/);
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
     expect(prompt).not.toMatch(/Do NOT push this worktree branch yourself/);
@@ -5172,6 +5174,11 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     ['claim-issue-filing-github', mandatoryDispatchHintGuidance({ cli: 'gh' })],
     ['claim-epic-github', buildClaimEpicSection('github', false)],
     ['claim-handoff-github', buildClaimGithubHandoff(false)],
+    ['claim-release-paths-github', buildClaimReleasePaths('github', false)],
+    ['claim-comment-fallback-github', CLAIM_GITHUB_COMMENT_FALLBACK],
+    ['claim-blocked-reconcile', ISSUE_BLOCKER_RECONCILIATION_GH],
+    ['claim-pr-side-review-github', buildClaimPrSideReview('github')],
+    ['claim-ci-late-registration', REQUIRED_CI_LATE_REGISTRATION_NOTE],
     ['claim-linked-screen-github', resolveRoot(buildClaimLinkedScreen('github'))],
     ['claim-ci-recovery-github', buildClaimCheckRecovery('github', false)],
     ['claim-merge-github', buildClaimMergeSection('github')],
@@ -5202,6 +5209,11 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(prompt).toContain('When the comment check prints a CLAIMANT');
     expect(prompt).toContain('When a linked PR is by a non-collaborator');
     expect(prompt).toContain('When a required check fails');
+    expect(prompt).toContain('When no tool-free gate is present, READ');
+    expect(prompt).toContain('When any open issue carries `blocked`, READ');
+    expect(prompt).toContain('If it exits at once with `no required checks reported`, READ');
+    expect(prompt).toContain('3. **PR-SIDE reviewers.** When the reviewer list names an `@<login>`');
+    expect(prompt).toContain('- **Release paths.** When the issue is already fixed');
   });
 
   it('defers the GitLab procedures when the claim is carried in the description', async () => {
@@ -5211,6 +5223,9 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(stagedSections()).toEqual([
       ['claim-issue-filing-gitlab', mandatoryDispatchHintGuidance({ cli: 'glab' })],
       ['claim-epic-gitlab', buildClaimEpicSection('gitlab', true)],
+      ['claim-release-paths-gitlab', buildClaimReleasePaths('gitlab', true)],
+      ['claim-comment-fallback-gitlab', CLAIM_GITLAB_COMMENT_FALLBACK],
+      ['claim-pr-side-review-gitlab', buildClaimPrSideReview('gitlab')],
       ['claim-linked-screen-gitlab', resolveRoot(buildClaimLinkedScreen('gitlab'))],
       ['claim-ci-recovery-gitlab', buildClaimCheckRecovery('gitlab', true)],
       ['claim-local-review', gitlabLocalReview],

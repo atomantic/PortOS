@@ -10,10 +10,12 @@ export const CLI_REVIEW_OUTCOME_GUIDE = fileURLToPath(new URL('../../../docs/CLI
 export const REVIEW_VERDICT_RUN_ID_TOKEN = '{portosReviewRunId}';
 const RUN_ID_SENTENCE = ` On a verdict report also send \`"agentId":"${REVIEW_VERDICT_RUN_ID_TOKEN}"\`, this reviewer's 1-based \`round\`, and \`changedLines\` (added plus deleted lines in the diff it reviewed).`;
 
+export const CLI_REVIEW_OUTCOME_HEADING = '**CLI outcomes (orchestrator only):**';
+
 /** Shared by claim prompts and pre-/post-PR review loops, including CLI-only runs. */
 export function buildCliReviewerOutcomeInstructions(reviewers = []) {
   if (!reviewers.some(isCliReviewer)) return '';
-  return `**CLI outcomes (orchestrator only):** After each attempt, READ \`${CLI_REVIEW_OUTCOME_GUIDE}\` and POST its bounded report to ${localApiBaseUrl()}/api/code-review/cli-outcome. Never give reviewers the API token.${RUN_ID_SENTENCE}`;
+  return `${CLI_REVIEW_OUTCOME_HEADING} After each attempt, READ \`${CLI_REVIEW_OUTCOME_GUIDE}\` and POST its bounded report to ${localApiBaseUrl()}/api/code-review/cli-outcome. Never give reviewers the API token.${RUN_ID_SENTENCE}`;
 }
 
 /**

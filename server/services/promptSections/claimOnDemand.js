@@ -12,6 +12,14 @@ import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLab
 import { TASK_PROMPT_KEY } from '../../lib/cos/cosTaskPrompt.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT, buildManagedGithubMergeScript } from '../../lib/mergeGateContract.js';
 import { GITHUB_HOST_SETUP } from './constants.js';
+import { FORGE_REVIEWER_WAIT_NOTE } from '../../lib/reviewerConfig.js';
+import { CLAIM_GITHUB_COMMENT_FALLBACK, CLAIM_GITLAB_COMMENT_FALLBACK } from '../taskPromptDefaults/catalog/claimEvidence.js';
+import { ISSUE_BLOCKER_RECONCILIATION_GH, REQUIRED_CI_LATE_REGISTRATION_NOTE } from '../taskPromptDefaults/catalog/guidance.js';
+import { CLI_REVIEW_OUTCOME_HEADING, REVIEW_VERDICT_RUN_ID_TOKEN } from './reviewerOutcome.js';
+import { PORTOS_API_URL_TOKEN } from '../../lib/portosUrls.js';
+
+// Slots agentPromptBuilder fills after deferral; a staged file would keep them literal.
+const RUN_TIME_TOKENS = [REVIEW_VERDICT_RUN_ID_TOKEN, PORTOS_API_URL_TOKEN];
 
 // The epic marker and its idempotent `label create` line come from the shared
 // label registry, so the label the claim agent stamps is by construction the one
@@ -150,6 +158,27 @@ export function buildClaimLinkedScreen(forge) {
   When the diff is screened safe, it is still a proposal, not a patch to trust. Read it statically and keep only hunks that address this issue. Reject anything unrelated or that adds dependencies, install or build scripts, CI workflow changes, network calls, credential or environment access, or host-control behavior. Never run its code, scripts or tests before you have read every kept hunk. Apply what you keep inside the claim worktree, then validate it like your own work: reproduce the bug, add or fix tests, handle the edge cases it missed, and follow the repo conventions. Credit the contributor with a \`Co-authored-by:\` trailer${github ? ' (their GitHub noreply address: `<id>+<login>@users.noreply.github.com`, with `<id>` from `gh api users/<login> -q .id`)' : ''} and name their ${pr} in your ${pr} body. After your ${pr} merges, leave one short comment on theirs naming the merged ${pr} that shipped their fix, and close it as superseded.`;
 }
 
+// Phase 3's release paths run only when revalidation finds the issue already
+// delivered, superseded, stale or human-only; most claims go straight to Phase 3b.
+export function buildClaimReleasePaths(forge, leaveOpen) {
+  const github = forge === 'github';
+  const park = github ? 'gh issue edit "${NUM}" --add-label needs-input' : 'glab issue update "${NUM}" --label needs-input';
+  const release = github ? 'gh issue edit "${NUM}" --remove-assignee @me --remove-label in-progress' : 'glab issue update "${NUM}" --unassign --unlabel in-progress';
+  const close = github ? 'gh issue close "${NUM}" --reason completed' : 'glab issue close "${NUM}"';
+  return `- **Already fixed, superseded, or closed-then-reopened-for-tracking** — ${leaveOpen ? `Report the evidence, apply \`${park}\` for a human to reconcile, and release this run's markers with \`${release}\`.` : `Comment with the delivering PR/MR, commit or issue, close the issue with \`${close}\` (use the forge's not-planned disposition if superseded), and release this run's markers with \`${release}\`.`} **Evidence gate:** if a specific delivering change cannot be named, an inconclusive lookup is not proof of resolution; continue the work.
+- **Stale reference** — document what was searched and what now exists, apply \`${park}\`, then release this run's markers with \`${release}\`. Use the same parked path for a genuinely human-only, destructive or irreversible decision, explaining the blocker.`;
+}
+
+// The PR/MR-side wait only runs when the reviewer list names an @login or the
+// repository requests a review bot; most claim runs configure neither.
+export function buildClaimPrSideReview(forge) {
+  const github = forge === 'github';
+  const pr = github ? 'PR' : 'MR';
+  return `3. **Satisfy the ${github ? `PR-SIDE` : `MR-SIDE`} reviewers.** ${github ? 'For a configured comment-triggered bot, use its appended procedure. For each other' : 'For each'} \`@<login>\` from the Phase 5 split, request the review now (${github ? `` : `resolve `}\`${github ? `gh pr edit <pr-number> --add-reviewer` : `MR_IID\` from the source branch exactly as step 5 does, then \`glab mr update "\${MR_IID}" --reviewer`} <login>\`, ${github ? `drop` : `dropping`} the \`@\`${github ? `` : `; if glab rejects the flag, run \`glab mr update --help\` rather than guessing`}) and address the findings — push fixes, capped at that reviewer's \`~max=<n>\` budget from the reviewer list (3 rounds when it carries none; the Review round caps note below restates configured budgets). A required ${github ? 'standard ' : ''}reviewer's approval gates the merge; an optional reviewer who is unavailable or gives no verdict does not. Resolve every accepted finding before proceeding, regardless of severity. ${FORGE_REVIEWER_WAIT_NOTE} If the ${github ? `repo` : `project`} auto-requests a review bot when the ${pr} opens, ${github ? 'wait that round out using the applicable reviewer procedure' : 'wait that round out and address it the same way'}. With no \`@<login>\` configured and no bot review appearing, this step is a no-op.
+
+   **Review-stuck cleanup** (${github ? `a PR-side` : `an MR-side`} reviewer still unsatisfied after its round budget): post one summarizing ${github ? `PR comment` : `MR note`} (\`${github ? `gh pr comment` : `glab mr note`}\`), then stop, leaving the open ${pr}, the assignee, the \`in-progress\` label, the exact worktree and the local branch in place so the human picks up cold.`;
+}
+
 export function buildClaimCheckRecovery(forge, leaveOpen) {
   const change = forge === 'github' ? 'PR' : 'MR';
   return `If a required check fails, inspect the failing job logs and identify the failure and affected head. Before reporting a hold, make a feasible bounded evidence-driven diagnosis or recovery attempt: reproduce with a focused test, fix and validate a cause, or perform one diagnostic rerun when justified. A failure that predates this branch or sits outside the diff (for example a repository-wide size ceiling or lint rule) is still this run's to fix in the ${change} when the fix is bounded and safe; "pre-existing" alone is never grounds to report blocked. Filing a follow-up alone is not an attempt; a passing rerun alone does not diagnose a flake. Never blindly retry until green or weaken tests. Respect configured retry budgets. If logs or a necessary prerequisite are unavailable, recovery is unsafe, or evidenced attempts are exhausted, report the concrete blocker and attempts, preserve the open ${change}, claim and checkout, and remain incomplete or blocked. After a fix or rerun, wait for required checks and reviews on the exact current head, then replace \`CI_VERIFIED_HEAD\` with that full verified SHA before the equality and merge gates. ${leaveOpen ? "Continue to the human handoff when they pass." : "Continue to the authorized merge when they pass."}`;
@@ -220,6 +249,44 @@ When Phase 1 lands on an epic (the second-pass undecomposed epic, or a selected 
     trigger: '   When the comment check prints a CLAIMANT or sets a nonempty one',
     instruction: 'follow the handoff.',
   })),
+  ...['github', 'gitlab'].flatMap((forge) => [false, true].map((leaveOpen) => ({
+    name: `claim-release-paths-${forge}`,
+    text: buildClaimReleasePaths(forge, leaveOpen),
+    trigger: '- **Release paths.** When the issue is already fixed, superseded, stale or needs a human-only decision',
+    instruction: 'follow it; if no specific delivering change can be named, continue the work.',
+  }))),
+  {
+    name: 'claim-comment-fallback-github',
+    text: CLAIM_GITHUB_COMMENT_FALLBACK,
+    trigger: 'When no tool-free gate is present',
+    instruction: 'run its conservative data-only fallback classifier, which emits only a login.',
+  },
+  {
+    name: 'claim-comment-fallback-gitlab',
+    text: CLAIM_GITLAB_COMMENT_FALLBACK,
+    trigger: 'Otherwise',
+    instruction: 'run its conservative data-only classifier, which emits only a login.',
+  },
+  {
+    name: 'claim-blocked-reconcile',
+    text: ISSUE_BLOCKER_RECONCILIATION_GH,
+    trigger: '**Reconcile stale `blocked` labels before selecting work.** When any open issue carries `blocked`',
+    instruction: 'follow it before building the target order; a failed dependency lookup preserves the label.',
+  },
+  ...['github', 'gitlab'].map((forge) => ({
+    name: `claim-pr-side-review-${forge}`,
+    text: buildClaimPrSideReview(forge),
+    trigger: forge === 'github'
+      ? '3. **PR-SIDE reviewers.** When the reviewer list names an `@<login>`, a comment-triggered review bot is configured, or the repository requests a review bot when the PR opens'
+      : '3. **MR-SIDE reviewers.** When the reviewer list names an `@<login>` or the project requests a review bot when the MR opens',
+    instruction: 'satisfy them before waiting on CI; with none, this step is a no-op.',
+  })),
+  {
+    name: 'claim-ci-late-registration',
+    text: REQUIRED_CI_LATE_REGISTRATION_NOTE,
+    trigger: 'If it exits at once with `no required checks reported`',
+    instruction: 'resolve what the forge actually requires before treating that as an empty set.',
+  },
   ...['github', 'gitlab'].map((forge) => ({
     name: `claim-linked-screen-${forge}`,
     text: buildClaimLinkedScreen(forge),
@@ -270,8 +337,21 @@ const DYNAMIC_CLAIM_HEADINGS = [
     name: 'claim-local-reviewer-procedure',
     pattern: /(?:^|\n)(## Local Reviewer Procedure\n[\s\S]*?)(?=\n## |$)/,
     matchesShipped: (body) => body.includes('Configured provider and local-model reviews run before standalone CLI reviewers.'),
+    // The CLI-outcome report carries a run-id slot filled after staging, so it stays inline.
+    inlineTail: (body) => {
+      const at = body.indexOf(CLI_REVIEW_OUTCOME_HEADING);
+      return at === -1 ? '' : body.slice(at);
+    },
+    pointer: (_body, path, tail) =>
+      `## Local Reviewer Procedure\n\nWhen Phase 5 runs local reviewers, READ \`${path}\` and execute each configured reviewer command in order.${tail ? `\n\n${tail}` : ''}`,
+  },
+  {
+    name: 'claim-comment-gate',
+    pattern: /(?:^|\n)(## Tool-Free Public Comment Gate\n[\s\S]*?)(?=\n## |$)/,
+    matchesShipped: (body) => body.includes('Send it first to the configured')
+      && body.includes('fail-closed for this candidate'),
     pointer: (_body, path) =>
-      `## Local Reviewer Procedure\n\nWhen Phase 5 runs local reviewers, READ \`${path}\` and execute each configured reviewer command in order.`,
+      `## Tool-Free Public Comment Gate\n\nWhen Phase 1 screens a candidate's comments, READ \`${path}\` and run that gate exactly.`,
   },
   {
     name: 'claim-workflow-scope',
@@ -315,24 +395,29 @@ export async function deferClaimSections(task, stage, portosRoot = '{portosRoot}
     prompt = prompt?.replaceAll(text, () => pointer);
   }
 
-  for (const { name, pattern, matchesShipped, pointer } of DYNAMIC_CLAIM_HEADINGS) {
+  // A pointer never matches its shipped shape, so a second pass leaves it alone.
+  for (const { name, pattern, matchesShipped, pointer, inlineTail = () => '' } of DYNAMIC_CLAIM_HEADINGS) {
     const descBody = typeof description === 'string' ? pattern.exec(description)?.[1] : null;
     const promptBody = typeof prompt === 'string' ? pattern.exec(prompt)?.[1] : null;
     const body = promptBody || descBody;
-    if (!body || body.includes('READ `') || !matchesShipped(body)) continue;
+    if (!body || !matchesShipped(body)) continue;
+    const tail = inlineTail(body);
+    const staged = tail ? body.slice(0, -tail.length).trimEnd() : body;
+    // A spawn-time slot would reach the file unexpanded; keep such a section inline.
+    if (RUN_TIME_TOKENS.some((token) => staged.includes(token))) continue;
     let path;
     try {
-      path = await stage(name, body);
+      path = await stage(name, staged);
     } catch (err) {
       console.log(`⏭️ Could not stage ${name}, inlining it: ${err.message}`);
     }
     if (!path) continue;
     deferred = true;
-    if (descBody && !descBody.includes('READ `') && matchesShipped(descBody)) {
-      description = description.replace(descBody, () => pointer(descBody, path));
+    if (descBody && matchesShipped(descBody)) {
+      description = description.replace(descBody, () => pointer(descBody, path, inlineTail(descBody)));
     }
-    if (promptBody && !promptBody.includes('READ `') && matchesShipped(promptBody)) {
-      prompt = prompt.replace(promptBody, () => pointer(promptBody, path));
+    if (promptBody && matchesShipped(promptBody)) {
+      prompt = prompt.replace(promptBody, () => pointer(promptBody, path, inlineTail(promptBody)));
     }
   }
 

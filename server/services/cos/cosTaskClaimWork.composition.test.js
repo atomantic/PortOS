@@ -36,6 +36,7 @@ import { buildImprovementTaskDescription } from './cosTaskPreStepBlocks.js';
 import { preflightClaimReviewers } from '../claimReviewerPreflight.js';
 import { deferClaimSections } from '../promptSections/claimOnDemand.js';
 import { PATHS } from '../../lib/paths.js';
+import { REVIEW_VERDICT_RUN_ID_TOKEN } from '../promptSections/reviewerOutcome.js';
 
 const app = { id: 'fixture', name: 'Fixture', repoPath: '/fixture' };
 const issueContext = { number: 42, title: 'A target issue', body: 'User-visible issue body.\n'.repeat(400) };
@@ -361,6 +362,11 @@ describe('claim procedures on demand', () => {
           `claim-issue-filing-${tracker}`,
           `claim-epic-${tracker}`,
           ...(tracker === 'github' ? ['claim-handoff-github'] : []),
+          `claim-release-paths-${tracker}`,
+          `claim-comment-fallback-${tracker}`,
+          ...(target ? [] : ['claim-blocked-reconcile']),
+          ...(prCompletion !== 'merge-on-green' ? [`claim-pr-side-review-${tracker}`] : []),
+          ...(tracker === 'github' ? ['claim-ci-late-registration'] : []),
           `claim-linked-screen-${tracker}`,
           `claim-ci-recovery-${tracker}`,
           ...(!leaveOpen ? [`claim-merge-${tracker}`, `claim-cleanup-${tracker}`] : []),
@@ -385,6 +391,10 @@ describe('claim procedures on demand', () => {
     expect(staged.map(({ name }) => name)).toEqual([
       'claim-issue-filing-github',
       'claim-handoff-github',
+      'claim-release-paths-github',
+      'claim-comment-fallback-github',
+      'claim-pr-side-review-github',
+      'claim-ci-late-registration',
       'claim-linked-screen-github',
       'claim-ci-recovery-github',
       'claim-merge-github',
@@ -399,6 +409,9 @@ describe('claim procedures on demand', () => {
     }));
     expect(staged.map(({ name }) => name)).toEqual([
       'claim-issue-filing-github',
+      'claim-release-paths-github',
+      'claim-pr-side-review-github',
+      'claim-ci-late-registration',
       'claim-ci-recovery-github',
       'claim-merge-github',
       'claim-cleanup-github',
@@ -406,5 +419,34 @@ describe('claim procedures on demand', () => {
       'claim-local-reviewer-procedure',
     ]);
     expect(prompt).toContain('When Phase 5 runs local reviewers, READ');
+  });
+
+  // #17471: the CLI-outcome report's own READ pointer used to keep the whole procedure inline.
+  it('defers the procedure beside a CLI reviewer and keeps its run-id slot inline', async () => {
+    const { prompt, staged } = await renderOnDemand(await buildClaimWorkTask(app, {
+      target: '42', preverified: true, nonEpic: true, commentsClear: true, linkedWorkClear: true, reviewers: ['ollama', 'codex'],
+    }));
+    const procedure = staged.find(({ name }) => name === 'claim-local-reviewer-procedure');
+    expect(procedure?.body).toContain('### ollama');
+    expect(procedure.body).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
+    expect(procedure.body).not.toContain('**CLI outcomes (orchestrator only):**');
+    expect(prompt).toContain('When Phase 5 runs local reviewers, READ');
+    expect(prompt).toContain('**CLI outcomes (orchestrator only):**');
+    expect(prompt).not.toContain('### ollama');
+  });
+
+  it('defers the tool-free comment gate and the fallback it replaces', async () => {
+    const { prompt, staged } = await renderOnDemand(await buildClaimWorkTask(app, { target: '42', reviewers: ['ollama'] }));
+    const gate = staged.find(({ name }) => name === 'claim-comment-gate');
+    expect(gate?.body).toContain('## Tool-Free Public Comment Gate');
+    expect(gate.body).toContain('COMMENT_REVIEW_SUSPICIOUS');
+    expect(staged.map(({ name }) => name)).toContain('claim-comment-fallback-github');
+    expect(prompt).toContain('When Phase 1 screens a candidate\'s comments, READ');
+    expect(prompt).not.toContain('COMMENT_REVIEW_FAILED=');
+    // A second pass finds only pointers and stages nothing more.
+    const again = [];
+    await deferClaimSections({ description: 'Claim the selected issue', metadata: { prompt } },
+      async (name) => { again.push(name); return stagedPath(name); }, PATHS.installRoot);
+    expect(again).toEqual([]);
   });
 });

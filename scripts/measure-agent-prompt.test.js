@@ -22,6 +22,9 @@ describe('scripts/measure-agent-prompt.js', () => {
     expect(stdout).toContain('claim-issue via tui:');
     expect(stdout).toContain('--- user prompt (');
     expect(stdout).toContain('--- system prompt (');
+    // #17471: the full claim-issue dispatch (user + system prompt) stays at or under 38 KB.
+    const total = Number(stdout.match(/ total=(\d+)B /)?.[1]);
+    expect(total, 'claim-issue tui prompt grew past its 38,000 B budget').toBeLessThanOrEqual(38_000);
 
     if (existedBefore) {
       expect(statSync(schedulePath).mtimeMs).toBe(mtimeBefore);

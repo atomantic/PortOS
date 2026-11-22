@@ -14,8 +14,9 @@
  *
  * Runs against the shipped defaults with placeholder app/reviewer values and
  * NO database (NODE_ENV=test + MEMORY_BACKEND=file are forced), so the numbers
- * are the prompt's own cost, not this install's. Set REPO=<path> to point the
- * api path's instruction-file walk at a real checkout.
+ * are the prompt's own cost, not this install's. Install paths print as
+ * `<repo-root>`, so a long checkout path (a CoS worktree) does not inflate them.
+ * Set REPO=<path> to point the api path's instruction-file walk at a real checkout.
  */
 import { writeFileSync } from 'fs';
 
@@ -34,6 +35,7 @@ const { getShippedTaskPrompt } = await import('../server/services/taskPromptServ
 const { buildImprovementTaskDescription } = await import('../server/services/cos/cosTaskPreStepBlocks.js');
 const { buildAgentPrompt } = await import('../server/services/agent/agentPromptBuilder.js');
 const { estimateTokens } = await import('../server/lib/contextBudget.js');
+const { PATHS } = await import('../server/lib/paths.js');
 
 const app = { id: 'example-app', name: 'Example App', repoPath: process.env.REPO || '/repo/example' };
 const template = await getShippedTaskPrompt(taskType, { claimFlow: true });
@@ -56,7 +58,13 @@ const result = await buildAgentPrompt(task, {}, app.repoPath, null, {
   agentId: 'agent-measure',
   split: !isApi,
 });
-const { userPrompt, systemPrompt = '' } = typeof result === 'string' ? { userPrompt: result } : result;
+const rendered = typeof result === 'string' ? { userPrompt: result } : result;
+// Same normalization as claimPromptSize.test.js; installRoot first, it may nest inside root.
+const roots = [...new Set([PATHS.installRoot, PATHS.root])].sort((a, b) => b.length - a.length);
+const normalize = (text = '') => roots.reduce((out, root) => out.replaceAll(root, '<repo-root>'), text);
+const userPrompt = normalize(rendered.userPrompt);
+const systemPrompt = normalize(rendered.systemPrompt);
+const bytes = (text) => Buffer.byteLength(text, 'utf8');
 
 const sections = (text) => text.split(/\n(?=## )/).map((s) => [s.split('\n')[0].slice(0, 72), s.length]);
 const printSections = (label, text) => {
@@ -64,7 +72,7 @@ const printSections = (label, text) => {
   for (const [heading, size] of sections(text)) console.log(`${String(size).padStart(7)}  ${heading}`);
 };
 
-console.log(`${taskType} via ${providerType}: template=${template.length}B description=${description.length}B total≈${estimateTokens(userPrompt + systemPrompt)} tok`);
+console.log(`${taskType} via ${providerType}: template=${template.length}B description=${description.length}B total=${bytes(userPrompt) + bytes(systemPrompt)}B ≈${estimateTokens(userPrompt + systemPrompt)} tok`);
 printSections('user prompt', userPrompt);
 if (systemPrompt) printSections('system prompt', systemPrompt);
 if (outPrefix) {
