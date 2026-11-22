@@ -30,6 +30,12 @@ import { formatContextTokens, formatDurationMs, formatRuntime } from '../../util
 const rateText = (value, estimated) =>
   (Number.isFinite(value) ? `${estimated ? '~' : ''}${value.toFixed(1)}` : '—');
 
+// A thinking model's visible answer is a character or two after many hidden reasoning tokens, so its
+// chars/s measures the answer's length, not speed (`reasoningHidden` from the server). Shown as n/a.
+export const reasoningHiddenTitle = (meanTokensPerSecond) =>
+  `Most generated tokens were reasoning that is not in the visible answer, so chars/s does not measure speed here.${Number.isFinite(meanTokensPerSecond) ? ' Read tok/s instead.' : ''}`;
+const charsRateText = (row) => (row.reasoningHidden === true ? 'n/a (reasoning)' : rateText(row.meanCharsPerSecond, false));
+
 const Rate = ({ value, estimated, suffix = '' }) => (
   Number.isFinite(value)
     ? <span className="text-gray-200 whitespace-nowrap">{rateText(value, estimated)}{suffix}</span>
@@ -79,7 +85,7 @@ export function toMarkdown(report) {
       row.tuningLabel || 'backend defaults',
       timingLabel(row.timingSource),
       rateText(row.meanTokensPerSecond, row.tokensEstimated),
-      rateText(row.meanCharsPerSecond, false),
+      charsRateText(row),
       rateText(row.meanPromptTokensPerSecond, row.tokensEstimated),
       Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : '—',
       Number.isFinite(row.warmupMs) ? formatDurationMs(row.warmupMs) : '—',
@@ -184,7 +190,11 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                   </td>
                   <td className="px-2 py-1.5 text-right text-gray-500 whitespace-nowrap">{timingLabel(row.timingSource)}</td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanTokensPerSecond} estimated={row.tokensEstimated} /></td>
-                  <td className="px-2 py-1.5 text-right"><Rate value={row.meanCharsPerSecond} estimated={false} /></td>
+                  <td className="px-2 py-1.5 text-right">
+                    {row.reasoningHidden === true
+                      ? <span className="text-gray-600 whitespace-nowrap" title={reasoningHiddenTitle(row.meanTokensPerSecond)}>{charsRateText(row)}</span>
+                      : <Rate value={row.meanCharsPerSecond} estimated={false} />}
+                  </td>
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanPromptTokensPerSecond} estimated={row.tokensEstimated} /></td>
                   <td className="px-2 py-1.5 text-right text-gray-200 whitespace-nowrap">
                     {Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : <span className="text-gray-600">—</span>}

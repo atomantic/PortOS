@@ -36,6 +36,7 @@ import {
   classifyFitVerdict,
   classifySampleFailure,
   rankByIntent,
+  sampleHidesReasoning,
   summarizePerformance,
   summarizeSweepScopes,
 } from '../lib/localModelAssessment.js';
@@ -83,6 +84,9 @@ import {
 } from './llamaServerManager.js';
 import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
 import { getSlotstreamServerEndpoint } from './slotstreamServerManager.js';
+import { LLAMA_APP, MTPLX_APP, SLOTSTREAM_APP } from '../lib/managedDaemon.js';
+import { readProcessTreeResidentBytes } from '../lib/processTreeMemory.js';
+import { getAppStatus } from './pm2.js';
 import { getSpecDecodePresetStatus } from './specDecodeModels.js';
 import { listManagedBackendModels } from './localLlm.js';
 import {
@@ -256,14 +260,48 @@ export function toSample(contextTokens, result) {
   };
 }
 
-/** Resident bytes for a model, from Ollama's `/api/ps`. `null` when unknown. */
-async function residentGbFor(backend, modelId) {
-  // Only Ollama reports a resident size; `null` elsewhere rather than a weight-file estimate.
-  if (backend !== 'ollama') return null;
-  const loaded = await getLoadedOllamaModels().catch(() => []);
-  const match = loaded.find((m) => m?.id === modelId || m?.name === modelId);
-  const bytes = match?.size;
-  return Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : null;
+// PM2 app per runtime PortOS runs as a managed daemon. Their footprint is the process's own: each
+// serves the model it was launched with, so the whole process is what that model costs to hold.
+const MANAGED_DAEMON_APPS = { llama: LLAMA_APP, mtplx: MTPLX_APP, slotstream: SLOTSTREAM_APP };
+
+// A reading that rounds to 0.00 GB (a wrapper-only tree) is not a measured footprint of the model;
+// stored as `0` it would score the memory axis as free.
+const toGb = (bytes) => {
+  const gb = Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : 0;
+  return gb > 0 ? gb : null;
+};
+
+/**
+ * A measured model's resident footprint and where it came from, `{ residentGb: null, residentSource: null }`
+ * when unknown. Ollama reports per-model size in `/api/ps`; a PM2-managed daemon is read from its process
+ * tree (`lib/processTreeMemory.js`). An external daemon PortOS does not run, LM Studio and vLLM report
+ * nothing, and are left `null` rather than given a weight-file estimate.
+ */
+async function residentMemoryFor(backend, modelId) {
+  const unknown = { residentGb: null, residentSource: null };
+  if (backend === 'ollama') {
+    const loaded = await getLoadedOllamaModels().catch(() => []);
+    const match = loaded.find((m) => m?.id === modelId || m?.name === modelId);
+    const residentGb = toGb(match?.size);
+    return residentGb === null ? unknown : { residentGb, residentSource: 'ollama' };
+  }
+  const app = MANAGED_DAEMON_APPS[backend];
+  if (!app) return unknown;
+  const status = await getAppStatus(app).catch(() => null);
+  // A daemon PM2 does not show online is not the one that answered the samples (an external
+  // server on the same port, or it exited), so its pid says nothing about this model.
+  if (status?.status !== 'online' || !Number.isSafeInteger(status?.pid) || status.pid <= 0) return unknown;
+  const reading = await readProcessTreeResidentBytes(status.pid).catch(() => null);
+  const residentGb = toGb(reading?.bytes);
+  return residentGb === null ? unknown : { residentGb, residentSource: `process-${reading.source}` };
+}
+
+// Tokens/s first: a thinking model's visible answer is a character or two, so its chars/s is ~0
+// and is never shown as its speed.
+function sampleRateText(sample) {
+  if (Number.isFinite(sample.tokensPerSecond)) return `${sample.tokensPerSecond} tok/s`;
+  if (sampleHidesReasoning(sample)) return 'speed n/a (reasoning hidden from the answer)';
+  return `${sample.charsPerSecond ?? '?'} chars/s`;
 }
 
 // Human-readable reason behind a non-`fits` verdict; quotes the backend's own error.
@@ -631,7 +669,7 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
       contextTokens: context,
       sample,
       message: sample.ok
-        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sample.charsPerSecond ?? '?'} chars/s`
+        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sampleRateText(sample)}`
         : `${modelId}: ${context.toLocaleString('en-US')} tokens → failed (${sample.error})`,
     });
     if (!sample.ok && classifySampleFailure(sample)) break;
@@ -661,8 +699,9 @@ async function measureModel({ backend, modelId, contexts, benchmark = false, tun
     // build was measured. `null` on Ollama (its id already carries the tag) and
     // whenever the backend reported none.
     quantization: card?.quantization ?? null,
-    // `null` = never measured; the LM Studio path legitimately reports null.
-    residentGb: verdict === 'fits' ? await residentGbFor(backend, modelId) : null,
+    // `null` = never measured; LM Studio, vLLM and external daemons legitimately report null.
+    // `residentSource` names the reading: 'ollama', 'process-footprint' or 'process-rss'.
+    ...(verdict === 'fits' ? await residentMemoryFor(backend, modelId) : { residentGb: null, residentSource: null }),
     // The discarded first request's time (load and warm-up costs), kept apart from `performance`.
     warmup,
     // `benchmark` = the fixed side-by-side profile (repeated warm runs at one context);

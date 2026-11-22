@@ -38,7 +38,7 @@ const report = ({ unassessed = [], assessments = [], uninstalled = [] } = {}) =>
 });
 
 const measured = (verdict = 'fits', meanTokensPerSecond = 42) => ({
-  verdict, performance: { meanTokensPerSecond, meanCharsPerSecond: 170 },
+  verdict, performance: { meanTokensPerSecond, meanCharsPerSecond: 170, reasoningHidden: false },
 });
 
 beforeEach(() => {
@@ -117,6 +117,7 @@ describe('startSweep', () => {
     expect(status.status).toBe('complete');
     expect(status.results.map((r) => r.modelId)).toEqual(['a', 'b']);
     expect(status.results[0].meanTokensPerSecond).toBe(42);
+    expect(status.results[0].reasoningHidden).toBe(false);
     // Sequential by design — two models at once would measure the contention.
     expect(runAssessment).toHaveBeenCalledTimes(2);
     expect(changes.map((state) => [state.status, state.completed, state.current?.modelId ?? null, state.settled])).toEqual([

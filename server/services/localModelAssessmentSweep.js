@@ -283,6 +283,8 @@ async function runSweepLoop(run, targets, contextTokens, emit, profile = null) {
       // Travels WITH the rate it qualifies. Dropping it here would render a
       // frame-counted estimate as a tokenizer measurement in the results list.
       tokensEstimated: typeof result?.performance?.tokensEstimated === 'boolean' ? result.performance.tokensEstimated : null,
+      // `true`: the chars/s above counted only a thinking model's visible answer, so it is not a speed.
+      reasoningHidden: typeof result?.performance?.reasoningHidden === 'boolean' ? result.performance.reasoningHidden : null,
       // `false` means the knobs never reached the daemon, so these numbers
       // describe some OTHER configuration. The report already refuses to rank
       // such a record; without these the sweep's own list would still present it
