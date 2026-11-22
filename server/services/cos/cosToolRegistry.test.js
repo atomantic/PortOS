@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   root: { persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } } },
+  listWebsiteLogins: vi.fn(),
+  fillWebsiteLogin: vi.fn(),
   dispatch: vi.fn(),
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
@@ -157,6 +159,12 @@ vi.mock('../instanceIdentity.js', () => ({
 vi.mock('../artists/index.js', async () => ({
   listArtists: (...args) => mocks.listArtists(...args),
   buildSubmissionProfile: (await vi.importActual('../artists/logic.js')).buildSubmissionProfile,
+}));
+vi.mock('../privacyWebsiteLogins.js', () => ({
+  listWebsiteLogins: (...args) => mocks.listWebsiteLogins(...args),
+}));
+vi.mock('../browserVaultFill.js', () => ({
+  fillWebsiteLogin: (...args) => mocks.fillWebsiteLogin(...args),
 }));
 vi.mock('../userActions.js', () => ({
   listUserActions: (...args) => mocks.listUserActions(...args),
@@ -612,6 +620,63 @@ describe('cosToolRegistry', () => {
       authority: { scope: 'agent', capabilities: { readPortos: true } },
     });
     expect(none.result).toMatchObject({ artists: [], note: expect.stringContaining('No artist named "Nobody"') });
+  });
+
+  describe('model-blind browser vault tools (#17397)', () => {
+    const LOGIN_ID = '00000000-0000-4000-8000-0000000000dd';
+    const fillCall = (requestId) => ({ requestId, name: 'browser.vault.fill', arguments: { targetId: 'tab-1', loginId: LOGIN_ID, fields: ['password'] } });
+
+    it('stays default-off for agents, absent for the mind, and never rides readPortos/writePortos', async () => {
+      const agentTools = getCosToolCatalog({ scope: 'agent', capabilities: { readPortos: true, writePortos: true } }).tools;
+      for (const name of ['browser.vault.list', 'browser.vault.fill']) {
+        expect(agentTools.find((tool) => tool.name === name).granted).toBe(false);
+      }
+      expect(getCosToolCatalog({ scope: 'mind' }).tools.some((tool) => tool.name.startsWith('browser.vault.'))).toBe(false);
+      await expect(executeCosToolCall({
+        call: fillCall('vault-denied'), authority: { scope: 'agent', capabilities: { readPortos: true, writePortos: true } },
+      })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+      await expect(executeCosToolCall({
+        call: fillCall('vault-mind'), authority: { scope: 'mind', capabilities: { browserVaultFill: true } },
+      })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+      await expect(executeCosToolCall({ call: fillCall('vault-ui'), authority: { scope: 'ui', authenticated: false } }))
+        .rejects.toMatchObject({ code: 'TOOL_AUTH_REQUIRED' });
+      expect(mocks.fillWebsiteLogin).not.toHaveBeenCalled();
+    });
+
+    it('lists login metadata across subjects and dispatches a granted fill', async () => {
+      const mcp = formatCosToolCatalog(getCosToolCatalog({ scope: 'agent', capabilities: { browserVaultFill: true } }), 'mcp');
+      expect(mcp.tools.find((tool) => tool.name === 'browser_vault_list').annotations).toMatchObject({ readOnlyHint: true });
+      expect(mcp.tools.find((tool) => tool.name === 'browser_vault_fill').annotations).toMatchObject({ readOnlyHint: false, idempotentHint: false });
+
+      mocks.listWebsiteLogins.mockResolvedValue([{ id: LOGIN_ID, label: 'Example', origins: ['https://example.com'], maskedUsername: 'a•••@example.com', hasTotp: false }]);
+      const listed = await executeCosToolCall({
+        call: { requestId: 'vault-list', name: 'browser.vault.list', arguments: { origin: 'https://example.com' } },
+        authority: { scope: 'agent', capabilities: { browserVaultFill: true } },
+      });
+      expect(listed.result.logins).toHaveLength(1);
+      expect(mocks.listWebsiteLogins).toHaveBeenCalledWith({ origin: 'https://example.com', allSubjects: true });
+
+      mocks.fillWebsiteLogin.mockResolvedValue({ ok: true, loginId: LOGIN_ID, targetId: 'tab-1', origin: 'https://example.com', filledFields: ['password'] });
+      const filled = await executeCosToolCall({ call: fillCall('vault-fill'), authority: { scope: 'agent', capabilities: { browserVaultFill: true } } });
+      expect(filled.state).toBe('completed');
+      expect(mocks.fillWebsiteLogin).toHaveBeenCalledWith({ targetId: 'tab-1', loginId: LOGIN_ID, fields: ['password'] });
+    });
+
+    it('redacts a registered ephemeral secret from any tool result or error', async () => {
+      const { registerEphemeralSecret, clearEphemeralSecrets } = await import('../../lib/secretText.js');
+      registerEphemeralSecret('pw-echoed-by-adapter-3310', { ttlMs: 60_000 });
+      try {
+        mocks.listWebsiteLogins.mockResolvedValue([{ id: LOGIN_ID, label: 'pw-echoed-by-adapter-3310' }]);
+        const listed = await executeCosToolCall({
+          call: { requestId: 'vault-echo', name: 'browser.vault.list', arguments: {} },
+          authority: { scope: 'agent', capabilities: { browserVaultFill: true } },
+        });
+        expect(listed.result.logins[0].label).toBe('[REDACTED]');
+        mocks.fillWebsiteLogin.mockRejectedValue(new Error('page said pw-echoed-by-adapter-3310'));
+        const failed = await executeCosToolCall({ call: fillCall('vault-echo-fail'), authority: { scope: 'agent', capabilities: { browserVaultFill: true } } });
+        expect(failed).toMatchObject({ state: 'failed', error: 'page said [REDACTED]' });
+      } finally { clearEphemeralSecrets(); }
+    });
   });
 
   it('returns bounded ledger events with source reduced to route identity', async () => {

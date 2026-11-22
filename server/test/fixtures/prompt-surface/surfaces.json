@@ -92,7 +92,7 @@
       ]
     },
     "agent.mcp": {
-      "promptTokens": 265,
+      "promptTokens": 273,
       "toolCount": 5,
       "toolTokens": 811,
       "tools": [
@@ -154,12 +154,14 @@
     },
     "ui.semantic": {
       "promptTokens": 0,
-      "toolCount": 36,
-      "toolTokens": 5903,
+      "toolCount": 38,
+      "toolTokens": 6577,
       "tools": [
         "brain.capture",
         "brain.recent",
         "brain.search",
+        "browser.vault.fill",
+        "browser.vault.list",
         "calendar.next",
         "calendar.today",
         "catalog.search",

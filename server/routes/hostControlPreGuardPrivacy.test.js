@@ -35,6 +35,7 @@ vi.mock('../services/privacyOptOut.js', () => ({}));
 vi.mock('../services/privacyRecheckScheduler.js', () => ({}));
 vi.mock('../services/privacySubjects.js', () => ({}));
 vi.mock('../services/privacyVault.js', () => ({}));
+vi.mock('../services/privacyWebsiteLogins.js', () => ({}));
 vi.mock('../services/privacyOrgs.js', () => ({}));
 vi.mock('../services/privacyBrokers.js', () => ({}));
 vi.mock('../services/privacyChanges.js', () => ({}));

@@ -76,7 +76,8 @@ import { choosePersistentMindName, reviewPersistentMindMemory, protectPersistent
 import { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } from '../persistent/persistentMindThinkingRequests.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { listUserActions } from '../userActions.js';
-import { scrubSecretTokens, scrubSecretTokensDeep } from '../../lib/secretText.js';
+import { scrubEphemeralSecrets, scrubEphemeralSecretsDeep, scrubSecretTokens, scrubSecretTokensDeep } from '../../lib/secretText.js';
+import { browserVaultFillSchema, browserVaultListInputSchema } from '../../lib/websiteLoginValidation.js';
 import { skillsListQuerySchema, skillsManageToolInputSchema, skillsViewQuerySchema } from '../../lib/skillsValidation.js';
 
 const MAX_CALL_RESULTS = 500;
@@ -387,6 +388,22 @@ const artistProfileTool = Object.freeze({
   adapter: { kind: 'artist-profile' },
 });
 
+// Model-blind website-login fill (#17397). Both tools need the default-off
+// `browserVaultFill` grant: which sites hold saved credentials is fill prep, and
+// the fill types a stored secret into the signed-in managed browser. Neither is
+// mind-scoped (the Persistent Mind has no browser controls). Results are
+// metadata only — never a password, TOTP seed or generated code.
+const browserVaultTools = [
+  ['list', 'List saved Privacy Vault website logins that browser.vault.fill can use: id, label, exact allowed origins, masked username, and whether a TOTP setup key is saved (hasTotp). Never returns a password, setup key or code. Pass origin to list only logins allowed on that exact origin.', browserVaultListInputSchema, 'read', true],
+  ['fill', 'Fill a saved website login into one managed-browser tab (targetId from the browser pages list or a navigate result). The host types the credential only when the tab\'s live origin EXACTLY matches one of the login\'s origins (no subdomain or scheme matching) and refuses on a mismatch, a navigation, a reverted value or a missing field, writing nothing it reports. fields defaults to identifier and password; request totp on the 2FA step for the current code. You never see the password, setup key or code, and the form is never submitted: check the page and submit it yourself.', browserVaultFillSchema, 'write', false],
+].map(([operation, description, schema, sideEffect, idempotent]) => Object.freeze({
+  type: 'portos_tool', name: `browser.vault.${operation}`, version: COS_TOOL_SCHEMA_VERSION,
+  providerName: `browser_vault_${operation}`, aliases: [`browser_vault_${operation}`],
+  description, input_schema: zodToOpenApiSchema(schema), output_schema: objectOutputSchema,
+  policy: { scopes: ['agent', 'ui'], requiredCapabilities: ['browserVaultFill'], sideEffect, idempotent, async: false, confirmation: 'none' },
+  adapter: { kind: 'browser-vault', operation },
+}));
+
 // Skill Registry (#17387): progressive disclosure over agentskills.io skills.
 // Reads are bounded and side-effect free, so they ride `readPortos` like the
 // other PortOS reads; authoring a skill writes prompt text future agents
@@ -671,7 +688,7 @@ const reportTools = [
   policy: { scopes: ['mind'], requiredCapabilities: ['auditReports', 'readPortos'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: name },
 }));
-const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindReviewMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, maintenanceRefreshTool, ...skillTools, ...eidoverseTools];
+const staticToolCatalog = [...sandboxTools, ...reportTools, toolsActivateTool, toolsDeactivateTool, ...recipeManagementTools, ...thinkingTools, ...localContextTools, taskTool, ...issueTools, mindCleanupTool, mindProtectMemoryTool, mindReviewMemoryTool, mindChooseNameTool, userActionsQueryTool, artistProfileTool, ...browserVaultTools, maintenanceRefreshTool, ...skillTools, ...eidoverseTools];
 const toolCatalog = (intent) => [...staticToolCatalog, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
@@ -740,6 +757,7 @@ const normalizeToolCapabilities = (raw) => ({
   promoteEidoverseFoundations: raw?.promoteEidoverseFoundations === true,
   installEidoverseControllers: raw?.installEidoverseControllers === true,
   callToolRecipes: raw?.callToolRecipes === true,
+  browserVaultFill: raw?.browserVaultFill === true,
 });
 
 const publicTool = (tool, { scope, capabilities, reportAccess }) => {
@@ -1343,6 +1361,15 @@ const runEidoverseWorldTool = async (tool, args, context) => {
   return runOperation(EIDOVERSE_WORLD_OPERATIONS, tool.adapter.operation, sayInWorld, world, args, context);
 };
 
+const runBrowserVaultTool = async (tool, args) => {
+  if (tool.adapter.operation === 'list') {
+    const { listWebsiteLogins } = await import('../privacyWebsiteLogins.js');
+    return { logins: await listWebsiteLogins({ origin: args.origin, allSubjects: true }) };
+  }
+  const { fillWebsiteLogin } = await import('../browserVaultFill.js');
+  return fillWebsiteLogin(args);
+};
+
 const queueMindTaskRequest = async (tool, args, context) => {
   const [outcome] = await executePersistentMindTaskRequests({
     taskRequests: [args],
@@ -1387,6 +1414,7 @@ const ADAPTER_HANDLERS = {
   'eidoverse-creative': runEidoverseCreativeTool,
   'eidoverse-controllers': runEidoverseControllersTool,
   'eidoverse-world': runEidoverseWorldTool,
+  'browser-vault': runBrowserVaultTool,
 };
 
 const ADAPTER_PREFIX_HANDLERS = [
@@ -1431,12 +1459,15 @@ const normalizeAdapterResult = ({ parsedCall, tool, result }) => {
   if (!parsedResult.success) {
     return { ...base, state: 'failed', error: 'Tool adapter returned an invalid result' };
   }
-  const failed = parsedResult.data.ok === false || parsedResult.data.state === 'failed';
+  // Every tool result can reach a model: redact any secret a host-side flow
+  // (the model-blind browser fill) registered, wherever an adapter echoed it.
+  const data = scrubEphemeralSecretsDeep(parsedResult.data);
+  const failed = data.ok === false || data.state === 'failed';
   return {
     ...base,
     state: failed ? 'failed' : 'completed',
-    ...(failed ? { error: String(parsedResult.data.error || parsedResult.data.summary || 'Tool adapter reported failure').slice(0, 500) } : {}),
-    result: parsedResult.data,
+    ...(failed ? { error: String(data.error || data.summary || 'Tool adapter reported failure').slice(0, 500) } : {}),
+    result: data,
   };
 };
 
@@ -1518,7 +1549,7 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
         version: COS_TOOL_SCHEMA_VERSION,
         state: 'failed',
         duplicate: false,
-        error: String(error?.message || error || 'Tool execution failed').slice(0, 500),
+        error: scrubEphemeralSecrets(String(error?.message || error || 'Tool execution failed')).slice(0, 500),
       }),
     )
     .then(async (normalized) => {

@@ -1,0 +1,60 @@
+{
+  "name": "browser.vault.fill",
+  "description": "Fill a saved website login into one managed-browser tab (targetId from the browser pages list or a navigate result). The host types the credential only when the tab's live origin EXACTLY matches one of the login's origins (no subdomain or scheme matching) and refuses on a mismatch, a navigation, a reverted value or a missing field, writing nothing it reports. fields defaults to identifier and password; request totp on the 2FA step for the current code. You never see the password, setup key or code, and the form is never submitted: check the page and submit it yourself.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "targetId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9_-]+$"
+      },
+      "loginId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+      },
+      "fields": {
+        "minItems": 1,
+        "maxItems": 3,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "identifier",
+            "password",
+            "totp"
+          ]
+        }
+      },
+      "selectors": {
+        "type": "object",
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "totp": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "targetId",
+      "loginId"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

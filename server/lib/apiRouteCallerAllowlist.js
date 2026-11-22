@@ -141,6 +141,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/brain/youtube/ingests/:videoId/transcript',
     '/api/browser/pages',
     '/api/browser/process',
+    '/api/browser/vault/fill',
+    '/api/browser/vault/logins',
     '/api/browser/version',
     '/api/code-animation/packages/validate',
     '/api/code-animation/projects/:id/sound-assets',

@@ -34,8 +34,13 @@ import { getOrg } from './privacyOrgs.js';
 import { resolveSubjectId } from './privacySubjects.js';
 import { listAccounts } from './messageAccounts.js';
 import { createDraft } from './messageDrafts.js';
-import { PRIVACY_SENSITIVE_TYPES } from '../lib/privacyConstants.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_WEBSITE_LOGIN_TYPE } from '../lib/privacyConstants.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
+
+const websiteLoginChangeRefusal = () => new ServerError(
+  'Website logins are not identity facts and cannot be declared as changes',
+  { status: 400, code: 'WEBSITE_LOGIN_CHANGE_FORBIDDEN' },
+);
 
 const EVENT_COLUMNS = `id, subject_id, vault_record_id, replacement_record_id, kind, declared_at, note`;
 
@@ -117,16 +122,21 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
     );
     const oldRecord = oldRows[0];
     if (!oldRecord) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+    // A website login is an encrypted JSON credential, not an identity fact an
+    // org is told about; an inline replacement would inherit its type with a
+    // plain string value the fill path cannot read.
+    if (oldRecord.type === PRIVACY_WEBSITE_LOGIN_TYPE) throw websiteLoginChangeRefusal();
 
     // Resolve the replacement record id (inline-create, link-existing, or none).
     let replacementId = null;
     if (replacementRecordId) {
       const { rows } = await client.query(
-        `SELECT id, subject_id FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
+        `SELECT id, subject_id, type FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
       );
       if (!rows[0]) {
         throw new ServerError('Replacement vault record not found', { status: 400, code: 'REPLACEMENT_NOT_FOUND' });
       }
+      if (rows[0].type === PRIVACY_WEBSITE_LOGIN_TYPE) throw websiteLoginChangeRefusal();
       // Retiring one person's address in favour of ANOTHER person's record is
       // never a legitimate change — it would silently re-point their orgs.
       if (rows[0].subject_id !== oldRecord.subject_id) {

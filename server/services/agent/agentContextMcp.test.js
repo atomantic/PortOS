@@ -115,7 +115,7 @@ describe('agentContextMcp service', () => {
       call: expect.objectContaining({ requestId: 'agent-mcp:test', name: 'brain.search' }),
       authority: {
         scope: 'agent',
-        capabilities: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false },
+        capabilities: { readPortos: true, writePortos: false, callToolRecipes: false, manageEidoverse: true, visitEidoversePeers: false, browserVaultFill: false },
       },
     }));
   });

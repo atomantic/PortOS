@@ -37,10 +37,15 @@ vi.mock('../services/browserStatus.js', () => ({
     downloads: { downloadDir: '/d', files: [{ name: 'secret.json' }] },
   })),
 }));
+const vaultFill = vi.hoisted(() => vi.fn(async ({ targetId, loginId }) => ({
+  ok: true, loginId, targetId, origin: 'https://example.com', filledFields: ['identifier', 'password'],
+})));
+vi.mock('../services/browserVaultFill.js', () => ({ fillWebsiteLogin: vaultFill }));
 vi.mock('../lib/safeUrlFetch.js', async (importOriginal) => ({ ...(await importOriginal()), assertPublicHttpUrl: vi.fn(async () => {}) }));
 
 const mounts = [['/api/browser', (await import('./browser.js')).default]];
 // The gated reads: [method, path, body, effect, success status].
+const fill = ['post', '/api/browser/vault/fill', { targetId: 'tab-1', loginId: '00000000-0000-4000-8000-0000000000cc' }, vaultFill, 200];
 const listings = [
   ['get', '/api/browser/pages', undefined, svc.getOpenPages, 200],
   ['get', '/api/browser/downloads', undefined, svc.getDownloads, 200],
@@ -57,9 +62,16 @@ describe('managed browser profile authority (#12488)', () => {
     await expectRemoteRefusal(mounts, listing);
   });
 
-  it('still navigates and lists for a local operator and a delegated agent session', async () => {
+  // The model-blind vault fill (#17397) types a stored credential into the
+  // signed-in browser: a remote password-free peer must never trigger it.
+  it('refuses the vault fill to a remote password-free caller before any login is read', async () => {
+    await expectRemoteRefusal(mounts, fill);
+  });
+
+  it('still navigates, fills and lists for a local operator and a delegated agent session', async () => {
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [
       ['post', '/api/browser/navigate', { url: 'https://example.com/' }, svc.navigateToUrlPinned, 200],
+      fill,
       ...listings,
     ] });
     expect(svc.navigateToUrlPinned).toHaveBeenLastCalledWith('https://example.com/', expect.anything());

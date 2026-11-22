@@ -42,10 +42,27 @@ portos-browser (PM2 process)
 | GET | `/api/browser/pages` | List open CDP pages |
 | GET | `/api/browser/version` | CDP version info |
 | GET | `/api/browser/logs` | Recent PM2 logs |
+| GET | `/api/browser/vault/logins` | Website-login fill candidates (metadata only; `?origin=` for one exact origin) |
+| POST | `/api/browser/vault/fill` | Model-blind credential fill into one tab (`{ targetId, loginId, fields?, selectors? }`) |
 
 ## Security
 
 Browser management relies on PortOS's network-level access control (see [Security Model](../API.md#security-model)). The `cdpHost` config is restricted to localhost values (`127.0.0.1`, `localhost`, `::1`) to prevent SSRF via CDP endpoint redirection. Do not expose the PortOS server to untrusted networks.
+
+## Model-blind website-login fill
+
+`POST /api/browser/vault/fill` (and the `browser.vault.fill` agent tool) types a saved [Privacy Vault website login](./privacy-center.md#website-logins) into one managed-browser tab without the caller ever seeing it. `fields` defaults to `identifier` and `password`; request `totp` on the 2FA step for the current code. The response is metadata only, for example `{ ok, origin, filledFields, identifierFilled, totpFilled, submitted: false }`, and the form is never submitted.
+
+The fill fails closed:
+
+- The browser-reported top-frame origin must exactly equal one of the login's origins, both before anything is decrypted and after a short settle window, and the document must be the same one throughout.
+- Page scripts run in a CDP isolated world, so a page can't spoof its origin by patching DOM prototypes. Each value write re-checks the live origin in the same task.
+- Fields are found only in the verified top document, including open shadow roots. A form in an iframe isn't found, so it can't be filled.
+- A main-frame load or navigation, a reverted value, or a missing field refuses the fill (`ORIGIN_MISMATCH`, `NAVIGATED_DURING_FILL`, `VALUE_NOT_RETAINED`, `FIELD_NOT_FOUND`).
+
+The identifier is typed with `Input.insertText`, which framework-controlled forms accept. The password and code are set through the native value setter plus `input`/`change` events, never sent as page-wide keystrokes. The password and generated code are registered with the ephemeral secret scrubber (`server/lib/secretText.js`), so PortOS tool results, prompt scrubbing and DOM reads redact them later.
+
+A script attached directly to the CDP port can still read the DOM; that is host-level access outside PortOS. The fill is gated like every host-control write, and agents additionally need the default-off **website login fill** grant (see [Agent Tools](./agent-context.md#semantic-action-grants)).
 
 ## Configuration
 

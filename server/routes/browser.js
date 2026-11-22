@@ -9,6 +9,7 @@ import { getBrowserStatusSnapshot } from '../services/browserStatus.js';
 import { requestHasHostControl } from '../services/authGate.js';
 import * as browserService from '../services/browserService.js';
 import { logsQuerySchema } from '../lib/sharedSchemas.js';
+import { browserVaultFillSchema, browserVaultListInputSchema } from '../lib/websiteLoginValidation.js';
 
 const router = express.Router();
 
@@ -162,6 +163,25 @@ router.post('/navigate', asyncHandler(async (req, res) => {
     settleMs: NAVIGATE_SETTLE_MS,
   });
   res.json(page);
+}));
+
+// GET /api/browser/vault/logins - Website logins that may be filled (#17397).
+// Metadata only (labels, exact origins, masked username, hasTotp) across every
+// household subject; `?origin=` narrows to logins allowed on that exact origin.
+router.get('/vault/logins', asyncHandler(async (req, res) => {
+  const { origin } = validateRequest(browserVaultListInputSchema, req.query);
+  const { listWebsiteLogins } = await import('../services/privacyWebsiteLogins.js');
+  res.json(await listWebsiteLogins({ origin, allSubjects: true }));
+}));
+
+// POST /api/browser/vault/fill - Model-blind credential fill into one tab.
+// Host-control gated like every write. The host decrypts and injects only
+// when the tab's live origin exactly matches the login; the response is
+// metadata only and never carries a password, seed or 2FA code. Never submits.
+router.post('/vault/fill', asyncHandler(async (req, res) => {
+  const request = validateRequest(browserVaultFillSchema, req.body);
+  const { fillWebsiteLogin } = await import('../services/browserVaultFill.js');
+  res.json(await fillWebsiteLogin(request));
 }));
 
 // GET /api/browser/health - Quick health check

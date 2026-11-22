@@ -68,9 +68,15 @@ describe('privacy enums server↔client mirror parity', () => {
     expect(client.SELF_SUBJECT_ID).toBe(server.PRIVACY_SELF_SUBJECT_ID);
   });
 
-  it('every sensitive type is a real vault type', () => {
+  // Website logins are sensitive but deliberately absent from VAULT_TYPES: the
+  // generic record form can't hold a credential, so they have their own section.
+  it('every sensitive type is a real vault type or the separately managed website login', () => {
     const vaultIds = client.VAULT_TYPES.map((t) => t.id);
-    for (const t of client.SENSITIVE_TYPES) expect(vaultIds).toContain(t);
+    expect(client.WEBSITE_LOGIN_TYPE).toBe(server.PRIVACY_WEBSITE_LOGIN_TYPE);
+    expect(vaultIds).not.toContain(client.WEBSITE_LOGIN_TYPE);
+    for (const t of client.SENSITIVE_TYPES) {
+      if (t !== client.WEBSITE_LOGIN_TYPE) expect(vaultIds).toContain(t);
+    }
   });
 
   // The tone tables are pre-composed Tailwind tokens keyed by enum id; a state
