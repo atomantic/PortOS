@@ -30,6 +30,8 @@ export default function HealthTab() {
   const sectionParam = searchParams.get('section');
 
   const [availableMetrics, setAvailableMetrics] = useState(new Set());
+  // Kept apart from an empty catalog: a failed read must not render as "no metrics".
+  const [catalogFailed, setCatalogFailed] = useState(false);
   const [expandedSections, setExpandedSections] = useState(new Set());
   const [correlationData, setCorrelationData] = useState(null);
   const [workouts, setWorkouts] = useState([]);
@@ -39,10 +41,11 @@ export default function HealthTab() {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const sectionRefs = useRef({});
 
-  // Fetch which metrics have data (once on mount)
-  useEffect(() => {
+  // Fetch which metrics have data (on mount, and again from the failure notice's Retry)
+  const fetchCatalog = useCallback(() => {
     getAvailableHealthMetrics()
       .then(metrics => {
+        setCatalogFailed(false);
         setAvailableMetrics(new Set(metrics.map(m => m.name)));
         // Set initial expanded sections after we know what's available
         const initial = new Set();
@@ -52,8 +55,13 @@ export default function HealthTab() {
         setExpandedSections(initial);
         setInitialized(true);
       })
-      .catch(() => setInitialized(true));
+      .catch(() => {
+        setCatalogFailed(true);
+        setInitialized(true);
+      });
   }, []);
+
+  useEffect(() => { fetchCatalog(); }, [fetchCatalog]);
 
   // Expand and scroll to section when URL param changes
   useEffect(() => {
@@ -198,7 +206,9 @@ export default function HealthTab() {
       </section>
 
       {/* Category sections */}
-      {METRIC_CATEGORIES.map(category => (
+      {catalogFailed ? (
+        <LoadFailureNotice message="Could not load the health metric list. Retry." onRetry={fetchCatalog} />
+      ) : METRIC_CATEGORIES.map(category => (
         <div key={category.id} ref={el => sectionRefs.current[category.id] = el}>
           <HealthCategorySection
             category={category}
