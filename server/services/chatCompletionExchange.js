@@ -8,7 +8,8 @@
  * `promptRunner.runPromptThroughProvider({ completion })`) owns those. Only
  * toolkit-less callers use this exchange directly without a run store.
  *
- * The request body is exactly `{ model, messages, temperature, max_tokens }`.
+ * The request body is exactly `{ model, messages, temperature, max_tokens }`, plus OpenRouter's
+ * `provider` routing object when the endpoint is OpenRouter and one is configured.
  * The streaming executor adds `stream` and provider-level sampling defaults and
  * reports no token counts; none of that may change under a caller that already
  * depends on this shape, so the two request shapes stay distinct.
@@ -28,6 +29,7 @@ import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
+import { openRouterBodyFragment } from '../lib/aiToolkit/internal/generationOptions.js';
 import { estimateTokens } from '../lib/contextBudget.js';
 
 /**
@@ -80,7 +82,7 @@ function completionWire(provider, model, prompt, { temperature, max_tokens }) {
   if (!nativeUrl) {
     return {
       url: `${provider.endpoint}/chat/completions`,
-      body: { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens },
+      body: { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens, ...openRouterBodyFragment(provider, model) },
       read: (data) => data,
     };
   }

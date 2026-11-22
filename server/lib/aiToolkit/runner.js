@@ -8,7 +8,7 @@ import { join, extname, basename, isAbsolute } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
-import { apiGenerationOptions } from './internal/generationOptions.js';
+import { apiGenerationOptions, openRouterBodyFragment } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
 import { isOllamaBackedProvider, ollamaThinkLevel, withModelNumCtx } from './internal/ollamaBacked.js';
 import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
@@ -835,6 +835,7 @@ export function createRunnerService(config = {}) {
             messages: [{ role: 'user', content: messageContent }],
             stream: true,
             ...apiGenerationOptions(provider),
+            ...openRouterBodyFragment(provider, requestModel),
             ...(thinkLevel ? { reasoning_effort: thinkLevel } : {}),
             ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
           };
