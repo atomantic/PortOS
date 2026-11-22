@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock file I/O so tests stay pure
 vi.mock('../lib/fileUtils.js', () => ({
@@ -1184,5 +1184,45 @@ describe('concurrent memory writes', () => {
       readJSONFile.mockResolvedValue({ items: [] });
       atomicWrite.mockResolvedValue(undefined);
     }
+  });
+});
+
+describe('memory item logs carry the item id, never the user-authored title', () => {
+  const TITLE = 'Zzyzx Private Poem Title';
+  let itemsStore;
+  let stdout;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    itemsStore = { items: [] };
+    stdout = [];
+    readJSONFile.mockImplementation(async (_path, fallback) => (
+      fallback && 'entries' in fallback ? { entries: [] } : structuredClone(itemsStore)
+    ));
+    atomicWrite.mockImplementation(async (_path, data) => { if (Array.isArray(data?.items)) itemsStore = structuredClone(data); });
+    vi.spyOn(console, 'log').mockImplementation((...args) => { stdout.push(args.join(' ')); });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    readJSONFile.mockResolvedValue({ items: [] });
+    atomicWrite.mockResolvedValue(undefined);
+  });
+
+  it('create, update, practice, and delete never write the title to stdout', async () => {
+    const item = await createMemoryItem({ title: TITLE, lines: ['Alpha line', 'Beta line'] });
+    await updateMemoryItem(item.id, { title: `${TITLE} Revised` });
+    await submitPractice(item.id, {
+      mode: 'fill-blank',
+      chunkId: null,
+      results: [{ correct: true }, { correct: false }],
+      totalMs: 1000,
+    });
+    await deleteMemoryItem(item.id);
+
+    const output = stdout.join('\n');
+    expect(output).not.toContain('Zzyzx');
+    expect(output).not.toContain('Private Poem');
+    expect(stdout.filter(line => line.includes(item.id)).length).toBeGreaterThanOrEqual(4);
   });
 });

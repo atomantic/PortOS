@@ -446,7 +446,7 @@ async function createMemoryItemLocked(data) {
 
   items.push(item);
   await saveMemoryItems(items);
-  console.log(`🧠 Memory item created: "${item.title}" (${contentLines.length} lines, ${remappedChunks.length} chunks)`);
+  console.log(`🧠 Memory item created: ${item.id} (${contentLines.length} lines, ${remappedChunks.length} chunks)`);
   return item;
 }
 
@@ -486,7 +486,7 @@ async function updateMemoryItemLocked(id, updates) {
   }
   item.updatedAt = new Date().toISOString();
   await saveMemoryItems(items);
-  console.log(`🧠 Memory item updated: "${item.title}"`);
+  console.log(`🧠 Memory item updated: ${item.id}`);
   return item;
 }
 
@@ -527,7 +527,7 @@ async function attestMemoryItemMasteryLocked(id, now, random) {
   setAuditSchedule(item, spotCheckAt, now);
   item.updatedAt = nowIso;
   await saveMemoryItems(items);
-  console.log(`🧠 Memory mastery attested: "${item.title}" → one future spot check scheduled`);
+  console.log(`🧠 Memory mastery attested: ${item.id} → one future spot check scheduled`);
   return { mastery: item.mastery, schedule: item.schedule };
 }
 
@@ -542,7 +542,7 @@ async function deleteMemoryItemLocked(id) {
   if (items[idx].builtin) return null; // Can't delete built-in items
   const removed = items.splice(idx, 1)[0];
   await saveMemoryItems(items);
-  console.log(`🧠 Memory item deleted: "${removed.title}"`);
+  console.log(`🧠 Memory item deleted: ${removed.id}`);
   return removed;
 }
 
@@ -644,7 +644,7 @@ export async function submitPractice(id, practiceData) {
       timestamp: now,
       exposure: true,
     });
-    console.log(`🧠 Memory exposure logged: "${item.title}" mode=${mode}`);
+    console.log(`🧠 Memory exposure logged: ${item.id} mode=${mode}`);
     return { mastery: item.mastery, schedule: item.schedule, practiceId };
   }
 
@@ -664,7 +664,7 @@ export async function submitPractice(id, practiceData) {
     timestamp: now,
   });
 
-  console.log(`🧠 Practice logged: "${item.title}" mode=${mode} ${correctCount}/${results.length} → next review in ${item.schedule.intervalDays}d`);
+  console.log(`🧠 Practice logged: ${item.id} mode=${mode} ${correctCount}/${results.length} → next review in ${item.schedule.intervalDays}d`);
   return { mastery: item.mastery, schedule: item.schedule, practiceId };
 }
 
@@ -763,7 +763,7 @@ async function advanceScheduleFromSessionLocked(memoryItemId, ratio, now, timezo
   applyScheduleAdvanceToItem(item, ratio, now, timezone);
   await saveMemoryItems(items);
 
-  console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+  console.log(`🧠 POST session reviewed ${item.id} → next review in ${item.schedule.intervalDays}d`);
   return item.schedule;
 }
 
@@ -923,7 +923,7 @@ async function mergeMasteryFromSessionLocked(memoryItemId, questions, now) {
   applyMasteryMergeToItem(item, attempts, now);
   await saveMemoryItems(items);
 
-  console.log(`🧠 POST session mastery merged: "${item.title}" ${attempts.length} answers → ${item.mastery.overallPct}% overall`);
+  console.log(`🧠 POST session mastery merged: ${item.id} ${attempts.length} answers → ${item.mastery.overallPct}% overall`);
   return item.mastery;
 }
 
@@ -964,7 +964,7 @@ async function applySessionToMemoryItemsLocked(memoryTasks, now, timezone) {
     // one-pass path stays identical to the legacy schedule+mastery sequence.
     if (questions.length) applyMasteryMergeToItem(item, questions, now);
     updated += 1;
-    console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
+    console.log(`🧠 POST session reviewed ${item.id} → next review in ${item.schedule.intervalDays}d`);
   }
 
   if (updated) await saveMemoryItems(items);

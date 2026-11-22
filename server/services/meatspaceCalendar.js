@@ -252,7 +252,7 @@ export function addLifeEvent(event) {
     const newEvent = { id: randomUUID(), ...event };
     data.events.push(newEvent);
     await saveEvents(data);
-    console.log(`📅 Life event added: "${newEvent.name}"`);
+    console.log(`📅 Life event added: ${newEvent.id} (${newEvent.type})`);
     return data.events;
   });
 }
@@ -267,7 +267,7 @@ export function updateLifeEvent(id, updates) {
     if (idx === -1) return null;
     data.events[idx] = { ...data.events[idx], ...updates };
     await saveEvents(data);
-    console.log(`📅 Life event updated: "${data.events[idx].name}"`);
+    console.log(`📅 Life event updated: ${data.events[idx].id} (${data.events[idx].type})`);
     return data.events;
   });
 }
@@ -282,7 +282,7 @@ export function removeLifeEvent(id) {
     if (idx === -1) return null;
     const removed = data.events.splice(idx, 1)[0];
     await saveEvents(data);
-    console.log(`📅 Life event removed: "${removed.name}"`);
+    console.log(`📅 Life event removed: ${removed.id} (${removed.type})`);
     return data.events;
   });
 }

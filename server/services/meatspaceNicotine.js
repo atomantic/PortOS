@@ -79,9 +79,7 @@ const substanceLog = createSubstanceLog({
   computeLogAmount: item => item.mgPerUnit * item.count,
   computeAverages: entries => computeRollingAverages(entries),
   describe: {
-    icon: '🚬', noun: 'nicotine', amountUnit: 'mg',
-    item: item => `${item.product || 'unnamed'} ${item.mgPerUnit}mg x${item.count}`,
-    button: item => `${item.name} ${item.mgPerUnit}mg`
+    icon: '🚬', noun: 'nicotine'
   },
   customButtons: { file: 'custom-nicotine-products.json', field: 'products', defaults: DEFAULT_PRODUCTS, fields: ['name', 'mgPerUnit'] }
 });
