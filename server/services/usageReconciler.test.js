@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { writeFileSync } from 'node:fs';
-import { lstat, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, mkdir, utimes, writeFile, rm } from 'node:fs/promises';
 import { constants as zstdConstants, createZstdDecompress, zstdCompressSync } from 'node:zlib';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -1563,6 +1563,57 @@ const RUN_WINDOW = { startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01
 const IN_WINDOW_MS = Date.parse('2026-07-01T10:10:00.000Z');
 const grokRun = { providerId: 'grok-cli', model: GROK_MODEL, workspacePath: WORKSPACE, ...RUN_WINDOW };
 const claudeRun = { providerId: 'claude-code', model: 'claude-opus-5', workspacePath: WORKSPACE, ...RUN_WINDOW };
+
+describe('transcripts last written before the run window are not read (#17368)', () => {
+  const OLD = new Date('2020-01-01T00:00:00Z');
+  const FRESH = new Date('2026-07-01T10:20:00Z');
+  const base = { workspacePath: WORKSPACE, ...RUN_WINDOW };
+  const age = (path, when) => utimes(path, when, when);
+
+  it('skips a stale claude transcript, bills a fresh one, and reads both when startTime is missing', async () => {
+    await writeClaudeSession('stale.jsonl', [claudeAssistant({ id: 'old', timestamp: '2026-07-01T10:05:00.000Z' })]);
+    await writeClaudeSession('fresh.jsonl', [claudeAssistant({ id: 'new', timestamp: '2026-07-01T10:06:00.000Z' })]);
+    const dir = join(home, '.claude', 'projects', PROJECT_SLUG);
+    await age(join(dir, 'stale.jsonl'), OLD);
+    await age(join(dir, 'fresh.jsonl'), FRESH);
+
+    const windowed = await readMeasuredUsage({ ...base, family: 'claude', home });
+    expect(windowed).toMatchObject({ sessions: 1, messages: 1, tokensOut: 50 });
+
+    __resetUsageClaims();
+    const unbounded = await readMeasuredUsage({ ...base, startTime: null, family: 'claude', home });
+    expect(unbounded).toMatchObject({ sessions: 2, messages: 2 });
+  });
+
+  it('skips a stale grok session', async () => {
+    await writeGrokSession({ updates: [grokTurnLine({ ms: IN_WINDOW_MS })] });
+    const file = join(home, '.grok', 'sessions', encodeURIComponent(WORKSPACE), 'session-aaaa', 'updates.jsonl');
+    await age(file, OLD);
+    expect(await readMeasuredUsage({ ...base, family: 'grok', home })).toBeNull();
+    await age(file, FRESH);
+    expect(await readMeasuredUsage({ ...base, family: 'grok', home })).toMatchObject({ source: 'measured' });
+  });
+
+  it('skips a stale kimi wire log', async () => {
+    await writeKimiSession({ agents: { main: [kimiUsageRecordLine({ timeMs: IN_WINDOW_MS })] } });
+    const file = join(home, '.kimi-code', 'sessions', 'wd_example_aaaa111111', 'session_session-aaaa', 'agents', 'main', 'wire.jsonl');
+    await age(file, OLD);
+    expect(await readMeasuredUsage({ ...base, family: 'kimi', home })).toBeNull();
+    await age(file, FRESH);
+    expect(await readMeasuredUsage({ ...base, family: 'kimi', home })).toMatchObject({ source: 'measured' });
+  });
+
+  it('skips a stale Antigravity transcript', async () => {
+    await writeAgySession({
+      steps: [agyStepLine({ index: 0, type: 'USER_INPUT', createdAt: '2026-07-01T10:10:00.000Z', content: 'x'.repeat(400) })]
+    });
+    const file = join(home, '.gemini', 'antigravity-cli', 'brain', 'conv-aaaa', '.system_generated', 'logs', 'transcript.jsonl');
+    await age(file, OLD);
+    expect(await readMeasuredUsage({ ...base, family: 'agy', home })).toBeNull();
+    await age(file, FRESH);
+    expect(await readMeasuredUsage({ ...base, family: 'agy', home })).not.toBeNull();
+  });
+});
 
 describe('resolveFamilyProvider', () => {
   it('prefers a cli record over a tui one and never an api one', () => {

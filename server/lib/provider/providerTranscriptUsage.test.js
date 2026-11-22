@@ -5,6 +5,7 @@ import {
   parseAgyHistory,
   parseAgyTranscript,
   parseClaudeTranscript,
+  parseClaudeTranscriptLines,
   parseCodexRollout,
   codexServiceTier,
   parseGrokChatHistory,
@@ -998,5 +999,27 @@ describe('parseKimiSessionIndex', () => {
       { sessionId: 'session-aaaa', sessionDir: '/home/example/.kimi-code/sessions/wd_repo_aaaa/session_aaaa', workDir: '/work/example-repo' },
       { sessionId: 'session-bbbb', sessionDir: '/home/example/.kimi-code/sessions/wd_other_bbbb/session_bbbb', workDir: '/work/other-repo' }
     ]);
+  });
+});
+
+describe('parseClaudeTranscriptLines', () => {
+  it('matches the string parser on keys, model buckets and window bounds', async () => {
+    const lines = [
+      claudeLine({ uuid: 'u1', id: 'msg_1', timestamp: '2026-07-01T10:01:00.000Z' }),
+      claudeLine({ uuid: 'u1b', id: 'msg_1', timestamp: '2026-07-01T10:01:01.000Z' }),
+      claudeLine({ uuid: 'u2', id: 'msg_2', timestamp: '2026-07-01T10:02:00.000Z' }),
+      claudeLine({ uuid: 'u3', id: 'msg_3', timestamp: '2026-06-30T10:02:00.000Z' }),
+      '',
+      '{"truncated":'
+    ];
+    const opts = {
+      from: Date.parse('2026-07-01T10:00:00.000Z'),
+      to: Date.parse('2026-07-01T10:10:00.000Z'),
+      exclude: new Set(['msg_2'])
+    };
+    async function* stream() { yield* lines; }
+    const streamed = await parseClaudeTranscriptLines(stream(), opts);
+    expect(streamed).toEqual(parseClaudeTranscript(lines.join('\n'), opts));
+    expect(streamed.countedKeys).toEqual(['msg_1']);
   });
 });

@@ -42,7 +42,9 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { homedir } from 'os';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
-import { readdir } from 'fs/promises';
+import { createReadStream } from 'node:fs';
+import { readdir, stat } from 'fs/promises';
+import { createInterface } from 'node:readline';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
 import { isFreeModelId, resolveModelRates, SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
@@ -51,7 +53,7 @@ import {
   claudeProjectSlug,
   decodeGrokSessionDir,
   parseAgyTranscript,
-  parseClaudeTranscript,
+  parseClaudeTranscriptLines,
   parseCodexRollout,
   parseAgyHistory,
   parseGrokChatHistory,
@@ -426,7 +428,23 @@ function maxBuckets(billed, absolute) {
   return Object.fromEntries(TOKEN_FIELDS.map(field => [field, Math.max(billed?.[field] || 0, absolute[field] || 0)]));
 }
 
-async function readClaudeSessions({ home, workspacePath, from, to, fold, reserveFrom, excludeFor }) {
+/**
+ * A transcript last written before the run window cannot hold a line inside it
+ * (the same rule `codexUsageSources.js` applies with `modifiedSince`), so the
+ * caller skips it without opening it. Null `from` keeps the full read, and a
+ * stat failure is "not stale" so the read itself reports a missing file.
+ * Also reports `size` so an empty file stays skipped as before.
+ */
+async function transcriptStat(path, from) {
+  const info = await stat(path).catch(() => null);
+  if (!info) return { stale: false, empty: false };
+  return {
+    stale: Number.isFinite(from) && info.mtimeMs < from,
+    empty: info.size === 0
+  };
+}
+
+async function readClaudeSessions({ home, workspacePath, from, to, fold, claim, releaseClaim, excludeFor }) {
   // The project directory name is the slugified cwd — an exact lookup, with
   // no directory scan and no chance of picking up another repo's sessions.
   const projectDir = join(home, '.claude', 'projects', claudeProjectSlug(workspacePath));
@@ -437,10 +455,26 @@ async function readClaudeSessions({ home, workspacePath, from, to, fold, reserve
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
     const path = join(entry.parentPath ?? entry.path, entry.name);
-    const text = await tryReadFile(path);
-    if (!text) continue;
-    const parsed = parseClaudeTranscript(text, { from, to, exclude: excludeFor(path) });
-    reserveFrom(path, parsed);
+    const { stale, empty } = await transcriptStat(path, from);
+    if (stale || empty) continue;
+    // Streamed: the session's prompt and tool text is never held in the heap.
+    // Each key is claimed the moment it is counted, because the stream awaits
+    // between lines and a claim deferred to the end would let a concurrent run
+    // read the same message unclaimed (the race `reserveFrom` closes for the
+    // whole-file readers).
+    const counted = [];
+    const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+    const parsed = await parseClaudeTranscriptLines(lines, {
+      from,
+      to,
+      exclude: excludeFor(path),
+      onCount: (key) => { claim(path, key); counted.push(key); }
+    }).catch(() => null);
+    if (!parsed) {
+      // Unreadable mid-stream: nothing was billed, so release what was claimed.
+      for (const key of counted) releaseClaim(path, key);
+      continue;
+    }
     fold(parsed);
   }
 }
@@ -456,6 +490,9 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
     for (const sessionId of await listSubdirs(cwdDir)) {
       const sessionDir = join(cwdDir, sessionId);
       const updatesPath = join(sessionDir, 'updates.jsonl');
+      // A session whose log was last written before the window cannot have
+      // billed anything inside it; summary.json/chat_history.jsonl are the same session.
+      if ((await transcriptStat(updatesPath, from)).stale) continue;
       const updatesText = await tryReadFile(updatesPath);
       // Sentinel, not truthiness: `turns > 0` means the session DID record
       // billed turns, so it is measured even when this run's window share is
@@ -481,6 +518,7 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
       const endedMs = Date.parse(summary.last_active_at || summary.updated_at || summary.created_at || '');
       if (!windowOverlaps(startedMs, endedMs, from, to)) continue;
       const chatPath = join(sessionDir, 'chat_history.jsonl');
+      if ((await transcriptStat(chatPath, from)).stale) continue;
       const chatText = await tryReadFile(chatPath);
       if (!chatText) continue;
       if (isClaimed(chatPath, 'session')) continue;
@@ -530,6 +568,7 @@ async function readAgySessions({ home, workspacePath, from, to, fold, reserveFro
     // match (worktree paths are unique per run).
     if (conversation.workspace && !cwdMatches(conversation.workspace, workspacePath)) continue;
     const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
+    if ((await transcriptStat(transcriptPath, from)).stale) continue;
     const text = await tryReadFile(transcriptPath);
     if (!text) continue;
     if (!conversation.workspace && !text.includes(workspacePath)) continue;
@@ -557,6 +596,7 @@ async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFr
     const agentsRoot = join(session.sessionDir, 'agents');
     for (const agentId of await listSubdirs(agentsRoot)) {
       const wirePath = join(agentsRoot, agentId, 'wire.jsonl');
+      if ((await transcriptStat(wirePath, from)).stale) continue;
       const text = await tryReadFile(wirePath);
       if (!text) continue;
       const parsed = parseKimiWireLog(text, { from, to, exclude: excludeFor(wirePath) });
@@ -768,7 +808,13 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     }
   };
 
-  const scan = { home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim, codexReserved };
+  const releaseClaim = (fileKey, messageKey) => {
+    removeClaim(fileKey, messageKey);
+    const index = reserved.findIndex(([f, m]) => f === fileKey && m === messageKey);
+    if (index >= 0) reserved.splice(index, 1);
+  };
+
+  const scan = { home, workspacePath, from, to, fold, reserveFrom, excludeFor, claim, releaseClaim, codexReserved };
   try {
     await (FAMILY_READERS[family] ?? FAMILY_READERS.codex)(scan);
   } catch (error) {
