@@ -9,12 +9,12 @@ import { gatewayIdForProvider } from '../lib/provider/providerGateways.js';
 import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
 import { modelComparisonImportSchema } from '../lib/modelComparisonValidation.js';
 import { captureLiveEnvironments, loadAssessments } from '../services/localModelAssessmentStore.js';
-import { localSpeedFromAssessments } from '../lib/localModelAssessment.js';
+import { localPerformanceFromAssessments } from '../lib/localModelAssessment.js';
 
 export function createModelComparisonRoutes(providerService = { getSelectableProviders }) {
   const router = Router();
   router.get('/', asyncHandler(async (_req, res) => {
-    // Disk-only read; an unreadable store reports no assessments, which leaves local speed unplotted.
+    // Disk-only read; an unreadable store reports no assessments, which leaves local measured axes unplotted.
     const [catalog, result, assessments] = await Promise.all([getPublicModelComparison(), providerService.getSelectableProviders(), loadAssessments()]);
     const inventory = result.providers.filter(provider => provider.enabled !== false).map(provider => ({
       id: provider.id, name: provider.name, gateway: gatewayIdForProvider(provider) || null,
@@ -26,9 +26,9 @@ export function createModelComparisonRoutes(providerService = { getSelectablePro
     }));
     // Staleness needs the live machine state; the backend-version probe is one cached loopback GET.
     const liveEnvironments = await captureLiveEnvironments({ backends: [...new Set(assessments.map(a => a?.backend).filter(Boolean))] });
-    const localSpeed = localSpeedFromAssessments(assessments, liveEnvironments);
-    const composite = buildModelComparisonComposite(catalog.observations, inventory, undefined, { localSpeed });
-    const currentComposite = buildModelComparisonComposite(catalog.observations, inventory, CURRENT_COMPARISON_ANCHOR, { localSpeed });
+    const localPerformance = localPerformanceFromAssessments(assessments, liveEnvironments);
+    const composite = buildModelComparisonComposite(catalog.observations, inventory, undefined, { localPerformance });
+    const currentComposite = buildModelComparisonComposite(catalog.observations, inventory, CURRENT_COMPARISON_ANCHOR, { localPerformance });
     res.json({ ...catalog, inventory, composite, currentComposite });
   }));
   router.post('/import', asyncHandler(async (req, res) => {

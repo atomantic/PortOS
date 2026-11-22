@@ -32,6 +32,7 @@ import {
   localLlmAgentBenchmarkSchema,
   localLlmAssessmentDeleteSchema,
   localLlmAssessmentSweepSchema,
+  localLlmAssessmentBenchmarkSchema,
   localLlmCapabilityTestSchema,
   localLlmCapabilityTestRunSchema,
   localLlmCapabilityTestDeleteSchema,
@@ -849,6 +850,23 @@ router.post('/assessments/sweep', asyncHandler(async (req, res) => {
   // A refused start (one already running, or nothing to measure) is a 409, not a
   // silent no-op that would leave the page waiting for progress that never comes.
   if (status.rejected) throw new ServerError(status.rejected, { status: 409, context: { scope } })
+  res.json(status)
+}))
+
+// POST /api/local-llm/assessments/benchmark — the side-by-side benchmark: the
+// picked models, one after another on the SAME queue as the sweep, each under the
+// fixed warm profile (`BENCHMARK_PROFILE`). User-triggered only: the UI names the
+// models and generation count first. Results persist as ordinary assessments, so
+// they feed the Models › Comparison measured axes.
+router.post('/assessments/benchmark', asyncHandler(async (req, res) => {
+  const { models } = validateRequest(localLlmAssessmentBenchmarkSchema, req.body)
+  const io = req.app.get('io')
+  const status = await startSweep({
+    models,
+    onProgress: (frame) => io?.emit('localLlm:progress', frame),
+    onChange: (state) => io?.emit('localLlm:sweep:changed', state),
+  })
+  if (status.rejected) throw new ServerError(status.rejected, { status: 409, context: { models: models.length } })
   res.json(status)
 }))
 
