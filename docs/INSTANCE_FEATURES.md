@@ -27,11 +27,10 @@ and the voice widget each fetch `/api/palette/manifest` once per session and it
 is HTTP-cached, so a server-side filter would both defeat that cache and still
 show hidden pages until a reload.
 
-Destination icons live in `NAV_DESTINATION_PRESENTATION` in
+Destination icons live in `NAV_PRESENTATION` in
 `client/src/lib/navPresentation.js`. The same registry supplies icons for
-section tabs and saved Pinned and Recent rows. Its `NAV_PRESENTATION` projection
-excludes local hub and studio views from the sidebar. `Layout.jsx` reads
-`feature`, `section` and `label` from `NAV_COMMANDS`. Tests keep each icon keyed
+section tabs and saved Pinned and Recent rows. Its projection
+excludes local hub and studio views from the sidebar. `feature`, `section` and `label` from `NAV_COMMANDS`. Tests keep each icon keyed
 to a live manifest path and check that feature tags and section gates refer to
 registered features and sections.
 

@@ -103,6 +103,10 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | Prefix | Domain |
 |--------|--------|
 | `/api/auth` | Optional password gate |
+| `/api/apps` | Managed app registry and lifecycle |
+| `/api/providers` | AI provider configuration and model catalogs |
+| `/api/agents/tools` | Agent tool routes |
+| `/api/digital-twin` | Digital-twin core routes |
 | `/api/alerts` | System alerts |
 | `/api/avatar` | Avatar rendering/config |
 | `/api/system` | System health metrics |
