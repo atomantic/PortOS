@@ -776,8 +776,12 @@ export default function PostSessionLauncher({
   const todayMinutes = todayMinutesTotal != null
     ? todayMinutesTotal
     : Math.round(todaysSessions.reduce((sum, s) => sum + (s.durationMs || 0), 0) / 60000);
-  const weekSessions = statsWeek?.sessionCount ?? 0;
-  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak, morseWpm });
+  // A stats read that failed (or never loaded) leaves these undefined so
+  // computeGoalProgress skips the row instead of showing a false 0/target; a
+  // successful payload with a real zero still renders as 0.
+  const weekSessions = statsWeek ? (statsWeek.sessionCount ?? 0) : undefined;
+  const goalStreak = stats ? currentStreak : undefined;
+  const goalRows = computeGoalProgress(config.goals, { todayMinutes, weekSessions, currentStreak: goalStreak, morseWpm });
 
   // A default/full recommendation may include memory drills, so wait until the
   // item pool is known before deciding whether its session is runnable.

@@ -71,6 +71,9 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [config, setConfig] = useState(null);
+  // Distinct from `config === null` (still loading): a rejected read must show a
+  // retryable error, never the loading sentence.
+  const [configError, setConfigError] = useState(null);
   const [recentSessions, setRecentSessions] = useState([]);
   const [sessionsError, setSessionsError] = useState(null);
   const [stats, setStats] = useState(null);
@@ -94,13 +97,17 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
 
   async function loadData() {
     let sessionsFailure = null;
+    let configFailure = null;
     const [cfg, sessions, st, stWeek] = await Promise.all([
-      getPostConfig().catch(() => null),
+      getPostConfig().catch(err => { configFailure = err; return null; }),
       getPostSessions(undefined, undefined, { silent: true }).catch(err => { sessionsFailure = err; return null; }),
       getPostStats(30).catch(() => null),
       getPostStats(7).catch(() => null)
     ]);
-    setConfig(cfg);
+    // Keep a previously loaded config on a failed retry-read; only a first load
+    // with no config falls to the error state.
+    setConfigError(configFailure);
+    if (!configFailure) setConfig(cfg);
     // A failed sessions read keeps the last list and raises a notice, so it never
     // reads as "no sessions today".
     setSessionsError(sessionsFailure);
@@ -108,6 +115,10 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
     setStats(st);
     setStatsWeek(stWeek);
   }
+
+  const configLoadError = (
+    <ListLoadError what="POST configuration" error={configError} onRetry={loadData} />
+  );
 
   async function handleStart(options) {
     const started = await session.startSession(options);
@@ -279,7 +290,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
             onSaved={handleConfigSaved}
             onBack={() => navigate('/post/launcher')}
           />
-        ) : (
+        ) : configError ? configLoadError : (
           <div className="text-gray-500">Loading configuration...</div>
         );
       case 'explore':
@@ -298,7 +309,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
             onSaved={handleConfigSaved}
             onBack={() => navigate('/post/launcher')}
           />
-        ) : (
+        ) : configError ? configLoadError : (
           <div className="text-gray-500">Loading practice plan...</div>
         );
       case 'wordplay':
@@ -402,6 +413,7 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
         );
       }
       default:
+        if (!config && configError) return configLoadError;
         return (
           <>
             {sessionsError && (
