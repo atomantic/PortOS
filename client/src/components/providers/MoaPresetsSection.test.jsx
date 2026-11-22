@@ -54,13 +54,16 @@ describe('MoaPresetsSection', () => {
     await screen.findByText('New MoA preset');
 
     const referenceSelect = screen.getByLabelText('Reference 1 provider');
-    expect([...referenceSelect.options].map((o) => o.value)).toEqual(['', 'local-a', 'hosted-b']);
+    const offered = [...referenceSelect.options].map((o) => o.value);
+    expect(offered).toEqual(expect.arrayContaining(['', 'local-a', 'hosted-b']));
+    expect(offered).not.toContain('cli-c');
+    expect(offered).not.toContain('off-d');
     expect(screen.getByRole('button', { name: 'Save preset' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Council' } });
     fireEvent.change(referenceSelect, { target: { value: 'local-a' } });
     fireEvent.change(screen.getByLabelText('Reference 2 provider'), { target: { value: 'hosted-b' } });
-    fireEvent.change(screen.getAllByLabelText('Model')[1], { target: { value: 'b-1' } });
+    fireEvent.change(screen.getByLabelText('Reference 2 model'), { target: { value: 'b-1' } });
     fireEvent.change(screen.getAllByLabelText('Temp')[0], { target: { value: '0.3' } });
     fireEvent.change(screen.getByLabelText('Aggregator provider'), { target: { value: 'hosted-b' } });
     expect(screen.getByText('ADVISOR TEXT')).toBeInTheDocument();

@@ -26,9 +26,9 @@
 
 import { scrubSecretTokens } from './secretText.js';
 import { redactPii } from './piiRedactionPatterns.js';
+import { MOA_ID_PREFIX, MOA_PROVIDER_TYPE, isMoaProvider, isMoaProviderId } from './provider/providerTypes.js';
 
-export const MOA_PROVIDER_TYPE = 'moa';
-export const MOA_ID_PREFIX = 'moa:';
+export { MOA_ID_PREFIX, MOA_PROVIDER_TYPE, isMoaProvider, isMoaProviderId };
 
 /**
  * `off` — advisor text is shown and injected as written.
@@ -51,10 +51,8 @@ export const MOA_AGGREGATOR_INSTRUCTION = [
   'Do not mention the advisors.',
 ].join('\n');
 
-export const isMoaProviderId = (id) => typeof id === 'string' && id.startsWith(MOA_ID_PREFIX);
 export const moaProviderId = (presetId) => `${MOA_ID_PREFIX}${presetId}`;
 export const presetIdFromMoaProviderId = (id) => (isMoaProviderId(id) ? id.slice(MOA_ID_PREFIX.length) : null);
-export const isMoaProvider = (provider) => provider?.type === MOA_PROVIDER_TYPE;
 
 /**
  * The virtual provider record a resolver returns for `moa:<id>`. `defaultModel`

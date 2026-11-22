@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router';
 import { Layers, Plus, Trash2 } from 'lucide-react';
 import { createMoaPreset, deleteMoaPreset, listMoaPresets, updateMoaPreset } from '../../services/apiMoaPresets';
 import { filterSelectableModels } from '../../utils/providers';
+import ProviderModelSelector from '../ProviderModelSelector';
 import { formatCount } from '../../utils/formatters';
 import { FormField } from '../ui/FormField';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
@@ -62,25 +63,25 @@ const toPayload = (draft) => ({
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm text-white';
 const buttonClass = 'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50';
 
+// compose={false}: a member is a saved API preset; the server checks its live eligibility on save and run.
 function MemberFields({ label, member, apiProviders, onChange, withTemperature }) {
   const provider = apiProviders.find((p) => p.id === member.providerId);
-  const models = filterSelectableModels(provider?.models || []);
   return (
-    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end">
-      <FormField label={`${label} provider`}>
-        <select className={inputClass} value={member.providerId} onChange={(e) => onChange({ ...member, providerId: e.target.value, model: '' })}>
-          <option value="">Choose an API provider…</option>
-          {apiProviders.map((p) => <option key={p.id} value={p.id}>{p.name || p.id}</option>)}
-          {member.providerId && !provider && <option value={member.providerId}>{member.providerId} (unavailable)</option>}
-        </select>
-      </FormField>
-      <FormField label="Model">
-        <select className={inputClass} value={member.model} onChange={(e) => onChange({ ...member, model: e.target.value })}>
-          <option value="">{provider?.defaultModel ? `Provider default (${provider.defaultModel})` : 'Provider default'}</option>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
-          {member.model && !models.includes(member.model) && <option value={member.model}>{member.model}</option>}
-        </select>
-      </FormField>
+    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] items-end">
+      <ProviderModelSelector
+        providers={apiProviders}
+        selectedProviderId={member.providerId}
+        selectedModel={member.model}
+        availableModels={filterSelectableModels(provider?.models || [])}
+        onProviderChange={(providerId) => onChange({ ...member, providerId, model: '' })}
+        onModelChange={(model) => onChange({ ...member, model })}
+        label={`${label} provider`}
+        modelLabel={`${label} model`}
+        emptyProviderOption="Choose an API provider…"
+        emptyModelOption={provider?.defaultModel ? `Provider default (${provider.defaultModel})` : 'Provider default'}
+        alwaysShowModel
+        compose={false}
+      />
       {withTemperature ? (
         <FormField label="Temp">
           <input

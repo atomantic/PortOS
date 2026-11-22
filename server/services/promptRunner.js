@@ -37,7 +37,7 @@ import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitu
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { attachGatewaySiblingKey } from '../lib/provider/providerGateways.js';
-import { isMoaProvider, isMoaProviderId } from '../lib/moaConfig.js';
+import { isMoaProvider, isMoaProviderId } from '../lib/provider/providerTypes.js';
 
 // Fallback-lifecycle notifiers live in services/autoFixer.js (which pulls in cos.js); initAutoFixer()
 // registers them through this leaf. Never import autoFixer.js here: `vitest related` follows it (#12285).

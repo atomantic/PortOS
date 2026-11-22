@@ -39,6 +39,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [CODE_ANIMATION_PACKAGES.md](./CODE_ANIMATION_PACKAGES.md) | Versioned portable Code Animation source/brief packages, non-executing validation, and contained production execution |
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design: React client, Express server, PM2 satellites, PostgreSQL + `data/` files |
 | [GREYBOX.md](./GREYBOX.md) | Environment starter layouts, Blender exports, camera shots, reference captures and AI editing |
+| [features/mixture-of-agents.md](./features/mixture-of-agents.md) | Mixture of Agents presets: parallel tool-free advisors, the acting aggregator, cache-safe tail injection, privacy filter and run attribution |
 | [features/image-verifier.md](./features/image-verifier.md) | Image Verifier: defect standards, evaluation profiles, model benchmarks, and integration with media jobs and imports |
 | [features/catalog-ingest.md](./features/catalog-ingest.md) | Catalog extraction graph, context budgets, coverage, and review draft contract |
 | [features/catalog-primitives.md](./features/catalog-primitives.md) | Catalog creative primitive ownership, locks, forks, design rounds, and canon description repair HTTP contract |

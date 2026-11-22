@@ -108,6 +108,33 @@ describe('runMoaPreset', () => {
     expect(runPrompt).toHaveBeenCalledTimes(2);
   });
 
+  it('gates every dispatch on the caller admission check and stops the run when it refuses', async () => {
+    const runPrompt = vi.fn(async (args) => ({ text: 'ok', runId: `run-${args.provider.id}` }));
+    const beforeExecute = vi.fn(async () => {});
+    await runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', beforeExecute }, { runPrompt });
+    expect(beforeExecute.mock.calls.map(([meta]) => meta.provider.id)).toEqual(['a', 'b']);
+    expect(runPrompt.mock.calls.at(-1)[0].beforeExecute).toBe(beforeExecute);
+
+    runPrompt.mockClear();
+    const refusing = vi.fn(async () => { throw new Error('over budget'); });
+    await expect(runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', beforeExecute: refusing }, { runPrompt })).rejects.toThrow('over budget');
+    expect(runPrompt).not.toHaveBeenCalled();
+
+    await expect(runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', completion: {}, beforeExecute: refusing }, { runPrompt })).rejects.toThrow('over budget');
+    await expect(runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', completion: {}, responseSchema: () => true }, { runPrompt })).rejects.toThrow(/does not support responseSchema/);
+  });
+
+  it('gives advisors a real deadline when the caller passes no stall bound', async () => {
+    const runPrompt = vi.fn(async (args) => ({ text: 'ok', runId: `run-${args.provider.id}` }));
+    await runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', timeout: 0 }, { runPrompt });
+    const advisorTimeout = runPrompt.mock.calls[0][0].timeout;
+    expect(advisorTimeout(state.providers.a)).toBeUndefined();
+    expect(runPrompt.mock.calls.at(-1)[0].timeout).toBe(0);
+    runPrompt.mockClear();
+    await runMoaPreset({ provider: moaRecord, prompt: 'P', source: 'ask', timeout: 9000 }, { runPrompt });
+    expect(runPrompt.mock.calls[0][0].timeout(state.providers.a)).toBe(9000);
+  });
+
   it('runs the aggregator directly when the preset is disabled, streamed and pinned for a streaming caller', async () => {
     state.preset.enabled = false;
     const onData = vi.fn();

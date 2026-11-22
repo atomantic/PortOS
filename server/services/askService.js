@@ -39,7 +39,7 @@ import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from '../lib/provider/providerVendors.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { isMoaProvider, isMoaProviderId } from '../lib/moaConfig.js';
+import { isMoaProvider, isMoaProviderId } from '../lib/provider/providerTypes.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';

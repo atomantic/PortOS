@@ -22,6 +22,9 @@
  *   option, pinned (`allowFallback: false`) because the preset names the
  *   acting, billed model.
  * - A disabled preset skips the advisors and runs the aggregator directly.
+ * - The caller's `beforeExecute` admission gate runs before every member's
+ *   dispatch, and a refusal stops the whole run. An advisor never inherits a
+ *   non-positive stall bound as its deadline (see `advisorTimeout`).
  *
  * After the runs settle, each record is tagged in its metadata (`moa`): advisors
  * with `role: 'reference'` and `parentRunId` (the aggregator's run), the
@@ -52,15 +55,40 @@ async function resolveMember(member) {
   return { provider, model, refusal: moaMemberRefusal(member, provider), label: memberLabel(provider, member.providerId, model) };
 }
 
-async function runReferences({ preset, prompt, source, timeout, cwd, controller, stopped, runPrompt, onRunCreated, onRunSettled }) {
+/**
+ * An advisor's wall-clock deadline. A streamed caller's `timeout` is a stall
+ * bound where 0 means none (the persistent mind passes 0); a bounded completion
+ * would read 0 as "abort now", so a non-positive bound falls back to the
+ * advisor provider's own timeout, then the runner default.
+ */
+const advisorTimeout = (timeout) => (provider) => {
+  const bound = typeof timeout === 'function' ? timeout(provider) : timeout;
+  return Number.isFinite(bound) && bound > 0 ? bound : undefined;
+};
+
+async function runReferences({ preset, prompt, source, timeout, cwd, controller, stopped, runPrompt, onRunCreated, onRunSettled, beforeExecute }) {
   const advisorPrompt = buildAdvisorPrompt(prompt);
+  let admissionError = null;
   const settled = await Promise.allSettled(preset.referenceModels.map(async (member, index) => {
     const { provider, model, refusal, label } = await resolveMember(member);
     const base = { index, providerId: member.providerId, model, label };
     if (refusal) return { ...base, ok: false, runId: null, error: refusal };
+    if (typeof beforeExecute === 'function') {
+      // The caller's admission gate (a spending or interrupt check) applies to
+      // every dispatch the request causes, not just the aggregator. A refusal
+      // stops the whole MoA run, as it stops a single provider's attempt.
+      try {
+        await beforeExecute({ runId: null, provider, model });
+      } catch (err) {
+        admissionError ??= err;
+        controller.abort();
+        return { ...base, ok: false, runId: null, error: err?.message || String(err) };
+      }
+    }
+    if (stopped.aborted) return { ...base, ok: false, runId: null, error: 'MoA run canceled', canceled: true };
     try {
       const reply = await runPrompt({
-        provider, prompt: advisorPrompt, source, model, timeout, signal: stopped, cwd,
+        provider, prompt: advisorPrompt, source, model, timeout: advisorTimeout(timeout), signal: stopped, cwd,
         completion: { maxTokens: preset.advisorMaxTokens, ...(member.temperature !== undefined ? { temperature: member.temperature } : {}) },
         onRunCreated, onRunSettled,
       });
@@ -72,9 +100,10 @@ async function runReferences({ preset, prompt, source, timeout, cwd, controller,
       return { ...base, ok: false, runId: err?.runId ?? null, error: err?.message || String(err), ...(isCanceled(err) ? { canceled: true } : {}) };
     }
   }));
-  return settled.map((outcome, index) => (outcome.status === 'fulfilled'
+  const references = settled.map((outcome, index) => (outcome.status === 'fulfilled'
     ? outcome.value
     : { index, providerId: preset.referenceModels[index].providerId, model: null, label: preset.referenceModels[index].providerId, ok: false, runId: null, error: outcome.reason?.message || String(outcome.reason) }));
+  return { references, admissionError };
 }
 
 async function tagRuns({ preset, references, aggregatorRunId }) {
@@ -107,6 +136,15 @@ export async function runMoaPreset(args, { runPrompt }) {
     provider, prompt, source, timeout, signal = null, cwd, completion, onRunCreated, onRunSettled,
     model: _callerModel, allowFallback: _allowFallback, ...streamArgs
   } = args;
+  // A completion caller's options are exactly what the bounded path accepts
+  // (plus the admission gate, honoured below); anything else would be dropped
+  // silently, so it is refused as runPromptThroughProvider refuses it.
+  const unsupported = completion
+    ? Object.keys(streamArgs).filter((key) => key !== 'beforeExecute' && streamArgs[key] !== undefined && streamArgs[key] !== null)
+    : [];
+  if (unsupported.length > 0) {
+    throw new Error(`runPromptThroughProvider: a completion request does not support ${unsupported.join(', ')}`);
+  }
   if (streamArgs.screenshots?.length) {
     throw new ServerError('MoA presets do not accept image inputs: their advisors run as text-only completions', { status: 422, code: 'MOA_IMAGES_UNSUPPORTED' });
   }
@@ -124,11 +162,12 @@ export async function runMoaPreset(args, { runPrompt }) {
   const controller = new AbortController();
   const stopped = anyAbortSignal([controller.signal, signal]);
   const startedAt = Date.now();
-  const references = preset.enabled
-    ? await runReferences({ preset, prompt, source, timeout, cwd, controller, stopped, runPrompt, onRunCreated, onRunSettled })
-    : [];
-  if (stopped.aborted) {
+  const { references, admissionError } = preset.enabled
+    ? await runReferences({ preset, prompt, source, timeout, cwd, controller, stopped, runPrompt, onRunCreated, onRunSettled, beforeExecute: streamArgs.beforeExecute })
+    : { references: [], admissionError: null };
+  if (admissionError || stopped.aborted) {
     await tagRuns({ preset, references, aggregatorRunId: null });
+    if (admissionError) throw admissionError;
     console.log(`⏹️ MoA ${preset.id} canceled during the advisor phase`);
     throw canceledError('MoA run canceled');
   }
@@ -140,6 +179,9 @@ export async function runMoaPreset(args, { runPrompt }) {
   let result = null;
   let failure = null;
   try {
+    if (completion && typeof streamArgs.beforeExecute === 'function') {
+      await streamArgs.beforeExecute({ runId: null, provider: aggregator.provider, model: aggregator.model });
+    }
     result = completion
       ? await runPrompt({
         provider: aggregator.provider, prompt: aggregatorPrompt, source, model: aggregator.model, timeout, signal: stopped, cwd, completion, onRunCreated, onRunSettled,
