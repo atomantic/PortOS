@@ -167,15 +167,17 @@ describe('translateMindEvent', () => {
   });
 
   it('replays only the exchanges that belong to the session', () => {
-    expect(mindHistoryUpdates([
+    const replay = mindHistoryUpdates([
       { kind: 'mind.message.accepted', data: { messageId: 'm1', displayText: 'hi' } },
       { kind: 'mind.message.accepted', data: { messageId: 'x', displayText: 'someone else' } },
       { kind: 'mind.reply', data: { replyToMessageId: 'm1', displayText: 'hello' } },
       { kind: 'mind.reply', data: { replyToMessageId: null, displayText: 'self-wake reply' } },
-    ], ['m1']).map((update) => [update.sessionUpdate, update.content.text])).toEqual([
+    ], ['m1', 'm0']);
+    expect(replay.updates.map((update) => [update.sessionUpdate, update.content.text])).toEqual([
       ['user_message_chunk', 'hi'],
       ['agent_message_chunk', 'hello'],
     ]);
+    expect(replay.missingMessageIds).toEqual(['m0']);
   });
 });
 

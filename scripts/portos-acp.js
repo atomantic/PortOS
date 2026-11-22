@@ -129,19 +129,25 @@ export const resolveSessionsFile = (env = process.env) => env[ACP_SESSIONS_FILE_
  */
 export const createSessionStore = (file, { log = () => {} } = {}) => {
   let tail = Promise.resolve();
-  const read = async () => {
+  // `readable: false` means the file exists but does not parse. Listing treats
+  // it as empty, but saving refuses: rewriting it would discard every record a
+  // human could still repair by hand.
+  const load = async () => {
     const raw = await readFile(file, 'utf8').catch((error) => (error.code === 'ENOENT' ? null : Promise.reject(error)));
-    if (raw === null) return [];
+    if (raw === null) return { records: [], readable: true };
     try {
-      return normalizeSessionRecords(JSON.parse(raw));
+      return { records: normalizeSessionRecords(JSON.parse(raw)), readable: true };
     } catch (error) {
       log(`⚠️ Ignoring unreadable ACP session index ${file}: ${error.message}`);
-      return [];
+      return { records: [], readable: false };
     }
   };
+  const read = async () => (await load()).records;
   const save = (record) => {
     const run = tail.then(async () => {
-      const records = upsertSessionRecord(await read(), record);
+      const current = await load();
+      if (!current.readable) throw new Error(`the session index ${file} is unreadable; fix or remove it to save sessions again`);
+      const records = upsertSessionRecord(current.records, record);
       await mkdir(dirname(file), { recursive: true, mode: 0o700 });
       const temp = `${file}.${process.pid}.tmp`;
       await writeFile(temp, `${JSON.stringify({ version: 1, sessions: records }, null, 2)}\n`, { mode: 0o600 });
@@ -356,9 +362,10 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
           if (out.terminal) finish(out.terminal);
         },
       });
+      // Never rejects: an abort becomes null (cancelled), a drop becomes `dropped`.
       const closed = done.then(
-        () => ({ error: 'PortOS closed the Persistent Mind stream before the turn finished' }),
-        (error) => (signal.aborted ? null : { error: error.message }),
+        () => ({ dropped: 'PortOS closed the Persistent Mind stream before the turn finished' }),
+        (error) => (signal.aborted ? null : { dropped: error.message }),
       );
       await client.json('POST', '/api/cos/mind/messages', { body: { id: messageId, text }, signal });
       session.messageIds = [...session.messageIds, messageId].slice(-MAX_ACP_SESSION_MESSAGE_IDS);
@@ -367,6 +374,9 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
       notify(session.sessionId, agentThoughtChunk('Queued for the Persistent Mind.\n'));
       const terminal = await Promise.race([finished, closed]);
       if (signal.aborted || terminal === null) return { stopReason: 'cancelled' };
+      if (terminal.dropped) {
+        throw acpError(JSON_RPC_ERRORS.INTERNAL_ERROR, `${terminal.dropped}. The message was queued, so the Persistent Mind still answers it; reload this session to see the reply.`);
+      }
       if (terminal.error) throw acpError(JSON_RPC_ERRORS.INTERNAL_ERROR, terminal.error);
       return { stopReason: terminal.stopReason };
     } finally {
@@ -398,6 +408,7 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
     },
     'session/load': async ({ sessionId, cwd }) => {
       requireString(sessionId, 'sessionId');
+      let historyTruncated = false;
       let session = sessions.get(sessionId);
       if (!session) {
         const record = await store.get(sessionId);
@@ -411,15 +422,22 @@ export const createAcpAgent = ({ client, store, send, log = () => {}, defaultMod
         });
         for (const update of askConversationUpdates(data?.conversation)) notify(sessionId, update);
       } else if (session.mode === 'mind' && session.messageIds.length) {
+        // The trajectory route pages forward only, so the newest page is all a
+        // load can see; say so rather than present a partial transcript as whole.
         const page = await client.json('GET', `/api/cos/mind?limit=${MIND_HISTORY_PAGE}`);
-        for (const update of mindHistoryUpdates(page?.events, session.messageIds)) notify(sessionId, update);
+        const history = mindHistoryUpdates(page?.events, session.messageIds);
+        historyTruncated = history.missingMessageIds.length > 0;
+        if (historyTruncated) {
+          notify(sessionId, agentThoughtChunk(`${history.missingMessageIds.length} earlier message(s) in this session are past the Persistent Mind's newest ${MIND_HISTORY_PAGE} trajectory events and are not replayed.\n`));
+        }
+        for (const update of history.updates) notify(sessionId, update);
       }
       sessions.set(sessionId, session);
       if (typeof cwd === 'string' && cwd && cwd !== session.cwd) {
         session.cwd = cwd;
         await persist(session);
       }
-      return buildSessionModePayload(session.mode);
+      return { ...buildSessionModePayload(session.mode), ...(historyTruncated ? { _meta: { portos: { historyTruncated: true } } } : {}) };
     },
     'session/list': async ({ cwd, cursor }) => listSessionPage(await store.list(), { cwd, cursor }),
     'session/set_mode': async ({ sessionId, modeId }) => {

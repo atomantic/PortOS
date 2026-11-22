@@ -89,9 +89,9 @@ Each editor owns its settings key. If your release names it differently, keep th
 |--------|----------|
 | `initialize` | Protocol version 1. Advertises `loadSession`, `sessionCapabilities.list`, text plus embedded-context prompts, no image or audio, no client MCP transports and no auth methods. Makes no PortOS call. |
 | `session/new` | Returns a session id with its mode and config options. Writes nothing and calls nothing in PortOS: an editor probing for models leaves no empty conversation behind. Client `mcpServers` are ignored, because PortOS owns its own tools. |
-| `session/prompt` | Text, resource links and embedded text resources are sent as written; nothing is rewritten or truncated. A prompt over a backend's limit gets that route's validation error back. Image and audio blocks are refused, never dropped silently. Ends with `end_turn`, or `cancelled` after `session/cancel`. |
+| `session/prompt` | Text blocks are sent exactly as typed. When a prompt has several blocks, they are joined with a blank line, a resource link becomes `[name](uri)`, and an embedded text resource is appended as `Context from <uri>:` followed by its text. Nothing else is added, rewritten or truncated. A prompt over a backend's limit gets that route's validation error back. Image and audio blocks are refused, never dropped silently. Ends with `end_turn`, or `cancelled` after `session/cancel`. |
 | `session/cancel` | Aborts the upstream request. In `ask` mode the server stops the provider when the stream closes and keeps the question and any partial answer. In `mind` mode the adapter stops waiting, but the shared resident mind still finishes the turn it already took. |
-| `session/load` | Replays history from PortOS: the Ask conversation's turns, or the session's own exchanges still in the mind's newest trajectory page (500 events). Updates the stored editor `cwd`. |
+| `session/load` | Replays history from PortOS: the Ask conversation's turns, or the session's own exchanges still in the mind's newest trajectory page (500 events). When older mind messages fall outside that page, the load says how many were not replayed and returns `_meta.portos.historyTruncated: true`. Updates the stored editor `cwd`. |
 | `session/list` | Lists saved sessions newest first, optionally filtered by `cwd`, with a `nextCursor` for paging. |
 | `session/set_mode`, `session/set_config_option` | Switch a session between `ask` and `mind` until its first prompt. |
 
@@ -99,6 +99,6 @@ Each editor owns its settings key. If your release names it differently, keep th
 
 ## Session records
 
-The editor-side session index lives in `~/.portos/acp-sessions.json`, mode `0600`, or `$PORTOS_ACP_SESSIONS_FILE`. A record is written only after a session's first prompt reaches PortOS. It maps the ACP session id to its mode, editor `cwd`, title (the first prompt's opening words) and PortOS conversation or mind message ids, keeping the newest 200 sessions. Message text stays in PortOS and is replayed from there. Deleting the file forgets the editor sessions; the PortOS conversations remain.
+The editor-side session index lives in `~/.portos/acp-sessions.json`, mode `0600`, or `$PORTOS_ACP_SESSIONS_FILE`. A record is written only after a session's first prompt reaches PortOS. It maps the ACP session id to its mode, editor `cwd`, title (the first prompt's opening words) and PortOS conversation or mind message ids, keeping the newest 200 sessions. Message text stays in PortOS and is replayed from there. If the file stops parsing, the adapter leaves it untouched and stops saving new sessions until you fix or remove it. Deleting the file forgets the editor sessions; the PortOS conversations remain.
 
 The mind stream route `GET /api/cos/mind/stream` sends the same trajectory events the PortOS UI receives over Socket.IO (`cos:mind:event`), behind the same `/api/*` auth gate, and replays nothing.

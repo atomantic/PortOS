@@ -429,17 +429,22 @@ export const translateMindEvent = (event, { messageId, turnId }) => {
   }
 };
 
-/** Replay the exchanges of one mind session from a trajectory page. */
+/**
+ * Replay the exchanges of one mind session from a trajectory page.
+ * `missingMessageIds` lists the session's messages the page no longer holds.
+ */
 export const mindHistoryUpdates = (events, messageIds) => {
   const ours = new Set(Array.isArray(messageIds) ? messageIds : []);
+  const seen = new Set();
   const updates = [];
   for (const event of Array.isArray(events) ? events : []) {
+    if (event?.kind === 'mind.message.accepted' && ours.has(event.data?.messageId)) seen.add(event.data.messageId);
     const text = displayText(event);
     if (!text) continue;
     if (event.kind === 'mind.message.accepted' && ours.has(event.data?.messageId)) updates.push(userMessageChunk(text));
     else if (event.kind === 'mind.reply' && ours.has(event.data?.replyToMessageId)) updates.push(agentMessageChunk(text));
   }
-  return updates;
+  return { updates, missingMessageIds: [...ours].filter((id) => !seen.has(id)) };
 };
 
 // ---------------------------------------------------------------------------

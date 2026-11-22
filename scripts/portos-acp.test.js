@@ -40,6 +40,7 @@ const startFakePortos = async () => {
     mindMessages: [],
     mindSubscribers: new Set(),
     mindEvents: [],
+    mindDropAfterPost: false,
     requests: [],
   };
   const server = createServer(async (req, res) => {
@@ -92,6 +93,10 @@ const startFakePortos = async () => {
       state.mindMessages.push(body);
       res.writeHead(202);
       res.end(JSON.stringify({ success: true, duplicate: false, messageId: body.id }));
+      if (state.mindDropAfterPost) {
+        for (const subscriber of state.mindSubscribers) subscriber.destroy();
+        return undefined;
+      }
       const emit = (event) => {
         state.mindEvents.push(event);
         for (const subscriber of state.mindSubscribers) frame(subscriber, null, event);
@@ -272,6 +277,17 @@ describe('portos-acp ask mode', () => {
     expect((await adapter.request('session/load', { sessionId: 'portos-missing', cwd: '/w', mcpServers: [] })).error.code).toBe(-32002);
   });
 
+  it('never overwrites a session index it cannot parse', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(env.PORTOS_ACP_SESSIONS_FILE, '{"sessions": [ truncated');
+    adapter = startAdapter(env);
+    const { result: { sessionId } } = await adapter.request('session/new', { cwd: '/w', mcpServers: [] });
+    expect((await adapter.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'hi' }] })).result).toEqual({ stopReason: 'end_turn' });
+    expect(await readFile(env.PORTOS_ACP_SESSIONS_FILE, 'utf8')).toBe('{"sessions": [ truncated');
+    expect(adapter.stderrLines.some((line) => line.includes('unreadable'))).toBe(true);
+    expect((await adapter.request('session/list', {})).result).toEqual({ sessions: [] });
+  });
+
   it('pins the mode once a session has a conversation', async () => {
     adapter = startAdapter(env);
     const { result: { sessionId } } = await adapter.request('session/new', { cwd: '/w', mcpServers: [] });
@@ -314,6 +330,23 @@ describe('portos-acp mind mode', () => {
     adapter = startAdapter(env);
     await adapter.request('session/load', { sessionId, cwd: '/w', mcpServers: [] });
     expect(adapter.updates(sessionId).map((u) => u.content.text)).toEqual(['What is open?', 'Three tasks are open.']);
+  });
+
+  it('reports a dropped stream as queued, and flags a load past the retained history', async () => {
+    fake.state.mindDropAfterPost = true;
+    adapter = startAdapter(env, { mode: 'mind' });
+    const { result: { sessionId } } = await adapter.request('session/new', { cwd: '/w', mcpServers: [] });
+    const reply = await adapter.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: 'Still there?' }] });
+    expect(reply.error.code).toBe(-32603);
+    expect(reply.error.message).toContain('The message was queued');
+    expect(fake.state.mindMessages).toHaveLength(1);
+    await adapter.stop();
+
+    // The trajectory page no longer holds that message.
+    adapter = startAdapter(env);
+    const loaded = await adapter.request('session/load', { sessionId, cwd: '/w', mcpServers: [] });
+    expect(loaded.result._meta).toEqual({ portos: { historyTruncated: true } });
+    expect(adapter.updates(sessionId)[0]).toMatchObject({ sessionUpdate: 'agent_thought_chunk' });
   });
 
   it('starts new sessions in the --mode default', async () => {
