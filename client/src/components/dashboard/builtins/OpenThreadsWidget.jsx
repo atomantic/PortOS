@@ -46,7 +46,7 @@ export default function OpenThreadsWidget() {
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
         <Link to="/brain/threads" className="flex items-center gap-2 hover:text-port-accent">
           <ListTodo size={16} className="text-gray-500" aria-hidden="true" />
-          <h3 className="text-sm font-semibold text-white">Open Threads</h3>
+          <h2 className="text-sm font-semibold text-white">Open Threads</h2>
         </Link>
         {hasResults && total > 0 && <span className="text-xs text-gray-500">{formatCount(total)} open</span>}
       </div>

@@ -12,7 +12,7 @@ import {
   blenderEffectiveOptions, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles,
 } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderMediaPath, blenderShotDir, readBlenderJson } from './workspace.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, codeModuleClosures, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHashes, codeModuleClosures, hashBlenderSources } from './hashing.js';
 import { getBlenderSong } from './song.js';
 
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
@@ -94,13 +94,16 @@ export async function countBlenderHandleFrames(owner, shotId, quality, handleRan
   return { inFrames, outFrames };
 }
 
+/** Older records have no song hash and retain their declared contract. */
+const songChanged = (recorded, songHashes) => recorded != null && !songHashes.includes(recorded);
+
 /**
  * Why a render recorded as `meta` is out of date, in the order of
  * MUSIC_VIDEO_BLENDER_STALE_REASONS; empty when it is current. `source` is the
  * shot's dependency files; a shot that moved on the song is `timing` (its
  * source may have changed as well: the one hash covers both).
  */
-function staleReasons(meta, range, handleRanges, { fps, shotHash, settingsHash, optionsHash, songHash, files }) {
+function staleReasons(meta, range, handleRanges, { fps, shotHash, settingsHash, optionsHash, songHashes, files }) {
   const reasons = [];
   if (meta.srcHash !== shotHash) {
     const moved = meta.fps === fps && Number.isInteger(meta.startFrame) && (meta.startFrame !== range.startFrame || meta.endFrame !== range.endFrame);
@@ -115,8 +118,7 @@ function staleReasons(meta, range, handleRanges, { fps, shotHash, settingsHash, 
   }
   if (meta.settingsHash !== settingsHash) reasons.push('settings');
   if ((meta.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash) reasons.push('options');
-  // Older renders have no song hash and retain their declared contract.
-  if (meta.songHash != null && meta.songHash !== songHash) reasons.push('song');
+  if (songChanged(meta.songHash, songHashes)) reasons.push('song');
   return reasons;
 }
 
@@ -160,7 +162,7 @@ async function readQuality(owner, shot, quality, current) {
   };
 }
 
-async function readStills(owner, shot, { shotHash, optionsHash, songHash, files }) {
+async function readStills(owner, shot, { shotHash, optionsHash, songHashes, files }) {
   const listed = await readBlenderJson(blenderStillsFile(owner, shot.id), []);
   const stills = [];
   for (const still of Array.isArray(listed) ? listed : []) {
@@ -171,7 +173,7 @@ async function readStills(owner, shot, { shotHash, optionsHash, songHash, files 
     stills.push({
       ...(await isFile(thumbnail) ? { thumbnail: blenderMediaPath(owner, thumbnail) } : {}),
       file: blenderMediaPath(owner, absolute), timeSec: still.timeSec, createdAt: still.createdAt || null,
-      stale: (still.songHash != null && still.songHash !== songHash) || still.srcHash !== shotHash || blenderImportsChanged(still.imports, files) || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
+      stale: songChanged(still.songHash, songHashes) || still.srcHash !== shotHash || blenderImportsChanged(still.imports, files) || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
     });
   }
   // Newest first: the first still is the shot's freshest picture.
@@ -190,7 +192,7 @@ export async function isBlenderRenderCurrent(owner, shot, quality, current) {
 
 const SHEET_FILE = /^sheet--?\d+--?\d+-e\d+\.jpg$/;
 
-async function readSheets(owner, shot, { shotHash, optionsHash, songHash, files }) {
+async function readSheets(owner, shot, { shotHash, optionsHash, songHashes, files }) {
   const listed = await readBlenderJson(blenderSheetsFile(owner, shot.id), []);
   const sheets = [];
   for (const sheet of Array.isArray(listed) ? listed : []) {
@@ -208,7 +210,7 @@ async function readSheets(owner, shot, { shotHash, optionsHash, songHash, files 
       endSec: sheet.endSec,
       fromPreview: Boolean(sheet.fromPreview),
       createdAt: sheet.createdAt || null,
-      stale: (sheet.songHash != null && sheet.songHash !== songHash)
+      stale: songChanged(sheet.songHash, songHashes)
         || sheet.srcHash !== shotHash
         || blenderImportsChanged(sheet.imports, files)
         || (sheet.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
@@ -234,16 +236,16 @@ export async function readBlenderRenders(owner, manifest, { settings, sources = 
   const qualities = finalsOnly ? ['final'] : BLENDER_RENDER_QUALITIES;
   const settingsHashes = Object.fromEntries(qualities.map((quality) => [quality, blenderSettingsHash(settings, quality)]));
   const optionsHash = blenderOptionsHash(blenderFilmOptions(manifest, settings));
-  const songHash = blenderSongHash(await getBlenderSong(owner, settings));
+  const songHashes = blenderSongHashes(await getBlenderSong(owner, settings));
   const renders = {};
   for (const shot of shots) {
     const shotHash = blenderShotHash(shot, files, { closures });
     const entry = {
-      stills: finalsOnly ? [] : await readStills(owner, shot, { shotHash, optionsHash, songHash, files }),
-      sheets: finalsOnly ? [] : await readSheets(owner, shot, { shotHash, optionsHash, songHash, files }),
+      stills: finalsOnly ? [] : await readStills(owner, shot, { shotHash, optionsHash, songHashes, files }),
+      sheets: finalsOnly ? [] : await readSheets(owner, shot, { shotHash, optionsHash, songHashes, files }),
     };
     for (const quality of qualities) {
-      const render = await readQuality(owner, shot, quality, { fps: settings.fps, shotHash, settingsHash: settingsHashes[quality], optionsHash, songHash, files });
+      const render = await readQuality(owner, shot, quality, { fps: settings.fps, shotHash, settingsHash: settingsHashes[quality], optionsHash, songHashes, files });
       if (render) entry[quality] = render;
     }
     const blend = join(blenderShotDir(owner, shot.id), 'shot.blend');

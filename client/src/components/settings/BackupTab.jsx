@@ -87,12 +87,13 @@ export function BackupTab() {
   const effectiveExcludesPanelId = useId();
   const exclusionsPanelId = useId();
   const snapshotsPanelId = useId();
+  const exclusionsRef = useRef(null);
   const [loading, setLoading] = useState(true);
   // A settings response that never resolved is NOT 'the defaults' — the schedule
   // fields stay null and the form is replaced by an error panel, so an unreachable
   // API can't be saved back as invented values (#6632).
   const [loadFailed, setLoadFailed] = useState(false);
-  const [loadFailures, setLoadFailures] = useState({ status: false, exclusions: false, snapshots: false });
+  const [loadFailures, setLoadFailures] = useState({ status: false, exclusions: false });
   const patchLoadFailures = (patch) => setLoadFailures(prev => ({ ...prev, ...patch }));
   const [saving, setSaving] = useState(false);
   // Schedule state is seeded ONLY from the API's resolved values. The server
@@ -117,9 +118,21 @@ export function BackupTab() {
   const [backupStatus, setBackupStatus] = useState('never');
   const [restoreWarning, setRestoreWarning] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
+  const [snapshotState, setSnapshotState] = useState('idle');
+  const snapshotGenerationRef = useRef(0);
+  const snapshotLoadingRef = useRef(false);
+  const destinationGenerationRef = useRef(0);
+  const [snapshotRevision, setSnapshotRevision] = useState(0);
+  const historyOpenRef = useRef(false);
+  const savingRef = useRef(false);
   // Disclosure open/closed flags for the collapsible panels, all collapsed by default.
   const [disclosure, setDisclosure] = useState({});
   const toggleDisclosure = (key, next) => setDisclosure(prev => ({ ...prev, [key]: typeof next === 'function' ? next(!!prev[key]) : next }));
+  const reviewExclusions = () => {
+    setDisclosure(prev => ({ ...prev, exclusions: true, defaultExcludes: true, effectiveExcludes: true }));
+    exclusionsRef.current?.querySelector('button')?.focus({ preventScroll: true });
+    exclusionsRef.current?.scrollIntoView?.({ block: 'start' });
+  };
   const [restoreTarget, setRestoreTarget] = useState(null); // source-bound request pending confirm
   const [restorePreview, setRestorePreview] = useState(null); // dry-run result
   // A committed database restore awaiting recovery (#9725): the server keeps
@@ -140,20 +153,17 @@ export function BackupTab() {
     Promise.allSettled([
       getSettings({ silent: true }),
       getBackupStatus({ silent: true }),
-      getBackupSnapshots({ silent: true }),
     ])
-      .then(([settingsResult, statusResult, snapshotsResult]) => {
+      .then(([settingsResult, statusResult]) => {
         if (settingsResult.status === 'rejected') throw settingsResult.reason;
         const statusLoadError = statusResult.status === 'rejected';
-        const snapshotsLoadError = snapshotsResult.status === 'rejected';
         const settings = settingsResult.value;
         const status = statusLoadError ? null : statusResult.value;
-        const snaps = snapshotsLoadError ? null : snapshotsResult.value;
         const backup = settings?.backup || {};
         const savedDest = backup.destPath || '';
         const savedExcludes = asExcludeArray(backup.excludePaths);
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
-        patchLoadFailures({ status: statusLoadError, exclusions: statusLoadError, snapshots: snapshotsLoadError });
+        patchLoadFailures({ status: statusLoadError, exclusions: statusLoadError });
         // The GET projects the effective schedule, so these are always present.
         // Anything else is an unresolved response and is treated as a load failure
         // rather than being papered over with a locally invented default.
@@ -183,7 +193,6 @@ export function BackupTab() {
         setBackupStatus(status?.status ?? 'never');
         setRestoreWarning(status?.restoreWarning ?? null);
         setRestoreRecovery(status?.restoreRecovery?.pending ? status.restoreRecovery : null);
-        setSnapshots(Array.isArray(snaps) ? snaps : []);
       })
       .catch(() => {
         setLoadFailed(true);
@@ -192,7 +201,40 @@ export function BackupTab() {
       .finally(() => setLoading(false));
   }, []);
 
+  const refreshSnapshots = async () => {
+    const generation = ++snapshotGenerationRef.current;
+    snapshotLoadingRef.current = true;
+    setSnapshotState('loading');
+    try {
+      const result = await getBackupSnapshots({ silent: true });
+      if (generation !== snapshotGenerationRef.current) return;
+      if (!Array.isArray(result)) throw new Error('Invalid snapshot history');
+      setSnapshots(result);
+      setSnapshotState('loaded');
+    } catch {
+      if (generation === snapshotGenerationRef.current) setSnapshotState('error');
+    } finally {
+      if (generation === snapshotGenerationRef.current) snapshotLoadingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (disclosure.snapshots && !savingRef.current) refreshSnapshots();
+    return () => { snapshotGenerationRef.current += 1; };
+  }, [disclosure.snapshots, snapshotRevision]);
+
   const handleSave = async () => {
+    savingRef.current = true;
+    snapshotGenerationRef.current += 1;
+    setSnapshotState('idle');
+    if (destPath !== savedDestPath) {
+      destinationGenerationRef.current += 1;
+      setDeletingIds(new Set());
+      restorePreviewGenerationRef.current += 1;
+      setRestoreTarget(null);
+      setRestorePreview(null);
+      setDeleteTarget(null);
+    }
     setSaving(true);
     try {
       const submitted = { destPath, enabled, cronExpression, retentionCount, excludePaths, disabledDefaultExcludes };
@@ -204,7 +246,9 @@ export function BackupTab() {
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
     } finally {
+      savingRef.current = false;
       setSaving(false);
+      setSnapshotRevision(revision => revision + 1);
     }
   };
 
@@ -221,11 +265,11 @@ export function BackupTab() {
     patchLoadFailures({ status: false });
     // A completed run establishes health, but does not include the exclusion
     // catalog. Recover that separately before enabling its controls.
+    if (!historyOpenRef.current) setSnapshotState('idle');
     return Promise.all([
-      getBackupSnapshots({ silent: true }).then(s => {
-        setSnapshots(Array.isArray(s) ? s : []);
-        patchLoadFailures({ snapshots: false });
-      }).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); }),
+      historyOpenRef.current && !savingRef.current
+        ? refreshSnapshots()
+        : Promise.resolve(),
       loadFailures.exclusions
         ? getBackupStatus({ silent: true }).then(status => {
           setDefaultExcludes(asArray(status?.defaultExcludes));
@@ -295,8 +339,10 @@ export function BackupTab() {
   const scheduleSummary = savedEnabled
     ? (describeCron(savedCronExpression) || savedCronExpression)
     : 'Scheduled backups are off';
-  const snapshotSummary = loadFailures.snapshots
-    ? 'Unavailable — reload to retry'
+  const snapshotSummary = snapshotState === 'error'
+    ? 'Unavailable — open to retry'
+    : snapshotState === 'loading' ? 'Loading…'
+    : snapshotState !== 'loaded' ? 'Open to load'
     : snapshots.length > 0
     ? `${snapshots.length} ${snapshots.length === 1 ? 'snapshot' : 'snapshots'}`
     : 'No snapshots yet';
@@ -398,6 +444,7 @@ export function BackupTab() {
     setDeleteTarget(null);
     if (!target || pendingDeletes.current.has(target.identity)) return;
     pendingDeletes.current.add(target.identity);
+    const destinationGeneration = destinationGenerationRef.current;
     const result = await deleteBackupSnapshot(target.snapshotId, target.source, { silent: true })
       .catch(err => ({ deleted: false, error: err }));
     pendingDeletes.current.delete(target.identity);
@@ -406,7 +453,10 @@ export function BackupTab() {
       return;
     }
     toast.success(`Deleted snapshot ${target.snapshotId}`);
+    if (destinationGeneration !== destinationGenerationRef.current) return;
+    snapshotGenerationRef.current += 1;
     setDeletingIds(previous => new Set(previous).add(target.identity));
+    if (snapshotLoadingRef.current && historyOpenRef.current && !savingRef.current) refreshSnapshots();
   };
 
   return (
@@ -416,6 +466,11 @@ export function BackupTab() {
       className="@container bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5"
     >
       <h2 id="backup-settings-heading" className="sr-only">Backup operations and configuration</h2>
+      <div className="space-y-2 text-sm text-gray-400">
+        <p>Use Time Machine for Mac-wide recovery. You can leave scheduled PortOS backups off if you&apos;ve verified that your backups can restore both the PortOS data folder and PostgreSQL. Use PortOS snapshots if you want an app-only restore or a portable PostgreSQL dump.</p>
+        <p>PortOS snapshots cover app data and, when successful, a PostgreSQL dump, not your whole installation or Mac. Defaults exclude some large data, such as Blender film render frames and training checkpoints. Some exclusions are optional and others always apply, so even disabling every optional exclusion does not make a complete backup.</p>
+        <button type="button" onClick={reviewExclusions} className="min-h-[40px] px-3 py-2 border border-port-border rounded-lg hover:bg-port-border text-gray-300">Review backup exclusions</button>
+      </div>
       {restoreRecovery && (
         <Banner tone="error" icon={AlertTriangle} title="Database restore needs recovery" size="md">
           {restoreRecovery.damaged ? (
@@ -589,7 +644,7 @@ export function BackupTab() {
         </span>
       </div>
 
-      <div className="border-t border-port-border pt-5">
+      <div ref={exclusionsRef} className="scroll-mt-20 border-t border-port-border pt-5">
         <CollapsibleSection
           label="Exclusions"
           icon={ShieldOff}
@@ -605,7 +660,7 @@ export function BackupTab() {
             <p className="text-sm text-port-warning">Backup exclusion details are unavailable — reload to retry before editing these rules.</p>
           ) : (
             <>
-              <p className="text-sm text-gray-400">Review what stays out of snapshots. Detailed rules are one click away so the recovery actions remain easy to find.</p>
+              <p className="text-sm text-gray-400">Review default and custom rules that keep data out of snapshots. Optional defaults can be disabled; always-excluded rules cannot. Custom rules still apply independently.</p>
 
           {defaultExcludeRows.length > 0 && (
             <div className="space-y-2">
@@ -641,7 +696,7 @@ export function BackupTab() {
                         )}
                         <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
                         <span className="text-gray-500">
-                          {d.reason}
+                          <span className="text-gray-400">{d.overridable ? 'Optional' : 'Always excluded'} · </span>{d.reason}
                           {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
                         </span>
                       </li>
@@ -726,13 +781,22 @@ export function BackupTab() {
           summary={snapshotSummary}
           id={snapshotsPanelId}
           open={!!disclosure.snapshots}
-          onOpenChange={(next) => toggleDisclosure('snapshots', next)}
+          onOpenChange={(next) => {
+            historyOpenRef.current = next;
+            if (!next) snapshotGenerationRef.current += 1;
+            toggleDisclosure('snapshots', next);
+          }}
           size="bar"
           className="space-y-3"
           bodyClassName="space-y-2 pt-2"
         >
-          {loadFailures.snapshots ? (
-            <p className="text-sm text-port-warning">Snapshot history is unavailable — reload to retry.</p>
+          {saving || snapshotState === 'idle' || snapshotState === 'loading' ? (
+            <BrailleSpinner text="Loading snapshot history" />
+          ) : snapshotState === 'error' ? (
+            <div className="text-sm text-port-warning">
+              Snapshot history is unavailable.{' '}
+              <button type="button" onClick={refreshSnapshots} className="px-3 py-2 border border-port-border rounded-lg hover:bg-port-border">Retry</button>
+            </div>
           ) : snapshots.length === 0 ? (
             <p className="text-sm text-gray-500">No snapshots have been recorded on this machine yet.</p>
           ) : (

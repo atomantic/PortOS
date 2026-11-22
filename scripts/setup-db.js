@@ -100,8 +100,9 @@ function hasCompose() {
 }
 
 // Domain-level readiness check: the configured PG_USER role can authenticate
-// to PG_DATABASE AND the `memories` table from init-db.sql exists in the
-// public schema. This is what `db.sh setup-native` produces. The probe
+// to PG_DATABASE, the `memories` table from init-db.sql exists in the
+// public schema, AND the server can load the pgvector library. This is what
+// `db.sh setup-native` produces. The probe
 // itself is a single cheap psql round-trip; passing it lets us skip the
 // full setup-native path (brew checks, ALTER USER, schema reapply) on
 // every `npm start`/`npm run dev`, which would otherwise reset the role's
@@ -123,11 +124,42 @@ function isPortOSDbReady(port = PG_PORT_NATIVE) {
         '-U', PG_USER,
         '-d', PG_DATABASE,
         '-tAc',
-        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' LIMIT 1"
+        // The vector cast makes the server load the pgvector library: a
+        // `brew upgrade` that drops the PostgreSQL 17 build leaves the schema
+        // intact but every vector query failing, and must not pass as ready.
+        "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'memories' AND '[1]'::vector IS NOT NULL LIMIT 1"
       ],
       { stdio: 'pipe', env: PG_CHILD_ENV }
     ).toString();
     return output.trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+// PostgreSQL's version as a server_version_num-style integer (17.12 → 170012).
+function pgVersionNum(text) {
+  const m = /(\d+)\.(\d+)/.exec(String(text ?? ''));
+  return m ? Number(m[1]) * 10000 + Number(m[2]) : null;
+}
+
+// A `brew upgrade` replaces the postgresql@17 keg's binaries and libraries but
+// leaves the old server process running. Each new backend then loads the new
+// libraries into the old binary and fails (`Symbol not found` in plpgsql,
+// `$libdir/vector` missing), so the fast path must not report ready while the
+// running server is older than the installed Homebrew keg. Darwin + Homebrew
+// only; anything that cannot be read counts as current.
+function isRunningServerStale(port = PG_PORT_NATIVE) {
+  if (process.platform !== 'darwin') return false;
+  try {
+    const prefix = execFileSync('brew', ['--prefix', 'postgresql@17'], { stdio: 'pipe' }).toString().trim();
+    const installed = pgVersionNum(execFileSync(join(prefix, 'bin', 'pg_config'), ['--version'], { stdio: 'pipe' }).toString());
+    const running = Number(execFileSync(
+      'psql',
+      ['-X', '-h', PG_HOST, '-p', String(port), '-U', PG_USER, '-d', PG_DATABASE, '-tAc', 'SHOW server_version_num'],
+      { stdio: 'pipe', env: PG_CHILD_ENV },
+    ).toString().trim());
+    return Boolean(installed && running && Math.floor(running / 10000) === Math.floor(installed / 10000) && running !== installed);
   } catch {
     return false;
   }
@@ -315,12 +347,12 @@ if (mode === 'native') {
   // Fast path: portos role can already authenticate to portos db and the
   // schema is in place. Skip setup-native to avoid re-ALTERing credentials
   // and the brew/psql startup-time hit on every `npm start`.
-  if (isPortOSDbReady()) {
+  if (isPortOSDbReady() && !isRunningServerStale()) {
     console.log(`✅ PortOS database ready on port ${PG_PORT_NATIVE}`);
     process.exit(0);
   }
-  // Otherwise (fresh checkout, missing role, missing schema, wrong password)
-  // run the full bootstrap.
+  // Otherwise (fresh checkout, missing role, missing schema, wrong password,
+  // a server left running across a Homebrew upgrade) run the full bootstrap.
   if (setupNativePostgres()) {
     process.exit(0);
   }

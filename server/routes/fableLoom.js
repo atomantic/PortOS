@@ -432,11 +432,11 @@ router.get('/sessions/:sessionId', asyncHandler(async (req, res) => {
 
 router.patch('/sessions/:sessionId', asyncHandler(async (req, res) => {
   const patch = validateRequest(hostedSessionPatchSchema, req.body);
-  res.json(await updateHostedSession(req.params.sessionId, patch));
+  res.json(await updateHostedSession(req.params.sessionId, patch, { io: req.app.get('io') }));
 }));
 
 router.delete('/sessions/:sessionId', asyncHandler(async (req, res) => {
-  res.json(endHostedSession(req.params.sessionId, { reason: 'api_deleted' }));
+  res.json(endHostedSession(req.params.sessionId, { reason: 'api_deleted', io: req.app.get('io') }));
 }));
 
 // --- Production Orchestration & Continuity Review ---------------------------

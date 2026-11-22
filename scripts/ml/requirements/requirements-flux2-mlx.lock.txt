@@ -13,7 +13,7 @@
 #
 # Regenerate after editing requirements-flux2-mlx.txt, from the repo root,
 # with a cooldown so brand-new releases are not adopted the day they publish:
-#   CUTOFF=<UTC date at least 7 days ago>
+#   CUTOFF=<UTC date at least 3 days ago>
 #   LOCK="$PWD/scripts/ml/requirements/requirements-flux2-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/ml/requirements/requirements-flux2-mlx.txt "$TMP/"
 #   cp "$LOCK" "$TMP/requirements-flux2-mlx.lock.txt"

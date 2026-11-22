@@ -17,7 +17,7 @@ import {
 } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderScratchDir, blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, codeModuleClosures, filmCodeEntries, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, blenderSongHashes, codeModuleClosures, filmCodeEntries, hashBlenderSources } from './hashing.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
 import { encodeBlenderPoster, encodeBlenderSheet, encodeBlenderShot } from './encode.js';
@@ -224,7 +224,7 @@ async function runContactSheet({
 
   const previewSettingsHash = blenderSettingsHash(settings, 'preview');
   const previewMeta = await isBlenderRenderCurrent(owner, shot, 'preview', {
-    fps: settings.fps, shotHash: srcHash, settingsHash: previewSettingsHash, optionsHash, songHash, files,
+    fps: settings.fps, shotHash: srcHash, settingsHash: previewSettingsHash, optionsHash, songHashes: blenderSongHashes(song), files,
   });
   const previewFramesDir = blenderFramesDir(owner, shot.id, 'preview');
   const previewFramePaths = previewMeta ? sheetFrames.map((f) => join(previewFramesDir, blenderFrameName(f, 'preview'))) : null;
@@ -398,7 +398,7 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
       // When only handles changed on a completed render, resume the existing shot and overlapping handle frames.
       const resumeBase = !force && previous?.srcHash === srcHash && previous?.settingsHash === settingsHash
         && !blenderImportsChanged(previous?.imports, files)
-        && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash && previous?.songHash === songHash;
+        && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash && previous?.songHash != null && blenderSongHashes(song).includes(previous.songHash);
       resume = resumeBase && (previous?.complete !== true || handlesChanged);
       resumedImports = resume ? previous.imports : null;
       const framesDir = blenderFramesDir(owner, shotId, quality);

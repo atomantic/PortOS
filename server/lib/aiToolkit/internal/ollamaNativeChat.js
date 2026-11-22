@@ -81,7 +81,7 @@ export function buildOllamaNativeChatBody({ model, messageContent, provider, gen
     model,
     messages: [toNativeMessage(messageContent)],
     stream: true,
-    ...(typeof think === 'boolean' ? { think } : {}),
+    ...(typeof think === 'boolean' || (typeof think === 'string' && think) ? { think } : {}),
     options: {
       num_ctx: requestedNumCtx(provider),
       ...(temperature === undefined ? {} : { temperature }),

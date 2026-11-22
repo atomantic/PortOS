@@ -21,12 +21,12 @@ const duplicatePairsSchema = z.object({
     sourcePath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
     targetPath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
   }).strict()).min(1).max(200),
-  mode: z.literal('hardlink').default('hardlink'),
+  mode: z.enum(['hardlink', 'clone']).default('hardlink'),
 }).strict();
 
 router.post('/duplicates/rectify', asyncHandler(async (req, res) => {
-  const { pairs } = validateRequest(duplicatePairsSchema, req.body);
-  res.json(await rectifyModelDuplicates(pairs));
+  const { pairs, mode } = validateRequest(duplicatePairsSchema, req.body);
+  res.json(await rectifyModelDuplicates(pairs, { mode }));
 }));
 const emptyBodySchema = z.object({}).strict();
 

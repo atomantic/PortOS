@@ -5,6 +5,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   getNicotineSummary: vi.fn(),
   getDailyNicotine: vi.fn(),
   getCustomNicotineProducts: vi.fn(),
+  logNicotine: vi.fn(),
   updateNicotineEntry: vi.fn().mockResolvedValue({}),
   removeNicotineEntry: vi.fn().mockResolvedValue({}),
   addCustomNicotineProduct: vi.fn(),
@@ -20,6 +21,7 @@ import {
   getNicotineSummary,
   getCustomNicotineProducts,
   getDailyNicotine,
+  logNicotine,
   updateNicotineEntry,
   removeNicotineEntry,
   addCustomNicotineProduct,
@@ -96,4 +98,52 @@ it('applies an added and a removed product button in place without re-reading th
   await waitFor(() => expect(screen.queryByText('Example Pouch')).toBeNull());
   expect(screen.getByText('Sample Gum')).toBeTruthy();
   expect(getCustomNicotineProducts).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a custom nicotine draft when the log rejects, and clears it once a log resolves', async () => {
+  getDailyNicotine.mockResolvedValueOnce([]);
+  logNicotine.mockRejectedValueOnce(new Error('boom'));
+  render(<NicotineTab />);
+  await screen.findByRole('button', { name: 'Log' });
+
+  fireEvent.change(screen.getByLabelText('Product'), { target: { value: 'Sample Pouch' } });
+  fireEvent.change(screen.getByLabelText('mg'), { target: { value: '6' } });
+  fireEvent.change(screen.getByLabelText('Qty'), { target: { value: '3' } });
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-03-02' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+
+  await waitFor(() => expect(logNicotine).toHaveBeenCalledTimes(1));
+  expect(screen.getByLabelText('Product')).toHaveValue('Sample Pouch');
+  expect(screen.getByLabelText('mg')).toHaveValue(6);
+  expect(screen.getByLabelText('Qty')).toHaveValue(3);
+  expect(screen.getByLabelText('Date')).toHaveValue('2026-03-02');
+  expect(getDailyNicotine).toHaveBeenCalledTimes(1);
+
+  getDailyNicotine.mockResolvedValueOnce([{
+    date: '2026-03-02',
+    nicotine: { items: [{ id: 'logged', product: 'Sample Pouch', mgPerUnit: 6, count: 3 }], totalMg: 18 },
+  }]);
+  logNicotine.mockResolvedValueOnce({ id: 'logged' });
+  fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+
+  await waitFor(() => expect(screen.getByText('Sample Pouch')).toBeTruthy());
+  expect(screen.getByLabelText('Product')).toHaveValue('');
+  expect(screen.getByLabelText('mg')).toHaveValue(null);
+  expect(logNicotine).toHaveBeenCalledTimes(2);
+});
+
+it('leaves the nicotine editor open when the update rejects', async () => {
+  getDailyNicotine.mockResolvedValue([{
+    date: '2024-06-01',
+    nicotine: { items: [{ id: 'event-id', product: 'Example', mgPerUnit: 3, count: 1 }], totalMg: 3 },
+  }]);
+  updateNicotineEntry.mockRejectedValueOnce(new Error('boom'));
+  render(<NicotineTab />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit', exact: true }));
+  fireEvent.change(screen.getByLabelText('Entry product'), { target: { value: 'Corrected' } });
+  const readsBeforeSave = getDailyNicotine.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(updateNicotineEntry).toHaveBeenCalled());
+  expect(screen.getByLabelText('Entry product')).toHaveValue('Corrected');
+  expect(getDailyNicotine.mock.calls.length).toBe(readsBeforeSave);
 });

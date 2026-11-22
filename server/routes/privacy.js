@@ -10,6 +10,10 @@
  * only — `value_enc` and plaintext never leave the service except through
  * the ONE explicit reveal endpoint. Org holdings responses join the vault's
  * masked fields only — never plaintext.
+ *
+ * Website logins (`/logins`, #17397) are write-only secrets: responses carry
+ * labels, exact origins, the masked username and `hasTotp`, and no endpoint —
+ * including the reveal — ever returns a login's password or TOTP seed.
  */
 
 import { Router } from 'express';
@@ -48,6 +52,12 @@ import {
   privacyRecheckConfigSchema,
 } from '../lib/privacyValidation.js';
 import {
+  websiteLoginCreateSchema,
+  websiteLoginUpdateSchema,
+  websiteLoginListQuerySchema,
+  websiteLoginIdParamsSchema,
+} from '../lib/websiteLoginValidation.js';
+import {
   listSubjects,
   getSubject,
   createSubject,
@@ -67,6 +77,12 @@ import {
   revealValue,
   getVaultStatus,
 } from '../services/privacyVault.js';
+import {
+  createWebsiteLogin,
+  listWebsiteLogins,
+  updateWebsiteLogin,
+  deleteWebsiteLogin,
+} from '../services/privacyWebsiteLogins.js';
 import {
   createOrg,
   listOrgs,
@@ -206,6 +222,31 @@ router.delete('/vault/:id', asyncHandler(async (req, res) => {
 router.post('/vault/:id/reveal', asyncHandler(async (req, res) => {
   const { id } = validateRequest(privacyVaultIdParamsSchema, req.params);
   res.json(await revealValue(id));
+}));
+
+// ─── Website logins (issue #17397) ──────────────────────────────────────────
+// Origin-bound credentials for the model-blind browser fill. Same subject
+// scoping as the vault; deletes go through the vault's own delete.
+
+router.get('/logins', asyncHandler(async (req, res) => {
+  const { subjectId, origin } = validateRequest(websiteLoginListQuerySchema, req.query);
+  res.json(await listWebsiteLogins({ subjectId, origin }));
+}));
+
+router.post('/logins', asyncHandler(async (req, res) => {
+  const data = validateRequest(websiteLoginCreateSchema, req.body);
+  res.status(201).json(await createWebsiteLogin(data));
+}));
+
+router.put('/logins/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(websiteLoginIdParamsSchema, req.params);
+  const patch = validateRequest(websiteLoginUpdateSchema, req.body);
+  res.json(await updateWebsiteLogin(id, patch));
+}));
+
+router.delete('/logins/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(websiteLoginIdParamsSchema, req.params);
+  res.json(await deleteWebsiteLogin(id));
 }));
 
 // ─── Trusted Organizations registry (issue #2141) ──────────────────────────

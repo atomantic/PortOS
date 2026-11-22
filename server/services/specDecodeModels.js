@@ -7,13 +7,20 @@
  * reports per-preset "downloaded / not downloaded" from disk and fetches the
  * missing file straight into the path the launcher will hand llama.cpp.
  *
+ * A shipped preset path (`models/<file>`, no `..`) is downloaded into the
+ * shared Hugging Face hub cache, and the returned path is that snapshot file.
+ * An existing `models/<file>` is still the path status and launch report, so
+ * an install that already points there keeps working. Any other path — an
+ * absolute file, a hand-entered location — is read and written exactly as given.
+ *
  * Path resolution is shared with llamaServerManager (`resolveSpecModelPath`) so
  * the download target and the launcher's existence check can never disagree
  * about which file a relative or `~`-prefixed path means.
  */
 
-import { stat, unlink } from 'fs/promises';
-import { resolve } from 'path';
+import { readdir, stat, unlink } from 'fs/promises';
+import { join, resolve } from 'path';
+import { getHfCacheRoot, repoToDirName } from '../lib/hfCache.js';
 import { expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -57,23 +64,103 @@ const downloadSlot = createDownloadSlot({
  */
 export const resolveSpecModelPath = (path) => resolve(expandHome(String(path || '').trim()));
 
+/**
+ * True for a shipped preset path (`models/<file>`). Those are the downloads
+ * that belong in the hub cache. Anything else is a path the user or a test
+ * named explicitly, and is left alone.
+ */
+export const isShippedPresetModelsPath = (path) => {
+  if (typeof path !== 'string') return false;
+  const normalized = path.trim().replace(/\\/g, '/');
+  if (!normalized.startsWith('models/')) return false;
+  return !normalized.split('/').includes('..');
+};
+
 const fileStat = async (path) => {
   const stats = await stat(resolveSpecModelPath(path)).catch(() => null);
   return stats?.isFile() ? stats : null;
 };
 
+/** Revision directory PortOS writes when it downloads a preset GGUF itself. */
+const PORTOS_SNAPSHOT = 'portos';
+
+const hubPresetFile = (repo, filename) => join(
+  getHfCacheRoot(),
+  repoToDirName(repo),
+  'snapshots',
+  PORTOS_SNAPSHOT,
+  filename,
+);
+
+/**
+ * A GGUF already in some snapshot of `repo` that this role would select.
+ * Directory reads only — status listing must not call Hugging Face.
+ */
+async function cachedPresetWeight(repo, { file, quant, role }) {
+  if (!repo) return null;
+  const snapshotsRoot = join(getHfCacheRoot(), repoToDirName(repo), 'snapshots');
+  const entries = await readdir(snapshotsRoot, { withFileTypes: true }).catch((err) => (
+    err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? [] : Promise.reject(err)
+  ));
+  const dirs = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = join(snapshotsRoot, entry.name);
+    const info = await stat(full).catch(() => null);
+    if (info?.isDirectory()) dirs.push({ full, mtimeMs: info.mtimeMs });
+  }
+  dirs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const dir of dirs) {
+    const names = await readdir(dir.full).catch(() => []);
+    let picked;
+    try {
+      picked = pickGgufSibling(
+        { siblings: names.filter((name) => /\.gguf$/i.test(name)).map((rfilename) => ({ rfilename })) },
+        { file, quant, repo, role },
+      );
+    } catch {
+      continue;
+    }
+    const candidate = join(dir.full, picked);
+    const info = await stat(candidate).catch(() => null);
+    if (info?.isFile() && info.size > 0) return { path: candidate, sizeBytes: info.size, file: picked };
+  }
+  return null;
+}
+
+/**
+ * Where this preset role's weight actually is.
+ *
+ * A file at the configured path wins, including a legacy `models/<file>`, so
+ * an installed preset keeps launching the file it already points at. Otherwise
+ * a matching hub snapshot is the weight. The download slot stays keyed by the
+ * configured path either way, so cancel and the in-flight flag still match.
+ */
+async function locatePresetWeight(entry, role) {
+  const configured = resolveSpecModelPath(entry.path);
+  const legacy = await fileStat(entry.path);
+  if (legacy) return { abs: configured, display: entry.path, size: legacy.size, inHub: false };
+  if (isShippedPresetModelsPath(entry.path) && entry.repo) {
+    const cached = await cachedPresetWeight(entry.repo, {
+      file: entry.file, quant: entry.quant, role,
+    }).catch(() => null);
+    if (cached) return { abs: cached.path, display: cached.path, size: cached.sizeBytes, inHub: true, file: cached.file };
+  }
+  return { abs: configured, display: entry.path, size: null, inHub: false };
+}
+
 /** State of one preset role (base, drafter or vision projector) for the UI. */
 const describeEntry = async (presetId, role) => {
   const entry = findSpecDecodePreset(presetId)?.[role];
   if (!entry?.path) return null;
-  const destPath = resolveSpecModelPath(entry.path);
-  const stats = await stat(destPath).catch(() => null);
-  const active = downloadSlot.get(destPath);
+  const slotKey = resolveSpecModelPath(entry.path);
+  const located = await locatePresetWeight(entry, role);
+  const active = downloadSlot.get(slotKey);
   return {
     role,
-    path: entry.path,
-    exists: Boolean(stats?.isFile()),
-    sizeBytes: stats?.isFile() ? stats.size : null,
+    path: located.size != null ? located.display : entry.path,
+    exists: located.size != null,
+    sizeBytes: located.size,
     repo: entry.repo || null,
     repoUrl: entry.repo ? `https://huggingface.co/${entry.repo}` : hfSearchUrl(entry.path),
     downloadable: Boolean(entry.repo),
@@ -262,17 +349,19 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
     );
   }
 
-  const destPath = resolveSpecModelPath(source.path);
-  const existing = await fileStat(source.path);
-  if (existing) {
-    return { success: true, alreadyDownloaded: true, path: source.path, sizeBytes: existing.size };
+  const slotKey = resolveSpecModelPath(source.path);
+  const existing = await locatePresetWeight(source, role);
+  if (existing.size != null) {
+    return { success: true, alreadyDownloaded: true, path: existing.display, sizeBytes: existing.size, file: existing.file || null };
   }
   // Claim the slot BEFORE the first await. Resolving the repo on Hugging Face
   // takes a round trip, and a second click (or a second tab) landing inside that
   // window would clear the in-flight check and start a parallel multi-gigabyte
-  // transfer of the same file. Everything after this point runs inside the
-  // try/finally so the claim is always released.
-  const slot = downloadSlot.claim(destPath, {
+  // transfer of the same file. The slot stays keyed by the configured path even
+  // when the bytes land in the hub cache, so cancel and the downloading flag
+  // still match. Everything after this point runs inside the try/finally so the
+  // claim is always released.
+  const slot = downloadSlot.claim(slotKey, {
     busyMessage: `${source.path} is already downloading`,
     meta: { presetId, role },
   });
@@ -283,21 +372,35 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
   try {
     const token = await getHfToken();
     slot.throwIfAborted();
+    const raced = await locatePresetWeight(source, role);
+    if (raced.size != null) {
+      return { success: true, alreadyDownloaded: true, path: raced.display, sizeBytes: raced.size, file: raced.file || null };
+    }
     onProgress({ event: 'start', presetId, role, path: source.path, message: `Resolving ${source.repo} on Hugging Face…` });
     const plan = await resolveSpecDownloadPlan({
       source,
       role,
-      destPath,
+      destPath: slotKey,
       token,
       signal: slot.signal,
     });
     slot.throwIfAborted();
-    assertDownloadFits(plan.preflight);
-    console.log(`⬇️  Downloading speculative-decoding weights ${source.repo}/${plan.file} → ${source.path}`);
+    // Shipped `models/<file>` presets land in the hub cache. The preflight
+    // above measured the configured path; remeasure the directory that will
+    // actually receive the file.
+    const writePath = isShippedPresetModelsPath(source.path)
+      ? hubPresetFile(source.repo, plan.file)
+      : slotKey;
+    const preflight = writePath === slotKey
+      ? plan.preflight
+      : await assessDownloadPreflight({ destPath: writePath, expectedBytes: plan.meta.bytes });
+    assertDownloadFits(preflight);
+    const storedPath = writePath === slotKey ? source.path : writePath;
+    console.log(`⬇️  Downloading speculative-decoding weights ${source.repo}/${plan.file}${writePath === slotKey ? ` → ${source.path}` : ' into the hub cache'}`);
     const { bytes } = await streamToFile({
       url: plan.url,
       headers: plan.headers,
-      destPath,
+      destPath: writePath,
       expectedSha256: plan.meta.sha256,
       slot,
       onBytes: (received, total) => {
@@ -305,9 +408,9 @@ export async function downloadSpecDecodeModel({ presetId, role, onProgress = () 
         emitProgress(received, total);
       },
     });
-    onProgress({ event: 'complete', presetId, role, path: source.path, received: bytes, total: bytes, message: `${source.path} downloaded` });
-    console.log(`✅ Speculative-decoding weights ready: ${source.path} (${bytes} bytes)`);
-    return { success: true, path: source.path, repo: source.repo, file: plan.file, sizeBytes: bytes };
+    onProgress({ event: 'complete', presetId, role, path: storedPath, received: bytes, total: bytes, message: `${plan.file} downloaded` });
+    console.log(`✅ Speculative-decoding weights ready: ${source.repo}/${plan.file} (${bytes} bytes)`);
+    return { success: true, path: storedPath, repo: source.repo, file: plan.file, sizeBytes: bytes };
   } catch (err) {
     const error = slot.wrapError(err);
     const event = slot.cancelled ? 'cancelled' : 'error';
@@ -340,29 +443,39 @@ export async function previewSpecDecodeDownload({ presetId, role }) {
       { status: 400, code: 'SPEC_NO_SOURCE' },
     );
   }
-  const destPath = resolveSpecModelPath(source.path);
-  const existing = await fileStat(source.path);
-  if (existing) {
+  const slotKey = resolveSpecModelPath(source.path);
+  const existing = await locatePresetWeight(source, role);
+  if (existing.size != null) {
     return {
       kind: 'spec-decode',
-      destPath: source.path,
+      destPath: existing.display,
       expectedBytes: existing.size,
       requiredBytes: 0,
       headroomBytes: 0,
       freeBytes: null,
       verdict: 'ok',
       alreadyDownloaded: true,
-      file: null,
+      provider: 'Hugging Face',
+      model: source.repo,
+      file: existing.file || null,
     };
   }
   const token = await getHfToken();
-  const plan = await resolveSpecDownloadPlan({ source, role, destPath, token });
+  const plan = await resolveSpecDownloadPlan({ source, role, destPath: slotKey, token });
+  const destPath = isShippedPresetModelsPath(source.path)
+    ? hubPresetFile(source.repo, plan.file)
+    : source.path;
+  const preflight = destPath === source.path
+    ? plan.preflight
+    : await assessDownloadPreflight({ destPath, expectedBytes: plan.meta.bytes });
   return {
     kind: 'spec-decode',
     file: plan.file,
     alreadyDownloaded: false,
-    ...plan.preflight,
-    destPath: source.path,
+    provider: 'Hugging Face',
+    model: source.repo,
+    ...preflight,
+    destPath,
   };
 }
 
@@ -397,29 +510,29 @@ export async function removeSpecDecodeModel({ presetId, role }) {
   if (!entry?.path) {
     throw new ServerError('No weight is configured for that preset role', { status: 400 });
   }
-  const destPath = resolveSpecModelPath(entry.path);
-  if (downloadSlot.get(destPath)) {
+  const slotKey = resolveSpecModelPath(entry.path);
+  if (downloadSlot.get(slotKey)) {
     throw new ServerError(
       `${entry.path} is still downloading — cancel the download before deleting it`,
       { status: 409, code: 'SPEC_DOWNLOAD_ACTIVE' },
     );
   }
+  const located = await locatePresetWeight(entry, role);
   const { getLlamaServerStatus } = await import('./llamaServerManager.js');
   const status = await getLlamaServerStatus();
   const runningPath = status?.config?.[role];
-  if (status?.running && runningPath && resolveSpecModelPath(runningPath) === destPath) {
+  if (status?.running && runningPath && resolveSpecModelPath(runningPath) === located.abs) {
     throw new ServerError(
       'Stop llama-server before deleting the weights it is currently running',
       { status: 409, code: 'SPEC_MODEL_IN_USE' },
     );
   }
-  const stats = await stat(destPath).catch(() => null);
-  if (!stats?.isFile()) {
+  if (located.size == null) {
     return { success: true, deleted: false, path: entry.path };
   }
-  await unlink(destPath);
-  console.log(`🗑️  Deleted speculative-decoding weights: ${entry.path}`);
-  return { success: true, deleted: true, path: entry.path };
+  await unlink(located.abs);
+  console.log(`🗑️  Deleted speculative-decoding weights: ${entry.repo || entry.path}`);
+  return { success: true, deleted: true, path: located.display };
 }
 
 /** Clears in-flight download bookkeeping (used by test suites). */

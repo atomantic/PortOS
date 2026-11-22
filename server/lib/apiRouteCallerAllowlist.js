@@ -141,11 +141,15 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/brain/youtube/ingests/:videoId/transcript',
     '/api/browser/pages',
     '/api/browser/process',
+    '/api/browser/vault/fill',
+    '/api/browser/vault/logins',
     '/api/browser/version',
     '/api/code-animation/packages/validate',
     '/api/code-animation/projects/:id/sound-assets',
     '/api/cos/agents/:id/release-candidate',
     '/api/cos/mind/maintainer/watchdog',
+    // scripts/portos-acp.js (docs/ACP.md): the ACP stdio adapter's live Persistent Mind feed; the browser uses Socket.IO.
+    '/api/cos/mind/stream',
     '/api/cos/schedule/deep-audits/:id',
     '/api/cos/schedule/maintenance-runs/:id/resume',
     '/api/cos/schedule/maintenance-runs/:id/steps/:stepId',
@@ -171,6 +175,9 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/music-video/:id/spend',
     '/api/ports/allocate',
     '/api/ports/scan',
+    // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
+    '/api/skills/config',
+    '/api/skills/manage',
     // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',

@@ -322,6 +322,7 @@ export async function emailLane(broker, kase, {
     subject,
     body,
     generatedBy: 'privacy-optout',
+    privacyMeta: { subjectId: kase.subjectId, vaultRecordIds: [], caseId: kase.id },
     sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
   });
 

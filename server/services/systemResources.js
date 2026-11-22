@@ -190,6 +190,12 @@ const MODEL_STORES = [
   { backend: 'hy3dgen', total: 'hy3dgen', label: 'Hunyuan3D models', note: 'Image-to-3D weights in the hy3dgen cache.' },
   { backend: 'hf-xet-cache', total: 'hfXetCache', label: 'Hugging Face xet cache', note: 'Regenerable download chunk cache and xet logs older than 7 days; counted separately from the Hub cache.' },
   { backend: 'pixie-forge', total: 'pixieForge', label: 'Pixie Forge LoRAs', note: 'LoRA adapters outside PortOS data.' },
+  { backend: 'slotstream', total: 'slotstream', label: 'Slotstream models', note: 'SSD-streamed checkpoints in the Slotstream cache.' },
+  { backend: 'fastvideo-mlx', total: 'fastvideoMlx', label: 'FastVideo MLX checkpoints', note: 'Converted DiTs rebuilt from the Hugging Face weights on the next render.' },
+  { backend: 'auk-ckpts', total: 'aukCkpts', label: 'AuK voice checkpoints', note: 'Source and converted weights the AuK voice runtime loads.' },
+  { backend: 'portos-models', total: 'portosModels', label: 'Manual downloads (~/.portos/models)', note: 'Hand-placed weights outside the Hugging Face cache; large weight files are flagged as unmanaged.' },
+  { backend: 'repo-models', total: 'repoModels', label: 'llama-server models (checkout models/)', note: 'Weights the llama-server presets read from the checkout; large files that no preset downloaded are flagged as unmanaged.' },
+  { backend: 'legacy-runtime', total: 'legacyRuntime', label: 'Retired runtimes', note: 'Leftovers of runtimes PortOS no longer ships; nothing reads them.' },
 ];
 
 const MODEL_STORE_MANAGE_PATH = Object.fromEntries(Object.entries(MODEL_STORE_BACKENDS).map(([id, store]) => [id, store.managePath]));
@@ -203,6 +209,8 @@ const modelStoreRows = (stores) => MODEL_STORES.flatMap(({ backend }) => (stores
     sizeBytes: entry.size,
     risk: entry.risk,
     cleanupReason: entry.cleanupReason,
+    unmanaged: entry.unmanaged,
+    sourcePrune: entry.sourcePrune,
   }),
   loaded: false,
 })));
@@ -406,10 +414,7 @@ export async function buildSystemResourceReport() {
     databaseRow,
     hf,
     loraStorage,
-    mtplxStore,
-    hy3dgenStore,
-    xetStore,
-    pixieForgeStore,
+    storeScans,
     ollamaStatus,
     ollamaStored,
     ollamaLoaded,
@@ -436,7 +441,7 @@ export async function buildSystemResourceReport() {
       .catch(() => null),
     listHfModelStorage({ strict: true }).catch(() => null),
     listLoraStorage({ strict: true }).catch(() => null),
-    ...MODEL_STORES.map(({ backend }) => listModelStore(backend).catch(() => null)),
+    Promise.all(MODEL_STORES.map(({ backend }) => listModelStore(backend).catch(() => null))),
     ollamaManager.getStatus(true).catch(() => null),
     ollamaManager.listStoredModels().catch(() => null),
     ollamaManager.getLoadedModels().catch(() => null),
@@ -453,7 +458,9 @@ export async function buildSystemResourceReport() {
     getAllTasks().catch(() => null),
     getStatus().catch(() => null),
     readAgentCensus(),
-    scanModelDuplicates().catch(() => ({ pinokioDetected: null, items: [], totalReclaimableBytes: 0, error: 'Duplicate model scan unavailable' })),
+    scanModelDuplicates().catch(() => ({
+      pinokioDetected: null, items: [], totalReclaimableBytes: 0, hub: null, error: 'Duplicate model scan unavailable',
+    })),
   ]);
 
   const parsedFilesystem = parseFilesystemStats(diskStats);
@@ -485,12 +492,7 @@ export async function buildSystemResourceReport() {
     ...(settings?.localLlm?.ollama?.disabled ? ['ollama'] : []),
     ...(settings?.localLlm?.lmstudio?.disabled ? ['lmstudio'] : []),
   ];
-  const stores = {
-    mtplx: mtplxStore,
-    hy3dgen: hy3dgenStore,
-    'hf-xet-cache': xetStore,
-    'pixie-forge': pixieForgeStore,
-  };
+  const stores = Object.fromEntries(MODEL_STORES.map(({ backend }, index) => [backend, storeScans[index]]));
   const downloadedModels = downloadedModelInventory({
     hf,
     loraStorage,

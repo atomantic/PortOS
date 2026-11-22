@@ -80,10 +80,19 @@ const generateTaskFromJob = vi.fn(async (job) => ({ id: `task-${job.id}`, descri
 const executeScriptJob = vi.fn().mockResolvedValue(undefined);
 const executeShellJob = vi.fn().mockResolvedValue(undefined);
 const recordJobGateSkip = vi.fn().mockResolvedValue(undefined);
+const recordJobBlockedConfig = vi.fn().mockResolvedValue(undefined);
+const clearJobBlockedConfig = vi.fn().mockResolvedValue(undefined);
+const setJobUnreachableRetryStep = vi.fn().mockResolvedValue(undefined);
+const runJobPreflight = vi.fn();
+const recordJobFailureIncident = vi.fn().mockResolvedValue({ alerted: true });
+const resolveJobIncidents = vi.fn().mockResolvedValue([]);
 const checkJobGate = vi.fn().mockResolvedValue({ shouldRun: true, reason: 'ok' });
 vi.mock('../autonomousJobs.js', () => ({
   generateTaskFromJob: (...a) => generateTaskFromJob(...a),
   recordJobGateSkip: (...a) => recordJobGateSkip(...a),
+  recordJobBlockedConfig: (...a) => recordJobBlockedConfig(...a),
+  clearJobBlockedConfig: (...a) => clearJobBlockedConfig(...a),
+  setJobUnreachableRetryStep: (...a) => setJobUnreachableRetryStep(...a),
   isScriptJob: (job) => job?.type === 'script',
   executeScriptJob: (...a) => executeScriptJob(...a),
   isShellJob: (job) => job?.type === 'shell',
@@ -99,6 +108,13 @@ vi.mock('../autonomousJobs.js', () => ({
     type: globalThis.__nextJobType || 'agent',
   })),
 }));
+vi.mock('../autonomousJobs/preflight.js', () => ({
+  runJobPreflight: (...a) => runJobPreflight(...a),
+}));
+vi.mock('../autonomousJobs/incidents.js', () => ({
+  recordJobFailureIncident: (...a) => recordJobFailureIncident(...a),
+  resolveJobIncidents: (...a) => resolveJobIncidents(...a),
+}));
 vi.mock('../jobGates.js', () => ({
   checkJobGate: (...a) => checkJobGate(...a),
   hasGate: vi.fn(() => false),
@@ -111,6 +127,7 @@ import {
   clearSpawningJob,
   registerSingleJobSchedule,
   handleJobSpawnFailed,
+  handleJobAgentCompleted,
 } from './cosJobScheduler.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent } from '../eventScheduler.js';
 vi.mock('../taskSchedule.js', () => ({ getUpcomingTasks: vi.fn() }));
@@ -128,6 +145,13 @@ beforeEach(() => {
   executeScriptJob.mockClear();
   executeShellJob.mockClear();
   recordJobGateSkip.mockClear();
+  recordJobBlockedConfig.mockClear();
+  clearJobBlockedConfig.mockClear();
+  setJobUnreachableRetryStep.mockClear();
+  recordJobFailureIncident.mockClear();
+  resolveJobIncidents.mockClear();
+  runJobPreflight.mockReset();
+  runJobPreflight.mockResolvedValue({ ok: true });
   checkJobGate.mockReset();
   checkJobGate.mockResolvedValue({ shouldRun: true, reason: 'ok' });
   // maxActionsPerDay:1, nothing recorded yet — the exact same-tick boundary.
@@ -475,12 +499,114 @@ describe('handleJobSpawnFailed — no 1s re-fire loop after a failed dispatch', 
   });
 
   it('a spawn error records a gate skip and re-arms via the normal schedule, not a 1s retry', async () => {
-    getJob.mockResolvedValueOnce({ id: 'job-err', name: 'job-err', enabled: true, intervalMs: 86_400_000, lastRun: new Date().toISOString() });
+    // The failure is also reported to the incident ledger, which reads the job too.
+    const defaultGetJob = getJob.getMockImplementation();
+    getJob.mockResolvedValue({ id: 'job-err', name: 'job-err', enabled: true, intervalMs: 86_400_000, lastRun: new Date().toISOString() });
 
     await handleJobSpawnFailed('job-err', 'failed');
+    getJob.mockImplementation(defaultGetJob);
 
     expect(recordJobGateSkip).toHaveBeenCalledWith('job-err');
     expect(scheduleEvent).toHaveBeenCalledTimes(1);
     expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(60000);
+  });
+});
+
+describe('executeScheduledJob — pre-dispatch preflight', () => {
+  it('a blocked_config job spawns nothing, reserves nothing and raises one incident', async () => {
+    runJobPreflight.mockResolvedValueOnce({ ok: false, reason: 'pinned provider "p1" has no credential: API key is not set' });
+    await executeScheduledJob('job-a');
+
+    expect(recordJobBlockedConfig).toHaveBeenCalledWith('job-a', expect.stringContaining('no credential'));
+    expect(recordJobFailureIncident).toHaveBeenCalledWith('job-a', expect.stringContaining('Configuration blocked'), expect.any(Object));
+    expect(generateTaskFromJob).not.toHaveBeenCalled();
+    expect(checkJobGate).not.toHaveBeenCalled();
+    expect(getScheduledActionReservations()).toBe(0);
+    expect(scheduleEvent).toHaveBeenCalled();
+  });
+
+  it('heals a previous blocked_config verdict once preflight passes', async () => {
+    getJob.mockResolvedValueOnce({ id: 'job-a', name: 'job-a', enabled: true, intervalMs: 86_400_000, lastStatus: 'blocked_config' });
+    await executeScheduledJob('job-a');
+    expect(clearJobBlockedConfig).toHaveBeenCalledWith('job-a');
+    expect(generateTaskFromJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('a green script run resolves open incidents; a failing one records one', async () => {
+    globalThis.__nextJobType = 'script';
+    await executeScheduledJob('script-a');
+    expect(resolveJobIncidents).toHaveBeenCalledWith('script-a');
+
+    executeScriptJob.mockRejectedValueOnce(new Error('Syntax error in job script'));
+    await executeScheduledJob('script-fail');
+    expect(recordJobFailureIncident).toHaveBeenCalledWith('script-fail', 'Syntax error in job script', expect.any(Object));
+  });
+});
+
+describe('handleJobSpawnFailed — zero-spend unreachable retry ladder', () => {
+  const unreachable = 'getaddrinfo ENOTFOUND api.example.com';
+  const job = (extra = {}) => ({ id: 'job-net', name: 'job-net', enabled: true, intervalMs: 86_400_000, lastRun: new Date().toISOString(), ...extra });
+
+  const defaultGetJob = getJob.getMockImplementation();
+  beforeEach(() => {
+    scheduleEvent.mockClear();
+    recordJobGateSkip.mockClear();
+  });
+  afterEach(() => { getJob.mockImplementation(defaultGetJob); });
+
+  it.each([[0, 5 * 60_000], [1, 15 * 60_000], [2, 30 * 60_000]])('step %i retries after %i ms with the alert suppressed', async (step, delay) => {
+    getJob.mockResolvedValue(job({ unreachableRetryStep: step || undefined }));
+    await handleJobSpawnFailed('job-net', 'failed', unreachable);
+
+    expect(setJobUnreachableRetryStep).toHaveBeenCalledWith('job-net', step + 1);
+    expect(scheduleEvent.mock.calls.at(-1)[0]).toMatchObject({ id: 'job:job-net', delayMs: delay });
+    expect(recordJobFailureIncident).not.toHaveBeenCalled();
+    expect(recordJobGateSkip).not.toHaveBeenCalled();
+  });
+
+  it('alerts and advances to the next period once the ladder is exhausted', async () => {
+    getJob.mockResolvedValue(job({ unreachableRetryStep: 3 }));
+    await handleJobSpawnFailed('job-net', 'failed', unreachable);
+
+    expect(recordJobFailureIncident).toHaveBeenCalledWith('job-net', unreachable, expect.any(Object));
+    expect(setJobUnreachableRetryStep).toHaveBeenCalledWith('job-net', 0);
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-net');
+  });
+
+  it('never retries past the next natural occurrence', async () => {
+    // Hourly job: the 5m rung fits, the 30m rung would land past the next fire... use a 10m cadence.
+    getJob.mockResolvedValue(job({ intervalMs: 10 * 60_000, unreachableRetryStep: 1 }));
+    await handleJobSpawnFailed('job-net', 'failed', unreachable);
+
+    expect(setJobUnreachableRetryStep).not.toHaveBeenCalledWith('job-net', 2);
+    expect(recordJobFailureIncident).toHaveBeenCalled();
+  });
+
+  it('a non-network spawn failure skips the ladder and alerts once', async () => {
+    getJob.mockResolvedValue(job());
+    await handleJobSpawnFailed('job-net', 'failed', '401 invalid api key');
+
+    expect(recordJobFailureIncident).toHaveBeenCalledWith('job-net', '401 invalid api key', expect.any(Object));
+    expect(recordJobGateSkip).toHaveBeenCalledWith('job-net');
+  });
+});
+
+describe('handleJobAgentCompleted — incident ledger feed', () => {
+  const agent = (result, metadata = { jobId: 'job-a', autonomousJob: true }) => ({ id: 'agent-1', metadata, result });
+
+  it('a failed scheduled-job run records its error; a green one resolves incidents', async () => {
+    await handleJobAgentCompleted(agent({ success: false, error: 'exit 1' }));
+    expect(recordJobFailureIncident).toHaveBeenCalledWith('job-a', 'exit 1', expect.any(Object));
+
+    await handleJobAgentCompleted(agent({ success: true }));
+    expect(resolveJobIncidents).toHaveBeenCalledWith('job-a');
+  });
+
+  it('ignores user tasks, runs without an error message, and agents without a job', async () => {
+    await handleJobAgentCompleted(agent({ success: false, error: 'x' }, { taskType: 'user' }));
+    await handleJobAgentCompleted(agent({ success: false }));
+    await handleJobAgentCompleted(null);
+    expect(recordJobFailureIncident).not.toHaveBeenCalled();
+    expect(resolveJobIncidents).not.toHaveBeenCalled();
   });
 });

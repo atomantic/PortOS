@@ -36,7 +36,7 @@ import { killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getAc
 import { runnerEntryShieldsRunningRecord } from '../../lib/runnerAgentLiveness.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
-import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, runnerAgents, dropRunnerAgent, trackRunnerAgent, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
 // longer depends on the lifecycle orchestrator — which depends on THIS module
 // for handleOrphanedTask. Importing them from their own leaf modules is what
@@ -46,7 +46,7 @@ import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMeta
 import { CLAIM_METADATA_KEYS } from '../cos/cosTaskClaim.js';
 import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../../lib/taskTargetBranch.js';
-import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
+import { holdRecoveredRunnerOllamaWork, readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
 import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../../lib/gitCommitProbe.js';
@@ -111,7 +111,7 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
         }
       }, task.taskType || 'user');
     }
-    runnerAgents.delete(agentId);
+    dropRunnerAgent(agentId);
   }
   return result;
 }
@@ -278,7 +278,7 @@ async function pauseAdmittedAgent(agentId, reason) {
     if (!persistedRunner) {
       throw new ServerError('Failed to persist paused state', { status: 500, code: 'AGENT_PAUSE_FAILED' });
     }
-    runnerAgents.delete(agentId);
+    dropRunnerAgent(agentId);
     emitLog('info', `⏸️ Paused runner agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
     return { success: true, agentId, pausedAt, mode: 'runner' };
   }
@@ -1218,7 +1218,7 @@ async function runCleanupOrphanedAgents() {
   for (const agentId of [...runnerAgents.keys()]) {
     const read = await readAgentRecordOrUnreadable(agentId);
     if (read === AGENT_RECORD_UNREADABLE || isLiveAgentRecord(read)) continue;
-    runnerAgents.delete(agentId);
+    dropRunnerAgent(agentId);
     emitLog('info', `🧹 Dropped stale runner-agent tracking for ${agentId} — no live record behind it`, { agentId });
   }
 
@@ -1262,21 +1262,38 @@ async function runCleanupOrphanedAgents() {
         const startedAtMs = agent.startedAt ? Date.parse(agent.startedAt) : 0;
         if (Date.now() - startedAtMs < SPAWN_GRACE_MS) continue;
       }
-      if (runnerAgents.has(agent.id)) runnerAgents.delete(agent.id);
-
-      // Before marking as orphaned, check if the process is actually still running
+      // Before marking as orphaned, check if the process is actually still running.
+      // Any leftover entry stays until the pid is known dead: a live Ollama-backed
+      // harness must never be uncounted as in-flight daemon work (#17342).
+      const tracked = runnerAgents.get(agent.id);
       if (agent.pid) {
         const stillAlive = await isPidAlive(agent.pid);
         if (stillAlive) {
           console.log(`🔄 Agent ${agent.id} (PID ${agent.pid}) still running, re-syncing to runner tracking`);
           const inferredType = isInternalTaskId(agent.taskId) ? 'internal' : 'user';
-          runnerAgents.set(agent.id, {
+          const current = runnerAgents.get(agent.id);
+          const acquired = current?.releaseOllamaWork ? null : await holdRecoveredRunnerOllamaWork(agent);
+          // Another sweep or spawn re-tracked or dropped it while this one awaited.
+          if (runnerAgents.get(agent.id) !== current) {
+            acquired?.();
+            continue;
+          }
+          // The stub carries the existing hold over, so replacing the entry keeps
+          // it; one that appeared on the entry during the await wins over ours.
+          const carried = current?.releaseOllamaWork ?? acquired;
+          if (acquired && carried !== acquired) acquired();
+          trackRunnerAgent(agent.id, {
             id: agent.id, pid: agent.pid, taskId: agent.taskId,
-            task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' }
+            task: { id: agent.taskId, taskType: inferredType, description: 'Re-synced from PID check' },
+            releaseOllamaWork: carried
           });
           continue;
         }
       }
+      // A spawn or sync that tracked this id during the liveness probe owns it now.
+      const replacement = runnerAgents.get(agent.id);
+      if (replacement && replacement !== tracked) continue;
+      dropRunnerAgent(agent.id);
 
       // Recheck after the awaited pid probes: completion owns its terminal write.
       if (completingAgents.has(agent.id)) continue;

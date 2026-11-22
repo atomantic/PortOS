@@ -537,7 +537,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   it('folds repeat default-branch CI notices into the newest one', async () => {
     const login = account.login;
     const ci = (id, updatedAt) => thread(id, { owner: login, reason: 'ci_activity', type: 'CheckSuite', url: null, updatedAt, title: 'CI workflow run failed for main branch' });
-    const actions = mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: 'main' });
+    const actions = mockGh(() => listing([ci('701', '2026-10-01T10:00:00Z'), ci('702', '2026-10-01T11:00:00Z')]), { [`repos/${login}/hello`]: { defaultBranch: 'main', canPush: true } });
     await syncAccountNotifications(account.id);
     const rows = (await listNotifications({ accountId: account.id, view: 'all' })).notifications;
     expect(rows.map((row) => [row.threadId, row.decision])).toEqual([['702', 'surface'], ['701', 'duplicate']]);
@@ -563,6 +563,48 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(actions.sort()).toEqual([['DELETE', 'notifications/threads/711'], ['DELETE', 'notifications/threads/712']]);
     expect((await getNotification(account.id, '713')).state).toBe('open');
     expect((await query('SELECT * FROM github_notification_rules WHERE account_id = $1', [account.id])).rows).toEqual([]);
+  });
+
+  it('resolves the account token once for a bulk clear and once for an audit mute, not once per thread', async () => {
+    mockGh((args) => githubListing(args, [thread('721'), thread('722'), thread('723')]));
+    await syncAccountNotifications(account.id);
+    await query(`UPDATE github_notifications SET unread = FALSE, read_on_github_at = NOW() WHERE account_id = $1`, [account.id]);
+    mockGh(() => listing([]));
+    vi.mocked(execGh).mockClear();
+    const tokenLookups = () => vi.mocked(execGh).mock.calls.filter(([args]) => args[0] === 'auth').length;
+    expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 3, failed: 0 });
+    expect(tokenLookups()).toBe(1);
+
+    vi.mocked(execGh).mockClear();
+    await query(`UPDATE github_notifications SET state = 'open' WHERE account_id = $1`, [account.id]);
+    await query(
+      `INSERT INTO github_notification_audit_changes (account_id, kind, repo_full_name, detail) VALUES ($1, 'mute-handled', 'octocat/hello', $2::jsonb)`,
+      [account.id, JSON.stringify({ threadIds: ['721', '722', '723'] })],
+    );
+    const { rows: [change] } = await query('SELECT id FROM github_notification_audit_changes WHERE account_id = $1', [account.id]);
+    await undoAuditChange(change.id);
+    expect(tokenLookups()).toBe(1);
+  });
+
+  it('reads managed-app remotes once per Autopilot PR pass, not once per pull request', async () => {
+    account = await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'deps', kind: 'dependabot-pr', repo: '*', action: 'merge' }] });
+    const repo = `${account.login}/hello`;
+    for (const number of [2301, 2302, 2303]) {
+      await query(`INSERT INTO github_notifications (account_id, thread_id, repo_full_name, repo_owner, reason, subject_type,
+        subject_api_url, gh_updated_at, state, decision, trust, suspect, evidence)
+        VALUES ($1, $2, $3, $4, 'subscribed', 'PullRequest', $5, NOW(), 'open', 'needs-you', 'trusted', FALSE,
+          '{"actor":"dependabot[bot]","actorType":"Bot","repoOwned":true,"subjectState":"open"}'::jsonb)`,
+      [account.id, String(number), repo, account.login, `https://api.github.com/repos/${repo}/pulls/${number}`]);
+    }
+    vi.mocked(getAllApps).mockResolvedValue([{ id: 'app-acme', name: 'Acme App', repoPath: '/example/acme-app' }]);
+    vi.mocked(execGh).mockImplementation(async (args) => JSON.stringify({ number: Number(args[2]), state: 'OPEN',
+      author: { login: 'app/dependabot', is_bot: true }, headRefOid: 'f'.repeat(40), headRefName: 'dependabot/example', baseRefName: 'main',
+      isDraft: false, mergeStateStatus: 'BLOCKED', mergeable: 'MERGEABLE', statusCheckRollup: [{ name: 'CI', conclusion: 'SUCCESS' }] }));
+    const { readOriginRemoteUrl } = await import('../lib/gitRemote.js');
+    vi.mocked(readOriginRemoteUrl).mockClear();
+    const { automateNotificationPullRequests } = await import('./githubNotificationPullRequest.js');
+    await automateNotificationPullRequests(account, { GH_TOKEN: 'synthetic-account-token' });
+    expect(readOriginRemoteUrl).toHaveBeenCalledTimes(1);
   });
 
   it('links a deployment approval to its waiting run, keeps it in front of you, and clears it once the run stops waiting', async () => {
@@ -936,7 +978,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
       thread('1505', { owner: login, repo: 'tool', reason: 'author', title: 'Example own change' }),
       thread('1506', { owner: login, repo: 'tool', reason: 'comment', commentUrl: `https://api.github.com/repos/${login}/tool/issues/comments/88` }),
     ]), {
-      [`repos/${login}/tool`]: 'main',
+      [`repos/${login}/tool`]: { defaultBranch: 'main', canPush: true },
       [`repos/${login}/tool/pulls/1502`]: { author: login, association: 'OWNER', state: 'open', merged: false },
       [`repos/${login}/tool/issues/comments/77`]: { author: 'visitor', association: 'NONE', mentions: 0 },
       [`repos/${login}/tool/collaborators/visitor/permission`]: { user: { login: 'visitor' }, permission: 'read' },
@@ -1016,7 +1058,7 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const pr = { author: login, authorType: 'User', association: 'CONTRIBUTOR', state: 'open', merged: false, draft: false, mergeableState: 'clean' };
     const forge = {
       // The account cannot push to the upstream repo, so it cannot merge there.
-      'repos/example-org/project': 'false',
+      'repos/example-org/project': { defaultBranch: 'main', canPush: false },
       'repos/example-org/project/pulls/1701': pr,
       'repos/example-org/project/issues/comments/91': { author: 'maint', authorType: 'User', association: 'MEMBER', mentions: 0 },
       // A public member of the org that owns the repo.
@@ -1541,8 +1583,8 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     });
     await updateAccount(account.id, { mode: 'autopilot', agentRules: [{ id: 'rule-ci', kind: 'ci-activity', repo: `${login}/tool`, action: 'agent', effort: 'high' }] });
     mockGh(() => listing([ciThread('1801', 'tool'), ciThread('1802', 'side')]), {
-      [`repos/${login}/tool`]: { default_branch: 'main' },
-      [`repos/${login}/side`]: { default_branch: 'main' },
+      [`repos/${login}/tool`]: { defaultBranch: 'main', canPush: true },
+      [`repos/${login}/side`]: { defaultBranch: 'main', canPush: true },
     });
     expect((await syncAccountNotifications(account.id)).assist).toMatchObject({ handedOff: 1, agentRuns: 1 });
     expect(vi.mocked(addTask).mock.calls[0][0]).toMatchObject({ effort: 'high', metadata: { githubNotificationResolve: { threadId: '1801', repo: `${login}/tool` } } });

@@ -63,7 +63,7 @@ it('merges newer installed evidence with shipped evidence and includes only sele
   expect(result.body.observations.find(row => row.id === observation.id).quality.value).toBe(1);
   expect(result.body.observations.find(row => row.id === observation.id).notes).toBe(localObservation.notes);
   expect(result.body.observations).toHaveLength(seed.observations.length);
-  expect(result.body.inventory).toEqual([{ id: 'example-provider', name: 'Example provider', gateway: null, localInference: false, models: [{ model: observation.model, efforts: [] }] }]);
+  expect(result.body.inventory).toEqual([{ id: 'example-provider', name: 'Example provider', gateway: null, localInference: false, runtime: null, models: [{ model: observation.model, efforts: [] }] }]);
   expect(result.body.composite.rows.length).toBeGreaterThan(0);
   expect(result.body.composite.rows.every(row => row.providerId === 'example-provider')).toBe(true);
   for (const path of ['/comparison/discover', '/comparison/run']) expect((await request(app).post(path).send({})).status).toBe(404);
@@ -313,7 +313,7 @@ it('loads legacy benchmark labels after upgrade and preserves evidence through s
 
 it('plots local Ornith and Qwen Coder with zero API charges and sourced quality without borrowing hosted costs', async () => {
   const providers = [
-    { id: 'ollama', name: 'Ollama', models: ['ornith:35b', 'qwen3-coder:30b', 'qwen2.5-coder:32b', 'unknown:7b'] },
+    { id: 'ollama', name: 'Ollama', models: ['ornith:35b', 'qwen3-coder:30b', 'qwen2.5-coder:32b', 'inkling-2-mini:26b-a5b', 'inkling-2-mini:26b-a5b-nvfp4', 'unknown:7b'] },
     { id: 'local-wrapper', name: 'Example CLI', ollamaBacked: true, models: ['ollama/qwen3-coder:30b'] },
     { id: 'declared-local', name: 'Example private runtime', servicePlan: 'local', models: ['ornith:35b'] },
     { id: 'lmstudio', name: 'LM Studio', models: ['lmstudio-community/Ornith-1.0-35B-GGUF'] },
@@ -347,6 +347,13 @@ it('plots local Ornith and Qwen Coder with zero API charges and sourced quality 
   expect(ornith.quality.method).toContain('base-model proxy');
   expect(sources[ornith.quality.sourceIds[0]].url).toBe('https://huggingface.co/ornith-ai/Ornith-1.0-35B');
   expect(local.find(row => row.model === 'qwen3-coder:30b').quality.value).toBeGreaterThan(0);
+  for (const tag of ['inkling-2-mini:26b-a5b', 'inkling-2-mini:26b-a5b-nvfp4']) {
+    const inkling = local.find(row => row.model === tag);
+    expect(inkling.quality.estimated).toBe(true);
+    expect(inkling.quality.value).toBeGreaterThan(0);
+    expect(inkling.quality.sourceIds.length).toBeGreaterThan(0);
+    expect(inkling.quality.method).toContain('quantization');
+  }
   for (const row of rows.filter(row => ['hosted', 'gateway', 'free-tier'].includes(row.providerId))) {
     expect(row.inputPerMillion.value).toBeGreaterThan(0);
     expect(row.costPerTask).toBeNull();
@@ -381,4 +388,50 @@ it('loads shipped Hydrogen effort scores and workload costs for an existing Anti
     expect(result.body.currentComposite.sources[row.costPerTask.sourceIds[0]].url).toMatch(/^https:\/\/artificialanalysis.ai\/models\/gemini-4-hydrogen/);
   }
   expect(result.body.composite.rows.every(row => row.costPerTask === null)).toBe(true);
+});
+
+it('plots published speed for API routes and this machine\'s measured speed for local runtimes, never a public figure for a local build', async () => {
+  const fast = seed.observations.find(row => row.quality && row.tokensPerSecond?.value > 0);
+  await mkdir(join(dir, 'local-llm'), { recursive: true });
+  await writeFile(join(dir, 'local-llm', 'assessments.json'), JSON.stringify({ schemaVersion: 1, assessments: [
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: '', assessedAt: '2026-11-20T00:00:00.000Z', performance: { meanTokensPerSecond: 120.5, samplesOk: 3, tokensEstimated: false } },
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: 'depth=7', assessedAt: '2026-11-21T00:00:00.000Z', performance: { meanTokensPerSecond: 140, samplesOk: 3 } },
+  ] }));
+  app = express();
+  app.use(express.json());
+  app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'example-provider', name: 'Example provider', models: [fast.model], enabled: true },
+    { id: 'mtplx', name: 'MTPLX', servicePlan: 'local', models: ['example-local', 'unmeasured-local'], enabled: true },
+  ] }) }));
+  app.use(errorMiddleware);
+
+  const body = (await request(app).get('/comparison')).body;
+  const rows = body.composite.rows;
+  const api = rows.find(row => row.providerId === 'example-provider' && row.tokensPerSecond);
+  expect(api.tokensPerSecond.value).toBeGreaterThan(0);
+  expect(api.tokensPerSecond.estimated).toBe(false);
+
+  const local = rows.find(row => row.model === 'example-local');
+  // The untuned reading wins over a newer tuned one: the axis describes the runtime as configured.
+  expect(local.tokensPerSecond).toMatchObject({ value: 120.5, estimated: false });
+  expect(body.composite.sources[local.tokensPerSecond.sourceIds[0]].url).toBe('/models/performance/results');
+  expect(rows.find(row => row.model === 'unmeasured-local').tokensPerSecond).toBeNull();
+});
+
+it('marks a local speed measured before the machine changed as an estimate and names the change', async () => {
+  await mkdir(join(dir, 'local-llm'), { recursive: true });
+  await writeFile(join(dir, 'local-llm', 'assessments.json'), JSON.stringify({ schemaVersion: 1, assessments: [
+    { backend: 'mtplx', modelId: 'example-local', tuningKey: '', assessedAt: '2026-11-20T00:00:00.000Z', environment: { platform: 'example-os', arch: 'example-arch' }, performance: { meanTokensPerSecond: 90, samplesOk: 3 } },
+  ] }));
+  app = express();
+  app.use(express.json());
+  app.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'mtplx', name: 'MTPLX', servicePlan: 'local', models: ['example-local'], enabled: true },
+  ] }) }));
+  app.use(errorMiddleware);
+
+  const { rows } = (await request(app).get('/comparison')).body.composite;
+  const local = rows.find(row => row.model === 'example-local');
+  expect(local.tokensPerSecond).toMatchObject({ value: 90, estimated: true });
+  expect(local.tokensPerSecond.method).toMatch(/different machine state.*Re-run the assessment/);
 });

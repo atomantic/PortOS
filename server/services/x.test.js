@@ -312,6 +312,17 @@ describe('reviewDraft state transitions', () => {
     expect(params[3]).toBe('pending_review');
   });
 
+  it('lets a stale approval return to review but keeps a fresh approval locked', async () => {
+    const { draft, params } = await runReview('draft-1', 'pending_review', [
+      { id: 'draft-1', account_id: 'acct-1', body: 'hello', state: 'pending_review', approved_at: null },
+    ]);
+    expect(draft.state).toBe('pending_review');
+    const sql = query.mock.calls.find(([text]) => /UPDATE x_drafts/.test(text))[0];
+    expect(sql).toMatch(/state='approved' AND \(approved_at IS NULL OR approved_at < NOW\(\) - \(\$5 \* interval '1 millisecond'\)\)/);
+    expect(sql).toMatch(/WHEN \$2='pending_review' THEN NULL/);
+    expect(params[4]).toBe(24 * 60 * 60 * 1000);
+  });
+
   it('returns null when the draft was no longer in the expected state', async () => {
     const { draft } = await runReview('draft-1', 'approved', []);
     expect(draft).toBeNull();

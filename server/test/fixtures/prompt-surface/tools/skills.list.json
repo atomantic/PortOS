@@ -1,0 +1,16 @@
+{
+  "name": "skills.list",
+  "description": "List available procedural skills (Level 0: id, name, short description, tier) plus any quarantined by the security scan. Pass appId to include an opted-in managed app's repo skills.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

@@ -21,12 +21,12 @@
  * so. What changed is that the button now exists.
  */
 
+import { join } from 'path';
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { assessDownloadPreflight, assertDownloadFits } from '../lib/downloadPreflight.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { getHfCacheRoot, repoToDirName } from '../lib/hfCache.js';
-import { hfInventoryRow } from '../lib/modelInventory.js';
+import { modelStoreInventoryRow } from '../lib/modelInventory.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
 import { resolveMtplxBinary } from '../lib/mtplxRuntime.js';
@@ -61,13 +61,17 @@ const REPO_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export const isMtplxRepoId = (value) => typeof value === 'string' && REPO_ID_RE.test(value);
 
-// MTPLX's own Python venv pulls checkpoints via huggingface_hub (see
-// docs/features/mtplx.md), landing them in the standard HF hub cache — NOT
-// necessarily the boot disk. getHfCacheRoot() honors the same
-// HF_HUB_CACHE/HF_HOME overrides ollamaManager/lmStudioManager already do,
-// so a "weights on an external SSD" setup gets checked against the volume
-// the pull actually lands on.
-const mtplxCachePath = () => getHfCacheRoot();
+// `mtplx pull` writes each checkpoint to its OWN store, `<MTPLX_HOME or ~/.mtplx>/models/
+// <org>--<name>` — not the Hugging Face hub cache (the live layout, and what
+// `modelStoreStorage.js` scans). The root comes from the model-root registry so a
+// "weights on an external SSD" setup (MTPLX_HOME) gets its free-disk preflight
+// against the volume the pull really lands on.
+// Resolved lazily: a preflight is a rare, user-triggered path, and a static import would
+// add the registry to every boot (the closure budget in `lib/importScoping.test.js`).
+const mtplxCachePath = async () => join((await import('../lib/modelRoots.js')).modelRootPath('mtplx'), 'models');
+
+// The store's key for a checkpoint: its directory name, which is also its inventory identity.
+const mtplxCheckpointKey = (repoId) => repoId.replace('/', '--');
 
 // No reliable byte count exists for what an MTPLX pull actually transfers.
 // `usedStorage` (an `expand[]` field fetchHuggingfaceModel can request)
@@ -83,7 +87,7 @@ const UNKNOWN_MTPLX_BYTES = 0;
 export async function previewMtplxPull({ model = null } = {}) {
   const repo = model ? requireRepoId(model) : null;
   const preflight = await assessDownloadPreflight({
-    destPath: mtplxCachePath(),
+    destPath: await mtplxCachePath(),
     expectedBytes: UNKNOWN_MTPLX_BYTES,
   });
   return { kind: 'mtplx', ...preflight, destPath: repo || 'MTPLX cache', alreadyDownloaded: false };
@@ -212,7 +216,7 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
   const repo = model ? requireRepoId(model) : null;
   const label = repo || 'MTPLX\'s default verified checkpoint';
   assertDownloadFits(await assessDownloadPreflight({
-    destPath: mtplxCachePath(),
+    destPath: await mtplxCachePath(),
     expectedBytes: UNKNOWN_MTPLX_BYTES,
   }));
 
@@ -245,16 +249,15 @@ export async function pullMtplxModel({ model = null, onProgress = () => {} } = {
   const cache = await listMtplxCachedModels();
   const cached = (cache.models || []).map((m) => m?.repo_id).filter(Boolean);
   console.log(`✅ MTPLX pull complete for ${label} (${cached.length} checkpoint(s) cached)`);
-  // MTPLX pulls through huggingface_hub into the standard hub cache (see
-  // `mtplxCachePath`), so what lands here is an ordinary `models--org--name`
-  // directory that Models → Status inventories. Recording it HERE rather than at
+  // A pull lands in MTPLX's own store (see `mtplxCachePath`), which Models → Status
+  // inventories as the `mtplx` backend. Recording it HERE rather than at
   // the callers covers both entry points — the model-pull route and the
   // readiness checklist's default-checkpoint fetch — with one seam. A named pull
   // records itself; the default pull has no repo to name, so the cache listing is
   // the only thing that knows what arrived.
   for (const repoId of repo ? [repo] : cached) {
     await recordModelInstall({
-      ...hfInventoryRow({ dirName: repoToDirName(repoId), name: repoId, detail: repoId, sizeBytes: null }),
+      ...modelStoreInventoryRow({ backend: 'mtplx', key: mtplxCheckpointKey(repoId), name: repoId, detail: 'MTPLX checkpoint', sizeBytes: null }),
       source: 'download',
     });
   }
@@ -294,7 +297,7 @@ export async function removeMtplxModel(model) {
     );
   }
 
-  await recordModelUninstall({ backend: 'huggingface', key: repoToDirName(repo) });
+  await recordModelUninstall({ backend: 'mtplx', key: mtplxCheckpointKey(repo) });
   console.log(`🗑️  MTPLX checkpoint removed: ${repo}`);
   return {
     success: true,

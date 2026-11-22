@@ -1,0 +1,21 @@
+{
+  "name": "feeds_mark_read",
+  "description": "Mark RSS feed items as read. Use when the user says \"mark that one read\", \"mark this read\", \"I read the second one\", or \"mark them all read\". Pass `query` with a distinctive phrase from the item's title (the LLM should reuse a title it just spoke from feeds_digest). Pass `all: true` to mark every unread item read; combine with `feedQuery` to scope to a single feed (e.g. \"mark all of Hacker News as read\").",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Distinctive phrase from the article title to fuzzy-match against currently unread items."
+      },
+      "all": {
+        "type": "boolean",
+        "description": "Mark every unread item as read. When true, `query` is ignored."
+      },
+      "feedQuery": {
+        "type": "string",
+        "description": "Optional: when `all` is true, restrict to a single feed by fuzzy-matching its title."
+      }
+    }
+  }
+}

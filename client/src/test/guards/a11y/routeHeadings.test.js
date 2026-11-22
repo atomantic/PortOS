@@ -1,10 +1,12 @@
 /**
- * Accessibility conventions: a heading on every routed page.
+ * Accessibility conventions: a heading on every routed page, and heading levels
+ * that never climb by more than one level on the way down.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
  */
 import { describe, it, expect } from 'vitest';
-import { maskedSourceOf, forEachOpeningTag, renderedTagNames } from '../../a11yScanCore.js';
-import { resolveRelativeImport, relativeImportBindings, reExportBindings, withVirtualSources } from '../../a11yScanWrappers.js';
+import { maskedSourceOf, forEachOpeningTag, renderedTagNames, tagIndexOf, lineOf, COMPONENT_TAG_NAME } from '../../a11yScanCore.js';
+import { resolveRelativeImport, relativeImportBindings, reExportBindings, defaultExportName, withVirtualSources } from '../../a11yScanWrappers.js';
+import { forEachLocalComponent } from '../../a11yScanNames.js';
 
 describe('a11y conventions: routeHeadings', () => {
   // name -> { file, exportedName } for every component a `<Route element>` in
@@ -201,5 +203,141 @@ describe('a11y conventions: routeHeadings', () => {
         return entry === undefined || suppliesPageHeading(entry.file, entry.exportedName);
       });
     expect(stale, `routed-heading exemption entries that no longer match a heading-less routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
+  });
+
+  // --- heading order (#17334) ----------------------------------------------
+  // The outline of a routed page: the headings the page renders, in document
+  // order. Only the page component's own JSX is walked — a heading inside a
+  // lazy-loaded tab component (MeatSpace, Brain, DigitalTwin) is not seen,
+  // because the tab bodies render behind a switch the walk cannot see through.
+  // That is a known gap, not a pass: the eight routes in #17323 live in those
+  // tabs and are covered by that issue's live sweep, not by this guard.
+  const localComponentBodies = (src) => {
+    const bodies = new Map();
+    forEachLocalComponent(src, (name, text, _params, start) => {
+      bodies.set(name, { start, text });
+    });
+    return bodies;
+  };
+
+  // Headings in a component's body, in document order. A local component is
+  // chased at the position of its tag — a card component's title lands where
+  // the page renders the card, not where the component is declared — so the
+  // outline reflects the render order rather than the declaration order. The
+  // chase is bounded and cycle-guarded by `path`; it is not deduped, because a
+  // component rendered three times really does render three headings.
+  const outlineOfComponent = (file, componentName, path, depth) => {
+    if (depth >= MAX_HEADING_CHASE_DEPTH) return [];
+    const key = `${file}#${componentName}`;
+    if (path.has(key)) return [];
+    const src = maskedSourceOf(file);
+    const bodies = localComponentBodies(src);
+    const body = bodies.get(componentName);
+    if (!body) return [];
+    const nextPath = new Set(path);
+    nextPath.add(key);
+    const out = [];
+    for (const node of tagIndexOf(body.text)) {
+      if (node.closing || node.tag === null) continue;
+      const heading = /^h([1-6])$/.exec(node.name ?? '');
+      if (heading) {
+        out.push({ level: Number(heading[1]), file, line: lineOf(src, body.start + node.index) });
+        continue;
+      }
+      if (node.name && COMPONENT_TAG_NAME.test(node.name) && bodies.has(node.name)) {
+        out.push(...outlineOfComponent(file, node.name, nextPath, depth + 1));
+      }
+    }
+    return out;
+  };
+
+  // The outline of a routed page element. The page's own h1 — a direct `<h1>`
+  // in the page component's JSX — is in the outline already; otherwise the page
+  // renders PageHeader (or renders under a shell that owns the h1), which the
+  // walk does not chase, so a synthetic level-1 anchor is prepended. Either
+  // way the page's own headings are checked against level 1.
+  const outlineOfPage = (element) => {
+    const src = maskedSourceOf(element.file);
+    const componentName = element.exportedName === 'default' ? defaultExportName(src) : element.exportedName;
+    if (!componentName) return null;
+    const own = outlineOfComponent(element.file, componentName, new Set(), 0);
+    if (element.shelled || !own.some((h) => h.level === 1)) {
+      return [{ level: 1, file: element.file, line: 1 }, ...own];
+    }
+    return own;
+  };
+
+  // Documented exceptions: pages whose heading outline still jumps by more
+  // than one level, pending the heading-order fix. An entry must name a page
+  // that really jumps — the staleness check below fails on a stale entry, so
+  // the list only shrinks.
+  const HEADING_ORDER_ALLOWLIST = new Set([
+    'src/pages/Browser.jsx',       // h1 → h3 section headings (#17323-class)
+    'src/pages/CapabilityMap.jsx', // h1 → h3 section headings (#17323-class)
+    'src/pages/FeatureAgents.jsx', // h1 → h3 empty-state heading (#17323-class)
+    'src/pages/Templates.jsx',     // h2 → h4 "About Templates" (#17323-class)
+    'src/pages/JiraReports.jsx',   // h1 → h3 card titles (#17323-class)
+  ]);
+
+  const headingOrderOffenders = (elements) => {
+    const offenders = [];
+    for (const element of elements) {
+      if (HEADINGLESS_ROUTE_ELEMENTS.has(element.file) || ROUTE_HEADING_GAP_ALLOWLIST.has(element.file)) continue;
+      const outline = outlineOfPage(element);
+      if (outline === null) continue;
+      for (let i = 1; i < outline.length; i++) {
+        if (outline[i].level - outline[i - 1].level > 1) {
+          offenders.push({ file: element.file, jump: `h${outline[i - 1].level} → h${outline[i].level}`, line: outline[i].line });
+        }
+      }
+    }
+    return offenders;
+  };
+
+  it('keeps heading levels ordered on routed pages (#17334)', () => {
+    const elements = routedPageElements('src/App.jsx');
+    // Probe first — a walker change that finds no Route elements must not pass
+    // over an empty set.
+    expect(elements.length, 'found no routed page elements in src/App.jsx — has the route table or its lazy-import idiom changed?').toBeGreaterThanOrEqual(90);
+
+    const offenders = headingOrderOffenders(elements);
+    const unlisted = offenders.filter((o) => !HEADING_ORDER_ALLOWLIST.has(o.file));
+    expect(unlisted, `Routed page headings increase by more than one level in document order — heading navigation expects the outline to climb one level at a time (WCAG 1.3.1/3.2.4):\n${unlisted.map((o) => `${o.file} — heading jump ${o.jump} at line ${o.line}`).join('\n')}`).toEqual([]);
+  });
+
+  it('flags an h1 → h3 jump on a routed page and passes a clean page (#17334)', () => {
+    // The rule is only real if it fails on a deliberately broken fixture — the
+    // probe below is the proof, run through the real walk rather than a
+    // hand-called decoder.
+    withVirtualSources({
+      'src/ProbeApp.jsx': `
+        import { Routes, Route } from 'react-router';
+        import Good from './pages/ProbeGood';
+        import Bad from './pages/ProbeBad';
+        export default function ProbeApp() {
+          return (
+            <Routes>
+              <Route path="/" element={<Good />} />
+              <Route path="/bad" element={<Bad />} />
+            </Routes>
+          );
+        }
+      `,
+      'src/pages/ProbeGood.jsx': 'export default function ProbeGood() {\n  return <div><h1>Good</h1><h2>Section</h2><h3>Sub</h3></div>;\n}',
+      'src/pages/ProbeBad.jsx': 'export default function ProbeBad() {\n  return <div><h1>Bad</h1><h3>Skipped</h3></div>;\n}',
+    }, () => {
+      const offenders = headingOrderOffenders(routedPageElements('src/ProbeApp.jsx'));
+      expect(offenders).toEqual([{ file: 'src/pages/ProbeBad.jsx', jump: 'h1 → h3', line: 2 }]);
+    });
+  });
+
+  it('keeps no stale entries in the heading-order exemption list (#17334)', () => {
+    // The allowlist only shrinks. An entry whose page no longer jumps is dead
+    // weight that quietly re-exempts the next heading omission routed to that
+    // file — the same rule the heading-presence lists follow.
+    const elements = routedPageElements('src/App.jsx');
+    const jumping = new Set(headingOrderOffenders(elements).map((o) => o.file));
+    const stale = [...HEADING_ORDER_ALLOWLIST].filter((file) => !jumping.has(file));
+    expect(stale, `heading-order exemption entries that no longer match a jumping routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
   });
 });

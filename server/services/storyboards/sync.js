@@ -54,26 +54,93 @@ export async function listStoryboardIdsForSync({ includeDeleted = false } = {}) 
   return includeDeleted ? listIds() : listLiveIds();
 }
 
+// Per key a sender may omit, the storyboards wire version from which an
+// omission means "cleared". `ALWAYS` keys are ones the current sanitizer always
+// writes (a current peer clears with null), so absence only ever means the
+// sender's sanitizer predates the field; `beforeSong` and `linkMedia` are also
+// omitted when cleared, so only a sender below the version that added them
+// omits them for lack of them.
+const ALWAYS = Number.POSITIVE_INFINITY;
+const BOARD_KEPT_WHEN_OMITTED = { plot: ALWAYS, plotLlm: ALWAYS, tempTrack: ALWAYS, source: ALWAYS };
+const BEAT_KEPT_WHEN_OMITTED = { pin: ALWAYS, beforeSong: 12 };
+const PANEL_KEPT_WHEN_OMITTED = {
+  facing: ALWAYS, composition: ALWAYS, move: ALWAYS, lens: ALWAYS, focus: ALWAYS, eyeline: ALWAYS,
+  setShot: ALWAYS, sourceSceneId: ALWAYS, sourceShotId: ALWAYS, sourceRev: ALWAYS, linkMedia: 15,
+};
+
+const isPlainRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+const entriesById = (items) => new Map((Array.isArray(items) ? items : [])
+  .filter((item) => isPlainRecord(item) && typeof item.id === 'string')
+  .map((item) => [item.id, item]));
+
+/**
+ * The remote board that won LWW, with the local values of fields its sender
+ * could not represent put back (`raw` is the board as received, before the
+ * sanitizer filled every omitted key with an empty). Beats and panels match by
+ * id; one the remote dropped stays dropped. Re-sanitizing re-applies the
+ * cross-field rules, so a restored pick, set camera or pin survives only while
+ * the remote still links its record, place or marker.
+ */
+function keepFieldsSenderOmitted(remote, raw, local, senderVersion) {
+  let restored = false;
+  const restore = (target, rawEntry, localEntry, keptWhenOmitted) => {
+    for (const [key, clearsFrom] of Object.entries(keptWhenOmitted)) {
+      if (senderVersion < clearsFrom && !Object.hasOwn(rawEntry, key) && Object.hasOwn(localEntry, key)) {
+        target[key] = localEntry[key];
+        restored = true;
+      }
+    }
+  };
+  const next = { ...remote };
+  restore(next, raw, local, BOARD_KEPT_WHEN_OMITTED);
+  const rawBeats = entriesById(raw.beats);
+  const localBeats = entriesById(local.beats);
+  const rawPanels = entriesById([...rawBeats.values()].flatMap((beat) => (Array.isArray(beat.panels) ? beat.panels : [])));
+  const localPanels = entriesById(local.beats.flatMap((beat) => beat.panels));
+  next.beats = remote.beats.map((beat) => {
+    const out = { ...beat };
+    const rawBeat = rawBeats.get(beat.id);
+    const localBeat = localBeats.get(beat.id);
+    if (rawBeat && localBeat) restore(out, rawBeat, localBeat, BEAT_KEPT_WHEN_OMITTED);
+    out.panels = beat.panels.map((panel) => {
+      const rawPanel = rawPanels.get(panel.id);
+      const localPanel = localPanels.get(panel.id);
+      if (!rawPanel || !localPanel) return panel;
+      const kept = { ...panel };
+      restore(kept, rawPanel, localPanel, PANEL_KEPT_WHEN_OMITTED);
+      return kept;
+    });
+    return out;
+  });
+  return restored ? sanitizeStoryboard(next) : remote;
+}
+
 /**
  * Merge boards received from a peer: sanitize, then whole-record LWW on
- * `updatedAt`, serialized per id against the REST writers. Journals the local
- * version a remote win is about to overwrite and re-stamps the conflict-journal
- * base hash for the record it wrote.
+ * `updatedAt`, serialized per id against the REST writers. A live remote win
+ * over a live local board keeps the fields an older sender's sanitizer could
+ * not emit (`keepFieldsSenderOmitted`). Journals the local version a remote
+ * win is about to overwrite and re-stamps the conflict-journal base hash for
+ * the record it wrote.
  */
-export async function mergeStoryboardsFromSync(remoteRecords, { source = { via: 'sync', peerId: null } } = {}) {
+export async function mergeStoryboardsFromSync(remoteRecords, { source = { via: 'sync', peerId: null }, senderSchemaVersions = null } = {}) {
   if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
+  const senderVersion = Number(senderSchemaVersions?.storyboards) || 0;
   const byId = new Map();
   for (const raw of remoteRecords) {
     const remote = sanitizeStoryboard(raw);
-    if (remote && !byId.has(remote.id)) byId.set(remote.id, remote);
+    if (remote && !byId.has(remote.id)) byId.set(remote.id, { remote, raw });
   }
   let changed = 0;
-  for (const remote of byId.values()) {
-    const applied = await queueStoryboardWrite(remote.id, async () => {
-      const local = sanitizeStoryboard(await readRaw(remote.id));
-      if (local && !compareNewerWins(remote.updatedAt, local.updatedAt)) return false;
+  for (const { remote: sanitized, raw } of byId.values()) {
+    const applied = await queueStoryboardWrite(sanitized.id, async () => {
+      const local = sanitizeStoryboard(await readRaw(sanitized.id));
+      if (local && !compareNewerWins(sanitized.updatedAt, local.updatedAt)) return false;
       // Re-receiving a tombstone already held would restart its GC grace period.
-      if (local?.deleted === true && remote.deleted === true) return false;
+      if (local?.deleted === true && sanitized.deleted === true) return false;
+      const remote = local && !local.deleted && !sanitized.deleted
+        ? keepFieldsSenderOmitted(sanitized, raw, local, senderVersion)
+        : sanitized;
       if (local) {
         await maybeJournalBeforeOverwrite({ kind: STORYBOARD_KIND, id: remote.id, local, remote, source });
       }

@@ -238,6 +238,25 @@ describe('PostSessionLauncher render (issue #2100)', () => {
     expect(screen.getByText(/4\/10/)).toBeTruthy();
   });
 
+  it('does not show streak or weekly-session goals as 0 when the stats reads failed', async () => {
+    renderLauncher({
+      stats: null,
+      statsWeek: null,
+      config: { ...baseConfig, goals: { streakTarget: 10, weeklySessions: 5, dailyMinutes: 20 } },
+    });
+    await waitFor(() => expect(getPostProgress).toHaveBeenCalled());
+    expect(screen.queryByText(/0\/10/)).toBeNull();
+    expect(screen.queryByText(/0\/5/)).toBeNull();
+  });
+
+  it('still renders a real zero streak from a successful stats payload', async () => {
+    renderLauncher({
+      stats: { ...stats, currentStreak: 0 },
+      config: { ...baseConfig, goals: { streakTarget: 10 } },
+    });
+    await waitFor(() => expect(screen.getByText(/0\/10/)).toBeTruthy());
+  });
+
   it('persists a selected Quick preset and passes the budget plan to the session', async () => {
     const onStart = vi.fn();
     renderLauncher({

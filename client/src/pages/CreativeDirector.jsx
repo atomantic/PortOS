@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -17,12 +17,15 @@ import { listVideoModels } from '../services/apiImageVideo.js';
 import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
 import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
 import ProjectLibrary from '../components/creative-director/ProjectLibrary.jsx';
 import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
+import { describeCreativeDirectorStatus } from '../lib/creativeDirectorStatus.js';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -39,12 +42,14 @@ const STATUS_COLORS = {
 
 const EMPTY_DIRECTIVE = { goal: '', deliverables: [], constraints: { universeId: null, seriesId: null, budgetCap: null } };
 
+const fetchProjectList = () => listCreativeDirectorProjects({ silent: true });
+
 export default function CreativeDirector() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: projects, setItems: setProjects, state: projectsState, error: projectsError, retry: retryProjects } = useListResource(fetchProjectList);
+  const loading = projectsState === 'loading';
   const [showForm, setShowForm] = useState(false);
   const videoDraftOpen = searchParams.get('new') === 'video';
   const setVideoDraftOpen = open => setSearchParams(prev => {
@@ -85,18 +90,8 @@ export default function CreativeDirector() {
     disableAudio: true,
   });
 
-  const fetchProjects = useCallback(() => {
-    listCreativeDirectorProjects({ silent: true })
-      .then((data) => { setProjects(data || []); setLoading(false); })
-      .catch((err) => {
-        toast.error(err?.message || 'Failed to load Creative Director projects');
-        setLoading(false);
-      });
-  }, []);
-
   useEffect(() => {
     let active = true;
-    fetchProjects();
     listVideoModels().then((m) => {
       if (!active) return;
       setModels(m || []);
@@ -106,7 +101,7 @@ export default function CreativeDirector() {
       if (preferred && !form.modelId) setForm((f) => ({ ...f, modelId: preferred.id }));
     }).catch(() => {});
     return () => { active = false; };
-  }, [fetchProjects]);
+  }, []);
 
   // Consume each remix handoff, then clear the history state so a
   // refresh doesn't re-seed (mirrors Story Builder's prefill-consume pattern).
@@ -494,11 +489,15 @@ export default function CreativeDirector() {
       )}
 
       <div className="flex-1 overflow-auto p-6">
-        {projects.length === 0 && !showForm && (
+        {projectsState === 'error' && (
+          <ListLoadError what="Creative Director projects" error={projectsError} onRetry={retryProjects} />
+        )}
+        {projectsState === 'ready' && projects.length === 0 && !showForm && (
           <div className="text-port-text-muted text-sm">
             No projects yet. <Link to="/creative-director?new=video" className="text-port-accent">Create a video draft</Link>.
           </div>
         )}
+        {projectsState === 'ready' && (
         <ProjectLibrary projects={projects}>
           {(p, compact) => (
             <div key={p.id} className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
@@ -517,7 +516,14 @@ export default function CreativeDirector() {
                 {p.treatment?.scenes?.length ? `${p.treatment.scenes.filter((s) => s.status === 'accepted').length}/${p.treatment.scenes.length} scenes accepted` : 'No treatment yet'}
               </div>
               <div className="flex gap-1 mt-1">
-                {p.workspace === 'video' && <span className="text-xs text-port-text-muted">Draft · next: edit brief · production not enabled</span>}
+                {/* Video start needs the limits and config revision VideoExecutionPanel
+                    collects, so the card points at the project instead of starting it. */}
+                {p.workspace === 'video' && (
+                  <span className="text-xs text-port-text-muted">
+                    {describeCreativeDirectorStatus(p).headline}
+                    {['draft', 'paused', 'failed'].includes(p.status) && ' · open the project to start'}
+                  </span>
+                )}
                 {/* Pause is meaningful only when the agent could be in flight.
                     `draft` has nothing running yet, and the terminal states are
                     obviously inert — match the detail page's gating. */}
@@ -538,6 +544,7 @@ export default function CreativeDirector() {
             </div>
           )}
         </ProjectLibrary>
+        )}
       </div>
 
       <Drawer

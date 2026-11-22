@@ -5,6 +5,7 @@
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
 import { isLocalInstanceEndpoint } from '../localEndpoint.js';
 import { isPlainObject } from '../objects.js';
+import { isOllamaBackedProvider, ollamaThinkingLevelsForModel } from '../aiToolkit/internal/ollamaBacked.js';
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
@@ -298,6 +299,20 @@ export function isKimiProvider(provider) {
   return id === 'kimi-cli' || id === 'kimi-tui' || commandBasename(provider?.command) === 'kimi';
 }
 
+export const HERMES_COMMAND = 'hermes';
+export const isHermesCommand = (command) => commandBasename(command) === HERMES_COMMAND;
+
+/**
+ * True when a provider is Hermes-Agent-flavored — the shipped `hermes-cli`/`hermes-tui` ids or any
+ * provider whose launch command basename is `hermes` (path/exe tolerant).
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isHermesProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'hermes-cli' || id === 'hermes-tui' || isHermesCommand(provider?.command);
+}
+
 /**
  * True when a provider is Antigravity-flavored — the shipped `antigravity-cli`/`antigravity-tui`
  * ids or any provider whose launch command basename is `agy`/`antigravity` (path/exe tolerant).
@@ -365,6 +380,9 @@ export function effortLevelsForProvider(provider, model = null) {
   if (harness === 'cursor' || isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (harness === 'grok' || isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (harness === 'claude' || isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
+  // An Ollama API provider's effort is the model's thinking level, where its template takes one.
+  // An MTPLX provider hands the same level to the chat template (Inkling packs).
+  if (provider.type === 'api' && (isOllamaBackedProvider(provider) || provider.mtplxBacked === true)) return ollamaThinkingLevelsForModel(model);
   return null;
 }
 

@@ -1,0 +1,44 @@
+{
+  "name": "mind.review-memory",
+  "description": "Review one owned active memory at its exact content version: keep, learn, archive, or defer. Learn requires your written lesson and keeps the source active; archive refuses protected records. Identical retries return the saved outcome; defer can precede learn, and archive must be a separate explicit decision. Keep/defer do not strengthen importance or evidence.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "memoryId": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9._-]+$"
+      },
+      "expectedVersion": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
+      "verdict": {
+        "type": "string",
+        "enum": [
+          "keep",
+          "learn",
+          "archive",
+          "defer"
+        ]
+      },
+      "rationale": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "lesson": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 10240
+      }
+    },
+    "required": [
+      "memoryId",
+      "expectedVersion",
+      "verdict"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

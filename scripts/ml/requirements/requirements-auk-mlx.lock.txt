@@ -22,7 +22,7 @@
 #   printf '[project]\nname = "auk-mlx-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-auk-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 # This lock was generated with --exclude-newer 2026-11-03; OSV reported no
 # advisories for any pin on 2026-11-10.

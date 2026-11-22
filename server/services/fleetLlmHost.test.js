@@ -4,7 +4,7 @@ vi.mock('./fleetLlmStartup.js', () => ({
   removeFleetHostLoginTask: async () => { state.loginTaskRemoved = true; return { success: true }; },
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, peers: [], peerResponses: new Map() }));
+const state = vi.hoisted(() => ({ providers: [], writes: [], enabled: '', loginTaskRemoved: false, specs: { platform: 'win32', cuda: { gpus: [{ name: 'NVIDIA RTX 3090', vramGb: 24 }] } }, servedModels: ['qwen3.8-27b'], peers: [], peerResponses: new Map() }));
 // The usage ledger has its own suite and its own disk; here it would only pull
 // `readJSONFile` into the narrow `fileUtils` double this file already declares.
 vi.mock('./fleetLlmUsage.js', () => ({
@@ -35,14 +35,14 @@ vi.mock('../lib/portosEnv.js', async (original) => {
 });
 vi.mock('../lib/commandExists.js', () => ({ commandOutput: async (_cmd, args) => args.includes('config') ? JSON.stringify({ services: { single: { image: 'example-runtime' } } }) : args.includes('inspect') ? 'sha256:' + 'a'.repeat(64) : '1.0' }));
 vi.mock('../lib/vllmQwenProject.js', () => ({ inspectVllmQwenProject: async () => ({ dir: '/example', composeFile: '/example/compose.yaml', hasWeights: true }) }));
-vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => ({ reachable: true, models: ['qwen3.8-27b'] }) }));
+vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => ({ reachable: true, models: state.servedModels }) }));
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
 vi.mock('./provider/providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
 vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
 import { configureFleetLlmHost, describeFleetHostError, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
-beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
+beforeEach(async () => { await stopFleetLlmHost(); state.writes = []; state.enabled = ''; state.loginTaskRemoved = false; state.providers = []; state.servedModels = ['qwen3.8-27b']; state.peers = []; state.peerResponses.clear(); vi.clearAllMocks(); });
 describe('dedicated host setup workflow', () => {
   it('pins the prepared image, keeps the runtime private and routes only local providers through the queue', async () => {
     state.providers = [
@@ -61,6 +61,21 @@ describe('dedicated host setup workflow', () => {
     const status = await getFleetLlmHostStatus();
     expect(status.serving).toBe(true);
     expect(JSON.stringify(status)).not.toContain('example-api-key');
+  });
+  it('advertises and records the checkpoint the runtime actually serves, not the recipe default', async () => {
+    state.servedModels = ['example-org/other-model'];
+    await configureFleetLlmHost();
+    expect(state.providers.at(-1)).toMatchObject({ defaultModel: 'example-org/other-model', models: ['example-org/other-model'] });
+    const status = await getFleetLlmHostStatus();
+    expect(status).toMatchObject({ serving: true, model: 'example-org/other-model' });
+    expect(status.checks.find((check) => check.id === 'runtime')).toMatchObject({ ok: true, detail: 'example-org/other-model' });
+  });
+  it('is not serving while the runtime answers with no model loaded', async () => {
+    await configureFleetLlmHost();
+    state.servedModels = [];
+    const status = await getFleetLlmHostStatus();
+    expect(status).toMatchObject({ serving: false, model: 'qwen3.8-27b' });
+    expect(status.checks.find((check) => check.id === 'runtime').ok).toBe(false);
   });
   it('cancels before starting a persistent runtime or enabling the gateway', async () => {
     await expect(configureFleetLlmHost({ isCancelled: () => true })).rejects.toThrow('cancelled');

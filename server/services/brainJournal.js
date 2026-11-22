@@ -212,25 +212,49 @@ function toJournalSummary(entry) {
   };
 }
 
-export async function listJournals({ limit = 50, offset = 0, includeContent = false } = {}) {
-  // getAll strips tombstones, so deleted days don't show in the sidebar even
-  // before the tombstone is GC'd.
-  const records = await brainStorage.getAll('journals');
-  records.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  const total = records.length;
-  const page = records.slice(offset, offset + limit);
-  // Hydrate just the page with each day's local Obsidian location (the
-  // obsidianPath/obsidianVaultId fields live in the non-synced sidecar, not the
-  // synced record) so summaries still report the mirror status.
+// Attach each day's local Obsidian location (the obsidianPath/obsidianVaultId
+// fields live in the non-synced sidecar, not the synced record) so summaries
+// still report the mirror status.
+async function hydrateObsidianLocations(entries) {
   const locations = await loadObsidianLocations();
-  const hydrated = page.map((entry) => {
+  return entries.map((entry) => {
     const date = entry.date || entry.id;
     const loc = pendingBulkLocations.get(date) || locations[date] || { obsidianPath: null, obsidianVaultId: null };
     return { ...entry, obsidianPath: loc.obsidianPath, obsidianVaultId: loc.obsidianVaultId };
   });
+}
+
+// Journal ids ARE the calendar date, so a descending id sort is newest-first
+// without opening any body.
+async function listJournalIdsNewestFirst() {
+  return (await brainStorage.listStoredIds('journals')).sort((a, b) => b.localeCompare(a));
+}
+
+// Walk ids newest-first and load only as many bodies as `wanted` needs: each
+// batch asks for exactly the shortfall, so a store with no tombstones reads
+// `offset + limit` bodies and nothing beyond. getById returns null for a
+// tombstone or corrupt record, which drops out instead of failing the page.
+export async function listJournals({ limit = 50, offset = 0, includeContent = false } = {}) {
+  const ids = await listJournalIdsNewestFirst();
+  const page = [];
+  let toSkip = offset;
+  let cursor = 0;
+  let dropped = 0;
+  while (page.length < limit && cursor < ids.length) {
+    const batch = ids.slice(cursor, cursor + toSkip + (limit - page.length));
+    cursor += batch.length;
+    for (const entry of await Promise.all(batch.map((id) => brainStorage.getById('journals', id)))) {
+      if (!entry) { dropped += 1; continue; }
+      if (toSkip > 0) toSkip -= 1;
+      else if (page.length < limit) page.push(entry);
+    }
+  }
+  const hydrated = await hydrateObsidianLocations(page);
   return {
     records: includeContent ? hydrated : hydrated.map(toJournalSummary),
-    total,
+    // Upper bound: ids on disk minus the tombstoned/corrupt rows this walk
+    // actually opened. Counting live days exactly would mean reading every body.
+    total: ids.length - dropped,
   };
 }
 
@@ -529,15 +553,15 @@ async function removeFromObsidian(entry) {
 // Sized so an ordinary transient blip cannot trip it but a systemic outage does.
 const MAX_CONSECUTIVE_RESYNC_SKIPS = 25;
 
-// Hydrate only one page at a time during whole-store catch-up.
+// Whole-store catch-up: each id is listed once and its body read once, a page
+// of ids at a time to bound memory.
+const ITERATE_PAGE_SIZE = 100;
 export async function* iterateJournals() {
-  const limit = 100;
-  let offset = 0;
-  while (true) {
-    const { records, total } = await listJournals({ offset, limit, includeContent: true });
-    for (const record of records) yield record;
-    offset += records.length;
-    if (offset >= total || records.length === 0) return;
+  const ids = await listJournalIdsNewestFirst();
+  for (let i = 0; i < ids.length; i += ITERATE_PAGE_SIZE) {
+    const loaded = await Promise.all(ids.slice(i, i + ITERATE_PAGE_SIZE)
+      .map((id) => brainStorage.getById('journals', id)));
+    for (const record of await hydrateObsidianLocations(loaded.filter(Boolean))) yield record;
   }
 }
 

@@ -28,6 +28,7 @@ describe('persistent mind capabilities', () => {
       expect.objectContaining({ id: 'eidoverse.promote', capability: 'promoteEidoverseFoundations', defaultEnabled: false }),
       expect.objectContaining({ id: 'eidoverse.controllers', capability: 'installEidoverseControllers', defaultEnabled: false }),
       expect.objectContaining({ id: 'mind.adjust-local-context', capability: 'adjustLocalContext', defaultEnabled: false }),
+      expect.objectContaining({ id: 'skills.manage', capability: 'manageSkills', defaultEnabled: false }),
       expect.objectContaining({ id: 'mind.cleanup', capability: 'manageMind', defaultEnabled: false }),
       expect.objectContaining({ id: 'voice.call-user', capability: 'callUser', kind: 'typed-action', defaultEnabled: false }),
     ]);

@@ -1,0 +1,24 @@
+{
+  "name": "get_context",
+  "description": "Resolve one stable context reference from an enabled scope.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 180
+      }
+    },
+    "required": [
+      "ref"
+    ],
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true,
+    "destructiveHint": false,
+    "idempotentHint": true,
+    "openWorldHint": false
+  }
+}

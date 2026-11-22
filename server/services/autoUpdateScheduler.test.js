@@ -18,7 +18,7 @@ const deps = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 
-vi.mock('chokidar', () => ({ watch: deps.watch }));
+vi.mock('../lib/fsWatcher.js', () => ({ watchPaths: deps.watch }));
 vi.mock('../lib/execGit.js', () => ({ execGit: deps.git }));
 
 vi.mock('./eventScheduler.js', () => ({ schedule: deps.schedule, cancel: deps.cancel }));
@@ -640,9 +640,7 @@ describe('updater status invalidation', () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(io.emit).toHaveBeenCalledTimes(1);
     expect(deps.watch.mock.calls[0][0].every(path => !path.endsWith('index'))).toBe(true);
-    // chokidar guards the native watch handle against Windows EPERM only for
-    // persistent watchers; a non-persistent one crashes the server when git
-    // prunes a watched refs/ subdirectory.
+    // Keep the watcher persistent so it holds the event loop like the old one.
     expect(deps.watch.mock.calls[0][1]).toMatchObject({ persistent: true });
     __resetAutoUpdateSchedulerForTests();
     expect(watcher.close).toHaveBeenCalledTimes(1);

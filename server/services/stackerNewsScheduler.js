@@ -22,7 +22,13 @@ export async function reconcileStackerNewsSchedulers() {
       handler: async () => {
         const current = await getAccount(account.id);
         if (!current || !hasEffectiveMonitoring(current, await listTerritories(account.id))) return;
-        await syncAccount(account.id);
+        const { getIo } = await import('./socket.js');
+        try {
+          await syncAccount(account.id);
+        } finally {
+          // A failed sync can still persist territory, item, or account changes.
+          getIo()?.emit('stacker-news:changed', { accountId: account.id });
+        }
       },
       metadata: { source: 'stackerNewsScheduler', accountId: account.id },
     });

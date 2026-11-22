@@ -10,6 +10,7 @@ import {
 import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import PersistentMindMaintainerControls from './PersistentMindMaintainerControls';
+import PersistentMindContextBreakdown from './PersistentMindContextBreakdown';
 import { Link } from 'react-router';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatDateTime } from '../../utils/formatters';
@@ -204,6 +205,8 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
           ) : (data.memories || []).map((memory) => <MemoryEditor key={memory.id} memory={memory} onSaved={refreshMemories} />)}
         </div>
       </section>}
+
+      {view !== 'memories' && <PersistentMindContextBreakdown breakdown={data?.breakdown} />}
 
       {view !== 'memories' && data?.preview && <ContinuationNote note={data.preview.continuationNote} />}
 

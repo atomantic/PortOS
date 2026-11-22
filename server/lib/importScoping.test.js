@@ -342,7 +342,7 @@ describe('shared provider type leaf', () => {
 // that is imported statically, so a resolver gap cannot make this look clean.
 describe('heavy single-feature packages stay out of the boot closure', () => {
   const closure = staticImportClosure(abs('index.js'));
-  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three', 'sharp', '@babel/parser'])(
+  it.each(['playwright-core', '@cantoo/pdf-lib', 'google-auth-library', 'three', 'sharp', '@babel/parser'])(
     'does not reach %s through static imports from index.js',
     (pkg) => {
       expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);

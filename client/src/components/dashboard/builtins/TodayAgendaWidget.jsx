@@ -33,7 +33,7 @@ export default function TodayAgendaWidget({ dashboardState }) {
     >
       <div className="flex items-center gap-2 mb-3">
         <CalendarDays size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Today&apos;s Agenda</h3>
+        <h2 className="text-sm font-semibold text-white">Today&apos;s Agenda</h2>
         <span className="ml-auto flex items-center gap-1 text-xs text-port-accent">
           Open <ArrowRight size={12} />
         </span>

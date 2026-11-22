@@ -246,3 +246,35 @@ describe('Project library discovery', () => {
   expect(screen.getByLabelText('Status')).toHaveValue('all');
   expect(screen.getByLabelText('Search projects')).toHaveValue('');
 });
+
+describe('Video project card status (#17221)', () => {
+  it('shows the live status headline and never claims production is not enabled', async () => {
+    vi.clearAllMocks();
+    cdApi.listCreativeDirectorProjects.mockResolvedValue([
+      { id: 'video-draft', name: 'Video draft', status: 'draft', workspace: 'video' },
+      { id: 'video-done', name: 'Video done', status: 'complete', workspace: 'video' },
+    ]);
+    render(<MemoryRouter initialEntries={['/creative-director?view=all']}><CreativeDirector /></MemoryRouter>);
+    expect(await screen.findByText(/Draft · waiting for you to start · open the project to start/)).toBeInTheDocument();
+    expect(screen.getByText('Complete · final video ready')).toBeInTheDocument();
+    expect(screen.queryByText(/production not enabled/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Start/ })).toBeNull();
+    expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
+  });
+});
+
+describe('CreativeDirector failed list read', () => {
+  it('shows a Retry instead of the empty copy, and recovers on Retry', async () => {
+    const user = userEvent.setup();
+    vi.clearAllMocks();
+    cdApi.listCreativeDirectorProjects
+      .mockRejectedValueOnce(new Error('503 down'))
+      .mockResolvedValue([{ id: 'existing-project', name: 'Existing project', status: 'draft', workspace: 'video' }]);
+    render(<MemoryRouter><CreativeDirector /></MemoryRouter>);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Creative Director projects');
+    expect(screen.queryByText(/No projects yet/)).toBeNull();
+    expect(screen.queryByText(/All projects/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('link', { name: 'Open Existing project' })).toBeInTheDocument();
+  });
+});

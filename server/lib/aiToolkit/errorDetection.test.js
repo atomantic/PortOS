@@ -52,6 +52,22 @@ describe('Error Detection', () => {
       expect(result.actionable).toBe(false);
     });
 
+    it('classifies an Ollama parser rejection of model-emitted tool markup as a response parse error', () => {
+      for (const message of [
+        'Ollama stream error: invalid Inkling2 tool name "eidoverse.chat" for header "toolCalls"',
+        'Ollama stream error: missing Inkling2 tool name for header "toolCalls"',
+        'Ollama stream error: invalid tool call JSON: unexpected end of JSON input',
+        'Ollama stream error: qwen3.5 tool call parsing failed',
+      ]) {
+        expect(analyzeError(message)).toMatchObject({ hasError: true, category: 'parse-error', requiresFallback: true });
+      }
+      // The daemon dying mid-stream is still not a response-shape failure, and
+      // prose that merely mentions a tool call outside our native-stream prefix
+      // (an agent transcript) is not one either.
+      expect(analyzeError('Ollama stream error: model runner has unexpectedly stopped').category).toBeNull();
+      expect(analyzeError('the invalid tool call was retried', 1).category).toBe(ERROR_CATEGORIES.UNKNOWN);
+    });
+
     it('detects an Anthropic refusal stop reason', () => {
       const result = analyzeError('{"stop_reason":"refusal"}');
       expect(result.category).toBe(ERROR_CATEGORIES.CONTENT_REFUSAL);
@@ -220,6 +236,16 @@ describe('Error Detection', () => {
       const result = analyzeError('Ollama returned 400: {"error":"\\"nomic-embed-text:latest\\" does not support chat"}', 1);
       expect(result.hasError).toBe(true);
       expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
+    });
+
+    it('classifies a runtime too old for the GGUF architecture as model-not-found with an update fix', () => {
+      // Ollama relays its bundled llama-server's load failure verbatim. The
+      // daemon is healthy; only this model needs a newer runtime, so it must
+      // not land in UNKNOWN and escalate to an investigation.
+      const result = analyzeError('Ollama returned 500: {"error":"llama-server process has terminated: exit status 1: error: Failed to load CLIP model from /models/blobs/sha256-0000\\nerror loading model: unknown model architecture: \'newarch_loop\'"}', 1);
+      expect(result.hasError).toBe(true);
+      expect(result.category).toBe(ERROR_CATEGORIES.MODEL_NOT_FOUND);
+      expect(result.suggestedFix).toMatch(/Update the runtime/);
     });
 
     it('should detect network errors', () => {

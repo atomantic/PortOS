@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { lstat, mkdtemp, mkdir, readFile, readlink, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -35,7 +35,14 @@ const metadataResponse = () => new Response(JSON.stringify({
   ],
 }), { status: 200, headers: { 'content-type': 'application/json' } });
 
+const ROOT_ENV = [
+  'HF_HUB_CACHE', 'HF_HOME', 'XDG_CACHE_HOME', 'PORTOS_MODELS_HOME', 'PORTOS_REPO_MODELS_DIR',
+  'SLOTSTREAM_MODEL_DIR', 'MTPLX_HOME', 'HY3DGEN_MODELS', 'HF_XET_CACHE', 'PIXIE_FORGE_HOME',
+];
+
 let cacheDir;
+let isolatedRoots;
+let savedEnv;
 let fetched;
 
 const installFetch = (fileBodies = FILES) => {
@@ -53,13 +60,24 @@ const installFetch = (fileBodies = FILES) => {
 
 beforeEach(async () => {
   cacheDir = await mkdtemp(join(tmpdir(), 'slotstream-cache-'));
+  // A developer machine may already hold this catalog repo. Point every
+  // overridable root at an empty temp so the reuse check cannot see it and
+  // skip the fetch these tests are about.
+  isolatedRoots = await mkdtemp(join(tmpdir(), 'slotstream-roots-'));
+  savedEnv = Object.fromEntries(ROOT_ENV.map((key) => [key, process.env[key]]));
+  for (const key of ROOT_ENV) process.env[key] = join(isolatedRoots, key);
   _resetSlotstreamDownloadsForTests();
   installFetch();
 });
 
 afterEach(async () => {
   vi.useRealTimers();
+  for (const key of ROOT_ENV) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
   await rm(cacheDir, { recursive: true, force: true });
+  await rm(isolatedRoots, { recursive: true, force: true });
   vi.unstubAllGlobals();
 });
 
@@ -206,6 +224,50 @@ describe('downloadSlotstreamModel', () => {
     expect((await downloadSlotstreamModel({ model: REPO, cacheDir })).success).toBe(true);
     expect(fetched.every((url) => url.includes('/api/models/'))).toBe(true);
     expect((await listSlotstreamCachedModels({ cacheDir })).models).toHaveLength(1);
+  });
+
+  it('links a servable copy from another declared root instead of downloading it again', async () => {
+    const source = join(process.env.PORTOS_MODELS_HOME, DIR_NAME);
+    await mkdir(source, { recursive: true });
+    for (const [name, body] of Object.entries(FILES)) await writeFile(join(source, name), body);
+    fetched = [];
+
+    const preview = await previewSlotstreamDownload({ model: REPO, cacheDir });
+    expect(preview.alreadyDownloaded).toBe(false);
+    expect(preview.linking).toBe(true);
+    expect(preview.provider).toBe('Hugging Face');
+    expect(preview.model).toBe(REPO);
+    expect(preview.requiredBytes).toBe(0);
+    expect(preview.expectedBytes).toBeGreaterThan(0);
+    expect(fetched).toEqual([]);
+
+    const result = await downloadSlotstreamModel({ model: REPO, cacheDir });
+    const linked = join(cacheDir, DIR_NAME);
+    expect(result).toMatchObject({ success: true, reused: true, repo: REPO });
+    expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await readlink(linked)).toBe(source);
+    expect(await readFile(join(linked, 'model.safetensors'), 'utf8')).toBe(SHARD);
+    expect(fetched).toEqual([]);
+    expect((await listSlotstreamCachedModels({ cacheDir })).models.map((row) => row.id)).toEqual([DIR_NAME]);
+    expect(await readFile(join(source, 'model.safetensors'), 'utf8')).toBe(SHARD);
+  });
+
+  it('links a hub snapshot of the same repo instead of fetching a second copy', async () => {
+    const snap = join(
+      process.env.HF_HUB_CACHE,
+      'models--mlx-community--Qwen3-30B-A3B-4bit',
+      'snapshots',
+      'abc123',
+    );
+    await mkdir(snap, { recursive: true });
+    for (const [name, body] of Object.entries(FILES)) await writeFile(join(snap, name), body);
+
+    const result = await downloadSlotstreamModel({ model: REPO, cacheDir });
+    const linked = join(cacheDir, DIR_NAME);
+    expect(result.reused).toBe(true);
+    expect((await lstat(linked)).isSymbolicLink()).toBe(true);
+    expect(await readlink(linked)).toBe(snap);
+    expect(fetched.every((url) => !url.includes('/resolve/'))).toBe(true);
   });
 
   it.each(['write', 'remove'])('fails closed when marker %s fails', async (phase) => {

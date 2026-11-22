@@ -36,7 +36,7 @@ import { normalizePersistentMindPrompt } from '../../lib/persistent/persistentMi
 import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../../lib/persistent/persistentMindPlaybook.js';
 import { resolvePersistentMindPlaybookPhase } from './persistentMindPlaybookSignals.js';
 import { assertVisionRunUsedImages, resolveLocalPromptBudget, runPromptThroughProvider } from '../promptRunner.js';
-import { CHARS_PER_TOKEN } from '../../lib/contextBudget.js';
+import { PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS, localPromptCharsForTokens } from '../../lib/persistent/persistentMindPromptBudget.js';
 import { stopRun } from '../runner.js';
 import {
   buildPersistentMindTaskCapabilityPrompt,
@@ -70,14 +70,6 @@ const { HEARTBEAT_INTERVAL_MS } = PERSISTENT_MIND_LIMITS;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
 const MAX_CONTINUATION_TOOL_PROMPT_CHARS = 24_000;
-// Every mind call declares this much answer room. On a local window the
-// prompt runner shrinks it to fit (localOutputReserveTokens) and caps
-// generation at the shrunk number.
-const PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS = 8_192;
-// Local-window prompt fitting. chars/4 undercounts real tokenizers (qwen3
-// packed a 54K-char wake into 14,990 tokens, ~10% over the estimate), so the
-// fitted prompt targets 90% of the room the dispatch gate allows.
-const LOCAL_PROMPT_TOKENIZER_MARGIN = 0.9;
 // Share of the fitted prompt the recalled context (memories, journal, recent
 // history) may take on a local window; the rest is the response contract,
 // capabilities, tool catalog and in-wake tool results.
@@ -173,7 +165,7 @@ function compactToolResultsToFit(results, maxChars) {
 async function resolvePersistentMindPromptBudget({ provider, model }) {
   const local = await resolveLocalPromptBudget({ provider, model, outputReserveTokens: PERSISTENT_MIND_OUTPUT_RESERVE_TOKENS });
   if (!local || local.maxPromptTokens <= 0) return null;
-  const maxPromptChars = Math.floor(local.maxPromptTokens * LOCAL_PROMPT_TOKENIZER_MARGIN) * CHARS_PER_TOKEN;
+  const maxPromptChars = localPromptCharsForTokens(local.maxPromptTokens);
   return {
     contextWindow: local.contextWindow,
     outputReserveTokens: local.outputReserveTokens,
@@ -366,6 +358,14 @@ export function persistentMindHarnessInfo(provider) {
       label: 'Direct API',
       recommendation: 'recommended',
       detail: 'Best fit for a persistent service: structured HTTP, clean cancellation, streaming, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.',
+    };
+  }
+  if (type === 'moa') {
+    return {
+      type,
+      label: 'Mixture of Agents',
+      recommendation: 'supported',
+      detail: 'API reference models advise in parallel, tool-free; the aggregator writes the turn and is the acting, billed run. Every member is billed as its own run, and image turns are refused.',
     };
   }
   const refusal = persistentMindToolFreeRefusal(provider);

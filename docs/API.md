@@ -125,7 +125,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/palette` | ⌘K command palette manifest + actions |
 | `/api/dashboard/layouts` | Dashboard widget layouts |
 | `/api/dashboard/daily-actions` | Dashboard daily action tracking |
-| `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches. Operators can rebuild missing memberships with `POST /auto-organize`. Collections also expose `GET /:id/primary` for eligible machines and run status, and `POST /:id/primary` with `{ instanceId }` to save a primary and consolidate the current items in the background. |
+| `/api/media/collections`, `/api/media/annotations`, `/api/media/sketches` | Media library collections/annotations/sketches. Operators can rebuild missing memberships with `POST /auto-organize`. `GET /:id/primary` lists eligible machines and run status; `POST /:id/primary` `{ instanceId }` saves a primary and consolidates in the background. One-time ids save nothing: `unsorted` (unfiled gallery) and `shared-media` (files on 2+ machines). |
 | `/api/media/holders` | Which machines hold each media file (`GET`) and Make primary (`POST /primary` `{ kind, filename, instanceId }`): keep that holder's copy and release the others |
 | `/api/media/usages` | Where each media file is used (`GET`): `{ items: { '<kind>:<ref>': [{ source, label, id, title, role, href }] } }`. `DELETE /api/image-gen/:filename` and `DELETE /api/video-gen/history/:id` refuse a used file with `409 MEDIA_IN_USE` (usages in `context.usages`) unless `?force=1` |
 | `/api/client-errors` | Client-side error reporting |
@@ -140,7 +140,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/feeds` | RSS/content feeds |
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
-| `/api/user-actions` | Operator-action ledger — read-only log of what the user did (machine-local) |
+| `/api/user-actions` | Read-only, machine-local operator-action ledger |
+| `/api/skills` | Agent skill registry |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |
 | `/api/messages` | Messages (email) integration |
@@ -232,6 +233,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/notifications` | Notification stream |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
+| `/api/moa-presets` | [MoA presets](./features/mixture-of-agents.md) (`moa:<id>`) |
 | `/api/provider-fallbacks` | GET/PUT the single ordered provider fallback list `{ entries: [{ providerId, model?, effort? }] }` (Models > Fallbacks); the step after the failed one runs next, wrapping to the first |
 | `/api/providers/comparison` | Selectable model inventory, sourced PortOS composite, and public evidence; POST `/import` merges researched observations (see [MODEL-COMPARISON.md](./MODEL-COMPARISON.md)) |
 | `/api/models/performance/task-benchmark` | Machine-local PortOS task benchmark history and configured-provider inventory; `POST /discover` and `POST /run` perform explicit user-requested actions |
@@ -361,20 +363,9 @@ socket.emit('shell:stop', { sessionId });
 
 ### iTerm2 Sessions
 
-The Shell page's iTerm2 view uses its own `iterm:*` events, never the `shell:*` ones — see [ITERM.md](./ITERM.md). There is no start, stop or resize: iTerm2 owns its sessions' lifecycle and size.
+The Shell page's iTerm2 view uses its own `iterm:*` events, never the `shell:*` ones; their payloads are in [ITERM.md](./ITERM.md#socket-events). There is no start, stop or resize: iTerm2 owns its sessions' lifecycle and size.
 
 `iterm:input` types exact bytes into a live host terminal and can run commands with the host user's privileges. Treat access to the PortOS socket as host-command access; the iTerm2 view adds no command allowlist. PortOS authentication and HTTPS are optional and off by default, so keep the instance on its private network and use a strong, unique instance password.
-
-```javascript
-socket.emit('iterm:list'); // subscribe; replies (and re-broadcasts) iterm:sessions
-socket.on('iterm:sessions', ({ status, sessions }) => {}); // status.state, [{ id: 'iterm-<uuid>', windowIndex, tabIndex, paneIndex, label, cwd, cols, rows, … }]
-socket.emit('iterm:attach', { id }); // → iterm:attached { id, cols, rows, bufferedOutput } | iterm:error
-socket.on('iterm:output', ({ id, data }) => {}); // one full-screen ANSI repaint per frame
-socket.emit('iterm:input', { id, data: 'ls\r' }); // exact bytes, delivered in order
-socket.on('iterm:exit', ({ id }) => {}); // session closed or iTerm2 went away
-socket.emit('iterm:detach', { id });
-socket.emit('iterm:unlist');
-```
 
 ### Provider Status
 

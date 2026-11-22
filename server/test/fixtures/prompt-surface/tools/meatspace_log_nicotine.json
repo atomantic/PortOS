@@ -1,0 +1,24 @@
+{
+  "name": "meatspace_log_nicotine",
+  "description": "Log nicotine use (cigarette, vape puff, pouch) to MortalLoom / Meatspace tracking. Use when the user says \"I had a cigarette\", \"two pouches\", \"just vaped\". Known categories (cigarette/vape/pouch) get sensible mgPerUnit defaults; otherwise specify mgPerUnit explicitly.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "product": {
+        "type": "string",
+        "description": "Product type (e.g. \"cigarette\", \"vape\", \"Zyn pouch\", \"cigar\")."
+      },
+      "count": {
+        "type": "number",
+        "description": "How many units (default 1)."
+      },
+      "mgPerUnit": {
+        "type": "number",
+        "description": "Nicotine milligrams per unit. Omit to use category default."
+      }
+    },
+    "required": [
+      "product"
+    ]
+  }
+}

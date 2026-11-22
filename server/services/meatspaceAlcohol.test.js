@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { computeStandardDrinks, computeRollingAverages } from './meatspaceAlcohol.js';
 import { getDateString } from '../lib/fileUtils.js';
 
@@ -160,3 +160,54 @@ describe('computeRollingAverages', () => {
 
 // Custom drink normalization and index validation are covered by meatspaceCustomDrinks.test.js
 // which exercises the actual service exports (getCustomDrinks, updateCustomDrink, etc.)
+
+// Substance writes must log an id and a date, never the drink name, ounces, ABV, or
+// the computed standard-drink total: the process log is copied into diagnostic bundles
+// and outlives the record (#17348).
+vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readJSONFile: vi.fn(),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  ensureDir: vi.fn().mockResolvedValue(undefined)
+}));
+vi.mock('./mortalLoomStore.js', () => ({
+  isMortalLoomEnabled: vi.fn().mockResolvedValue(false),
+  readDailyLogIfEnabled: vi.fn().mockResolvedValue(null),
+  mlArrayIfEnabled: vi.fn().mockResolvedValue(null),
+  mlPush: vi.fn(), mlPatchById: vi.fn(), mlRemoveById: vi.fn(), mlIdAtDateIndex: vi.fn()
+}));
+
+describe('drink logs never carry the drink name or measurements', () => {
+  it('log, edit, remove, and custom-button writes keep name, oz, ABV, and the total off stdout', async () => {
+    const fileUtils = await import('../lib/fileUtils.js');
+    const { logDrink, updateDrink, removeDrink, addCustomDrink, updateCustomDrink, removeCustomDrink } = await import('./meatspaceAlcohol.js');
+    let store = { entries: [], lastEntryDate: null };
+    let buttons = { drinks: [] };
+    fileUtils.readJSONFile.mockImplementation(async path => structuredClone(String(path).endsWith('daily-log.json') ? store : buttons));
+    fileUtils.atomicWrite.mockImplementation(async (path, data) => {
+      if (String(path).endsWith('daily-log.json')) store = structuredClone(data);
+      else buttons = structuredClone(data);
+    });
+    const stdout = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => { stdout.push(args.join(' ')); });
+    try {
+      const date = '2024-06-01';
+      const logged = await logDrink({ name: 'Zzyzx Fixture Ale', oz: 13.37, abv: 6.66, count: 1, date });
+      const total = String(logged.standardDrinks);
+      await updateDrink(date, 0, { oz: 17.91, abv: 8.42, id: logged.drink.id });
+      await removeDrink(date, 0, logged.drink.id);
+      await addCustomDrink({ name: 'Zzyzx Custom Button', oz: 13.37, abv: 6.66 });
+      await updateCustomDrink(0, { name: 'Zzyzx Renamed Button' });
+      await removeCustomDrink(0);
+
+      const output = stdout.join('\n');
+      for (const secret of ['Zzyzx', '13.37', '17.91', '6.66', '8.42', total]) {
+        expect(output).not.toContain(secret);
+      }
+      expect(stdout.filter(line => line.includes(logged.drink.id))).toHaveLength(3);
+      expect(stdout.some(line => line.includes(date))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

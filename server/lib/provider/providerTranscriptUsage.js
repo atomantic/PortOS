@@ -132,34 +132,13 @@ const inWindow = (ts, from, to) => {
 };
 
 /**
- * Parse a Claude Code session transcript.
- *
- * **De-duplication is load-bearing.** One API response is written to the
- * transcript as SEVERAL lines that share the same `message.id`, `requestId`,
- * and an identical `message.usage` — the CLI re-emits the assistant record as
- * it streams/annotates content blocks. On a measured session, 1,734 assistant
- * lines represented only 740 distinct responses, so summing per line inflates
- * every token count (and therefore the cost) by ~2.3×. We count each
- * `message.id` exactly once. Lines with no id fall back to their own `uuid`
- * so they still count once rather than being dropped.
- *
- * Sub-agent (`isSidechain`) messages ARE counted: their tokens are billed to
- * the same account, and PortOS records one run per parent invocation.
- *
- * @param {string} jsonlText raw file contents (may end mid-line)
- * @param {{ from?: number|null, to?: number|null, exclude?: Set<string>|null }} [opts]
- *   `from`/`to` are epoch-ms bounds; assistant messages outside the window are
- *   excluded (used to attribute a long-lived CLI session to one PortOS run).
- *   `exclude` is a set of message keys already billed to another run — those are
- *   skipped, and the keys this call DID count come back as `countedKeys` so the
- *   caller can claim them. Without this, two runs whose windows overlap both
- *   fold the same messages and the cost doubles.
- * @returns {{ sessionId: string|null, cwd: string|null, model: string|null,
- *   models: string[], byModel: object, messages: number, tokensIn: number,
- *   tokensOut: number, cacheReadTokens: number, cacheWriteTokens: number,
- *   countedKeys: string[], firstTs: string|null, lastTs: string|null }}
+ * Incremental fold behind `parseClaudeTranscript` and `parseClaudeTranscriptLines`:
+ * `add(entry)` per parsed line, `finish()` for the result. Keeping one fold is what
+ * keeps the counted keys identical between the string and streaming callers.
+ * `onCount(key)` fires synchronously as each key is counted.
+ * See `parseClaudeTranscript` for the dedupe contract.
  */
-export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclude = null } = {}) {
+export function createClaudeTranscriptFold({ from = null, to = null, exclude = null, onCount = null } = {}) {
   const totals = emptyTotals();
   const seen = new Set();
   const modelCounts = new Map();
@@ -176,15 +155,15 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
   // identical content still get distinct keys (see `dedupeKey` below).
   const contentSeen = new Map();
 
-  for (const entry of parseJsonLines(jsonlText)) {
+  const add = (entry) => {
     if (!sessionId && typeof entry.sessionId === 'string') sessionId = entry.sessionId;
     if (!cwd && typeof entry.cwd === 'string') cwd = entry.cwd;
 
     const usage = entry.type === 'assistant' ? entry.message?.usage : null;
-    if (!usage || typeof usage !== 'object') continue;
+    if (!usage || typeof usage !== 'object') return;
 
     const ts = toEpoch(entry.timestamp);
-    if (!inWindow(ts, from, to)) continue;
+    if (!inWindow(ts, from, to)) return;
 
     // One response spans multiple lines with identical usage — count it once.
     //
@@ -207,11 +186,14 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
       contentSeen.set(content, occurrence + 1);
       dedupeKey = `@${content}#${occurrence}`;
     }
-    if (seen.has(dedupeKey)) continue;
+    if (seen.has(dedupeKey)) return;
     // Already billed to another run whose window also covers this message —
     // skip it so overlapping runs can't each claim the same tokens.
-    if (exclude?.has(dedupeKey)) continue;
+    if (exclude?.has(dedupeKey)) return;
     seen.add(dedupeKey);
+    // Lets a streaming caller claim the key in the same synchronous step as the
+    // `exclude` check, so a concurrent read cannot slip between them.
+    onCount?.(dedupeKey);
 
     totals.messages += 1;
     totals.tokensIn += num(usage.input_tokens);
@@ -239,30 +221,89 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
       if (!firstTs || entry.timestamp < firstTs) firstTs = entry.timestamp;
       if (!lastTs || entry.timestamp > lastTs) lastTs = entry.timestamp;
     }
-  }
-
-  // A session can switch models mid-run (/model, or a fallback). Report every
-  // model seen, plus the most-used one as the single `model` attribution — and
-  // `byModel`, so a caller can price each model's own tokens at its own rate
-  // rather than billing the whole aggregate at the majority model.
-  const models = [...modelCounts.keys()];
-  const model = models.length
-    ? [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
-    : null;
-
-  return {
-    sessionId,
-    cwd,
-    model,
-    models,
-    byModel: Object.fromEntries(byModel),
-    // The message keys this call counted — the caller claims them so a later,
-    // overlapping run can pass them back as `exclude` instead of re-billing.
-    countedKeys: [...seen],
-    ...totals,
-    firstTs,
-    lastTs
   };
+
+  const finish = () => {
+    // A session can switch models mid-run (/model, or a fallback). Report every
+    // model seen, plus the most-used one as the single `model` attribution — and
+    // `byModel`, so a caller can price each model's own tokens at its own rate
+    // rather than billing the whole aggregate at the majority model.
+    const models = [...modelCounts.keys()];
+    const model = models.length
+      ? [...modelCounts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+      : null;
+
+    return {
+      sessionId,
+      cwd,
+      model,
+      models,
+      byModel: Object.fromEntries(byModel),
+      // The message keys this call counted — the caller claims them so a later,
+      // overlapping run can pass them back as `exclude` instead of re-billing.
+      countedKeys: [...seen],
+      ...totals,
+      firstTs,
+      lastTs
+    };
+  };
+
+  return { add, finish };
+}
+
+/**
+ * Parse a Claude Code session transcript.
+ *
+ * **De-duplication is load-bearing.** One API response is written to the
+ * transcript as SEVERAL lines that share the same `message.id`, `requestId`,
+ * and an identical `message.usage` — the CLI re-emits the assistant record as
+ * it streams/annotates content blocks. On a measured session, 1,734 assistant
+ * lines represented only 740 distinct responses, so summing per line inflates
+ * every token count (and therefore the cost) by ~2.3×. We count each
+ * `message.id` exactly once. Lines with no id fall back to their own `uuid`
+ * so they still count once rather than being dropped.
+ *
+ * Sub-agent (`isSidechain`) messages ARE counted: their tokens are billed to
+ * the same account, and PortOS records one run per parent invocation.
+ *
+ * @param {string} jsonlText raw file contents (may end mid-line)
+ * @param {{ from?: number|null, to?: number|null, exclude?: Set<string>|null }} [opts]
+ *   `from`/`to` are epoch-ms bounds; assistant messages outside the window are
+ *   excluded (used to attribute a long-lived CLI session to one PortOS run).
+ *   `exclude` is a set of message keys already billed to another run — those are
+ *   skipped, and the keys this call DID count come back as `countedKeys` so the
+ *   caller can claim them. Without this, two runs whose windows overlap both
+ *   fold the same messages and the cost doubles.
+ * @returns {{ sessionId: string|null, cwd: string|null, model: string|null,
+ *   models: string[], byModel: object, messages: number, tokensIn: number,
+ *   tokensOut: number, cacheReadTokens: number, cacheWriteTokens: number,
+ *   countedKeys: string[], firstTs: string|null, lastTs: string|null }}
+ */
+export function parseClaudeTranscript(jsonlText, opts = {}) {
+  const fold = createClaudeTranscriptFold(opts);
+  for (const entry of parseJsonLines(jsonlText)) fold.add(entry);
+  return fold.finish();
+}
+
+/**
+ * Parse a transcript line by line from any async-iterable of lines, so a large
+ * session never exists as one string plus an array of every parsed object.
+ * Shares the fold with `parseClaudeTranscript`: dedupe keys, window and
+ * `exclude` behavior are identical.
+ */
+export async function parseClaudeTranscriptLines(lines, opts = {}) {
+  const fold = createClaudeTranscriptFold(opts);
+  for await (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') fold.add(parsed);
+    } catch {
+      continue;
+    }
+  }
+  return fold.finish();
 }
 
 const SPEED_TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];

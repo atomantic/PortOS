@@ -20,10 +20,31 @@ import {
 } from '../../lib/persistent/persistentMindThinkingPresets.js';
 import { getProviderById } from '../provider/providers.js';
 import { getProviderStatus, isProviderAvailable } from '../provider/providerStatus.js';
+import { isMoaProviderId } from '../../lib/provider/providerTypes.js';
 
 const providerModelIds = (provider) => (provider?.models || [])
   .map((model) => typeof model === 'string' ? model : model?.id)
   .filter(Boolean);
+
+/**
+ * An MoA preset route (`moa:<id>`, #17386). The preset pins every member, so
+ * the route's model must name the aggregator's model and no effort may be
+ * pinned. An advisor that cannot run is dropped at run time; an aggregator
+ * that cannot run refuses the route now, since the turn could not be written.
+ */
+async function resolveMoaRoute({ providerId, model, effort, noun }) {
+  const { getMoaPreset, moaPresetRefusals, resolveMoaProvider } = await import('../moaPresets.js');
+  const provider = await resolveMoaProvider(providerId).catch(() => null);
+  if (!provider) return { ok: false, error: `${noun} provider "${providerId}" is unavailable` };
+  const aggregatorRefusal = (await moaPresetRefusals(await getMoaPreset(provider.moaPresetId)))
+    .find((refusal) => refusal.role === 'aggregator');
+  if (aggregatorRefusal) return { ok: false, error: `${noun} aggregator ${aggregatorRefusal.refusal}` };
+  if (model !== provider.defaultModel) {
+    return { ok: false, error: `${noun} model "${model}" is not the aggregator model of MoA preset "${provider.moaPresetId}"` };
+  }
+  if (effort) return { ok: false, error: `${noun} effort "${effort}" is not supported by an MoA preset` };
+  return { ok: true, provider, model, effort: null };
+}
 
 /**
  * Validate one exact provider/model/effort selection against the live registry.
@@ -31,6 +52,7 @@ const providerModelIds = (provider) => (provider?.models || [])
  */
 async function resolveExactRoute({ providerId, model, effort, noun, incompleteError, requireCatalog = false }) {
   if (!providerId || !model) return { ok: false, error: incompleteError };
+  if (isMoaProviderId(providerId)) return resolveMoaRoute({ providerId, model, effort, noun });
 
   const provider = await getProviderById(providerId);
   if (!provider || provider.enabled === false) {

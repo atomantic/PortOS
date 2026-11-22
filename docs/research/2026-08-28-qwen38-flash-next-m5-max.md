@@ -36,22 +36,34 @@ model directories; no model weights belong in the repository.
 ## Installation
 
 The following keeps the Python runtime separate from PortOS and downloads the
-Apple-Silicon conversion into the machine-local PortOS model area:
+Apple-Silicon conversion into the shared Hugging Face hub cache (see
+[Where the weights live](#where-the-weights-live)):
 
 ```bash
 uv venv --python 3.11 ~/.portos/qwen38-flash-mlx
 uv pip install --python ~/.portos/qwen38-flash-mlx/bin/python \
   mlx-vlm==0.6.17 jinja2
 ~/.portos/qwen38-flash-mlx/bin/hf download Vontra/Qwen3.8-Flash-Next-MLX-4bit \
-  --local-dir ~/.portos/models/Qwen3.8-Flash-Next-MLX-4bit \
   --max-workers 4
 ```
+
+### Where the weights live
+
+Download with the repo id and no `--local-dir`, and refer to the model by repo
+id afterwards (`--model Vontra/Qwen3.8-Flash-Next-MLX-4bit`; MLX-VLM resolves it
+through the hub cache). The first version of this recipe used
+`--local-dir ~/.portos/models/...`, which materialised a second, 104 GB copy
+outside the hub cache. The Models panel cannot track, size-compare or reclaim a
+`--local-dir` copy as a model: it can only list it as **unmanaged** weights under
+`~/.portos/models`. The hub cache (`~/.cache/huggingface/hub`, or wherever
+`HF_HOME` points) is the one place PortOS inventories as downloaded models, and
+its repos that share files with each other are deduplicated by content hash.
 
 The first text smoke test is:
 
 ```bash
 ~/.portos/qwen38-flash-mlx/bin/python -m mlx_vlm.generate \
-  --model ~/.portos/models/Qwen3.8-Flash-Next-MLX-4bit \
+  --model Vontra/Qwen3.8-Flash-Next-MLX-4bit \
   --prompt "Explain sparse mixture-of-experts models in one sentence." \
   --max-tokens 64 --temperature 0 --thinking-mode disabled --verbose
 ```
@@ -63,7 +75,7 @@ the same public sample resized to 768 px wide fit:
 ```bash
 sips -Z 768 -s format jpeg input.jpg --out /tmp/qwen38-input.jpg
 ~/.portos/qwen38-flash-mlx/bin/python -m mlx_vlm.generate \
-  --model ~/.portos/models/Qwen3.8-Flash-Next-MLX-4bit \
+  --model Vontra/Qwen3.8-Flash-Next-MLX-4bit \
   --image /tmp/qwen38-input.jpg --resize-shape 768 768 \
   --prompt "Describe this image in one sentence." \
   --max-tokens 64 --temperature 0 --thinking-mode disabled --verbose
@@ -114,13 +126,17 @@ same prompt set against the MLX run. The model card confirms that Qwen3.8 uses
 the new `qwen4_exp` architecture and that current compatible runtimes are
 required.
 
-After that upgrade, the already-downloaded GGUF can be served with the same
-single-slot profile (the first shard is the model path):
+After that upgrade, fetch the GGUF into the hub cache and serve it with the same
+single-slot profile (the first shard is the model path; llama.cpp finds the other
+shards next to it):
 
 ```bash
+~/.portos/qwen38-flash-mlx/bin/hf download unsloth/Qwen3.8-Flash-Next-GGUF \
+  --include "UD-Q3_K_XL/*" --include "mmproj-F16.gguf"
+SNAPSHOT=$(ls -d ~/.cache/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots/* | head -n 1)
 llama-server \
-  --model ~/.portos/models/Qwen3.8-Flash-Next-UD-Q3_K_XL/UD-Q3_K_XL/Qwen3.8-Flash-Next-UD-Q3_K_XL-00001-of-00003.gguf \
-  --mmproj ~/.portos/models/Qwen3.8-Flash-Next-UD-Q3_K_XL/mmproj-F16.gguf \
+  --model "$SNAPSHOT/UD-Q3_K_XL/Qwen3.8-Flash-Next-UD-Q3_K_XL-00001-of-00003.gguf" \
+  --mmproj "$SNAPSHOT/mmproj-F16.gguf" \
   --host 127.0.0.1 --port 5569 --ctx-size 4096 --parallel 1 \
   --n-gpu-layers 999 --flash-attn on --jinja --alias qwen38-flash-q3
 ```

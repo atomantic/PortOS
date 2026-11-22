@@ -9,7 +9,17 @@
  * boundary, then verify `getDailyAggregates` applies it end-to-end.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Default range keys the user's local calendar. The mock keeps real offset math
+// (`todayInTimezone`) and only supplies the configured zone.
+let mockTimezone = 'UTC';
+vi.mock('./userTimezone.js', async () => {
+  const { todayInTimezone } = await import('../lib/timezone.js');
+  return {
+    userLocalToday: async (at = new Date()) => todayInTimezone(mockTimezone, at),
+  };
+});
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -32,7 +42,7 @@ afterEach(async () => {
   tempDirs.length = 0;
 });
 
-const { pickDaySumPoints, getDailyAggregates } = await import('./appleHealthQuery.js');
+const { pickDaySumPoints, getDailyAggregates, getMetrics } = await import('./appleHealthQuery.js');
 
 const qty = (p) => p.qty ?? 0;
 
@@ -144,5 +154,41 @@ describe('getDailyAggregates', () => {
 
     const results = await getDailyAggregates('step_count', '2024-02-03', '2024-02-03');
     expect(results).toEqual([{ date: '2024-02-03', value: 9000 }]);
+  });
+});
+
+describe('default date range (#17357)', () => {
+  async function writeDay(dateStr) {
+    await writeFile(
+      join(PATHS.health, `${dateStr}.json`),
+      JSON.stringify({
+        date: dateStr,
+        metrics: { step_count: [{ date: `${dateStr} 12:00:00 +0000`, qty: 1 }] },
+      }),
+      'utf-8'
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    mockTimezone = 'UTC';
+  });
+
+  // Local evening behind UTC, and local morning ahead of UTC, both still name
+  // the local today file. The UTC calendar day after that local key stays out.
+  it.each([
+    ['America/Los_Angeles', '2026-01-16T05:30:00Z', '2026-01-15', '2026-01-16'],
+    ['Asia/Tokyo', '2026-01-15T22:30:00Z', '2026-01-16', '2026-01-17'],
+  ])('includes local today and excludes the following UTC day in %s', async (tz, instant, localToday, followingUtcDay) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(instant));
+    mockTimezone = tz;
+    await writeDay(localToday);
+    await writeDay(followingUtcDay);
+
+    const points = await getMetrics('step_count');
+    const days = points.map(p => p.date.slice(0, 10));
+    expect(days).toContain(localToday);
+    expect(days).not.toContain(followingUtcDay);
   });
 });

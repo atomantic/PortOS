@@ -76,7 +76,7 @@ export default function DailyPostWidget() {
     >
       <div className="flex items-center gap-2 mb-3">
         <Brain size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Daily POST</h3>
+        <h2 className="text-sm font-semibold text-white">Daily POST</h2>
         {completedToday ? (
           <span className="ml-auto px-2 py-0.5 bg-port-success/20 text-port-success text-xs rounded-full">
             Done today{typeof todayScore === 'number' ? ` · ${todayScore}%` : ''}

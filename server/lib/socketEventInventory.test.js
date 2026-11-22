@@ -39,10 +39,9 @@ const EXTERNAL_CONSUMER_EVENTS = [
   'peer:sync:subscribe',
 ];
 const TRACKED_UNLISTENED_EVENTS = [
-  'audio-gen:completed', 'audio-gen:failed', 'audio-gen:progress', 'audio-gen:started',
   'calendar:sync:failed', 'calendar:sync:started',
   'health:xml:complete',
-  'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:progress', 'messages:sync:started',
+  'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:started',
   'provider:error',
 ];
 const isAckOrTemplate = (event) => /:(?:un)?subscribed$/.test(event) || /[{}]/.test(event);
@@ -67,6 +66,27 @@ describe('Socket.IO event inventory', () => {
       .map((event) => event.event)
       .sort();
     expect(unlistened).toEqual([...EXTERNAL_CONSUMER_EVENTS, ...TRACKED_UNLISTENED_EVENTS].sort());
+  });
+
+  it('detects req.app.get(io), getIo(), alias and room-scoped emits', async () => {
+    const root = makeTempRoot('portos-socket-shapes-');
+    write(root, 'server/routes/shapes.js', `
+      req.app.get('io')?.emit('shape:route', {});
+      req.app.get("io").emit('shape:route-strict', {});
+      getIo()?.emit('shape:getio', {});
+      boundIo?.emit('shape:bound', {});
+      providersIo?.emit('shape:providers', {});
+      ioRef?.emit('shape:ref', {});
+      io.of('/ns').to(\`session:\${id}\`).emit('shape:room', {});
+      io.to(roomFor(id)).except(sid).emit('shape:except', {});
+      ns.to(room).emit('shape:ns', {});
+    `);
+    write(root, 'client/src/empty.js', 'export default {};');
+    const { events } = await buildSocketEventInventory({ repoRoot: root });
+    expect(events.filter((e) => e.serverEmitted).map((e) => e.event).sort()).toEqual([
+      'shape:bound', 'shape:except', 'shape:getio', 'shape:providers', 'shape:ref',
+      'shape:room', 'shape:route', 'shape:route-strict', 'shape:ns',
+    ].sort());
   });
 
   it('merges client/server declarations and normalizes bounded template events', async () => {

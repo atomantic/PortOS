@@ -125,7 +125,7 @@ export default function QuickImagePrompt() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 h-full flex flex-col min-h-0 overflow-y-auto">
       <div className="flex items-center justify-between mb-3 shrink-0">
-        <h3 className="text-sm font-semibold text-white">Quick Image</h3>
+        <h2 className="text-sm font-semibold text-white">Quick Image</h2>
         <Link to="/media/image" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
           Image Gen &rarr;
         </Link>

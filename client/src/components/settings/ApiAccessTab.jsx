@@ -12,7 +12,7 @@ const DEFAULT_AGENT_CONTEXT = {
   enabled: false,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false },
+  actions: { readPortos: false, writePortos: false, callToolRecipes: false, manageEidoverse: false, visitEidoversePeers: false, browserVaultFill: false },
 };
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
@@ -360,6 +360,14 @@ export function ApiAccessTab() {
               onChange={(value) => patchAgentContextAction('manageEidoverse', value)}
               label="Allow private Eidoverse world management"
               hint="Project resources, build bounded content, manage world roles, and speak as the persistent CoS identity."
+            />
+            <Toggle
+              id="agent-context-action-browser-vault-fill"
+              checked={agentContext.actions.browserVaultFill}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('browserVaultFill', value)}
+              label="Allow website login fill"
+              hint="List saved Privacy Center website logins and have PortOS type one into a managed-browser tab whose origin matches exactly. Agents never see the password, 2FA key or code."
             />
           </div>
           <p className="text-xs text-gray-500">

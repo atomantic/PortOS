@@ -9,6 +9,7 @@ import { posix } from 'node:path';
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
+  'services/autonomousJobs/notepad.db.test.js',
   'services/catalog/catalogDB.merge.db.test.js',
   'services/catalogIdentity/protocol.db.test.js',
   'services/catalog/catalogDB.identityIntegration.db.test.js',
@@ -53,6 +54,7 @@ export const DB_TEST_INCLUDE = [
   'services/privacyChanges.db.test.js',
   'services/privacyBrokers.db.test.js',
   'services/privacyOptOut.db.test.js',
+  'services/privacyWebsiteLogins.db.test.js',
   'services/provider/providerGraphStore.db.test.js',
   'services/catalog/catalogCanonProjection.test.js',
   'services/catalog/catalogRefResolver.test.js',
@@ -67,6 +69,7 @@ export const DB_TEST_INCLUDE = [
   'services/imessageManage.db.test.js',
   'services/beeperSync.db.test.js',
   'services/githubNotifications.db.test.js',
+  'services/githubNotificationsIndexes.db.test.js',
   'services/creativeDirector/projectsDB.test.js',
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',

@@ -28,7 +28,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
 import { getMediaModelStorage } from '../services/mediaModelStorage.js';
-import { isModelStoreBackend, isSafeModelStoreKey, removeModelStoreItem } from '../services/modelStoreStorage.js';
+import { isModelStoreBackend, isSafeModelStoreKey, pruneConvertedSource, removeModelStoreItem } from '../services/modelStoreStorage.js';
 import { recordModelUninstall } from '../services/modelManifest.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
 
@@ -218,6 +218,14 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
 // store (MTPLX, Hunyuan3D, HF xet cache, Pixie Forge LoRAs). The key must match
 // an item the server just scanned; the path removed comes from that scan, never
 // from the request.
+router.delete('/store/:backend/:key/source', asyncHandler(async (req, res) => {
+  const { backend, key } = req.params;
+  if (!isModelStoreBackend(backend) || !isSafeModelStoreKey(key)) {
+    throw new ServerError('Invalid model store item', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  res.json(await pruneConvertedSource(backend, key));
+}));
+
 router.delete('/store/:backend/:key', asyncHandler(async (req, res) => {
   const { backend, key } = req.params;
   if (!isModelStoreBackend(backend) || !isSafeModelStoreKey(key)) {

@@ -67,6 +67,10 @@ export const padSourceForUpscale = async (sourcePath, outPath, {
       '-vf', await withColorTag(alignFilter({ width, height, padFrames, fps, squareWidth, squareHeight })),
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,
+      // Strip container and stream metadata (QuickTime location tags, device info)
+      // before the padded clip is uploaded to a remote upscaler such as Topaz.
+      '-map_metadata', '-1',
+      '-map_metadata:s', '-1',
       '-an',
       '-y', outPath,
     ],

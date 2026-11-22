@@ -811,7 +811,7 @@ export default function FableLoomStory({ view = 'graph' }) {
           universe={linkedUniverse} series={linkedSeries}
           onRender={submitSceneImage} onClose={() => setImageComposer(null)}
           disabled={mediaWorkflowBlocked || styleContextLoading || styleContextUnavailable}
-          disabledReason={generationDisabledReason}
+          disabledReason={mediaGenerationDisabledReason}
         />
       )}
 

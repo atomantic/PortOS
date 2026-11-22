@@ -620,6 +620,56 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'unsloth/Qwen3.8-27B-GGUF'
   },
   {
+    // GGUF arch `inkling2_loop` (projector `inkling2v`) is new: a runtime whose
+    // bundled llama.cpp predates it fails the load with "unknown model
+    // architecture" rather than producing wrong output. No Ollama id here:
+    // Ollama's `hf.co/…` GGUF path runs through that same bundled llama.cpp,
+    // and its library build is MLX-only (see `inkling-2-mini-mlx`).
+    key: 'inkling-2-mini',
+    name: 'Inkling 2 Mini',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision'],
+    params: '26B / 3.4B active',
+    size: '18.7 GB',
+    family: 'inkling',
+    description: 'Thinking Machines’ looped MoE: the middle layers run three times per token, giving ~5.4B effective active parameters, with a 1M context, vision, tools and adjustable thinking effort. Apache-2.0.',
+    note: 'LM Studio needs a llama.cpp engine that knows the inkling2_loop architecture (b12406 or newer). Vendor card: cap output tokens and agent turns, since long reasoning loops can occur.',
+    repository: 'thinkingmachines/Inkling-2-Mini',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 1048576,
+    // A full Hugging Face URL: LM Studio's own hub has no Inkling-2-Mini entry
+    // (`lms get lmstudio-community/inkling-2-mini-gguf` fails to resolve), but
+    // `lms get` downloads the HF repo directly from its URL.
+    lmstudio: 'https://huggingface.co/lmstudio-community/Inkling-2-Mini-GGUF'
+  },
+  {
+    // The Ollama library's only Inkling build: `latest`, `26b-a5b` and
+    // `26b-a5b-nvfp4` resolve to one manifest (NVFP4 safetensors on Ollama's
+    // MLX runner), so every tag is an alias of this Apple-Silicon entry. No LM
+    // Studio id: mlx-lm has no released support for this architecture yet (#17205).
+    key: 'inkling-2-mini-mlx',
+    name: 'Inkling 2 Mini MLX',
+    category: 'general',
+    recommendedFor: ['general', 'coding', 'reasoning', 'vision'],
+    params: '26B / 3.4B active',
+    size: '20 GB',
+    family: 'inkling',
+    description: 'The Apple-Silicon-native build of Inkling 2 Mini from the Ollama library (NVFP4 weights on Ollama’s MLX engine), with a 1M context, vision, tools and adjustable thinking effort. Apache-2.0.',
+    note: 'Vendor card: cap output tokens and agent turns, since long reasoning loops can occur.',
+    repository: 'thinkingmachines/Inkling-2-Mini',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 1048576,
+    format: 'mlx',
+    appleSiliconOnly: true,
+    ollama: 'inkling-2-mini:26b-a5b-nvfp4',
+    ollamaAliases: ['inkling-2-mini', 'inkling-2-mini:latest', 'inkling-2-mini:26b-a5b'],
+    // Reviewed: every Ollama tag is this one NVFP4 manifest, so `26b-a5b` is no
+    // more full-precision than `-nvfp4`. The hosted row is full precision, so the
+    // composite's local-build relabel ("quantization not measured") is what keeps
+    // this reference honest; do not drop it to show a bare hosted score.
+    benchmarkModel: 'inkling-2-mini'
+  },
+  {
     key: 'qwen3.6-27b',
     name: 'Qwen3.6 27B',
     category: 'general',

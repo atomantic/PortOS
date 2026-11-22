@@ -44,6 +44,8 @@ export default function FableLoomHostedJoin() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingError, setRecordingError] = useState(null);
 
+  const controlsDisabled = !connected || turnPhase === 'thinking' || turnPhase === 'speaking' || turnPhase === 'ended';
+
   const mediaRecorderRef = useRef(null);
   const pressedRef = useRef(false);
   const startGenRef = useRef(0);
@@ -87,6 +89,11 @@ export default function FableLoomHostedJoin() {
     s.on('connect', () => {
       setConnected(true);
       setAuthError(null);
+    });
+
+    s.on('disconnect', () => {
+      setConnected(false);
+      discardRecordingRef.current?.();
     });
 
     s.on('connect_error', (err) => {
@@ -135,6 +142,7 @@ export default function FableLoomHostedJoin() {
     s.on('hosted:session:ended', (data) => {
       abortHostedSpeech(speechPlaybackRef.current);
       speechPlaybackRef.current = null;
+      discardRecordingRef.current?.();
       setTurnPhase('ended');
       setAuthError(data?.reason === 'host_ended' ? 'The host has ended this play session.' : 'Session ended.');
     });
@@ -157,7 +165,7 @@ export default function FableLoomHostedJoin() {
 
   // Microphone recording controls
   const startRecording = async () => {
-    if (pressedRef.current || mediaRecorderRef.current || turnPhase === 'thinking' || turnPhase === 'speaking' || turnPhase === 'ended') return;
+    if (pressedRef.current || mediaRecorderRef.current || controlsDisabled) return;
     setRecordingError(null);
     pressedRef.current = true;
     const generation = ++startGenRef.current;
@@ -210,10 +218,11 @@ export default function FableLoomHostedJoin() {
       if (socket) {
         socket.emit('hosted:mic:start');
       }
-    } catch (err) {
-      if (mediaRecorderRef.current?.stream === stream) mediaRecorderRef.current = null;
-      stream?.getTracks().forEach((track) => track.stop());
-      console.error('Microphone access denied:', err);
+    } catch {
+      if (mediaRecorderRef.current?.stream !== stream) stream?.getTracks().forEach((track) => track.stop());
+      if (generation !== startGenRef.current || !mountedRef.current) return;
+      discardRecordingRef.current();
+      setRecordingError('Microphone access is unavailable. Allow microphone permission or type a message below.');
     }
   };
 
@@ -259,7 +268,7 @@ export default function FableLoomHostedJoin() {
 
   const handleSendText = (e) => {
     e?.preventDefault();
-    if (!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || !socket) return;
+    if (controlsDisabled || !textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || !socket) return;
     socket.emit('hosted:turn:text', { text: textInput });
     setTextInput('');
   };
@@ -366,11 +375,12 @@ export default function FableLoomHostedJoin() {
             onPointerDown={startRecording}
             onPointerUp={stopRecording}
             onPointerLeave={stopRecording}
-            disabled={turnPhase === 'thinking' || turnPhase === 'speaking'}
+            onPointerCancel={stopRecording}
+            disabled={controlsDisabled}
             className={`w-24 h-24 rounded-full flex flex-col items-center justify-center gap-1.5 shadow-2xl transition-all select-none touch-none ${
               isRecording
                 ? 'bg-red-500 scale-105 shadow-red-500/50 ring-4 ring-red-400/30'
-                : turnPhase === 'thinking' || turnPhase === 'speaking'
+                : controlsDisabled
                   ? 'bg-slate-800 text-slate-600 opacity-60 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-500 text-white active:scale-95'
             }`}
@@ -395,13 +405,13 @@ export default function FableLoomHostedJoin() {
             aria-label="Message protagonist"
             aria-describedby={textInput.length > MAX_TEXT_CHARACTERS ? 'hosted-text-count hosted-text-limit-error' : 'hosted-text-count'}
             aria-invalid={textInput.length > MAX_TEXT_CHARACTERS}
-            disabled={turnPhase === 'thinking' || turnPhase === 'speaking'}
+            disabled={controlsDisabled}
             className="flex-1 bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
           />
           <button
             type="submit"
             aria-label="Send message"
-            disabled={!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || turnPhase === 'thinking' || turnPhase === 'speaking'}
+            disabled={!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || controlsDisabled}
             className="min-w-[44px] min-h-[44px] p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center justify-center"
           >
             <Send className="w-4 h-4" />

@@ -14,7 +14,7 @@ describe('locked runtime profiles', () => {
     const entries = lock.split(/\n(?=[A-Za-z0-9])/).filter((entry) => /^[A-Za-z0-9][\w.-]*==/.test(entry));
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) expect(entry, entry.split(' ')[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/);
-    expect(lock).toContain('--exclude-newer <UTC date at least 7 days ago>');
+    expect(lock).toContain('--exclude-newer <UTC date at least 3 days ago>');
     expect(lock).toContain('--generate-hashes');
     expect(lock).toContain('OSV');
   });

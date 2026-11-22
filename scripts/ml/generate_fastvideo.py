@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -266,6 +267,38 @@ def is_converted(checkpoint_dir: Path) -> bool:
     return all((checkpoint_dir / name).is_file() for name in _MLX_CHECKPOINT_FILES)
 
 
+_REVISION_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+
+
+def record_conversion_source(model_root: Path, weights_name: str, base: Path | None = None) -> None:
+    """Remember which hub snapshot a converted DiT came from.
+
+    Written beside the converted checkpoint the Models scan lists (the top-level
+    cache directory, not a nested VSA or Omni folder). Prune is an explicit
+    per-artifact action; this file is what names the source and says it may go.
+    A failed conversion does not call this, so a half-written DiT has no prune
+    offer. Revision is recorded only when the snapshot directory is a commit.
+    """
+    parent = model_root.parent
+    grand = parent.parent
+    repo = None
+    revision = None
+    if parent.name == "snapshots" and grand.name.startswith("models--"):
+        rest = grand.name[len("models--"):]
+        repo = rest.replace("--", "/", 1) if rest else None
+        if _REVISION_RE.fullmatch(model_root.name):
+            revision = model_root.name.lower()
+    cache = mlx_checkpoint_root(model_root, base)
+    cache.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "sourceRepo": repo,
+        "sourceRevision": revision,
+        "sourceWeights": str(model_root / weights_name),
+        "prunable": True,
+    }
+    (cache / "portos-source.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
 def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
                           base: Path | None = None, *, vsa: bool = False, steps: int = 4) -> Path:
     """Return the converted MLX DiT for `fmt`, converting it if it is missing."""
@@ -279,6 +312,7 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
         out_base = out_base / f"vsa-schedule-v2-{steps}-{schedule_key}"
     out_dir = out_base / fmt
     if is_converted(out_dir):
+        record_conversion_source(model_root, "transformer", base)
         return out_dir
     transformer = model_root / "transformer"
     if not transformer.is_dir():
@@ -306,6 +340,7 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
     # is the user's download: name it, do not delete it.
     print(f"STATUS:MLX {fmt} DiT ready — {transformer} is no longer needed to render and can be deleted",
           file=sys.stderr, flush=True)
+    record_conversion_source(model_root, "transformer", base)
     return out_dir
 
 
@@ -326,6 +361,7 @@ def ensure_omni_checkpoint(repo_dir: Path, entry_script: Path, model_root: Path,
     out_dir = out_base / fmt
     encoder = out_base / "nvfp4-encoder"
     if is_converted(out_dir) and encoder.is_dir() and (composed / "text_encoder").resolve() == encoder.resolve():
+        record_conversion_source(model_root, "transformer_ref", base)
         return composed, out_dir
     converter = repo_dir.joinpath(*_CONVERTER_SCRIPT)
     if not converter.is_file():
@@ -353,6 +389,7 @@ def ensure_omni_checkpoint(repo_dir: Path, entry_script: Path, model_root: Path,
     text_encoder.symlink_to(encoder, target_is_directory=True)
     print(f"STATUS:MLX {fmt} DiT ready — {model_root / 'transformer_ref'} is no longer needed to render and can be deleted",
           file=sys.stderr, flush=True)
+    record_conversion_source(model_root, "transformer_ref", base)
     return composed, out_dir
 
 

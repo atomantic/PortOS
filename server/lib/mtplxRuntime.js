@@ -5,8 +5,8 @@
  */
 
 import { constants } from 'fs';
-import { access, readFile, stat } from 'fs/promises';
-import { isAbsolute, join } from 'path';
+import { access, readdir, readFile, realpath, stat } from 'fs/promises';
+import { dirname, isAbsolute, join } from 'path';
 import { PATHS } from './paths.js';
 import { findCommandOnPath } from './processEnv.js';
 
@@ -67,4 +67,49 @@ export function resolveMtplxBinary() {
   // uv writes console scripts before its whole sync finishes. Polls, cache
   // reads and starts must keep using any existing external runtime until then.
   return (!mtplxInstallInProgress && findCommandOnPath(mtplxManagedBinary())) || findCommandOnPath('mtplx');
+}
+
+const MTPLX_DIST_INFO = /^mtplx-([^-]+)\.dist-info$/i;
+
+/**
+ * The MTPLX version installed in PortOS's private venv, read from its
+ * `mtplx-<version>.dist-info` directory rather than by running the binary (a
+ * status poll must not execute it). `null` when there is no private runtime or
+ * it cannot be read.
+ */
+export async function readManagedMtplxVersion({ venvDir = mtplxVenvDir() } = {}) {
+  const lib = join(venvDir, 'lib');
+  const pythons = await readdir(lib).catch(() => []);
+  for (const python of pythons.filter((name) => name.startsWith('python')).sort()) {
+    const entries = await readdir(join(lib, python, 'site-packages')).catch(() => []);
+    const match = entries.map((name) => MTPLX_DIST_INFO.exec(name)).find(Boolean);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/** The `mtplx==<version>` pin of a lock file's text, or `null`. */
+export function lockedMtplxVersion(lockText) {
+  return /^mtplx==([^\s;\\]+)/m.exec(String(lockText || ''))?.[1] || null;
+}
+
+/**
+ * The version of an external (Homebrew or pip) `mtplx`, read without running it: from the Homebrew
+ * wrapper's version-keyed venv when there is one, otherwise from the venv the console script lives in
+ * (`<venv>/bin/mtplx`). `null` when neither holds an `mtplx` dist-info.
+ */
+export async function readExternalMtplxVersion(binaryPath, wrapperVenvPath = null) {
+  if (wrapperVenvPath) return readManagedMtplxVersion({ venvDir: wrapperVenvPath });
+  const resolved = await realpath(binaryPath).catch(() => null);
+  return resolved ? readManagedMtplxVersion({ venvDir: dirname(dirname(resolved)) }) : null;
+}
+
+/** Numeric dotted-version order (`2.12.3` < `2.13.0`); a non-numeric part compares as 0. */
+export function compareMtplxVersions(a, b) {
+  const parts = (v) => String(v).split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0) ? -1 : 1;
+  }
+  return 0;
 }

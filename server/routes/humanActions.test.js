@@ -8,7 +8,8 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 const store = new Map();
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 vi.mock('../services/brainStorage.js', () => ({
-  getThreads: vi.fn(async () => { await tick(); return [...store.values()]; }),
+  getThreadListRows: vi.fn(async () => { await tick(); return [...store.values()]; }),
+  getThreadById: vi.fn(async (id) => { await tick(); return store.get(id) ?? null; }),
   createThread: vi.fn(async (data) => {
     await tick();
     const record = { id: `t${store.size + 1}`, ...data };

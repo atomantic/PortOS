@@ -334,7 +334,7 @@ export async function createGoal({ title, description, horizon, category, goalTy
     goals.goals.push(goal);
     goals.updatedAt = new Date().toISOString();
 
-    console.log(`🎯 Goal created: "${title}" (${horizon}, urgency: ${goal.urgency ?? 'n/a'})`);
+    console.log(`🎯 Goal created: ${goal.id} (${horizon}, urgency: ${goal.urgency ?? 'n/a'})`);
     return goal;
   });
 }
@@ -477,7 +477,7 @@ export async function linkActivity(goalId, { activityName, requiredFrequency, no
     }
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
-    console.log(`🔗 Activity "${activityName}" linked to goal "${goal.title}"`);
+    console.log(`🔗 Activity linked to goal ${goal.id}`);
     return goal;
   });
 }
@@ -496,7 +496,7 @@ export async function unlinkActivity(goalId, activityName) {
     goal.linkedActivities.splice(idx, 1);
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
-    console.log(`🔗 Activity "${activityName}" unlinked from goal "${goal.title}"`);
+    console.log(`🔗 Activity unlinked from goal ${goal.id}`);
     return goal;
   });
 }
@@ -629,7 +629,7 @@ export async function linkCalendarToGoal(goalId, { subcalendarId, subcalendarNam
 
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
-    console.log(`📅 Calendar "${subcalendarName}" linked to goal "${goal.title}"`);
+    console.log(`📅 Calendar ${subcalendarId} linked to goal ${goal.id}`);
     return goal;
   });
 }
@@ -646,7 +646,7 @@ export async function unlinkCalendarFromGoal(goalId, subcalendarId) {
     goal.linkedCalendars.splice(idx, 1);
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
-    console.log(`📅 Calendar unlinked from goal "${goal.title}"`);
+    console.log(`📅 Calendar ${subcalendarId} unlinked from goal ${goal.id}`);
     return goal;
   });
 }
@@ -718,7 +718,7 @@ Respond with a JSON array only (no markdown fences, no explanation). Each elemen
     throw new ServerError(`AI returned invalid phase data: ${detail}`, { status: 502, code: 'AI_PARSE_ERROR' });
   }
 
-  console.log(`🎯 Generated ${validated.data.length} phases for goal "${goal.title}"`);
+  console.log(`🎯 Generated ${validated.data.length} phases for goal ${goal.id}`);
   return validated.data;
 }
 
@@ -741,7 +741,7 @@ export async function acceptGoalPhases(goalId, phases) {
 
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
-    console.log(`🎯 Accepted ${phases.length} phases for goal "${goal.title}"`);
+    console.log(`🎯 Accepted ${phases.length} phases for goal ${goal.id}`);
     return goal;
   });
 }
@@ -802,7 +802,7 @@ ${goal.targetDate ? '- "targetDate": string (YYYY-MM-DD format)\n' : ''}- "order
 
   const milestones = validated.data;
   const taskCount = milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
-  console.log(`🧩 Decomposed goal "${goal.title}" into ${milestones.length} milestones / ${taskCount} tasks`);
+  console.log(`🧩 Decomposed goal ${goal.id} into ${milestones.length} milestones / ${taskCount} tasks`);
   return milestones;
 }
 
@@ -838,7 +838,7 @@ export async function acceptGoalDecomposition(goalId, milestones) {
     goal.updatedAt = now;
     goals.updatedAt = now;
     const taskCount = goal.milestones.reduce((sum, ms) => sum + ms.tasks.length, 0);
-    console.log(`🧩 Accepted decomposition for "${goal.title}": ${goal.milestones.length} milestones / ${taskCount} tasks`);
+    console.log(`🧩 Accepted decomposition for goal ${goal.id}: ${goal.milestones.length} milestones / ${taskCount} tasks`);
     return goal;
   });
 }
@@ -1079,7 +1079,7 @@ Respond with JSON only (no markdown fences). The response must be an object with
     return fresh;
   });
 
-  console.log(`📋 Check-in for "${goal.title}": ${checkIn.status} (${goal.progress}%${expectedProgress != null ? ` vs ${expectedProgress}% expected` : ''})`);
+  console.log(`📋 Check-in for goal ${goal.id}: ${checkIn.status} (${goal.progress}%${expectedProgress != null ? ` vs ${expectedProgress}% expected` : ''})`);
   return checkIn;
 }
 
@@ -1111,7 +1111,7 @@ export async function updateGoalProgress(goalId, value) {
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
 
-    console.log(`📊 Progress for "${goal.title}": ${prev}% → ${value}%`);
+    console.log(`📊 Progress for goal ${goal.id}: ${prev}% → ${value}%`);
     return goal;
   });
 }

@@ -1,0 +1,8 @@
+{
+  "name": "meatspace_summary_today",
+  "description": "Report today's alcohol and nicotine totals against rolling averages. Use when the user asks \"how am I doing today?\", \"what's my drink count?\", \"have I had any cigarettes today?\".",
+  "schema": {
+    "type": "object",
+    "properties": {}
+  }
+}

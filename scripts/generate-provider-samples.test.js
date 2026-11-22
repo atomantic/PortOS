@@ -61,7 +61,7 @@ describe('provider sample generator', () => {
     // change to PROVIDER_ORDER that quietly loses or renames an id fails here
     // rather than only showing up as a smaller diff on the JSON files.
     const SHIPPED_IDS = [
-      'kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui',
+      'kilo-cli', 'kilo-tui', 'openchamber-cli', 'pi-cli', 'pi-tui', 'hermes-cli', 'hermes-tui',
       'claude-code', 'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
       'opencode-ollama', 'opencode-ollama-tui', 'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-llama-tui',

@@ -229,6 +229,10 @@ export const appSchema = z.object({
   // Free-text deployment assumptions (who uses it, what runs beside the user)
   // every quality audit weighs reachability against. Empty clears it.
   deploymentModel: z.string().trim().max(2000).optional(),
+  // Opt-in to the Skill Registry's `project` tier (#17387): the repo's
+  // `.agents/skills/` and `.claude/skills/` are discovered, security-scanned
+  // and offered to agents. Unset/false = never read (default off).
+  skillDiscovery: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable(),

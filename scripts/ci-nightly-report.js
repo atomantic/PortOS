@@ -200,6 +200,14 @@ export function buildMainRedIssueBody({ failedJobs, base, head, runUrl, compareB
   return lines.join('\n');
 }
 
+/**
+ * The line a green run appends as it closes the issue. Claim verification
+ * (server/services/mainHealthClosure.js) reads it as the pointer to the green CI
+ * run, then proves that run and this job's closure through the Actions API, so
+ * keep it the body's last line and keep both sides in step.
+ */
+export const mainHealthRecoveryLine = (head, runUrl) => `Green again at \`${head.slice(0, 9)}\`: ${runUrl}`;
+
 /** The open "main is red" issue record, `null` when none, `undefined` when the listing failed. */
 async function findOpenMainRedIssue(target, fetchImpl, logger) {
   for (let page = 1; page <= MAX_ISSUE_PAGES; page += 1) {
@@ -249,7 +257,7 @@ async function syncMainRedIssue({ existing, red, target, fetchImpl, logger, body
       && await writeIssue(fetchImpl, target, logger, 'POST', `/issues/${existing.number}/comments`, { body: `Still red at \`${head.slice(0, 9)}\`: ${runUrl}` });
     return { action: 'updated', ok };
   }
-  const recovery = `Green again at \`${head.slice(0, 9)}\`: ${runUrl}`;
+  const recovery = mainHealthRecoveryLine(head, runUrl);
   const ok = await writeIssue(fetchImpl, target, logger, 'PATCH', `/issues/${existing.number}`, {
     state: 'closed',
     state_reason: 'completed',

@@ -84,7 +84,7 @@ function TraitRadar({ runs, height = 320 }) {
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <RadarChart data={data} outerRadius="70%">
+      <RadarChart title="Personality trait scores" desc="Radar chart of trait scores from 0 to 100 for each selected run." data={data} outerRadius="70%">
         <PolarGrid stroke={colors.grid} />
         <PolarAngleAxis dataKey="trait" tick={{ fill: colors.axis, fontSize: 11 }} />
         <PolarRadiusAxis domain={[0, 100]} tick={{ fill: colors.axis, fontSize: 10 }} />

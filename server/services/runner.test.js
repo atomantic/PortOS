@@ -54,6 +54,12 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockResolvedValue('{}'),
 }));
 
+// The Ollama-backed spawn path reaches a real localhost daemon otherwise; its own
+// behavior is covered by ollamaAgentContext.test.js.
+vi.mock('./ollamaAgentContext.js', () => ({
+  ensureOllamaAgentContext: vi.fn(async () => ({ skipped: false, contextLength: null, applied: false, warning: null })),
+  beginOllamaAgentWork: vi.fn(async () => () => {}),
+}));
 vi.mock('./agent/agentCliSpawning.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
 vi.mock('./visionCli.js', () => ({ prepareCliVisionRun: vi.fn(async () => ({
   invocation: { command: 'claude', args: ['-p', '-', '--add-dir', '/example/outside'], stdin: 'Read the staged image', cwd: process.cwd() },
@@ -1689,5 +1695,43 @@ describe('resolveRunCwd — callback containment (#3180)', () => {
     expect(cwd).toBeUndefined();
     expect(failure).toMatchObject({ success: false });
     expect(failure.error).toMatch(/blank/);
+  });
+});
+
+// #17341: an Ollama-backed CLI run is in-flight daemon work for its child's
+// lifetime, so another agent's context reload defers instead of restarting
+// Ollama under it.
+describe('executeCliRun — in-flight Ollama registration', () => {
+  const ollamaProvider = { id: 'claude-ollama', command: 'claude', ollamaBacked: true, timeout: 5000 };
+
+  it('registers after the context is prepared, before spawn, and releases when the child exits', async () => {
+    const { beginOllamaAgentWork, ensureOllamaAgentContext } = await import('./ollamaAgentContext.js');
+    const release = vi.fn();
+    beginOllamaAgentWork.mockResolvedValueOnce(release);
+    const child = makeChild();
+    child.pid = 123457;
+    spawn.mockReturnValueOnce(child);
+
+    await executeCliRun({ runId: 'ollama-run', provider: ollamaProvider, prompt: 'Example', workspacePath: TEST_WORKSPACE, onComplete: vi.fn() });
+    expect(beginOllamaAgentWork).toHaveBeenCalledWith(ollamaProvider);
+    expect(ensureOllamaAgentContext.mock.invocationCallOrder[0]).toBeLessThan(beginOllamaAgentWork.mock.invocationCallOrder[0]);
+    expect(beginOllamaAgentWork.mock.invocationCallOrder[0]).toBeLessThan(spawn.mock.invocationCallOrder[0]);
+    expect(release).not.toHaveBeenCalled();
+
+    child.emit('exit', 0, null);
+    expect(release).toHaveBeenCalledOnce();
+    child.emit('close', 0);
+    await flushMicrotasks();
+  });
+
+  it('does not register a cloud CLI run', async () => {
+    const { beginOllamaAgentWork } = await import('./ollamaAgentContext.js');
+    const child = makeChild();
+    child.pid = 123458;
+    spawn.mockReturnValueOnce(child);
+    await executeCliRun({ runId: 'cloud-run', provider: { id: 'example', command: 'codex', timeout: 5000 }, prompt: 'Example', workspacePath: TEST_WORKSPACE, onComplete: vi.fn() });
+    expect(beginOllamaAgentWork).not.toHaveBeenCalled();
+    child.emit('close', 0);
+    await flushMicrotasks();
   });
 });

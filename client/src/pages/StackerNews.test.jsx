@@ -50,6 +50,8 @@ const local = vi.hoisted(() => ({
 }));
 vi.mock('../hooks/useLocalModels', () => ({ default: () => local.models }));
 vi.mock('../hooks/useVisionModelIds', () => ({ default: () => local.vision }));
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn() }));
+vi.mock('../services/socket', () => ({ default: socket }));
 const { default: StackerNews } = await import('./StackerNews.jsx');
 
 const optionsOf = (select) => within(select).getAllByRole('option').map((option) => option.textContent);
@@ -110,6 +112,37 @@ describe('StackerNews', () => {
     api.getStackerNewsTerritories.mockResolvedValue({ territories: [] });
     api.getStackerNewsItems.mockResolvedValue({ items: [] });
     api.getStackerNewsActions.mockResolvedValue({ actions: [] });
+  });
+
+  it('refreshes the account list and scopes socket-driven resource reads to the selected account', async () => {
+    const { unmount } = renderPage('/stacker-news/a1/review');
+    expect(await screen.findByText(/No stored content/)).toBeInTheDocument();
+    const event = 'stacker-news:changed';
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === event);
+    const resources = [api.getStackerNewsTerritories, api.getStackerNewsItems, api.getStackerNewsActions];
+
+    await act(async () => onChanged({ accountId: 'a2' }));
+    expect(api.getStackerNewsAccounts).toHaveBeenCalledTimes(2);
+    for (const read of resources) expect(read).toHaveBeenCalledTimes(1);
+
+    api.getStackerNewsItems.mockResolvedValueOnce({
+      items: [{ id: 'i1', kind: 'post', title: 'New from scheduled sync' }],
+    });
+    await act(async () => onChanged({ accountId: 'a1' }));
+    expect(screen.getByText('New from scheduled sync')).toBeInTheDocument();
+    expect(api.getStackerNewsAccounts).toHaveBeenCalledTimes(3);
+    for (const read of resources) {
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(read).toHaveBeenLastCalledWith('a1', { silent: true });
+    }
+
+    await act(async () => onChanged());
+    expect(screen.getByText(/No stored content/)).toBeInTheDocument();
+    expect(api.getStackerNewsAccounts).toHaveBeenCalledTimes(4);
+    for (const read of resources) expect(read).toHaveBeenCalledTimes(3);
+
+    unmount();
+    expect(socket.off).toHaveBeenCalledWith(event, onChanged);
   });
 
   it('retries an account read without claiming the deep-linked account is missing', async () => {

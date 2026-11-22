@@ -781,6 +781,10 @@ export async function transitionCase(caseId, toState, patch = {}) {
       `UPDATE privacy_broker_cases SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING ${CASE_COLUMNS}`,
       params,
     );
+    if (clearIdentity) {
+      const { eraseCaseDrafts } = await import('./privacyDraftErasure.js');
+      await eraseCaseDrafts(caseId, parseEvidence(existing.rows[0].evidence).draftId);
+    }
     console.log(`📋 Case ${caseId}: ${existing.rows[0].state} → ${toState}`);
     return rowToCase(rows[0]);
   });
@@ -799,6 +803,8 @@ export async function clearCaseIdentityEvidence(caseId) {
     [ERASABLE_EVIDENCE_KEYS, caseId],
   );
   if (!rows[0]) throw new ServerError('Case not found', { status: 404, code: 'NOT_FOUND' });
+  const { eraseCaseDrafts } = await import('./privacyDraftErasure.js');
+  await eraseCaseDrafts(caseId, rowToCase(rows[0]).evidence?.draftId);
   console.log(`🗑️ Case ${caseId}: identity evidence erased`);
   return rowToCase(rows[0]);
 }

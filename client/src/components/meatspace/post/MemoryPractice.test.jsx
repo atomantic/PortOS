@@ -439,3 +439,50 @@ describe('MemoryPractice daily routine actions', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
+
+describe('MemoryPractice answer verdict accessibility', () => {
+  const item = {
+    id: 'example-memory',
+    title: 'Example Memory',
+    content: {
+      lines: [
+        { text: 'First example line of text.' },
+        { text: 'Second example line of text.' },
+        { text: 'Third example line of text.' },
+      ],
+      chunks: [{ id: 'example-chunk', label: 'Example Chunk', lineRange: [0, 2] }],
+    },
+  };
+  const renderMode = (mode) => render(
+    <MemoryPractice itemId={item.id} item={item} mode={mode} onSelectMode={() => {}} onExitMode={() => {}} onBack={() => {}} onContinue={() => {}} />
+  );
+  const cases = [
+    ['spaced', 'Your answer', 'nothing like it'],
+    ['sequence', 'Your answer', 'nothing like it'],
+    ['fill-blank', 'Missing words', 'zzz'],
+  ];
+
+  it.each(cases)('%s: announces the verdict in a pre-mounted status region, focuses it, and advances on a second Enter', async (mode, label, wrong) => {
+    getChunkMastery.mockResolvedValue([{ id: 'example-chunk', label: 'Example Chunk', lineRange: [0, 2], accuracy: 0, hintLevel: 3 }]);
+    renderMode(mode);
+    const input = await screen.findByLabelText(label);
+    const region = screen.getByRole('status');
+    expect(region).toHaveTextContent('');
+
+    fireEvent.change(input, { target: { value: wrong } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.getByRole('status')).toBe(region);
+    expect(region).toHaveTextContent(/Full line:|Expected:/);
+    expect(document.activeElement).toBe(region);
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+
+    // A held Enter (auto-repeat) never skips the verdict.
+    fireEvent.keyDown(region, { key: 'Enter', repeat: true });
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+
+    fireEvent.keyDown(region, { key: 'Enter' });
+    const next = await screen.findByLabelText(label);
+    expect(document.activeElement).toBe(next);
+  });
+});

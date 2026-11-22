@@ -900,7 +900,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     });
   });
 
-  it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
+  it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed', 'ci-recovered'].map(disposition => [mode, disposition])))
   ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);
     const task = { id: 'claim-example', taskType: 'user', metadata: { app: 'app-example', claimFlow: true, claimTarget: '42' } };

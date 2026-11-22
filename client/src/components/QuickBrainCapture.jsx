@@ -200,7 +200,7 @@ export default function QuickBrainCapture() {
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold text-white">Quick Capture</h3>
+        <h2 className="text-sm font-semibold text-white">Quick Capture</h2>
         <Link to="/brain/inbox" className="text-xs text-gray-500 hover:text-port-accent transition-colors">
           Brain &rarr;
         </Link>

@@ -25,16 +25,23 @@ export const AGENT_CONTEXT_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
 export const AGENT_CONTEXT_SCOPES = Object.freeze(['navigation', 'workspaces', 'brain', 'identity']);
 export const AGENT_CONTEXT_PROFILES = Object.freeze(['metadata', 'summary']);
 export const AGENT_CONTEXT_DEFAULT_SCOPES = Object.freeze(['navigation', 'workspaces']);
+// `browserVaultFill` (#17397) lets a CoS agent list website-login metadata and
+// have the host fill a saved credential into a managed-browser tab whose live
+// origin exactly matches; the agent never receives the secret. Agent-only: the
+// Persistent Mind has no browser controls.
 export const agentContextActionGrantsSchema = portosSemanticToolGrantsSchema.extend({
   callToolRecipes: z.boolean().optional(),
+  browserVaultFill: z.boolean().optional(),
 }).strict();
 export const createDefaultAgentContextActionGrants = () => ({
   ...createDefaultPortosSemanticToolGrants(),
   callToolRecipes: false,
+  browserVaultFill: false,
 });
 export const normalizeAgentContextActionGrants = (raw) => ({
   ...normalizePortosSemanticToolGrants(raw),
   callToolRecipes: raw?.callToolRecipes === true,
+  browserVaultFill: raw?.browserVaultFill === true,
 });
 export const AGENT_CONTEXT_DEFAULT_ACTIONS = Object.freeze(createDefaultAgentContextActionGrants());
 export const AGENT_CONTEXT_LIMITS = Object.freeze({

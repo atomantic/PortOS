@@ -590,3 +590,33 @@ describe('Tribe URL-backed selection, delete confirmation, and form labels', () 
     }
   });
 });
+
+describe('Tribe failed reads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+  });
+
+  it('shows a Retry instead of the empty roster on a failed first read, and recovers on Retry', async () => {
+    getTribePeople.mockRejectedValueOnce(new Error('503 down')).mockResolvedValue({ people: PEOPLE });
+    renderAt('/tribe');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load Tribe');
+    expect(screen.queryByText('No relationships yet')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Person')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps a loaded roster when a tribe:changed refresh fails', async () => {
+    getTribePeople.mockResolvedValue({ people: PEOPLE });
+    renderAt('/tribe');
+    await screen.findByText('Example Person');
+
+    getTribePeople.mockRejectedValueOnce(new Error('503 down'));
+    const handler = socket.on.mock.calls.find(([event]) => event === 'tribe:changed')[1];
+    await act(async () => { handler(); });
+
+    expect(screen.getByText('Example Person')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

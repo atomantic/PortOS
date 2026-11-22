@@ -156,13 +156,12 @@ function MediaCollectionDetailContent() {
   // Re-read location annotations and gallery rows when bytes or video
   // history arrive. Debounce batches of socket events.
   useEffect(() => {
-    if (isUnsorted) return undefined;
     let active = true;
     let timer = null;
     const onArrived = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        getMediaCollection(id, { silent: true }).then((c) => { if (active) setCollection(c); }).catch(() => {});
+        if (!isUnsorted) getMediaCollection(id, { silent: true }).then((c) => { if (active) setCollection(c); }).catch(() => {});
         page.refresh();
       }, 500);
     };
@@ -572,7 +571,7 @@ function MediaCollectionDetailContent() {
         )}
       </div>
 
-      {!isUnsorted && <CollectionPrimaryControl collectionId={id} />}
+      <CollectionPrimaryControl collectionId={id} oneShot={isUnsorted} />
 
       <MediaBatchImport key={id} collectionId={isUnsorted ? undefined : id} onImported={(item, updated) => {
         // Mutation responses omit GET-only peer locations. Keep those for

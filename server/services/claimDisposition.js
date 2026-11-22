@@ -14,6 +14,8 @@ const positiveIssue = value => /^[1-9]\d*$/.test(String(value ?? '')) && Number.
 // `needs-input` is the park the claim prompt's Phase 3 applies, so a parked
 // claim must settle here instead of retrying until its budget is exhausted.
 const PARK_LABELS = new Set(['blocked', 'needs-input']);
+// Dispositions that delivered no change, so the bound checkout must hold none.
+const NO_CODE_DISPOSITIONS = new Set(['operator-blocked', 'ci-recovered']);
 
 async function trustedGithubEvent(event, target, run) {
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
@@ -108,6 +110,17 @@ async function githubDisposition({ number, target, run }) {
   // does not prove a particular PR delivered code. An automatic PR closure
   // still needs the exact merged/default-branch evidence above.
   if (closed.closer != null) return unverified('merged-delivery-unverified');
+  // The shared Actions bot is never a collaborator. Its closure counts only when
+  // Actions evidence proves the Main health workflow recorded a green main run.
+  if (closed.actor?.login?.toLowerCase() === 'github-actions') {
+    const { verifyMainHealthClosure } = await import('./mainHealthClosure.js');
+    const defaultCommit = repository.defaultBranchRef?.target?.oid;
+    const recovery = await verifyMainHealthClosure({ number, target, run, closed, defaultBranch, defaultCommit });
+    if (!recovery.verified) return unverified(recovery.reason);
+    return { status: 'verified', disposition: 'ci-recovered', issue: number, closedAt: closed.createdAt,
+      closedBy: closed.actor.login, ciRun: recovery.ciRun, ciCommit: recovery.ciCommit,
+      monitorRun: recovery.monitorRun, defaultBranch, defaultCommit };
+  }
   if (!await trustedGithubEvent(closed, target, run)) return unverified('closure-authority-unverified');
   return { status: 'verified', disposition: 'operator-closed', issue: number,
     closedAt: closed.createdAt, closedBy: closed.actor.login };
@@ -226,10 +239,11 @@ async function inspectClaimDisposition(task, agent) {
     if (result.status !== 'verified') return result;
     issues.push(result);
   }
-  // Parking settles this attempt, not unfinished code. Bound claims must be
-  // clean and contained in the live default head. Unbound runs own no checkout:
-  // never inspect the shared primary checkout's unrelated work.
-  for (const issue of issues.filter(issue => issue.disposition === 'operator-blocked')) {
+  // Parking or a CI recovery settles this attempt, not unfinished code: neither
+  // shipped a change for this claim. Bound claims must be clean and contained in
+  // the live default head. Unbound runs own no checkout: never inspect the
+  // shared primary checkout's unrelated work.
+  for (const issue of issues.filter(issue => NO_CODE_DISPOSITIONS.has(issue.disposition))) {
     if (!/^[a-f0-9]{40,64}$/i.test(issue.defaultCommit || '')) return unverified('default-branch-unavailable');
     const trees = await listWorktrees(source).catch(() => null);
     if (!Array.isArray(trees)) return unverified('checkout-unavailable');

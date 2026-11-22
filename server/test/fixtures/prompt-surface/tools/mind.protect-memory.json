@@ -1,0 +1,27 @@
+{
+  "name": "mind.protect-memory",
+  "description": "Protect an existing active mind-owned memory as core identity or important knowledge before cleanup. Use its id from curated context. Cannot remove protection or demote core identity. Protected memories survive both manual and self-triggered bulk cleanup.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "memoryId": {
+        "type": "string",
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9._-]+$"
+      },
+      "protection": {
+        "type": "string",
+        "enum": [
+          "important",
+          "core-identity"
+        ]
+      }
+    },
+    "required": [
+      "memoryId",
+      "protection"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

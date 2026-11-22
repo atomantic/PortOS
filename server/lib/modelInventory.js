@@ -30,6 +30,7 @@
 /** Backends whose downloaded weights PortOS inventories. */
 export const MODEL_INVENTORY_BACKENDS = [
   'huggingface', 'lora', 'ollama', 'lmstudio', 'mtplx', 'hy3dgen', 'hf-xet-cache', 'pixie-forge',
+  'slotstream', 'fastvideo-mlx', 'auk-ckpts', 'portos-models', 'repo-models', 'legacy-runtime',
 ];
 
 // The on-the-wire prefix per backend. `huggingface` shortens to `hf` for the same
@@ -44,6 +45,12 @@ const BACKEND_PREFIX = {
   hy3dgen: 'hy3dgen',
   'hf-xet-cache': 'hf-xet',
   'pixie-forge': 'pixie-forge',
+  slotstream: 'slotstream',
+  'fastvideo-mlx': 'fastvideo-mlx',
+  'auk-ckpts': 'auk-ckpts',
+  'portos-models': 'portos-models',
+  'repo-models': 'repo-models',
+  'legacy-runtime': 'legacy-runtime',
 };
 
 const PREFIX_BACKEND = new Map(Object.entries(BACKEND_PREFIX).map(([backend, prefix]) => [prefix, backend]));
@@ -173,6 +180,42 @@ export const MODEL_STORE_BACKENDS = {
     risk: 'high',
     cleanupReason: 'A LoRA adapter may be the only copy and can take hours to reproduce.',
   },
+  slotstream: {
+    label: 'Slotstream',
+    managePath: '/models/llms',
+    risk: 'medium',
+    cleanupReason: 'Slotstream weights are re-downloadable but run to 100 GB or more; deleting one leaves the runtime with nothing to serve until it is pulled again.',
+  },
+  'fastvideo-mlx': {
+    label: 'FastVideo MLX',
+    managePath: '/models/media',
+    risk: 'low',
+    cleanupReason: 'A converted MLX checkpoint is rebuilt from its Hugging Face weights on the next render (a few minutes, once). The source weights must still be in the hub cache.',
+  },
+  'auk-ckpts': {
+    label: 'AuK voice',
+    managePath: '/models/media',
+    risk: 'medium',
+    cleanupReason: 'The AuK runtime refuses to start without these checkpoints; deleting one means re-running its installer.',
+  },
+  'portos-models': {
+    label: 'Manual downloads (~/.portos/models)',
+    managePath: '/models/llms',
+    risk: 'high',
+    cleanupReason: 'Hand-placed weights that nothing in PortOS can re-download for you; confirm the source is still available before deleting.',
+  },
+  'repo-models': {
+    label: 'llama-server models (checkout models/)',
+    managePath: '/models/llms',
+    risk: 'high',
+    cleanupReason: 'Downloads made for a llama-server preset can be fetched again from the runtime settings, but anything else here was placed by hand and PortOS cannot re-download it; confirm the source is still available before deleting.',
+  },
+  'legacy-runtime': {
+    label: 'Retired runtime',
+    managePath: '/models/media',
+    risk: 'medium',
+    cleanupReason: 'Left behind by a runtime PortOS no longer ships; nothing reads these files, but the download is large if you ever want it back.',
+  },
 };
 
 /**
@@ -182,7 +225,7 @@ export const MODEL_STORE_BACKENDS = {
  * MTPLX session bank is a regenerable cache inside a backend whose checkpoints are
  * not.
  */
-export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, risk, cleanupReason }) => {
+export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, risk, cleanupReason, unmanaged = false, sourcePrune = null }) => {
   const store = MODEL_STORE_BACKENDS[backend];
   return {
     id: store ? modelInventoryId(backend, key) : null,
@@ -195,6 +238,11 @@ export const modelStoreInventoryRow = ({ backend, key, name, detail, sizeBytes, 
     cleanupReason: cleanupReason || store?.cleanupReason || null,
     managePath: store?.managePath,
     action: { type: 'model-store', backend, key },
+    // Large weights sitting in a hand-placed directory the app does not manage;
+    // the panel flags them so they can be moved into the hub cache or removed.
+    ...(unmanaged ? { unmanaged: true } : {}),
+    // `{ backend, key }` only — the server re-reads the sidecar. No path leaves this process.
+    ...(sourcePrune ? { sourcePrune } : {}),
   };
 };
 

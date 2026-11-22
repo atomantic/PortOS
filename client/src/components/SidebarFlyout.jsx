@@ -1,8 +1,8 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router';
 
-export default function SidebarFlyout({ item, anchor, close, scheduleCloseFlyout, cancelCloseFlyout, isActive }) {
+export default function SidebarFlyout({ item, anchor, close, id, focusToken = 0, onDismiss, scheduleCloseFlyout, cancelCloseFlyout, isActive }) {
   const location = useLocation();
   const ref = useRef(null);
   const [top, setTop] = useState(anchor.top);
@@ -15,6 +15,16 @@ export default function SidebarFlyout({ item, anchor, close, scheduleCloseFlyout
     window.addEventListener('resize', clamp);
     return () => window.removeEventListener('resize', clamp);
   }, [anchor, item]);
+  // Keyboard entry from the rail trigger bumps focusToken; mouse hover never does.
+  useEffect(() => {
+    if (focusToken > 0) ref.current?.querySelector('a[href]')?.focus();
+  }, [focusToken]);
+  const handleKeyDown = (event) => {
+    if (event.key === 'Escape' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      onDismiss?.({ restoreFocus: true });
+    }
+  };
   const flyoutChildren = item.groups?.length
     ? item.groups.flatMap(group => [...(group.label ? [{ groupLabel: group.label }] : []), ...group.children])
     : item.children;
@@ -26,6 +36,8 @@ export default function SidebarFlyout({ item, anchor, close, scheduleCloseFlyout
   return (
     <nav
       ref={ref}
+      id={id}
+      onKeyDown={handleKeyDown}
       aria-label={`${item.label} pages`}
       onMouseEnter={cancelCloseFlyout}
       onMouseLeave={scheduleCloseFlyout}

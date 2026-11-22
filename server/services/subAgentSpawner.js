@@ -31,7 +31,7 @@ import { syncRunnerAgents } from './agent/agentRunnerSync.js';
 import { cleanupOrphanedAgents } from './agent/agentManagement.js';
 import { completeAgentRun } from './agent/agentRunTracking.js';
 import { appendRunEvent } from './agent/agentRunEventLog.js';
-import { activeAgents, runnerAgents, setUseRunner, useRunner } from './agent/agentState.js';
+import { activeAgents, dropRunnerAgent, runnerAgents, setUseRunner, useRunner } from './agent/agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { loadState } from './cos/cosState.js';
@@ -181,7 +181,7 @@ async function handleTaskReady(task) {
       emitLog('error', `Failed to spawn agent for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
       const jobId = task.metadata?.jobId;
       if (jobId) {
-        cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed' });
+        cosEvents.emit('job:spawn-failed', { jobId, reason: 'failed', error: err?.message || String(err) });
       }
       // Same task-level error contract as the workspace-prep failure path.
       cosEvents.emit('agent:error', { taskId: task.id, error: err?.message || String(err) });
@@ -374,7 +374,7 @@ async function runInitSpawner() {
       await completeAgent(agentId, { success: false, validationPassed: null, error });
       await releaseAgentReservation(agentId);
       await completeAgentRun(agent.runId, '', 1, 0, { message: error, category: 'runner-error' });
-      runnerAgents.delete(agentId);
+      dropRunnerAgent(agentId);
     }
   });
 

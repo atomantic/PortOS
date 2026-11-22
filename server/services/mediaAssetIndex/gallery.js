@@ -4,12 +4,14 @@ import { PATHS } from '../../lib/paths.js';
 import { withMediaFileSizes } from '../../lib/mediaFileInfo.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
-import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections } from './db.js';
+import { listAssets, countAssets, galleryFacets, listMixedGalleryPage, collectionCovers, visibleImageCollections, listGalleryImageRefs } from './db.js';
+import { resolveCollectionVideoFilename } from '../collectionVideoFiles.js';
 import { compactGalleryRecord } from './logic.js';
 import { projectImageInputProvenance } from '../../lib/imageInputProvenance.js';
 
 const keyFor = ({ kind, data }) => `${kind}:${kind === 'image' ? data.filename : data.id}`;
 const keyForRef = item => `${item.kind}:${item.ref}`;
+const collectionItems = collections => collections.flatMap(collection => collection.items || []);
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : 0;
 const text = value => typeof value === 'string' && value.trim() ? value : null;
 const readImages = async diskReader => (diskReader || (await import('../imageGen/local.js')).listGallery)();
@@ -35,7 +37,7 @@ async function resolveScope({ collectionId, starred, rating, mediaKeys, collecti
   if (collectionId) {
     const store = collectionSnapshot ? null : await import('../mediaCollections.js');
     if (collectionId === 'unsorted') {
-      excludeKeys = (collectionSnapshot || await store.listCollections()).flatMap(c => (c.items || []).map(keyForRef));
+      excludeKeys = collectionItems(collectionSnapshot || await store.listCollections()).map(keyForRef);
     } else {
       collection = collectionSnapshot ? collectionSnapshot.find(item => item.id === collectionId) : await store.getCollection(collectionId);
       orderedKeys = [...(collection?.items || [])]
@@ -49,6 +51,38 @@ async function resolveScope({ collectionId, starred, rating, mediaKeys, collecti
     keys = keys ? keys.filter(key => own.includes(key)) : own;
   }
   return { mediaKeys: keys, excludeKeys, orderedKeys, collection };
+}
+
+/**
+ * Capture this machine's unfiltered Unsorted gallery as physical transfer
+ * identities, once per run. A video row can share its bytes with a filed
+ * history ID, so gallery membership alone is not enough to move that file.
+ */
+export async function listUnsortedGalleryFiles(diskReader) {
+  const [{ listCollections }, { loadCompactHistory }] = await Promise.all([
+    import('../mediaCollections.js'),
+    import('../videoGen/history.js'),
+  ]);
+  const [imageRefs, videos] = await Promise.all([
+    isFileBackend() ? readImages(diskReader).then(images => images.map(image => image.filename)) : listGalleryImageRefs(),
+    loadCompactHistory(),
+  ]);
+  const filed = collectionItems(await listCollections({ requireComplete: true }));
+  const excludedKeys = new Set(filed.map(keyForRef));
+  const videoNames = new Map(videos.map(row => [row.id, row.filename]));
+  const filedVideoFiles = new Set(filed.filter(item => item.kind === 'video')
+    .map(({ ref }) => resolveCollectionVideoFilename(ref, videoNames)).filter(Boolean));
+  const entries = new Map();
+  const add = (kind, filename) => {
+    if (typeof filename === 'string' && filename) entries.set(`${kind}:${filename}`, { kind, filename });
+  };
+  for (const filename of imageRefs) {
+    if (!excludedKeys.has(`image:${filename}`)) add('image', filename);
+  }
+  for (const { id, filename } of videos) {
+    if (!excludedKeys.has(`video:${id}`) && !filedVideoFiles.has(filename)) add('video', filename);
+  }
+  return [...entries.values()];
 }
 
 /** Bounded reads; sidecars remain the reconcile authority and test escape hatch. */

@@ -738,6 +738,65 @@ async function getRuntimeContextLength(selectedModel = null) {
   return windows.length ? Math.min(...windows) : null
 }
 
+// In-flight work registry. A daemon restart drops every request on every model,
+// so callers that hold a request or agent run open on this daemon register here
+// and `ensureContextWindow` waits for them to drain instead of killing them.
+const inFlightWork = new Set()
+let drainWaiters = []
+let reloadGate = null
+export const CONTEXT_RELOAD_DRAIN_TIMEOUT_MS = 120_000
+
+/**
+ * Mark a unit of work (API request, prompt run, agent run) as using the daemon.
+ * @returns {() => void} idempotent release
+ */
+function beginOllamaWork() {
+  const token = {}
+  inFlightWork.add(token)
+  return () => {
+    if (!inFlightWork.delete(token) || inFlightWork.size > 0) return
+    const waiters = drainWaiters
+    drainWaiters = []
+    for (const resolve of waiters) resolve(true)
+  }
+}
+
+/**
+ * `beginOllamaWork` once no reload is in progress. Registers in the same turn as the
+ * final gate check: registering after a separate awaited wait resumes microtasks later,
+ * long enough for another caller to see an empty registry and start a new reload.
+ * @returns {Promise<() => void>} idempotent release
+ */
+async function beginOllamaWorkAfterReload() {
+  while (reloadGate) await reloadGate
+  return beginOllamaWork()
+}
+
+const getInFlightOllamaWorkCount = () => inFlightWork.size
+
+/** Resolves true once nothing is in flight, false after `timeoutMs`. */
+function waitForOllamaDrain(timeoutMs = CONTEXT_RELOAD_DRAIN_TIMEOUT_MS) {
+  if (inFlightWork.size === 0) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    const waiter = (drained) => { clearTimeout(timer); resolve(drained) }
+    const timer = setTimeout(() => {
+      drainWaiters = drainWaiters.filter((w) => w !== waiter)
+      resolve(false)
+    }, timeoutMs)
+    drainWaiters.push(waiter)
+  })
+}
+
+/** The window a resident model was actually loaded at (`/api/ps`), or null when not resident/unknown. */
+async function getResidentModelContext(model) {
+  const wanted = typeof model === 'string' ? model.trim() : ''
+  if (!wanted) return null
+  const models = await getRuntimeModels()
+  const hit = models?.find((m) => modelNames(m).includes(wanted))
+  const n = Number(hit?.context_length)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 /**
  * Hold the Ollama daemon at (at least) `contextLength` tokens, reloading it with
  * that window when it is running at a smaller one.
@@ -786,6 +845,23 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
     return { applied: false, reason: 'already-large-enough', contextLength: target, runtimeContextLength: runtime }
   }
 
+  // Drain, then re-read the window: the wait can be long enough for another caller to have
+  // reloaded the daemon already, and work that started meanwhile must be waited for too.
+  let currentRuntime = runtime
+  const drainDeadline = Date.now() + CONTEXT_RELOAD_DRAIN_TIMEOUT_MS
+  while (inFlightWork.size > 0) {
+    console.log(`⏳ Ollama reload to ${target} tokens waiting for ${inFlightWork.size} in-flight run(s)`)
+    const remaining = drainDeadline - Date.now()
+    if (remaining <= 0 || !(await waitForOllamaDrain(remaining))) {
+      console.log(`⏭️ Ollama reload to ${target} tokens skipped: ${inFlightWork.size} run(s) still in flight after ${CONTEXT_RELOAD_DRAIN_TIMEOUT_MS}ms`)
+      return { applied: false, reason: 'in-flight', contextLength: target, runtimeContextLength: currentRuntime }
+    }
+    currentRuntime = await getRuntimeContextLength(selectedModel)
+    if (currentRuntime != null && currentRuntime >= target) {
+      return { applied: false, reason: 'already-large-enough', contextLength: target, runtimeContextLength: currentRuntime }
+    }
+  }
+
   console.log(`🪟 Reloading Ollama at a ${target}-token context window (was ${runtime ?? 'unknown'})`)
 
   // The restart ladder itself — including the rule that a launch-at-login daemon
@@ -793,7 +869,16 @@ async function ensureContextWindow(contextLength, selectedModel = null) {
   // The checks ABOVE are what is specific to a context window: a resident model
   // already big enough, and the >= latch that keeps an agent spawn from bouncing
   // the daemon. Everything below was the same ladder written twice.
-  return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target, runtimeContextLength: runtime }
+  // The gate holds new runs (`beginOllamaWorkAfterReload`) until the restart settles, so none starts on a
+  // daemon that is about to be killed.
+  let openGate
+  reloadGate = new Promise((resolve) => { openGate = resolve })
+  try {
+    return { ...(await restartWithEnv(env, { tuning: false })), contextLength: target, runtimeContextLength: currentRuntime }
+  } finally {
+    reloadGate = null
+    openGate()
+  }
 }
 
 /**
@@ -1249,7 +1334,10 @@ async function getModelDetails(name, requestOptions = {}) {
   }
   const details = {
     contextLength,
-    capabilities: Array.isArray(data.capabilities) ? data.capabilities : []
+    capabilities: Array.isArray(data.capabilities) ? data.capabilities : [],
+    // Layout keys for context-memory planning (lib/contextMemoryPlan.js).
+    modelInfo: data.model_info && typeof data.model_info === 'object' ? data.model_info : null,
+    runner: typeof data.details?.runner === 'string' ? data.details.runner : null
   }
   modelDetailsCache.set(name, details)
   return details
@@ -1266,6 +1354,16 @@ async function getModelDetails(name, requestOptions = {}) {
  */
 async function getModelCapabilities(name, requestOptions = {}) {
   return (await getModelDetails(name, requestOptions)).capabilities
+}
+
+/**
+ * A model's `model_info` layout keys and runner (`mlx` or null) from /api/show, cached with the other details.
+ * @param {string} name
+ * @returns {Promise<{ modelInfo: object|null, runner: string|null }>}
+ */
+async function getModelLayout(name, requestOptions = {}) {
+  const { modelInfo = null, runner = null } = await getModelDetails(name, requestOptions)
+  return { modelInfo, runner }
 }
 
 /** Add `contextLength` + `capabilities` to each model (parallel, cached). */
@@ -1467,15 +1565,23 @@ async function warmModel(modelName, keepAlive = '30m') {
  * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, retrying?: boolean, finalizing?: boolean }) => void} [onProgress]
  * @returns {Promise<{ success: boolean, modelId: string, error?: string, recovered?: boolean }>}
  */
-async function pullModel(modelId, onProgress) {
+async function pullModel(modelId, onProgress, { signal } = {}) {
   if (!(await checkOllamaAvailable())) {
     return { success: false, error: 'Ollama not available', modelId }
   }
   console.log(`📥 Ollama pull: ${modelId}`)
 
+  // Layer digests this pull touched, so a cancel can remove exactly their
+  // `-partial` scratch files and nothing another model owns.
+  const digests = new Set()
   let lastError = null
   for (let attempt = 1; attempt <= PULL_MAX_ATTEMPTS; attempt++) {
-    const result = await attemptOllamaPull(modelId, onProgress)
+    const result = await attemptOllamaPull(modelId, onProgress, { signal, digests })
+    if (signal?.aborted) {
+      const removed = await removePartialBlobs(digests)
+      console.log(`🛑 Ollama pull canceled: ${modelId} (removed ${removed} partial file${removed === 1 ? '' : 's'})`)
+      return { success: false, canceled: true, code: 'INSTALL_CANCELED', error: 'Download canceled', modelId }
+    }
     if (result.success) {
       installedModels = null  // bust cache so the new model shows on next list
       console.log(`✅ Ollama pull complete: ${modelId}${attempt > 1 ? ` (after ${attempt} attempts)` : ''}`)
@@ -1811,12 +1917,15 @@ function isOllamaOutdatedError(error) {
  * @param {(p: object) => void} [onProgress]
  * @returns {Promise<{ success: boolean, error?: string }>}
  */
-async function attemptOllamaPull(modelId, onProgress) {
+async function attemptOllamaPull(modelId, onProgress, { signal, digests } = {}) {
   // No timeout — multi-GB pulls take minutes; the stream is the lifecycle.
+  // Aborting the request is what cancels: Ollama stops a blob download once no
+  // request is waiting on it.
   const response = await fetchWithTimeout(`${config.baseUrl}/api/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: modelId, stream: true })
+    body: JSON.stringify({ name: modelId, stream: true }),
+    ...(signal ? { signal } : {}),
   }, 0).catch((err) => ({ _err: describeFetchError(err) }))
 
   if (response._err || !response.ok || !response.body) {
@@ -1824,6 +1933,7 @@ async function attemptOllamaPull(modelId, onProgress) {
   }
 
   const lastError = await streamNdjson(response, (frame) => {
+    if (digests && typeof frame.digest === 'string') digests.add(frame.digest)
     if (typeof onProgress === 'function') {
       const percent = frame.total > 0 && frame.completed >= 0
         ? Math.round((frame.completed / frame.total) * 100)
@@ -1833,6 +1943,26 @@ async function attemptOllamaPull(modelId, onProgress) {
   }).catch((err) => err?.message || String(err))
 
   return lastError ? { success: false, error: lastError } : { success: true }
+}
+
+/**
+ * Delete the `<blob>-partial*` scratch files Ollama keeps for the given layer
+ * digests (`sha256:<hex>`). Completed blobs are never touched: a layer another
+ * model already shares has no partial file. Returns how many files went.
+ * @param {Iterable<string>} digests
+ * @returns {Promise<number>}
+ */
+async function removePartialBlobs(digests) {
+  const prefixes = [...digests]
+    .map((digest) => /^sha256:([a-f0-9]{64})$/.exec(digest)?.[1])
+    .filter(Boolean)
+    .map((hex) => `sha256-${hex}-partial`)
+  if (!prefixes.length) return 0
+  const blobsDir = join(getModelsDir(), 'blobs')
+  const names = await readdir(blobsDir).catch(() => [])
+  const doomed = names.filter((name) => prefixes.some((prefix) => name.startsWith(prefix)))
+  const results = await Promise.all(doomed.map((name) => unlink(join(blobsDir, name)).then(() => true, () => false)))
+  return results.filter(Boolean).length
 }
 
 /**
@@ -2198,6 +2328,7 @@ async function getStatus(forceRefresh = false) {
 export {
   getInstalledModels,
   getModelCapabilities,
+  getModelLayout,
   getLoadedModels,
   getLoadedModelsAt,
   getLastInstalledModelsError,
@@ -2214,6 +2345,11 @@ export {
   startServer,
   stopServer,
   ensureContextWindow,
+  beginOllamaWork,
+  beginOllamaWorkAfterReload,
+  getInFlightOllamaWorkCount,
+  waitForOllamaDrain,
+  getResidentModelContext,
   restartWithEnv,
   getRuntimeContextLength,
   startPersistentService,

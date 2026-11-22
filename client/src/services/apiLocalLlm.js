@@ -29,6 +29,7 @@ export const getVisionModels = (options) => request('/local-llm/vision-models', 
 // backend reports capabilities (Ollama `/api/show`); agent pickers union it with
 // the client-side id regex via `useToolUseModelIds`.
 export const getToolUseModels = (options) => request('/local-llm/tool-use-models', options);
+export const getContextPlans = (options) => request('/local-llm/context-plans', options);
 
 // `variants: true` opts into per-quant RAM-aware enrichment (probes Hugging Face
 // per HF-backed entry) — the recommended-models picker wants it. Callers that only
@@ -111,6 +112,10 @@ export const installLocalLlmModel = (backend, modelId, options = {}) => {
     ...rest,
   });
 };
+
+// Stops a download `installLocalLlmModel` started; that request then resolves `{ canceled: true }`.
+export const cancelLocalLlmInstall = (backend, modelId, options = {}) =>
+  request('/local-llm/install/cancel', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });
 
 export const deleteLocalLlmModel = (backend, modelId, options = {}) =>
   request('/local-llm/delete', { method: 'POST', body: JSON.stringify({ backend, modelId }), ...options });

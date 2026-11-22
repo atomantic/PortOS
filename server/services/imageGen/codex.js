@@ -51,7 +51,7 @@ import {
 import { buildNoImageReason } from './noImageReason.js';
 import { conformImageAspect } from './aspectConform.js';
 import { aspectRatioPhrase } from '../../lib/aspectRatio.js';
-import { resolveInputImages } from './inputImages.js';
+import { resolveInputImages, stageSanitizedInputImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
@@ -280,6 +280,25 @@ async function generateImagePrepared({
     prompt, negativePrompt, width, height, inputImages, initImageStrength, promptAdditions,
   });
 
+  // Per-render scratch cwd for the child (#11734). Rooted at the OS temp dir —
+  // the same pattern every other ephemeral PortOS workspace uses, including the
+  // sibling Codex text turn in `services/codexAppServer.js`. Deliberately NOT a
+  // `PATHS` entry: `PATHS` names durable, documented directories under the
+  // install root that backup and federation reason about, and this one is
+  // created per render and removed when the job settles. An earlier revision
+  // read `PATHS.tmp`, which has never existed on the object — `ensureDir`
+  // received `undefined` and every Codex render died here before spawning.
+  const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
+  let cliInputImages;
+  try {
+    const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+    await assertReadableInputImages(inputImages.paths);
+    cliInputImages = await stageSanitizedInputImages({ inputImages, scratchDir, reviewedReferenceBytes });
+  } catch (error) {
+    await runner.removeScratchDirectory(scratchDir);
+    throw error;
+  }
+
   // `codex exec` treats `-i, --image <FILE>...` as VARIADIC, so it greedily
   // swallows every following positional — including the prompt — when no other
   // flag interrupts it. That left codex with no positional prompt; it then read
@@ -299,9 +318,9 @@ async function generateImagePrepared({
     // into their config is respected via hasEffortFlag inside buildEffortArgs.
     ...buildEffortArgs(effectiveEffort, { command: 'codex' }, [], effectiveModel),
     // `-i` is variadic, so every input image rides one flag.
-    ...(inputImages.paths.length ? ['-i', ...inputImages.paths] : []),
+    ...(cliInputImages.paths.length ? ['-i', ...cliInputImages.paths] : []),
     '-m', effectiveModel,
-    ...(inputImages.paths.length ? ['--'] : []),
+    ...(cliInputImages.paths.length ? ['--'] : []),
     fullPrompt,
   ];
 
@@ -318,26 +337,10 @@ async function generateImagePrepared({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
-  // Per-render scratch cwd for the child (#11734). Rooted at the OS temp dir —
-  // the same pattern every other ephemeral PortOS workspace uses, including the
-  // sibling Codex text turn in `services/codexAppServer.js`. Deliberately NOT a
-  // `PATHS` entry: `PATHS` names durable, documented directories under the
-  // install root that backup and federation reason about, and this one is
-  // created per render and removed when the job settles. An earlier revision
-  // read `PATHS.tmp`, which has never existed on the object — `ensureDir`
-  // received `undefined` and every Codex render died here before spawning.
-  const scratchDir = await mkdtemp(join(tmpdir(), 'portos-codex-image-'));
-  try {
-    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-    await assertReadableInputImages(inputImages.paths);
-  } catch (error) {
-    await runner.removeScratchDirectory(scratchDir);
-    throw error;
-  }
   const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir, referenceEventFields: referenceEventFields(meta) });
   runner.run(job, {
     bin: codexPath || undefined, args, scratchDir, meta, cleanC2PA, denoise,
-    prepareAttempt: () => prepareCodexAttempt(job, inputImages.paths),
+    prepareAttempt: () => prepareCodexAttempt(job, cliInputImages.paths),
     conformAspect: conformImageAspect,
     recordUsage: recordCodexRender,
     referenceEventFields: referenceEventFields(meta),

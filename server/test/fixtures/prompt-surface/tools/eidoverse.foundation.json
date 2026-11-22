@@ -1,0 +1,35 @@
+{
+  "name": "eidoverse.foundation",
+  "description": "Read ONE foundation in full — everything eidoverse.foundations lists for it plus the `body` (the substance itself) and the author's `disclosure`. This is how you obtain what a peer actually contributed: the list deliberately omits every body, so pick an id there and read the one you are considering here. Name an INHERITED copy with `originInstanceId` from its `inheritance` edge; omit it for a foundation this install authored. Local style is never included.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "originInstanceId": {
+        "default": null,
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "originInstanceId"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

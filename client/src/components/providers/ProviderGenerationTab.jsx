@@ -10,6 +10,10 @@ import {
   TIMEOUT_INPUT_STEP_MS,
 } from '../../utils/formatters';
 import { PROVIDER_FIELD_RANGES } from './providerFormData';
+import ProviderRoutingSection from './ProviderRoutingSection';
+import { isOpenRouterEndpoint } from './providerRoutingForm';
+import ContextWindowPlanner from './ContextWindowPlanner';
+import { isOllamaBackedProvider } from '../../utils/providerTypes';
 
 export default function ProviderGenerationTab({ formData, setFormData, capabilityProvider, showsNumCtx, generationControls }) {
   // `capabilityProvider`, not `formData`: the per-model windows model refresh
@@ -85,8 +89,32 @@ export default function ProviderGenerationTab({ formData, setFormData, capabilit
               </p>
             </FormField>
           )}
+
+          {showsNumCtx && (
+            <FormField label="Per-model num_ctx" className="sm:col-span-2">
+              <textarea
+                rows={3}
+                value={formData.modelNumCtxText}
+                onChange={(e) => setFormData(prev => ({ ...prev, modelNumCtxText: e.target.value }))}
+                placeholder={'model-id = 1048576'}
+                spellCheck={false}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                One <code className="text-gray-400">model = tokens</code> per line. Replaces Local num_ctx for that model only, so a long-context model can run at its full window without raising it for every other model.
+              </p>
+              {isOllamaBackedProvider(capabilityProvider) && (
+                <ContextWindowPlanner
+                  modelNumCtxText={formData.modelNumCtxText}
+                  onChange={(modelNumCtxText) => setFormData(prev => ({ ...prev, modelNumCtxText }))}
+                />
+              )}
+            </FormField>
+          )}
         </div>
       </div>
+
+      {isOpenRouterEndpoint(formData.endpoint) && <ProviderRoutingSection formData={formData} setFormData={setFormData} />}
 
       {generationControls && (
         <div className="border-t border-port-border pt-4 mt-4">

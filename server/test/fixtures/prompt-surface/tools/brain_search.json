@@ -1,0 +1,20 @@
+{
+  "name": "brain_search",
+  "description": "Search the user's brain inbox for previously captured thoughts, notes, or ideas. Use when the user asks \"what did I say about X?\", \"do I have any notes on Y?\", or wants to recall something they captured earlier. Returns up to 5 matching entries with their capture text and date.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Substring to search for in captured text (case-insensitive). Use the most distinctive keyword the user mentioned."
+      },
+      "limit": {
+        "type": "integer",
+        "description": "Max results to return (default 5, max 10)."
+      }
+    },
+    "required": [
+      "query"
+    ]
+  }
+}

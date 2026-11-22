@@ -118,3 +118,15 @@ describe('Timeline bounded event page (#11151)', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 });
+
+describe('Timeline failed day read', () => {
+  it('shows a Retry instead of the empty-day copy, and recovers on Retry', async () => {
+    getTimelineDay.mockRejectedValueOnce(new Error('503 down'));
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the timeline');
+    expect(screen.queryByText('No recorded activity on this day.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('No recorded activity on this day.');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

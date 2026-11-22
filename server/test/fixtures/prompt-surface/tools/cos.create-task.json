@@ -1,0 +1,101 @@
+{
+  "name": "cos.create-task",
+  "description": "Queue one bounded, supervised CoS agent task through the normal scheduler and delivery gates.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "description": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "prompt": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 12000
+      },
+      "priority": {
+        "default": "MEDIUM",
+        "type": "string",
+        "enum": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "CRITICAL"
+        ]
+      },
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "providerId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 100
+      },
+      "model": {
+        "type": "string",
+        "maxLength": 200
+      },
+      "effort": {
+        "default": "",
+        "anyOf": [
+          {
+            "type": "string",
+            "const": ""
+          },
+          {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra"
+            ]
+          }
+        ]
+      },
+      "planOnly": {
+        "type": "boolean"
+      },
+      "prCompletion": {
+        "type": "string",
+        "enum": [
+          "review-then-merge",
+          "merge-on-green",
+          "leave-open",
+          "draft"
+        ]
+      },
+      "requiredValidation": {
+        "maxItems": 5,
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "dependencies",
+            "engines",
+            "submodules",
+            "forge",
+            "reviewers"
+          ]
+        }
+      }
+    },
+    "required": [
+      "description",
+      "prompt",
+      "priority",
+      "appId",
+      "providerId",
+      "model",
+      "effort"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "supervised-write"
+}

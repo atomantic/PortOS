@@ -37,7 +37,7 @@ import {
   AGY_IMAGEGEN_IMAGE_MODEL, IMAGE_GEN_MODE, IMAGE_TOOL_NAMES, describeFidelity,
   nearestAgyAspectRatio, visualReferenceRole,
 } from './modes.js';
-import { resolveInputImages } from './inputImages.js';
+import { cliPromptImageNames, resolveInputImages, stageCliPromptImages } from './inputImages.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
@@ -48,6 +48,7 @@ const AGY_TIMEOUT_MS = (() => {
   const n = Number(process.env.AGY_IMAGEGEN_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
 })();
+const OUTPUT_NAME = 'output.png';
 const DEFAULT_BIN = 'agy';
 const DEFAULT_HARVEST_TIMEOUT_MS = 5000;
 let harvestTimeoutMs = DEFAULT_HARVEST_TIMEOUT_MS;
@@ -134,11 +135,11 @@ const agyImagePathsDirective = ({ paths, initPath, referencePaths, initImageStre
   const role = initPath
     ? `The first is the source image to edit — ${describeFidelity(initImageStrength)}.${refCount ? ` The rest are ${visualReferenceRole(refCount)}.` : ''}`
     : `Use ${refCount === 1 ? 'it' : 'them'} as ${visualReferenceRole(refCount)}.`;
-  return `\nPass these absolute paths to the tool's ImagePaths parameter, in this order: ${paths.join(', ')}\n${role}`;
+  return `\nPass these files from the working directory to the tool's ImagePaths parameter, in this order: ${paths.join(', ')}\nIf ImagePaths requires absolute paths, resolve those files locally against the working directory.\n${role}`;
 };
 
 export function buildAgyPrompt({
-  prompt, negativePrompt, width, height, stagingPath,
+  prompt, negativePrompt, width, height,
   inputImages = { paths: [], initPath: null, referencePaths: [] }, initImageStrength,
 }) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
@@ -156,10 +157,10 @@ export function buildAgyPrompt({
   // exposed this failure mode captioned itself "DIMENSIONS: 832 x 1216 (2:3)".
   const ratio = nearestAgyAspectRatio(width, height);
   const aspect = ratio ? `\nPass AspectRatio "${ratio}" to the tool.` : '';
-  const images = agyImagePathsDirective({ ...inputImages, initImageStrength });
+  const images = agyImagePathsDirective({ ...cliPromptImageNames(inputImages), initImageStrength });
   return `Use your built-in ${AGY_TOOL} tool to generate exactly one image.
 Image prompt: ${prompt.trim()}${avoid}${aspect}${images}
-Save the generated image as a PNG file at exactly this path: ${stagingPath}
+Save the generated image as a PNG file at exactly this path in the working directory: ${OUTPUT_NAME}
 ${noFabricationClause(AGY_TOOL)}
 Do not create any other files, do not modify any code or workspace content, and do not run unrelated tools. When the file is written, you are done.`;
 }
@@ -215,9 +216,9 @@ async function resolveAgyDriverModel(model, shippedDefault) {
  * The exact message agy receives and the record of what PortOS added to the
  * user's prompt (#11317). Shared by the render and the compose preview.
  */
-export function agySentPrompt({ prompt = '', negativePrompt, width, height, stagingPath, inputImages, initImageStrength, promptAdditions = [] }) {
+export function agySentPrompt({ prompt = '', negativePrompt, width, height, inputImages, initImageStrength, promptAdditions = [] }) {
   const buildWith = (text) => buildAgyPrompt({
-    prompt: text, negativePrompt, width, height, stagingPath, inputImages, initImageStrength,
+    prompt: text, negativePrompt, width, height, inputImages, initImageStrength,
   });
   const fullPrompt = buildWith(prompt);
   return {
@@ -268,16 +269,25 @@ async function generateImagePrepared({
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const scratchDir = join(tmpdir(), `portos-agy-${jobId}`);
-  const stagingPath = join(scratchDir, 'output.png');
+  const stagingPath = join(scratchDir, OUTPUT_NAME);
 
-  const { fullPrompt, record: sentRecord } = agySentPrompt({
-    prompt, negativePrompt, width, height, stagingPath, inputImages, initImageStrength, promptAdditions,
-  });
   // `driverModel` is what agy actually runs on — a retired shipped default is
   // re-pointed here, so every record below reports the model that rendered
   // rather than the one the caller asked for. See resolveAgyDriverModel.
   const { model: driverModel, models } = await resolveAgyDriverModel(model, modelIsShippedDefault);
   const baseArgs = ensureAntigravityPrintArgs([], { model: driverModel, models });
+  // Before registration, clean up here if reference validation or staging fails.
+  await mkdir(scratchDir, { recursive: true, mode: 0o700 });
+  try {
+    const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
+    await stageCliPromptImages({ paths: inputImages.paths, scratchDir, reviewedReferenceBytes });
+  } catch (error) {
+    await runner.removeScratchDirectory(scratchDir);
+    throw error;
+  }
+  const { fullPrompt, record: sentRecord } = agySentPrompt({
+    prompt, negativePrompt, width, height, inputImages, initImageStrength, promptAdditions,
+  });
   const { args } = prepareAntigravityPrompt(baseArgs, fullPrompt);
   const meta = {
     id: jobId,
@@ -299,15 +309,6 @@ async function generateImagePrepared({
     ...sentRecord,
     createdAt: new Date().toISOString(),
   };
-  // The scratch dir is the last fallible step before the job exists, so a
-  // refusal above leaves nothing behind; from here on the runner owns it.
-  await mkdir(scratchDir, { recursive: true });
-  try {
-    await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
-  } catch (error) {
-    await runner.removeScratchDirectory(scratchDir);
-    throw error;
-  }
   const job = await runner.registerJob({ meta, renderStartedAtMs, scratchDir });
   runner.run(job, {
     bin: agyPath || undefined, args, scratchDir, meta, cleanC2PA, denoise,

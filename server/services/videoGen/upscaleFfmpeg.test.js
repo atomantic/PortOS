@@ -31,6 +31,7 @@ describe('padSourceForUpscale', () => {
     // than black so the model is not asked to synthesize detail into a cut.
     expect(argFor('-vf')).toBe('pad=864:512:0:0:color=black,tpad=stop_mode=clone:stop_duration=0.160000');
     expect(ffmpeg.runs.at(-1).args).toContain('-an');
+    expect(ffmpeg.runs.at(-1).args.join(' ')).toContain('-map_metadata -1 -map_metadata:s -1');
   });
 
   it('omits the tail filter entirely when no frames need padding', async () => {

@@ -1,5 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
-import { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
+import { getAuthenticatedClient } from './googleAuth.js';
+import { createCalendarApi } from './calendarApi.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars, updateSyncStatus } from './calendarAccounts.js';
 import { hasGoogleEventId, pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
 
@@ -30,8 +31,7 @@ async function runApiSyncAccount(accountId, io) {
     const auth = await getAuthenticatedClient();
     if (!auth) throw new ServerError('Google OAuth not configured. Set up credentials in Config tab.', { status: 401 });
 
-    const { calendar } = await import('@googleapis/calendar');
-    const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
+    const cal = createCalendarApi(auth);
     const { pastDate, futureDate } = getSyncDateRange();
 
     let totalNew = 0;
@@ -44,7 +44,7 @@ async function runApiSyncAccount(accountId, io) {
       const allEvents = [];
       let pageToken;
       do {
-        const response = await cal.events.list({
+        const response = await cal.listEvents({
           calendarId: sc.calendarId,
           timeMin: pastDate.toISOString(),
           timeMax: futureDate.toISOString(),
@@ -160,13 +160,12 @@ export async function apiDiscoverCalendars(accountId) {
   const auth = await getAuthenticatedClient();
   if (!auth) throw new ServerError('Google OAuth not configured', { status: 401 });
 
-  const { calendar } = await import('@googleapis/calendar');
-  const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
+  const cal = createCalendarApi(auth);
   const allCalendars = [];
   let pageToken;
 
   do {
-    const response = await cal.calendarList.list({ pageToken });
+    const response = await cal.listCalendarList({ pageToken });
     allCalendars.push(...(response.data.items || []));
     pageToken = response.data.nextPageToken;
   } while (pageToken);

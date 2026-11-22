@@ -69,7 +69,8 @@ vi.mock('./agentCompletion.js', () => ({
 // otherwise reaches a real localhost:11434 in this suite. Stub it to a no-op —
 // its own behavior is covered by services/ollamaAgentContext.test.js.
 vi.mock('../ollamaAgentContext.js', () => ({
-  ensureOllamaAgentContext: vi.fn().mockResolvedValue({ skipped: false, contextLength: null, applied: false, warning: null })
+  ensureOllamaAgentContext: vi.fn().mockResolvedValue({ skipped: false, contextLength: null, applied: false, warning: null }),
+  beginOllamaAgentWork: vi.fn().mockResolvedValue(() => {})
 }));
 
 vi.mock('./agentFinalization.js', () => ({
@@ -243,7 +244,7 @@ import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
 import * as agentLifecycle from './agentFinalization.js';
-import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
+import { beginOllamaAgentWork, ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as gitService from '../git.js';
 import { probePrForBranch } from '../prProbe.js';
@@ -1119,6 +1120,59 @@ describe('spawnTuiAgent runtime', () => {
     await capturedOnExit({ exitCode: 0, killed: false });
     await cloudSpawn;
     expect(ensureOllamaAgentContext).not.toHaveBeenCalled();
+  });
+
+  // #17341: the run holds an in-flight registration for as long as its harness
+  // can talk to the daemon, so a later spawn's context reload defers instead of
+  // restarting Ollama under it.
+  describe('in-flight Ollama registration', () => {
+    const ollamaProvider = { id: 'claude-ollama-tui', name: 'Claude Ollama TUI', type: 'tui', command: 'claude', ollamaBacked: true, envVars: {} };
+
+    it('registers after the context is prepared and releases once the session exits', async () => {
+      const release = vi.fn();
+      vi.mocked(beginOllamaAgentWork).mockResolvedValueOnce(release);
+      const spawnPromise = runSpawn({ provider: ollamaProvider });
+      await flushMicrotasks();
+
+      expect(beginOllamaAgentWork).toHaveBeenCalledWith(ollamaProvider);
+      expect(vi.mocked(ensureOllamaAgentContext).mock.invocationCallOrder.at(-1))
+        .toBeLessThan(vi.mocked(beginOllamaAgentWork).mock.invocationCallOrder.at(-1));
+      expect(release).not.toHaveBeenCalled();
+
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await spawnPromise;
+      expect(release).toHaveBeenCalled();
+    });
+
+    it('releases when the session fails to start', async () => {
+      const release = vi.fn();
+      vi.mocked(beginOllamaAgentWork).mockResolvedValueOnce(release);
+      vi.mocked(shellService.createShellSession).mockImplementationOnce(() => {
+        throw new Error('posix_spawnp failed');
+      });
+
+      await expect(runSpawn({ provider: ollamaProvider })).resolves.toBeNull();
+      expect(release).toHaveBeenCalled();
+    });
+
+    it('finalizes a failed registration as a failed start', async () => {
+      vi.mocked(beginOllamaAgentWork).mockRejectedValueOnce(new Error('registry unavailable'));
+      await expect(runSpawn({ provider: ollamaProvider })).resolves.toBeNull();
+      expect(shellService.createShellSession).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        completionReason: 'spawn-error',
+        error: 'Failed to start TUI session: registry unavailable',
+      }));
+    });
+
+    it('does not register a cloud-provider run', async () => {
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await spawnPromise;
+      expect(beginOllamaAgentWork).not.toHaveBeenCalled();
+    });
   });
 
   it('does not double-fire a PR owned by a slashdo-capable Claude TUI', async () => {

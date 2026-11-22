@@ -174,6 +174,7 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'activity-digest',
   'agent-personality-generation',
   'ai-app-detect',
+  'ask', // Ask Yourself answers over personal sources; reached as a run only through an MoA preset
   'autobiography-evaluate',
   'autobiography-follow-ups',
   'code-review',

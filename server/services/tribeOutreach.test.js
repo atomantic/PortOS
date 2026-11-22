@@ -411,6 +411,19 @@ describe('generateOutreachDraft', () => {
     ]);
   });
 
+  it('logs only ids when filing a draft, never the contact name', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z' });
+      const lines = log.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(lines).toContain('draft=draft-new');
+      expect(lines).toContain('person=p1');
+      expect(lines).not.toContain('Alex');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('reuses an existing un-sent outreach draft for the same conversation + inbound (no duplicate LLM call)', async () => {
     listDrafts.mockResolvedValue([
       { id: 'draft-old', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z', status: 'draft', body: 'earlier' },

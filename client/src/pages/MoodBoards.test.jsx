@@ -126,3 +126,18 @@ describe('MoodBoards index', () => {
     expect(screen.queryByText('Board To Delete')).toBeNull();
   });
 });
+
+describe('MoodBoards failed list read', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('shows a Retry instead of the onboarding copy, and recovers on Retry', async () => {
+    listMoodBoards.mockRejectedValueOnce(new Error('503 down')).mockResolvedValue([{ id: 'a', name: 'Amber', items: [] }]);
+    await renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load mood boards');
+    expect(screen.queryByText('No mood boards yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Combine boards' })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: 'Delete Amber' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

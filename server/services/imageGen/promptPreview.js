@@ -2,12 +2,10 @@
  * Compose-time preview of what an Image Gen render sends to its model (#11317):
  * the same request preparation and the same per-backend prompt builders the
  * render runs, without staging uploads or queueing anything. Uploads the form
- * holds are named by `previewUploadLabel` in place of their staged path, and
- * the grok/agy output path names the job folder it will get.
+ * holds are represented by `previewUploadLabel` in place of their staged path.
  */
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from './fableLoomParams.js';
-import { tmpdir } from 'node:os';
 import { getRunwayImageModel, RUNWAY_IMAGE_DEFAULT_MODEL } from '../../lib/runwayImageModels.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
@@ -46,8 +44,6 @@ function previewInputImages(mode, params, modelId) {
   const paths = ordered.slice(0, maxInputImages(mode, modelId) ?? ordered.length);
   return { paths, initPath, referencePaths: initPath ? paths.slice(1) : paths };
 }
-
-const jobOutputPath = (prefix) => join(tmpdir(), `${prefix}-<job>`, 'output.png');
 
 export async function previewImagePrompt({ uploadedInitImage = false, uploadedReferenceCount = 0, reviewReference = false, ...body }) {
   if (body.fableLoom && (uploadedInitImage || uploadedReferenceCount)) throw fableLoomMultipartUnsupported();
@@ -114,12 +110,12 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
   }
   if (mode === IMAGE_GEN_MODE.GROK) {
     return { ...envelope, ...grokSentPrompt({
-      ...common, aspectRatio: params.aspectRatio ?? cloud?.providerParams.aspectRatio, stagingPath: jobOutputPath('portos-grok'),
+      ...common, aspectRatio: params.aspectRatio ?? cloud?.providerParams.aspectRatio,
       inputImages: previewInputImages(mode, params),
     }).record };
   }
   if (mode === IMAGE_GEN_MODE.AGY) {
-    return { ...envelope, ...agySentPrompt({ ...common, stagingPath: jobOutputPath('portos-agy'), inputImages: previewInputImages(mode, params) }).record };
+    return { ...envelope, ...agySentPrompt({ ...common, inputImages: previewInputImages(mode, params) }).record };
   }
   if (mode === IMAGE_GEN_MODE.RUNWAY) {
     return { ...envelope, ...runwayImageSentPrompt({ ...common, modelId: cloud?.providerParams.model, inputImages: previewInputImages(mode, params, cloud?.providerParams.model), visualConditioning: params.visualConditioning }).record };

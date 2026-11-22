@@ -8,9 +8,10 @@ import { join, extname, basename, isAbsolute } from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { analyzeError, ERROR_CATEGORIES } from './errorDetection.js';
-import { apiGenerationOptions } from './internal/generationOptions.js';
+import { apiGenerationOptions, openRouterBodyFragment } from './internal/generationOptions.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl, ollamaNativeFrameToChunk } from './internal/ollamaNativeChat.js';
-import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest } from './internal/preHeaderRetry.js';
+import { isOllamaBackedProvider, ollamaThinkLevel, withModelNumCtx } from './internal/ollamaBacked.js';
+import { describeTransportError, fetchWithPreHeaderRetry, isReplaySafeLocalRequest, sendWithCredentialSession } from './internal/preHeaderRetry.js';
 // The two streaming ceilings (no-progress bound, absolute runtime cap) live in
 // a leaf module so a host's own backstop timer can read the absolute bound
 // without dragging this file's fs/child_process closure with it.
@@ -704,7 +705,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout, absoluteTimeoutMs, maxTokens, beforeExecute, onSettled, onPersistenceFailure, effort = provider?.effort ?? null }) {
       const ownershipSaved = patchRunMetadata(runId, runOwnership('api'));
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
@@ -819,23 +820,40 @@ export function createRunnerService(config = {}) {
       // `num_ctx` in any position), so the model would load at the daemon
       // default and silently drop the prompt's head. See
       // ./internal/ollamaNativeChat.js.
-      const nativeOllamaUrl = ollamaNativeChatUrl(provider);
       const requestModel = model || provider.defaultModel;
+      // A per-model window (`modelNumCtx`) replaces `numCtx` for this model only.
+      const windowProvider = withModelNumCtx(provider, requestModel);
+      const nativeOllamaUrl = ollamaNativeChatUrl(windowProvider);
+      // An effort the model takes as an Ollama thinking level replaces the
+      // provider's boolean `thinking` for this run.
+      const thinkLevel = isOllamaBackedProvider(provider) || provider?.mtplxBacked === true ? ollamaThinkLevel(requestModel, effort) : null;
+      // MTPLX has no native `think` field: Inkling takes its level as a chat-template kwarg.
+      const mtplxEffort = provider?.mtplxBacked === true && thinkLevel;
+      const generation = { ...apiGenerationOptions(provider), ...(thinkLevel && !mtplxEffort ? { think: thinkLevel } : {}) };
       const requestBody = nativeOllamaUrl
-        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider, generation: apiGenerationOptions(provider), maxTokens })
+        ? buildOllamaNativeChatBody({ model: requestModel, messageContent, provider: windowProvider, generation, maxTokens })
         : {
             model: requestModel,
             messages: [{ role: 'user', content: messageContent }],
             stream: true,
             ...apiGenerationOptions(provider),
+            ...openRouterBodyFragment(provider, requestModel),
+            ...(mtplxEffort ? { chat_template_kwargs: { ...apiGenerationOptions(provider).chat_template_kwargs, reasoning_effort: thinkLevel } } : {}),
+            ...(thinkLevel ? { reasoning_effort: thinkLevel } : {}),
             ...(Number.isInteger(maxTokens) && maxTokens > 0 ? { max_tokens: maxTokens } : {}),
           };
-      const response = !endpointGuard.allowed
-        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
-        : ready.success
-        ? await fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
+      // A host credential pool (#17384) may rotate this request onto another key
+      // of the same service after a 429/402/401, before the provider-wide bench
+      // and fallback chain see the failure. `null` = send the record's own key.
+      const credentialSession = endpointGuard.allowed && ready.success && provider.apiKey && hooks.openCredentialSession
+        ? await Promise.resolve(hooks.openCredentialSession(provider, requestModel)).catch((err) => {
+          console.log(`🔑 Run ${runId} credential pool unavailable: ${err.message}`);
+          return null;
+        })
+        : null;
+      const sendOnce = (apiKey) => fetchWithPreHeaderRetry(() => fetch(nativeOllamaUrl || `${provider.endpoint}/chat/completions`, {
             method: 'POST',
-            headers,
+            headers: apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers,
             signal: controller.signal,
             // Hands the request undici's ceilings disabled, leaving `stallTimeout`
             // / `absoluteTimeout` above as the run's only bounds — see
@@ -847,7 +865,11 @@ export function createRunnerService(config = {}) {
             // A caller-owned budget/admission hook accounts for one invocation;
             // do not silently replay a possibly processed local generation.
             allowReplay: !beforeExecute && isReplaySafeLocalRequest(provider),
-          }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }))
+          }).catch(err => ({ ok: false, error: describeTransportError(err), status: 0 }));
+      const response = !endpointGuard.allowed
+        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
+        : ready.success
+        ? await sendWithCredentialSession(credentialSession, provider.apiKey, sendOnce, controller.signal)
         : { ok: false, error: ready.error || 'Provider readiness check failed', status: 0 };
 
       if (!response.ok) {

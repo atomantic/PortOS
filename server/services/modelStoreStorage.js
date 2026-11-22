@@ -1,11 +1,17 @@
 /**
  * File-system model stores outside the Hugging Face hub cache and `data/loras/`.
  *
- * Four stores hold tens of gigabytes that Models → Media and the system-resources
- * report used to be blind to: MTPLX checkpoints and its session bank, Hunyuan3D
- * weights, the Hugging Face xet download-chunk cache, and Pixie Forge LoRAs.
- * Each is a first-class inventory backend (`lib/modelInventory.js`), not a generic
- * "other caches" bucket.
+ * Every root declared in `lib/modelRoots.js` other than the hub cache is scanned
+ * here: MTPLX checkpoints and its session bank, Hunyuan3D weights, the Hugging Face
+ * xet download-chunk cache, Pixie Forge LoRAs, Slotstream checkpoints, converted
+ * FastVideo MLX checkpoints, AuK voice checkpoints, a retired runtime's leftovers,
+ * and the two hand-placed directories (`~/.portos/models` and the checkout's
+ * `models/`). Each is a first-class inventory backend (`lib/modelInventory.js`),
+ * not a generic "other caches" bucket.
+ *
+ * **Unmanaged weights.** A hand-placed directory is not a layout PortOS writes, so
+ * any entry in it holding a weight file of 1 GiB or more is flagged `unmanaged`:
+ * reported and deletable through the same guarded path, never moved automatically.
  *
  * **The request never supplies a path.** A delete names `<backend>/<key>`; the key
  * must match an item this module just scanned, and the paths removed are the ones
@@ -14,9 +20,8 @@
  * instead of reading it as empty and pruning the manifest.
  */
 
-import { lstat, readdir, stat } from 'fs/promises';
-import { homedir } from 'os';
-import { join, relative, isAbsolute } from 'path';
+import { lstat, readFile, readdir, readlink, stat } from 'fs/promises';
+import { basename, dirname, join, relative, isAbsolute, resolve } from 'path';
 import { dirSize, rmGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { MODEL_STORE_BACKENDS } from '../lib/modelInventory.js';
@@ -25,16 +30,16 @@ import { recordModelUninstall } from './modelManifest.js';
 export const XET_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const XET_SEARCH_DEPTH = 3;
 const SESSION_BANK = 'session-bank';
+export const UNMANAGED_WEIGHT_MIN_BYTES = 1024 ** 3;
+const WEIGHT_FILE = /\.(safetensors|gguf|bin|pt)$/i;
+const WEIGHT_WALK_DEPTH = 4;
 
-export const getMtplxRoot = () => process.env.MTPLX_HOME || join(homedir(), '.mtplx');
-export const getHy3dgenRoot = () => process.env.HY3DGEN_MODELS || join(homedir(), '.cache', 'hy3dgen');
-export const getPixieForgeRoot = () => process.env.PIXIE_FORGE_HOME || join(homedir(), '.pixie-forge');
-export const getXetRoot = () => {
-  if (process.env.HF_XET_CACHE) return process.env.HF_XET_CACHE;
-  const hfHome = process.env.HF_HOME
-    || join(process.env.XDG_CACHE_HOME || join(homedir(), '.cache'), 'huggingface');
-  return join(hfHome, 'xet');
-};
+// Every root path lives in the registry (`lib/modelRoots.js`). It loads on the first
+// scan, not at module load: scanning is a rare, user-triggered path, and a static
+// import would add the registry to every boot (the closure budget in
+// `lib/importScoping.test.js`).
+const rootPath = async (id) => (await import('../lib/modelRoots.js')).modelRootPath(id);
+const rootFor = async (backend) => (await import('../lib/modelRoots.js')).modelRootForBackend(backend);
 
 /** readdir that treats a missing root as an empty store and rethrows anything else. */
 const readEntries = (dir) => readdir(dir, { withFileTypes: true }).catch((err) => {
@@ -58,12 +63,170 @@ const isRealDirectory = (path) => lstat(path).then(
   },
 );
 
-const item = ({ key, name, detail, size, root, removePaths, risk, cleanupReason }) => ({
-  key, name, detail, size, root, removePaths, risk, cleanupReason,
+const item = ({ key, name, detail, size, root, removePaths, risk, cleanupReason, unmanaged, sourcePrune = null }) => ({
+  key, name, detail, size, root, removePaths, risk, cleanupReason, unmanaged,
+  ...(sourcePrune ? { sourcePrune } : {}),
 });
 
+/** Shown on a converted checkpoint whose source the runtime does not read. */
+const SOURCE_PRUNE_PHRASE = 'source weights (re-downloadable; needed only to re-convert)';
+const PRUNABLE_SOURCE_NAMES = new Set(['transformer', 'transformer_ref']);
+
+async function readSourceSidecar(dir) {
+  const raw = await readFile(join(dir, 'portos-source.json'), 'utf8').catch((err) => {
+    if (err?.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (raw == null) return null;
+  try {
+    const doc = JSON.parse(raw);
+    return doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : null;
+  } catch {
+    return null;
+  }
+}
+
+const sourceRevisionLabel = (revision) => (
+  typeof revision === 'string' && /^[0-9a-f]{40}$/i.test(revision) ? revision.slice(0, 8) : null
+);
+
+/**
+ * FastVideo records the hub snapshot it converted. The row names that source
+ * and offers prune only while the weights directory is still there. AuK is
+ * not this path: the runtime reads those source directories at start.
+ */
+async function annotateFastvideoSources(items) {
+  for (const entry of items) {
+    const doc = await readSourceSidecar(join(entry.root, entry.key));
+    if (!doc) continue;
+    const repo = typeof doc.sourceRepo === 'string' && doc.sourceRepo ? doc.sourceRepo : null;
+    const rev = sourceRevisionLabel(doc.sourceRevision);
+    const sourceLabel = repo ? `${repo}${rev ? `@${rev}` : ''}` : null;
+    entry.detail = [entry.detail, sourceLabel, SOURCE_PRUNE_PHRASE].filter(Boolean).join(' · ');
+    const weights = typeof doc.sourceWeights === 'string' ? doc.sourceWeights : '';
+    const { getHfCacheRoot } = await import('../lib/hfCache.js');
+    const insideHub = weights ? resolvedWithin(getHfCacheRoot(), weights) : null;
+    const present = insideHub && PRUNABLE_SOURCE_NAMES.has(basename(insideHub))
+      ? await stat(insideHub).then((info) => info.isDirectory(), () => false)
+      : false;
+    if (doc.prunable === true && present) {
+      entry.sourcePrune = { backend: 'fastvideo-mlx', key: entry.key };
+    }
+  }
+  return items;
+}
+
+/**
+ * AuK source directories are what the runtime opens (`config.yaml` and the
+ * Qwen preprocessor). Name the repo; never offer prune, even if a sidecar
+ * claims the directory is disposable.
+ */
+async function annotateAukSources(items) {
+  const { AUK_WEIGHT_SOURCES } = await import('./voice/aukRuntime.js');
+  const byDir = new Map(AUK_WEIGHT_SOURCES.map((row) => [row.directory, row]));
+  const repos = AUK_WEIGHT_SOURCES.map((row) => row.repo).join(', ');
+  for (const entry of items) {
+    const source = byDir.get(entry.key);
+    if (source) {
+      entry.detail = `${entry.detail} · ${source.repo} · the AuK runtime reads these weights`;
+    } else if (entry.key === 'mlx') {
+      entry.detail = `${entry.detail} · converted from ${repos}`;
+    }
+  }
+  return items;
+}
+
+const NO_WEIGHTS = { count: 0, bytes: 0 };
+
+/**
+ * Weight files of at least `UNMANAGED_WEIGHT_MIN_BYTES` under `path`, to a bounded
+ * depth. Symlinks and dot-entries are skipped: a link must never be counted as
+ * the store's own weights, and `.cache` dirs hold download bookkeeping, not weights.
+ */
+async function largeWeights(path, depth = WEIGHT_WALK_DEPTH) {
+  const info = await lstat(path);
+  if (info.isFile()) {
+    return WEIGHT_FILE.test(path) && info.size >= UNMANAGED_WEIGHT_MIN_BYTES ? { count: 1, bytes: info.size } : NO_WEIGHTS;
+  }
+  if (!info.isDirectory() || depth <= 0) return NO_WEIGHTS;
+  let count = 0;
+  let bytes = 0;
+  for (const entry of await readEntries(path)) {
+    if (entry.name.startsWith('.')) continue;
+    const found = await largeWeights(join(path, entry.name), depth - 1);
+    count += found.count;
+    bytes += found.bytes;
+  }
+  return { count, bytes };
+}
+
+/**
+ * One item per top-level entry of a declared root: a directory, or (`files`) a
+ * loose weight file. A root PortOS does not manage flags entries holding large
+ * weights as unmanaged, except the names `ownedNames` returns (a layout PortOS
+ * itself writes inside an otherwise hand-placed directory). A missing root is an
+ * empty store.
+ */
+async function scanRootEntries(backend, { detail, files = false, ownedNames = null }) {
+  const { path: root, managed } = await rootFor(backend);
+  const items = [];
+  if (!await isRealDirectory(root)) return items;
+  const owned = ownedNames ? await ownedNames() : new Set();
+  for (const entry of await readEntries(root)) {
+    if (entry.name.startsWith('.')) continue;
+    const isDir = entry.isDirectory();
+    if (!isDir && !(files && entry.isFile() && WEIGHT_FILE.test(entry.name))) continue;
+    const path = join(root, entry.name);
+    const presetOwned = owned.has(entry.name);
+    const weights = managed || presetOwned ? NO_WEIGHTS : await largeWeights(path);
+    const unmanaged = weights.count > 0;
+    items.push(item({
+      key: entry.name,
+      name: entry.name,
+      detail: presetOwned ? 'llama-server preset weights' : unmanaged
+        ? `${detail} · ${weights.count} weight file${weights.count === 1 ? '' : 's'} of 1 GiB or more outside the Hugging Face cache`
+        : detail,
+      size: isDir ? await dirSize(path, { strict: true }) : (await stat(path)).size,
+      root,
+      removePaths: [path],
+      unmanaged,
+    }));
+  }
+  return items;
+}
+
+// Models → Runtimes downloads a preset's weights to `models/<file>` relative to the
+// checkout (`lib/specDecodePresets.js`), so those files are a layout PortOS writes.
+async function presetModelFileNames() {
+  const { SPEC_DECODE_PRESETS, SPEC_MODEL_ROLES } = await import('../lib/specDecodePresets.js');
+  const names = new Set();
+  for (const preset of SPEC_DECODE_PRESETS) {
+    for (const role of SPEC_MODEL_ROLES) {
+      const path = preset[role]?.path;
+      if (typeof path === 'string' && path.startsWith('models/')) names.add(path.slice('models/'.length).split('/')[0]);
+    }
+  }
+  return names;
+}
+
+// The retired HunyuanVideo MLX runtime (migration 315) was never migrated off
+// disk. The whole checkout is one item: nothing reads it, and its snapshot links
+// into the hub cache dangle once those weights are gone.
+async function scanLegacyRuntime() {
+  const { path: dir } = await rootFor('legacy-runtime');
+  if (!await isRealDirectory(dir)) return [];
+  return [item({
+    key: 'hunyuan-video-mlx',
+    name: 'HunyuanVideo MLX runtime',
+    detail: 'Retired runtime: checkout, venv and text encoders',
+    size: await dirSize(dir, { strict: true }),
+    root: dirname(dir),
+    removePaths: [dir],
+  })];
+}
+
 async function scanMtplx() {
-  const root = getMtplxRoot();
+  const root = await rootPath('mtplx');
   const modelsDir = join(root, 'models');
   const items = [];
   for (const dirName of await isRealDirectory(modelsDir) ? await subdirs(modelsDir) : []) {
@@ -98,7 +261,7 @@ async function scanMtplx() {
 }
 
 async function scanHy3dgen() {
-  const root = getHy3dgenRoot();
+  const root = await rootPath('hy3dgen');
   const items = [];
   for (const dirName of await subdirs(root)) {
     const path = join(root, dirName);
@@ -139,7 +302,7 @@ async function staleXetLogs(logsDir, now) {
 }
 
 async function scanXetCache({ now = Date.now() } = {}) {
-  const root = getXetRoot();
+  const root = await rootPath('hf-xet-cache');
   const chunkCaches = await findChunkCaches(root);
   const chunkSizes = await Promise.all(chunkCaches.map((path) => dirSize(path, { strict: true })));
   const logsDir = join(root, 'logs');
@@ -157,7 +320,7 @@ async function scanXetCache({ now = Date.now() } = {}) {
 }
 
 async function scanPixieForge() {
-  const root = join(getPixieForgeRoot(), 'loras');
+  const root = join(await rootPath('pixie-forge'), 'loras');
   const items = [];
   for (const entry of await isRealDirectory(root) ? await readEntries(root) : []) {
     if (!entry.isFile() || !entry.name.endsWith('.safetensors')) continue;
@@ -179,6 +342,12 @@ const SCANNERS = {
   hy3dgen: scanHy3dgen,
   'hf-xet-cache': scanXetCache,
   'pixie-forge': scanPixieForge,
+  slotstream: () => scanRootEntries('slotstream', { detail: 'Slotstream checkpoint' }),
+  'fastvideo-mlx': async () => annotateFastvideoSources(await scanRootEntries('fastvideo-mlx', { detail: 'Converted MLX checkpoint, rebuilt from the hub weights on the next render' })),
+  'auk-ckpts': async () => annotateAukSources(await scanRootEntries('auk-ckpts', { detail: 'AuK voice runtime checkpoint' })),
+  'portos-models': () => scanRootEntries('portos-models', { detail: 'Hand-placed model weights', files: true }),
+  'repo-models': () => scanRootEntries('repo-models', { detail: 'Hand-placed model weights in the checkout', files: true, ownedNames: presetModelFileNames }),
+  'legacy-runtime': scanLegacyRuntime,
 };
 
 export const isModelStoreBackend = (backend) => Object.hasOwn(SCANNERS, backend);
@@ -224,4 +393,104 @@ export async function removeModelStoreItem(backend, key) {
   }
   await recordModelUninstall({ backend, key });
   return { ok: true, freedBytes: target.size };
+}
+
+const resolvedWithin = (root, target) => {
+  const base = resolve(root);
+  const candidate = resolve(target);
+  const rel = relative(base, candidate);
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) ? candidate : null;
+};
+
+/** Repo directory (`models--…`) that contains `weights`, or null. */
+function repoDirOf(hubRoot, weights) {
+  let current = weights;
+  const hub = resolve(hubRoot);
+  while (current.startsWith(hub) && current !== hub) {
+    if (basename(current).startsWith('models--')) return current;
+    current = dirname(current);
+  }
+  return null;
+}
+
+async function symlinkTargets(dir, accept) {
+  const found = [];
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const link = await readlink(path).catch(() => null);
+      if (!link) continue;
+      const abs = resolve(dirname(path), link);
+      if (accept(abs)) found.push(abs);
+    } else if (entry.isDirectory()) {
+      found.push(...await symlinkTargets(path, accept));
+    }
+  }
+  return found;
+}
+
+async function stillLinked(dir, target) {
+  const wanted = await stat(target).then(() => resolve(target), () => null);
+  if (!wanted) return false;
+  const links = await symlinkTargets(dir, (abs) => resolve(abs) === wanted);
+  return links.length > 0;
+}
+
+/**
+ * Delete one converted checkpoint's source weights.
+ *
+ * Only FastVideo. The path comes from the sidecar this scan recorded, and it
+ * must be a `transformer` or `transformer_ref` directory inside the hub cache.
+ * The converted checkpoint is not touched. A symlink is removed as a link.
+ * Blobs that snapshot links point at are removed only when nothing else in
+ * that repo still links them.
+ *
+ * @returns {Promise<{ ok: true, freedBytes: number }>}
+ */
+export async function pruneConvertedSource(backend, key) {
+  if (backend !== 'fastvideo-mlx') {
+    throw new ServerError('This checkpoint source is not prunable — the runtime reads it.', { status: 409, code: 'SOURCE_NOT_PRUNABLE' });
+  }
+  if (!isSafeModelStoreKey(key)) throw new ServerError('Invalid model store key', { status: 400, code: 'VALIDATION_ERROR' });
+  const { path: root } = await rootFor(backend);
+  const checkpoint = join(root, key);
+  const doc = await readSourceSidecar(checkpoint);
+  if (!doc) throw new ServerError('Converted checkpoint has no recorded source', { status: 404, code: 'NOT_FOUND' });
+  if (doc.prunable !== true) {
+    throw new ServerError('This checkpoint source is not prunable — the runtime reads it.', { status: 409, code: 'SOURCE_NOT_PRUNABLE' });
+  }
+  const { getHfCacheRoot, listLinkedSharedBlobs, releaseSharedBlobs } = await import('../lib/hfCache.js');
+  const hub = getHfCacheRoot();
+  const weights = typeof doc.sourceWeights === 'string' ? resolvedWithin(hub, doc.sourceWeights) : null;
+  if (!weights || !PRUNABLE_SOURCE_NAMES.has(basename(weights))) {
+    throw new ServerError('Recorded source is not a prunable transformer directory in the hub cache', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const info = await lstat(weights).catch(() => null);
+  if (!info) return { ok: true, freedBytes: 0 };
+  const repoDir = repoDirOf(hub, weights);
+  const repoName = repoDir ? basename(repoDir) : null;
+  const shared = repoName ? await listLinkedSharedBlobs(hub, repoName).catch(() => new Map()) : new Map();
+  const localBlobs = info.isSymbolicLink() || !info.isDirectory()
+    ? []
+    : await symlinkTargets(weights, (abs) => repoDir && resolvedWithin(join(repoDir, 'blobs'), abs));
+  let freed = 0;
+  if (info.isDirectory() && !info.isSymbolicLink()) {
+    freed = await dirSize(weights).catch(() => 0);
+  }
+  console.log(`🗑️ Pruning converted-checkpoint source: fastvideo-mlx/${key}`);
+  await rmGuarded(weights, { recursive: !info.isSymbolicLink(), force: true });
+  if (repoDir) {
+    for (const blob of localBlobs) {
+      if (await stillLinked(repoDir, blob)) continue;
+      const blobInfo = await stat(blob).catch(() => null);
+      await rmGuarded(blob, { force: true });
+      if (blobInfo?.isFile()) freed += blobInfo.size;
+    }
+  }
+  if (shared.size) {
+    const released = await releaseSharedBlobs(hub, shared);
+    freed += released.freedBytes;
+  }
+  return { ok: true, freedBytes: freed };
 }

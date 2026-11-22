@@ -11,6 +11,7 @@ import {
   isCodexProvider,
   isCursorProvider,
   isGrokProvider,
+  isHermesProvider,
   isKimiProvider,
   isOpencodeProvider,
   prefixOpencodeModel,
@@ -353,6 +354,28 @@ export const PROVIDER_HARNESSES = Object.freeze([
     // No `isPiProvider` predicate exists — `pi` has no vendor module of its own
     // beyond `aiToolkit/internal/pi.js`, so match its binary basename directly.
     matches: (provider) => commandBasename(provider?.command) === 'pi',
+  }),
+  Object.freeze({
+    id: 'hermes',
+    label: 'Hermes Agent',
+    modes: CLI_TUI_MODES,
+    protocol: 'openai',
+    // Headless runs read the prompt from stdin (`--query-file -`, added at spawn
+    // time by `prepareHermesPrompt`), so no argv ceiling applies. See the hermes block in providerVendors.js.
+    recipe: recipe({
+      command: 'hermes',
+      cli: ['chat', '--oneshot', '--quiet', '--yolo'],
+      tui: ['--tui', '--yolo'],
+      baseUrl: { via: 'env', name: 'OPENAI_BASE_URL' },
+      credential: { via: 'env', name: 'OPENAI_API_KEY', required: false },
+    }),
+    bindings: Object.freeze([
+      // Hermes documents `OPENAI_BASE_URL` + `OPENAI_API_KEY` as its custom
+      // OpenAI-compatible endpoint, which covers the hosted gateways and the
+      // local daemons alike; a local daemon needs no key.
+      Object.freeze({ protocol: 'openai', baseUrl: Object.freeze({ via: 'env', name: 'OPENAI_BASE_URL' }), credential: Object.freeze({ via: 'env', name: 'OPENAI_API_KEY', required: false }) }),
+    ]),
+    matches: isHermesProvider,
   }),
   Object.freeze({
     id: 'direct',

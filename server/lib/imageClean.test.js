@@ -5,8 +5,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
 import {
-  autoCleanGeneratedImage, stripPngC2PAChunk, stripPngMetadataChunks, cleanImageBuffer,
-  compositeIgnoreZone,
+  autoCleanGeneratedImage, stripPngC2PAChunk, stripPngMetadataChunks,
+  stripJpegMetadataSegments, stripWebpMetadataChunks, stripImageMetadata,
+  cleanImageBuffer, compositeIgnoreZone,
 } from './imageClean.js';
 
 let sandbox;
@@ -490,5 +491,128 @@ describe('compositeIgnoreZone', () => {
     const left = await pixelAt(out.data, 2, 8);
     expect(left.b).toBeGreaterThan(200);
     expect(left.r).toBeLessThan(60);
+  });
+});
+
+// Build a minimal JPEG segment (FF <marker> <2-byte BE length> <payload>).
+function makeJpegSegment(marker, payload) {
+  const len = payload.length + 2;
+  const header = Buffer.from([0xff, marker, (len >> 8) & 0xff, len & 0xff]);
+  return Buffer.concat([header, payload]);
+}
+
+function findJpegSosOffset(buf) {
+  let offset = 2;
+  while (offset + 1 < buf.length) {
+    if (buf[offset] !== 0xff) return -1;
+    let m = offset + 1;
+    while (m < buf.length && buf[m] === 0xff) m += 1;
+    const marker = buf[m];
+    if (marker === 0xda) return offset;
+    if (marker === 0xd9) return -1;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) { offset = m + 1; continue; }
+    const len = buf.readUInt16BE(m + 1);
+    offset = m + 1 + len;
+  }
+  return -1;
+}
+
+describe('stripJpegMetadataSegments / stripWebpMetadataChunks / stripImageMetadata', () => {
+  it('losslessly strips JPEG APP1 (EXIF GPS + XMP), APP13 (IPTC), and COM without re-encoding scan data', async () => {
+    const cleanJpeg = await sharp({
+      create: { width: 32, height: 32, channels: 3, background: { r: 80, g: 120, b: 160 } },
+    }).jpeg({ quality: 85 }).toBuffer();
+
+    const withExif = await sharp(cleanJpeg)
+      .withExif({
+        IFD0: { Make: 'TestCam', Model: 'TestModel' },
+        IFD3: { GPSLatitudeRef: 'N', GPSLongitudeRef: 'W' },
+      })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    // Also inject XMP (APP1), IPTC (APP13), and COM segments right after SOI.
+    const xmp = makeJpegSegment(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>secret-loc</x:xmpmeta>'));
+    const iptc = makeJpegSegment(0xed, Buffer.from('Photoshop 3.0\0iptc-device'));
+    const com = makeJpegSegment(0xfe, Buffer.from('camera-serial-12345'));
+    const polluted = Buffer.concat([withExif.subarray(0, 2), xmp, iptc, com, withExif.subarray(2)]);
+
+    const beforeMeta = await sharp(polluted).metadata();
+    expect(beforeMeta.exif).toBeDefined();
+
+    const result = stripImageMetadata(polluted);
+    expect(result.stripped).toBe(true);
+    expect(result.droppedTypes).toEqual(expect.arrayContaining(['APP1', 'APP13', 'COM']));
+    expect(result.sizeAfter).toBeLessThan(result.sizeBefore);
+
+    // Compressed scan data (SOS through EOI) is byte-identical — no re-encode.
+    const beforeSos = findJpegSosOffset(polluted);
+    const afterSos = findJpegSosOffset(result.data);
+    expect(beforeSos).toBeGreaterThan(0);
+    expect(afterSos).toBeGreaterThan(0);
+    expect(result.data.subarray(afterSos).equals(polluted.subarray(beforeSos))).toBe(true);
+
+    const afterMeta = await sharp(result.data).metadata();
+    expect(afterMeta.exif).toBeUndefined();
+    expect(afterMeta.xmp).toBeUndefined();
+    expect(afterMeta.iptc).toBeUndefined();
+    expect(result.data.includes(Buffer.from('secret-loc'))).toBe(false);
+    expect(result.data.includes(Buffer.from('camera-serial-12345'))).toBe(false);
+  });
+
+  it('no-ops on a clean JPEG and passes malformed JPEGs through untouched', async () => {
+    const cleanJpeg = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: '#336699' },
+    }).jpeg().toBuffer();
+    const res = stripJpegMetadataSegments(cleanJpeg);
+    expect(res.stripped).toBe(false);
+    expect(res.data).toBe(cleanJpeg);
+
+    const truncated = Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x50, 0x45, 0x78]);
+    const bad = stripJpegMetadataSegments(truncated);
+    expect(bad.stripped).toBe(false);
+    expect(bad.data).toBe(truncated);
+  });
+
+  it('losslessly strips WebP EXIF and XMP chunks and clears VP8X flags', async () => {
+    const withExif = await sharp({
+      create: { width: 24, height: 24, channels: 3, background: { r: 20, g: 140, b: 90 } },
+    })
+      .withExif({ IFD0: { Make: 'PhoneCam' }, IFD3: { GPSLatitudeRef: 'N' } })
+      .webp({ quality: 85 })
+      .toBuffer();
+
+    const beforeMeta = await sharp(withExif).metadata();
+    expect(beforeMeta.exif).toBeDefined();
+
+    const result = stripImageMetadata(withExif);
+    expect(result.stripped).toBe(true);
+    expect(result.droppedTypes).toContain('EXIF');
+    expect(result.sizeAfter).toBeLessThan(result.sizeBefore);
+
+    const afterMeta = await sharp(result.data).metadata();
+    expect(afterMeta.format).toBe('webp');
+    expect(afterMeta.width).toBe(24);
+    expect(afterMeta.height).toBe(24);
+    expect(afterMeta.exif).toBeUndefined();
+    expect(afterMeta.xmp).toBeUndefined();
+
+    // Clean WebP is a no-op.
+    const clean = stripWebpMetadataChunks(result.data);
+    expect(clean.stripped).toBe(false);
+    expect(clean.data).toBe(result.data);
+  });
+
+  it('losslessly strips a PNG eXIf chunk via stripImageMetadata without altering pixels', async () => {
+    const withExif = await sharp(pngFixture)
+      .withExif({ IFD0: { Make: 'PhoneCam' }, IFD3: { GPSLatitudeRef: 'N' } })
+      .png()
+      .toBuffer();
+    expect((await sharp(withExif).metadata()).exif).toBeDefined();
+
+    const result = stripImageMetadata(withExif);
+    expect(result.stripped).toBe(true);
+    expect(result.droppedTypes).toContain('eXIf');
+    expect((await sharp(result.data).metadata()).exif).toBeUndefined();
   });
 });

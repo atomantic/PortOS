@@ -18,7 +18,7 @@
 #   printf '[project]\nname = "guard-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'x86_64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'aarch64'"'"'", "python_full_version < '"'"'3.15'"'"' and sys_platform == '"'"'win32'"'"' and platform_machine == '"'"'AMD64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-guard-runtime.txt --universal --python-version 3.11 \
 #     --generate-hashes --only-binary :all: --index-url https://pypi.org/simple --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 # Bounded Transformers refresh: uv 0.13.7, exclude-newer 2026-11-07T00:00:00Z.
 # Constrain companion pins; regenerate for Python <3.15 in the declared environments

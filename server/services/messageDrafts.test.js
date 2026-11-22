@@ -21,7 +21,10 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }
 }));
 
-const { listDrafts, createDraft, updateDraft, claimDraftForSend, releaseDraftSend } = await import('./messageDrafts.js');
+const {
+  listDrafts, createDraft, updateDraft, claimDraftForSend, releaseDraftSend,
+  erasePrivacyDrafts, scrubLegacyPrivacyDraftValues, PRIVACY_DRAFT_REDACTION_NOTICE
+} = await import('./messageDrafts.js');
 
 // Seed the file store directly so we control accountId/status without relying on
 // createDraft (which always stamps status 'draft').
@@ -123,5 +126,70 @@ describe('messageDrafts.updateDraft approval binding', () => {
     const claimed = await claimDraftForSend(id);
     expect(claimed).toMatchObject({ body: 'Re-approved reply', status: 'sending' });
     releaseDraftSend(id, claimed.sendAttemptId);
+  });
+});
+
+describe('privacy draft erasure (#17233)', () => {
+  const stored = () => JSON.parse(fileStore.get('/mock/messages/drafts.json'));
+  const priv = (id, status, extra = {}) => ({
+    id, status, generatedBy: 'privacy-optout', subject: 'Request', body: 'Name: Alex Example',
+    createdAt: '2026-01-01T00:00:00.000Z', privacyMeta: { subjectId: 's1', caseId: 'c1' }, ...extra
+  });
+  const attempt = { id: 'att-1', startedAt: '2026-01-01T00:00:00.000Z' };
+
+  beforeEach(() => fileStore.clear());
+
+  it('is a no-op that never creates the messages dir when no drafts store exists', async () => {
+    const { ensureDir, atomicWrite } = await import('../lib/fileUtils.js');
+    ensureDir.mockClear(); atomicWrite.mockClear();
+    expect(await erasePrivacyDrafts(() => true)).toEqual({ deleted: 0, redacted: 0, skipped: 0 });
+    expect(await scrubLegacyPrivacyDraftValues(['Alex Example'])).toBe(0);
+    expect(ensureDir).not.toHaveBeenCalled();
+    expect(atomicWrite).not.toHaveBeenCalled();
+  });
+
+  it('createDraft persists privacyMeta and omits the key for ordinary drafts', async () => {
+    const withMeta = await createDraft({ accountId: 'a', generatedBy: 'privacy-optout', privacyMeta: { subjectId: 's1' } });
+    const plain = await createDraft({ accountId: 'a' });
+    expect(withMeta.privacyMeta).toEqual({ subjectId: 's1' });
+    expect('privacyMeta' in plain).toBe(false);
+  });
+
+  it('deletes unsent matches, redacts sent bodies, and leaves locked and unrelated drafts untouched', async () => {
+    seed([
+      priv('d', 'draft'), priv('a', 'approved'), priv('f', 'failed'),
+      priv('sent', 'sent', { sendAttempts: [attempt] }),
+      priv('sending', 'sending', { sendAttemptId: 'att-1', sendAttempts: [attempt] }),
+      priv('other-subject', 'draft', { privacyMeta: { subjectId: 's2' } }),
+      { id: 'manual', status: 'draft', generatedBy: 'manual', body: 'Name: Alex Example', privacyMeta: { subjectId: 's1' } }
+    ]);
+    // The sending draft has no live dispatcher, so loadDrafts reclassifies it
+    // delivery_unknown; either way it must survive untouched.
+    const result = await erasePrivacyDrafts(d => d.privacyMeta?.subjectId === 's1');
+    expect(result).toEqual({ deleted: 3, redacted: 1, skipped: 1 });
+    const left = Object.fromEntries(stored().map(d => [d.id, d]));
+    expect(Object.keys(left).sort()).toEqual(['manual', 'other-subject', 'sending', 'sent']);
+    expect(left.sent).toMatchObject({ status: 'sent', body: PRIVACY_DRAFT_REDACTION_NOTICE, sendAttempts: [attempt] });
+    expect(left.sending.body).toBe('Name: Alex Example');
+    expect(left.manual.body).toBe('Name: Alex Example');
+  });
+
+  it('onlyUnsent revokes queued opt-outs but keeps sent drafts as-is', async () => {
+    seed([priv('a', 'approved'), priv('sent', 'sent'), priv('chg', 'draft', { generatedBy: 'privacy-change' })]);
+    const result = await erasePrivacyDrafts(d => d.privacyMeta?.subjectId === 's1', { onlyUnsent: true, generatedBy: ['privacy-optout'] });
+    expect(result).toMatchObject({ deleted: 1, redacted: 0 });
+    expect(stored().map(d => d.id).sort()).toEqual(['chg', 'sent']);
+    expect(stored().find(d => d.id === 'sent').body).toBe('Name: Alex Example');
+  });
+
+  it('scrubs revoked values from legacy untagged privacy drafts only on whole-token matches', async () => {
+    seed([
+      priv('legacy', 'draft', { privacyMeta: undefined, body: 'Name: Alex Example, Alex Examples Jr' }),
+      { id: 'manual', status: 'draft', generatedBy: 'manual', body: 'Alex Example' },
+    ]);
+    expect(await scrubLegacyPrivacyDraftValues(['Alex Example', ' '])).toBe(1);
+    const left = Object.fromEntries(stored().map(d => [d.id, d]));
+    expect(left.legacy.body).toBe('Name: [redacted], Alex Examples Jr');
+    expect(left.manual.body).toBe('Alex Example');
   });
 });

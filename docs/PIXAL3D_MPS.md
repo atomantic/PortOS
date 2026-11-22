@@ -28,7 +28,7 @@ Setup does not download models or run inference.
 
 `scripts/ml/requirements/requirements-pixal3d-mps.txt` records the wheel closure. Its generated
 lock hashes every artifact; the header documents regeneration with patched uv
-and `--exclude-newer` at least seven days before the update. The initial resolve
+and `--exclude-newer` at least three days before the update. The initial resolve
 used uv 0.13.6 offline against a verified wheelhouse after an online source fetch
 timed out. Each selected wheel's SHA-256, non-yanked status and upload date before
 2026-11-03T00:00:00Z were checked against PyPI metadata. The separate

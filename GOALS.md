@@ -96,7 +96,7 @@ The active roadmap lives in the GitHub issue tracker — open issues labeled
 | Centralized App Management | Complete | Core infrastructure, app wizard, streaming import, PM2 standardization. |
 | Autonomous AI Orchestration | Ongoing | CoS, agent runner, skill system, autonomous jobs, task learning all operational. Continuous refinement. |
 | Personal Knowledge Management | Ongoing | Brain capture, semantic memory, weekly digests, memory classification all complete. Quality tuning continues. |
-| Digital Identity Modeling | Ongoing | Soul, digital twin, identity orchestrator (M42 P1-P4), behavioral feedback, taste profiling, autobiography, Ask Yourself all shipped. Cross-insights engine (M42 P5) next. |
+| Digital Identity Modeling | Ongoing | Soul, digital twin, identity orchestrator (M42 P1-P4), behavioral feedback, taste profiling, autobiography, Ask Yourself all shipped. Rule-based cross-insights engine (M42 P5) shipped. |
 | Creative Production Suite | Ongoing | Writers Room, Universe Builder, Series Pipeline, Creative Director, Image Gen, Video Gen, Timeline Editor, Collections, LoRAs, Importer, Sharing all shipped. FLUX.2 multi-reference, whole-episode audio, rich-text prose editor, episodic-video provider expansion in flight. |
 | Developer Productivity Toolkit | Complete | Shell, git, browser, history, usage, JIRA, code runner, submodules, reference repos, CyberCity all shipped. |
 | Self-Improving Intelligence | Ongoing | Task learning, self-improvement analysis, autonomous jobs, self-healing metrics active. |

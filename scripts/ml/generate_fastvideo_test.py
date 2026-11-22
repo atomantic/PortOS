@@ -258,6 +258,12 @@ class MlxCheckpointTest(unittest.TestCase):
                 (out / name).write_text("")
             resolved = self.helper.ensure_mlx_checkpoint(Path(tmp), model_root, "int6", {}, base)
             self.assertEqual(resolved, out)
+            sidecar = self.helper.mlx_checkpoint_root(model_root, base) / "portos-source.json"
+            recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+            self.assertEqual(recorded["sourceRepo"], "Org/Repo")
+            self.assertIsNone(recorded["sourceRevision"])
+            self.assertTrue(recorded["sourceWeights"].endswith("transformer"))
+            self.assertTrue(recorded["prunable"])
 
     def test_a_snapshot_without_a_transformer_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -266,6 +272,8 @@ class MlxCheckpointTest(unittest.TestCase):
             with self.assertRaises(FileNotFoundError) as ctx:
                 self.helper.ensure_mlx_checkpoint(Path(tmp), model_root, "int4", {}, Path(tmp) / "cache")
             self.assertIn("transformer", str(ctx.exception))
+            cache = Path(tmp) / "cache"
+            self.assertFalse(cache.exists() and any(cache.rglob("portos-source.json")))
 
     def test_vsa_never_reuses_a_dense_conversion(self):
         with tempfile.TemporaryDirectory() as tmp:

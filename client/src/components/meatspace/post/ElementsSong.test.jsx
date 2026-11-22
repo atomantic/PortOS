@@ -375,3 +375,37 @@ it('samples beyond the first fifteen equally weak elements before building the q
   expect(new Set(seen).size).toBe(15);
   expect(screen.getByText('Element Flash Complete')).toBeInTheDocument();
 });
+
+describe('ElementsSong answer verdict accessibility', () => {
+  const lyricItem = { ...item, content: { ...item.content,
+    lines: [
+      { text: 'Hydrogen and Helium sing.', elements: ['H', 'He'] },
+      { text: 'Hydrogen again.', elements: ['H'] },
+    ],
+  } };
+
+  it.each([
+    ['element-flash', 'Your answer'],
+    ['fill-blank', 'Missing elements'],
+  ])('%s: focuses a pre-mounted status region holding the verdict, and Enter advances', async (mode, label) => {
+    render(<ElementsSong item={lyricItem} mode={mode} onBack={() => {}} />);
+    await settle();
+    const region = screen.getByRole('status');
+    expect(region).toHaveTextContent('');
+
+    const input = screen.getByLabelText(label);
+    fireEvent.change(input, { target: { value: 'zzz' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await settle();
+
+    expect(screen.getByRole('status')).toBe(region);
+    expect(region).toHaveTextContent(/Answer:|Expected:/);
+    expect(document.activeElement).toBe(region);
+
+    fireEvent.keyDown(region, { key: 'Enter', repeat: true });
+    expect(screen.queryByLabelText(label)).not.toBeInTheDocument();
+    fireEvent.keyDown(region, { key: 'Enter' });
+    await settle();
+    expect(document.activeElement).toBe(screen.getByLabelText(label));
+  });
+});

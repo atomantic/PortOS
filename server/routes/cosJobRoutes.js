@@ -8,6 +8,8 @@ import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
+import { getJobNotepad, getJobNote, setJobNote, deleteJobNote, clearJobNotes } from '../services/autonomousJobs/notepad.js';
+import { noteKeySchema, putNoteBodySchema } from '../lib/autonomousJobNotepadValidation.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -17,6 +19,9 @@ import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { describeReaimedValues } from '../lib/jobFormFields.js';
 
 const router = Router();
+
+// The incident ledger is only read here, so keep it out of the boot import closure.
+const loadIncidents = () => import('../services/autonomousJobs/incidents.js');
 
 // Validate a 5-field cron expression for job create/update. Throws a 400
 // ServerError on a malformed field count or an unparseable expression.
@@ -47,6 +52,12 @@ router.get('/jobs', asyncHandler(async (req, res) => {
   const jobs = await autonomousJobs.getAllJobs();
   const stats = await autonomousJobs.getJobStats();
   const timezone = await getUserTimezone();
+  const { listJobIncidents } = await loadIncidents();
+  const openIncidentByJob = new Map();
+  for (const incident of await listJobIncidents({ openOnly: true })) {
+    // Newest first: keep the most recent open incident per job.
+    if (!openIncidentByJob.has(incident.jobId)) openIncidentByJob.set(incident.jobId, incident);
+  }
   // nextRunAt is the server's own next-fire projection (user timezone, DST,
   // weekdaysOnly), so the UI renders it instead of re-deriving it in the browser.
   const jobsWithGates = jobs.map(j => {
@@ -56,6 +67,7 @@ router.get('/jobs', asyncHandler(async (req, res) => {
     return {
       ...j,
       hasGate: hasGate(j.id),
+      openIncident: openIncidentByJob.get(j.id) || null,
       nextRunAt: Number.isFinite(nextRun) ? new Date(nextRun).toISOString() : null
     };
   });
@@ -93,6 +105,21 @@ router.get('/jobs/gates', asyncHandler(async (req, res) => {
       : { jobId: gateIds[i], shouldRun: true, reason: `Gate error (fail-open): ${s.reason?.message || s.reason}`, error: true }
   );
   res.json({ gates: results });
+}));
+
+// GET /api/cos/jobs/incidents - Deduplicated failure incidents (open first, then resolved), newest first
+router.get('/jobs/incidents', asyncHandler(async (req, res) => {
+  const { listJobIncidents } = await loadIncidents();
+  const incidents = await listJobIncidents();
+  res.json({ incidents });
+}));
+
+// POST /api/cos/jobs/incidents/:id/ack - Acknowledge an open incident (silences reminders until a new signature appears)
+router.post('/jobs/incidents/:id/ack', asyncHandler(async (req, res) => {
+  const { acknowledgeJobIncident } = await loadIncidents();
+  const incident = await acknowledgeJobIncident(req.params.id);
+  if (!incident) throw new ServerError('Incident not found or already resolved', { status: 404, code: 'NOT_FOUND' });
+  res.json({ incident });
 }));
 
 // GET /api/cos/jobs/:id - Get a single job
@@ -284,6 +311,58 @@ router.delete('/jobs/:id', asyncHandler(async (req, res) => {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json({ success: true });
+}));
+
+// Per-job durable KV notepad (#17392). Machine-local; the job must exist so a
+// typo'd id cannot accumulate orphan rows that deleteJob would never clear.
+async function requireJob(id) {
+  const job = await autonomousJobs.getJob(id);
+  if (!job) throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });
+}
+
+function parseNoteKey(key) {
+  const parsed = noteKeySchema.safeParse(key);
+  if (!parsed.success) failValidation(parsed);
+  return parsed.data;
+}
+
+// GET /api/cos/jobs/:id/notepad - Entries plus byte usage and remaining budget
+router.get('/jobs/:id/notepad', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  res.json(await getJobNotepad(req.params.id));
+}));
+
+// GET /api/cos/jobs/:id/notepad/:key - One entry
+router.get('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  const note = await getJobNote(req.params.id, parseNoteKey(req.params.key));
+  if (!note) throw new ServerError('Notepad key not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(note);
+}));
+
+// PUT /api/cos/jobs/:id/notepad/:key - Upsert { value }; 400 on a cap overflow, state untouched
+router.put('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  const key = parseNoteKey(req.params.key);
+  const parsed = putNoteBodySchema.safeParse(req.body);
+  if (!parsed.success) failValidation(parsed);
+  await requireJob(req.params.id);
+  res.json(await setJobNote(req.params.id, key, parsed.data.value));
+}));
+
+// DELETE /api/cos/jobs/:id/notepad/:key - Delete one entry
+router.delete('/jobs/:id/notepad/:key', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  if (!await deleteJobNote(req.params.id, parseNoteKey(req.params.key))) {
+    throw new ServerError('Notepad key not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(await getJobNotepad(req.params.id));
+}));
+
+// DELETE /api/cos/jobs/:id/notepad - Clear every entry
+router.delete('/jobs/:id/notepad', asyncHandler(async (req, res) => {
+  await requireJob(req.params.id);
+  await clearJobNotes(req.params.id);
+  res.json(await getJobNotepad(req.params.id));
 }));
 
 export default router;

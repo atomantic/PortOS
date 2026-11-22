@@ -234,6 +234,12 @@ export async function listAssets({ limit, offset = 0, videos, typed = false, ord
   return result.rows.map(row => typed ? { kind: row.kind, data: shape(row.data) } : shape(rowToAsset(row)));
 }
 
+/** Image gallery identities without materializing metadata or file sizes. */
+export async function listGalleryImageRefs() {
+  const { rows } = await query("SELECT ref FROM media_assets WHERE kind = 'image'");
+  return rows.map(row => row.ref);
+}
+
 /** Count matching rows without materializing their JSONB payloads. */
 export async function countAssets({ videos, compact = false, localImages, ...filters } = {}) {
   const { params, where } = assetFilter(filters);

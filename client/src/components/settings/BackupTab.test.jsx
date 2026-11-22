@@ -58,6 +58,7 @@ const renderTab = async ({ openExclusions = true, openSnapshots = true } = {}) =
   }
   if (openSnapshots) {
     fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+    await waitFor(() => expect(screen.queryByText('Loading snapshot history')).not.toBeInTheDocument());
   }
 };
 
@@ -96,6 +97,118 @@ describe('BackupTab', () => {
       expect(screen.getByLabelText(/Additional Exclude Paths/i)).toBeInTheDocument();
       fireEvent.click(snapshots);
       expect(await screen.findByText('snap-hidden')).toBeInTheDocument();
+    });
+  });
+
+  describe('snapshot history loading', () => {
+    it.each([false, true])('loads settings before slow history with schedule enabled=%s', async (enabled) => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled, cronExpression: '0 2 * * *', retentionCount: null } });
+      let finishHistory;
+      getBackupSnapshots.mockReturnValue(new Promise(resolve => { finishHistory = resolve; }));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+      expect(getBackupSnapshots).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /^Snapshot history/i })).toHaveTextContent('Open to load');
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      expect(screen.getByText('Loading snapshot history')).toBeInTheDocument();
+      expect(screen.queryByText(/No snapshots have been recorded/i)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Save$/i })).toBeEnabled();
+      await act(async () => finishHistory([{ id: 'snap-loaded' }]));
+      expect(screen.getByText('snap-loaded')).toBeInTheDocument();
+    });
+
+    it('retries a failed request and reloads history on reopening', async () => {
+      getBackupSnapshots.mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce([{ id: 'snap-retried' }])
+        .mockResolvedValueOnce([{ id: 'snap-reopened' }]);
+      await renderTab({ openSnapshots: false });
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      expect(await screen.findByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByText(/No snapshots have been recorded/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(await screen.findByText('snap-retried')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      expect(await screen.findByText('snap-reopened')).toBeInTheDocument();
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not fetch history after a backup while the disclosure is closed', async () => {
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 1 });
+      await renderTab({ openSnapshots: false });
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i })));
+      expect(getBackupSnapshots).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      await waitFor(() => expect(getBackupSnapshots).toHaveBeenCalledTimes(1));
+    });
+
+    it('reloads history after a save that keeps the same destination', async () => {
+      getBackupSnapshots.mockResolvedValueOnce([{ id: 'snap-before-save' }])
+        .mockResolvedValueOnce([{ id: 'snap-after-save' }]);
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      expect(await screen.findByText('snap-after-save')).toBeInTheDocument();
+    });
+
+    it('discards history from the previous destination after a save', async () => {
+      let finishOld;
+      getBackupSnapshots.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }))
+        .mockResolvedValueOnce([{ id: 'snap-new-destination' }]);
+      updateSettings.mockResolvedValue({});
+      await renderTab({ openSnapshots: false });
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/new-dest' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+      expect(await screen.findByText('snap-new-destination')).toBeInTheDocument();
+      await act(async () => finishOld([{ id: 'snap-old-destination' }]));
+      expect(screen.queryByText('snap-old-destination')).not.toBeInTheDocument();
+      expect(screen.getByText('snap-new-destination')).toBeInTheDocument();
+    });
+
+    it('discards a restore preview when the destination save starts', async () => {
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-old' }]);
+      let finishPreview;
+      restoreDatabase.mockReturnValue(new Promise(resolve => { finishPreview = resolve; }));
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: 'Restore DB' }));
+      fireEvent.change(screen.getByLabelText(/Destination Path/i), { target: { value: '/new-dest' } });
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: /^Save$/i })));
+      await act(async () => finishPreview({ status: 'ok', sizeBytes: 1, tableCount: 1 }));
+      expect(screen.queryByRole('dialog', { name: 'Restore database' })).not.toBeInTheDocument();
+    });
+
+    it('refreshes again if a deletion overtakes an inventory request', async () => {
+      let finishDelete;
+      let finishOld;
+      getBackupSnapshots.mockResolvedValueOnce([{ id: 'snap-deleted' }])
+        .mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }))
+        .mockResolvedValueOnce([]);
+      deleteBackupSnapshot.mockReturnValue(new Promise(resolve => { finishDelete = resolve; }));
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 1 });
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: /Delete snapshot snap-deleted/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^Delete$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      await act(async () => finishDelete({ deleted: true }));
+      expect(await screen.findByText(/No snapshots have been recorded/i)).toBeInTheDocument();
+      await act(async () => finishOld([{ id: 'snap-deleted' }]));
+      expect(screen.queryByText('snap-deleted')).not.toBeInTheDocument();
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(3);
+    });
+
+    it('ignores an older request that resolves after a manual backup refresh', async () => {
+      let finishOld;
+      getBackupSnapshots.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }))
+        .mockResolvedValueOnce([{ id: 'snap-after-run' }]);
+      triggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 1 });
+      await renderTab({ openSnapshots: false });
+      fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      expect(await screen.findByText('snap-after-run')).toBeInTheDocument();
+      await act(async () => finishOld([{ id: 'snap-before-run' }]));
+      expect(screen.queryByText('snap-before-run')).not.toBeInTheDocument();
+      expect(screen.getByText('snap-after-run')).toBeInTheDocument();
     });
   });
 
@@ -813,6 +926,46 @@ describe('BackupTab', () => {
       expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
     });
 
+    it('opens the effective rules and optional controls from the coverage note', async () => {
+      const renderPath = '/music-video/*/blender/renders/';
+      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: [
+        { path: renderPath, reason: 'Blender film renders', overridable: true },
+        { path: '/browser-profile/', reason: 'Browser cache', overridable: false },
+      ] });
+      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', retentionCount: null, excludePaths: ['/custom/'], disabledDefaultExcludes: [] } });
+      await renderTab({ openExclusions: false, openSnapshots: false });
+
+      expect(screen.getByText(/not your whole installation or Mac/i)).toBeInTheDocument();
+      expect(screen.getByText(/even disabling every optional exclusion does not make a complete backup/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Review backup exclusions' }));
+
+      const exclusions = screen.getByRole('button', { name: /^Exclusions/i });
+      expect(exclusions).toHaveFocus();
+      expect(exclusions).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: /Default exclusions/i })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: /Effective exclude list/i })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByText('Optional ·')).toBeInTheDocument();
+      expect(screen.getByText('Always excluded ·')).toBeInTheDocument();
+      expect(screen.getByLabelText('Additional Exclude Paths')).toBeInTheDocument();
+      const effectivePanel = document.getElementById(screen.getByRole('button', { name: /Effective exclude list/i }).getAttribute('aria-controls'));
+      expect(within(effectivePanel).getByText(renderPath)).toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/custom/')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('switch', { name: `Disable default exclusion ${renderPath}` }));
+      expect(within(effectivePanel).queryByText(renderPath)).not.toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/browser-profile/')).toBeInTheDocument();
+      expect(within(effectivePanel).getByText('/custom/')).toBeInTheDocument();
+      expect(getBackupSnapshots).not.toHaveBeenCalled();
+    });
+
+    it('opens the unavailable state when exclusions cannot load', async () => {
+      getBackupStatus.mockRejectedValue(new Error('offline'));
+      await renderTab({ openExclusions: false, openSnapshots: false });
+      fireEvent.click(screen.getByRole('button', { name: 'Review backup exclusions' }));
+      expect(screen.getByRole('button', { name: /^Exclusions/i })).toHaveFocus();
+      expect(screen.getByText(/Backup exclusion details are unavailable/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Additional Exclude Paths')).not.toBeInTheDocument();
+    });
+
     it('collapses the default-exclusions catalog behind a disclosure summarizing the count', async () => {
       getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
       await renderTab();
@@ -958,7 +1111,7 @@ describe('BackupTab', () => {
       triggerBackup.mockResolvedValue({ skipped: true });
       await renderTab();
 
-      // Baseline: existing status + snapshot are on screen, fetched once on mount.
+      // Baseline: existing status + snapshot are on screen, fetched once on opening history.
       expect(screen.getByText(/7 tables/i)).toBeTruthy();
       expect(screen.getByText('snap-existing')).toBeTruthy();
       expect(getBackupStatus).toHaveBeenCalledTimes(1);
@@ -981,7 +1134,7 @@ describe('BackupTab', () => {
 
     it('refreshes snapshots and toasts success on a non-skipped run', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: [], retentionCount: null } });
-      // Empty on mount, a named snapshot on the post-run refetch — so the test
+      // Empty on opening history, a named snapshot on the post-run refetch — so the test
       // proves the returned snapshots are actually applied to state and rendered,
       // not merely that a second fetch happened.
       getBackupSnapshots.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'snap-fresh' }]);
@@ -1171,9 +1324,9 @@ describe('BackupTab', () => {
       getBackupSnapshots.mockRejectedValue(new Error('offline'));
       await renderTab({ openExclusions: false, openSnapshots: false });
 
-      expect(screen.getByRole('button', { name: /^Snapshot history/i })).toHaveTextContent('Unavailable');
+      expect(screen.getByRole('button', { name: /^Snapshot history/i })).toHaveTextContent('Open to load');
       fireEvent.click(screen.getByRole('button', { name: /^Snapshot history/i }));
-      expect(screen.getByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Snapshot history is unavailable/i)).toBeInTheDocument();
       expect(screen.queryByText(/No snapshots yet/i)).not.toBeInTheDocument();
     });
   });

@@ -5,7 +5,7 @@ Living reference of every third-party dependency in PortOS, why it's kept, and w
 That "every dependency" claim is enforced by `server/test/guards/repo/deps-doc.test.js` (run by `cd server && npm test`): every dependency needs a row under the workspace and dependency group that declares it. A row without a matching declaration fails unless its verdict records the removal (`REMOVED` / `REPLACED`).
 
 **Last audited:** 2026-09-21 (routine sweep: 0 open Dependabot alerts, 0 vulnerabilities across root/server/client/autofixer, react/react-dom 19.3.0 held back by r3f peer cap #7370); prior 2026-09-12 (scoped: remove the redundant direct `google-auth-library`, issue #7013); prior 2026-09-11 (scoped: drop `@scalar/api-reference-react`, issue #7012); prior 2026-09-02 (scoped: `pdf-lib` → `@cantoo/pdf-lib`, issue #5672; parity sweep that added the missing `playwright-core` row and put this document under test — `server/test/guards/repo/deps-doc.test.js`, issue #5708); prior 2026-08-04 (scoped audit of the `keyv`/`cacheable` supply-chain compromise); prior follow-up 2026-07-14 (issue #2547), prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
-**Verdict:** All remaining dependencies justified. The 2026-09-21 routine sweep verified that all direct dependencies are current, with 0 open Dependabot alerts on GitHub, clean audits across all workspaces, and react/react-dom 19.3.0 held back by @react-three/fiber's peer constraint (issue #7370). The 2026-09-12 follow-up removed the direct `google-auth-library@11.0.2` pin (issue #7013); Google OAuth now uses the copy already pulled transitively by the scoped Calendar SDK, so this is a manifest/lockfile cleanup rather than a reduction of the transitive tree. The 2026-09-11 follow-up removed `@scalar/api-reference-react` (issue #7012) — the heaviest client dependency, ~half the lockfile and 3.24 MB of dist assets, including Vue 3 and the Vercel AI SDK advisory GHSA-866g-f22w-33x8. The REST Reference tab now lists OpenAPI operations natively. The 2026-08-04 audit replaced the client `eslint` lint stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
+**Verdict:** All remaining dependencies justified. The 2026-09-21 routine sweep verified that all direct dependencies are current, with 0 open Dependabot alerts on GitHub, clean audits across all workspaces, and react/react-dom 19.3.0 held back by @react-three/fiber's peer constraint (issue #7370). The 2026-09-12 follow-up removed the direct `google-auth-library@11.0.2` pin (issue #7013); At the time, Google OAuth switched to the copy pulled transitively by the scoped Calendar SDK. Issue #17210 later replaced that SDK with a REST adapter and pinned the existing OAuth version directly. Issue #17250 replaced that pin with an owned OAuth2 client (`server/lib/googleOAuthClient.js`). The 2026-09-11 follow-up removed `@scalar/api-reference-react` (issue #7012) — the heaviest client dependency, ~half the lockfile and 3.24 MB of dist assets, including Vue 3 and the Vercel AI SDK advisory GHSA-866g-f22w-33x8. The REST Reference tab now lists OpenAPI operations natively. The 2026-08-04 audit replaced the client `eslint` lint stack with `@biomejs/biome`, dropping 110 net client packages including the `file-entry-cache → flat-cache → keyv` chain named in the August 2026 Shai-Hulud npm compromise (PortOS held safe versions throughout — see the detailed finding below). The same pass closed a latent hole where `ignore-scripts=true` was only active for repo-root installs, not for any workspace install or CI. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.4`). The 2026-09-02 follow-up replaced abandoned `pdf-lib` (no publish since 2022-05) with the maintained MIT fork `@cantoo/pdf-lib@2.9.1` — a same-public-API swap across the four export paths, done while `npm audit` was still clean rather than under advisory pressure.
 
 ## Audit Methodology
 
@@ -28,13 +28,13 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@cantoo/pdf-lib` | 2 | KEEP | PDF generation for the volume / comic / prose / legacy-archive exports | Maintained MIT fork of `pdf-lib`, which has had no publish since 2022-05. Same public API (`PDFDocument`/`rgb`/`StandardFonts`); the swap was 4 import lines. On maintenance watch — see the detailed finding |
 | `pdf-lib` | — | REPLACED | PDF generation | 2026-09-02 → `@cantoo/pdf-lib` (issue #5672). Abandoned upstream: `1.17.1` is simultaneously the pinned and the latest published version, unchanged since 2022-05-12. Not deprecated and never flagged by `npm audit` — replaced ahead of an advisory, not in response to one |
 | `@novnc/novnc` | 1 | KEEP | PortDeck remote desktop viewer | Mature RFB/VNC protocol implementation; replacing it would require owning multiple security types and framebuffer encodings |
-| `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
-| `@googleapis/gmail` | — | REPLACED | Messages/Gmail integration | Issue #12219 → `server/services/gmailApi.js`, a six-operation adapter over the `@googleapis/calendar` OAuth client's `request()` (fixed Gmail v1 origin; auth, refresh and transport stay upstream). Calendar still retains `googleapis-common`, Google auth and their transport dependencies, so this trims a direct dependency and its update churn, not that transitive supply chain |
+| `@googleapis/calendar` | — | REPLACED | Calendar integration | Issue #17210 → `server/services/calendarApi.js`, a four-operation adapter for the fixed Calendar v3 origin. Removes the generated SDK, `googleapis-common`, and `url-template` |
+| `@googleapis/gmail` | — | REPLACED | Messages/Gmail integration | Issue #12219 → `server/services/gmailApi.js`, a six-operation adapter for the fixed Gmail v1 origin using the owned OAuth client's `request()` |
 | `better-sqlite3-multiple-ciphers` | 2 | KEEP | `server/services/signalSnapshot.js` — read-only SQLCipher snapshot of the local Signal Desktop database | MIT build of better-sqlite3 with SQLCipher 4 compatibility. Ships prebuilds and sets `gypfile` false, so install does not compile it. `node:sqlite` cannot open SQLCipher, and a main-file copy misses committed WAL frames (#11149). A missing prebuild fails that sync closed |
-| `chokidar` | 1 | KEEP | server file watching | Mature cross-platform file-system watcher used by server services |
-| `compression` | 1 | KEEP | server HTTP responses | Express-maintained Brotli and gzip negotiation for API and built client responses; preserves streaming and backpressure |
+| `chokidar` | — | REPLACED | server file watching | Issue #17251 → `server/lib/fsWatcher.js`, an owned recursive `node:fs.watch` wrapper with add/change/unlink classification and write-stability debouncing; also removes `readdirp` from the lockfile |
+| `compression` | — | REPLACED | server HTTP responses | Issue #17213 moved response compression to `node:zlib` in `server/lib/httpCompression.js` and removed four lockfile packages |
 | `express` | 1 | KEEP | `server/index.js` + routes | Framework |
-| `google-auth-library` | — | REMOVED (direct) | Google OAuth | Consolidated under `@googleapis/calendar`'s transitive `googleapis-common` dependency |
+| `google-auth-library` | — | REPLACED | Shared Calendar and Gmail OAuth | Issue #17250 → `server/lib/googleOAuthClient.js`, an owned OAuth2 client on Node `fetch`. Removes the package and its exclusive transitive tree |
 | `kokoro-js` | 2 | REMOVED | Former in-process TTS | Replaced by the in-tree Piper backend; existing settings migrate |
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
@@ -60,7 +60,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@scalar/api-reference-react` | — | REMOVED | Dev Tools → API Explorer | 2026-09-11 → native REST Reference tab (issue #7012). Was the heaviest client dep (~half the lockfile, 3.24 MB dist, Vue 3 + Vercel AI SDK). See detailed finding |
 | `@xterm/xterm` | 1 | KEEP | browser terminal | |
 | `@xterm/addon-fit` | — | REMOVED | xterm sizing | 2026-09-12 → in-tree terminal sizing helper (issue #7014) |
-| `@xterm/addon-web-links` | 1 | KEEP | xterm links | |
+| `@xterm/addon-web-links` | — | REPLACED | xterm links | PortOS-owned link provider shared by the PTY and iTerm2 views (issue #17214) |
 | `lucide-react` | 1 | KEEP | icons | Widely-used |
 | `react` | 1 | KEEP | UI | |
 | `react-dom` | 1 | KEEP | UI | |
@@ -87,7 +87,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `@testing-library/react` | 1 | KEEP | component tests | |
 | `@testing-library/user-event` | 1 | KEEP | interaction tests | |
 | `playwright-core` | 1 | KEEP | browser test tooling | Drives the separately provisioned browser for client verification |
-| `rollup-plugin-visualizer` | 2 | KEEP | bundle-size analysis | Dev-only, opt-in |
+| `rollup-plugin-visualizer` | — | REMOVED | bundle-size analysis | `npm run build:analyze --prefix client` publishes `client/dist/bundle-report.json` with raw, gzip, and Brotli byte counts for each emitted file (#17212) |
 | **Browser dependencies** | | | | |
 | _(none)_ | — | — | `browser/server.js` | Zero dependencies — Node built-ins only, plus in-repo imports from `server/lib/` and `scripts/lib/`. No Dependabot entry, and its lockfile is gitignored |
 
@@ -122,12 +122,12 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 - **Upgrade**: migration 376 switches saved Kokoro settings to Piper, preserving the old settings and any customized Piper voice. Reads and saves also normalize restored legacy settings. Settings → Voice explains the change; choose a voice and use **Save & Reconcile** to install the binary/model. No models download during migration.
 - **Character profiles**: historical Kokoro profiles and audio remain intact. Synthesis reports an actionable retirement error; select/promote a Piper preset to replace the binding rather than silently changing a character's voice.
 
-### `google-auth-library` — REMOVED (direct) 2026-09-12 (issue #7013)
+### `google-auth-library` — REPLACED (issue #17250)
 
-- **Usage (was)**: `server/services/googleAuth.js` imported `OAuth2Client` directly for the shared Calendar/Messages OAuth flow.
-- **Resolution**: the service now uses `auth.OAuth2` from the existing `@googleapis/calendar` SDK. That export is the same `OAuth2Client` class supplied through `googleapis-common`, so authorization URLs, token exchange, credentials, and refresh-token persistence keep the existing behavior.
-- **Transitive cost**: the lockfile retains `google-auth-library@10.9.1` under `googleapis-common` (shared by the Calendar and Gmail SDKs) and removes the direct `11.0.2` copy plus its exclusive nested dependencies. This removes a redundant direct pin, not the transitive package itself.
-- **Regression cover**: `server/test/guards/repo/deps-doc.test.js` and the Calendar route/account/sync suites pass; a direct module-load smoke check confirms that `auth.OAuth2` is constructible.
+- **Usage (was)**: `server/services/googleAuth.js` constructed `OAuth2Client` for the shared Calendar and Gmail OAuth flow: consent URL, code exchange, refresh, and authenticated `request()`. Issue #7013 had dropped the direct pin in favor of the copy inside `@googleapis/calendar`; issue #17210 removed that SDK and pinned `google-auth-library@11.0.2` directly.
+- **Resolution**: `server/lib/googleOAuthClient.js` owns that surface on Node `fetch`, `URLSearchParams`, and `AbortSignal.timeout`. Service-account JWT, metadata-server probes, ID-token verification, and proxy agents are not implemented.
+- **Transitive cost**: removing the direct pin drops `google-auth-library` and the packages only it pulled in (including `gaxios`, `gcp-metadata`, and the `node-fetch` polyfill tree).
+- **Regression cover**: `server/lib/googleOAuthClient.test.js` plus the Calendar and Gmail adapter suites, including stalled-refresh and no-resubmit send tests.
 
 
 ### `eslint` — removed from client lint and server complexity report
@@ -152,7 +152,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 
 If `/do:depfree --heavy` is run, the following Tier 1 entries would drop to Tier 2/3 and become replacement candidates regardless of popularity:
 
-- `@googleapis/calendar` — narrow surface used; could be replaced with direct REST calls + owned auth (Gmail already is, via `gmailApi.js`).
 - Many of the `@dnd-kit/*`, `@xterm/*`, `lucide-react`, `recharts` deps would be re-evaluated.
 - `pm2` would NOT be replaced (foundational process manager).
 
@@ -162,7 +161,7 @@ This is intentionally NOT done in default mode — current dependency footprint 
 
 `/do:depfree --extreme` (and the `better-dependency-freedom` scheduled audit with its removal bar set to **Extreme**) aims at zero dependencies: it forces the strongest model tier at maximum reasoning effort, drops the line ceiling in favor of a parity-test gate, and keeps only what cannot be owned responsibly — the Node runtime and npm, security-sensitive protocol implementations (the `pg` wire protocol and its authentication, TLS), native bindings (`node-pty`, `better-sqlite3-multiple-ciphers`, `sharp`), and the CI-required test runner. Under that bar the following Tier 1 entries become candidates, each needing a written replacement design and a parity suite before any call site switches:
 
-- `express` and `compression` — the used surface is routing, middleware chaining, static files, body parsing, and Brotli/gzip negotiation over `node:http` and `node:zlib`.
+- `express` — the used surface is routing, middleware chaining, static files, and body parsing over `node:http`.
 - `socket.io` — the used surface is rooms, acks, and reconnection over WebSocket; a design must cover the client half too.
 - `react` / `react-dom` — a product-level rewrite rather than a dependency swap; expected to be recorded `SKIPPED_INFEASIBLE` with a design sketch and a filed issue, which is the mode's required output for a package it cannot remove.
 - `@googleapis/*` — direct REST calls plus owned OAuth signing.

@@ -9,6 +9,7 @@ import { auditWorkflow, EXTENDED_AUDIT_INSTRUCTIONS } from '../../lib/auditWorkf
  */
 
 import { join } from 'path';
+import { randomUUID } from 'crypto';
 import { stat } from 'fs/promises';
 import { getMemorySection } from '../memoryRetriever.js';
 import { getToolsSummaryForPrompt } from '../tools.js';
@@ -127,17 +128,26 @@ export const UI_AUDIT_TASK_TYPES = Object.freeze([
 ]);
 const UI_AUDIT_TASK_TYPE_SET = new Set(UI_AUDIT_TASK_TYPES);
 
-export const UI_AUDIT_RUNTIME_RULE = `## UI Audit Runtime (PortOS local system)
+// Each UI audit run owns its own background tab, marked with a per-agent
+// window.name. A shared tab let concurrent audits navigate each other's page
+// mid-run, so every finding's route and console evidence could be wrong.
+// The marker is keyed by the spawning agent id; the random fallback only
+// matters for callers that build a prompt without one, and it still gives the
+// run a marker no other run shares.
+export function buildUiAuditRuntimeRule(agentId) {
+  const marker = `portos-ui-quality-audit:${agentId || randomUUID()}`;
+  return `## UI Audit Runtime (PortOS local system)
 This is an unattended run, but it is not browserless when the target has a web UI. PortOS provides a managed Chromium browser for CoS agents over Chrome DevTools Protocol (CDP). The agent-facing browser bridge is separate from that managed browser: an empty array returned by agent.browsers.list() ([]), getForUrl() returning "No browser is available", or an otherwise unusable agent-browser binding is a provider-bridge failure, not evidence that PortOS's managed Chromium or CDP endpoint is unavailable. Do not skip live UI verification because the provider bridge is empty, unusable, or no human is present.
 
 - Use Playwright/browser tools only with a working browser bridge that can attach to the dedicated PortOS tab described below without creating a page or bringing the browser window to the front. Otherwise use the configured CDP endpoint from the local shell, including when the provider bridge is empty or unusable.
 - When the agent browser bridge is empty or unusable, query the configured PortOS browser health endpoint (usually http://127.0.0.1:5557/health, or its configured healthPort) and the CDP /json/version or /json/list endpoints before stopping. The richer /api/browser/health check may require the instance password; a 401 from that API route is an authentication response, not evidence that PortOS's managed browser is unavailable. A healthy PortOS health/CDP response overrides the provider's "No browser is available" response.
 - Check browser status/configuration when needed; the CDP endpoint is local and configurable, with shipped default 127.0.0.1:5556.
-- All UI audits share one persistent, dedicated PortOS browser tab. At the start, inspect normal type: "page" targets from /json/list and read window.name over each page's webSocketDebuggerUrl. Reuse only the target marked window.name === "portos-ui-quality-audit"; never guess ownership from a URL, title, or which tab is active, and never navigate, activate, or close any other page. If no marked target exists, create exactly one background target by sending Target.createTarget with {url: "about:blank", background: true} to the browser-level webSocketDebuggerUrl from /json/version, then find its page target by the returned targetId. Do not use PUT /json/new, browser.newPage(), context.newPage(), a new browser context/window, or an "open in new tab" action for this audit. If background target creation fails, do not fall back to a foreground tab; report the specific CDP failure and stop the live UI portion.
-- Navigate that one dedicated target in place with Page.navigate and inspect it with Runtime.evaluate on its page socket. Reuse the same target for every route and control; never create a page per view. Do not send Page or Runtime commands to the browser-level socket from /json/version, and do not call Page.bringToFront or use UI actions that select/focus a tab. After navigation, set window.name = "portos-ui-quality-audit" again if a cross-site navigation cleared it. At the end, set window.name to that marker and document.title to "PortOS UI Audit", then leave the tab open for the next audit. Use Page, Runtime, Log, and Network domains on the dedicated page socket for live evidence.
+- Each UI audit run owns one dedicated PortOS browser tab, marked window.name === "${marker}" (this run's marker). Other audits run concurrently with their own markers, so this tab is yours alone. At the start, inspect normal type: "page" targets from /json/list and read window.name over each page's webSocketDebuggerUrl. Reuse only a target marked with your exact marker; never guess ownership from a URL, title, or which tab is active. Never navigate, activate, or close a target marked with another agent's marker, the legacy bare marker "portos-ui-quality-audit", or any unmarked page. If your marker is absent, create exactly one background target by sending Target.createTarget with {url: "about:blank", background: true} to the browser-level webSocketDebuggerUrl from /json/version, record the returned targetId, find its page target by that targetId, and set window.name to your marker. Do not use PUT /json/new, browser.newPage(), context.newPage(), a new browser context/window, or an "open in new tab" action for this audit. If background target creation fails, do not fall back to a foreground tab; report the specific CDP failure and stop the live UI portion.
+- Navigate that one dedicated target in place with Page.navigate and inspect it with Runtime.evaluate on its page socket. Reuse the same target for every route and control; never create a page per view. Do not send Page or Runtime commands to the browser-level socket from /json/version, and do not call Page.bringToFront or use UI actions that select/focus a tab. After navigation, set window.name = "${marker}" again if a cross-site navigation cleared it. At the end of the run, after you have saved your live evidence, close only your own target: send Target.closeTarget {targetId} on the browser-level socket with the targetId you recorded. Never close a target you did not create in this run, and identify it by targetId, not by URL or title. Use Page, Runtime, Log, and Network domains on the dedicated page socket for live evidence.
 - If the instance password is set, the dedicated tab lands on the login page. Do not ask for, search for, or guess the password: it is stored only as a hash, and the gate exists to keep other machines out, not this agent. Your environment already holds $PORTOS_API_TOKEN, a loopback session token PortOS minted for you (empty when no password is set). Before navigating, on the dedicated page socket send Network.enable then Network.setCookie with {name: "portos_auth_<port>", value: <the token>, url: <the UI origin>, httpOnly: true, sameSite: "Lax"} where <port> is the UI origin's port (for example portos_auth_5555 for http://localhost:5555; the server also accepts the bare name portos_auth), then Page.navigate again. Never print the token or write it into a finding.
 - Treat the target as a running local system: discover its actual UI/API URL and ports from the app configuration, PortOS app/process state, and health endpoints, then inspect scoped server logs when diagnosing console or request failures. Do not guess a URL or treat source-only speculation as a UI finding.
 - Capture live evidence (snapshots, console/request results, and observed runtime state) before changing code. Do not stop the UI audit merely because the provider bridge is unavailable. Stop the web-UI portion only after the PortOS health/CDP probes fail or no usable page target can be created, navigated, and inspected; the handoff must name the concrete endpoint, HTTP/process, or WebSocket failure. A provider-only "No browser is available" result is not enough, and a failed CDP probe must not become a source-only UX finding. For a native or source-only target with no web surface, continue the relevant audit without inventing a browser target and record that limitation.`;
+}
 
 export function isUiAuditTask(task) {
   const taskType = task?.metadata?.analysisType
@@ -696,7 +706,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     .filter(Boolean).join('\n\n');
 
   const {
-    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection,
   } = await buildFullPathOptionalSections({
     task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
@@ -720,13 +730,13 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       buildIssueFilingSection({ ...attributionOptions, taskBody: [task.description, contextBlock] }),
       buildPrAttributionSection(attributionOptions),
     ].filter(Boolean).join('\n\n');
-  const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
+  const uiAuditRuntimeSection = isUiAuditTask(task) ? buildUiAuditRuntimeRule(agentId) : '';
 
   return finalizePrompt(buildFullAgentPrompt({
     task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
-    reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess, completionMode,
   }));
@@ -921,6 +931,15 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // Keep the existing lifecycle template first, then append one narrow domain
   // guide when the task explicitly concerns a supported visual stack.
   const skillSection = await loadSkillTemplates(detectSkillTemplates(task));
+  // Level 0 of the Skill Registry (#17387): ids and one-line descriptions only,
+  // so the briefing stays lean; the agent loads a full skill with skills.view.
+  // Lazy and failure-tolerant: a broken skill tree must never block a spawn.
+  const skillIndexSection = await import('../skills/skillService.js')
+    .then(({ buildSkillIndexPromptSection }) => buildSkillIndexPromptSection({ appId: task.metadata?.app || undefined }))
+    .catch((err) => {
+      console.log(`⚠️ Skill index unavailable for the agent briefing: ${err.message}`);
+      return '';
+    });
 
   // Build onboard tools section for agent awareness
   const toolsSection = skipDevContext
@@ -951,7 +970,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     }
   }
   return {
-    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection,
   };
 }
@@ -969,7 +988,7 @@ function buildFullAgentPrompt({
   task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
   worktreeSection, pipelineSection, jiraSection, orchestrationSection,
   issueFilingSection, simplifySection, tuiCompletionSection,
-  reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+  reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection, skillIndexSection,
   toolsSection, planningContextSection, uiAuditRuntimeSection,
   completionBullet, completionInstructions, noChangeSuccess, completionMode,
 }) {
@@ -995,7 +1014,7 @@ ${buildUnnecessaryDispatchSection(task)}
 ${reviewLoopSection}
 ${reviewLoopFollowUpSection}
 ${compactionSection}
-${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${toolsSection ? `\n${toolsSection}\n` : ''}${planningContextSection}
+${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${skillIndexSection ? `\n${skillIndexSection}\n` : ''}${toolsSection ? `\n${toolsSection}\n` : ''}${planningContextSection}
 ## Instructions
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
@@ -1202,7 +1221,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
   const dispatchInvestigation = buildUnnecessaryDispatchSection(task);
   if (dispatchInvestigation) contractSections.push(dispatchInvestigation);
   if (task.metadata?.prCompletion === PR_COMPLETIONS.DRAFT) contractSections.push(DRAFT_PR_RULE);
-  if (isUiAuditTask(task)) contractSections.push(UI_AUDIT_RUNTIME_RULE);
+  if (isUiAuditTask(task)) contractSections.push(buildUiAuditRuntimeRule(agentId));
   const securityAuditRuntime = buildSecurityAuditRuntimeSection(task, { providerId, providerCommand, agentId });
   if (securityAuditRuntime) contractSections.push(securityAuditRuntime);
 

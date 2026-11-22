@@ -284,7 +284,7 @@ function CutOnTimeline({ project, cut, world, worldPlaces, onChange }) {
       </div>
       {picking && on && !cut.holderSubjectId && (
         <div className="max-w-sm space-y-1">
-          <p className="text-port-text-muted">Tap where the observer stands.</p>
+          <p className="text-port-text-muted">Focus the map and press Enter to place the observer at the center, or tap the map.</p>
           <WorldMap world={world} places={worldPlaces} view={view} onView={setView} drawing={[]} actors={spotActors()}
             onAddPoint={(point) => onChange({ cameraSpot: point })} />
         </div>

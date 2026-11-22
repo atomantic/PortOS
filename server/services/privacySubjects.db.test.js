@@ -22,7 +22,6 @@ vi.mock('./privacyPromptScrub.js', () => ({ scrubRevokedPrivacyFacts: vi.fn() })
 // touches the repo's real .env during the run (createVaultRecord encrypts).
 const HEX_KEY = 'e'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = HEX_KEY;
 
 let dbReady = false;
 let skipReason = '';
@@ -52,19 +51,24 @@ describe.skipIf(!runDb)('privacy household subjects DB round-trip', () => {
   const track = (subject) => { createdSubjects.push(subject.id); return subject; };
 
   beforeAll(async () => {
+    // Set only while the suite runs, before any service import, so a skipped suite never leaks it.
+    process.env.PRIVACY_VAULT_KEY = HEX_KEY;
     subjects = await import('./privacySubjects.js');
     vault = await import('./privacyVault.js');
     selfSubjectId = (await import('../lib/privacyValidation.js')).PRIVACY_SELF_SUBJECT_ID;
   });
 
   afterAll(async () => {
-    // Child rows (vault records, consents, orgs, cases) go by FK CASCADE.
-    for (const id of createdSubjects) {
-      await query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]).catch(() => {});
+    try {
+      // Child rows (vault records, consents, orgs, cases) go by FK CASCADE.
+      for (const id of createdSubjects) {
+        await query(`DELETE FROM privacy_subjects WHERE id = $1`, [id]).catch(() => {});
+      }
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
     }
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
   });
 
   it('seeds a self subject that lists first and is flagged isSelf', async () => {

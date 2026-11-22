@@ -245,17 +245,21 @@ export async function addIntervention(intervention) {
     // Check if it's a curated one
     const curated = CURATED_INTERVENTIONS.find(c => c.id === id);
 
+    // Re-tracking an existing id must not erase its history: keep logs, startedAt and
+    // any field the caller did not send.
+    const existing = data.interventions[id];
+
     data.interventions[id] = {
       id,
-      name: intervention.name || curated?.name || 'Unknown',
-      category: intervention.category || curated?.category || 'custom',
-      dosage: intervention.dosage || '',
-      frequency: intervention.frequency || 'daily',
-      trackingUnit: intervention.trackingUnit || curated?.trackingUnit || 'dose',
-      startedAt: new Date().toISOString(),
+      name: intervention.name || existing?.name || curated?.name || 'Unknown',
+      category: intervention.category || existing?.category || curated?.category || 'custom',
+      dosage: intervention.dosage || existing?.dosage || '',
+      frequency: intervention.frequency || existing?.frequency || 'daily',
+      trackingUnit: intervention.trackingUnit || existing?.trackingUnit || curated?.trackingUnit || 'dose',
+      startedAt: existing?.startedAt || new Date().toISOString(),
       active: true,
-      notes: intervention.notes || '',
-      logs: []
+      notes: intervention.notes || existing?.notes || '',
+      logs: existing?.logs || []
     };
 
     await saveData(data);

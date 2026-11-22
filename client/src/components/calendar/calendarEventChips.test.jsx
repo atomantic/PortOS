@@ -388,14 +388,16 @@ describe('ChronotypeOverlay zone labels', () => {
     }
   });
 
-  it('keeps the band fill on the zone\'s own raw color', async () => {
+  it('keeps the band fill on the zone\'s own raw hue, carried as alpha', async () => {
     getChronotypeEnergySchedule.mockResolvedValue(ZONES);
-    const { container } = render(<ChronotypeOverlay startHour={6} pxPerHour={60} />);
-    await act(async () => {});
+    await renderView(<ChronotypeOverlay startHour={6} pxPerHour={60} />);
     // The band is a large tint, not text — grading it would shift the wash the
-    // zone is recognized by, and it carries no ink of its own.
-    const band = container.querySelector('div[style*="opacity"]');
-    expect(parseColor(band.style.backgroundColor)).toEqual(parseColor('#f59e0b'));
+    // zone is recognized by, and it carries no ink of its own. The tint is an
+    // alpha channel on the background, never element opacity (which would fade
+    // the label inside it too).
+    const band = screen.getByText('Peak Focus').parentElement;
+    expect(band.style.opacity).toBe('');
+    expect(band.style.backgroundColor).toMatch(/^(#f59e0b[0-9a-f]{2}|rgba?\(\s*245,\s*158,\s*11)/i);
   });
 });
 

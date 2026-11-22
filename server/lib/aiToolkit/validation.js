@@ -13,6 +13,24 @@ import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, parseProvid
 export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_LENGTH)
   .refine((value) => parseProviderRef(value) !== null, 'providerId must be a preset id or a composite <harness>.<cli|tui|api>@<service-slug>[+<bootstrap-slug>]');
 
+// OpenRouter `provider` routing preferences; resolved into the request body by
+// `resolveOpenRouterProviderField` (internal/generationOptions.js).
+// Slugs are lowercased before the shape check so ' Anthropic ' is accepted.
+const routingSlugList = z.array(z.string().trim().toLowerCase().min(1).max(80)).max(32);
+const routingFields = {
+  sort: z.enum(['price', 'throughput', 'latency']).nullable().optional(),
+  only: routingSlugList.optional(),
+  ignore: routingSlugList.optional(),
+  order: routingSlugList.optional(),
+  require_parameters: z.boolean().optional(),
+  data_collection: z.enum(['allow', 'deny']).nullable().optional(),
+};
+export const providerRoutingSchema = z.object({
+  ...routingFields,
+  // Per-model overrides merge OVER the flat defaults for the matching model only.
+  models: z.record(z.string().trim().min(1).max(300), z.object(routingFields).strict()).optional(),
+}).strict();
+
 // Mirrors the runner's getMimeType keys; anything else is rejected.
 const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
@@ -108,6 +126,12 @@ export const providerSchema = z.object({
   // Per-request context window (Ollama num_ctx). Lifts the ~4K default so long
   // prompts (e.g. a whole manuscript) aren't silently truncated. Null = unset.
   numCtx: z.number().int().min(512).max(1048576).nullable().optional(),
+  // Per-model num_ctx overrides keyed by model id; each replaces numCtx for
+  // that model only (a 1M-token model next to 128K ones on one daemon).
+  modelNumCtx: z.record(z.string().min(1).max(300), z.number().int().min(512).max(1048576)).optional(),
+  // OpenRouter `provider` routing preferences (sort, allow/deny lists, data
+  // collection, per-model overrides); sent only to OpenRouter endpoints. Null clears.
+  providerRouting: providerRoutingSchema.nullable().optional(),
   // Default generation controls for local OpenAI-compatible backends and their
   // OpenCode wrappers; a run may override per task. Nullable: null is "unset"
   // (the backend keeps its own), so the editor can remove a pin.

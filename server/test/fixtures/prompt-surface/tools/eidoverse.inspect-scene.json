@@ -1,0 +1,37 @@
+{
+  "name": "eidoverse.inspect-scene",
+  "description": "Inspect authored entities in this install's admitted private world before construction. Input {anchor:[x,y,z],radius,limit?}: coordinates ±10000, radius (0,100], limit 1–12 (default 8). Returns stable ids, authored transforms, safe asset references, PortOS-managed markers and world AABBs where measured. Known boxes intersect the sphere; unknown boxes are selected by origin. complete covers enumeration only; boundsComplete also requires no unknown extents anywhere in the snapshot. Unavailable, incomplete, truncated, invalidEntities>0 or unknownBounds>0 NEVER certifies an area clear. Motion, attachments, procedural components and simulation are not evaluated; terrain, avatars and rendered animation are outside this inspection. No remote inspection, raw components or private record content. Use a new requestId for a fresh read.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "anchor": {
+        "minItems": 3,
+        "maxItems": 3,
+        "type": "array",
+        "items": {
+          "type": "number",
+          "minimum": -10000,
+          "maximum": 10000
+        }
+      },
+      "radius": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "maximum": 100
+      },
+      "limit": {
+        "default": 8,
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 12
+      }
+    },
+    "required": [
+      "anchor",
+      "radius",
+      "limit"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

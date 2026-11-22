@@ -12,7 +12,7 @@
  *     body (including the runner-enqueue handoff), and releases it in a
  *     finally. That is what closes the late-delete race where a concurrent
  *     `task:ready` re-emit spawned a SECOND agent for the same task id.
- *   - withMapEntryCleanup — the `runnerAgents` cleanup that
+ *   - withRunnerAgentCleanup — the `runnerAgents` cleanup that
  *     `handleAgentCompletion` wraps its body in, so a throw from any
  *     completion step (completeAgent / updateTask / processAgentCompletion /
  *     finalizeAgent) can't strand the in-memory agent record.
@@ -25,12 +25,12 @@
  * orchestrators actually delegate to the extracted guards.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
-import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
+import { withSpawnDedupGuard, withRunnerAgentCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY, PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -231,13 +231,13 @@ describe('spawnAgentForTask dedup — late-delete race (issue #2548 / #1563)', (
   });
 });
 
-// ─── withMapEntryCleanup — the real runnerAgents completion cleanup ──────────
+// ─── withRunnerAgentCleanup — the real runnerAgents completion cleanup ───────
 
-describe('withMapEntryCleanup — runnerAgents completion cleanup', () => {
+describe('withRunnerAgentCleanup — runnerAgents completion cleanup', () => {
   it('runs the completion steps then deletes the map entry (happy path)', async () => {
     runnerAgents.set('agent-A', { taskId: 'task-A' });
     const steps = [];
-    await withMapEntryCleanup(runnerAgents, 'agent-A', async () => {
+    await withRunnerAgentCleanup('agent-A', async () => {
       steps.push('completeAgent');
       steps.push('updateTask');
       steps.push('processAgentCompletion');
@@ -246,24 +246,27 @@ describe('withMapEntryCleanup — runnerAgents completion cleanup', () => {
     expect(runnerAgents.has('agent-A')).toBe(false);
   });
 
-  it('deletes the map entry even when an inner completion step throws', async () => {
+  it('deletes the map entry and releases its Ollama hold even when an inner completion step throws', async () => {
     // A throw from completeAgent / updateTask / processAgentCompletion /
     // finalizeAgent must never leak the in-memory record — memory grows
-    // unboundedly and a stale entry can re-trigger/misroute completion.
-    runnerAgents.set('agent-B', { taskId: 'task-B' });
+    // unboundedly and a stale entry can re-trigger/misroute completion — nor its
+    // in-flight Ollama hold, which would defer every later context reload (#17342).
+    const releaseOllamaWork = vi.fn();
+    runnerAgents.set('agent-B', { taskId: 'task-B', releaseOllamaWork });
     await expect(
-      withMapEntryCleanup(runnerAgents, 'agent-B', async () => {
+      withRunnerAgentCleanup('agent-B', async () => {
         throw new Error('completeAgent failed: state save error');
       })
     ).rejects.toThrow('completeAgent failed');
     expect(runnerAgents.has('agent-B')).toBe(false);
+    expect(releaseOllamaWork).toHaveBeenCalledTimes(1);
   });
 
   it('propagates the inner error after cleanup (finally does not swallow it)', async () => {
     runnerAgents.set('agent-C', { taskId: 'task-C' });
     let caught;
     try {
-      await withMapEntryCleanup(runnerAgents, 'agent-C', async () => {
+      await withRunnerAgentCleanup('agent-C', async () => {
         throw new Error('updateTask failed');
       });
     } catch (err) {
@@ -277,7 +280,7 @@ describe('withMapEntryCleanup — runnerAgents completion cleanup', () => {
     // handleAgentCompletion's early-return branches (paused / unknown agent)
     // delete the entry before the guarded body; the finally delete must be a
     // harmless no-op if the key is already gone.
-    const result = await withMapEntryCleanup(runnerAgents, 'agent-missing', async () => 'ok');
+    const result = await withRunnerAgentCleanup('agent-missing', async () => 'ok');
     expect(result).toBe('ok');
     expect(runnerAgents.has('agent-missing')).toBe(false);
   });
@@ -402,11 +405,11 @@ describe('self-update spawn gate — funnel coverage (#4124)', () => {
     expect(preamble.indexOf('isUpdateInProgress()')).toBeLessThan(preamble.indexOf('isRunnerReachable()'));
   });
 
-  it('handleAgentCompletion delegates runnerAgents cleanup to withMapEntryCleanup', () => {
+  it('handleAgentCompletion delegates runnerAgents cleanup to withRunnerAgentCleanup', () => {
     const idx = AGENT_LIFECYCLE_SRC.indexOf('export async function handleAgentCompletion');
     expect(idx, 'handleAgentCompletion must exist').toBeGreaterThan(-1);
     const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 60_000);
-    expect(body).toMatch(/withMapEntryCleanup\(\s*runnerAgents\s*,\s*agentId\s*,/);
+    expect(body).toMatch(/withRunnerAgentCleanup\(\s*agentId\s*,/);
   });
 
   // A tracked agent can already be terminal by the time its completion event
@@ -503,13 +506,13 @@ function recoveryBranchSource() {
 
 /**
  * Source of the TRACKED completion preamble in handleAgentCompletion — from
- * entering the withMapEntryCleanup body to the first real work it does. Both
+ * entering the withRunnerAgentCleanup body to the first real work it does. Both
  * anchors are real statements, so the window can't silently widen to swallow the
  * rest of the completion body as the function grows.
  */
 function trackedCompletionPreamble() {
-  const start = AGENT_LIFECYCLE_SRC.indexOf('withMapEntryCleanup(runnerAgents, agentId,');
-  expect(start, 'withMapEntryCleanup wrapper must exist').toBeGreaterThan(-1);
+  const start = AGENT_LIFECYCLE_SRC.indexOf('withRunnerAgentCleanup(agentId,');
+  expect(start, 'withRunnerAgentCleanup wrapper must exist').toBeGreaterThan(-1);
   const end = AGENT_LIFECYCLE_SRC.indexOf("Normalize the agent's task shape", start);
   expect(end, 'end anchor (task-shape normalization) must exist').toBeGreaterThan(start);
   return AGENT_LIFECYCLE_SRC.slice(start, end);

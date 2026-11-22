@@ -1,0 +1,35 @@
+{
+  "name": "eidoverse.adopt",
+  "description": "Stand an INHERITED foundation up so it actually runs on this install, keeping a `derived-from` edge back to the peer that authored it. Only a `controller` foundation is adoptable today: it installs the SHIPPED controller its body names, DISARMED and not delivering effects, so arming it is a separate act you or your human take afterwards. A `schema`, `affordance`, or `district-template` foundation is refused by name — nothing here interprets one yet. A refusal is a result, not an error: read `reasons` and never narrate a refused adopt as done. Adopting is also the only re-use path that KEEPS attribution; re-typing a peer's body through eidoverse.record is refused as republishing their work as your own.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "originInstanceId": {
+        "default": null,
+        "anyOf": [
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "originInstanceId"
+    ],
+    "additionalProperties": false
+  },
+  "sideEffect": "write"
+}

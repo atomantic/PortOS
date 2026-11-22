@@ -59,6 +59,7 @@ vi.mock('./brainStorage.js', () => ({
     [...journalRecords.entries()]
       .filter(([, rec]) => !rec._deleted)
       .map(([id, rec]) => ({ id, ...rec }))),
+  listStoredIds: vi.fn(async () => [...journalRecords.keys()]),
   upsertWithId: vi.fn(async (_type, id, record) => {
     const existing = journalRecords.get(id);
     const live = existing && !existing._deleted ? { id, ...existing } : null;

@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('./ollamaManager.js', () => ({
+  beginOllamaWork: vi.fn(),
+  beginOllamaWorkAfterReload: vi.fn(),
   ensureContextWindow: vi.fn(),
   getRuntimeContextLength: vi.fn(),
   getModelCapabilities: vi.fn(),
   getBaseUrl: vi.fn(() => 'http://localhost:11434')
 }))
 
-import { ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
-import { dropUnsupportedOllamaThinking, ensureOllamaAgentContext } from './ollamaAgentContext.js'
+vi.mock('./provider/providers.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getProviderById: vi.fn()
+}))
+
+import { beginOllamaWork, beginOllamaWorkAfterReload, ensureContextWindow, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
+import { getProviderById } from './provider/providers.js'
+import {
+  beginOllamaAgentWork,
+  dropUnsupportedOllamaThinking,
+  ensureOllamaAgentContext,
+  holdRecoveredOllamaAgentWork
+} from './ollamaAgentContext.js'
 
 const claudeOllamaTui = {
   id: 'claude-ollama-tui',
@@ -95,6 +108,27 @@ describe('ensureOllamaAgentContext', () => {
 // `gemma3:27b` (capabilities `["completion","vision"]`) failed three times with
 // `Error: "gemma3:27b" does not support thinking` — Ollama rejects the whole
 // request rather than ignoring the level.
+describe('beginOllamaAgentWork', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('registers a local-daemon run once any reload settles and hands back its release', async () => {
+    const release = vi.fn()
+    vi.mocked(beginOllamaWorkAfterReload).mockResolvedValue(release)
+    expect(await beginOllamaAgentWork(claudeOllamaTui)).toBe(release)
+    expect(beginOllamaWorkAfterReload).toHaveBeenCalledOnce()
+  })
+
+  it('does not register cloud or remote-daemon providers', async () => {
+    const remote = { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }
+    for (const provider of [null, { id: 'claude-code-tui', type: 'tui' }, remote]) {
+      const release = await beginOllamaAgentWork(provider)
+      expect(typeof release).toBe('function')
+      release()
+    }
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
+  })
+})
+
 describe('dropUnsupportedOllamaThinking', () => {
   const opencodeOllama = { id: 'opencode-ollama-tui', type: 'tui', command: 'opencode', ollamaBacked: true }
 
@@ -158,5 +192,37 @@ describe('dropUnsupportedOllamaThinking', () => {
     const provider = { ...opencodeOllama, effort: 'high', endpoint: 'http://198.51.100.7:11434/v1' }
     expect((await dropUnsupportedOllamaThinking(provider, 'gemma3:27b', 'high')).dropped).toBe(false)
     expect(getModelCapabilities).not.toHaveBeenCalled()
+  })
+})
+
+describe('holdRecoveredOllamaAgentWork', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('re-registers a survivor whose persisted provider uses the local daemon, without waiting for a reload', async () => {
+    const release = vi.fn()
+    beginOllamaWork.mockReturnValueOnce(release)
+    getProviderById.mockResolvedValueOnce(claudeOllamaTui)
+    expect(await holdRecoveredOllamaAgentWork({ metadata: { providerId: 'claude-ollama-tui' } })).toBe(release)
+    expect(getProviderById).toHaveBeenCalledWith('claude-ollama-tui')
+    expect(beginOllamaWorkAfterReload).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no provider id', null, {}],
+    ['a deleted provider', null, { metadata: { providerId: 'gone' } }],
+    ['a non-Ollama provider', { id: 'codex', type: 'cli' }, { metadata: { providerId: 'codex' } }],
+    ['a remote daemon', { ...claudeOllamaTui, envVars: { ANTHROPIC_BASE_URL: 'http://192.0.2.10:11434' } }, { metadata: { providerId: 'remote' } }]
+  ])('holds nothing for %s', async (_label, provider, record) => {
+    getProviderById.mockResolvedValueOnce(provider)
+    const release = await holdRecoveredOllamaAgentWork(record)
+    expect(typeof release).toBe('function')
+    expect(beginOllamaWork).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed provider lookup as no hold rather than rejecting', async () => {
+    getProviderById.mockRejectedValueOnce(new Error('toolkit not ready'))
+    const release = await holdRecoveredOllamaAgentWork({ metadata: { providerId: 'claude-ollama-tui' } })
+    expect(typeof release).toBe('function')
+    expect(beginOllamaWork).not.toHaveBeenCalled()
   })
 })

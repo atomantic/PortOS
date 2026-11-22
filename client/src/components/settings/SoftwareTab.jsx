@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import Pill from '../ui/Pill';
 import BrailleSpinner from '../BrailleSpinner';
 import LoadFailedState from '../ui/LoadFailedState';
+import HomebrewUpgrades from './HomebrewUpgrades';
 import {
   getSoftwareInventory,
   updateNodeRuntime,
@@ -283,6 +284,8 @@ export default function SoftwareTab() {
           </ul>
         </section>
       ))}
+
+      <HomebrewUpgrades />
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
         {hiddenCount > 0 || showAll

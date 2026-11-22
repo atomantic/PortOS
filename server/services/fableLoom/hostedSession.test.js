@@ -362,8 +362,13 @@ describe('fableLoom hostedSession', () => {
       expect(io.emits.filter(({ event }) => [
         'hosted:turn:phase', 'hosted:turn:tts', 'hosted:story:transition',
       ].includes(event)).map(({ event, payload }) => payload.phase || event)).toEqual([
-        'listening', 'thinking', 'speaking', 'hosted:turn:tts', 'hosted:story:transition',
+        'listening', 'thinking', 'speaking', 'hosted:turn:tts', 'hosted:story:transition', 'idle',
       ]);
+      const speaking = io.emits.find(({ event, payload }) => event === 'hosted:turn:phase' && payload.phase === 'speaking');
+      expect(io.emits.at(-1)).toMatchObject({
+        event: 'hosted:turn:phase',
+        payload: { phase: 'idle', turnId: speaking.payload.turnId },
+      });
       expect(getHostedSession(session.id).currentNodeId).toBe('node-2');
     });
 
@@ -706,6 +711,11 @@ describe('fableLoom hostedSession', () => {
       })).resolves.toMatchObject({ accepted: true, committed: true });
       expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
       expect(transitions(io)).toHaveLength(1);
+      const transitionAt = io.emits.findIndex((event) => event.event === 'hosted:story:transition');
+      expect(io.emits[transitionAt + 1]).toMatchObject({
+        event: 'hosted:turn:phase',
+        payload: { phase: 'idle', turnId: result.turnId },
+      });
 
       await expect(acknowledgeHostedSpeech(session.id, {
         turnId: result.turnId, role: 'host', socketId, status: 'ended', io,
@@ -744,6 +754,11 @@ describe('fableLoom hostedSession', () => {
       expect(io.emits.some((event) => event.event === 'hosted:turn:tts')).toBe(false);
       expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
       expect(transitions(io)).toHaveLength(1);
+      const speaking = io.emits.find((event) => event.event === 'hosted:turn:phase' && event.payload?.phase === 'speaking');
+      expect(io.emits.at(-1)).toMatchObject({
+        event: 'hosted:turn:phase',
+        payload: { phase: 'idle', turnId: speaking.payload.turnId },
+      });
     });
 
     it('drops the pending move on playback failure without a transition', async () => {

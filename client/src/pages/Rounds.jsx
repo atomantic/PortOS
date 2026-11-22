@@ -8,12 +8,14 @@
  * scroll (the editor and guide still live at their own routes).
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { Music, Plus, Trash2, BookOpen, CheckCircle2, Circle, Wand2 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -22,22 +24,22 @@ import { RHYTHM_SHAPES } from '../lib/songCraft';
 
 const shapeLabel = (id) => RHYTHM_SHAPES.find((s) => s.id === id)?.label || null;
 
+// The endpoint returns `{ rounds }`; unwrap so useListResource sees the list. A
+// malformed body throws instead of collapsing into an empty list.
+const fetchRounds = async () => {
+  const data = await listRounds({ silent: true });
+  if (!Array.isArray(data?.rounds)) throw new Error('Unexpected rounds response');
+  return data.rounds;
+};
+
 export default function Rounds() {
   const navigate = useNavigate();
-  const [rounds, setRounds] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { items: rounds, setItems: setRounds, state, error, retry } = useListResource(fetchRounds);
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   // Inline delete confirm (no window.confirm, no two-click-arm) — one row armed
   // at a time via useConfirmDelete + <ConfirmButtonPair>.
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
-
-  useEffect(() => {
-    listRounds({ silent: true })
-      .then((data) => setRounds(Array.isArray(data?.rounds) ? data.rounds : []))
-      .catch((err) => toast.error(err?.message || 'Failed to load rounds'))
-      .finally(() => setLoading(false));
-  }, []);
 
   const [create, creating] = useAsyncAction(async () => {
     const name = title.trim();
@@ -145,8 +147,10 @@ export default function Rounds() {
       </form>
 
       {/* List */}
-      {loading ? (
+      {state === 'loading' ? (
         <p className="text-sm text-gray-500">Loading rounds…</p>
+      ) : state === 'error' ? (
+        <ListLoadError what="rounds" error={error} onRetry={retry} />
       ) : rounds.length === 0 ? (
         <p className="text-sm text-gray-500">No rounds yet — write your first above.</p>
       ) : (

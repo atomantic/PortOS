@@ -55,10 +55,15 @@ vi.mock('../cos/cosAgentLifecycle.js', async (importOriginal) => ({
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
+// Deferred-imported by the recovery path; the provider lookup and daemon check
+// behind it are pinned in ollamaAgentContext.test.js.
+const { holdRecoveredOllamaAgentWork } = vi.hoisted(() => ({ holdRecoveredOllamaAgentWork: vi.fn() }));
+vi.mock('../ollamaAgentContext.js', () => ({ holdRecoveredOllamaAgentWork }));
+
 import { connectTuiSessionViaRunner, getActiveAgentsFromRunner, terminateAgentViaRunner } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
 import { AGENT_RECORD_UNREADABLE, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
-import { activeAgents, runnerAgents, spawningTasks } from './agentState.js';
+import { activeAgents, dropRunnerAgent, runnerAgents, spawningTasks } from './agentState.js';
 import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
@@ -362,5 +367,48 @@ describe('readRunnerCompletionReceipt', () => {
 
   it('returns null when no receipt exists', async () => {
     await expect(readRunnerCompletionReceipt('agent-missing', record)).resolves.toBeNull();
+  });
+});
+
+describe('syncRunnerAgents re-registers surviving Ollama-backed agents as in-flight work (#17342)', () => {
+  const survivor = { id: 'agent-1', taskId: 'task-1', pid: 1234, startedAt: Date.now(), kind: 'cli', processActive: true, liveness: 'pid' };
+  let release;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runnerAgents.clear();
+    activeAgents.clear();
+    spawningTasks.clear();
+    release = vi.fn();
+    holdRecoveredOllamaAgentWork.mockResolvedValue(release);
+    vi.mocked(getActiveAgentsFromRunner).mockResolvedValue([survivor]);
+  });
+
+  it('holds the daemon for the recovered run until its entry is dropped', async () => {
+    const record = { id: 'agent-1', status: 'running', metadata: { providerId: 'claude-ollama', runId: 'run-1' } };
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue(record);
+
+    await expect(syncRunnerAgents()).resolves.toBe(1);
+
+    expect(holdRecoveredOllamaAgentWork).toHaveBeenCalledWith(record);
+    expect(runnerAgents.get('agent-1')?.releaseOllamaWork).toBe(release);
+    expect(release).not.toHaveBeenCalled();
+
+    dropRunnerAgent('agent-1');
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-acquire a hold for an agent this process already tracks', async () => {
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ id: 'agent-1', status: 'running', metadata: { providerId: 'claude-ollama' } });
+    await syncRunnerAgents();
+    await syncRunnerAgents();
+    expect(holdRecoveredOllamaAgentWork).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the Ollama lookup for a record that names no provider', async () => {
+    vi.mocked(readAgentRecordOrUnreadable).mockResolvedValue({ id: 'agent-1', status: 'running', metadata: {} });
+    await expect(syncRunnerAgents()).resolves.toBe(1);
+    expect(holdRecoveredOllamaAgentWork).not.toHaveBeenCalled();
+    expect(runnerAgents.has('agent-1')).toBe(true);
   });
 });

@@ -61,8 +61,15 @@ vi.mock('../services/apiCore.js', async importOriginal => {
 vi.mock('../services/apiLocalLlm.js', async (importOriginal) => ({
   ...await importOriginal(),
   getLocalPersistentMindSetup: vi.fn(async () => null),
+  // The Generation tab's context planner reads on mount; it has its own suite.
+  getContextPlans: vi.fn(async () => ({ budgetBytes: null, plans: [] })),
 }));
 vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+// The Mixture of Agents section mounts on the presets view; it has its own suite.
+vi.mock('../services/apiMoaPresets', () => ({
+  listMoaPresets: vi.fn(async () => ({ presets: [], maxReferenceModels: 5, instructions: null })),
+  createMoaPreset: vi.fn(), updateMoaPreset: vi.fn(), deleteMoaPreset: vi.fn(),
+}));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
 vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
 vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
@@ -156,6 +163,8 @@ const renderPage = async (initialPath) => {
 // switch (the drawer renders only the active panel).
 const openEditorTab = async (label) => {
   fireEvent.click(await screen.findByRole('tab', { name: label }));
+  // Settle tab-mount reads (the Generation tab's context planner) inside act.
+  await act(async () => {});
 };
 
 // The rare page actions (Compare local models, Fleet setup, Load Samples) sit

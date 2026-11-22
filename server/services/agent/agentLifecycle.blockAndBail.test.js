@@ -634,7 +634,7 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
 
     await spawnAgentForTask({ id: 'task-job', metadata: { app: APP, jobId: 'job-7' } });
 
-    expect(vi.mocked(cosEvents.emit).mock.calls).toContainEqual(['job:spawn-failed', { jobId: 'job-7', reason: 'failed' }]);
+    expect(vi.mocked(cosEvents.emit).mock.calls).toContainEqual(['job:spawn-failed', { jobId: 'job-7', reason: 'failed', error: 'setup blew up' }]);
   });
 });
 

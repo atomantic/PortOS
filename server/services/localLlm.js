@@ -881,6 +881,7 @@ export async function getStatus() {
   )
   return {
     backend: getBackend(),
+    installs: listActiveInstalls(),
     ollama: {
       disabled: Boolean(settings.localLlm?.ollama?.disabled),
       installed: ollamaCli || ollamaStatus.available,
@@ -1260,7 +1261,7 @@ export async function previewInstallModel(backend, modelId) {
   }
 }
 
-async function performInstallModel(backend, modelId, onProgress, { force = false } = {}) {
+async function performInstallModel(backend, modelId, onProgress, { force = false, signal } = {}) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   // Resolve-not-throw: every other failure this function can hit (unknown
   // backend, OLLAMA_OUTDATED, ...) resolves `{ success: false, error }` —
@@ -1278,7 +1279,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
     const importSpec = getOllamaImportSpec(modelId)
     const result = importSpec
       ? await ollamaManager.importModelFromHfSafetensors(importSpec, onProgress)
-      : await ollamaManager.pullModel(modelId, onProgress)
+      : await ollamaManager.pullModel(modelId, onProgress, { signal })
     if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
   }
@@ -1294,8 +1295,9 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
     // `lms get` streams substantial progress to stdout; the default 1MB
     // maxBuffer overflows and surfaces as a false install failure (see
     // voice/bootstrap.js which uses the same 64MB ceiling for `lms get`).
-    const r = await execFileAsync('lms', ['get', '-y', modelId], { timeout: LMS_INSTALL_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 })
+    const r = await execFileAsync('lms', ['get', '-y', modelId], { timeout: LMS_INSTALL_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, signal })
       .then(() => ({ ok: true })).catch((err) => ({ _err: err.stderr || err.message }))
+    if (signal?.aborted) return installCanceled(modelId)
     if (r._err) return { success: false, error: r._err, modelId }
     lmStudioManager.resetCache()
     void syncLocalProviderModels({ backend: 'lmstudio', force: true })
@@ -1359,8 +1361,46 @@ async function performDeleteModel(backend, modelId) {
  * @param {boolean} [options.force] Re-download even when the weights are present
  * @returns {Promise<Object>} `{ success, ... }` — never throws (see performInstallModel)
  */
+// In-flight installs, one per backend + model, so Cancel can reach the pull a
+// request started. In-memory on purpose: a restart ends every pull anyway.
+const activeInstalls = new Map()
+const installKey = (backend, modelId) => `${backend}:${modelId}`
+const installCanceled = (modelId) => ({ success: false, canceled: true, code: 'INSTALL_CANCELED', error: 'Download canceled', modelId })
+
+/** The model downloads this process is running now, for the status payload. */
+export function listActiveInstalls() {
+  return [...activeInstalls.values()].map(({ backend, modelId, startedAt, cancelable }) => ({ backend, modelId, startedAt, cancelable }))
+}
+
+/**
+ * Stop an in-flight install. The install itself resolves `INSTALL_CANCELED`
+ * and removes what it had partly downloaded.
+ */
+export function cancelModelInstall(backend, modelId) {
+  const entry = activeInstalls.get(installKey(backend, modelId))
+  if (!entry) return { success: false, code: 'INSTALL_NOT_RUNNING', error: `No download of ${modelId} is running on ${backend}` }
+  // An Ollama Safetensors import stages the checkpoint and then runs `ollama create`
+  // under its own staging lifecycle, which takes no signal; answering success here
+  // would leave it running behind a "canceled" banner.
+  if (!entry.cancelable) {
+    return { success: false, code: 'INSTALL_NOT_CANCELABLE', error: `${modelId} is an Ollama import and can't be canceled once started` }
+  }
+  console.log(`🛑 Local LLM: canceling ${backend} download of ${modelId}`)
+  entry.controller.abort()
+  return { success: true }
+}
+
 export async function installModel(backend, modelId, onProgress, options = {}) {
-  const result = await performInstallModel(backend, modelId, onProgress, options)
+  const key = installKey(backend, modelId)
+  if (activeInstalls.has(key)) {
+    return { success: false, code: 'INSTALL_IN_PROGRESS', error: `${modelId} is already downloading on ${backend}`, modelId }
+  }
+  const controller = new AbortController()
+  const cancelable = !(backend === 'ollama' && getOllamaImportSpec(modelId))
+  activeInstalls.set(key, { backend, modelId, controller, cancelable, startedAt: new Date().toISOString() })
+  const result = await performInstallModel(backend, modelId, onProgress, { ...options, signal: controller.signal })
+    .finally(() => activeInstalls.delete(key))
+  if (controller.signal.aborted && !result?.success) return installCanceled(modelId)
   if (result?.success && !result.pending) {
     // The row comes from the shared builder the SCAN uses, so a tracked model and
     // a scanned one carry the same size semantics, cleanup warning and delete
@@ -1370,8 +1410,37 @@ export async function installModel(backend, modelId, onProgress, options = {}) {
       ...localModelInventoryRow({ backend, modelId }),
       source: 'download',
     })
+    if (backend === 'ollama') await applyRecommendedContextWindow(modelId).catch((err) => console.warn(`⚠️ Context window for ${modelId} not set: ${err.message}`))
   }
   return result
+}
+
+/**
+ * List installed Ollama models with their context plans (KV size per window, recommended window).
+ * @returns {Promise<{ budgetBytes: number|null, cacheType: string, cacheTypeSource: string, plans: object[] }>}
+ */
+export async function listContextPlans() {
+  const { planInstalledModels } = await import('./contextMemoryPlanner.js')
+  const models = await listModels('ollama').catch(() => [])
+  return planInstalledModels(models)
+}
+
+/**
+ * Give a newly installed Ollama model the largest window that fits this host
+ * (its native maximum when memory allows), as a per-model num_ctx on the
+ * built-in Ollama provider. Leaves an override the user already set alone.
+ */
+async function applyRecommendedContextWindow(modelId) {
+  const provider = await getProviderById('ollama')
+  if (!provider || provider.modelNumCtx?.[modelId]) return null
+  const { planModelContext, resolveContextPlanHost } = await import('./contextMemoryPlanner.js')
+  const model = (await listModels('ollama', true).catch(() => [])).find((m) => m.id === modelId) || { id: modelId }
+  // planModelContext returns no recommendation when the host budget is unknown and the cache is reserved.
+  const plan = await planModelContext(model, await resolveContextPlanHost())
+  if (!plan.recommended) return null
+  await updateProvider('ollama', { modelNumCtx: { ...(provider.modelNumCtx || {}), [modelId]: plan.recommended } })
+  console.log(`📏 ${modelId}: per-model num_ctx set to ${plan.recommended} (largest window that fits this host)`)
+  return plan.recommended
 }
 
 /**

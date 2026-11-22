@@ -31,6 +31,7 @@ Manage local applications, terminal environments, system resources, and develope
 | **PortOS Submodules** | `/apps/portos-default/submodules`, `/devtools/submodules` | Git submodule management for PortOS and managed repositories, submodule update checks, and recursive synchronization. | [CONTRIBUTING.md](../CONTRIBUTING.md) |
 | **Web Shell** | `/shell` | Browser-based interactive terminal multiplexer for host command execution and active debugging. | — |
 | **Process Manager** | `/devtools/processes` | Real-time PM2 process table, status inspection, memory/CPU usage, and manual process restarts. | [PM2.md](../PM2.md) |
+| **Security Camera** | `/security` | Live webcam and microphone monitor with audio level meter, device selection, and a feed that can route host microphone audio to the speakers. | — |
 | **System Resources & Health** | `/system-resources/overview`, `/system-resources` | Host-level operational signals, CPU/RAM utilization, disk thresholds, top processes, and running build/commit hash validation. | [METRICS.md](../METRICS.md) |
 | **Storage Report & Disk Cleanup** | `/system-resources/storage` | Comprehensive disk usage breakdown, cache directory inspection, AI-assisted cleanup triage, and temporary artifact removal. | [STORAGE.md](../STORAGE.md) |
 | **Active Queues** | `/system-resources/queues` | Live inspection of background job queues (media renders, agent tasks, batch jobs), queue prioritization, and cancellation. | — |
@@ -58,7 +59,7 @@ Submit tasks, manage durable autonomous agents, schedule recurring automations, 
 
 | Surface / Page | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Chief of Staff Tasks** | `/cos/tasks` | Task dispatch queue, priority scheduling (HIGH, MEDIUM, LOW), auto-execution vs user approval gates, task context preparation, and learning ETAs. | [Chief of Staff](./chief-of-staff.md), [CoS Enhancement](./cos-enhancement.md) |
+| **Chief of Staff Tasks** | `/cos/tasks` | Task dispatch queue, priority scheduling (HIGH, MEDIUM, LOW), auto-execution vs user approval gates, task context preparation, and learning ETAs. | [Chief of Staff](./chief-of-staff.md) |
 | **Agent Runs & Feedback** | `/cos/agents` | Live streaming agent output, token counts, transcript inspection, and durable rating/feedback collection for continuous learning. | [Agent Runner](./cos-agent-runner.md) |
 | **Schedule Timeline & Workflows** | `/cos/workflow`, `/cos/schedule` | Visual Gantt-style schedule editor showing launch order, task dependencies, concurrency limits, and cron schedules. | [Chief of Staff](./chief-of-staff.md) |
 | **Operational Briefings & Digest** | `/cos/briefing`, `/cos/digest` | Morning briefings of operational signals, system alerts, pending approvals, and end-of-day accomplishment rollups. | [GOALS_OPERATIONAL.md](../GOALS_OPERATIONAL.md) |
@@ -185,7 +186,7 @@ Unified communication channels, local voice assistant, community stewardship, an
 | **Voice Mode** | `/settings/voice` | Hands-free voice assistant with continuous VAD (AudioWorklet), speech-to-text (Whisper local or Web Speech), local LLM orchestration, text-to-speech (Piper or Qwen3-TTS), barge-in support, and `ui_navigate` tool execution. | [Voice Mode](./voice.md) |
 | **Ambient Display Mode** | `/ambient` | Fullscreen idle dashboard, ambient animations, system status ticker, and display screensaver. | — |
 | **Eidoverse Worlds** | `/eidoverse` | Private, install-local 3D world for the human and Persistent Mind/CoS agents, with durable name-based identity, world history, deterministic PortOS resource projection, and governed world augmentation. | [Eidoverse Worlds](./eidoverse.md) |
-| **OpenWorld (retired compatibility surface)** | `/openworld`, `/city` | Historical Three.js / React Three Fiber world; legacy routes redirect to Eidoverse so existing bookmarks remain usable. | [OpenWorld](./openworld.md) |
+| **OpenWorld (retired compatibility surface)** | `/openworld`, `/city` | Historical Three.js / React Three Fiber world; legacy routes redirect to Eidoverse so existing bookmarks remain usable. | [Eidoverse Worlds](./eidoverse.md) |
 
 ---
 
@@ -199,7 +200,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 | **Model Library** | `/models/llms` | The Ollama / LM Studio weights catalog — find, install, compare, and remove models — plus the Abuse Guard classifier at `/models/llms/abuse`. | [Claude on Ollama](./claude-ollama.md) |
 | **Speculative Decoding** | `/models/llms-runtimes` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./dflash2.md), [MTPLX](./mtplx.md), [RTX 3090 vLLM](./qwen38-rtx3090.md), [SGLang Qwen](./sglang-qwen38.md) |
 | **Embeddings Management** | `/models/embeddings` | Local text embedding models (Nomic, Ollama) and pgvector semantic index configuration. | [STORAGE.md](../STORAGE.md) |
-| **LoRAs & Model Training** | `/models/loras`, `/models/training` | LoRA adapter discovery, Civitai downloads, image captioning, and local FLUX LoRA training dataset management. | — |
+| **LoRAs** | `/models/loras` (`/models/training` redirects here) | Supported LoRA adapter discovery and inference management, Civitai downloads, and removal of retired LoRA training datasets and runs. LoRA training is retired. | [Data Maintenance](../DATA_MAINTENANCE.md) |
 | **Media Models Storage** | `/models/media` | Hugging Face cache management and storage inspection for image/video diffusion models. | — |
 | **Model Status & VRAM** | `/models/status` | Live resident VRAM/RAM inspection, model unloading, and memory optimization. | — |
 | **Performance Benchmarks** | `/models/performance` | Automated throughput measurement (tokens/sec, chars/sec, TTFT) across models and engines. | — |
@@ -208,7 +209,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 | **Instances & Peer Federation** | `/instances`, `/settings/sharing` | Multi-install peer federation across Tailscale VPN, capability discovery, and federated media generation offloading. | [FEDERATED_MEDIA_PROVIDERS.md](../FEDERATED_MEDIA_PROVIDERS.md) |
 | **PostgreSQL Datastore** | `/settings/database` | Mandatory local PostgreSQL datastore with pgvector extension, migrations, and storage classification contract. | [STORAGE.md](../STORAGE.md), [Postgres ADR](../decisions/2026-06-07-postgres-as-primary-datastore.md) |
 | **Backup & Restore** | `/settings/backup` | Automated filesystem rsync snapshots and database dumps with point-in-time restore. | [BACKUP.md](../BACKUP.md) |
-| **Security & Trust Model** | `/settings/security`, `/security` | Opt-in instance password authentication, TLS certificates (`setup:cert`), Tailscale trust boundary, port allocation, and audit logs. | [SETUP.md](../SETUP.md), [PORTS.md](../PORTS.md), [REMOTE_DESKTOP.md](../REMOTE_DESKTOP.md) |
+| **Security & Trust Model** | `/settings/security` | Opt-in instance password authentication, TLS certificates (`setup:cert`), Tailscale trust boundary, port allocation, and audit logs. | [SETUP.md](../SETUP.md), [PORTS.md](../PORTS.md), [REMOTE_DESKTOP.md](../REMOTE_DESKTOP.md) |
 
 ---
 

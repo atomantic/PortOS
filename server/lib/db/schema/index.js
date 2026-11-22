@@ -20,6 +20,7 @@ import { postDdl } from './post.js';
 import { commissionsDdl } from './commissions.js';
 import { userActionsDdl } from './userActions.js';
 import { reviewQueueTriageDdl } from './reviewQueueTriage.js';
+import { autonomousJobNotepadsDdl } from './autonomousJobNotepads.js';
 import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
 import { cosTasksDdl } from './cosTasks.js';
 import { cosAgentsDdl } from './cosAgents.js';
@@ -53,6 +54,7 @@ export {
   commissionsDdl,
   userActionsDdl,
   reviewQueueTriageDdl,
+  autonomousJobNotepadsDdl,
   cosAgentFeedbackDdl,
   cosTasksDdl,
   cosAgentsDdl,
@@ -98,6 +100,7 @@ export function buildUpgradeDdl() {
     ...commissionsDdl,
     ...userActionsDdl,
     ...reviewQueueTriageDdl,
+    ...autonomousJobNotepadsDdl,
     ...cosAgentFeedbackDdl,
     ...cosTasksDdl,
     ...cosAgentsDdl,

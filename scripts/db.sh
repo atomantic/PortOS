@@ -590,6 +590,72 @@ provision_role() {
       pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
 }
 
+# Homebrew's pgvector bottle only ships builds for the newest PostgreSQL
+# majors. A `brew upgrade` can move it past postgresql@17 and unlink the old
+# vector library, leaving the running server failing every vector query with
+# `could not access file "$libdir/vector"`. When the pg17 keg has no vector
+# library, build the same pgvector release from source against that keg.
+# `make install` writes real files into the keg's shared lib/extension dirs,
+# which later pgvector upgrades (symlink-only) leave alone.
+ensure_pgvector_for_pg17() {
+  local pg_config pkglibdir version build_dir
+  pg_config="$(brew --prefix postgresql@17)/bin/pg_config"
+  pkglibdir="$("$pg_config" --pkglibdir)"
+  if [ -e "$pkglibdir/vector.dylib" ] || [ -e "$pkglibdir/vector.so" ]; then
+    log "pgvector library present for PostgreSQL 17"
+    return 0
+  fi
+  version="$(brew list --versions pgvector | awk '{print $2}' | sed 's/_.*//')"
+  warn "Homebrew's pgvector ${version:-build} has no PostgreSQL 17 library in $pkglibdir; building it from source"
+  build_dir="$(mktemp -d)"
+  if ! git clone --quiet --depth 1 ${version:+--branch "v$version"} https://github.com/pgvector/pgvector.git "$build_dir/pgvector" ||
+     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" >/dev/null ||
+     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" install >/dev/null; then
+    rm -rf "$build_dir"
+    err "Could not build pgvector for PostgreSQL 17 (needs git and the Xcode command line tools)"
+    exit 1
+  fi
+  rm -rf "$build_dir"
+  log "pgvector ${version} built and installed for PostgreSQL 17"
+}
+
+# A `brew upgrade` swaps the postgresql@17 keg's binaries and libraries but
+# leaves the old server process running, so new backends load the new
+# libraries into the old binary and fail (`Symbol not found` in plpgsql, the
+# rebuilt vector library). When the running server's minor version differs
+# from the installed keg and Homebrew manages the service, restart it; when
+# something else runs it, stop with the exact restart to do.
+restart_stale_brew_pg17() {
+  [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1 || return 0
+  local running installed sys_user
+  sys_user="$(whoami)"
+  running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]' || true)"
+  installed="$("$(brew --prefix postgresql@17)/bin/pg_config" --version 2>/dev/null | sed -E 's/^[^0-9]*([0-9]+)\.([0-9]+).*/\1 \2/' | awk '{ printf "%d", $1 * 10000 + $2 }' || true)"
+  case "$running" in ''|*[!0-9]*) return 0 ;; esac
+  case "$installed" in ''|*[!0-9]*) return 0 ;; esac
+  # Another major on this port is not the keg we manage.
+  [ $((running / 10000)) -eq $((installed / 10000)) ] || return 0
+  [ "$running" -ne "$installed" ] || return 0
+  if brew services list 2>/dev/null | awk '$1 == "postgresql@17" { print $2 }' | grep -qx started; then
+    warn "PostgreSQL server ($running) is older than the installed postgresql@17 ($installed) after a Homebrew upgrade; restarting it"
+    brew services restart postgresql@17 >/dev/null || true
+    local i
+    for i in $(seq 1 30); do
+      pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    running="$(pg_bound psql -X -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc 'SHOW server_version_num' 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ "$running" = "$installed" ]; then
+      log "PostgreSQL restarted on the installed version"
+      return 0
+    fi
+    err "PostgreSQL did not come back on the installed version after a restart. Check: brew services list"
+    exit 1
+  fi
+  err "PostgreSQL on port $PGPORT is running an older binary ($running) than the installed postgresql@17 ($installed). Restart that server, then re-run: npm run setup:db"
+  exit 1
+}
+
 cmd_setup_native() {
   info "Setting up native PostgreSQL for PortOS..."
 
@@ -613,6 +679,7 @@ cmd_setup_native() {
     else
       log "pgvector already installed"
     fi
+    ensure_pgvector_for_pg17
 
     # Ensure pg17 binaries are on PATH
     PG_BIN="$(brew --prefix postgresql@17)/bin"
@@ -668,6 +735,8 @@ cmd_setup_native() {
     fi
     PGPORT="$pg_port"
   fi
+
+  restart_stale_brew_pg17
 
   # Step 3: Create portos user if it doesn't exist
   # Connect as the current system user (default Homebrew superuser) to create the role

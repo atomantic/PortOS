@@ -184,3 +184,40 @@ describe('projection maintenance', () => {
       .toEqual([agentIdAt(1)]);
   });
 });
+
+describe('selectArchivedCompletions (#17309)', () => {
+  const DAYS = ['2026-03-07', '2026-03-08'];
+  const appRecord = (i, app, taskId) => ({
+    ...recordAt(i), taskId, startedAt: completedAtAt(i), metadata: { taskType: 'user', app },
+  });
+
+  async function seedTwoDays({ version1 = false } = {}) {
+    await rm(fixture, { recursive: true, force: true });
+    await mkdir(fixture, { recursive: true });
+    const records = [appRecord(0, 'app-a', 'task-0'), appRecord(1, 'app-b', 'task-1'), appRecord(2, 'app-a', 'task-2')];
+    const days = [DAYS[0], DAYS[0], DAYS[1]];
+    await writeFile(join(fixture, 'index.json'), JSON.stringify(Object.fromEntries(records.map((r, n) => [r.id, days[n]]))));
+    for (const [n, record] of records.entries()) await writeArchive(record, days[n]);
+    if (version1) {
+      await writeFile(join(fixture, 'index.order.json'), JSON.stringify({
+        version: 1, entries: Object.fromEntries(records.map(r => [r.id, [r.completedAt, 3]])),
+      }));
+    }
+  }
+
+  it('backfills an unprojected day once, then selects by app and task id without reading metadata', async () => {
+    await seedTwoDays({ version1: true }); // a version-1 sidecar decodes empty
+    const index = await import('./cosAgentIndex.js');
+
+    const forApp = await index.selectArchivedCompletions({ dates: DAYS, app: 'app-a' });
+    expect(forApp.map(row => row.id)).toEqual([agentIdAt(2), agentIdAt(0)]);
+    expect(io.dayScans).toBe(2);
+
+    io.metadata = 0;
+    io.dayScans = 0;
+    const forTask = await index.selectArchivedCompletions({ dates: DAYS, taskIds: ['task-1'] });
+    expect(forTask.map(row => row.id)).toEqual([agentIdAt(1)]);
+    expect(io.metadata).toBe(0);
+    expect(io.dayScans).toBe(0);
+  });
+});

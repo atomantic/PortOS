@@ -183,6 +183,14 @@ const RUNTIME_ROWS = [
     docsUrl: 'https://moonshotai.github.io/kimi-cli/',
   },
   {
+    vendor: 'hermes',
+    label: 'Hermes Agent CLI',
+    // Hermes ships a source installer script (it provisions its own Python/Node toolchain).
+    install: { kind: 'script', url: 'https://hermes-agent.nousresearch.com/install.sh' },
+    selfUpdate: ['update'],
+    docsUrl: 'https://hermes-agent.nousresearch.com/docs/',
+  },
+  {
     vendor: 'antigravity',
     label: 'Antigravity CLI',
     // Antigravity ships a single compiled binary, not an npm package.

@@ -8,12 +8,14 @@
  * the board.
  */
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Plus, Palette, Trash2, ImageIcon, FileText, Film } from 'lucide-react';
 import CombineMoodBoards from '../components/moodBoard/CombineMoodBoards';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import ListLoadError from '../components/ui/ListLoadError';
+import useListResource from '../hooks/useListResource';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import EmptyState from '../components/EmptyState';
@@ -184,24 +186,16 @@ function MoodBoardCard({ board, onDelete, isConfirming, onConfirmDelete, onCance
   );
 }
 
+const fetchBoards = () => listMoodBoards({ silent: true });
+
 export default function MoodBoards() {
   const navigate = useNavigate();
-  const [boards, setBoards] = useState([]);
+  const { items: boards, setItems: setBoards, state, error, retry } = useListResource(fetchBoards);
+  const loading = state === 'loading';
   const sortedBoards = useMemo(() => [...boards].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })), [boards]);
-  const [loading, setLoading] = useState(true);
   const [combining, setCombining] = useState(false);
   const [creating, setCreating] = useState(false);
   const [confirmingId, setConfirmingId] = useState(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const data = await listMoodBoards({ silent: true }).catch(() => null);
-    if (data) setBoards(Array.isArray(data) ? data : []);
-    else toast.error('Failed to load mood boards');
-    setLoading(false);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
 
   const handleCreate = async () => {
     // The header button is disabled while a create is in flight, but the empty
@@ -231,7 +225,7 @@ export default function MoodBoards() {
         subtitle="Collect visual and textual references for your universes, scenes, and treatments."
         actions={(
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setCombining(true)} disabled={loading || boards.length < 2} className="min-h-[44px] px-3 text-sm rounded border border-port-border text-gray-200 disabled:opacity-50">
+            <button type="button" onClick={() => setCombining(true)} disabled={state !== 'ready' || boards.length < 2} className="min-h-[44px] px-3 text-sm rounded border border-port-border text-gray-200 disabled:opacity-50">
               Combine boards
             </button>
             <button
@@ -250,6 +244,8 @@ export default function MoodBoards() {
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {loading ? (
           <PageSkeleton header="none" label="Loading mood boards" cards={4} sidebar={false} />
+        ) : state === 'error' ? (
+          <ListLoadError what="mood boards" error={error} onRetry={retry} />
         ) : boards.length === 0 ? (
           <EmptyState
             icon={Palette}

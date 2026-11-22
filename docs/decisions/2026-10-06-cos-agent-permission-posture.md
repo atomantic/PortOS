@@ -58,9 +58,10 @@ failed run.
 - Untrusted-content stages: already `plan` / `acceptEdits` + sandbox.
 - A user who wants auto mode for an interactive-attached session can pin it in
   `provider.args`. Codex and kimi already skip their injected bypass when the
-  argv declares a posture (`codexHasApprovalPolicy`); the Claude headless
-  builder (`claudeSpawnArgs`) always prepends `--dangerously-skip-permissions`,
-  so that override is not yet honored — tracked as a follow-up.
+  argv declares a posture (`codexHasApprovalPolicy`), and the Claude headless
+  builder (`claudeSpawnArgs`) likewise omits the default
+  `--dangerously-skip-permissions` when the provider argv already pins a
+  posture (#10419).
 
 ## Revisit when
 

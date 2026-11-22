@@ -145,6 +145,8 @@ function classifyFit(sizeBytes, usableBytes) {
 }
 
 const normalizeText = (value) => String(value || '').trim()
+// A Hub repo id as typed: one `owner/name`, no spaces or extra path segments.
+const REPO_ID_RE = /^[\w.-]+\/[\w.-]+$/
 
 // Ollama installed ids are full `hf.co/<repo>:<quant>` strings — lowercase and
 // drop a `:latest` tag for comparison. (LM Studio matching goes through
@@ -863,14 +865,21 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
   // non-Apple hosts, or audio. `appleSilicon` is route-injected (default false),
   // keeping tests deterministic regardless of their host.
   const wantMlx = appleSilicon && backend === 'lmstudio' && requestedCategory !== 'audio'
-  const [ggufModelsRaw, mlxModelsRaw] = await Promise.all([
+  // A full repo id (`owner/name`) names one model, and an original release is
+  // usually safetensors the GGUF filter drops. Ask the Hub for that repo's
+  // quantized derivatives too, so its runnable builds lead the results.
+  const baseRepo = ggufOnly && REPO_ID_RE.test(normalizeText(query)) ? normalizeText(query) : null
+  const [ggufModelsRaw, mlxModelsRaw, quantizedRaw] = await Promise.all([
     fetchModels(search, fetchLimit, ggufOnly ? 'gguf' : null),
     // MLX is optional enrichment — a transient/API-specific MLX-query failure must
     // not blank the primary GGUF results, so swallow it to an empty list. (The
     // GGUF query still throws on failure, preserving the original error behaviour.)
-    wantMlx ? fetchModels(mlxSearch, fetchLimit, 'mlx').catch(() => []) : Promise.resolve([])
+    wantMlx ? fetchModels(mlxSearch, fetchLimit, 'mlx').catch(() => []) : Promise.resolve([]),
+    // Enrichment like the MLX query: a failure must not blank the main results.
+    baseRepo ? fetchModels('', fetchLimit, ['gguf', `base_model:quantized:${baseRepo}`]).catch(() => []) : Promise.resolve([]),
   ])
-  let models = ggufModelsRaw
+  const quantizedIds = new Set(quantizedRaw.map((model) => model.id || model.modelId).filter(Boolean))
+  let models = [...quantizedRaw, ...ggufModelsRaw]
   if (models.length === 0 && ggufOnly) models = await fetchModels(search, fetchLimit, null)
 
   const seen = new Set()
@@ -919,7 +928,8 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
 
   const results = [...curated, ...live, ...mlxLive]
     .filter((model) => requestedCategory !== 'security-uncensored' || model.reducedSafeguards)
-    .sort((a, b) => b.score - a.score || b.downloads - a.downloads)
+    .sort((a, b) => Number(quantizedIds.has(b.repository)) - Number(quantizedIds.has(a.repository))
+      || b.score - a.score || b.downloads - a.downloads)
     .slice(0, limit)
 
   return enrichWithSizes(results, { backend, usableBytes, installedIds })

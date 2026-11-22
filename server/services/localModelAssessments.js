@@ -102,8 +102,17 @@ export const DEFAULT_CONTEXT_TOKENS = [512, 4096, 16384];
 // measurement (see lib/localModelAssessment.js).
 const CHARS_PER_TOKEN = 4;
 
-// Short fixed answer: the point is prefill + decode at a context, comparable across models.
-const SAMPLE_MAX_TOKENS = 96;
+// Fixed output budget: the point is prefill + decode at a context, comparable across models. Long
+// enough that a thinking model's reasoning and a multi-token-prediction runtime's draft acceptance
+// average over many decode steps rather than a handful (#17430).
+const SAMPLE_MAX_TOKENS = 256;
+
+// One short generation before the measured samples. A runtime's first request pays one-off costs
+// (weights paging in, kernel compilation, a speculative-decoding draft head warming up) that are not
+// its steady-state speed; averaging them into sample 1 ranked a faster runtime below a slower one.
+// Its time is recorded separately as `warmup`, never folded into `performance`.
+const WARMUP_MAX_TOKENS = 16;
+const WARMUP_PROMPT = 'Reply with the single word: ready.';
 
 // Per-sample ceiling; a timeout is recorded as a resource failure and the run moves on.
 const SAMPLE_TIMEOUT_MS = 120000;
@@ -551,6 +560,44 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
     message: `Measuring ${modelId} — ${contexts.length} generation${contexts.length === 1 ? '' : 's'}…`,
   });
 
+  // Both runners take the same shape, including the request-applied knobs —
+  // the ONLY difference is whether the model is reached through a configured
+  // provider or straight at a loopback endpoint. runLocalLlmTest resolves
+  // (never throws) for in-stream failures, but can still throw before the
+  // stream opens — an unconfigured provider. Catch that into the same result
+  // shape so one bad backend records a failed sample instead of aborting the
+  // whole assessment with no evidence at all.
+  const generate = (prompt, maxTokens) => {
+    const shared = {
+      modelId,
+      prompt,
+      systemPrompt: SAMPLE_SYSTEM_PROMPT,
+      temperature: 0,
+      maxTokens,
+      timeoutMs: SAMPLE_TIMEOUT_MS,
+      extraBody: request,
+      signal,
+      // Ollama's OpenAI-compatible shim frequently omits usage even though the
+      // native `/api/chat` final frame reports exact tokenizer counts and
+      // eval/prefill durations. Use that transport only for Performance-page
+      // evidence; OpenCode remains on its normal provider endpoint.
+      nativeOllamaUsage: backend === 'ollama',
+    };
+    return (endpoint
+      ? runEndpointLlmTest({ ...shared, runtime: backend, endpoint, apiKey })
+      : runLocalLlmTest({ ...shared, backend })
+    ).catch((err) => ({ backend, modelId, text: '', error: err?.message || 'assessment run failed' }));
+  };
+
+  let warmup = null;
+  if (!signal?.aborted) {
+    emit({ event: 'start', sampleIndex: 0, sampleCount: contexts.length, message: `${modelId}: warming up (not measured)…` });
+    const result = await generate(WARMUP_PROMPT, WARMUP_MAX_TOKENS);
+    const timing = (value) => (Number.isFinite(value) ? value : null);
+    // A failed warm-up is recorded, not fatal: the measured samples below carry their own errors.
+    warmup = { ok: !result?.error, ttftMs: timing(result?.timings?.ttftMs), totalMs: timing(result?.timings?.totalMs), error: result?.error || null };
+  }
+
   const samples = [];
   for (const context of contexts) {
     if (signal?.aborted) break;
@@ -561,32 +608,7 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
       contextTokens: context,
       message: `${modelId}: sample ${samples.length + 1}/${contexts.length} at ${context.toLocaleString('en-US')} tokens of context…`,
     });
-    // runLocalLlmTest resolves (never throws) for in-stream failures, but can
-    // still throw before the stream opens — an unconfigured provider. Catch that
-    // into the same result shape so one bad backend records a failed sample
-    // instead of aborting the whole assessment with no evidence at all.
-    // Both runners take the same shape, including the request-applied knobs —
-    // the ONLY difference is whether the model is reached through a configured
-    // provider or straight at a loopback endpoint.
-    const shared = {
-      modelId,
-      prompt: buildSamplePrompt(context),
-      systemPrompt: SAMPLE_SYSTEM_PROMPT,
-      temperature: 0,
-      maxTokens: SAMPLE_MAX_TOKENS,
-      timeoutMs: SAMPLE_TIMEOUT_MS,
-      extraBody: request,
-      signal,
-      // Ollama's OpenAI-compatible shim frequently omits usage even though the
-      // native `/api/chat` final frame reports exact tokenizer counts and
-      // eval/prefill durations. Use that transport only for Performance-page
-      // evidence; OpenCode remains on its normal provider endpoint.
-      nativeOllamaUsage: backend === 'ollama',
-    };
-    const result = await (endpoint
-      ? runEndpointLlmTest({ ...shared, runtime: backend, endpoint, apiKey })
-      : runLocalLlmTest({ ...shared, backend })
-    ).catch((err) => ({ backend, modelId, text: '', error: err?.message || 'assessment run failed' }));
+    const result = await generate(buildSamplePrompt(context), SAMPLE_MAX_TOKENS);
 
     const sample = toSample(context, result);
     samples.push(sample);
@@ -632,6 +654,8 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
     quantization: card?.quantization ?? null,
     // `null` = never measured; the LM Studio path legitimately reports null.
     residentGb: verdict === 'fits' ? await residentGbFor(backend, modelId) : null,
+    // The discarded first request's time (load and warm-up costs), kept apart from `performance`.
+    warmup,
     assessedAt: new Date().toISOString(),
     environment,
     verdict,

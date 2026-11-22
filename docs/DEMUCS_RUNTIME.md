@@ -28,7 +28,7 @@ No model weights are downloaded by that probe.
 Installation requires `--require-hashes --no-deps --only-binary :all:`. No source
 build, build-backend resolution or loose-package fallback is allowed. The source
 requirements and full regeneration command are in `scripts/ml/requirements/requirements-demucs.txt`
-and the lock header. Use a cooldown at least seven days before regeneration,
+and the lock header. Use a cooldown at least three days before regeneration,
 then audit **every** pin across all platform markers through OSV, including
 malicious-package (`MAL-`) records. Hash verification establishes artifact
 integrity; a lock is not a claim that all its packages are current or that no

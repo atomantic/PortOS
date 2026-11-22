@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
 import { PORTS } from '../lib/ports.js';
 
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
@@ -68,16 +69,16 @@ export async function clearAuth() {
   console.log('📅 Google OAuth tokens cleared');
 }
 
-// The Google SDK is loaded on first use, not at boot (#16558).
-async function createOAuth2Client(credentials) {
-  const { auth } = await import('@googleapis/calendar');
-  return new auth.OAuth2({
+// The owned client is a Node-fetch leaf (#17250). It stays out of the boot
+// package closure that used to pay for google-auth-library (#16558).
+function createOAuth2Client(credentials) {
+  return createGoogleOAuthClient({
     clientId: credentials.clientId,
     clientSecret: credentials.clientSecret,
     redirectUri: credentials.redirectUri || OAUTH_REDIRECT_URI,
     // Token exchange/refresh uses its own transport, before an API request's
-    // deadline applies. Keep the SDK's retries and per-request overrides.
-    transporterOptions: { timeout: GOOGLE_API_TIMEOUT_MS }
+    // deadline applies. Keep the transport's retries and per-request overrides.
+    timeoutMs: GOOGLE_API_TIMEOUT_MS,
   });
 }
 
@@ -85,7 +86,7 @@ export async function getAuthUrl(returnTo = 'calendar') {
   const credentials = await getCredentials();
   if (!credentials) throw new ServerError('No Google OAuth credentials configured', { status: 400 });
 
-  const client = await createOAuth2Client(credentials);
+  const client = createOAuth2Client(credentials);
   const url = client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
@@ -102,7 +103,7 @@ export async function handleCallback(code) {
   const credentials = await getCredentials();
   if (!credentials) throw new ServerError('No credentials configured', { status: 400 });
 
-  const client = await createOAuth2Client(credentials);
+  const client = createOAuth2Client(credentials);
   const { tokens } = await client.getToken(code);
   await saveTokens(tokens);
   oAuth2Client = client;
@@ -122,7 +123,7 @@ export async function getAuthenticatedClient() {
   if (!tokens?.access_token) return null;
 
   if (!oAuth2Client) {
-    oAuth2Client = await createOAuth2Client(credentials);
+    oAuth2Client = createOAuth2Client(credentials);
     oAuth2Client.setCredentials(tokens);
 
     attachTokenPersistence(oAuth2Client);

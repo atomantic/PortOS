@@ -1,0 +1,19 @@
+{
+  "name": "weather.now",
+  "description": "Report the current weather (temperature + conditions) for a location. ",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "lat": {
+        "type": "number",
+        "description": "Latitude (-90 to 90). Omit to use the configured/default location."
+      },
+      "lon": {
+        "type": "number",
+        "description": "Longitude (-180 to 180). Omit to use the configured/default location."
+      }
+    },
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

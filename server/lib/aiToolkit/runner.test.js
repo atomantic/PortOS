@@ -76,6 +76,48 @@ describe('AI Toolkit runner service', () => {
     }
   });
 
+  it('resends on the key a host credential session rotates to, and hands the last failure to the finalizer', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const provider = { id: 'pooled', type: 'api', endpoint: 'https://api.example.com/v1', apiKey: 'example-primary-key', allowCustomEndpoint: true, defaultModel: 'example-model' };
+    // The toolkit's half of the contract only: a session names the key to send
+    // and answers whether a failure should be resent (#17384).
+    const keys = ['example-primary-key', 'example-backup-key'];
+    const session = {
+      get apiKey() { return keys[0]; },
+      onFailure: vi.fn(async ({ status }) => { if (status !== 429 || keys.length < 2) return false; keys.shift(); return true; }),
+      onSuccess: vi.fn(),
+    };
+    const openCredentialSession = vi.fn(async () => session);
+    const runner = createRunnerService({ dataDir, providerService: {}, hooks: { openCredentialSession } });
+    const reader = { read: async () => ({ done: true }), cancel: async () => {}, releaseLock() {} };
+    const providerFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429, text: async () => 'slow down' })
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => reader } });
+    vi.stubGlobal('fetch', providerFetch);
+    try {
+      const { runId } = await runner.createRun({ providerId: provider.id, provider, prompt: 'hello' });
+      const settled = Promise.withResolvers();
+      await runner.executeApiRun({ runId, provider, prompt: 'hello', onSettled: settled.resolve });
+      await settled.promise;
+      expect(openCredentialSession).toHaveBeenCalledWith(provider, 'example-model');
+      expect(providerFetch.mock.calls.map(([, init]) => init.headers.Authorization)).toEqual(['Bearer example-primary-key', 'Bearer example-backup-key']);
+      expect(session.onSuccess).toHaveBeenCalledTimes(1);
+
+      // Exhausted: the run fails on the LAST response, as a lone failure would.
+      providerFetch.mockReset().mockResolvedValue({ ok: false, status: 429, text: async () => 'still slow' });
+      const second = await runner.createRun({ providerId: provider.id, provider, prompt: 'hello' });
+      const done = Promise.withResolvers();
+      await runner.executeApiRun({ runId: second.runId, provider, prompt: 'hello', onComplete: done.resolve });
+      const metadata = await done.promise;
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(metadata.success).toBe(false);
+      expect(metadata.error).toContain('429');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reports settled only after API stream cleanup and asynchronous output hooks', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
@@ -571,6 +613,45 @@ describe('AI Toolkit runner service', () => {
     expect(await readFile(join(dataDir, 'runs', 'run-numctx', 'output.txt'), 'utf-8')).toBe('hello');
   });
 
+  it('sends a supported effort as the Ollama thinking level over the provider boolean', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const fetch = stubNdjsonFetch([`${JSON.stringify({ message: { role: 'assistant', content: 'ok' }, done: true, done_reason: 'stop' })}\n`]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-think-level', provider: runReady({ numCtx: 16384, thinking: true }), model: 'inkling-2-mini:26b-a5b-nvfp4', effort: 'low',
+      prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).think).toBe('low');
+  });
+
+  it('sends an MTPLX Inkling effort as a chat-template kwarg beside the output-token cap', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const fetch = stubStreamingFetch();
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-mtplx-effort',
+      provider: runReady({ id: 'mtplx', endpoint: 'http://localhost:8000/v1', mtplxBacked: true, thinking: true }),
+      model: 'Youssofal/Inkling-2-Mini-MTPLX-Optimized-Speed', effort: 'low', maxTokens: 512,
+      prompt: 'hi', workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    expect(await completed).toMatchObject({ success: true });
+    const body = JSON.parse(fetch.mock.calls[0][1].body);
+    expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, reasoning_effort: 'low' });
+    expect(body.max_tokens).toBe(512);
+    expect(body).not.toHaveProperty('think');
+  });
+
   it('fails an Ollama native run whose stream reports an error frame', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);
@@ -587,6 +668,31 @@ describe('AI Toolkit runner service', () => {
     const result = await completed;
     expect(result.success).toBe(false);
     expect(result.error).toContain('model runner has unexpectedly stopped');
+  });
+
+  // Inkling 2 opened a native tool frame headed by the prompt's own JSON key
+  // (`toolCalls`) mid-reply; Ollama's parser rejected it. That is one malformed
+  // response, so the run must carry a schema/type category rather than UNKNOWN,
+  // which benched the whole Ollama provider and escalated to an investigation.
+  it('classifies an Ollama native stream rejection of model tool markup as parse-error', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    stubNdjsonFetch([
+      `${JSON.stringify({ message: { role: 'assistant', content: 'I will check local chat.' }, done: false })}\n`,
+      `${JSON.stringify({ error: 'invalid Inkling2 tool name "eidoverse.chat" for header "toolCalls"' })}\n`,
+    ]);
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady: async () => ({ success: true }) } });
+    let complete;
+    const completed = new Promise((resolve) => { complete = resolve; });
+
+    await runner.executeApiRun({
+      runId: 'run-numctx-tool-markup', provider: runReady({ numCtx: 16384 }), model: null, prompt: 'hi',
+      workspacePath: process.cwd(), screenshots: [], onData: undefined, onComplete: complete,
+    });
+
+    const result = await completed;
+    expect(result).toMatchObject({ success: false, errorCategory: 'parse-error' });
+    expect(result.errorAnalysis).toMatchObject({ hasError: true, category: 'parse-error' });
   });
 
   it('keeps a non-Ollama endpoint with numCtx on /chat/completions and sends it no num_ctx', async () => {

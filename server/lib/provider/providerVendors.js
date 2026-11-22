@@ -78,6 +78,8 @@ import {
   buildCodexAgentThreadArgs,
   buildEffortArgs,
   isOpencodeCommand,
+  HERMES_COMMAND,
+  isHermesCommand,
   ensureLeadingSubcommand,
   prefixOpencodeModel,
   localRuntimeNamespace,
@@ -867,6 +869,62 @@ const PI = {
   },
 };
 
+// ─── hermes ─────────────────────────────────────────────────────────────────
+//
+// Hermes Agent (NousResearch/hermes-agent, binary `hermes`), per its published CLI reference:
+//   - Headless: `hermes chat --oneshot --quiet --query-file -` answers one prompt and exits;
+//     `--query-file -` reads the prompt from stdin verbatim, so a large prompt never rides argv.
+//   - Unattended runs carry `--yolo` (skips dangerous-command approvals); tool-free callers strip it.
+//   - Interactive: `hermes --tui`; `--model` is accepted at the top level.
+//   - No per-run reasoning-effort flag exists (it is `agent.reasoning_effort` in the user's
+//     config.yaml), so no effort is passed and `effortLevelsForProvider` reports no ladder.
+//   - No switch disables every tool (`--toolsets` only enables sets), so a one-shot is never
+//     tool-free and fails closed through `toolFreeOneShotRefusal`.
+
+const HERMES_APPROVAL_FLAGS = ['--yolo'];
+
+function ensureHermesTuiArgs(baseArgs = []) {
+  const args = [...baseArgs];
+  if (!argvHasFlag(args, ['--tui', '--cli'])) args.unshift('--tui');
+  if (!argvHasFlag(args, HERMES_APPROVAL_FLAGS)) args.push('--yolo');
+  return args;
+}
+
+const hermesCliArgs = (baseArgs, { model }) => {
+  const args = ensureLeadingSubcommand(baseArgs, 'chat');
+  if (!argvHasFlag(args, ['--oneshot'])) args.push('--oneshot');
+  if (!argvHasFlag(args, ['--quiet', '-Q'])) args.push('--quiet');
+  if (!argvHasFlag(args, HERMES_APPROVAL_FLAGS)) args.push('--yolo');
+  if (model && !hasModelFlag(args)) args.push('--model', model);
+  return args;
+};
+
+// `--query-file` replaces any baked query source; stdin carries the prompt.
+function prepareHermesPrompt(args = []) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--query-file') { i += 1; continue; }
+    if (typeof arg === 'string' && arg.startsWith('--query-file=')) continue;
+    out.push(arg);
+  }
+  return { args: [...out, '--query-file', '-'], useStdin: true, cleanup: () => {} };
+}
+
+const HERMES = {
+  id: 'hermes',
+  idFragment: 'hermes',
+  inferredCommand: HERMES_COMMAND,
+  matchCommand: isHermesCommand,
+  // No dedicated matchCliProvider — matches by command, same as matchCommand.
+  tuiArgs: ensureHermesTuiArgs,
+  cliArgs: hermesCliArgs,
+  preparePrompt: prepareHermesPrompt,
+  spawnArgs: defaultSpawnArgs(hermesCliArgs, HERMES_COMMAND),
+  // Only the `--yolo` bypass is stripped; no tool-disable switch exists (see above).
+  toolFreeOneShot: { matchCommand: isHermesCommand },
+};
+
 // ─── claude (default fallback — MUST stay last) ────────────────────────────
 
 function claudeCliArgs(baseArgs, { model, effort, provider }) {
@@ -1084,7 +1142,7 @@ const CLAUDE = {
  * exclusive by construction (distinct binary basenames, or a provider-id
  * check that doesn't overlap with a command-basename check).
  */
-export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, PI, CLAUDE];
+export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, KILO, OPENCHAMBER, HERMES, PI, CLAUDE];
 
 /**
  * A row's `matchCliProvider` may be absent when it's identical to

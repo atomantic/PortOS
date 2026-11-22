@@ -9,6 +9,9 @@ export const getMessageAccounts = () => request('/messages/accounts');
 export const createMessageAccount = (data, options = {}) => request('/messages/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateMessageAccount = (id, data, options = {}) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
+export const getMessageTokenStatus = (options = {}) => request('/messages/debug/token-status', options);
+export const testMessageToken = (provider) => request('/messages/debug/test-token', { method: 'POST', body: JSON.stringify({ provider }) });
+export const clearMessageToken = (provider) => request('/messages/debug/clear-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
 // Returns evaluations plus missingMessageIds for explicit requests (1–100 IDs).
 // Default requests evaluate at most 20 pending messages; accountId is optional.

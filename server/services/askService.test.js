@@ -58,6 +58,15 @@ vi.mock('./calendarSync.js', () => ({
   getEvents: vi.fn(),
 }));
 
+// MoA (#17386): a `moa:` id resolves through the preset store and runs
+// through runPromptThroughProvider, which fans out to the preset's members.
+vi.mock('./moaPresets.js', () => ({
+  resolveMoaProvider: vi.fn(async (id) => (id === 'moa:council'
+    ? { id: 'moa:council', name: 'MoA: Council', type: 'moa', enabled: true, defaultModel: 'agg-big', moaPresetId: 'council' }
+    : null)),
+}));
+vi.mock('./promptRunner.js', async (importOriginal) => ({ ...await importOriginal(), runPromptThroughProvider: vi.fn() }));
+
 // catalogDB is mocked so the catalog retriever never touches Postgres; the real
 // catalogTypes lib (getCatalogType) stays unmocked — it's pure.
 vi.mock('./catalog/catalogDB.js', () => ({
@@ -82,6 +91,7 @@ const calendarSync = await import('./calendarSync.js');
 const providers = await import('./provider/providers.js');
 const providerExecutionReadiness = await import('./provider/providerExecutionReadiness.js');
 
+const promptRunner = await import('./promptRunner.js');
 const askService = await import('./askService.js');
 
 beforeEach(() => {
@@ -903,5 +913,21 @@ describe('tool-free Ask (#9008)', () => {
     const api = { id: 'example-api', type: 'api', enabled: true, endpoint: 'http://127.0.0.1:1', defaultModel: 'm' };
     providers.getProviderById.mockResolvedValue(api);
     await expect(askService.resolveAskProvider('example-api', { hasHostControl: false })).resolves.toBe(api);
+  });
+});
+
+describe('runAsk with an MoA preset', () => {
+  it('runs the preset tool-free without host control, sharing the caller signal, and answers with the aggregator text', async () => {
+    promptRunner.runPromptThroughProvider.mockResolvedValue({ text: 'council answer', runId: 'run-agg' });
+    const controller = new AbortController();
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'hi', providerId: 'moa:council', signal: controller.signal })) events.push(evt);
+
+    expect(providers.getProviderById).not.toHaveBeenCalled();
+    const [args] = promptRunner.runPromptThroughProvider.mock.calls[0];
+    expect(args).toMatchObject({ provider: { id: 'moa:council', type: 'moa' }, source: 'ask', signal: controller.signal, completion: { temperature: 0.4 } });
+    expect(events.filter((e) => e.type === 'delta').map((e) => e.text)).toEqual(['council answer']);
+    expect(events.at(-1)).toMatchObject({ type: 'done', answer: 'council answer', providerId: 'moa:council', model: 'agg-big' });
+    expect(await askService.resolveAskProvider('moa:council', { hasHostControl: false })).toMatchObject({ type: 'moa' });
   });
 });

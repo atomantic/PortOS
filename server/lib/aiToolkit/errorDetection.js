@@ -150,6 +150,24 @@ const ERROR_PATTERNS = [
     suggestedFix: 'The local inference runtime ran out of GPU memory. Retry once the device drains, shrink the context/KV cache, or run a smaller model.'
   },
   {
+    // Ollama's per-model output parser rejected tool-call markup the MODEL
+    // emitted mid-stream (Inkling2: `invalid Inkling2 tool name "x.y" for
+    // header "toolCalls"` when the model opened a native tool frame whose
+    // header disagrees with its body; other parsers: `invalid tool call JSON`,
+    // `qwen3.5 tool call parsing failed`). The daemon is healthy and serves the
+    // next prompt fine, so this is one malformed RESPONSE: `parse-error` keeps
+    // it in the schema/type tier and out of the provider bench
+    // (isRequestSpecificCategory in lib/provider/providerCooldown.js), where
+    // UNKNOWN benched Ollama for every caller and escalated straight to an
+    // investigation. Anchored on the prefix only ./internal/ollamaNativeChat.js
+    // writes, so an agent transcript that merely mentions a tool call can't match.
+    pattern: /Ollama stream error:[^\n]*\btool[ _-]?(?:call|name)\b/i,
+    category: 'parse-error',
+    requiresFallback: true,
+    actionable: false,
+    suggestedFix: 'The model emitted malformed tool-call markup that Ollama could not parse. Retry the request; a model that keeps doing this needs a prompt that asks for plain-text output.'
+  },
+  {
     // Codex's transient model-capacity rejection is not a credential or
     // billing problem. Let the existing rate-limit recovery choose a fallback.
     pattern: /^(?:ERROR:\s*)?Selected model is at capacity\. Please try a different model\.[ \t]*$/im,
@@ -220,6 +238,18 @@ const ERROR_PATTERNS = [
     requiresFallback: true,
     actionable: true,
     suggestedFix: 'Choose a model supported by the signed-in Codex account, or clear the model override to use the CLI default. Changing to API-key authentication uses separate API billing.'
+  },
+  {
+    // llama.cpp's load-time refusal of a GGUF whose `general.architecture` it
+    // was built without, as relayed by Ollama, LM Studio or llama-server. The
+    // weights and the daemon are both fine; only this model needs a newer
+    // runtime build, so it is request-specific like a missing model id rather
+    // than an UNKNOWN that escalates to an investigation task.
+    pattern: /unknown model architecture/i,
+    category: ERROR_CATEGORIES.MODEL_NOT_FOUND,
+    requiresFallback: true,
+    actionable: true,
+    suggestedFix: 'This runtime\'s llama.cpp build predates the model\'s architecture. Update the runtime (Ollama, LM Studio\'s llama.cpp engine, or llama-server) to a release that supports it, then retry.'
   },
   {
     pattern: /unauthorized|invalid.?api.?key|authentication|forbidden|401|403/i,

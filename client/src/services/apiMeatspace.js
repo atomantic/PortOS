@@ -33,7 +33,7 @@ export const syncClinvar = (requestId, options) => request('/meatspace/genome/cl
 export const scanClinvar = () => request('/meatspace/genome/clinvar/scan', { method: 'POST' });
 
 // MeatSpace - Epigenetic Lifestyle Tracking
-export const getEpigeneticInterventions = () => request('/meatspace/genome/epigenetic');
+export const getEpigeneticInterventions = (options = {}) => request('/meatspace/genome/epigenetic', options);
 export const getEpigeneticRecommendations = (categories = [], options = {}) =>
   request(`/meatspace/genome/epigenetic/recommendations${categories.length ? `?categories=${categories.join(',')}` : ''}`, options);
 export const getEpigeneticCompliance = (days = 30) =>

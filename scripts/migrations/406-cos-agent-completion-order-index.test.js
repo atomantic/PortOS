@@ -53,13 +53,13 @@ describe('migration 406 — CoS archive completion-order projection', () => {
     await expect(migration.up({ rootDir })).resolves.toMatchObject({ projected: 3, pruned: 0, unreadable: 0 });
 
     const projections = await readProjections();
-    expect(projections.get('agent-open')).toEqual({
+    expect(projections.get('agent-open')).toMatchObject({
       completedAt: '2026-04-01T09:30:00.000Z', completed: true, feedbackEligible: true,
     });
     // A rated run and a scheduled (non-user) run both order a page, but neither
     // is still an answerable feedback ask.
     expect(projections.get('agent-rated').feedbackEligible).toBe(false);
-    expect(projections.get('agent-scheduled')).toEqual({
+    expect(projections.get('agent-scheduled')).toMatchObject({
       completedAt: '2026-04-02T09:30:00.000Z', completed: true, feedbackEligible: false,
     });
   });

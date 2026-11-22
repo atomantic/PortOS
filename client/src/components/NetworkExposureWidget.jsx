@@ -94,7 +94,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
             <Globe className={`w-5 h-5 ${schemeColor}`} />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Network Exposure</h3>
+            <h2 className="text-base @sm:text-lg font-semibold leading-tight text-white">Network Exposure</h2>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
               <SchemeIcon size={14} className={schemeColor} />
               <span className={schemeColor}>{scheme.toUpperCase()}</span>

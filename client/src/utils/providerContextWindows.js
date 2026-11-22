@@ -23,7 +23,7 @@ import {
   knownProviderContextWindow,
 } from '../../../server/lib/provider/providerContextWindows.js';
 // The Ollama `num_ctx` ceiling, resolved as the server's budgeter and pre-dispatch gate do (#7466), via the toolkit's dependency-free `internal/` leaf.
-import { clampToRuntimeContextWindow } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+import { clampToRuntimeContextWindow, withModelNumCtx } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
 export {
   // Stamps the window PortOS holds a local Ollama daemon at (`runtimeContextWindow` on the readiness payload, #7472) onto a provider projection so the clamp sees the rung the browser can't resolve.
@@ -92,7 +92,8 @@ const claimedModelContextWindow = (provider, model) => {
  * @param {string|null|undefined} model
  * @returns {{tokens: number|null, source: string|null}}
  */
-export const resolveModelContextWindow = (provider, model) => {
+export const resolveModelContextWindow = (rawProvider, model) => {
+  const provider = withModelNumCtx(rawProvider, model);
   const claimed = claimedModelContextWindow(provider, model);
   const tokens = clampToRuntimeContextWindow(provider, claimed.tokens);
   // A clamped window is the daemon's own `num_ctx`, a REPORTED window even when the replaced number was an override or guess.

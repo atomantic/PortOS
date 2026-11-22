@@ -31,7 +31,7 @@ Keep all other packages on PyPI rather than dropping the cooldown.
 
 Keep CPython 3.11 and both x86_64 targets. Preserve the existing output pins,
 markers and unrelated hash blocks (the script seeds resolution from the old
-output; never remove it first), advance the cutoff to a UTC date at least seven
+output; never remove it first), advance the cutoff to a UTC date at least three
 days old, and restore each target/cutoff header. The
 [selective regeneration procedure](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration)
 describes complete-closure constraints and selective generated-block transfer.
@@ -48,7 +48,7 @@ DOC=                  # runtime doc named in the lock header, e.g. docs/WAN22_CU
 CUDA_SCOPED=          # packages routed to the CUDA index, e.g. "torch torchvision"
 LINUX_CUDA_SCOPED=    # extra packages routed to the CUDA index on Linux only
 COMPILE_EXTRA=()      # extra uv pip compile flags
-CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
+CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least three days old
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 for target in windows linux; do

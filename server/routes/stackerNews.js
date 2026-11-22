@@ -179,12 +179,17 @@ router.get('/accounts/:id/items', asyncHandler(async (req, res) => {
   res.json({ items: await stackerNews.listItems(req.params.id) });
 }));
 
-router.post('/items', asyncHandler(async (req, res) => res.status(201).json(await stackerNews.ingestItem(validateRequest(itemSchema, req.body)))));
+router.post('/items', asyncHandler(async (req, res) => {
+  const item = await stackerNews.ingestItem(validateRequest(itemSchema, req.body));
+  emitChanged(req, item.accountId);
+  res.status(201).json(item);
+}));
 
 router.post('/items/:id/analyze', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'item ID');
   const analysis = await stackerNews.analyzeItem(req.params.id);
   if (!analysis) throw new ServerError('Stacker News item not found', { status: 404 });
+  emitChanged(req, analysis.item.accountId);
   res.json(analysis);
 }));
 

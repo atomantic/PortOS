@@ -198,6 +198,36 @@ describe('Outlook batch identity reconciliation (#8635)', () => {
   });
 });
 
+describe('calendar:sync:started is always paired with a terminal event', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({ events: [] });
+  });
+
+  const emittedEvents = io => io.emit.mock.calls.map(([name]) => name);
+
+  it('emits completed with status skipped when the Outlook token is unavailable', async () => {
+    getAccount.mockResolvedValue({ id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'outlook-calendar' });
+    syncOutlookCalendarApi.mockResolvedValue(null);
+    const io = { emit: vi.fn() };
+    expect(await syncAccount(ACCOUNT_ID, io)).toMatchObject({ status: 'skipped' });
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', {
+      accountId: ACCOUNT_ID, newEvents: 0, pruned: 0, status: 'skipped',
+    });
+    expect(emittedEvents(io)).toEqual(['calendar:sync:started', 'calendar:sync:completed']);
+  });
+
+  it('emits completed with status push-only for google-calendar accounts', async () => {
+    getAccount.mockResolvedValue({ id: ACCOUNT_ID, name: 'Example Account', enabled: true, type: 'google-calendar' });
+    const io = { emit: vi.fn() };
+    expect(await syncAccount(ACCOUNT_ID, io)).toMatchObject({ status: 'push-only' });
+    expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', {
+      accountId: ACCOUNT_ID, newEvents: 0, pruned: 0, status: 'push-only',
+    });
+    expect(emittedEvents(io)).toEqual(['calendar:sync:started', 'calendar:sync:completed']);
+  });
+});
+
 describe('Outlook windowed prune (#12961)', () => {
   it('prunes only in-window events missing from the batch', async () => {
     const day = 24 * 60 * 60 * 1000;

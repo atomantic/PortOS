@@ -1,0 +1,10 @@
+{
+  "name": "calendar.next",
+  "description": "Report the next upcoming calendar event. ",
+  "schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  },
+  "sideEffect": "read"
+}

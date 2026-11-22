@@ -17,8 +17,10 @@
  * at an arbitrary local file.
  */
 
-import { basename } from 'path';
+import { mkdir, readFile, writeFile } from 'fs/promises';
+import { basename, extname, join } from 'path';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
+import { stripImageMetadata } from '../../lib/imageClean.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { maxInputImages } from './cloudProviderConfig.js';
 
@@ -70,5 +72,65 @@ export function resolveInputImages({ mode, initImagePath = null, referenceImageP
     paths,
     initPath: resolvedInit,
     referencePaths: resolvedInit ? paths.slice(1) : paths,
+  };
+}
+
+const CLI_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.avif', '.heic', '.heif']);
+
+export function cliPromptImageName(path, index) {
+  const ext = extname(path).toLowerCase();
+  return `input-${index + 1}${CLI_IMAGE_EXTENSIONS.has(ext) ? ext : '.png'}`;
+}
+
+export function cliPromptImageNames({ paths, initPath }) {
+  const names = paths.map(cliPromptImageName);
+  return { paths: names, initPath: initPath ? names[0] : null, referencePaths: initPath ? names.slice(1) : names };
+}
+
+/** Use the same cwd-relative names in previews and on disk. Preserve reviewed
+ * bytes when supplied and strip container metadata before the CLI can read it. */
+export async function stageCliPromptImages({ paths, scratchDir, reviewedReferenceBytes = null }) {
+  for (const [index, path] of paths.entries()) {
+    const bytes = (index === 0 && reviewedReferenceBytes) || await readFile(path);
+    const { data } = stripImageMetadata(bytes);
+    await writeFile(join(scratchDir, cliPromptImageName(path, index)), data, { mode: 0o600 });
+  }
+}
+
+/**
+ * Stage metadata-stripped copies in `scratchDir/inputs/` for any input image
+ * that carries container metadata (EXIF/GPS/XMP/IPTC/text/caBX), leaving the
+ * gallery original untouched. Inputs without strippable metadata keep their
+ * original path so clean files pay no extra disk copy.
+ */
+export async function stageSanitizedInputImages({ inputImages, scratchDir, reviewedReferenceBytes = null }) {
+  if (!inputImages?.paths?.length) return inputImages;
+  let inputsDirReady = false;
+  const inputsDir = join(scratchDir, 'inputs');
+  const nextPaths = [];
+  for (let i = 0; i < inputImages.paths.length; i += 1) {
+    const srcPath = inputImages.paths[i];
+    const bytes = (i === 0 && reviewedReferenceBytes) ? reviewedReferenceBytes : await readFile(srcPath).catch(() => null);
+    if (!bytes) {
+      nextPaths.push(srcPath);
+      continue;
+    }
+    const result = stripImageMetadata(bytes);
+    if (!result.stripped) {
+      nextPaths.push(srcPath);
+      continue;
+    }
+    if (!inputsDirReady) {
+      await mkdir(inputsDir, { recursive: true });
+      inputsDirReady = true;
+    }
+    const stagedPath = join(inputsDir, `${i}-${basename(srcPath)}`);
+    await writeFile(stagedPath, result.data);
+    nextPaths.push(stagedPath);
+  }
+  return {
+    paths: nextPaths,
+    initPath: inputImages.initPath ? nextPaths[0] : null,
+    referencePaths: inputImages.initPath ? nextPaths.slice(1) : nextPaths,
   };
 }

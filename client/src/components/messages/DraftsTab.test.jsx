@@ -8,13 +8,30 @@ vi.mock('../../services/apiMessages.js', () => ({
   sendMessageDraft: vi.fn(),
   reconcileMessageDraft: vi.fn(),
   approveMessageDraft: vi.fn(),
+  updateMessageDraft: vi.fn(),
 }));
+
+const socketMock = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    handlers,
+    socket: {
+      on: (event, fn) => {
+        if (!handlers.has(event)) handlers.set(event, new Set());
+        handlers.get(event).add(fn);
+      },
+      off: (event, fn) => { handlers.get(event)?.delete(fn); },
+    },
+  };
+});
+vi.mock('../../services/socket', () => ({ default: socketMock.socket }));
 
 import {
   getMessageDrafts,
   sendMessageDraft,
   reconcileMessageDraft,
   approveMessageDraft,
+  updateMessageDraft,
 } from '../../services/apiMessages.js';
 beforeEach(() => vi.clearAllMocks());
 
@@ -208,6 +225,82 @@ describe('DraftsTab send capabilities', () => {
   });
 });
 
+describe('DraftsTab editing and review', () => {
+  it.each(['draft', 'pending_review', 'approved', 'failed'])('offers edit for %s', async (status) => {
+    getMessageDrafts.mockResolvedValue([
+      { id: 'd1', status, sendVia: 'api', subject: 'Editable', body: 'Body' },
+    ]);
+    render(<DraftsTab accounts={[]} />);
+    expect(await screen.findByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
+  it.each(['sending', 'delivery_unknown', 'sent'])('does not offer edit for %s', async (status) => {
+    getMessageDrafts.mockResolvedValue([{
+      id: 'd1', status, sendVia: 'api', subject: 'Locked', body: 'Body', sendAttemptId: 'attempt-1',
+    }]);
+    render(<DraftsTab accounts={[]} />);
+    expect(await screen.findByText(status === 'delivery_unknown' ? 'Delivery unknown' : status)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+
+  it('saves recipient, subject, and body and applies an approval reset from the response', async () => {
+    getMessageDrafts.mockResolvedValue([{
+      id: 'd1', status: 'approved', sendVia: 'api', to: ['old@example.com'], subject: 'Old subject', body: 'Old body',
+    }]);
+    updateMessageDraft.mockResolvedValueOnce({
+      id: 'd1', status: 'draft', sendVia: 'api', to: ['new@example.com', 'cc@example.com'],
+      subject: 'New subject', body: 'New body',
+    });
+    render(<DraftsTab accounts={[]} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: 'new@example.com, cc@example.com' } });
+    fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'New subject' } });
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'New body' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    await waitFor(() => expect(updateMessageDraft).toHaveBeenCalledWith('d1', {
+      to: ['new@example.com', 'cc@example.com'],
+      subject: 'New subject',
+      body: 'New body',
+    }));
+    expect(await screen.findByText('draft')).toBeInTheDocument();
+    expect(screen.getByText('New subject')).toBeInTheDocument();
+    expect(screen.getByText('New body')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+  });
+
+  it('expands a clamped sendable body and leaves copy-only drafts fully visible', async () => {
+    const longBody = 'Line one\nLine two\nLine three\nLine four that was hidden';
+    getMessageDrafts.mockResolvedValue([
+      { id: 'sendable', status: 'draft', sendVia: 'api', subject: 'Long', body: longBody },
+      { id: 'copy', status: 'draft', accountId: 'outlook', sendVia: 'playwright', subject: 'Copy', body: longBody },
+    ]);
+    render(<DraftsTab accounts={[{ id: 'outlook', name: 'Outlook', canSend: false }]} />);
+    const hiddenLine = await screen.findAllByText(/Line four that was hidden/);
+    expect(hiddenLine[0].className).toContain('line-clamp-3');
+    expect(hiddenLine[1].className).not.toContain('line-clamp-3');
+    expect(screen.getAllByRole('button', { name: 'Show full message' })).toHaveLength(1);
+    const toggle = screen.getByRole('button', { name: 'Show full message' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+    expect(hiddenLine[0].className).not.toContain('line-clamp-3');
+  });
+
+  it('approves a pending_review draft', async () => {
+    const pending = {
+      id: 'd1', status: 'pending_review', sendVia: 'api', subject: 'Needs review', body: 'Please approve',
+    };
+    getMessageDrafts.mockResolvedValue([pending]);
+    approveMessageDraft.mockResolvedValueOnce({ ...pending, status: 'approved' });
+    render(<DraftsTab accounts={[]} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }));
+    expect(approveMessageDraft).toHaveBeenCalledWith('d1');
+    expect(await screen.findByRole('button', { name: 'Send' })).toBeEnabled();
+    expect(screen.getByText('approved')).toBeInTheDocument();
+  });
+});
+
 describe('DraftsTab — failed read', () => {
   it('shows an error with Retry instead of "No drafts", then the drafts after Retry', async () => {
     getMessageDrafts.mockRejectedValueOnce(new Error('drafts down'));
@@ -223,5 +316,32 @@ describe('DraftsTab — failed read', () => {
 
     expect(await screen.findByText('Recovered draft')).toBeTruthy();
     expect(screen.queryByText(/Could not load drafts/)).toBeNull();
+  });
+});
+
+describe('DraftsTab live refresh', () => {
+  it.each(['messages:draft:created', 'messages:draft:sent', 'messages:changed'])(
+    'refetches drafts on %s and removes listeners on unmount', async (event) => {
+      getMessageDrafts.mockResolvedValueOnce([{ id: 'd1', status: 'draft', subject: 'First' }]);
+      const { unmount } = render(<DraftsTab accounts={[]} />);
+      await screen.findByText('First');
+      getMessageDrafts.mockResolvedValueOnce([
+        { id: 'd1', status: 'draft', subject: 'First' },
+        { id: 'd2', status: 'draft', subject: 'Second' },
+      ]);
+      await act(async () => { socketMock.handlers.get(event).forEach((fn) => fn()); });
+      await screen.findByText('Second');
+      unmount();
+      expect(socketMock.handlers.get(event).size).toBe(0);
+    });
+
+  it('keeps loaded drafts when a live refresh fails', async () => {
+    getMessageDrafts.mockResolvedValueOnce([{ id: 'd1', status: 'draft', subject: 'First' }]);
+    render(<DraftsTab accounts={[]} />);
+    await screen.findByText('First');
+    getMessageDrafts.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => { socketMock.handlers.get('messages:changed').forEach((fn) => fn()); });
+    await waitFor(() => expect(getMessageDrafts).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('First')).toBeInTheDocument();
   });
 });

@@ -22,7 +22,6 @@ vi.mock('./messageDrafts.js', () => ({
 
 const HEX_KEY = 'e'.repeat(64);
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = HEX_KEY;
 
 let dbReady = false;
 let skipReason = '';
@@ -51,18 +50,23 @@ describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
   const createdEvents = [];
 
   beforeAll(async () => {
+    // Set only while the suite runs, before any service import, so a skipped suite never leaks it.
+    process.env.PRIVACY_VAULT_KEY = HEX_KEY;
     changes = await import('./privacyChanges.js');
     orgs = await import('./privacyOrgs.js');
     vault = await import('./privacyVault.js');
   });
 
   afterAll(async () => {
-    for (const id of createdEvents) await query(`DELETE FROM privacy_change_events WHERE id = $1`, [id]).catch(() => {});
-    for (const id of createdOrgs) await query(`DELETE FROM privacy_orgs WHERE id = $1`, [id]).catch(() => {});
-    for (const id of createdVaultRecords) await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
+    try {
+      for (const id of createdEvents) await query(`DELETE FROM privacy_change_events WHERE id = $1`, [id]).catch(() => {});
+      for (const id of createdOrgs) await query(`DELETE FROM privacy_orgs WHERE id = $1`, [id]).catch(() => {});
+      for (const id of createdVaultRecords) await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
+    }
   });
 
   it('declares a change: retires the old record, flips holdings, mirrors forward holdings, writes the event', async () => {
@@ -173,5 +177,26 @@ describe.skipIf(!runDb)('privacy changes DB round-trip', () => {
     expect(draftArg.to).toEqual(['support@sub.example']);
     expect(draftArg.body).toContain('new@me.example'); // new value plaintext for the org
     expect(draftArg.generatedBy).toBe('privacy-change');
+  });
+
+  it('refuses sensitive replacement types and non-holding orgs without drafting', async () => {
+    const oldRec = await vault.createVaultRecord({ type: 'ssn', label: 'Old SSN', value: '111-22-3333' });
+    createdVaultRecords.push(oldRec.id);
+    const holder = await orgs.createOrg({ name: 'Holder Co', contact: { email: 'h@holder.example' } });
+    const stranger = await orgs.createOrg({ name: 'Stranger Co', contact: { email: 's@stranger.example' } });
+    createdOrgs.push(holder.id, stranger.id);
+    await orgs.setOrgHoldings(holder.id, [{ vaultRecordId: oldRec.id, status: 'current' }]);
+    const event = await changes.declareChange({
+      vaultRecordId: oldRec.id,
+      replacement: { label: 'New SSN', value: '444-55-6666' },
+    });
+    createdEvents.push(event.id);
+    createdVaultRecords.push(event.replacementRecordId);
+
+    const { createDraft } = await import('./messageDrafts.js');
+    const before = createDraft.mock.calls.length;
+    await expect(changes.draftUpdateEmail(event.id, stranger.id)).rejects.toMatchObject({ status: 404, code: 'HOLDING_NOT_FOUND' });
+    await expect(changes.draftUpdateEmail(event.id, holder.id)).rejects.toMatchObject({ status: 400, code: 'SENSITIVE_TYPE_EMAIL_FORBIDDEN' });
+    expect(createDraft).toHaveBeenCalledTimes(before);
   });
 });

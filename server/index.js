@@ -79,6 +79,7 @@ const cosRoutes = createLazyRouter(() => import('./routes/cos.js'));
 const featureAgentsRoutes = createLazyRouter(() => import('./routes/featureAgents.js'));
 const memoryRoutes = createLazyRouter(() => import('./routes/memory.js'));
 const userActionsRoutes = createLazyRouter(() => import('./routes/userActions.js'));
+const skillsRoutes = createLazyRouter(() => import('./routes/skills.js'));
 const apiDocsRoutes = createLazyRouter(() => import('./routes/apiDocs.js'));
 const browserRoutes = createLazyRouter(() => import('./routes/browser.js'));
 const backupRoutes = createLazyRouter(() => import('./routes/backup.js'));
@@ -168,6 +169,7 @@ const conflictJournalRoutes = createLazyRouter(() => import('./routes/conflictJo
 const openclawRoutes = createLazyRouter(() => import('./routes/openclaw.js'));
 const roundsRoutes = createLazyRouter(() => import('./routes/rounds.js'));
 const askRoutes = createLazyRouter(() => import('./routes/ask.js'));
+const moaPresetRoutes = createLazyRouter(() => import('./routes/moaPresets.js'));
 const appleHealthDaysRoutes = createLazyRouter(() => import('./routes/appleHealthDays.js'));
 const appleHealthRoutes = createLazyRouter(() => import('./routes/appleHealth.js'));
 const avatarRoutes = createLazyRouter(() => import('./routes/avatar.js'));
@@ -413,6 +415,7 @@ app.use('/api/catalog', catalogSheetRoutes);
 app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/user-actions', userActionsRoutes);
+app.use('/api/skills', skillsRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/imessage', imessageRoutes);
 app.use('/api/contacts', contactsRoutes);
@@ -524,6 +527,7 @@ app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/peer-media', peerMediaRoutes);
 app.use('/api/ask', askRoutes);
+app.use('/api/moa-presets', moaPresetRoutes);
 
 
 // Asset static mounts, then a terminating 404 for every server-owned prefix so

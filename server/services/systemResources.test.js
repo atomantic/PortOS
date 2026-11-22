@@ -56,12 +56,20 @@ vi.mock('./mediaModelStorage.js', () => ({
   })),
 }));
 vi.mock('./modelStoreStorage.js', () => ({
-  listModelStore: vi.fn(async (backend) => backend === 'mtplx'
-    ? { totalBytes: 60, items: [
-      { key: 'org--ckpt', name: 'org/ckpt', detail: 'MTPLX checkpoint', size: 50 },
-      { key: 'session-bank', name: 'MTPLX session bank', detail: 'cache', size: 10, risk: 'low', cleanupReason: 'Rebuilt on demand.' },
-    ] }
-    : { totalBytes: 0, items: [] }),
+  listModelStore: vi.fn(async (backend) => {
+    if (backend === 'mtplx') {
+      return { totalBytes: 60, items: [
+        { key: 'org--ckpt', name: 'org/ckpt', detail: 'MTPLX checkpoint', size: 50 },
+        { key: 'session-bank', name: 'MTPLX session bank', detail: 'cache', size: 10, risk: 'low', cleanupReason: 'Rebuilt on demand.' },
+      ] };
+    }
+    if (backend === 'portos-models') {
+      return { totalBytes: 900, items: [
+        { key: 'Example-MLX-4bit', name: 'Example-MLX-4bit', detail: 'Hand-placed model weights', size: 900, unmanaged: true },
+      ] };
+    }
+    return { totalBytes: 0, items: [] };
+  }),
 }));
 vi.mock('./ollamaManager.js', () => ({
   getStatus: vi.fn(async () => ({ available: true, models: [{ id: 'example:latest', name: 'Example', size: 100 }] })),
@@ -397,6 +405,15 @@ describe('system resource reporting', () => {
     expect(report.models.totals.mtplx).toBe(60);
     expect(report.storageAreas.find((area) => area.id === 'mtplx')).toMatchObject({ sizeBytes: 60, status: 'ready' });
     expect(report.storageAreas.find((area) => area.id === 'pixie-forge')).toMatchObject({ sizeBytes: 0, status: 'ready' });
+    // Hand-placed weights surface as their own backend, flagged unmanaged, and count toward model bytes.
+    expect(report.models.downloaded.find((row) => row.id === 'portos-models:Example-MLX-4bit'))
+      .toMatchObject({ backend: 'portos-models', sizeBytes: 900, unmanaged: true, risk: 'high', action: { type: 'model-store', backend: 'portos-models', key: 'Example-MLX-4bit' } });
+    expect(report.models.downloaded.find((row) => row.id === 'mtplx:org--ckpt').unmanaged).toBeUndefined();
+    expect(report.storageAreas.find((area) => area.id === 'portos-models')).toMatchObject({ sizeBytes: 900, status: 'ready', managePath: '/models/llms' });
+    expect(report.models.totals.portosModels).toBe(900);
+    for (const id of ['slotstream', 'fastvideo-mlx', 'auk-ckpts', 'repo-models', 'legacy-runtime']) {
+      expect(report.storageAreas.find((area) => area.id === id)).toMatchObject({ sizeBytes: 0, status: 'ready' });
+    }
     expect(report.cleanupCandidates.find((candidate) => candidate.id === 'mtplx:org--ckpt').action)
       .toEqual({ type: 'model-store', backend: 'mtplx', key: 'org--ckpt' });
   });

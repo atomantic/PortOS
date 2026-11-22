@@ -26,8 +26,8 @@ table is pending investigation, not a certified exception.
   independent work; a generic refresh must preserve declared target support
   (Pixal3D CUDA was restored separately in
   [#15855](https://github.com/atomantic/PortOS/pull/15855)).
-- Locks keep hash enforcement and wheel-only installation, and use a seven-day
-  release cooldown (`--exclude-newer` at least seven days old). Never compose
+- Locks keep hash enforcement and wheel-only installation, and use a three-day
+  release cooldown (`--exclude-newer` at least three days old). Never compose
   artifact hashes by hand.
 
 ## Held-back pins
@@ -55,6 +55,7 @@ that upstream moves or the caller is migrated.
 | Transformers 5.22.1 | Pixal3D CUDA, TRELLIS.2 CUDA | Exact | Immutable profile identities (`scripts/*-cuda-profile.json`, registry cutoff 2026-11-04) and the setup assertion pin it. Moving is a new profile revision with CUDA validation. |
 | `cuda-bindings==13.5.0` | LTX CUDA | Cooldown exception (#15454) | 28 artifacts postdate the fixed `2026-11-05T00:00:00Z` cutoff. Retained deliberately; do not claim every source meets the cutoff. |
 | `trellis2-apple` revision `c873bde81ebe1e56535c6caddb4b21267364a923` | TRELLIS.2 Metal | Cooldown exception (#15708) | Commit dated 2026-11-09T16:25:19Z (seven days on 2026-11-16T16:25:19Z); carries the autorelease-pool leak repair. Preserve the repair. |
+| `mtplx==2.13.0` | MTPLX | Cooldown exception (#17422) | Published 2026-11-22; the first release that loads the Inkling 2 Mini MTP packs. Only MTPLX bypasses the cutoff (`--exclude-newer-package mtplx=…`); its 45 dependencies keep the previous pins. |
 | Annotated-Types 0.7.0 | Pixal3D Metal | Retained distinct artifact | MiniMax H3 MLX uses 0.8.0; keep each profile's own resolution. |
 | tokenizers 0.23.3 (upstream `<0.23` guard overridden) | FastVideo MLX | Pinned together with Transformers 5.22.x | Upstream's `<0.23` guard addressed a CLIP RobertaProcessing keyword mismatch that Transformers 5.22.x avoids (positional arguments); validated against actual CLIP load/save. Recorded as an inline comment in `scripts/ml/requirements/requirements-fastvideo-mlx.txt`. |
 
@@ -67,7 +68,7 @@ Use this to advance a few packages in a complete lock while every unrelated
 version, marker, hash block and provenance comment stays byte-identical.
 
 1. Use a hash-verified uv (the lock header names the version last used) and a
-   cutoff at least seven days old. Copy the profile's direct input and the
+   cutoff at least three days old. Copy the profile's direct input and the
    `pyproject.toml` environment restriction from the lock header into a scratch
    directory.
 2. Extract every existing `name==version` requirement, with its marker, from the

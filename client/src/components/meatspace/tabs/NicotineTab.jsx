@@ -128,13 +128,16 @@ export default function NicotineTab() {
     e.preventDefault();
     if (!mgPerUnit) return;
     setLogging(true);
-    await logNicotine({
+    const result = await logNicotine({
       product: product || '',
       mgPerUnit: parseFloat(mgPerUnit),
       count: count || 1,
       date: date || undefined
     }).catch(() => null);
     setLogging(false);
+    // request() already toasts. A rejected log must keep the draft; clearing
+    // here used to drop the dose the person just typed.
+    if (!result) return;
     setProduct('');
     setMgPerUnit('');
     setCount(1);
@@ -165,13 +168,16 @@ export default function NicotineTab() {
     if (!editingKey) return;
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
-    await updateNicotineEntry(entryDate, index, {
+    const result = await updateNicotineEntry(entryDate, index, {
       id: editForm.id,
       product: editForm.product,
       mgPerUnit: parseFloat(editForm.mgPerUnit),
       count: parseInt(editForm.count, 10) || 1,
       date: editForm.date !== entryDate ? editForm.date : undefined
     }).catch(() => null);
+    // A failed edit stays open. Refreshing here would also replace the row
+    // under the draft with the last server list.
+    if (!result) return;
     setEditingKey(null);
     setRefreshKey(k => k + 1);
   };

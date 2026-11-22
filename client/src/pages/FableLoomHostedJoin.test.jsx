@@ -46,9 +46,70 @@ describe('FableLoomHostedJoin', () => {
     expect(screen.getByText('Audience Microphone UI')).toBeInTheDocument();
   });
 
-  it('keeps the transcript as the only inner scroll region of the dynamic shell', () => {
+  const socketHandler = (event) => mockSocket.on.mock.calls.find(([name]) => name === event)?.[1];
+
+  const renderConnectedJoin = () => {
     window.location.hash = '#session=sess-123&token=tok-abc';
-    render(<FableLoomHostedJoin />);
+    const view = render(<FableLoomHostedJoin />);
+    act(() => socketHandler('connect')());
+    return view;
+  };
+
+  it.each(['disconnect', 'ended'])('disables guest input on %s', (event) => {
+    renderConnectedJoin();
+    const input = screen.getByRole('textbox', { name: 'Message protagonist' });
+    const talk = screen.getByRole('button', { name: 'Hold Talk' });
+    const send = screen.getByRole('button', { name: 'Send message' });
+    fireEvent.change(input, { target: { value: 'Look around' } });
+    expect(send).toBeEnabled();
+
+    act(() => {
+      if (event === 'disconnect') socketHandler('disconnect')();
+      else socketHandler('hosted:turn:phase')({ phase: 'ended' });
+    });
+
+    expect(talk).toBeDisabled();
+    expect(input).toBeDisabled();
+    expect(send).toBeDisabled();
+    fireEvent.submit(input.closest('form'));
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+    expect(input).toHaveValue('Look around');
+  });
+
+  it('shows a mic refusal and lets the next press start recording without a pointer release', async () => {
+    const track = { stop: vi.fn() };
+    const getUserMedia = vi.fn()
+      .mockRejectedValueOnce(new DOMException('Permission denied', 'NotAllowedError'))
+      .mockResolvedValueOnce({ getTracks: () => [track] })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia } });
+    const recorder = { state: 'recording', start: vi.fn(), stop: vi.fn() };
+    vi.stubGlobal('MediaRecorder', class { constructor() { return recorder; } });
+    try {
+      renderConnectedJoin();
+      const button = screen.getByRole('button', { name: 'Hold Talk' });
+      fireEvent.pointerDown(button);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/allow microphone permission or type a message/i);
+
+      fireEvent.pointerDown(button);
+      await waitFor(() => expect(recorder.start).toHaveBeenCalledOnce());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(mockSocket.emit).toHaveBeenCalledWith('hosted:mic:start');
+
+      fireEvent.pointerCancel(button);
+      expect(recorder.stop).toHaveBeenCalledOnce();
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(button).toHaveAccessibleName('Hold Talk');
+
+      fireEvent.pointerDown(button);
+      expect(getUserMedia).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the transcript as the only inner scroll region of the dynamic shell', () => {
+    renderConnectedJoin();
 
     const shell = screen.getByRole('main');
     expect(shell).toHaveClass('h-dvh-screen', 'overflow-y-auto');
@@ -65,8 +126,7 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('sends text input fallback when submitted', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
 
     const input = screen.getByPlaceholderText('Or type a message…');
     fireEvent.change(input, { target: { value: '  Look around the room  ' } });
@@ -86,9 +146,8 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('preserves an over-limit paste, refuses to send, and lets the guest shorten the message', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const user = userEvent.setup();
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const input = screen.getByRole('textbox', { name: 'Message protagonist' });
     expect(input).not.toHaveAttribute('maxlength');
     expect(input).toHaveAccessibleDescription('0 / 1,000 characters');
@@ -112,8 +171,7 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('refuses over-limit typed input without cutting or clearing it', () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const input = screen.getByRole('textbox', { name: 'Message protagonist' });
     const text = 'x'.repeat(1001);
     fireEvent.change(input, { target: { value: text } });
@@ -124,7 +182,6 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('releases a mic opened after push-to-talk was released', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     let resolveMic;
     const track = { stop: vi.fn() };
     const getUserMedia = vi.fn(() => new Promise((resolve) => { resolveMic = resolve; }));
@@ -132,7 +189,7 @@ describe('FableLoomHostedJoin', () => {
     const recorder = vi.fn();
     vi.stubGlobal('MediaRecorder', recorder);
 
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const button = screen.getByRole('button', { name: /hold talk/i });
     fireEvent.pointerDown(button);
     fireEvent.pointerUp(button);
@@ -145,7 +202,6 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('stops the recorder and tracks on unmount', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const track = { stop: vi.fn() };
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track] }) },
@@ -153,7 +209,7 @@ describe('FableLoomHostedJoin', () => {
     const recorder = { state: 'recording', start: vi.fn(), stop: vi.fn(), mimeType: 'audio/webm' };
     vi.stubGlobal('MediaRecorder', class { constructor() { return recorder; } });
 
-    const { unmount } = render(<FableLoomHostedJoin />);
+    const { unmount } = renderConnectedJoin();
     fireEvent.pointerDown(screen.getByRole('button', { name: /hold talk/i }));
     await waitFor(() => expect(recorder.start).toHaveBeenCalledOnce());
     unmount();
@@ -164,7 +220,6 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('closes the mic on release while preserving the recorder final chunk', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const track = { stop: vi.fn() };
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -183,7 +238,7 @@ describe('FableLoomHostedJoin', () => {
       }
     });
 
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const button = screen.getByRole('button', { name: /hold talk/i });
     fireEvent.pointerDown(button);
     await waitFor(() => expect(recorder?.state).toBe('recording'));
@@ -199,7 +254,6 @@ describe('FableLoomHostedJoin', () => {
 
   it('shows an over-cap recording refusal, aborts the turn, and keeps the guest connected', async () => {
     const { MAX_VOICE_AUDIO_BYTES, RECORDING_TOO_LONG_MESSAGE } = await import('../lib/audioRecorder.js');
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const track = { stop: vi.fn() };
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -212,7 +266,7 @@ describe('FableLoomHostedJoin', () => {
       stop() { this.state = 'inactive'; this.onstop?.(); }
     });
     try {
-      render(<FableLoomHostedJoin />);
+      renderConnectedJoin();
       const button = screen.getByRole('button', { name: /hold talk/i });
       fireEvent.pointerDown(button);
       await waitFor(() => expect(recorder?.state).toBe('recording'));
@@ -230,7 +284,6 @@ describe('FableLoomHostedJoin', () => {
 
   it('ignores an old oversized stop callback after a newer recording starts', async () => {
     const { MAX_VOICE_AUDIO_BYTES } = await import('../lib/audioRecorder.js');
-    window.location.hash = '#session=sess-123&token=tok-abc';
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
       value: { getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })) },
@@ -242,7 +295,7 @@ describe('FableLoomHostedJoin', () => {
       stop() { this.state = 'inactive'; }
     });
     try {
-      render(<FableLoomHostedJoin />);
+      renderConnectedJoin();
       const button = screen.getByRole('button', { name: /hold talk/i });
       fireEvent.pointerDown(button);
       await waitFor(() => expect(recorders).toHaveLength(1));
@@ -265,7 +318,6 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('keeps audio chunks separate across two press and release cycles', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
     let streamIndex = 0;
     Object.defineProperty(navigator, 'mediaDevices', {
@@ -286,7 +338,7 @@ describe('FableLoomHostedJoin', () => {
       stop() { this.state = 'inactive'; this.onstop?.(); }
     });
 
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const button = screen.getByRole('button', { name: /hold talk/i });
     fireEvent.pointerDown(button);
     await waitFor(() => expect(recorders).toHaveLength(1));
@@ -306,10 +358,7 @@ describe('FableLoomHostedJoin', () => {
     vi.unstubAllGlobals();
   });
 
-  const socketHandler = (event) => mockSocket.on.mock.calls.find(([name]) => name === event)?.[1];
-
   it('discards an in-progress recording and shows the mapped message when the mic is refused', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const track = { stop: vi.fn() };
     Object.defineProperty(navigator, 'mediaDevices', {
       configurable: true,
@@ -322,7 +371,7 @@ describe('FableLoomHostedJoin', () => {
       stop() { this.state = 'inactive'; queueMicrotask(() => this.onstop?.()); }
     });
 
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     fireEvent.pointerDown(screen.getByRole('button', { name: /hold talk/i }));
     await waitFor(() => expect(recorder?.state).toBe('recording'));
     expect(screen.getByText(/release when done/i)).toBeInTheDocument();
@@ -339,8 +388,7 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('falls back to the server message and re-enables input after a failed turn returns to idle', () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
 
     act(() => { socketHandler('hosted:turn:phase')({ phase: 'thinking' }); });
     expect(screen.getByRole('button', { name: /hold talk/i })).toBeDisabled();
@@ -357,9 +405,8 @@ describe('FableLoomHostedJoin', () => {
   });
 
   it('reports audience playback completion, failure, and cancellation', async () => {
-    window.location.hash = '#session=sess-123&token=tok-abc';
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    render(<FableLoomHostedJoin />);
+    renderConnectedJoin();
     const handler = (event) => mockSocket.on.mock.calls.filter(([name]) => name === event).at(-1)?.[1];
     const audio = document.querySelector('audio');
     const audienceTurn = '22222222-2222-4222-8222-222222222222';

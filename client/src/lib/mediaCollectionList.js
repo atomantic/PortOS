@@ -8,7 +8,7 @@ import { tokenizeQuery, matchHaystack } from './mediaSearch.js';
 // Shared name prefixes auto-creators stamp onto collections, paired with the badge label the card renders above the title (otherwise every card shows the same clipped
 // prefix). Drives PRESENTATION plus the provenance fallback for records an older peer sent without `source`; classification itself comes from `collection.source` (#3311).
 // Keep in sync with the server-side creators: `universeCollectionNameFor` / `seriesCollectionNameFor` in `server/services/mediaCollections.js`,
-// `server/services/creativeDirector/projects{DB,File}.js` and `server/services/writersRoom/local.js`.
+// `findOrCreateMusicVideoCollection`, `server/services/creativeDirector/projects{DB,File}.js` and `server/services/writersRoom/local.js`.
 export const AUTO_NAME_PREFIXES = [
   'Creative Director: ',
   'Writers Room: ',
@@ -19,7 +19,10 @@ export const AUTO_NAME_PREFIXES = [
   'Fable Loom: ',
   'Timeline: ',
   'Sprite: ',
-].map((prefix) => ({ prefix, badge: prefix.replace(/[:\s]+$/, '') }));
+].map((prefix) => ({ prefix, badge: prefix.replace(/[:\s]+$/, '') })).concat([
+  { prefix: 'Music video: ', badge: 'Music Video' },
+  { prefix: 'Music Video: ', badge: 'Music Video' },
+]);
 
 // Descriptions stamped by the auto-creators. A user can't produce these by
 // accident through the UI (the create form takes a name only).

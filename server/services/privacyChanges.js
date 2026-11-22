@@ -34,7 +34,13 @@ import { getOrg } from './privacyOrgs.js';
 import { resolveSubjectId } from './privacySubjects.js';
 import { listAccounts } from './messageAccounts.js';
 import { createDraft } from './messageDrafts.js';
+import { PRIVACY_SENSITIVE_TYPES, PRIVACY_WEBSITE_LOGIN_TYPE } from '../lib/privacyConstants.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
+
+const websiteLoginChangeRefusal = () => new ServerError(
+  'Website logins are not identity facts and cannot be declared as changes',
+  { status: 400, code: 'WEBSITE_LOGIN_CHANGE_FORBIDDEN' },
+);
 
 const EVENT_COLUMNS = `id, subject_id, vault_record_id, replacement_record_id, kind, declared_at, note`;
 
@@ -116,16 +122,21 @@ export async function declareChange({ vaultRecordId, replacement, replacementRec
     );
     const oldRecord = oldRows[0];
     if (!oldRecord) throw new ServerError('Vault record not found', { status: 404, code: 'NOT_FOUND' });
+    // A website login is an encrypted JSON credential, not an identity fact an
+    // org is told about; an inline replacement would inherit its type with a
+    // plain string value the fill path cannot read.
+    if (oldRecord.type === PRIVACY_WEBSITE_LOGIN_TYPE) throw websiteLoginChangeRefusal();
 
     // Resolve the replacement record id (inline-create, link-existing, or none).
     let replacementId = null;
     if (replacementRecordId) {
       const { rows } = await client.query(
-        `SELECT id, subject_id FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
+        `SELECT id, subject_id, type FROM privacy_vault_records WHERE id = $1`, [replacementRecordId],
       );
       if (!rows[0]) {
         throw new ServerError('Replacement vault record not found', { status: 400, code: 'REPLACEMENT_NOT_FOUND' });
       }
+      if (rows[0].type === PRIVACY_WEBSITE_LOGIN_TYPE) throw websiteLoginChangeRefusal();
       // Retiring one person's address in favour of ANOTHER person's record is
       // never a legitimate change — it would silently re-point their orgs.
       if (rows[0].subject_id !== oldRecord.subject_id) {
@@ -341,6 +352,20 @@ export async function draftUpdateEmail(eventId, orgId) {
   }
   const org = await getOrg(orgId);
   if (!org) throw new ServerError('Organization not found', { status: 404, code: 'NOT_FOUND' });
+  // Same membership rule as markOrgUpdated/markOrgRemoved: only an org that holds
+  // the changed record, under this event's subject, may receive the new value.
+  const { rows: holdings } = await query(
+    `SELECT 1 FROM privacy_org_holdings WHERE vault_record_id = $1 AND org_id = $2 AND status = ANY($3::text[])`,
+    [event.vaultRecordId, orgId, INVENTORY_STATUSES],
+  );
+  if (org.subjectId !== event.subjectId || !holdings[0]) {
+    throw new ServerError('Organization is not part of this change', { status: 404, code: 'HOLDING_NOT_FOUND' });
+  }
+  // Checked from metadata before any decrypt: the draft body is plaintext in drafts storage.
+  const replacementRecord = await getVaultRecord(event.replacementRecordId);
+  if (replacementRecord && PRIVACY_SENSITIVE_TYPES.includes(replacementRecord.type)) {
+    throw new ServerError('Sensitive vault types cannot be drafted into plaintext update emails', { status: 400, code: 'SENSITIVE_TYPE_EMAIL_FORBIDDEN' });
+  }
   const to = org.contact?.email;
   if (!to) throw new ServerError('Organization has no contact email', { status: 400, code: 'ORG_EMAIL_MISSING' });
 
@@ -365,6 +390,11 @@ export async function draftUpdateEmail(eventId, orgId) {
     subject,
     body,
     generatedBy: 'privacy-change',
+    privacyMeta: {
+      subjectId: event.subjectId,
+      vaultRecordIds: [event.vaultRecordId, event.replacementRecordId],
+      changeEventId: event.id,
+    },
     sendVia: sendViaForAccountType(account.type),
   });
   console.log(`📧 Drafted privacy update email for org ${orgId} (change ${eventId}, draft ${draft.id})`);

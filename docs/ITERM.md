@@ -51,3 +51,16 @@ Nothing here enters federation or sync. iTerm2 sessions stay on this machine.
 ## Clean-room protocol rule
 
 iTerm2 and its Python client are GPLv2; PortOS is MIT. The wire codec (`server/lib/protobufWire.js`) and the message declarations (`server/lib/itermMessages.js`) are written by PortOS. They declare only the messages and fields PortOS uses, with field numbers that match iTerm2's published API protocol. **Do not vendor `api.proto`, paste its text, or port reference-client code.** Unknown fields on the wire are skipped, so declaring less than the full protocol is safe.
+
+## Socket events
+
+```javascript
+socket.emit('iterm:list'); // subscribe; replies (and re-broadcasts) iterm:sessions
+socket.on('iterm:sessions', ({ status, sessions }) => {}); // status.state, [{ id: 'iterm-<uuid>', windowIndex, tabIndex, paneIndex, label, cwd, cols, rows, … }]
+socket.emit('iterm:attach', { id }); // → iterm:attached { id, cols, rows, bufferedOutput } | iterm:error
+socket.on('iterm:output', ({ id, data }) => {}); // one full-screen ANSI repaint per frame
+socket.emit('iterm:input', { id, data: 'ls\r' }); // exact bytes, delivered in order
+socket.on('iterm:exit', ({ id }) => {}); // session closed or iTerm2 went away
+socket.emit('iterm:detach', { id });
+socket.emit('iterm:unlist');
+```

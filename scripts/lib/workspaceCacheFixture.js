@@ -34,7 +34,7 @@ function snapshot(root) {
 function primaryDependencies(host, workspace) {
   const dependencies = join(host, 'primary/node_modules');
   mkdirSync(dependencies, { recursive: true });
-  for (const name of ['vite', 'vitest', ...(workspace === 'client' ? ['@vitejs', 'rollup-plugin-visualizer'] : [])]) {
+  for (const name of ['vite', 'vitest', ...(workspace === 'client' ? ['@vitejs'] : [])]) {
     link(join(REPO, workspace, 'node_modules', name), join(dependencies, name));
   }
   put(join(dependencies, '.vite/keep'), 'primary persistent cache');

@@ -171,16 +171,13 @@ export function registerFableLoomHostedNamespace(io) {
           });
           return;
         }
-        const updated = await updateHostedSession(sessionId, {
+        // updateHostedSession broadcasts hosted:session:sync (playbackPhase,
+        // activeHoldIndex, currentNodeId), which is the only room update needed.
+        await updateHostedSession(sessionId, {
           playbackPhase: parsed.data.phase,
           activeHoldIndex: parsed.data.activeHoldIndex,
           currentNodeId: parsed.data.nodeId,
         }, { io });
-        ns.to(room).emit('hosted:playback:sync', {
-          phase: updated.playbackPhase,
-          activeHoldIndex: updated.activeHoldIndex,
-          nodeId: updated.currentNodeId,
-        });
       } catch (err) {
         socket.emit('hosted:error', { code: err.code || 'UPDATE_FAILED', message: err.message });
       }
@@ -189,8 +186,8 @@ export function registerFableLoomHostedNamespace(io) {
     socket.on('hosted:audio:target', async (data) => {
       if (socket.hostedRole !== 'host') return;
       try {
-        const updated = await updateHostedSession(sessionId, { audioTarget: data?.target }, { io });
-        ns.to(room).emit('hosted:audio:target:updated', { audioTarget: updated.audioTarget });
+        // The hosted:session:sync broadcast inside updateHostedSession carries audioTarget.
+        await updateHostedSession(sessionId, { audioTarget: data?.target }, { io });
       } catch (err) {
         socket.emit('hosted:error', { code: 'TARGET_UPDATE_FAILED', message: err.message });
       }

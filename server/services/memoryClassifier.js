@@ -379,7 +379,7 @@ export async function classifyMemories(task, agentOutput) {
   const result = parseLLMResponse(llmResponse, prompt);
 
   if (result.parseError) {
-    console.log(`⚠️ Failed to parse LLM response, raw: ${llmResponse.substring(0, 200)}`);
+    console.log(`⚠️ Failed to parse LLM response (${llmResponse.length} chars)`);
     return {
       memories: [],
       rejected: [],

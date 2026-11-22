@@ -435,6 +435,14 @@ CREATE TABLE IF NOT EXISTS review_queue_triage (
 
 ALTER TABLE review_queue_triage ADD COLUMN IF NOT EXISTS delivery JSONB;
 
+CREATE TABLE IF NOT EXISTS autonomous_job_notepads (
+    job_id TEXT NOT NULL,
+    key TEXT COLLATE "C" NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (job_id, key)
+  );
+
 CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
     agent_id TEXT PRIMARY KEY,
     archive_date TEXT
@@ -1879,11 +1887,17 @@ CREATE TABLE IF NOT EXISTS privacy_vault_records (
       share_with_twin BOOLEAN NOT NULL DEFAULT FALSE,
       use_for_scans BOOLEAN NOT NULL DEFAULT FALSE,
       notes TEXT NOT NULL DEFAULT '',
+      login_origins TEXT[] NOT NULL DEFAULT '{}',
+      has_totp BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
 CREATE INDEX IF NOT EXISTS idx_privacy_vault_records_type ON privacy_vault_records (type);
+
+ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS login_origins TEXT[] NOT NULL DEFAULT '{}';
+
+ALTER TABLE privacy_vault_records ADD COLUMN IF NOT EXISTS has_totp BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS privacy_consents (
       id UUID PRIMARY KEY,
@@ -2521,6 +2535,8 @@ ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS triaged_for TIMESTAMPT
 
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS read_on_github_at TIMESTAMPTZ;
 
+CREATE INDEX IF NOT EXISTS idx_github_notifications_resolve_task ON github_notifications ((evidence->'handoff'->>'taskId')) WHERE state = 'open' AND evidence->'handoff'->>'lane' = 'notification-resolve';
+
 CREATE TABLE IF NOT EXISTS github_notification_sync (
     account_id TEXT PRIMARY KEY,
     last_modified TEXT,
@@ -2541,6 +2557,8 @@ CREATE TABLE IF NOT EXISTS github_notification_events (
   );
 
 CREATE INDEX IF NOT EXISTS idx_github_notification_events_thread ON github_notification_events (account_id, thread_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_github_notification_events_automation ON github_notification_events (account_id, created_at DESC, id DESC) WHERE actor = 'automation';
 
 CREATE TABLE IF NOT EXISTS github_notification_rules (
     id BIGSERIAL PRIMARY KEY,

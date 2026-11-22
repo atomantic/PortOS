@@ -301,6 +301,23 @@ Phase 4 — Report:
     updatedAt: null
   },
   {
+    id: 'job-skill-curator',
+    name: 'Skill Curator',
+    description: 'Daily deterministic upkeep of agent-created local procedural skills: marks idle ones stale, then moves long-idle ones into data/skills/.archive/ (never deletes). Pinned, locked and job-referenced skills are skipped; every move is recorded in the reversible skill ledger. No AI calls.',
+    category: 'skill-curator',
+    interval: 'daily',
+    intervalMs: DAY,
+    scheduledTime: '04:30',
+    enabled: false,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'skill-curator',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
+  {
     id: 'job-self-diagnostics',
     name: 'Self-Diagnostics',
     description: 'Daily scan of CoS task-learning metrics. Surfaces any self-healing category with recorded failures (claim-work, layered-intelligence, etc.) into a single reusable GitHub summary issue marked `monitoring`, ordered by impact. Deterministic — no AI calls.',

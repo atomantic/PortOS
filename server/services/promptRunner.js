@@ -37,6 +37,7 @@ import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitu
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { attachGatewaySiblingKey } from '../lib/provider/providerGateways.js';
+import { isMoaProvider, isMoaProviderId } from '../lib/provider/providerTypes.js';
 
 // Fallback-lifecycle notifiers live in services/autoFixer.js (which pulls in cos.js); initAutoFixer()
 // registers them through this leaf. Never import autoFixer.js here: `vitest related` follows it (#12285).
@@ -313,7 +314,16 @@ function buildSchemaFailureError(result) {
  * @returns {Promise<{ provider: object|null, selectedModel: string|null }>}
  */
 export async function resolveProviderAndModel({ providerId, model } = {}) {
-  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
+  // An MoA preset id resolves to its virtual record (lib/moaConfig.js), which
+  // runPromptThroughProvider dispatches to the MoA runner. Unlike an unknown
+  // preset id, an INVALID stored preset throws: falling through to the active
+  // provider would silently run a selection on a different model.
+  if (isMoaProviderId(providerId)) {
+    const { resolveMoaProvider } = await import('./moaPresets.js');
+    const moa = await resolveMoaProvider(providerId);
+    if (moa) return { provider: moa, selectedModel: moa.defaultModel };
+  }
+  let provider = providerId && !isMoaProviderId(providerId) ? await getProviderById(providerId).catch(() => null) : null;
   if (!provider) provider = await getActiveProvider();
   const selectedModel = provider ? resolveEffectiveModel(provider, model) : null;
   return { provider, selectedModel };
@@ -567,7 +577,7 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
   if (typeof rawArgs.provider.id !== 'string' || !rawArgs.provider.id) {
     throw new Error('runPromptThroughProvider: provider.id must be a non-empty string');
   }
-  if (rawArgs.provider.type !== PROVIDER_TYPES.CLI && rawArgs.provider.type !== PROVIDER_TYPES.API && rawArgs.provider.type !== PROVIDER_TYPES.TUI) {
+  if (rawArgs.provider.type !== PROVIDER_TYPES.CLI && rawArgs.provider.type !== PROVIDER_TYPES.API && rawArgs.provider.type !== PROVIDER_TYPES.TUI && !isMoaProvider(rawArgs.provider)) {
     throw new Error(`Unsupported provider type: ${rawArgs.provider.type}`);
   }
   if (typeof rawArgs.prompt !== 'string' || !rawArgs.prompt.length) {
@@ -589,6 +599,12 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
 
   if (args.signal && !args.completion) {
     throw new Error('runPromptThroughProvider: signal is honoured only for completion requests');
+  }
+  if (isMoaProvider(args.provider)) {
+    // Each member re-enters this function with its own API provider, so every
+    // advisor and the aggregator is an ordinary tracked run (services/moaRunner.js).
+    const { runMoaPreset } = await import('./moaRunner.js');
+    return runMoaPreset(args, { runPrompt: runPromptThroughProvider });
   }
   if (args.completion) {
     if (args.provider.type !== PROVIDER_TYPES.API) {
@@ -1396,6 +1412,15 @@ async function executeProviderRunOnce({
       }
     }
 
+    // Registers the run so a context-window reload waits for it, and clamps the window to what a
+    // resident runner is serving. Acquired immediately before the promise so nothing can throw
+    // between acquisition and the `.finally` release. CLI runs are excluded: `executeCliRun`
+    // prepares the daemon's window first and then registers its own child (#17341), and holding a
+    // registration here would make that preparation wait out the drain timeout on this very run.
+    const ollamaRun = isOllamaBackedProvider(effectiveProvider) && effectiveProvider.type !== PROVIDER_TYPES.CLI
+      ? await import('./ollamaRunWindow.js').then(({ beginOllamaRun }) => beginOllamaRun(effectiveProvider, effectiveModel))
+      : null;
+    if (ollamaRun) effectiveProvider = ollamaRun.provider;
     return new Promise((resolve, reject) => {
     let text = '';
     let settled = false;
@@ -1556,7 +1581,7 @@ async function executeProviderRunOnce({
       // a per-call override (e.g. the importer's long stage timeout) governs the
       // ceiling instead of the runner's provider/default fallback — same
       // caller-override precedence CLI/TUI runs already get.
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: effectiveProvider === provider ? localBudget.maxTokens : maxTokens, ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout, absoluteTimeoutMs, maxTokens: effectiveProvider === provider ? localBudget.maxTokens : maxTokens, ...(effort ? { effort } : {}), ...(admitDispatch ? { beforeExecute: admitDispatch } : {}) }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
@@ -1566,7 +1591,7 @@ async function executeProviderRunOnce({
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }
-    });
+    }).finally(() => ollamaRun?.release());
   }).finally(() => {
     if (typeof onRunSettled !== 'function') return;
     try { onRunSettled(runId); } catch (err) {

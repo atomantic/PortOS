@@ -25,7 +25,7 @@ export default function OnThisDayWidget({ dashboardState }) {
     <div className="bg-port-card border border-port-border rounded-xl p-4 h-full">
       <div className="flex items-center gap-2 mb-3">
         <History size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">On This Day</h3>
+        <h2 className="text-sm font-semibold text-white">On This Day</h2>
       </div>
 
       <ul className="space-y-2">

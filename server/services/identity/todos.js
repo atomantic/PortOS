@@ -22,7 +22,7 @@ export async function addTodo(goalId, { title, priority, estimateMinutes }) {
     goal.updatedAt = new Date().toISOString();
     goals.updatedAt = new Date().toISOString();
 
-    console.log(`✅ Todo added to "${goal.title}": "${title}"`);
+    console.log(`✅ Todo ${todo.id} added to goal ${goal.id}`);
     return todo;
   });
 }

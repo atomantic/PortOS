@@ -1,3 +1,4 @@
+import { routingFormDefaults, findRoutingFormError, applyRoutingToPayload } from './providerRoutingForm';
 import {
   effortLevelsForProvider,
   isClaudeCommandProvider,
@@ -31,6 +32,26 @@ export const PROVIDER_FIELD_RANGES = {
 /** A space-separated argv input as the array the provider schema takes. */
 export const argList = (text) => (text ? text.split(' ').filter(Boolean) : []);
 export const modelListFromText = (text) => text.split(',').map(model => model.trim()).filter(Boolean);
+
+// Per-model num_ctx overrides edited as one 'model = tokens' line each.
+export const modelNumCtxToText = (map) => Object.entries(map || {}).map(([model, tokens]) => `${model} = ${tokens}`).join('\n');
+/** Parse the per-model text into { map } or { error } naming the first bad line. */
+export const parseModelNumCtxText = (text) => {
+  const map = {};
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const at = line.lastIndexOf('=');
+    const model = at > 0 ? line.slice(0, at).trim() : '';
+    const value = at > 0 ? line.slice(at + 1).trim() : '';
+    const { min, max } = PROVIDER_FIELD_RANGES.numCtx;
+    if (!model || !/^\d+$/.test(value) || Number(value) < min || Number(value) > max) {
+      return { error: `Per-model num_ctx line "${line}" must be "model = tokens" with ${formatCount(min)} to ${formatCount(max)} tokens` };
+    }
+    map[model] = Number(value);
+  }
+  return { map };
+};
 
 const rangeMessage = (label, { min, max }, unit = '') =>
   `${label} must be between ${formatCount(min)} and ${formatCount(max)}${unit ? ` ${unit}` : ''}`;
@@ -81,6 +102,8 @@ export const initialProviderFormData = (provider) => ({
   fallbackProvider: provider?.fallbackProvider || '',
   fallbackModel: provider?.fallbackModel || '',
   numCtx: provider?.numCtx ?? '',
+  modelNumCtxText: modelNumCtxToText(provider?.modelNumCtx),
+  ...routingFormDefaults(provider),
   // All three seed from the record ONLY. Seeding a value the provider does not
   // have would let an unrelated Save pin it — the editor must be able to leave
   // "unset" alone, since unset is what lets each backend keep its own default.
@@ -160,6 +183,12 @@ export const findProviderFormError = ({ formData, createsModePair, showsNumCtx, 
   if (showsNumCtx && outOfRange(formData.numCtx, PROVIDER_FIELD_RANGES.numCtx)) {
     return { tab: 'generation', message: rangeMessage('Local num_ctx', PROVIDER_FIELD_RANGES.numCtx, 'tokens') };
   }
+  if (showsNumCtx) {
+    const perModel = parseModelNumCtxText(formData.modelNumCtxText);
+    if (perModel.error) return { tab: 'generation', message: perModel.error };
+  }
+  const routingError = findRoutingFormError(formData);
+  if (routingError) return { tab: 'generation', message: routingError };
   if (generationControls?.temperature && outOfRange(formData.temperature, PROVIDER_FIELD_RANGES.temperature)) {
     return { tab: 'generation', message: rangeMessage('Temperature', PROVIDER_FIELD_RANGES.temperature) };
   }
@@ -200,6 +229,10 @@ export const buildProviderPayload = ({ provider, formData, modelsText, showsNumC
   // field is `''`, which is not a number (or a boolean) the server schema
   // accepts. Drop what can't be used; the server merges by spread, so
   // anything already stored is left alone.
+  // Form-only text; the record stores the parsed map ({} clears every override).
+  delete data.modelNumCtxText;
+  applyRoutingToPayload(data, formData);
+  if (showsNumCtx) data.modelNumCtx = parseModelNumCtxText(formData.modelNumCtxText).map || {};
   if (!generationControls?.temperature) delete data.temperature;
   if (!generationControls?.topP) delete data.topP;
   if (!generationControls?.thinking) delete data.thinking;

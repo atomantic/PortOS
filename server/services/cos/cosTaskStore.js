@@ -571,7 +571,7 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     auditWorkflow(t.metadata) === auditWorkflow(taskData.metadata)
   );
   if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}${duplicate.status === 'blocked' ? ` (blocked: ${duplicate.metadata?.blockedCategory || 'unknown'})` : ''}`);
+    console.log(`⚠️ Duplicate task rejected: matches ${duplicate.id}${duplicate.status === 'blocked' ? ` (blocked: ${duplicate.metadata?.blockedCategory || 'unknown'})` : ''}`);
     return { ...duplicate, duplicate: true };
   }
 

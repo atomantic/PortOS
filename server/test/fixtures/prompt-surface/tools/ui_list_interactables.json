@@ -1,0 +1,23 @@
+{
+  "name": "ui_list_interactables",
+  "description": "List interactive elements on the current page. Fallback when the per-turn UI summary isn't enough.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "tab",
+          "button",
+          "link",
+          "input",
+          "textarea",
+          "select",
+          "checkbox",
+          "radio"
+        ],
+        "description": "Optional kind filter."
+      }
+    }
+  }
+}

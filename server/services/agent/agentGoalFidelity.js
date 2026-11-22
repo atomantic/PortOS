@@ -186,7 +186,11 @@ export async function evaluateGoalFidelity({ task, workspacePath, startedAt, exe
     ? fidelityNotJudged('Claimed issue requirements unavailable; claim workflow is not a code objective.')
     : noFidelityVerdict();
   if (isGoalFidelityInvestigation(task)) {
-    const overturned = overturnedInvestigatedFinding({ task, agents: await getAgentsWithArchive({ endAt: Date.now(), lookbackDays: OVERTURN_LOOKBACK_DAYS }) });
+    const affected = Array.isArray(task.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
+    const overturned = overturnedInvestigatedFinding({
+      task,
+      agents: await getAgentsWithArchive({ endAt: Date.now(), lookbackDays: OVERTURN_LOOKBACK_DAYS, taskIds: affected }),
+    });
     if (overturned) {
       return fidelityNotJudged(`This investigation overturned the goal-fidelity finding (${overturned.gap}); its diff is not judged against the investigated objective.`);
     }

@@ -422,7 +422,7 @@ export const runPostRouteSequence = ({
       resumeMediaJobCompletions();
     }))
     .then(whileRunning(() => {
-      // Sharing attaches chokidar watchers + drains the offline manifest
+      // Sharing attaches directory watchers + drains the offline manifest
       // backlog. Fire-and-forget — a failed bucket shouldn't block boot.
       bestEffort(initSharing(), logFailure('Sharing init failed'));
     }))

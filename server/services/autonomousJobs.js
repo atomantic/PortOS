@@ -38,6 +38,9 @@ import {
   deleteJob,
   recordJobExecution,
   recordJobGateSkip,
+  recordJobBlockedConfig,
+  clearJobBlockedConfig,
+  setJobUnreachableRetryStep,
   toggleJob,
   getJobStats
 } from './autonomousJobs/crud.js'
@@ -72,6 +75,9 @@ export {
   deleteJob,
   recordJobExecution,
   recordJobGateSkip,
+  recordJobBlockedConfig,
+  clearJobBlockedConfig,
+  setJobUnreachableRetryStep,
   toggleJob,
   generateTaskFromJob,
   getJobStats,

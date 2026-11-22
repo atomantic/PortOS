@@ -77,6 +77,7 @@ export function hasReviewerCoverage(reviewers, perReviewerStatus) {
  */
 export const NON_REVIEWER_VENDORS = Object.freeze({
   'gemini-legacy': 'a retired row kept only so an old stored config still resolves — Gemini CLI was migrated to Antigravity and ships no binary of its own',
+  hermes: 'a reviewer reads untrusted diff text, which needs a no-tool posture, and Hermes has no switch that disables its tools (--toolsets only enables sets), so no enforced public-review recipe exists for it',
   openchamber: "a reviewer is a one-shot critique of a diff, and OpenChamber's only prompt path creates a persistent session inside a running workspace runtime the user owns — a review round would leave a session behind per reviewer per PR, and cannot run at all when that runtime is down",
 });
 

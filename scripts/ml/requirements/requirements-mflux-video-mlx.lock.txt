@@ -18,7 +18,7 @@
 #   (cd "$TMP" && uv pip compile requirements-mflux-video-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
 #     --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5 \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
+#     --exclude-newer <UTC date at least 3 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
 aiohappyeyeballs==2.7.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:065665c041c42a5938ed220bdcd7230f22527fbec085e1853d2402c8a3615d9d \

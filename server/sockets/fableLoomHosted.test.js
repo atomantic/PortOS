@@ -712,11 +712,12 @@ describe('fableLoomHosted Socket.IO namespace', () => {
 
       await host.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
 
-      expect(roomEvent('hosted:playback:sync')?.data).toEqual({
-        phase: 'entry',
+      expect(roomEvent('hosted:session:sync')?.data).toMatchObject({
+        playbackPhase: 'entry',
         activeHoldIndex: 1,
-        nodeId: 'node-2',
+        currentNodeId: 'node-2',
       });
+      expect(roomEvent('hosted:playback:sync')).toBeUndefined();
       expect(getHostedSession(session.id)).toMatchObject({
         playbackPhase: 'entry',
         activeHoldIndex: 1,
@@ -727,7 +728,7 @@ describe('fableLoomHosted Socket.IO namespace', () => {
     it('refuses hosted:playback:update from an audience socket', () => {
       audience.listeners['hosted:playback:update']({ phase: 'entry', activeHoldIndex: 1, nodeId: 'node-2' });
 
-      expect(roomEvent('hosted:playback:sync')).toBeUndefined();
+      expect(roomEvent('hosted:session:sync')).toBeUndefined();
       expect(getHostedSession(session.id)).toMatchObject({
         playbackPhase: 'hold',
         activeHoldIndex: 0,
@@ -743,13 +744,13 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       await host.listeners['hosted:playback:update'](payload);
       expect(host.emitted.find((e) => e.event === 'hosted:error')?.data).toMatchObject({ code: 'VALIDATION_ERROR' });
       expect(getHostedSession(session.id)).toMatchObject({ playbackPhase: 'hold', activeHoldIndex: 0, currentNodeId: 'node-1' });
-      expect(roomEvent('hosted:playback:sync')).toBeUndefined();
+      expect(roomEvent('hosted:session:sync')).toBeUndefined();
     });
 
     it.each([0, 10])('accepts the REST playback hold-index boundary %s', async (activeHoldIndex) => {
       const host = connectHost();
       await host.listeners['hosted:playback:update']({ phase: 'hold', activeHoldIndex, nodeId: 'node-2' });
-      expect(roomEvent('hosted:playback:sync')?.data).toEqual({ phase: 'hold', activeHoldIndex, nodeId: 'node-2' });
+      expect(roomEvent('hosted:session:sync')?.data).toMatchObject({ playbackPhase: 'hold', activeHoldIndex, currentNodeId: 'node-2' });
     });
 
     // #8112: only the host may re-bind this hosted session's episode. An
@@ -836,6 +837,8 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
       expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
       expect(roomEvents.filter((event) => event.event === 'hosted:story:transition')).toHaveLength(1);
+      const transitionAt = roomEvents.findIndex((event) => event.event === 'hosted:story:transition');
+      expect(roomEvents[transitionAt + 1]?.data).toEqual({ phase: 'idle', turnId });
 
       await host.listeners['hosted:speech:done']({ turnId, status: 'ended' });
       expect(roomEvents.filter((event) => event.event === 'hosted:story:transition')).toHaveLength(1);
@@ -889,6 +892,9 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(roomEvent('hosted:turn:tts')).toBeUndefined();
       expect(getHostedSession(session.id)).toMatchObject({ currentNodeId: 'node-2', turnPhase: 'idle' });
       expect(roomEvent('hosted:story:transition')?.data).toMatchObject({ transitionId: 'tr-1' });
+      const speaking = roomEvents.find((event) => event.event === 'hosted:turn:phase' && event.data?.phase === 'speaking');
+      const transitionAt = roomEvents.findIndex((event) => event.event === 'hosted:story:transition');
+      expect(roomEvents[transitionAt + 1]?.data).toEqual({ phase: 'idle', turnId: speaking.data.turnId });
     });
 
     it('drops the in-flight turn on hosted:turn:abort', async () => {

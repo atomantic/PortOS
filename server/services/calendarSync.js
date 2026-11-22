@@ -228,21 +228,25 @@ async function runAccountSync(accountId, io, options) {
 
   const providerSync = async () => {
     const cache = await loadCache(accountId);
+    // Every started event needs a terminal event: clients flip to 'syncing' on
+    // calendar:sync:started and only leave it on completed/failed.
+    const noOpSync = status => {
+      io?.emit('calendar:sync:completed', { accountId, newEvents: 0, pruned: 0, status });
+      return { newEvents: 0, pruned: 0, total: cache.events.length, status };
+    };
     let providerResult;
     if (account.type === 'outlook-calendar') {
       const { syncOutlookCalendarApi } = await import('./calendarApiSync.js');
       providerResult = await syncOutlookCalendarApi(account, cache, io, options);
     } else if (account.type === 'google-calendar') {
       // Google Calendar uses push sync — syncAccount is a no-op
-      return { newEvents: 0, pruned: 0, total: cache.events.length, status: 'push-only' };
+      return noOpSync('push-only');
     } else {
       throw new Error(`Unsupported calendar account type: ${account.type}`);
     }
 
     // syncOutlookCalendarApi returns null when token is unavailable — treat as no-op
-    if (providerResult === null) {
-      return { newEvents: 0, pruned: 0, total: cache.events.length, status: 'skipped' };
-    }
+    if (providerResult === null) return noOpSync('skipped');
     const newEvents = Array.isArray(providerResult) ? providerResult : providerResult?.events ?? [];
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
 

@@ -3,15 +3,15 @@ import {
 } from 'recharts';
 import useChartColors from '../../hooks/useChartColors.js';
 import { pluralize } from '../../lib/textUtils';
-import { formatCount } from '../../utils/formatters';
+import { formatCount, shiftISODate } from '../../utils/formatters';
 
 // Blood markers to chart — prefer common ones if available in the test results
 const PREFERRED_MARKERS = ['cholesterol', 'glucose', 'ldl', 'hdl', 'triglycerides'];
 
-function compute30DayRollingAvg(dailyData, testDate) {
-  const windowStart = new Date(testDate);
-  windowStart.setDate(windowStart.getDate() - 30);
-  const startStr = windowStart.toISOString().split('T')[0];
+export function compute30DayRollingAvg(dailyData, testDate) {
+  // `testDate` is a YYYY-MM-DD day-file key. Parsing it with `new Date` treats
+  // it as UTC midnight, then `toISOString` shifts the window a day near local midnight.
+  const startStr = shiftISODate(testDate, -30);
 
   const window = dailyData.filter(d => d.date >= startStr && d.date < testDate && d.steps != null);
   if (window.length === 0) return null;
@@ -102,7 +102,7 @@ export default function ActivityBloodCorrelation({ data, range }) {
       </div>
 
       <ResponsiveContainer width="100%" height={220}>
-        <ComposedChart data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
+        <ComposedChart title="Activity versus blood metrics" desc="Combined chart comparing daily activity with a blood metric over time." data={chartData} margin={{ top: 5, right: 40, bottom: 5, left: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} />
           <XAxis dataKey="date" tick={{ fill: chartColors.axis, fontSize: 11 }} />
           <YAxis

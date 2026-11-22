@@ -1,5 +1,5 @@
 /**
- * Client API wrapper for the Privacy Center: PII Vault, Trusted Organizations, org holdings,
+ * Client API wrapper for the Privacy Center: PII Vault, website logins, Trusted Organizations, org holdings,
  * social-account links and household subjects with consent audit.
  *
  * Privacy Center — encrypted PII Vault + Trusted Organizations registry (status, vault CRUD + reveal,
@@ -93,6 +93,27 @@ export const deleteVaultRecord = (id, options) => request(`/privacy/vault/${id}`
 // The ONE decrypt path — explicit user action. Returns { id, type, value }.
 export const revealVaultRecord = (id, options) => request(`/privacy/vault/${id}/reveal`, {
   method: 'POST',
+  ...options,
+});
+
+// ── Website logins (#17397) ─────────────────────────────────────────────────
+// Origin-bound credentials for the model-blind browser fill. Responses carry
+// metadata only ({ id, label, origins, maskedUsername, hasTotp, notes }); there
+// is no reveal. Update is partial: an absent secret keeps the stored value and
+// `totpSecret: null` removes the 2FA setup key.
+export const getWebsiteLogins = (options) => request(...scoped('/privacy/logins', options));
+export const createWebsiteLogin = (data, options) => request('/privacy/logins', {
+  method: 'POST',
+  body: JSON.stringify(data),
+  ...options,
+});
+export const updateWebsiteLogin = (id, patch, options) => request(`/privacy/logins/${id}`, {
+  method: 'PUT',
+  body: JSON.stringify(patch),
+  ...options,
+});
+export const deleteWebsiteLogin = (id, options) => request(`/privacy/logins/${id}`, {
+  method: 'DELETE',
   ...options,
 });
 

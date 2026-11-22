@@ -77,8 +77,23 @@ export default function MtplxServerCard({
       </div>
 
       <p className="text-xs text-gray-400 leading-relaxed">
-        MTPLX runs Qwen checkpoints with native multi-token-prediction decoding on Apple Silicon and serves them over an OpenAI-compatible loopback API. PortOS manages it as a PM2 process, exactly like <code className="text-gray-300">llama-server</code> — start it here, then pick an <strong className="text-white">MTPLX</strong> preset in AI Providers. Search for and download MTP checkpoints below — PortOS never fetches weights on its own, but every download, removal, and launch happens here.
+        MTPLX runs Qwen and Inkling checkpoints with native multi-token-prediction decoding on Apple Silicon and serves them over an OpenAI-compatible loopback API. PortOS manages it as a PM2 process, exactly like <code className="text-gray-300">llama-server</code> — start it here, then pick an <strong className="text-white">MTPLX</strong> preset in AI Providers. Search for and download MTP checkpoints below — PortOS never fetches weights on its own, but every download, removal, and launch happens here.
       </p>
+
+      {status?.runtimeOutdated && (
+        <div className="bg-port-accent/10 border border-port-accent/30 rounded-lg p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <p className="text-gray-300">
+            {status.runtimeManaged === false
+              ? <>The <code className="text-gray-200">mtplx</code> on your PATH is <code className="text-gray-200">{status.runtimeVersion}</code>, older than the <code className="text-gray-200">{status.lockedVersion}</code> this PortOS version ships, so newer checkpoints may not load. Installing PortOS's own runtime takes precedence and leaves your install untouched.</>
+              : <>MTPLX <code className="text-gray-200">{status.runtimeVersion}</code> is installed; this PortOS version ships <code className="text-gray-200">{status.lockedVersion}</code>.</>}
+            {status.running && ' Restart MTPLX afterwards to use it.'}
+          </p>
+          <button onClick={onInstall} disabled={busy} className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}>
+            {actionInProgress === 'runtime-install-mtplx' ? <BrailleSpinner /> : <Download size={13} />}
+            {status.runtimeManaged === false ? "Install PortOS's MTPLX runtime" : 'Update MTPLX runtime'}
+          </button>
+        </div>
+      )}
 
       {!status ? (
         <p className="text-xs text-gray-500">Checking for MTPLX…</p>

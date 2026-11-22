@@ -1,7 +1,7 @@
 /**
  * Shared mock scaffold for the Prompt Manager suites: the page shell
  * (`pages/PromptManager.test.jsx`) and one suite per editor
- * (`components/prompts/{Stages,Variables,JobSkills}Editor.test.jsx`).
+ * (`components/prompts/{Stages,Variables,JobSkills,AgentSkills}Editor.test.jsx`).
  *
  * **Importing this module registers the mocks.** `vi.mock` is hoisted to the
  * top of this module, so the registrations run before this module's own import
@@ -33,12 +33,24 @@ export const api = {
   getJobSkill: vi.fn(() => Promise.resolve({})),
   saveJobSkill: vi.fn(),
   previewJobSkill: vi.fn(),
+  getSkills: vi.fn(() => Promise.resolve({ skills: [], archived: [], quarantined: [] })),
+  viewSkill: vi.fn(() => Promise.resolve({ content: '' })),
+  editSkill: vi.fn(),
+  getCuratorStatus: vi.fn(() => Promise.resolve({ config: { staleAfterDays: 14, archiveAfterDays: 30 }, counts: null, lastRun: null, job: null })),
+  runCurator: vi.fn(),
+  applySkillAction: vi.fn(),
+  getSkillLedger: vi.fn(() => Promise.resolve({ entries: [] })),
+  rollbackSkillLedgerEntry: vi.fn(),
 };
 
 vi.mock('../services/apiPrompts', () => Object.fromEntries(
   ['getPrompts', 'getPrompt', 'createPrompt', 'savePrompt', 'deletePrompt', 'previewPrompt', 'getPromptUsage',
     'getPromptVariables', 'createPromptVariable', 'savePromptVariable', 'deletePromptVariable',
     'getJobSkills', 'getJobSkill', 'saveJobSkill', 'previewJobSkill']
+    .map((name) => [name, (...args) => api[name](...args)]),
+));
+vi.mock('../services/apiSkills', () => Object.fromEntries(
+  ['getSkills', 'viewSkill', 'editSkill', 'getCuratorStatus', 'runCurator', 'applySkillAction', 'getSkillLedger', 'rollbackSkillLedgerEntry']
     .map((name) => [name, (...args) => api[name](...args)]),
 ));
 vi.mock('../services/apiProviders', () => ({

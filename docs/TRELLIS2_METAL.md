@@ -66,7 +66,7 @@ From the repository root, use the hash-verified uv **0.13.7**:
 MACOSX_DEPLOYMENT_TARGET=26.0 uv --no-config pip compile \
   scripts/ml/requirements/requirements-trellis2-mps.txt --python-version 3.13 \
   --python-platform aarch64-apple-darwin --generate-hashes --only-binary :all: \
-  --exclude-newer <UTC-cutoff-at-least-seven-days-old> --no-header --no-annotate \
+  --exclude-newer <UTC-cutoff-at-least-three-days-old> --no-header --no-annotate \
   -o scripts/ml/requirements/requirements-trellis2-mps.lock.txt
 ```
 

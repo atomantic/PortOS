@@ -102,6 +102,26 @@ describe('Runway image workflow', () => {
     expect(sidecar.referenceTags.map((r) => r.filename)).toEqual(['hero.png', 'rival.png']);
     expect(JSON.stringify(sidecar)).not.toContain(root);
   });
+  it('strips EXIF and XMP from reference images before encoding Runway data URIs', async () => {
+    const jpegWithExif = await sharp(output)
+      .withExif({ IFD0: { Make: 'TestPhone' }, IFD3: { GPSLatitudeRef: 'N', GPSLongitudeRef: 'W' } })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const xmpPayload = Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>runway-secret-gps</x:xmpmeta>');
+    const xmpSeg = Buffer.concat([Buffer.from([0xff, 0xe1, ((xmpPayload.length + 2) >> 8) & 0xff, (xmpPayload.length + 2) & 0xff]), xmpPayload]);
+    const polluted = Buffer.concat([jpegWithExif.subarray(0, 2), xmpSeg, jpegWithExif.subarray(2)]);
+    const refPath = join(PATHS.images, 'gps-ref.jpg');
+    await writeFile(refPath, polluted);
+
+    const job = await runway.generateImage({ prompt: 'A portrait', model: 'gen4_image_turbo', referenceImagePaths: [refPath] });
+    expect(await terminal(job.jobId)).toMatchObject({ type: 'completed' });
+    const uri = calls[0].body.referenceImages[0].uri;
+    const sent = Buffer.from(uri.slice(uri.indexOf(',') + 1), 'base64');
+    const meta = await sharp(sent).metadata();
+    expect(meta.exif).toBeUndefined();
+    expect(meta.xmp).toBeUndefined();
+    expect(sent.includes(Buffer.from('runway-secret-gps'))).toBe(false);
+  });
   it('renders an unseeded third-party model with more than three untagged references', async () => {
     const paths = Array.from({ length: 5 }, (_, i) => join(PATHS.images, `reference-${i}.png`));
     await Promise.all(paths.map((path) => writeFile(path, output)));

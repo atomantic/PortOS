@@ -1,0 +1,13 @@
+{
+  "name": "ui_describe_visually",
+  "description": "Take a screenshot of what the user is currently looking at and describe it using a vision model. Use when the user asks about VISUAL content the text-based ui_read can't capture — \"what's on this chart?\", \"describe this graph\", \"what does the OpenWorld look like right now?\", \"what am I looking at?\". For plain text content prefer ui_read; only reach for this when the answer requires SEEING pixels (charts, 3D/WebGL views, images, diagrams). The screenshot is captured client-side (the browser may prompt for screen-capture permission the first time).",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "What the user wants to know about the screen (e.g. \"what does this chart show?\"). Defaults to a general description."
+      }
+    }
+  }
+}

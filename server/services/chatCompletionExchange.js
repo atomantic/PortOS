@@ -8,7 +8,8 @@
  * `promptRunner.runPromptThroughProvider({ completion })`) owns those. Only
  * toolkit-less callers use this exchange directly without a run store.
  *
- * The request body is exactly `{ model, messages, temperature, max_tokens }`.
+ * The request body is exactly `{ model, messages, temperature, max_tokens }`, plus OpenRouter's
+ * `provider` routing object when the endpoint is OpenRouter and one is configured.
  * The streaming executor adds `stream` and provider-level sampling defaults and
  * reports no token counts; none of that may change under a caller that already
  * depends on this shape, so the two request shapes stay distinct.
@@ -28,7 +29,9 @@ import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
 import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
+import { openRouterBodyFragment } from '../lib/aiToolkit/internal/generationOptions.js';
 import { estimateTokens } from '../lib/contextBudget.js';
+import { sendWithCredentialSession } from '../lib/aiToolkit/internal/preHeaderRetry.js';
 
 /**
  * The provider's reported token counts as usage-ledger fields, or `null` when
@@ -80,7 +83,7 @@ function completionWire(provider, model, prompt, { temperature, max_tokens }) {
   if (!nativeUrl) {
     return {
       url: `${provider.endpoint}/chat/completions`,
-      body: { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens },
+      body: { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens, ...openRouterBodyFragment(provider, model) },
       read: (data) => data,
     };
   }
@@ -100,6 +103,17 @@ function completionWire(provider, model, prompt, { temperature, max_tokens }) {
       },
     }),
   };
+}
+
+/**
+ * The credential pool session for this request (#17384), or null. Deferred:
+ * only a provider record that names a service instance can have a pool, and
+ * every other completion must not pay for the graph store's closure.
+ */
+async function openPoolSession(provider, model) {
+  if (typeof provider.serviceId !== 'string' || !provider.apiKey) return null;
+  const { openCredentialSession } = await import('./provider/credentialPoolRuntime.js');
+  return openCredentialSession(provider, model);
 }
 
 /**
@@ -125,6 +139,7 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
     }
     headers['Authorization'] = `Bearer ${provider.apiKey}`;
   }
+  const session = provider.apiKey ? await openPoolSession(provider, model).catch(() => null) : null;
 
   const controller = new AbortController();
   // Distinguishes the deadline from a caller cancel, and records how far the
@@ -141,12 +156,12 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
   let response;
   try {
     controller.signal.throwIfAborted();
-    response = await fetch(wire.url, {
+    response = await sendWithCredentialSession(session, provider.apiKey, (apiKey) => fetch(wire.url, {
       method: 'POST',
-      headers,
+      headers: apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers,
       signal: controller.signal,
       body: JSON.stringify(wire.body)
-    });
+    }), controller.signal);
     stallPhase = 'response-body';
 
     if (!response.ok) {

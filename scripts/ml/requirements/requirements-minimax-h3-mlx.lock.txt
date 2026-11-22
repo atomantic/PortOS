@@ -1,6 +1,6 @@
 # AUTO-GENERATED hash-pinned lock — do not edit by hand. Input: requirements-minimax-h3-mlx.txt
 # Regenerate with hash-verified uv 0.13.7 on Apple Silicon, from the repo root.
-# Use a freshly computed UTC cutoff at least seven days old (below: 2026-11-15 run):
+# Use a freshly computed UTC cutoff at least three days old (below: 2026-11-15 run):
 #   uv --no-config pip compile scripts/ml/requirements/requirements-minimax-h3-mlx.txt --generate-hashes --python-version 3.11 \
 #     --only-binary :all: --exclude-newer 2026-11-07T00:00:00Z --no-header -o scripts/ml/requirements/requirements-minimax-h3-mlx.lock.txt
 # Installed with: uv pip sync --require-hashes --only-binary :all: (scripts/setup-image-video.sh)

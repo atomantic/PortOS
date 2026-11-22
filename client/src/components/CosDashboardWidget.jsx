@@ -126,7 +126,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
             <Bot className={`w-6 h-6 ${status.running ? 'text-port-success' : 'text-gray-500'}`} />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">Chief of Staff</h3>
+            <h2 className="text-base @sm:text-lg font-semibold leading-tight text-white">Chief of Staff</h2>
             <p className="text-sm text-gray-500">
               {status.running
                 ? status.paused ? 'Paused' : 'Active'

@@ -21,6 +21,14 @@ vi.mock('../services/privacyVault.js', () => ({
   getVaultStatus: vi.fn(async () => ({ keyConfigured: true, recordCounts: { email: 1 } })),
 }));
 
+const LOGIN_META = { id: 'c0ffee00-0000-4000-8000-0000000000b1', label: 'Example portal', origins: ['https://example.com'], maskedUsername: 'a•••@example.com', hasTotp: true };
+vi.mock('../services/privacyWebsiteLogins.js', () => ({
+  createWebsiteLogin: vi.fn(async () => LOGIN_META),
+  listWebsiteLogins: vi.fn(async () => [LOGIN_META]),
+  updateWebsiteLogin: vi.fn(async (id) => ({ ...LOGIN_META, id })),
+  deleteWebsiteLogin: vi.fn(async () => ({ ok: true })),
+}));
+
 vi.mock('../services/privacyOrgs.js', () => ({
   createOrg: vi.fn(async (input) => ({ id: 'c0ffee00-0000-4000-8000-000000000002', name: input.name, trust: input.trust ?? 'trusted' })),
   listOrgs: vi.fn(async () => [{ id: 'o1', name: 'Acme Bank', trust: 'trusted' }]),
@@ -100,6 +108,7 @@ const brokerService = await import('../services/privacyBrokers.js');
 const scanService = await import('../services/privacyScan.js');
 const changeService = await import('../services/privacyChanges.js');
 const optOutService = await import('../services/privacyOptOut.js');
+const loginService = await import('../services/privacyWebsiteLogins.js');
 
 const VALID_UUID = 'c0ffee00-0000-4000-8000-000000000001';
 
@@ -227,6 +236,40 @@ describe('GET /api/privacy/vault/:id', () => {
   it('404s a missing record', async () => {
     const res = await request(makeApp()).get(`/api/privacy/vault/${VALID_UUID}`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('/api/privacy/logins (#17397)', () => {
+  const body = { label: 'Example portal', origins: ['https://Example.com/login'], username: 'alice@example.com', password: 'pw-route-test-8812' };
+
+  it('normalizes exact origins at the edge and returns metadata only', async () => {
+    const res = await request(makeApp()).post('/api/privacy/logins').send({ ...body, totpSecret: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ' });
+    expect(res.status).toBe(201);
+    expect(loginService.createWebsiteLogin).toHaveBeenCalledWith(expect.objectContaining({ origins: ['https://example.com'] }));
+    expect(JSON.stringify(res.body)).not.toContain('pw-route-test-8812');
+  });
+
+  it.each([
+    ['a bare hostname origin', { origins: ['example.com'] }],
+    ['an invalid TOTP setup key', { totpSecret: 'NOT!A!SEED' }],
+    ['an unknown field', { shareWithTwin: true }],
+  ])('rejects %s', async (_label, patch) => {
+    const res = await request(makeApp()).post('/api/privacy/logins').send({ ...body, ...patch });
+    expect(res.status).toBe(400);
+    expect(loginService.createWebsiteLogin).not.toHaveBeenCalled();
+  });
+
+  it('passes the subject and exact-origin filters to the list', async () => {
+    const res = await request(makeApp()).get(`/api/privacy/logins?subjectId=${SELF}&origin=https://example.com/x`);
+    expect(res.status).toBe(200);
+    expect(loginService.listWebsiteLogins).toHaveBeenCalledWith({ subjectId: SELF, origin: 'https://example.com' });
+  });
+
+  it('updates partially with null clearing the seed, and deletes by id', async () => {
+    expect((await request(makeApp()).put(`/api/privacy/logins/${VALID_UUID}`).send({ totpSecret: null })).status).toBe(200);
+    expect(loginService.updateWebsiteLogin).toHaveBeenCalledWith(VALID_UUID, { totpSecret: null });
+    expect((await request(makeApp()).delete(`/api/privacy/logins/${VALID_UUID}`)).status).toBe(200);
+    expect(loginService.deleteWebsiteLogin).toHaveBeenCalledWith(VALID_UUID);
   });
 });
 

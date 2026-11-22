@@ -1,0 +1,13 @@
+{
+  "name": "feeds_digest",
+  "description": "Summarize the user's unread RSS feed items. Use when the user asks \"what's new in my feeds?\", \"any news?\", \"read me my headlines\". Returns up to 5 of the newest unread items with title and feed name.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "limit": {
+        "type": "integer",
+        "description": "Max items (default 5, max 10)."
+      }
+    }
+  }
+}

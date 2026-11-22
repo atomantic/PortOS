@@ -8,7 +8,7 @@ vi.mock('../../services/apiAgents', () => ({ triggerCosOnDemandTask: vi.fn() }))
 vi.mock('./ComparisonResearch', () => ({ default: () => <div>Research configuration</div> }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
-  Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />,
+  Scatter: ({ name, data }) => <div data-testid={`scatter-${name}`} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} data-labels={JSON.stringify(data?.map(({ label }) => label))} />,
   CartesianGrid: () => null, Tooltip: () => null, LabelList: () => null,
   XAxis: ({ label }) => <div data-testid="xaxis" data-label={label?.value} />, YAxis: () => null,
 }));
@@ -97,7 +97,7 @@ it('plots current-workload measurements by default and preserves a choice of the
 it('preserves empty selections across reload, handles zero costs and switches axes', async () => {
   const { unmount } = render(<ModelComparison />);
   await screen.findByTestId('scatter-example:gpt-6-luna');
-  fireEvent.change(screen.getByLabelText('Cost axis'), { target: { value: 'inputPerMillion' } });
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'inputPerMillion' } });
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.1,21],[0.1,32]]');
   fireEvent.click(screen.getByRole('button', { name: 'Clear models' }));
   unmount();
@@ -137,16 +137,16 @@ it('upgrades the legacy token-rate default without losing filters and remembers 
   localStorage.setItem('portos-composite-comparison-v1', JSON.stringify({ priceId: 'blendedPerMillion', models: ['gpt-6-luna'], efforts: ['low', 'high'] }));
   const { unmount } = render(<ModelComparison />);
   await screen.findByTestId('scatter-example:gpt-6-luna');
-  expect(screen.getByLabelText('Cost axis')).toHaveValue('costPerTask');
+  expect(screen.getByLabelText('X axis')).toHaveValue('costPerTask');
   expect(screen.queryByTestId('scatter-example:claude-opus-5-5')).toBeNull();
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.6000000000000001,32]]');
-  fireEvent.change(screen.getByLabelText('Cost axis'), { target: { value: 'blendedPerMillion' } });
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'blendedPerMillion' } });
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.2,32]]');
   expect(screen.getByText(/vertical effort curves do not mean equal task cost/)).toBeTruthy();
   unmount();
   render(<ModelComparison />);
   await screen.findByTestId('scatter-example:gpt-6-luna');
-  expect(screen.getByLabelText('Cost axis')).toHaveValue('blendedPerMillion');
+  expect(screen.getByLabelText('X axis')).toHaveValue('blendedPerMillion');
 });
 
 it('never substitutes a token rate for missing task cost and lets users exclude estimated task costs', async () => {
@@ -202,7 +202,44 @@ it('keeps researched Hydrogen token prices and sources visible after reload with
   fireEvent.click(screen.getByRole('button', { name: 'Reload data' }));
   await waitFor(() => expect(api.getModelComparison).toHaveBeenCalledTimes(2));
   expect(screen.getByLabelText('gemini-4-hydrogen token pricing')).toHaveTextContent('Output: $7.50 / 1M');
-  fireEvent.change(screen.getByLabelText('Cost axis'), { target: { value: 'inputPerMillion' } });
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'inputPerMillion' } });
   expect(screen.queryByTestId('scatter-example:gemini-4-hydrogen-high')).toBeNull();
   expect(screen.getByRole('button', { name: 'Research gemini-4-hydrogen' })).toBeEnabled();
+});
+
+it('plots one point for a model whose efforts all carry the same score', async () => {
+  const sameScore = ['low', 'medium', 'high'].map(effort => ({ ...row('example-local', effort, 20, 0, true), costPerTask: metric(0) }));
+  api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows: [...sameScore, row('gpt-6-luna', 'low', 21, 0.2), row('gpt-6-luna', 'high', 32, 0.2)] } });
+  render(<ModelComparison />);
+  const local = await screen.findByTestId('scatter-example:example-local');
+  expect(JSON.parse(local.dataset.values)).toEqual([[0, 20]]);
+  expect(JSON.parse(local.dataset.labels)).toEqual(['example-local (low–high, same score) ≈']);
+  // Measured efforts that differ still plot separately.
+  expect(JSON.parse(screen.getByTestId('scatter-example:gpt-6-luna').dataset.values)).toHaveLength(2);
+  expect(screen.getByText(/2 identical provider or effort points combined/)).toBeTruthy();
+});
+
+it('lists, rather than ranges, equal-score efforts separated by a different one', async () => {
+  const efforts = [['low', 20], ['medium', 25], ['high', 20]].map(([effort, quality]) => ({ ...row('example-local', effort, quality, 0, true), costPerTask: metric(0) }));
+  api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows: efforts } });
+  render(<ModelComparison />);
+  const local = await screen.findByTestId('scatter-example:example-local');
+  expect(JSON.parse(local.dataset.values)).toEqual(expect.arrayContaining([[0, 20], [0, 25]]));
+  expect(JSON.parse(local.dataset.values)).toHaveLength(2);
+  expect(JSON.parse(local.dataset.labels)).toContain('example-local (low, high, same score) ≈');
+});
+
+it('plots intelligence against output speed and leaves unmeasured models off the speed axis', async () => {
+  const fast = { ...row('gpt-6-luna', 'low', 21, 0.2), tokensPerSecond: metric(140) };
+  const local = { ...row('example-local', 'high', 30, 0), tokensPerSecond: metric(120.5) };
+  const unmeasured = row('unmeasured-local', 'high', 25, 0);
+  api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows: [fast, local, unmeasured] } });
+  render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:gpt-6-luna');
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'tokensPerSecond' } });
+  expect(screen.getByRole('heading', { name: 'Speed vs. intelligence' })).toBeTruthy();
+  expect(screen.getByTestId('xaxis').dataset.label).toBe('Output tokens / second');
+  expect(JSON.parse(screen.getByTestId('scatter-example:example-local').dataset.values)).toEqual([[120.5, 30]]);
+  expect(screen.queryByTestId('scatter-example:unmeasured-local')).toBeNull();
+  expect(screen.getByLabelText('Log speed scale')).toBeTruthy();
 });

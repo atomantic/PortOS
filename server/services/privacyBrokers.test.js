@@ -10,6 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { queryMock, withTransactionMock } = vi.hoisted(() => ({ queryMock: vi.fn(), withTransactionMock: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ query: queryMock, withTransaction: withTransactionMock }));
 
+const { eraseMock } = vi.hoisted(() => ({ eraseMock: vi.fn(async () => ({})) }));
+vi.mock('./messageDrafts.js', () => ({ erasePrivacyDrafts: eraseMock, scrubLegacyPrivacyDraftValues: vi.fn() }));
+
 const SELF = '00000000-0000-4000-8000-000000000001';
 vi.mock('./privacySubjects.js', () => ({ resolveSubjectId: (id) => id || SELF }));
 
@@ -25,6 +28,8 @@ const {
   recordScanVerdict,
   ensureSeeded,
   resetEnsureSeededForTests,
+  clearCaseIdentityEvidence,
+  transitionCase,
 } = await import('./privacyBrokers.js');
 
 beforeEach(() => queryMock.mockReset());
@@ -272,5 +277,40 @@ describe('recordScanVerdict — 23505 unique constraint fallback (#4021)', () =>
     expect(result).toBeDefined();
     expect(result.id).toBe('case-123');
     expect(result.state).toBe('found');
+  });
+});
+
+describe('case erasure removes the linked opt-out draft (#17233)', () => {
+  const caseRow = (state, evidence) => ({ id: 'case-1', subject_id: SELF, broker_id: 'spokeo', state, found: false, evidence, disclosed_fields: [] });
+  const expectCaseScoped = () => {
+    const [predicate, opts] = eraseMock.mock.calls[0];
+    expect(opts).toEqual({ generatedBy: ['privacy-optout'] });
+    expect(predicate({ id: 'draft-9' })).toBe(true);
+    expect(predicate({ id: 'other', privacyMeta: { caseId: 'case-1' } })).toBe(true);
+    expect(predicate({ id: 'other', privacyMeta: { caseId: 'case-2' } })).toBe(false);
+  };
+
+  it('clearCaseIdentityEvidence erases the case draft referenced by evidence.draftId', async () => {
+    eraseMock.mockClear();
+    queryMock.mockResolvedValueOnce({ rows: [caseRow('submitted', { lane: 'email', draftId: 'draft-9' })] });
+    await clearCaseIdentityEvidence('case-1');
+    expectCaseScoped();
+  });
+
+  it('transitionCase to confirmed_removed erases the case draft; other transitions do not', async () => {
+    eraseMock.mockClear();
+    const client = { query: vi.fn(async (sql) => (/SELECT id, state, evidence/.test(sql)
+      ? { rows: [{ id: 'case-1', state: 'awaiting_processing', evidence: { lane: 'email', draftId: 'draft-9' } }] }
+      : { rows: [caseRow('confirmed_removed', { lane: 'email', draftId: 'draft-9' })] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await transitionCase('case-1', 'confirmed_removed', { viaRescan: true });
+    expectCaseScoped();
+
+    eraseMock.mockClear();
+    client.query.mockImplementation(async (sql) => (/SELECT id, state, evidence/.test(sql)
+      ? { rows: [{ id: 'case-1', state: 'found', evidence: {} }] }
+      : { rows: [caseRow('optout_in_progress', {})] }));
+    await transitionCase('case-1', 'optout_in_progress');
+    expect(eraseMock).not.toHaveBeenCalled();
   });
 });

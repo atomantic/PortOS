@@ -13,6 +13,12 @@ import {
   storableAutoUpdateConfig,
 } from '../lib/sharedSchemas.js';
 import {
+  homebrewHoldSchema,
+  homebrewRepairSchema,
+  homebrewStatusQuerySchema,
+  homebrewUpgradeSchema,
+} from '../lib/softwareValidation.js';
+import {
   countActiveCosAgents,
   getPersistentMindImageWorkGuard,
 } from '../services/updatePreflight.js';
@@ -260,6 +266,38 @@ router.post('/software/blender', asyncHandler(async (req, res) => {
   const { acknowledgeBusy } = validateRequest(acknowledgeBusySchema, req.body || {});
   const { startBlenderInstall } = await import('../services/blenderInstaller.js');
   res.status(202).json(await startBlenderInstall({ acknowledgeBusy, io: req.app.get('io') }));
+}));
+
+// GET /api/update/software/homebrew — outdated Homebrew packages with the risk each
+// upgrade carries for PortOS, and problems visible now (macOS). `fresh=1` runs
+// `brew update` first.
+router.get('/software/homebrew', asyncHandler(async (req, res) => {
+  const { fresh } = validateRequest(homebrewStatusQuerySchema, req.query);
+  const { getHomebrewStatus } = await import('../services/homebrewUpgrades.js');
+  res.json(await getHomebrewStatus({ fresh: fresh === '1' }));
+}));
+
+// POST /api/update/software/homebrew/upgrade — upgrade the named packages, then
+// check and repair what PortOS runs on. Progress streams on `software:homebrew`.
+router.post('/software/homebrew/upgrade', asyncHandler(async (req, res) => {
+  const { names, acknowledgeRisk, acknowledgeBusy } = validateRequest(homebrewUpgradeSchema, req.body || {});
+  const { startHomebrewJob } = await import('../services/homebrewUpgrades.js');
+  res.status(202).json(await startHomebrewJob({ kind: 'upgrade', names, acknowledgeRisk, acknowledgeBusy, io: req.app.get('io') }));
+}));
+
+// POST /api/update/software/homebrew/repair — the post-upgrade check and repair on
+// its own, for an upgrade run in a terminal.
+router.post('/software/homebrew/repair', asyncHandler(async (req, res) => {
+  const { acknowledgeBusy } = validateRequest(homebrewRepairSchema, req.body || {});
+  const { startHomebrewJob } = await import('../services/homebrewUpgrades.js');
+  res.status(202).json(await startHomebrewJob({ kind: 'repair', acknowledgeBusy, io: req.app.get('io') }));
+}));
+
+// POST /api/update/software/homebrew/hold — `brew pin` / `brew unpin` formulae.
+router.post('/software/homebrew/hold', asyncHandler(async (req, res) => {
+  const { names, hold } = validateRequest(homebrewHoldSchema, req.body || {});
+  const { setHomebrewHold } = await import('../services/homebrewUpgrades.js');
+  res.json(await setHomebrewHold({ names, hold, io: req.app.get('io') }));
 }));
 
 export default router;

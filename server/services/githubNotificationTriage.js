@@ -16,6 +16,7 @@ import { applyLearnedRule, computeThreadTrust, decideThread, matchWaitingRun, pa
 import { parseGitRemoteUrl, readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { execGh } from './github.js';
 import { createGithubActorTrust } from './forgeActorTrust.js';
 import { listAccounts } from './githubAccounts.js';
@@ -24,6 +25,8 @@ const GH_TIMEOUT_MS = 20_000;
 // Each thread costs a few API calls; the rest wait for the next run. The first
 // sync reads the whole inbox, read threads included.
 const MAX_THREADS_PER_RUN = 60;
+// Concurrent `gh` reads per run; the reader memo dedupes shared lookups across workers.
+const GH_READ_CONCURRENCY = 5;
 // Open threads a rules-version bump re-decides without new activity: version 2
 // changed your own PRs and finished threads (now marked done, not just read);
 // version 3 leaves a bot's comment on your own PR to the PR workflow; version
@@ -59,6 +62,8 @@ const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false), draft: (.draft // false), mergeableState: .mergeable_state}';
 const COMMENT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
 
+const REPO_INFO_JQ = '{defaultBranch: .default_branch, canPush: .permissions.push}';
+
 const isBotLogin = (login) => /\[bot\]$/i.test(login);
 const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value) ? value : null);
 
@@ -66,12 +71,13 @@ const loginOrNull = (value) => (typeof value === 'string' && LOGIN_RE.test(value
 export async function managedAppsByRepoKey() {
   const { getAllApps } = await import('./apps.js');
   const apps = await getAllApps({ includeArchived: false }).catch(() => []);
+  const withRepo = apps.filter((app) => app.repoPath);
+  const remotes = await Promise.all(withRepo.map((app) => readOriginRemoteUrl(app.repoPath).catch(() => null)));
   const byKey = new Map();
-  for (const app of apps) {
-    if (!app.repoPath) continue;
-    const parsed = parseGitRemoteUrl(await readOriginRemoteUrl(app.repoPath).catch(() => null));
+  withRepo.forEach((app, index) => {
+    const parsed = parseGitRemoteUrl(remotes[index]);
     if (parsed) byKey.set(`${parsed.host}/${parsed.owner}/${parsed.repo}`.toLowerCase(), app);
-  }
+  });
   return byKey;
 }
 
@@ -87,14 +93,21 @@ function createReader(account, env) {
     if (!memo.has(key)) memo.set(key, load());
     return memo.get(key);
   };
+  // One GET repos/{repo} serves both the default branch and push permission.
+  const repoInfo = (repo) => once(`r:${repo}`, async () => {
+    const info = await json(`repos/${repo}`, REPO_INFO_JQ);
+    return {
+      defaultBranch: typeof info?.defaultBranch === 'string' && info.defaultBranch ? info.defaultBranch : null,
+      canPush: typeof info?.canPush === 'boolean' ? info.canPush : null,
+    };
+  });
   return {
     subject: (path) => (path ? once(`s:${path}`, () => json(path, SUBJECT_JQ)) : null),
     comment: (path) => (path ? once(`c:${path}`, () => json(path, COMMENT_JQ)) : null),
     userCreatedAt: (login) => once(`u:${login}`, () => run([`users/${login}`, '--jq', '.created_at']).then((out) => out.trim() || null).catch(() => null)),
-    defaultBranch: (repo) => once(`b:${repo}`, () => run([`repos/${repo}`, '--jq', '.default_branch']).then((out) => out.trim() || null).catch(() => null)),
+    defaultBranch: async (repo) => (await repoInfo(repo)).defaultBranch,
     // Whether this account can push to (and so merge in) the repo; null when unread.
-    canPush: (repo) => once(`p:${repo}`, () => run([`repos/${repo}`, '--jq', '.permissions.push'])
-      .then((out) => ({ true: true, false: false })[out.trim()] ?? null).catch(() => null)),
+    canPush: async (repo) => (await repoInfo(repo)).canPush,
     // 204 for a member; any failure (404, no visibility) is "not a member".
     orgMember: (org, login) => once(`o:${org}/${login}`, () => run([`orgs/${org}/members/${login}`]).then(() => true).catch(() => false)),
     repoTrust: (repo) => once(`t:${repo}`, () => createGithubActorTrust({
@@ -191,7 +204,7 @@ export async function threadDiscussionVouched(account, env, row) {
 }
 
 async function triageThread(row, ctx) {
-  const { account, reader, ownLogins, managedKeys, learnedRules, now } = ctx;
+  const { account, reader, ownLogins, managedKeys, learnedRules, repoThreadCounts, now } = ctx;
   const repo = REPO_RE.test(row.repo_full_name) ? row.repo_full_name : null;
   const owner = row.repo_owner.toLowerCase();
   const repoManaged = repo ? managedKeys.has(`${account.host}/${repo}`.toLowerCase()) : false;
@@ -199,8 +212,10 @@ async function triageThread(row, ctx) {
 
   const subjectPath = repoApiPath(row.subject_api_url, account.host);
   const commentPath = repoApiPath(row.latest_comment_api_url, account.host);
-  const subject = await reader.subject(subjectPath);
-  const comment = commentPath && commentPath !== subjectPath ? await reader.comment(commentPath) : null;
+  const [subject, comment] = await Promise.all([
+    reader.subject(subjectPath),
+    commentPath && commentPath !== subjectPath ? reader.comment(commentPath) : null,
+  ]);
   const subjectAuthor = loginOrNull(subject?.author);
   const commenter = loginOrNull(comment?.author);
   const isDeployment = row.reason === 'approval_requested' && row.subject_type === 'WorkflowRun';
@@ -213,14 +228,8 @@ async function triageThread(row, ctx) {
   const trustOf = (login, actorType = null) => rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwner: row.repo_owner }, login, actorType);
   // Any other thread from this repo counts as history, whatever its age: rows
   // from one sync share a created_at, so an age comparison would see none.
-  let priorThreadsInRepo = null;
-  const priorThreads = async () => {
-    priorThreadsInRepo ??= Number((await query(
-      'SELECT COUNT(*)::int AS n FROM github_notifications WHERE account_id = $1 AND repo_full_name = $2 AND thread_id <> $3',
-      [account.id, row.repo_full_name, row.thread_id],
-    )).rows[0].n);
-    return priorThreadsInRepo;
-  };
+  // The row itself is in the batch's per-repo count, so it is subtracted.
+  const priorThreads = () => Math.max(0, (repoThreadCounts.get(row.repo_full_name) ?? 0) - 1);
   const signalsFor = async (login, loginTrust, association, mentionCount) => (loginTrust === 'outside'
     ? spamSignals({
       trust: loginTrust,
@@ -228,7 +237,7 @@ async function triageThread(row, ctx) {
       actorAssociation: association,
       mentionCount,
       repoOwned,
-      priorThreadsInRepo: await priorThreads(),
+      priorThreadsInRepo: priorThreads(),
       reason: row.reason,
       now,
     })
@@ -365,8 +374,7 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
   );
   if (!rows.length) return 0;
   const reader = createReader(account, env);
-  let changed = 0;
-  for (const row of rows) {
+  const changes = await mapWithConcurrency(rows, GH_READ_CONCURRENCY, async (row) => {
     const subject = await reader.subject(repoApiPath(row.subject_api_url, account.host));
     const statusCheckedAt = new Date(now).toISOString();
     // An unreadable PR (deleted, access lost) is still stamped, so it rotates
@@ -386,9 +394,9 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
        WHERE account_id = $1 AND thread_id = $2 AND evidence = $5::jsonb`,
       [account.id, row.thread_id, toPgJson(status), finished, toPgJson(row.evidence)],
     );
-    if (rowCount && moved) changed += 1;
-  }
-  return changed;
+    return rowCount && moved ? 1 : 0;
+  });
+  return changes.reduce((sum, n) => sum + n, 0);
 }
 
 // No new GitHub activity since the last decision (never decided counts: nothing
@@ -404,6 +412,17 @@ function carryTurnEvidence(row, evidence) {
   return { ...evidence, ...kept };
 }
 
+// Per-repo thread totals for a batch in one grouped query, for spam history.
+async function countThreadsByRepo(accountId, rows) {
+  const repos = [...new Set(rows.map((row) => row.repo_full_name))];
+  if (!repos.length) return new Map();
+  const { rows: counts } = await query(
+    'SELECT repo_full_name, COUNT(*)::int AS n FROM github_notifications WHERE account_id = $1 AND repo_full_name = ANY($2::text[]) GROUP BY repo_full_name',
+    [accountId, repos],
+  );
+  return new Map(counts.map((entry) => [entry.repo_full_name, entry.n]));
+}
+
 /**
  * Triage this account's threads that are new or have new activity since their
  * last decision. Returns `{ triaged, decisions: { [decision]: n } }`.
@@ -417,13 +436,14 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
   );
   if (!rows.length) return { triaged: 0, decisions: {} };
   const reader = createReader(account, env);
-  const ctx = {
-    account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), learnedRules: await loadLearnedRules(account.id), now,
-  };
   // A hand-off holds until new activity; a row selected only because its stamp was cleared is re-stamped, not re-decided.
   const held = rows.filter((row) => row.decision === 'handed-off' && isSameActivity(row));
-  const results = [];
-  for (const row of rows) if (!held.includes(row)) results.push({ row, result: await triageThread(row, ctx) });
+  const pending = rows.filter((row) => !held.includes(row));
+  const ctx = {
+    account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), learnedRules: await loadLearnedRules(account.id),
+    repoThreadCounts: await countThreadsByRepo(account.id, pending), now,
+  };
+  const results = await mapWithConcurrency(pending, GH_READ_CONCURRENCY, async (row) => ({ row, result: await triageThread(row, ctx) }));
 
   const decisions = {};
   let triaged = 0;

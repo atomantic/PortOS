@@ -33,19 +33,17 @@ let duringInsert;
 let insertAttempts;
 let rejectInsert;
 const deleteEvent = vi.fn(async () => ({}));
-vi.mock('@googleapis/calendar', () => ({
-  calendar: () => ({
-    events: {
-      insert: vi.fn(async ({ requestBody }) => {
-        const attempt = ++insertAttempts;
-        if (attempt === rejectInsert) throw new Error('Calendar quota exceeded');
-        const id = `evt-${attempt}`;
-        insertedEvents.push({ id, requestBody });
-        await duringInsert?.();
-        return { data: { id } };
-      }),
-      delete: deleteEvent,
-    },
+vi.mock('./calendarApi.js', () => ({
+  createCalendarApi: () => ({
+    insertEvent: vi.fn(async ({ requestBody }) => {
+      const attempt = ++insertAttempts;
+      if (attempt === rejectInsert) throw new Error('Calendar quota exceeded');
+      const id = `evt-${attempt}`;
+      insertedEvents.push({ id, requestBody });
+      await duringInsert?.();
+      return { data: { id } };
+    }),
+    deleteEvent,
   }),
 }));
 
@@ -186,6 +184,7 @@ describe('goalCalendarScheduler write serialization (#8755)', () => {
     deleteEvent.mockImplementation(async ({ eventId }) => {
       if (eventId === 'evt-11' || eventId === 'evt-20') throw new Error('Delete unavailable');
       if (eventId === 'evt-1') throw Object.assign(new Error('Already deleted'), { code: 410 });
+      if (eventId === 'evt-2') throw Object.assign(new Error('Not found'), { code: 404 });
     });
     await expect(scheduleTimeBlocks('g1')).rejects.toMatchObject({
       code: 'CALENDAR_CLEANUP_FAILED', message: expect.stringContaining('2 calendar events could not be removed')

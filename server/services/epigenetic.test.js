@@ -275,6 +275,21 @@ describe('epigenetic intervention persistence', () => {
     await expect(getInterventions()).resolves.toMatchObject({ interventions: {}, trackedCount: 0 });
   });
 
+  it('re-tracking an existing id keeps its logs, startedAt and unsent fields (#17353)', async () => {
+    await addIntervention({ id: 'retrack-example', name: 'Example', dosage: '5 mg', notes: 'with food', trackingUnit: 'mg' });
+    await logEntry('retrack-example', { amount: 5, date: '2026-09-10' });
+    const before = (await getInterventions()).interventions['retrack-example'];
+
+    await addIntervention({ id: 'retrack-example', name: 'Example', category: 'custom' });
+
+    const after = (await getInterventions()).interventions['retrack-example'];
+    expect(after.logs).toEqual(before.logs);
+    expect(after.logs).toHaveLength(1);
+    expect(after.startedAt).toBe(before.startedAt);
+    expect(after.dosage).toBe('5 mg');
+    expect(after.notes).toBe('with food');
+  });
+
   it('replaces a same-day entry and keeps the remaining logs in date order', async () => {
     await addTracked('vitamin-d');
     await logEntry('vitamin-d', { amount: 3, date: '2026-09-12', notes: 'first' });

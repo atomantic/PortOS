@@ -216,16 +216,18 @@ export async function deleteBoard(id) {
  * on `updatedAt` (tombstone-aware) via the shared `mergeBoardRecord` decision —
  * identical contract to mergeProjectsFromSync: seeds/advances the conflict-journal
  * base hash and journals the about-to-be-overwritten local version when remote
- * wins (best-effort, never throws into the merge). Returns `{ applied, count }`.
+ * wins (best-effort, never throws into the merge). `senderSchemaVersions` is the
+ * peer's advertised wire versions; a moodBoards sender below v2 cannot carry
+ * video pins, so the merge keeps the receiver's. Returns `{ applied, count }`.
  */
-export async function mergeBoardsFromSync(remoteBoards, { source = { via: 'sync', peerId: null } } = {}) {
+export async function mergeBoardsFromSync(remoteBoards, { source = { via: 'sync', peerId: null }, senderSchemaVersions = null } = {}) {
   if (!Array.isArray(remoteBoards)) return { applied: false, count: 0 };
   let changed = 0;
   for (const remote of remoteBoards) {
     const applied = await withTransaction(async (client) => {
       const sel = await client.query(`SELECT data FROM mood_boards WHERE id = $1 FOR UPDATE`, [remote?.id]);
       const local = rowToBoard(sel.rows[0]);
-      const { next, inserted, remoteWins, changed: didChange } = mergeBoardRecord(local, remote);
+      const { next, inserted, remoteWins, changed: didChange } = mergeBoardRecord(local, remote, { senderSchemaVersions });
       if (!next) return false; // malformed remote → dropped
       if (inserted) {
         await persist(client.query.bind(client), next);

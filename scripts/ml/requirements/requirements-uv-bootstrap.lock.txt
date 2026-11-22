@@ -9,7 +9,7 @@
 # a cooldown so brand-new releases are not adopted the day they publish:
 #   uv pip compile scripts/ml/requirements/requirements-uv-bootstrap.txt --universal --python-version 3.8 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o scripts/ml/requirements/requirements-uv-bootstrap.lock.txt
+#     --exclude-newer <UTC date at least 3 days ago> -o scripts/ml/requirements/requirements-uv-bootstrap.lock.txt
 # then check the result against OSV (including MAL- malicious-package records).
 # Generated from a local index of all 19 PyPI artifacts, each checked against
 # the release SHA-256 and uploaded before 2026-11-04T00:00:00Z (seven-day cooldown).

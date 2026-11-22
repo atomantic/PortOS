@@ -512,19 +512,25 @@ describe('FableLoom routes', () => {
     });
 
     it('PATCH sessions/:sessionId updates session', async () => {
+      const app = makeApp();
+      const io = { of: vi.fn() };
+      app.set('io', io);
       fableLoom.updateHostedSession.mockReturnValueOnce({ id: 'sess-1', audioTarget: 'audience' });
-      const res = await request(makeApp())
+      const res = await request(app)
         .patch('/api/fableloom/sessions/sess-1')
         .send({ audioTarget: 'audience' });
       expect(res.status).toBe(200);
-      expect(fableLoom.updateHostedSession.mock.calls[0][0]).toBe('sess-1');
+      expect(fableLoom.updateHostedSession).toHaveBeenCalledWith('sess-1', { audioTarget: 'audience' }, { io });
     });
 
     it('DELETE sessions/:sessionId ends session', async () => {
+      const app = makeApp();
+      const io = { of: vi.fn() };
+      app.set('io', io);
       fableLoom.endHostedSession.mockReturnValueOnce({ ok: true });
-      const res = await request(makeApp()).delete('/api/fableloom/sessions/sess-1');
+      const res = await request(app).delete('/api/fableloom/sessions/sess-1');
       expect(res.status).toBe(200);
-      expect(fableLoom.endHostedSession).toHaveBeenCalledWith('sess-1', { reason: 'api_deleted' });
+      expect(fableLoom.endHostedSession).toHaveBeenCalledWith('sess-1', { reason: 'api_deleted', io });
     });
   });
 

@@ -23,10 +23,11 @@ const getPeers = vi.fn(async () => [PEER]);
 vi.mock('./instances.js', () => ({ getPeers: (...args) => getPeers(...args) }));
 
 const streamRequest = vi.fn();
-vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args) }));
+const peerFetch = vi.fn();
+vi.mock('../lib/peerHttpClient.js', () => ({ peerStreamRequest: (...args) => streamRequest(...args), peerFetch: (...args) => peerFetch(...args) }));
 const { peerStreamRequest: realPeerStreamRequest } = await vi.importActual('../lib/peerHttpClient.js');
 
-const { markHosted, unmarkHosted, takeHostedAssets, resolveMediaLocations, hostedByForCollectionItems, hostedCountsByPeer, __resetPeerCooldown } = await import('./peerHostedMedia.js');
+const { markHosted, unmarkHosted, hostFileOn, reconcileHostedMedia, releasedHostedKeys, takeHostedAssets, resolveMediaLocations, hostedByForCollectionItems, hostedCountsByPeer, hostedKeysOf, peerServesFile, __resetPeerCooldown } = await import('./peerHostedMedia.js');
 const { mountAssetRoutes } = await import('./assetMounts.js');
 const { saveHistory } = await import('./videoGen/history.js');
 
@@ -41,6 +42,7 @@ beforeAll(() => {
 
 beforeEach(async () => {
   streamRequest.mockReset();
+  peerFetch.mockReset();
   __resetPeerCooldown();
   getPeers.mockImplementation(async () => [PEER]);
   rmSync(join(tempRoot, 'peer-hosted-media.json'), { force: true });
@@ -51,6 +53,16 @@ const upstream = (body, status = 200, headers = {}) => ({
   status,
   headers: { 'content-type': 'image/png', 'content-length': String(body.length), ...headers },
   stream: Readable.from([Buffer.from(body)]),
+});
+
+describe('Make-primary release marks', () => {
+  it('survive fresh host evidence from the same peer (inventory reconcile and markHosted)', async () => {
+    await hostFileOn('image', 'released.png', PEER.instanceId);
+    await hostFileOn('video', 'released.mp4', PEER.instanceId);
+    await reconcileHostedMedia(PEER.instanceId, 'image', ['released.png'], ['released.png']);
+    await markHosted(PEER.instanceId, [{ kind: 'video', filename: 'released.mp4' }]);
+    expect(await releasedHostedKeys()).toEqual(new Set(['image:released.png', 'video:released.mp4']));
+  });
 });
 
 describe('hostedByForCollectionItems', () => {
@@ -112,6 +124,32 @@ describe('takeHostedAssets', () => {
     const remaining = await takeHostedAssets(PEER.instanceId, missing, keys);
     expect(remaining.map((a) => a.filename)).toEqual(['universe-art.png', 'local.png']);
     expect((await resolveMediaLocations([{ kind: 'image', ref: 'coll-only.png' }]))[0].location).toBe('remote');
+  });
+});
+
+describe('peerServesFile', () => {
+  const head = (status, location) => ({ status, ok: status >= 200 && status < 300, headers: { get: (name) => (name === 'x-portos-media-location' ? location ?? null : null) } });
+
+  it('HEADs the kind mount and reads only a peer-local copy as held', async () => {
+    peerFetch.mockResolvedValueOnce(head(200));
+    expect(await peerServesFile(PEER, 'image-ref', 'init-1.png')).toBe('held');
+    expect(peerFetch.mock.calls[0][0]).toBe('https://peer.example.com:5555/data/image-refs/init-1.png');
+    expect(peerFetch.mock.calls[0][1].method).toBe('HEAD');
+    peerFetch.mockResolvedValueOnce(head(200, 'remote'));
+    expect(await peerServesFile(PEER, 'audio', 'memo.webm')).toBe('not-held');
+    peerFetch.mockResolvedValueOnce(head(404));
+    expect(await peerServesFile(PEER, 'model', 'ship.glb')).toBe('not-held');
+    peerFetch.mockResolvedValueOnce(head(500));
+    expect(await peerServesFile(PEER, 'model', 'ship.glb')).toBe('unreachable');
+    peerFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    expect(await peerServesFile(PEER, 'video', 'clip.mp4')).toBe('unreachable');
+    expect(peerFetch.mock.calls[4][0]).toBe('https://peer.example.com:5555/data/videos/clip.mp4');
+  });
+
+  it('never dials for an unknown kind or a non-basename', async () => {
+    expect(await peerServesFile(PEER, 'music', 'song.mp3')).toBe('not-held');
+    expect(await peerServesFile(PEER, 'audio', '../secret.wav')).toBe('not-held');
+    expect(peerFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -311,6 +349,43 @@ describe('static-mount fallback', () => {
       localServer.closeAllConnections();
       await Promise.all([closeLoopbackServer(peerServer), closeLoopbackServer(localServer)]);
     }
+  });
+
+  describe.each([
+    ['image-ref', 'image-refs', 'init-ref.png', 'image/png'],
+    ['audio', 'audio', 'memo.webm', 'audio/webm'],
+    ['model', 'models', 'ship.glb', 'model/gltf-binary'],
+  ])('a hosted %s file', (kind, dir, filename, type) => {
+    it(`streams from the host through /data/${dir}, forwarding Range`, async () => {
+      await markHosted(PEER.instanceId, [{ kind, filename }]);
+      expect(await hostedKeysOf(PEER.instanceId)).toEqual(new Set([`${kind}:${filename}`]));
+      streamRequest.mockResolvedValue(upstream('PART', 206, { 'content-type': type, 'content-range': 'bytes 0-3/100', 'accept-ranges': 'bytes' }));
+      const res = await request(app).get(`/data/${dir}/${filename}`).set('Range', 'bytes=0-3');
+      expect(res.status).toBe(206);
+      expect(res.headers['content-range']).toBe('bytes 0-3/100');
+      expect(res.headers['x-portos-media-location']).toBe('remote');
+      expect(streamRequest.mock.calls[0][0]).toBe(`https://peer.example.com:5555/data/${dir}/${filename}`);
+      expect(streamRequest.mock.calls[0][1].headers.Range).toBe('bytes=0-3');
+    });
+
+    it('serves the local copy instead, and is never recorded once one exists', async () => {
+      await markHosted(PEER.instanceId, [{ kind, filename: `shadow-${filename}` }]);
+      mkdirSync(join(tempRoot, dir), { recursive: true });
+      writeFileSync(join(tempRoot, dir, `shadow-${filename}`), 'LOCALWINS');
+      const res = await request(app).get(`/data/${dir}/shadow-${filename}`);
+      expect(res.status).toBe(200);
+      expect(res.headers['x-portos-media-location']).toBeUndefined();
+      expect(streamRequest).not.toHaveBeenCalled();
+      rmSync(join(tempRoot, 'peer-hosted-media.json'), { force: true });
+      expect(await markHosted(PEER.instanceId, [{ kind, filename: `shadow-${filename}` }])).toBe(0);
+    });
+
+    it('forgets the entry once the host answers 404', async () => {
+      await markHosted(PEER.instanceId, [{ kind, filename: `gone-${filename}` }]);
+      streamRequest.mockResolvedValue(upstream('nope', 404));
+      expect((await request(app).get(`/data/${dir}/gone-${filename}`)).status).toBe(404);
+      expect(await hostedKeysOf(PEER.instanceId)).toEqual(new Set());
+    });
   });
 
   it('404s a file nobody hosts', async () => {

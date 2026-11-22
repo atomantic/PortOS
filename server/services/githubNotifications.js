@@ -137,7 +137,11 @@ async function fetchListing(account, env, { all, ifModifiedSince = null }) {
 const UPSERT_SQL = `INSERT INTO github_notifications (
     account_id, thread_id, repo_full_name, repo_owner, repo_private, reason, subject_type,
     subject_title, subject_api_url, html_url, unread, gh_updated_at, latest_comment_api_url
-  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+  ) SELECT $1, t.* FROM unnest(
+    $2::text[], $3::text[], $4::text[], $5::boolean[], $6::text[], $7::text[],
+    $8::text[], $9::text[], $10::text[], $11::boolean[], $12::timestamptz[], $13::text[]
+  ) AS t(thread_id, repo_full_name, repo_owner, repo_private, reason, subject_type,
+    subject_title, subject_api_url, html_url, unread, gh_updated_at, latest_comment_api_url)
   ON CONFLICT (account_id, thread_id) DO UPDATE SET
     repo_full_name = EXCLUDED.repo_full_name,
     repo_owner = EXCLUDED.repo_owner,
@@ -186,14 +190,14 @@ async function runAutomation(account, env, automate) {
   // Observe still clears threads with nothing left to do, so a closed or
   // merged thread never waits on the operator; Assist does the same below.
   if (account.mode === 'observe') {
-    const { cleared } = await markThreadsDone(account, FINISHED_OPEN_SQL, { actor: 'automation', limit: MAX_AUTO_DONE_PER_RUN });
+    const { cleared } = await markThreadsDone(account, FINISHED_OPEN_SQL, { actor: 'automation', limit: MAX_AUTO_DONE_PER_RUN, env });
     return { sorted: 0, acted: cleared, handedOff: 0, agentRuns: 0 };
   }
   const autopilot = account.mode === 'autopilot'
     ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
     : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
-    act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail }),
+    act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail, account, env }),
   });
   return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns, ...(autopilot.merged ? { merged: autopilot.merged } : {}) };
 }
@@ -263,10 +267,16 @@ async function syncAccountNow(account, automate) {
   const truncated = inbox.truncated || unread.truncated;
 
   await withTransaction(async (client) => {
-    for (const r of records) {
+    // One round trip for the whole listing (up to 1,000 rows) instead of a
+    // query per thread while the transaction holds the row locks.
+    if (records.length > 0) {
+      const col = (pick) => records.map(pick);
       await client.query(UPSERT_SQL, [
-        account.id, r.threadId, r.repoFullName, r.repoOwner, r.repoPrivate, r.reason, r.subjectType,
-        r.subjectTitle, r.subjectApiUrl, r.htmlUrl, r.unread, r.ghUpdatedAt, r.latestCommentApiUrl, listedAt,
+        account.id,
+        col((r) => r.threadId), col((r) => r.repoFullName), col((r) => r.repoOwner), col((r) => r.repoPrivate),
+        col((r) => r.reason), col((r) => r.subjectType), col((r) => r.subjectTitle), col((r) => r.subjectApiUrl),
+        col((r) => r.htmlUrl), col((r) => r.unread), col((r) => r.ghUpdatedAt), col((r) => r.latestCommentApiUrl),
+        listedAt,
       ]);
     }
     await reconcileListings(client, account.id, { inbox, unread });
@@ -481,17 +491,18 @@ async function learnFromOperator(client, row, action) {
  * Apply one thread action on GitHub, then mirror it locally. The operator's
  * actions teach learned rules (unless `learn: false`, for a bulk audit change);
  * an automation's carry the decision behind it. A bulk caller passes `emit: false`
- * and announces the change once.
+ * and announces the change once, and may pass the `account` and `env` it already
+ * resolved so a per-thread loop does not respawn `gh auth token` for each thread.
  */
-export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true } = {}) {
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true, account: suppliedAccount, env: suppliedEnv } = {}) {
   const spec = ACTION_SPECS[action];
-  const account = await getAccount(accountId);
+  const account = suppliedAccount || await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   if (!existing) {
     throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
   }
   if (spec.method) {
-    const env = await requireAccountEnv(account);
+    const env = suppliedEnv || await requireAccountEnv(account);
     await execGh(
       ['api', '--hostname', account.host, '--method', spec.method, `notifications/threads/${threadId}${spec.path}`, ...spec.fields],
       GH_TIMEOUT_MS,
@@ -526,7 +537,7 @@ const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNA
  * first, without teaching learned rules. One failed thread is counted, never
  * stops the rest; an account gh cannot act as fails them all the same way.
  */
-async function markThreadsDone(account, whereSql, { actor = 'operator', limit = null } = {}) {
+async function markThreadsDone(account, whereSql, { actor = 'operator', limit = null, env: suppliedEnv = null } = {}) {
   const { rows } = await query(
     `SELECT thread_id, decision, evidence->>'rule' AS rule FROM github_notifications WHERE account_id = $1 AND ${whereSql}
      ORDER BY gh_updated_at DESC${limit ? ` LIMIT ${limit}` : ''}`,
@@ -534,10 +545,14 @@ async function markThreadsDone(account, whereSql, { actor = 'operator', limit = 
   );
   let cleared = 0;
   let failed = 0;
+  // Resolved lazily so an account gh cannot act as still fails per the loop below.
+  let env = suppliedEnv;
   for (const [index, row] of rows.entries()) {
     const detail = actor === 'automation' ? { decision: row.decision, rule: row.rule } : { decision: row.decision, bulk: 'finished' };
-    const error = await applyNotificationAction(account.id, row.thread_id, 'done', { actor, learn: false, emit: false, detail })
-      .then(() => null, (failure) => failure);
+    const error = await (async () => {
+      env ||= await requireAccountEnv(account);
+      await applyNotificationAction(account.id, row.thread_id, 'done', { actor, learn: false, emit: false, detail, account, env });
+    })().then(() => null, (failure) => failure);
     if (!error) {
       cleared += 1;
       continue;

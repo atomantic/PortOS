@@ -24,7 +24,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 vi.mock('../services/brainStorage.js', () => ({
-  getAll: vi.fn(),
+  getSongListRows: vi.fn(),
   getById: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
@@ -105,12 +105,12 @@ describe('Brain SongBook routes', () => {
   // ===========================================================================
 
   describe('GET /api/brain/songbook', () => {
-    it('projects out content.text — the index is metadata-only, text comes from GET /:id', async () => {
-      const song = baseSong();
-      song.content = { format: 'chordpro', text: 'x'.repeat(5000) };
-      brainStorage.getAll.mockResolvedValue([song]);
+    it('serves the cached metadata-only rows; text comes from GET /:id', async () => {
+      const song = { ...baseSong(), content: { format: 'chordpro' } };
+      brainStorage.getSongListRows.mockResolvedValue([song]);
       const res = await request(app).get('/api/brain/songbook');
       expect(res.body.songs[0].content).toEqual({ format: 'chordpro' });
+      expect(brainStorage.getById).not.toHaveBeenCalled();
       expect(res.body.songs[0].title).toBe(song.title);
     });
   });

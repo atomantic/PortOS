@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
+import { FileText, Trash2, Send, Check, RefreshCw, Copy, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   reconcileMessageDraft,
@@ -7,12 +7,29 @@ import {
   approveMessageDraft,
   sendMessageDraft,
   deleteMessageDraft,
+  updateMessageDraft,
 } from '../../services/apiMessages.js';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import BrailleSpinner from '../BrailleSpinner';
 import ListLoadError from '../ui/ListLoadError';
+import socket from '../../services/socket';
+
+// Server invalidations only; the list is re-read rather than patched from the payload.
+const DRAFT_EVENTS = ['messages:draft:created', 'messages:draft:sent', 'messages:changed'];
+
+// updateDraft refuses sending, delivery_unknown, and sent. These four are the
+// statuses a person can still change before or after a failed send.
+const EDITABLE_DRAFT_STATUSES = ['draft', 'pending_review', 'approved', 'failed'];
+// pending_review is a pre-approval status on the server; Approve must reach it.
+const APPROVABLE_DRAFT_STATUSES = ['draft', 'pending_review'];
+
+const draftFieldClass = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent';
+
+function parseRecipientList(value) {
+  return value.split(',').map(part => part.trim()).filter(Boolean);
+}
 
 function DeliveryReconciliation({ draft, onReconciled }) {
   const [checkedMailbox, setCheckedMailbox] = useState(false);
@@ -75,6 +92,11 @@ export default function DraftsTab({ accounts }) {
   const sendingRef = useRef(new Set());
   const [sendingIds, setSendingIds] = useState(new Set());
   const [copiedId, setCopiedId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ to: '', subject: '', body: '' });
+  const savingEditRef = useRef(false);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const handleCopy = async (draft) => {
@@ -105,11 +127,57 @@ export default function DraftsTab({ accounts }) {
     fetchDrafts();
   }, [fetchDrafts]);
 
+  useEffect(() => {
+    const refresh = () => { fetchDrafts(); };
+    for (const event of DRAFT_EVENTS) socket.on(event, refresh);
+    return () => {
+      for (const event of DRAFT_EVENTS) socket.off(event, refresh);
+    };
+  }, [fetchDrafts]);
+
   const handleApprove = async (id) => {
     const result = await approveMessageDraft(id).catch(() => null);
     if (!result) return;
-    setDrafts(prev => prev.map(d => d.id === id ? { ...d, status: 'approved' } : d));
+    setDrafts(prev => prev.map(d => d.id === id ? result : d));
     toast.success('Draft approved');
+  };
+
+  const startEdit = (draft) => {
+    setEditingId(draft.id);
+    setEditForm({
+      to: (draft.to || []).join(', '),
+      subject: draft.subject || '',
+      body: draft.body || '',
+    });
+  };
+
+  const handleSaveEdit = async (event) => {
+    event.preventDefault();
+    if (!editingId || savingEditRef.current) return;
+    savingEditRef.current = true;
+    setSavingEdit(true);
+    // The response is the draft after the server drops approval when content changed.
+    const result = await updateMessageDraft(editingId, {
+      to: parseRecipientList(editForm.to),
+      subject: editForm.subject,
+      body: editForm.body,
+    }).catch(() => null).finally(() => {
+      savingEditRef.current = false;
+      setSavingEdit(false);
+    });
+    if (!result) return;
+    setDrafts(prev => prev.map(d => d.id === result.id ? result : d));
+    setEditingId(null);
+    toast.success('Draft updated');
+  };
+
+  const toggleExpanded = (id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   const handleSend = async (id) => {
@@ -194,7 +262,7 @@ export default function DraftsTab({ accounts }) {
             key={draft.id}
             className="p-4 bg-port-card rounded-lg border border-port-border space-y-2"
           >
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className={`px-2 py-0.5 rounded text-xs ${statusColors[draft.status] || ''}`}>
                   {draft.status === 'delivery_unknown' ? 'Delivery unknown' : draft.status}
@@ -204,8 +272,18 @@ export default function DraftsTab({ accounts }) {
                   <span className="text-xs text-port-accent-2">AI generated</span>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                {draft.status === 'draft' && !isCopyOnly(draft) && (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {EDITABLE_DRAFT_STATUSES.includes(draft.status) && editingId !== draft.id && (
+                  <button
+                    type="button"
+                    onClick={() => startEdit(draft)}
+                    className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-white transition-colors"
+                    title="Edit" aria-label="Edit"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                )}
+                {APPROVABLE_DRAFT_STATUSES.includes(draft.status) && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleApprove(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-success transition-colors"
@@ -218,7 +296,7 @@ export default function DraftsTab({ accounts }) {
                     which have no programmatic send channel) never offer Send —
                     messageSender can't deliver them, so the button would only
                     fail. Send them yourself from the Messages/Signal app. */}
-                {draft.status === 'approved' && !isCopyOnly(draft) && (
+                {draft.status === 'approved' && !isCopyOnly(draft) && editingId !== draft.id && (
                   <button
                     onClick={() => handleSend(draft.id)}
                     className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-400 hover:text-port-accent transition-colors"
@@ -259,15 +337,86 @@ export default function DraftsTab({ accounts }) {
                 )}
               </div>
             </div>
-            <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
-            {draft.to?.length > 0 && (
-              <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
+            {editingId === draft.id ? (
+              <form onSubmit={handleSaveEdit} className="space-y-2">
+                <div>
+                  <label htmlFor={`draft-to-${draft.id}`} className="block text-xs text-gray-400 mb-1">To</label>
+                  <input
+                    id={`draft-to-${draft.id}`}
+                    value={editForm.to}
+                    onChange={event => setEditForm(prev => ({ ...prev, to: event.target.value }))}
+                    placeholder="one@example.com, two@example.com"
+                    disabled={savingEdit}
+                    className={draftFieldClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor={`draft-subject-${draft.id}`} className="block text-xs text-gray-400 mb-1">Subject</label>
+                  <input
+                    id={`draft-subject-${draft.id}`}
+                    value={editForm.subject}
+                    onChange={event => setEditForm(prev => ({ ...prev, subject: event.target.value }))}
+                    disabled={savingEdit}
+                    className={draftFieldClass}
+                  />
+                </div>
+                <div>
+                  <label htmlFor={`draft-body-${draft.id}`} className="block text-xs text-gray-400 mb-1">Body</label>
+                  <textarea
+                    id={`draft-body-${draft.id}`}
+                    value={editForm.body}
+                    onChange={event => setEditForm(prev => ({ ...prev, body: event.target.value }))}
+                    rows={6}
+                    disabled={savingEdit}
+                    className={`${draftFieldClass} resize-y`}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    aria-busy={savingEdit}
+                    className="min-h-[44px] px-3 rounded bg-port-accent text-white text-sm disabled:opacity-50"
+                  >
+                    Save draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingId(null)}
+                    disabled={savingEdit}
+                    className="min-h-[44px] px-3 rounded bg-port-border text-gray-300 text-sm disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="text-sm text-white">{draft.subject || '(no subject)'}</div>
+                {draft.to?.length > 0 && (
+                  <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
+                )}
+                {/* Review-only drafts are sent by hand, so show the full body (not
+                    clamped) — it's the text the user copies into their messaging app. */}
+                <div
+                  id={`draft-body-text-${draft.id}`}
+                  className={`text-sm text-gray-400 whitespace-pre-wrap ${isCopyOnly(draft) || expandedIds.has(draft.id) ? '' : 'line-clamp-3'}`}
+                >
+                  {draft.body}
+                </div>
+                {!isCopyOnly(draft) && draft.body && (
+                  <button
+                    type="button"
+                    aria-expanded={expandedIds.has(draft.id)}
+                    aria-controls={`draft-body-text-${draft.id}`}
+                    onClick={() => toggleExpanded(draft.id)}
+                    className="min-h-[44px] px-1 text-sm text-port-accent hover:text-white"
+                  >
+                    {expandedIds.has(draft.id) ? 'Show less' : 'Show full message'}
+                  </button>
+                )}
+              </>
             )}
-            {/* Review-only drafts are sent by hand, so show the full body (not
-                clamped) — it's the text the user copies into their messaging app. */}
-            <div className={`text-sm text-gray-400 whitespace-pre-wrap ${isCopyOnly(draft) ? '' : 'line-clamp-3'}`}>
-              {draft.body}
-            </div>
             {draft.status === 'delivery_unknown' && (
               <DeliveryReconciliation key={draft.sendAttemptId} draft={draft}
                 onReconciled={updated => setDrafts(prev => prev.map(d =>

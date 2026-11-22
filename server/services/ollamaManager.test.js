@@ -251,6 +251,41 @@ describe('ollamaManager.pullModel transient-error retry', () => {
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('hit transient error'))
   })
 
+  it('stops on cancel without retrying and removes only that pull\'s partial blobs', async () => {
+    const { mkdtemp, mkdir, writeFile, access, rm } = await import('fs/promises')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-cancel-'))
+    const hex = 'a'.repeat(64)
+    const other = 'b'.repeat(64)
+    await mkdir(join(dir, 'blobs'), { recursive: true })
+    for (const name of [`sha256-${hex}-partial`, `sha256-${hex}-partial-0`, `sha256-${other}-partial`, `sha256-${'c'.repeat(64)}`]) {
+      await writeFile(join(dir, 'blobs', name), 'x')
+    }
+    vi.stubEnv('OLLAMA_MODELS', dir)
+    const pullModel = await loadPullModel()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const controller = new AbortController()
+    const { pullUrls } = stubFetch([
+      makeStreamResponse([{ status: 'pulling', digest: `sha256:${hex}`, total: 100, completed: 10 }], { rejectAt: 1 }),
+    ])
+    const onProgress = vi.fn(() => controller.abort())
+
+    const promise = pullModel('example-model:7b', onProgress, { signal: controller.signal })
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toMatchObject({ success: false, canceled: true, code: 'INSTALL_CANCELED' })
+    expect(pullUrls).toHaveLength(1)
+    const exists = (name) => access(join(dir, 'blobs', name)).then(() => true, () => false)
+    expect(await exists(`sha256-${hex}-partial`)).toBe(false)
+    expect(await exists(`sha256-${hex}-partial-0`)).toBe(false)
+    expect(await exists(`sha256-${other}-partial`)).toBe(true)
+    expect(await exists(`sha256-${'c'.repeat(64)}`)).toBe(true)
+    vi.unstubAllEnvs()
+    await rm(dir, { recursive: true, force: true })
+  })
+
   it('retries a dropped-connection read rejection (undici "terminated")', async () => {
     const pullModel = await loadPullModel()
     const { pullUrls } = stubFetch([
@@ -1321,6 +1356,61 @@ describe('ollamaManager context window', () => {
     stubPs([{ name: 'a', context_length: 4096 }])
     const { ensureContextWindow } = await loadManager()
     expect(await ensureContextWindow(null)).toEqual({ applied: false, reason: 'not-configured', contextLength: null })
+  })
+
+  it('refuses a reload instead of restarting the daemon under in-flight work', async () => {
+    vi.useFakeTimers()
+    try {
+      stubPs([{ name: 'a', context_length: 4096 }])
+      const { ensureContextWindow, beginOllamaWork, CONTEXT_RELOAD_DRAIN_TIMEOUT_MS } = await loadManager()
+      const release = beginOllamaWork()
+      const pending = ensureContextWindow(131072, 'a')
+      await vi.advanceTimersByTimeAsync(CONTEXT_RELOAD_DRAIN_TIMEOUT_MS + 1)
+      expect(await pending).toMatchObject({ applied: false, reason: 'in-flight', contextLength: 131072 })
+      release()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // #17341: an agent harness registers through beginOllamaWorkAfterReload; the
+  // registration must land in the same turn as the gate check, and a later
+  // spawn's reload must then defer instead of restarting the daemon under it.
+  it('registers agent work in the same turn as the reload-gate check, deferring a later reload', async () => {
+    vi.useFakeTimers()
+    try {
+      stubPs([{ name: 'a', context_length: 4096 }])
+      const { ensureContextWindow, beginOllamaWorkAfterReload, getInFlightOllamaWorkCount, CONTEXT_RELOAD_DRAIN_TIMEOUT_MS } = await loadManager()
+      const registering = beginOllamaWorkAfterReload()
+      expect(getInFlightOllamaWorkCount()).toBe(1)
+      const release = await registering
+      const pending = ensureContextWindow(131072, 'a')
+      await vi.advanceTimersByTimeAsync(CONTEXT_RELOAD_DRAIN_TIMEOUT_MS + 1)
+      expect(await pending).toMatchObject({ applied: false, reason: 'in-flight' })
+      release()
+      expect(getInFlightOllamaWorkCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waitForOllamaDrain resolves once every in-flight run releases', async () => {
+    const { beginOllamaWork, waitForOllamaDrain, getInFlightOllamaWorkCount } = await loadManager()
+    const a = beginOllamaWork()
+    const b = beginOllamaWork()
+    const drained = waitForOllamaDrain(60_000)
+    a()
+    a() // idempotent
+    expect(getInFlightOllamaWorkCount()).toBe(1)
+    b()
+    expect(await drained).toBe(true)
+  })
+
+  it('reads the window a specific resident model was loaded at', async () => {
+    stubPs([{ name: 'mlx-model', context_length: 131072 }])
+    const { getResidentModelContext } = await loadManager()
+    expect(await getResidentModelContext('mlx-model')).toBe(131072)
+    expect(await getResidentModelContext('other')).toBeNull()
   })
 
   it('leaves a daemon alone when it already loaded a large enough window', async () => {

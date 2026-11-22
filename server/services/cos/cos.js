@@ -116,7 +116,8 @@ import {
   scheduleNextImprovementCheck,
   registerSingleJobSchedule,
   clearSpawningJob,
-  handleJobSpawnFailed
+  handleJobSpawnFailed,
+  handleJobAgentCompleted
 } from './cosJobScheduler.js';
 
 // Shared capacity and idle-review admission owner. The engines retain their
@@ -1511,18 +1512,23 @@ export async function init() {
         .catch(err => console.error(`❌ Dequeue after ${agent?.id} completion failed: ${err.message}`));
     });
 
+    handleJobAgentCompleted(agent).catch(err =>
+      console.error(`❌ Failed to record job incident for agent ${agent?.id}: ${err.message}`));
+
     // Create notification when a daily briefing completes
     if (agent?.metadata?.jobId === 'job-daily-briefing' && agent?.result?.success) {
       getUserTimezone()
-        .then(tz => {
+        .then(async tz => {
           const today = todayInTimezone(tz);
+          const { getBriefingImageAttachments } = await import('./cosReports.js');
+          const attachments = await getBriefingImageAttachments(today);
           return addNotification({
             type: NOTIFICATION_TYPES.BRIEFING_READY,
             title: 'Daily Briefing Ready',
             description: `Your daily briefing for ${today} is ready for review.`,
             priority: 'low',
             link: '/cos/briefing',
-            metadata: { date: today, agentId: agent.id }
+            metadata: { date: today, agentId: agent.id, ...(attachments.length ? { attachments } : {}) }
           });
         })
         .catch(err => console.error(`❌ Failed to create briefing notification: ${err.message}`));
@@ -1551,8 +1557,8 @@ export async function init() {
     );
   });
 
-  cosEvents.on('job:spawn-failed', ({ jobId, reason }) =>
-    handleJobSpawnFailed(jobId, reason).catch(err =>
+  cosEvents.on('job:spawn-failed', ({ jobId, reason, error }) =>
+    handleJobSpawnFailed(jobId, reason, error).catch(err =>
       console.error(`❌ Failed to re-arm job schedule after spawn failure for ${jobId}: ${err.message}`)
     )
   );

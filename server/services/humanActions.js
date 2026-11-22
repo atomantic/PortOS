@@ -40,7 +40,7 @@ export function scheduleHumanActionPlan(plan) {
 
 async function writePlan(plan) {
   const tag = humanActionPlanTag(plan.planKey);
-  const existing = (await brainStorage.getThreads()) || [];
+  const existing = await brainStorage.getThreadListRows();
   const stale = existing.filter((thread) => isHumanActionThread(thread)
     && thread.tags.includes(tag)
     && !isTerminalThreadStatus(thread.status));
@@ -68,11 +68,13 @@ async function writePlan(plan) {
 
 /** Human action threads, soonest due first. `includeDone` adds finished ones. */
 export async function listHumanActions({ planKey = null, includeDone = false } = {}) {
-  const threads = (await brainStorage.getThreads()) || [];
+  const rows = await brainStorage.getThreadListRows();
   const tag = planKey ? humanActionPlanTag(planKey) : null;
-  return threads
-    .filter((thread) => isHumanActionThread(thread)
-      && (!tag || thread.tags.includes(tag))
-      && (includeDone || !isTerminalThreadStatus(thread.status)))
-    .sort((a, b) => (Date.parse(a.dueAt) || Infinity) - (Date.parse(b.dueAt) || Infinity));
+  const matching = rows.filter((thread) => isHumanActionThread(thread)
+    && (!tag || thread.tags.includes(tag))
+    && (includeDone || !isTerminalThreadStatus(thread.status)));
+  // The response carries each step's `notes` (its ready-to-paste instructions),
+  // which the cached list rows omit, so hydrate just the matches.
+  const full = (await Promise.all(matching.map((row) => brainStorage.getThreadById(row.id)))).filter(Boolean);
+  return full.sort((a, b) => (Date.parse(a.dueAt) || Infinity) - (Date.parse(b.dueAt) || Infinity));
 }

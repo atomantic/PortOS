@@ -5,7 +5,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import localLlmRoutes from './localLlm.js';
 import { runLocalLlmTest, compareLocalLlmModels } from '../services/localLlmPlayground.js';
-import { listModels, listVisionModels, listToolUseModels, installModel, switchBackend } from '../services/localLlm.js';
+import { listModels, listVisionModels, listToolUseModels, installModel, cancelModelInstall, switchBackend } from '../services/localLlm.js';
 import { enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js';
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js';
 import { runAssessment } from '../services/localModelAssessments.js';
@@ -33,6 +33,7 @@ vi.mock('../services/localLlm.js', () => ({
   listVisionModels: vi.fn(async () => []),
   listToolUseModels: vi.fn(async () => []),
   installModel: vi.fn(),
+  cancelModelInstall: vi.fn(),
   previewInstallModel: vi.fn(async () => ({
     kind: 'install', verdict: 'ok', destPath: '/tmp/models', expectedBytes: 0, freeBytes: 1e12, requiredBytes: 0, headroomBytes: 0,
   })),
@@ -293,6 +294,28 @@ describe('local LLM playground routes', () => {
       expect.any(Function),
       { force: true }
     );
+  });
+
+  it('answers a canceled install as canceled, not as a 502 failure', async () => {
+    installModel.mockResolvedValue({ success: false, canceled: true, code: 'INSTALL_CANCELED', modelId: 'llama3.2' });
+    const res = await request(makeApp()).post('/api/local-llm/install').send({ backend: 'ollama', modelId: 'llama3.2' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: false, canceled: true, modelId: 'llama3.2' });
+  });
+
+  it('POST /install/cancel stops a running download and 404s when none is running', async () => {
+    cancelModelInstall.mockReturnValueOnce({ success: true });
+    const ok = await request(makeApp()).post('/api/local-llm/install/cancel').send({ backend: 'ollama', modelId: 'llama3.2' });
+    expect(ok.status).toBe(200);
+    expect(cancelModelInstall).toHaveBeenCalledWith('ollama', 'llama3.2');
+
+    cancelModelInstall.mockReturnValueOnce({ success: false, code: 'INSTALL_NOT_RUNNING', error: 'No download of llama3.2 is running on ollama' });
+    const missing = await request(makeApp()).post('/api/local-llm/install/cancel').send({ backend: 'ollama', modelId: 'llama3.2' });
+    expect(missing.status).toBe(404);
+
+    cancelModelInstall.mockReturnValueOnce({ success: false, code: 'INSTALL_NOT_CANCELABLE', error: 'llama3.2 is an Ollama import and can\'t be canceled once started' });
+    const held = await request(makeApp()).post('/api/local-llm/install/cancel').send({ backend: 'ollama', modelId: 'llama3.2' });
+    expect(held.status).toBe(409);
   });
 
   it('POST /install without force still pulls as a regular install', async () => {

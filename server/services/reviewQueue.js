@@ -279,7 +279,7 @@ const PRODUCERS = [
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
       const timezone = ctx.timezone || 'UTC';
       const now = ctx.now || new Date();
-      const threads = await brainStorage.getThreads();
+      const threads = await brainStorage.getThreadListRows();
       const candidates = (Array.isArray(threads) ? threads : [])
         .filter((thread) => threadBelongsToView(thread, ctx.view, timezone, now));
       const actionable = await Promise.all(candidates.map(async thread => {

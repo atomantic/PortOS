@@ -49,7 +49,7 @@ function QueueControls({ status, onStart, onStop, onPause, onResume }) {
           ? <Play size={16} className="shrink-0" aria-hidden="true" />
           : <Pause size={16} className="shrink-0" aria-hidden="true" />}
         <div className="flex-1 min-w-0 text-left">
-          <div className="text-[10px] text-gray-600">Queue</div>
+          <div className="text-[10px] text-port-text-muted">Queue</div>
           <div className={`${status.paused ? 'text-xs' : 'text-sm'} font-bold`}>{status.paused ? 'Resume' : 'Pause'}</div>
         </div>
       </button>
@@ -61,7 +61,7 @@ function QueueControls({ status, onStart, onStop, onPause, onResume }) {
       >
         <Square size={16} className="shrink-0" aria-hidden="true" />
         <div className="flex-1 min-w-0 text-left">
-          <div className="text-[10px] text-gray-600">Agent</div>
+          <div className="text-[10px] text-port-text-muted">Agent</div>
           <div className="text-sm font-bold text-port-error">Stop</div>
         </div>
       </button>

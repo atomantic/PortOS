@@ -45,6 +45,8 @@ export const MODE_SHARED_SETTINGS_KEYS = Object.freeze([
   'ignoreUserConfig',
   'codexAuthMode',
   'numCtx',
+  'modelNumCtx',
+  'providerRouting',
   'temperature',
   'topP',
   'thinking',

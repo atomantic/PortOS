@@ -17,6 +17,17 @@ vi.mock('../../services/apiPrivacy.js', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./VaultRecordDrawer', () => ({ default: () => null }));
+const loginSectionMounts = vi.hoisted(() => []);
+vi.mock('./WebsiteLoginsSection', async () => {
+  const { useState } = await import('react');
+  return {
+    // A lazy initializer runs once per mount, so this records remounts.
+    default: function WebsiteLoginsSectionStub({ subjectId }) {
+      useState(() => loginSectionMounts.push(subjectId));
+      return null;
+    },
+  };
+});
 
 import PrivacyVaultTab from './PrivacyVaultTab';
 
@@ -48,5 +59,20 @@ describe('PrivacyVaultTab subject switching', () => {
 
     expect(screen.queryByText('Record for A')).toBeNull();
     expect(screen.getByText('Record for B')).toBeTruthy();
+  });
+});
+
+describe('PrivacyVaultTab website logins (#17397)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    loginSectionMounts.length = 0;
+    api.getPrivacyStatus.mockResolvedValue({ keyConfigured: true });
+    api.getVaultRecords.mockResolvedValue([]);
+  });
+
+  it('remounts the Website logins section per subject so no state crosses scopes', async () => {
+    const { rerender } = render(<PrivacyVaultTab subjectId="subject-a" />);
+    rerender(<PrivacyVaultTab subjectId="subject-b" />);
+    await waitFor(() => expect(loginSectionMounts).toEqual(['subject-a', 'subject-b']));
   });
 });

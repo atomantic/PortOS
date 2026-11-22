@@ -88,7 +88,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <Server className={`w-5 h-5 ${healthStyle.color}`} />
           </div>
           <div className="min-w-0">
-            <h3 className="text-base @sm:text-lg font-semibold leading-tight text-white">System Health</h3>
+            <h2 className="text-base @sm:text-lg font-semibold leading-tight text-white">System Health</h2>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
               <HealthIcon size={14} className={healthStyle.color} />
               <span className={healthStyle.color}>

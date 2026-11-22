@@ -16,6 +16,7 @@ import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
+import { scrubEphemeralSecretsDeep } from '../lib/secretText.js';
 import { execPm2, listProcessesStrict } from './pm2.js';
 import { runtimeUpdateEvents } from './runtimeUpdateEvents.js';
 
@@ -317,11 +318,73 @@ export async function evaluateOnPage(page, expression, { timeout = CDP_EVALUATE_
       clearTimeout(timer);
       ws.close();
       if (msg.error || msg.result?.exceptionDetails) return resolve(null);
-      resolve(msg.result?.result?.value ?? null);
+      // A vault password the model-blind fill typed into this browser must not
+      // echo back through a later DOM read (#17397).
+      resolve(scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null));
     });
 
     ws.on('error', () => { clearTimeout(timer); ws.close(); resolve(null); });
   });
+}
+
+/**
+ * A request/response CDP session over one target's websocket. `send(method,
+ * params)` resolves with the command's `result` or rejects (the rejection
+ * carries the raw CDP error as `cdpError`, never in its message); `on(method,
+ * fn)` subscribes to events; `close()` tears it down and rejects anything
+ * pending. Rejects when the socket cannot open within `commandTimeoutMs`.
+ */
+export async function openCdpSession(webSocketDebuggerUrl, { commandTimeoutMs = CDP_DEFAULT_TIMEOUT_MS } = {}) {
+  if (!webSocketDebuggerUrl) throw new Error('CDP target has no debugger websocket');
+  const { default: WebSocket } = await import('ws');
+  const ws = new WebSocket(webSocketDebuggerUrl);
+  const pending = new Map();
+  const listeners = new Map();
+  let nextId = 1;
+  let closed = false;
+  const failPending = (error) => {
+    for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
+    pending.clear();
+  };
+  ws.on('message', (data) => {
+    const msg = safeJSONParse(data.toString(), null, { context: 'cdp-session' });
+    if (!msg) return;
+    const entry = msg.id != null ? pending.get(msg.id) : null;
+    if (entry) {
+      pending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.error) entry.reject(Object.assign(new Error(`CDP ${entry.method} failed`), { cdpError: msg.error }));
+      else entry.resolve(msg.result ?? {});
+      return;
+    }
+    if (msg.method) for (const fn of listeners.get(msg.method) ?? []) fn(msg.params ?? {});
+  });
+  ws.on('close', () => { closed = true; failPending(new Error('CDP session closed')); });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { ws.terminate(); reject(new Error('CDP session open timed out')); }, commandTimeoutMs);
+    ws.once('open', () => { clearTimeout(timer); resolve(); });
+    ws.on('error', () => { clearTimeout(timer); reject(new Error('CDP session failed')); });
+  });
+  return {
+    send(method, params = {}) {
+      if (closed) return Promise.reject(new Error('CDP session closed'));
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP ${method} timed out`)); }, commandTimeoutMs);
+        pending.set(id, { method, resolve, reject, timer });
+        ws.send(JSON.stringify({ id, method, params }));
+      });
+    },
+    on(method, fn) {
+      if (!listeners.has(method)) listeners.set(method, []);
+      listeners.get(method).push(fn);
+    },
+    close() {
+      closed = true;
+      failPending(new Error('CDP session closed'));
+      try { ws.close(); } catch {}
+    },
+  };
 }
 
 // ---------- CDP navigation ----------
@@ -790,7 +853,7 @@ export async function navigateToUrlPinned(url, {
         // so a late rebind that changed the page under us fails closed here.
         const bad = ssrfPinRefusalReason(messages, verifyRemoteIp, url, topFrameId);
         if (bad) return finish({ ok: false, reason: bad });
-        const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : (msg.result?.result?.value ?? null);
+        const evalResult = (msg.error || msg.result?.exceptionDetails) ? null : scrubEphemeralSecretsDeep(msg.result?.result?.value ?? null);
         const { finalUrl } = pickMainFrameHops(messages, topFrameId);
         return finish({ ok: true, finalUrl, evalResult });
       }

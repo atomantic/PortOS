@@ -19,7 +19,7 @@ export default function FeedsWidget({ dashboardState }) {
     >
       <div className="flex items-center gap-2 mb-3">
         <Rss size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Feeds</h3>
+        <h2 className="text-sm font-semibold text-white">Feeds</h2>
         <span className="ml-auto flex items-center gap-1 text-xs text-port-accent">
           Open <ArrowRight size={12} />
         </span>

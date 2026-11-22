@@ -189,3 +189,23 @@ describe('life calendar read-modify-writes are serialized', () => {
     expect(persisted.map(e => e.name)).toContain('Added');
   });
 });
+
+describe('life event logs carry the event id and type, never the name', () => {
+  it('add, update, and remove never write the event name to stdout', async () => {
+    const stdout = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((...args) => { stdout.push(args.join(' ')); });
+    try {
+      const events = await addLifeEvent({ name: 'Zzyzx Family Diagnosis', type: 'health', recurrence: 'yearly', month: 4, day: 9, enabled: true });
+      const added = events.find(e => e.name === 'Zzyzx Family Diagnosis');
+      await updateLifeEvent(added.id, { enabled: false });
+      await removeLifeEvent(added.id);
+
+      const output = stdout.join('\n');
+      expect(output).not.toContain('Zzyzx');
+      expect(stdout.filter(line => line.includes(added.id))).toHaveLength(3);
+      expect(stdout.every(line => line.includes('health'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

@@ -1,22 +1,34 @@
 /**
  * Collection-wide orchestration of verified per-file primary changes. The
- * assignment persists on the collection. The run is transient and repeatable;
+ * assignment persists only on a real collection. The run is transient and repeatable;
  * the holders service persists any offline releases it accepted.
+ *
+ * Two scopes are not collections and persist nothing: `unsorted` (every gallery
+ * file outside a collection) and `shared-media` (every file more than one
+ * machine holds, filed or not; a file only one machine holds is left alone).
  */
 import { ServerError } from '../lib/errorHandler.js';
 import { getCollection, setCollectionPrimaryMachine } from './mediaCollections.js';
-import { listMediaPrimaryMachines, prepareMediaConsolidation } from './mediaHolders.js';
+import { listMediaHolders, listMediaPrimaryMachines, prepareMediaConsolidation } from './mediaHolders.js';
 import { emitCollectionPrimaryChanged } from './peerSyncEventBus.js';
 import { loadCollectionVideoFilenames, resolveCollectionVideoFilename } from './collectionVideoFiles.js';
 
+const UNSORTED_ID = 'unsorted';
+export const SHARED_MEDIA_ID = 'shared-media';
+const ONE_SHOT_IDS = new Set([UNSORTED_ID, SHARED_MEDIA_ID]);
+
+async function listSharedMediaFiles() {
+  const { items } = await listMediaHolders();
+  return Object.values(items).filter((item) => item.holders.length > 1).map(({ kind, filename }) => ({ kind, filename }));
+}
 const active = new Set();
 const lastRuns = new Map();
 const MAX_RECENT_RUNS = 100;
 const MAX_DETAILS = 10;
 
 export async function getCollectionPrimaryStatus(id) {
-  const [collection, machines] = await Promise.all([getCollection(id), listMediaPrimaryMachines()]);
-  return { instanceId: collection.primaryInstanceId ?? null, machines, run: lastRuns.get(id) ?? null };
+  const [collection, machines] = await Promise.all([ONE_SHOT_IDS.has(id) ? null : getCollection(id), listMediaPrimaryMachines()]);
+  return { instanceId: collection?.primaryInstanceId ?? null, machines, run: lastRuns.get(id) ?? null };
 }
 
 async function consolidate(id, entries, move) {
@@ -60,6 +72,16 @@ export async function startCollectionPrimary(id, instanceId) {
   if (active.has(id)) throw new ServerError('This collection is already consolidating', { status: 409, code: 'MEDIA_BUSY' });
   active.add(id);
   try {
+    if (id === UNSORTED_ID) {
+      const { listUnsortedGalleryFiles } = await import('./mediaAssetIndex/gallery.js');
+      const move = await prepareMediaConsolidation(instanceId);
+      const entries = await listUnsortedGalleryFiles();
+      return startRun(id, instanceId, entries, move);
+    }
+    if (id === SHARED_MEDIA_ID) {
+      const move = await prepareMediaConsolidation(instanceId);
+      return startRun(id, instanceId, await listSharedMediaFiles(), move);
+    }
     const collection = await getCollection(id);
     const [move, videoNames] = await Promise.all([
       prepareMediaConsolidation(instanceId),
@@ -72,13 +94,17 @@ export async function startCollectionPrimary(id, instanceId) {
       entries.set(`${kind}:${filename ?? ref}`, { kind, filename });
     }
     await setCollectionPrimaryMachine(id, instanceId);
-    lastRuns.delete(id);
-    consolidate(id, [...entries.values()], move).catch((err) => {
-      console.error(`❌ Collection primary job failed: ${err.code || err.name}`);
-    });
-    return { instanceId, run: lastRuns.get(id) };
+    return startRun(id, instanceId, [...entries.values()], move);
   } catch (err) {
     active.delete(id);
     throw err;
   }
+}
+
+function startRun(id, instanceId, entries, move) {
+  lastRuns.delete(id);
+  consolidate(id, entries, move).catch((err) => {
+    console.error(`❌ Collection primary job failed: ${err.code || err.name}`);
+  });
+  return { instanceId, run: lastRuns.get(id) };
 }

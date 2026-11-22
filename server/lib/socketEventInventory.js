@@ -17,7 +17,16 @@ const FILE_READ_CONCURRENCY = 32;
 const EXCLUDED_DIRECTORY_NAMES = new Set(['node_modules', 'coverage', 'dist']);
 const EXCLUDED_SERVER_PREFIXES = Object.freeze(['server/cos-runner/']);
 const SOCKET_CALL_RE = /\bsocket\??\.(on|once|emit)\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
-const SERVER_EMIT_RE = /\b(?:io|ioInstance)\??\.emit\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
+// Server emit receivers: the `io` aliases the services bind, `getIo()`, and the
+// `req.app.get('io')` route form. Room/namespace hops (`.to/.in/.except/.of`) may
+// sit between the receiver and `.emit(` (one level of nested call parens allowed).
+const SERVER_EMIT_RECEIVER = String.raw`(?:\b(?:io|ioInstance|boundIo|providersIo|ioRef|ns)|\bgetIo\(\)|\.get\(\s*['"]io['"]\s*\))`;
+const SERVER_EMIT_HOPS = String.raw`(?:\??\.(?:to|in|except|of)\((?:[^()]|\([^()]*\))*\))*`;
+const EVENT_NAME_SOURCE = /(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/.source;
+const SERVER_EMIT_RE = new RegExp(
+  `${SERVER_EMIT_RECEIVER}\\??${SERVER_EMIT_HOPS}\\??\\.emit\\(\\s*${EVENT_NAME_SOURCE}`,
+  'g',
+);
 const SERVER_BROADCAST_RE = /\bbroadcastTo(?!Set\b)[A-Za-z]*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
 // Quoted colon-namespaced names. Clients often listen through constant arrays
 // (`const EVENTS = ['brain:changed']`) rather than a literal `socket.on(...)`, so

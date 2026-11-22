@@ -240,6 +240,46 @@ export const providerServiceUpdateSchema = providerConnectionUpdateSchema.extend
   credentialVia: serviceCredentialViaSchema.optional(),
 }).strict();
 
+// --- credential pools on a service instance (#17384) ------------------------
+// A pool key is EITHER a stored value or a reference to an env variable (the
+// service checks the name against the definition), never both. Header-safe
+// like every key sent as a bearer token.
+// The strategy list and entry cap mirror `credentialPool.js` (pinned equal in
+// its test) instead of importing it: this module is on the boot path, the pool
+// logic loads only when a pool is used.
+const CREDENTIAL_POOL_STRATEGIES = ['fill_first', 'round_robin', 'least_used'];
+const CREDENTIAL_POOL_MAX_ENTRIES = 32;
+const poolKeyLabelSchema = z.string().trim().min(1).max(120);
+const poolCredentialIdSchema = z.string().trim().min(1).max(128);
+
+export const credentialPoolKeyCreateSchema = z.object({
+  label: poolKeyLabelSchema.optional(),
+  apiKey: z.string().trim().min(8).max(4096)
+    .refine(isHeaderSafeKey, { message: headerSafeKeyMessage('pool') })
+    .optional(),
+  envVar: z.string().trim().min(1).max(128).regex(/^[A-Z][A-Z0-9_]*$/, { message: 'An env variable name is upper-case letters, digits and underscores' }).optional(),
+  enabled: z.boolean().optional(),
+}).strict().refine((value) => Boolean(value.apiKey) !== Boolean(value.envVar), {
+  message: 'Send exactly one of apiKey or envVar',
+});
+
+export const credentialPoolKeyUpdateSchema = z.object({
+  label: poolKeyLabelSchema.optional(),
+  enabled: z.boolean().optional(),
+  rebindOrigin: z.literal(true).optional(),
+}).strict();
+
+export const CREDENTIAL_POOL_SCHEMA_LIMITS = Object.freeze({ strategies: CREDENTIAL_POOL_STRATEGIES, maxEntries: CREDENTIAL_POOL_MAX_ENTRIES });
+
+export const credentialPoolSettingsSchema = z.object({
+  strategy: z.enum(CREDENTIAL_POOL_STRATEGIES).optional(),
+  order: z.array(poolCredentialIdSchema).max(CREDENTIAL_POOL_MAX_ENTRIES * 4).optional(),
+}).strict();
+
+export const credentialPoolResetSchema = z.object({
+  credentialId: poolCredentialIdSchema.optional(),
+}).strict();
+
 // PATCH /api/providers/bindings/:id (#6369). Management state only: no
 // `enabled`, because route enablement is an executable-record field that
 // PATCH /api/providers/:id owns and a binding toggle must never grant it.

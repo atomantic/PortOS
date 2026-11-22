@@ -750,7 +750,7 @@ function armPendingSpeech(session, sessionId, { io, turn, playResult, targetNode
   return true;
 }
 
-function commitHostedMove(session, sessionId, { io, loom, targetNode, transitionId }) {
+function commitHostedMove(session, sessionId, { io, loom, targetNode, transitionId, turnId }) {
   session.currentNodeId = targetNode.id;
   session.playbackPhase = initialPhaseForNode(targetNode);
   session.activeHoldIndex = 0;
@@ -761,6 +761,13 @@ function commitHostedMove(session, sessionId, { io, loom, targetNode, transition
     node: publicNode(targetNode, loom),
     transitionId,
     playbackPhase: session.playbackPhase,
+  });
+  // Clients leave `speaking` only on a phase frame. The transition alone left
+  // the audience mic and the host banner stuck until a later session sync
+  // (#17269), including an ending scene that never syncs again.
+  emitHosted(io, sessionId, 'hosted:turn:phase', {
+    phase: 'idle',
+    ...(turnId ? { turnId } : {}),
   });
 }
 
@@ -872,6 +879,7 @@ export async function acknowledgeHostedSpeech(sessionId, {
       loom,
       targetNode,
       transitionId: claim.transitionId,
+      turnId: claim.turnId,
     });
     return { accepted: true, committed: true };
   } catch (err) {
@@ -1131,6 +1139,7 @@ export async function processHostedUtterance(sessionId, {
         loom,
         targetNode,
         transitionId: playResult.transitionId,
+        turnId: turn.id,
       });
     } else {
       releaseHostedStay(session, sessionId, { io, turnId: turn.id });

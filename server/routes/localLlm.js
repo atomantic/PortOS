@@ -77,7 +77,7 @@ import {
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit } from '../services/huggingFaceCatalog.js'
 import { getMeasuredFits } from '../services/localModelAssessmentStore.js'
 import {
-  getStatus, listModels, listVisionModels, listToolUseModels, installModel, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
+  getStatus, listModels, listVisionModels, listToolUseModels, listContextPlans, installModel, cancelModelInstall, previewInstallModel, deleteModel, switchBackend, migrateBackend, installBackend, upgradeBackend, controlOllamaServer,
   describeInstallProgress
 } from '../services/localLlm.js'
 import { getModelAbuseGuardStatus, installModelAbuseGuard, cancelModelAbuseGuardInstall, runModelAbuseScan } from '../services/modelAbuseGuard.js'
@@ -168,6 +168,12 @@ router.get('/status', asyncHandler(async (req, res) => {
 // LoRA caption-model picker.
 router.get('/vision-models', asyncHandler(async (_req, res) => {
   res.json({ models: await listVisionModels() })
+}))
+
+// GET /api/local-llm/context-plans — per installed Ollama model: KV-cache size at each
+// window step under the daemon's cache type, what fits this host, and the recommended window.
+router.get('/context-plans', asyncHandler(async (_req, res) => {
+  res.json(await listContextPlans())
 }))
 
 // GET /api/local-llm/tool-use-models — tool-use (function-calling) capable
@@ -575,6 +581,12 @@ router.post('/install', asyncHandler(async (req, res) => {
     emit('error', `Install failed: ${err.message}`)
     throw err
   })
+  // A user's Cancel is not a failure: no error toast, just a terminal frame.
+  if (result.canceled) {
+    emit('error', `${modelId} download canceled`)
+    res.json({ success: false, canceled: true, modelId })
+    return
+  }
   if (!result.success) {
     emit('error', result.error || 'Install failed')
     // Forward structured `code` (e.g. OLLAMA_OUTDATED) so the client can offer
@@ -586,6 +598,18 @@ router.post('/install', asyncHandler(async (req, res) => {
     ? `${modelId} download started in LM Studio — it'll finish in the background`
     : `${modelId} ${force ? 'redownloaded' : 'installed'} on ${backend}`)
   res.json({ success: true, ...result })
+}))
+
+// POST /api/local-llm/install/cancel — stop a download POST /install started.
+// The install request then answers `{ canceled: true }` after removing the
+// partial files.
+router.post('/install/cancel', asyncHandler(async (req, res) => {
+  const { backend, modelId } = validateRequest(localLlmInstallSchema, req.body)
+  const result = cancelModelInstall(backend, modelId)
+  if (!result.success) {
+    throw new ServerError(result.error, { status: result.code === 'INSTALL_NOT_CANCELABLE' ? 409 : 404, code: result.code })
+  }
+  res.json(result)
 }))
 
 // POST /api/local-llm/upgrade-backend — upgrade an existing backend install

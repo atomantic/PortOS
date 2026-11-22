@@ -14,7 +14,6 @@ import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 
 const originalKey = process.env.PRIVACY_VAULT_KEY;
-process.env.PRIVACY_VAULT_KEY = 'e'.repeat(64);
 
 let dbReady = false;
 let skipReason = '';
@@ -50,6 +49,8 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   const injectedApprover = async (id) => ({ id, status: 'approved' });
 
   beforeAll(async () => {
+    // Set only while the suite runs, before any service import, so a skipped suite never leaks it.
+    process.env.PRIVACY_VAULT_KEY = 'e'.repeat(64);
     svc = await import('./privacyOptOut.js');
     brokers = await import('./privacyBrokers.js');
     vault = await import('./privacyVault.js');
@@ -79,13 +80,16 @@ describe.skipIf(!runDb)('privacy opt-out engine DB round-trip', () => {
   });
 
   afterAll(async () => {
-    for (const id of createdVaultIds) await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
-    if (optOutGrantId) await query(`DELETE FROM privacy_consents WHERE id = $1`, [optOutGrantId]).catch(() => {});
-    await query(`DELETE FROM privacy_broker_cases WHERE broker_id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
-    await query(`DELETE FROM privacy_brokers WHERE id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
-    await close();
-    if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
-    else process.env.PRIVACY_VAULT_KEY = originalKey;
+    try {
+      for (const id of createdVaultIds) await query(`DELETE FROM privacy_vault_records WHERE id = $1`, [id]).catch(() => {});
+      if (optOutGrantId) await query(`DELETE FROM privacy_consents WHERE id = $1`, [optOutGrantId]).catch(() => {});
+      await query(`DELETE FROM privacy_broker_cases WHERE broker_id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
+      await query(`DELETE FROM privacy_brokers WHERE id = ANY($1)`, [[brokerId, emailBrokerId]]).catch(() => {});
+      await close();
+    } finally {
+      if (originalKey === undefined) delete process.env.PRIVACY_VAULT_KEY;
+      else process.env.PRIVACY_VAULT_KEY = originalKey;
+    }
   });
 
   it('keeps a found case unchanged in the ledger when auto-approve has no send-capable account', async () => {

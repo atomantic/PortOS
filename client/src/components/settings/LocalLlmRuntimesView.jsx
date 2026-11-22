@@ -10,6 +10,7 @@ import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
 import {
   migrateLocalLlmBackend,
+  upgradeLocalLlmBackend,
   controlOllamaService,
   getLlamaServerStatus,
   getLlamaServerUpdateStatus,
@@ -360,6 +361,12 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         ? 'Dedicated Qwen host stopped and its container removed'
         : 'Dedicated Qwen host disabled'),
   ).then(loadFleetHostStatus);
+  // The roster's update action; same endpoint and toast as the Ollama detail card's button.
+  const runtimeUpgradeOllama = () => runAction(
+    'runtime-upgrade-ollama',
+    () => upgradeLocalLlmBackend('ollama'),
+    (r) => r?.note ? `Ollama updated — ${r.note}` : `Ollama updated to v${status?.ollama?.latestVersion}`,
+  );
   const controlLmStudio = (action) => runAction(
     `runtime-${action}-lmstudio`,
     () => controlLmStudioService(action),
@@ -591,12 +598,15 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       // Custom catch below owns the failure toast — `silent` keeps apiCore from
       // firing a second one for the same error.
       const res = await downloadSpecDecodeModel(presetId, role, { silent: true });
-      // Fetching the projector is the user saying they want vision — arm it on
-      // the launch line rather than leaving the field they can't see (it lives
-      // under Advanced) empty and the download with no visible effect. Only when
-      // the field is still empty, so a hand-entered path is never overwritten.
-      if (role === 'projector' && res?.path && presetId === llamaPresetIdRef.current) {
-        setLlamaForm((prev) => (prev.projector.trim() ? prev : { ...prev, projector: res.path }));
+      // A shipped preset field is empty or still `models/<file>`. Adopt the
+      // path the download wrote (the hub snapshot for those presets) so the
+      // next start uses it. A hand-entered path outside `models/` stays.
+      if (res?.path && presetId === llamaPresetIdRef.current) {
+        setLlamaForm((prev) => {
+          const current = String(prev[role] || '').trim().replace(/\\/g, '/');
+          if (current && !current.startsWith('models/')) return prev;
+          return { ...prev, [role]: res.path };
+        });
       }
       toast.success(res?.alreadyDownloaded
         ? `${res.path} is already on disk`
@@ -655,8 +665,10 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       // Deleting the sidecar is the inverse of fetching it, so release the field
       // it armed — otherwise the path stays behind and blocks Start on a file the
       // user just chose to remove, with the only Clear button under Advanced.
-      if (role === 'projector' && presetId === llamaPresetIdRef.current) {
-        setLlamaForm((prev) => (prev.projector.trim() === (res?.path || '').trim() ? { ...prev, projector: '' } : prev));
+      if (res?.path && presetId === llamaPresetIdRef.current) {
+        setLlamaForm((prev) => (
+          String(prev[role] || '').trim() === String(res.path).trim() ? { ...prev, [role]: '' } : prev
+        ));
       }
       toast.success(res?.path ? `Deleted ${res.path}` : 'Weight file deleted');
     } catch (err) {
@@ -785,6 +797,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
         actionInProgress={actionInProgress}
         onRefresh={loadStatus}
         onControlOllama={controlOllama}
+        onUpgradeOllama={runtimeUpgradeOllama}
         onControlLmStudio={controlLmStudio}
         onInstallBackend={installRuntimeBackend}
         onInstallLlama={runtimeInstallLlama}

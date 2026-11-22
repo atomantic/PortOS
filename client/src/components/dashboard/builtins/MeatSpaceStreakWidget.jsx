@@ -20,7 +20,7 @@ export default function MeatSpaceStreakWidget({ dashboardState }) {
     >
       <div className="flex items-center gap-2 mb-3">
         <HeartPulse size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Health Logging</h3>
+        <h2 className="text-sm font-semibold text-white">Health Logging</h2>
         <span className="ml-auto flex items-center gap-1 text-xs text-port-accent">
           Open <ArrowRight size={12} />
         </span>
