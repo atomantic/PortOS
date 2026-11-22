@@ -34,6 +34,7 @@ import {
   classifyFitVerdict,
   classifySampleFailure,
   rankByIntent,
+  sampleHidesReasoning,
   summarizePerformance,
   summarizeSweepScopes,
 } from '../lib/localModelAssessment.js';
@@ -286,6 +287,14 @@ async function residentMemoryFor(backend, modelId) {
   const reading = await readProcessTreeResidentBytes(status.pid).catch(() => null);
   const residentGb = toGb(reading?.bytes);
   return residentGb === null ? unknown : { residentGb, residentSource: `process-${reading.source}` };
+}
+
+// Tokens/s first: a thinking model's visible answer is a character or two, so its chars/s is ~0
+// and is never shown as its speed.
+function sampleRateText(sample) {
+  if (Number.isFinite(sample.tokensPerSecond)) return `${sample.tokensPerSecond} tok/s`;
+  if (sampleHidesReasoning(sample)) return 'speed n/a (reasoning hidden from the answer)';
+  return `${sample.charsPerSecond ?? '?'} chars/s`;
 }
 
 // Human-readable reason behind a non-`fits` verdict; quotes the backend's own error.
@@ -645,9 +654,8 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
       sampleCount: contexts.length,
       contextTokens: context,
       sample,
-      // Tokens/s first: a thinking model's visible answer is a character or two, so its chars/s is ~0.
       message: sample.ok
-        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${Number.isFinite(sample.tokensPerSecond) ? `${sample.tokensPerSecond} tok/s` : `${sample.charsPerSecond ?? '?'} chars/s`}`
+        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sampleRateText(sample)}`
         : `${modelId}: ${context.toLocaleString('en-US')} tokens → failed (${sample.error})`,
     });
     if (!sample.ok && classifySampleFailure(sample)) break;

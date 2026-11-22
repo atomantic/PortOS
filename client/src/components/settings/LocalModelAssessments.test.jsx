@@ -297,6 +297,15 @@ describe('LocalModelAssessments', () => {
     expect(screen.queryByText('0 chars/s')).not.toBeInTheDocument();
   });
 
+  it('shows n/a, not chars/s, for a thinking-model record with no tok/s', async () => {
+    getLocalLlmAssessments.mockResolvedValue(report({
+      ranked: [rankedEntry({ performance: { ...rankedEntry().performance, meanCharsPerSecond: 0.2, reasoningHidden: true } })],
+    }));
+    await renderPanel();
+    expect(await screen.findByText('n/a (reasoning)')).toBeInTheDocument();
+    expect(screen.queryByText(/0\.2 chars\/s/)).not.toBeInTheDocument();
+  });
+
   it('shows chars/s alone for a runtime that reported no token counts', async () => {
     getLocalLlmAssessments.mockResolvedValue(report({ ranked: [rankedEntry()] }));
     await renderPanel();

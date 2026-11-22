@@ -691,6 +691,22 @@ describe('progress streaming', () => {
     expect(withContext.every((f) => f.sampleCount === 2)).toBe(true);
   });
 
+  it('reports tok/s per sample, and never a thinking model\'s near-zero chars/s as its speed', async () => {
+    const run = (timings) => ({ text: '4', timings: { totalMs: 5000, ttftMs: 300, chars: 1, charsPerSecond: 0.2, ...timings } });
+    runLocalLlmTest
+      .mockResolvedValueOnce(okRun()) // discarded warm-up
+      .mockResolvedValueOnce(run({ completionTokens: 70, tokensPerSecond: 65.3 }))
+      .mockResolvedValueOnce(run({ completionTokens: 70, tokensPerSecond: null }));
+    const frames = [];
+    await svc.runAssessment({
+      backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096], onProgress: (frame) => frames.push(frame),
+    });
+    const measured = frames.filter((f) => f.sample).map((f) => f.message);
+    expect(measured[0]).toMatch(/65\.3 tok\/s/);
+    expect(measured[1]).toMatch(/speed n\/a/);
+    expect(measured.join(' ')).not.toMatch(/chars\/s/);
+  });
+
   it('emits a terminal frame for a cancelled run so a listener never hangs', async () => {
     const controller = new AbortController();
     runLocalLlmTest.mockImplementation(async () => { controller.abort(); return okRun(); });
