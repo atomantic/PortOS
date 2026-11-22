@@ -5,6 +5,7 @@ vi.mock('../../../services/apiMeatspace.js', () => ({
   getAlcoholSummary: vi.fn(),
   getDailyAlcohol: vi.fn(),
   getCustomDrinks: vi.fn(),
+  logAlcoholDrink: vi.fn(),
   updateAlcoholDrink: vi.fn().mockResolvedValue({}),
   removeAlcoholDrink: vi.fn().mockResolvedValue({}),
   removeCustomDrink: vi.fn().mockResolvedValue({}),
@@ -20,6 +21,7 @@ import {
   getAlcoholSummary,
   getCustomDrinks,
   getDailyAlcohol,
+  logAlcoholDrink,
   updateAlcoholDrink,
   removeAlcoholDrink,
   removeCustomDrink,
@@ -92,4 +94,55 @@ it('keeps the edit draft on the same drink when an earlier button is removed in 
   await waitFor(() => expect(screen.queryByText('Example Stout')).toBeNull());
   expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Lager');
   expect(getCustomDrinks).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a custom drink draft when the log rejects, and clears it once a log resolves', async () => {
+  getDailyAlcohol.mockResolvedValueOnce([]);
+  logAlcoholDrink.mockRejectedValueOnce(new Error('boom'));
+  render(<AlcoholTab />);
+  await screen.findByRole('button', { name: 'Log' });
+
+  fireEvent.change(screen.getByLabelText('Name (optional)'), { target: { value: 'Hazy IPA' } });
+  fireEvent.change(screen.getByLabelText('Volume'), { target: { value: '12' } });
+  fireEvent.change(screen.getByLabelText('ABV %'), { target: { value: '6.5' } });
+  fireEvent.change(screen.getByLabelText('Count'), { target: { value: '2' } });
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-03-02' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+
+  await waitFor(() => expect(logAlcoholDrink).toHaveBeenCalledTimes(1));
+  expect(screen.getByLabelText('Name (optional)')).toHaveValue('Hazy IPA');
+  expect(screen.getByLabelText('Volume')).toHaveValue(12);
+  expect(screen.getByLabelText('ABV %')).toHaveValue(6.5);
+  expect(screen.getByLabelText('Count')).toHaveValue(2);
+  expect(screen.getByLabelText('Date')).toHaveValue('2026-03-02');
+  expect(getDailyAlcohol).toHaveBeenCalledTimes(1);
+
+  getDailyAlcohol.mockResolvedValueOnce([{
+    date: '2026-03-02',
+    alcohol: { drinks: [{ id: 'logged', name: 'Hazy IPA', oz: 12, abv: 6.5, count: 2 }] },
+  }]);
+  logAlcoholDrink.mockResolvedValueOnce({ id: 'logged' });
+  fireEvent.click(screen.getByRole('button', { name: 'Log' }));
+
+  await waitFor(() => expect(screen.getByText('Hazy IPA')).toBeTruthy());
+  expect(screen.getByLabelText('Name (optional)')).toHaveValue('');
+  expect(screen.getByLabelText('Volume')).toHaveValue(null);
+  expect(screen.getByLabelText('ABV %')).toHaveValue(null);
+  expect(logAlcoholDrink).toHaveBeenCalledTimes(2);
+});
+
+it('leaves the drink editor open when the update rejects', async () => {
+  getDailyAlcohol.mockResolvedValue([{
+    date: '2024-06-01',
+    alcohol: { drinks: [{ id: 'event-id', name: 'Example', oz: 12, abv: 5, count: 1 }] },
+  }]);
+  updateAlcoholDrink.mockRejectedValueOnce(new Error('boom'));
+  render(<AlcoholTab />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit drink', exact: true }));
+  fireEvent.change(screen.getByLabelText('Entry name'), { target: { value: 'Corrected' } });
+  const readsBeforeSave = getDailyAlcohol.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  await waitFor(() => expect(updateAlcoholDrink).toHaveBeenCalled());
+  expect(screen.getByLabelText('Entry name')).toHaveValue('Corrected');
+  expect(getDailyAlcohol.mock.calls.length).toBe(readsBeforeSave);
 });

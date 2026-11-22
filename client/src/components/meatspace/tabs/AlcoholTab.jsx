@@ -156,7 +156,7 @@ export default function AlcoholTab() {
     e.preventDefault();
     if (!oz || !abv) return;
     setLogging(true);
-    await logAlcoholDrink({
+    const result = await logAlcoholDrink({
       name: name || '',
       oz: Math.round(toOz(parseFloat(oz), volumeUnit) * 100) / 100,
       abv: parseFloat(abv),
@@ -164,6 +164,9 @@ export default function AlcoholTab() {
       date: date || undefined
     }).catch(() => null);
     setLogging(false);
+    // request() already toasts. A rejected log must keep the draft; clearing
+    // here used to drop the dose the person just typed.
+    if (!result) return;
     setName('');
     setOz('');
     setAbv('');
@@ -197,7 +200,7 @@ export default function AlcoholTab() {
     if (!editingKey) return;
     const [entryDate, indexStr] = editingKey.split(':');
     const index = parseInt(indexStr, 10);
-    await updateAlcoholDrink(entryDate, index, {
+    const result = await updateAlcoholDrink(entryDate, index, {
       id: editForm.id,
       name: editForm.name,
       oz: Math.round(toOz(parseFloat(editForm.oz), editVolumeUnit) * 100) / 100,
@@ -205,6 +208,9 @@ export default function AlcoholTab() {
       count: parseInt(editForm.count, 10) || 1,
       date: editForm.date !== entryDate ? editForm.date : undefined
     }).catch(() => null);
+    // A failed edit stays open. Refreshing here would also replace the row
+    // under the draft with the last server list.
+    if (!result) return;
     setEditingKey(null);
     setRefreshKey(k => k + 1);
   };
