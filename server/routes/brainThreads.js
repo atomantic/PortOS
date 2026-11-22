@@ -125,7 +125,7 @@ router.post('/attach', asyncHandler(async (req, res) => {
   if (threadId) {
     const thread = requireThread(await brainStorage.updateWith('threads', threadId,
       (fresh) => ({ refs: mergeRef(fresh.refs, ref) })));
-    console.log(`🧵 Attached ${ref.kind} ref to thread "${thread.title}"`);
+    console.log(`🧵 Attached ${ref.kind} ref to thread ${thread.id}`);
     return res.json({ thread, created: false });
   }
 
@@ -140,7 +140,7 @@ router.post('/attach', asyncHandler(async (req, res) => {
     externalState: 'unknown',
     closedAt: resolveClosedAt(null, data.status, now),
   });
-  console.log(`🧵 Created thread "${thread.title}" from a ${ref.kind} ref`);
+  console.log(`🧵 Created thread ${thread.id} from a ${ref.kind} ref`);
   return res.status(201).json({ thread, created: true });
 }));
 
@@ -201,7 +201,7 @@ router.post('/', asyncHandler(async (req, res) => {
     externalState: 'unknown',
     closedAt: resolveClosedAt(null, data.status, new Date().toISOString()),
   });
-  console.log(`🧵 Created thread: "${thread.title}" (${thread.status})`);
+  console.log(`🧵 Created thread ${thread.id} (${thread.status})`);
   res.status(201).json(thread);
 }));
 

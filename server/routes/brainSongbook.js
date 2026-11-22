@@ -253,7 +253,7 @@ router.delete('/:id/attachments/:filename', asyncHandler(async (req, res) => {
     return next;
   });
 
-  console.log(`🗑️ Song attachment deleted: ${safeFilename}`);
+  console.log(`🗑️ Song attachment deleted from song ${song.id}`);
   res.json({ success: true, filename: safeFilename, attachments: updated.attachments });
 }));
 

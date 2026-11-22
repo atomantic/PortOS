@@ -253,7 +253,7 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
   // Derive caller IP from req.ip, stripping ::ffff: prefix for IPv4-mapped addresses
   const rawIp = req.ip || req.socket.remoteAddress || '';
   const address = rawIp.replace(/^::ffff:/, '');
-  console.log(`🌐 Announce received from ${data.name || 'unknown'} (raw IP: ${rawIp}, resolved: ${address}, port: ${data.port})`);
+  console.log(`🌐 Announce received from ${data.instanceId || 'unknown'} (port: ${data.port})`);
   if (!address) throw new ServerError('Could not determine caller IP', { status: 400 });
 
   const result = await instances.handleAnnounce({

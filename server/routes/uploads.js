@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { confirmQuerySchema } from '../lib/queryValidation.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
-import { join, resolve } from 'path';
+import { extname, join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, isPathInsideDir, unlinkGuarded,
@@ -158,7 +158,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
   const stats = await stat(filepath);
   await unlinkGuarded(filepath);
 
-  console.log(`🗑️ File deleted: ${safeFilename} (${formatSize(stats.size)})`);
+  console.log(`🗑️ File deleted (${extname(safeFilename) || 'no ext'}, ${formatSize(stats.size)})`);
 
   res.json({ success: true, filename: safeFilename, size: stats.size });
 })));
