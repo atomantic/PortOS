@@ -452,6 +452,15 @@ describe('a read whose variable segment can leave the directory the source names
   const leaves = (dir) => `${test}: reads a path with a variable segment that can leave ${dir}`;
   const through = (helper, dir) => `${test}: reads a path through ${helper}() that the analyzer cannot resolve (under ${dir})`;
 
+  it('does not key on gitignored __pycache__ bytecode under a keyed tree', () => {
+    const body = "for (const name of readdirSync(FIXTURES)) readFileSync(join(FIXTURES, name));";
+    const base = floorOf(body, { 'server/lib/fixtures/x.py': 'x = 1\n' });
+    const cached = floorOf(body, { 'server/lib/fixtures/x.py': 'x = 1\n', 'server/lib/fixtures/__pycache__/x.cpython-313.pyc': 'bytecode\n' });
+    expect(base.memoizable).toBe(true);
+    expect(cached.key).toBe(base.key);
+    expect(floorOf(body, { 'server/lib/fixtures/x.py': 'x = 2\n' }).key).not.toBe(base.key);
+  });
+
   it('keeps slash normalization and refuses another member operation only when its result can be read', () => {
     const path = "join(FIXTURES, 'f0.json')";
     const rel = 'server/lib/fixtures/f0.json';
