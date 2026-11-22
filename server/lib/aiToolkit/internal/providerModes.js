@@ -46,6 +46,7 @@ export const MODE_SHARED_SETTINGS_KEYS = Object.freeze([
   'codexAuthMode',
   'numCtx',
   'modelNumCtx',
+  'providerRouting',
   'temperature',
   'topP',
   'thinking',

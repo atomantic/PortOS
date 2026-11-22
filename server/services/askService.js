@@ -44,6 +44,7 @@ import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from 
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { ensureManagedRuntimeReady } from './provider/providerExecutionReadiness.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
+import { openRouterBodyFragment } from '../lib/aiToolkit/internal/generationOptions.js';
 import { iterateOpenAiChat } from '../lib/openAiChatStream.js';
 
 import { spawn } from '../lib/childProcess.js';
@@ -493,6 +494,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
       model,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.4,
+      extraBody: openRouterBodyFragment(provider, model),
       signal,
       timeoutMs: provider.timeout || 300000,
     })) {

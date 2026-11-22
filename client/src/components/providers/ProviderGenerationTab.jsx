@@ -10,6 +10,8 @@ import {
   TIMEOUT_INPUT_STEP_MS,
 } from '../../utils/formatters';
 import { PROVIDER_FIELD_RANGES } from './providerFormData';
+import ProviderRoutingSection from './ProviderRoutingSection';
+import { isOpenRouterEndpoint } from './providerRoutingForm';
 import ContextWindowPlanner from './ContextWindowPlanner';
 import { isOllamaBackedProvider } from '../../utils/providerTypes';
 
@@ -111,6 +113,8 @@ export default function ProviderGenerationTab({ formData, setFormData, capabilit
           )}
         </div>
       </div>
+
+      {isOpenRouterEndpoint(formData.endpoint) && <ProviderRoutingSection formData={formData} setFormData={setFormData} />}
 
       {generationControls && (
         <div className="border-t border-port-border pt-4 mt-4">

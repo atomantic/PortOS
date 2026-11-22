@@ -1,3 +1,4 @@
+import { routingFormDefaults, findRoutingFormError, applyRoutingToPayload } from './providerRoutingForm';
 import {
   effortLevelsForProvider,
   isClaudeCommandProvider,
@@ -102,6 +103,7 @@ export const initialProviderFormData = (provider) => ({
   fallbackModel: provider?.fallbackModel || '',
   numCtx: provider?.numCtx ?? '',
   modelNumCtxText: modelNumCtxToText(provider?.modelNumCtx),
+  ...routingFormDefaults(provider),
   // All three seed from the record ONLY. Seeding a value the provider does not
   // have would let an unrelated Save pin it — the editor must be able to leave
   // "unset" alone, since unset is what lets each backend keep its own default.
@@ -185,6 +187,8 @@ export const findProviderFormError = ({ formData, createsModePair, showsNumCtx, 
     const perModel = parseModelNumCtxText(formData.modelNumCtxText);
     if (perModel.error) return { tab: 'generation', message: perModel.error };
   }
+  const routingError = findRoutingFormError(formData);
+  if (routingError) return { tab: 'generation', message: routingError };
   if (generationControls?.temperature && outOfRange(formData.temperature, PROVIDER_FIELD_RANGES.temperature)) {
     return { tab: 'generation', message: rangeMessage('Temperature', PROVIDER_FIELD_RANGES.temperature) };
   }
@@ -227,6 +231,7 @@ export const buildProviderPayload = ({ provider, formData, modelsText, showsNumC
   // anything already stored is left alone.
   // Form-only text; the record stores the parsed map ({} clears every override).
   delete data.modelNumCtxText;
+  applyRoutingToPayload(data, formData);
   if (showsNumCtx) data.modelNumCtx = parseModelNumCtxText(formData.modelNumCtxText).map || {};
   if (!generationControls?.temperature) delete data.temperature;
   if (!generationControls?.topP) delete data.topP;

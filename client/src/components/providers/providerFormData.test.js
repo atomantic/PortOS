@@ -25,3 +25,34 @@ describe('per-model num_ctx form field', () => {
     expect(buildProviderPayload({ provider, formData: { ...formData, modelNumCtxText: '' }, modelsText: '', showsNumCtx: true }).modelNumCtx).toEqual({});
   });
 });
+
+describe('OpenRouter routing form fields', () => {
+  const provider = {
+    id: 'openrouter', type: 'api', name: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1',
+    providerRouting: { sort: 'price', data_collection: 'deny', only: ['anthropic'], models: { 'a/b': { sort: 'latency' } } },
+  };
+
+  it('round-trips the stored routing and clears it with null', () => {
+    const formData = initialProviderFormData(provider);
+    expect(formData.routingOnly).toBe('anthropic');
+    const payload = buildProviderPayload({ provider, formData, modelsText: '' });
+    expect(payload.providerRouting).toEqual(provider.providerRouting);
+    expect(payload).not.toHaveProperty('routingSort');
+    const cleared = buildProviderPayload({
+      provider, modelsText: '',
+      formData: { ...formData, routingSort: '', routingDataCollection: '', routingOnly: '', routingModelsText: '' },
+    });
+    expect(cleared.providerRouting).toBeNull();
+  });
+
+  it('rejects malformed per-model JSON on the generation tab', () => {
+    const formData = { ...initialProviderFormData(provider), routingModelsText: '{nope' };
+    expect(findProviderFormError({ formData })?.tab).toBe('generation');
+  });
+
+  it('never sends providerRouting for a non-OpenRouter endpoint', () => {
+    const local = { id: 'l', type: 'api', name: 'L', endpoint: 'http://localhost:11434/v1' };
+    const payload = buildProviderPayload({ provider: local, formData: initialProviderFormData(local), modelsText: '' });
+    expect(payload).not.toHaveProperty('providerRouting');
+  });
+});
