@@ -146,6 +146,15 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets(entry)).not.toContain(target);
   });
 
+  it('keeps worktree modules on the shared ownership fence', () => {
+    const entries = readdirSync(abs('services/worktree')).filter(file => file.endsWith('.js') && !file.endsWith('.test.js'));
+    expect(entries.length).toBeGreaterThan(0);
+    for (const file of entries) {
+      const entry = `services/worktree/${file}`;
+      expect(importTargets(entry), entry).not.toContain('services/cos/cosClaimOwnership.js');
+    }
+  });
+
   it('the leaves the cut entries import stay import-free', () => {
     expect(importTargets('services/readinessSignal.js')).toEqual([]);
     expect(importTargets('services/provider/providerRecoveryHooks.js')).toEqual([]);
