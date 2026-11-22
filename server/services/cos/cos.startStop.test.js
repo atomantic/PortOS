@@ -104,6 +104,8 @@ vi.mock('../prWatcher.js', () => ({
 }));
 
 const { start, stop, getStatus, resumeDeferredCompletions } = await import('./cos.js');
+// The daemon reaches the agentManagement double above only through the boot-registered handlers.
+(await import('../bootHooks.js')).registerBootHooks();
 const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 

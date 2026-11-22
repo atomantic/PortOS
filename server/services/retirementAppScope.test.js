@@ -50,6 +50,8 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
   },
 }));
 const { recordBranchReconcileOutcome, getBranchReconcileOutcome } = await import('./branchReconcileOutcome.js');
+// The Git UI entry point reaches real branch retirement only through the boot-registered hook.
+(await import('./bootHooks.js')).registerBootHooks();
 
 describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement receipts (real git)', () => {
   let scratch;

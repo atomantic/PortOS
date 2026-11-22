@@ -256,8 +256,8 @@ export async function settleQueuedJob(job, { status, error }) {
     trackTerminalOperation((async () => {
       await releaseStagedUploads(job.params);
       if (isTopazUpscale(job)) {
-        const { cleanupPreparedTopaz } = await import('../videoGen/topazJob.js');
-        await cleanupPreparedTopaz(job.params.preparedId);
+        const { cleanupTopazStaging } = await import('../videoGen/topazStaging.js');
+        await cleanupTopazStaging(job.params.preparedId);
       }
       broadcastTerminalSse(job.id, status === 'canceled'
         ? { type: 'canceled', reason: error } : { type: 'error', error });

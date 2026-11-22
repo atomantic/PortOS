@@ -15,6 +15,10 @@ import { readClaimOwnershipAgents } from './cos/cosClaimOwnershipState.js';
 import { readBranchCompletionHold } from './branchCompletionPolicy.js';
 import { listWorktrees } from './worktreeManager.js';
 import { deleteMergedBranches, deleteMergedRemoteBranches } from './git.js';
+import { registerBootHooks } from './bootHooks.js';
+
+// Production wiring: git.js reaches the mocked cleanupMerged only through the boot-registered hook.
+registerBootHooks();
 const HEAD = 'a'.repeat(40);
 const REMOTE = 'https://example.com/team/repo.git';
 const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });

@@ -135,7 +135,26 @@ const SELECTION_CUTS = [
     'notifies readiness subscribers through the readinessSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
+  // #17499: lazy imports whose target statically imported the importer.
+  ['services/cos/cos.js', 'services/agent/agentManagement.js',
+    'recovers orphans through handlers registerBootHooks() registers in cos/cosOrphanRecoveryHooks.js'],
+  ['services/git.js', 'services/prProbe.js',
+    'reads the merged PR through the prView.js leaf'],
+  ['services/git.js', 'services/branchReconcile.js',
+    'retires merged branches through the cleanup registerBootHooks() registers in mergedBranchCleanupHook.js'],
+  ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
+    'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
+  ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',
+    'reads owner decisions from branchRetirementDecision.js and forge shipment from branchReconcile/forgeShipment.js'],
+  ['services/apps.js', 'services/taskSchedule.js',
+    'resets watcher cooldowns through taskScheduleStore.js'],
 ];
+
+// Runtimes that import the queue back load through runtimeModuleRegistry.js (#17499).
+const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
+const productionModulesIn = (dir) => readdirSync(abs(dir))
+  .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
+  .map(file => `${dir}/${file}`);
 
 const importTargets = (entry) => {
   const { statics: eager, deferred: lazy } = moduleSpecifiers(readFileSync(abs(entry), 'utf-8'), entry);
@@ -148,18 +167,36 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets(entry)).not.toContainEqual(typeof target === 'string' ? target : expect.stringMatching(target));
   });
 
-  it('keeps worktree modules on the shared ownership fence', () => {
-    const entries = readdirSync(abs('services/worktree')).filter(file => file.endsWith('.js') && !file.endsWith('.test.js'));
+  it('keeps worktree modules on the shared ownership fence and off branch reconciliation', () => {
+    const entries = productionModulesIn('services/worktree');
     expect(entries.length).toBeGreaterThan(0);
-    for (const file of entries) {
-      const entry = `services/worktree/${file}`;
+    for (const entry of entries) {
       expect(importTargets(entry), entry).not.toContain('services/cos/cosClaimOwnership.js');
+      expect(importTargets(entry), entry).not.toContain('services/branchReconcile.js');
+    }
+  });
+
+  it('keeps every media queue module off the runtimes that import the queue', () => {
+    const entries = productionModulesIn('services/mediaJobQueue');
+    expect(entries).toContain('services/mediaJobQueue/execution.js');
+    for (const entry of entries) {
+      expect(importTargets(entry), entry).not.toContainEqual(expect.stringMatching(QUEUE_IMPORTING_RUNTIME));
     }
   });
 
   it('the leaves the cut entries import stay import-free', () => {
-    expect(importTargets('services/readinessSignal.js')).toEqual([]);
-    expect(importTargets('services/provider/providerRecoveryHooks.js')).toEqual([]);
+    for (const leaf of [
+      'services/readinessSignal.js',
+      'services/provider/providerRecoveryHooks.js',
+      'services/cos/cosOrphanRecoveryHooks.js',
+      'services/mergedBranchCleanupHook.js',
+      'services/mediaJobQueue/runtimeModuleRegistry.js',
+    ]) expect(importTargets(leaf), leaf).toEqual([]);
+  });
+
+  // Positive control for the media scan: the boot owner still names every runtime.
+  it('still sees the runtime loaders bootHooks.js registers', () => {
+    expect(importTargets('services/bootHooks.js').filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.

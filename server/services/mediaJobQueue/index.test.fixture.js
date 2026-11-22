@@ -114,7 +114,7 @@ export const stubs = {
   cancelAudioRemote: vi.fn(),
   cancelImageRemote: vi.fn(),
   cancelVideoRemote: vi.fn(),
-  // #1332: loraTraining is dynamically imported by the queue for runTraining
+  // #1332: loraTraining is loaded through the runtime registry for runTraining
   // (worker) and hasSurvivingTrainer (boot reconcile). Stub both so the boot
   // re-attach decision is testable without loading the real trainer module.
   runTraining: vi.fn(() => new Promise(() => {})),
@@ -171,7 +171,6 @@ vi.mock('../videoGen/upscaleJob.js', () => ({
 vi.mock('../videoGen/topazJob.js', () => ({
   runVideoUpscale: (...args) => stubs.runTopazUpscale(...args),
   cancel: (...args) => stubs.cancelTopazUpscale(...args),
-  cleanupPreparedTopaz: vi.fn(async () => {}),
 }));
 
 vi.mock('../videoGen/verticalJob.js', () => ({
@@ -263,6 +262,8 @@ export async function importFresh() {
   await mediaJobQueue?.__resetForTests();
   vi.resetModules();
   mediaJobQueue = await import('./index.js');
+  // The fresh graph has a fresh runtime registry; the production loaders resolve to the mocks above.
+  (await import('../bootHooks.js')).registerBootHooks();
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
   imageGenEvents = (await import('../imageGenEvents.js')).imageGenEvents;
   audioGenEvents = (await import('../audioGen/events.js')).audioGenEvents;

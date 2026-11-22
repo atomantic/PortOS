@@ -37,6 +37,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
+import { registerBootHooks } from '../bootHooks.js';
 import { firstLine } from './cosTaskStore.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
@@ -162,6 +163,9 @@ const task = (id, priority = 'MEDIUM', { app } = {}) => ({
   status: 'pending',
   metadata: app !== undefined ? { app } : {},
 });
+
+// resetOrphanedTasks reaches agentManagement (spied below) only through the boot-registered handlers.
+registerBootHooks();
 
 // ─── evaluateTasks: priority ordering ──────────────────────────────────────
 

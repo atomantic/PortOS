@@ -190,7 +190,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       claimReserved: async () => (await import('../claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
       checkoutPresent: () => readCheckoutPresence(wt.path),
       checkoutProcess: () => probeProcessCwdInside(wt.path),
-      idleMs: async () => (await import('../branchReconcile.js')).checkoutIdleMs(wt.path),
+      idleMs: async () => (await import('../branchReconcile/checkoutIdle.js')).checkoutIdleMs(wt.path),
     });
     if (scan.hold) {
       if (MERGED_OWNERSHIP_HOLDS.has(scan.hold.reason)) console.log(`⏭️ Kept merged worktree ${wt.path} (branch ${scan.branch}): ${scan.hold.reason}`);

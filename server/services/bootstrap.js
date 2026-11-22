@@ -78,6 +78,7 @@ import { startAutomaticUpdateReservationRecovery, stopAutomaticUpdateReservation
 import { setAIToolkit as setPromptsToolkit } from './promptService.js';
 import { executeTuiRun as executeTuiRunFixed } from './tuiPromptRunner.js';
 import { initAutoFixer } from './autoFixer.js';
+import { registerBootHooks } from './bootHooks.js';
 import { initTaskLearning } from './taskLearning.js';
 import { initSpawner } from './subAgentSpawner.js';
 import { initCertRenewer } from './certRenewer.js';
@@ -193,6 +194,8 @@ import { initImageOriginStamping } from './imageGen/imageRecords.js';
  * `runBootSequence` below.
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
+  // First: the CoS daemon, media queue and git cleanup route all call through these.
+  registerBootHooks();
   bindMaintenanceIo(io);
   bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim

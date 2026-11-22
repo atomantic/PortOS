@@ -272,7 +272,7 @@ async function readReconcileCompletionHold(input, deps = {}) {
   if (reason !== 'pr-completion-review-required' || input.prUrl) return reason;
   const detail = await (deps.readCompletionHoldDetail ?? policy.readBranchCompletionHoldDetail)(input);
   if (detail?.reason !== reason || detail.unshipped !== true) return reason;
-  const readUnshipped = deps.readBranchUnshipped ?? (await import('../branchReconcile.js')).readBranchUnshipped;
+  const readUnshipped = deps.readBranchUnshipped ?? (await import('../branchReconcile/forgeShipment.js')).readBranchUnshipped;
   const unshipped = await readUnshipped(input.repoPath, input.branch, { forgeAccount: input.forgeAccount ?? null }).catch(() => null);
   return unshipped === true ? null : reason;
 }
@@ -300,7 +300,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const getAgents = deps.getAgents ?? readClaimOwnershipAgents;
   const readCompletionHold = deps.readCompletionHold ?? (holdInput => readReconcileCompletionHold(holdInput, deps));
   const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('../agent/agentState.js')).getActiveAgentIds;
-  const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('../branchReconcile.js');
+  const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('../branchRetirementDecision.js');
 
   const app = await getAppById(appId).catch(() => null);
   const repoPath = app?.repoPath;

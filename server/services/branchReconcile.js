@@ -36,6 +36,7 @@ import { readVerdictLedger, partitionSuperseded } from './supersededLedger.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { gatheredHoldReason, resolveLiveOwnerReason } from './branchRetirementDecision.js';
+import { readBranchUnshipped } from './branchReconcile/forgeShipment.js';
 import {
   classifyBranches, gitLines, isAbandonedAgentWorktree, isAbandonedClaimWorktree, parseRemoteHeads,
   partitionRemoteOrphans, prioritizeBranches, RECONCILED_REMOTE, upstreamBranchName,
@@ -88,8 +89,10 @@ export {
   limitBranchesForAgent,
 } from './branchReconcile/inFlightPrompt.js';
 export {
-  checkoutIdleMs, cleanupMerged, reapSupersededBranches, SUPERSEDED_UNMANAGED_IDLE_MS,
+  cleanupMerged, reapSupersededBranches, SUPERSEDED_UNMANAGED_IDLE_MS,
 } from './branchReconcile/retireCheckouts.js';
+export { checkoutIdleMs } from './branchReconcile/checkoutIdle.js';
+export { readBranchUnshipped };
 
 // Bound the gh query (single-user repos never realistically truncate at 200).
 const PR_LIST_LIMIT = 200;
@@ -174,26 +177,6 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
     }
   }
   return byHead;
-}
-
-/**
- * Whether the forge shows `branch` never shipped: no open PR, and none closed
- * unmerged (a deliberate decision, e.g. superseded, that a second PR must not
- * override). A merged PR does not count — later commits are new work. Null when
- * the forge cannot answer (non-GitHub origin, gh failure, unparseable output):
- * an exact `--head` query rather than `getOpenPrsByHead`'s capped list, whose
- * empty Map for a non-GitHub origin must never read as "no PR" to a caller
- * releasing a hold.
- * @returns {Promise<boolean|null>}
- */
-export async function readBranchUnshipped(repoPath, branch, { origin, forgeExec = null, forgeAccount = null } = {}) {
-  const repoSpec = githubRepoSpec(origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin);
-  if (!repoSpec || !branch) return null;
-  const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
-  const raw = await execGh(['pr', 'list', '--repo', repoSpec, '--state', 'all', '--head', branch, '--json', 'state'],
-    undefined, { cwd, env }).catch(() => null);
-  const parsed = raw === null ? null : safeJSONParse(raw, null);
-  return Array.isArray(parsed) ? parsed.every(pr => pr?.state === 'MERGED') : null;
 }
 
 /**

@@ -29,6 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { securityScanPRDisclosure } from '../lib/securityScanEvidence.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { parseGitRemoteUrl } from '../lib/gitRemote.js';
+import { requireMergedBranchCleanup } from './mergedBranchCleanupHook.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit, execGitSafe };
@@ -625,7 +626,7 @@ export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHead
 
   // A zero exit may mean queued, and a timeout/nonzero exit may follow a
   // completed merge. Read back before reporting success or deleting anything.
-  const { readPullRequest } = await import('./prProbe.js');
+  const { readPullRequest } = await import('./prView.js');
   const merged = await readPullRequest(prNumber,
     'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository', { cwd: dir, env });
   if (merged?.state !== 'MERGED') {
@@ -2190,7 +2191,7 @@ export async function deleteMergedRemoteBranches(dir, names, { defaultBranch, ex
  */
 export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null, onlyBranches } = {}) {
   if (onlyBranches !== undefined && !(onlyBranches instanceof Set)) throw new Error('Cleanup branch selector must be a Set');
-  const { cleanupMerged } = await import('./branchReconcile.js');
+  const cleanupMerged = requireMergedBranchCleanup();
   const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);
