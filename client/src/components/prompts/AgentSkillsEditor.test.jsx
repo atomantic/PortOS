@@ -149,6 +149,33 @@ describe('AgentSkillsEditor', () => {
     ));
   });
 
+  it('holds rollback and a live curator pass while the open skill has unsaved edits', async () => {
+    api.getSkillLedger.mockResolvedValue({ entries: [
+      { id: 'e3', at: new Date().toISOString(), actor: 'agent', action: 'patch', skill: { id: 'local:deploy' }, before: { files: 1 }, after: { files: 1 } },
+    ] });
+    await renderPage('/prompts/agent-skills?agentSkill=local%3Adeploy');
+    fireEvent.change(await screen.findByDisplayValue('# local:deploy body'), { target: { value: 'draft' } });
+    expect(screen.getByRole('button', { name: 'Run now' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    expect((await screen.findByRole('button', { name: 'Roll back' })).disabled).toBe(true);
+    expect(screen.getByDisplayValue('draft')).toBeTruthy();
+  });
+
+  it('follows the open skill into the archive after a curator pass moves it', async () => {
+    api.runCurator.mockResolvedValueOnce({ dryRun: false, transitions: [{ id: 'local:deploy', from: 'stale', to: 'archived', idleDays: 40 }], failures: [] });
+    await renderPage('/prompts/agent-skills?agentSkill=local%3Adeploy');
+    await screen.findByDisplayValue('# local:deploy body');
+    api.getSkills.mockResolvedValue({
+      ...LIST,
+      skills: LIST.skills.filter((entry) => entry.id !== 'local:deploy'),
+      archived: [...LIST.archived, { id: 'archive:deploy', name: 'deploy', tier: 'local', path: 'deploy', originalId: 'local:deploy', usage: usage({ state: 'archived' }) }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run pass' }));
+    await waitFor(() => expect(currentSearch()).toContain('agentSkill=archive%3Adeploy'));
+    expect(await screen.findByText(/Archived skills are hidden from agents/)).toBeTruthy();
+  });
+
   it('previews a curator pass without applying it', async () => {
     api.runCurator.mockResolvedValueOnce({ dryRun: true, transitions: [{ id: 'local:deploy', from: 'active', to: 'stale', idleDays: 20 }], failures: [] });
     await renderPage('/prompts/agent-skills');

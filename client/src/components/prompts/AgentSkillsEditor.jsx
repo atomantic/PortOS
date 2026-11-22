@@ -59,7 +59,9 @@ function UsageLine({ usage }) {
   );
 }
 
-function CuratorPanel({ status, failed, onReload, onChanged }) {
+// `editBlocked`: the open skill holds unsaved edits or a save is in flight, so
+// a live pass (which may archive that skill) waits until it is clean.
+function CuratorPanel({ status, failed, onReload, onChanged, editBlocked }) {
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState(null);
   const [confirmRun, setConfirmRun] = useState(false);
@@ -99,8 +101,9 @@ function CuratorPanel({ status, failed, onReload, onChanged }) {
       )}
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" className={btn} disabled={busy || !counts} onClick={() => run(true)}>Preview pass</button>
-        <button type="button" className={btn} disabled={busy || !counts} onClick={() => setConfirmRun(true)}>Run now</button>
+        <button type="button" className={btn} disabled={busy || !counts || editBlocked} onClick={() => setConfirmRun(true)}>Run now</button>
       </div>
+      {editBlocked && <div className="mt-1 text-xs text-gray-500">Save or discard the open skill's edits before running a pass.</div>}
       {confirmRun && (
         <InlineConfirmRow
           className="mt-2 rounded-lg"
@@ -128,7 +131,9 @@ function CuratorPanel({ status, failed, onReload, onChanged }) {
   );
 }
 
-function LedgerDrawer({ open, onClose, onRolledBack }) {
+// `editBlocked`: a rollback re-reads the open skill, so it waits until that
+// editor holds no unsaved edits and no save is in flight.
+function LedgerDrawer({ open, onClose, onRolledBack, editBlocked }) {
   const [entries, setEntries] = useState(null);
   const [failed, setFailed] = useState(false);
   const [confirmId, setConfirmId] = useState(null);
@@ -163,6 +168,7 @@ function LedgerDrawer({ open, onClose, onRolledBack }) {
       {failed && <CatalogueNotice label="Change history" stale={Boolean(entries)} onRetry={() => setAttempt((n) => n + 1)} />}
       {entries === null && !failed && <div className="text-sm text-gray-500" role="status">Loading change history…</div>}
       {entries?.length === 0 && <div className="text-sm text-gray-500">No skill changes recorded yet.</div>}
+      {editBlocked && <div className="mb-2 text-xs text-port-warning">Save or discard the open skill's edits before rolling back a change.</div>}
       <ul className="space-y-2">
         {entries?.map((entry) => (
           <li key={entry.id} className="rounded-lg border border-port-border p-2 text-sm">
@@ -171,7 +177,7 @@ function LedgerDrawer({ open, onClose, onRolledBack }) {
                 <span className="font-medium text-white">{entry.action}</span>{' '}
                 <span className="text-gray-400">{entry.skill?.id}</span>
               </div>
-              <button type="button" className={btn} disabled={busyId !== null} onClick={() => setConfirmId(entry.id)}>
+              <button type="button" className={btn} disabled={busyId !== null || editBlocked} onClick={() => setConfirmId(entry.id)}>
                 {busyId === entry.id ? 'Rolling back…' : 'Roll back'}
               </button>
             </div>
@@ -234,6 +240,17 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
     onDirtyChange?.(editor.dirty ? openLabel : null);
     return () => onDirtyChange?.(null);
   }, [editor.dirty, openLabel, onDirtyChange]);
+
+  // A curator pass (or another tab) archived the open skill: follow it to its
+  // archive entry instead of leaving an id that no longer resolves.
+  const movedTo = catalogue.loaded && selected && !isArchivedId(selected) && !skills.some((entry) => entry.id === selected)
+    ? archived.find((entry) => entry.originalId === selected)?.id : null;
+  // The setter is rebuilt each render; only a new destination may navigate.
+  const setSelectedRef = useRef(setSelected);
+  setSelectedRef.current = setSelected;
+  useEffect(() => {
+    if (movedTo) setSelectedRef.current(movedTo);
+  }, [movedTo]);
 
   const switchSkill = (id) => {
     setChooserOpen(false);
@@ -325,7 +342,7 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
         </div>
         <button type="button" className={btn} onClick={() => setLedgerOpen(true)}><History size={14} /> History</button>
       </div>
-      <CuratorPanel status={status.data} failed={status.failed} onReload={status.reload} onChanged={refresh} />
+      <CuratorPanel status={status.data} failed={status.failed} onReload={status.reload} onChanged={refresh} editBlocked={editor.dirty || saving} />
       {catalogue.failed && <CatalogueNotice label="Agent skills" stale={catalogue.loaded} onRetry={catalogue.reload} />}
       {usageUnavailable && (
         <div role="alert" className="mb-2 rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-xs text-port-warning">
@@ -459,7 +476,7 @@ export default function AgentSkillsEditor({ splitPane, reloadKey, onDirtyChange 
         chooserOpen={chooserOpen}
         onChooserOpenChange={setChooserOpen}
       />
-      <LedgerDrawer open={ledgerOpen} onClose={() => setLedgerOpen(false)} onRolledBack={afterRollback} />
+      <LedgerDrawer open={ledgerOpen} onClose={() => setLedgerOpen(false)} onRolledBack={afterRollback} editBlocked={editor.dirty || saving} />
     </>
   );
 }
