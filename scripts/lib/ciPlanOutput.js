@@ -17,8 +17,8 @@ import { WINDOWS_CONTRACT_TESTS } from './ciPlanRules.js';
 export const MAX_TARGETED_TEST_FILES = 125;
 // A client runner's cold-memo cost is about 0.4s per file including overhead
 // (#16805 measurements), so one runner absorbs 400 client files, explicit or
-// reached through a related walk, inside the existing critical path. Fanning out earlier only adds three
-// runner starts, Chrome warm-ups and memo restores.
+// reached through a related walk, inside the existing critical path. Fanning
+// out earlier only adds three runner starts, Chrome warm-ups and memo restores.
 export const CLIENT_FANOUT_TEST_FILES = 400;
 
 // Parallel runners per test job on a full plan. Decided here rather than in
@@ -50,7 +50,7 @@ export const shardIndexes = (mode, count) => (
  */
 const runnerFanOutCap = (runner) => (runner === 'client' ? CLIENT_FANOUT_TEST_FILES : MAX_TARGETED_TEST_FILES);
 export const fansOut = (runner, { mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
-  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > runnerFanOutCap(runner)));
+  && Math.max(files.length, mode === 'related' ? reach : 0) > runnerFanOutCap(runner);
 
 /** The suites a measureRepoImportReach() report selects; 0 when it was not measured. */
 export const reachCount = (report) => (Number.isFinite(report?.selected) ? report.selected : 0);

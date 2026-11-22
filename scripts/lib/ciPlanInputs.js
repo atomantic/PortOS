@@ -239,8 +239,9 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
       collectTestDependencies(graph, [test])?.filter(isSharedClientDependency) ?? null]))
     : {};
 
-  const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
+  const relatedServerSources = collectedChangedFiles.filter((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
+  const hasRelatedServerSource = relatedServerSources.length > 0;
   const dbDependencies = hasRelatedServerSource
     ? collectTestDependencies(graph, resolveDbTestFiles(dependencyFiles))
     : [];
@@ -285,8 +286,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
       return null;
     }
   };
-  const serverReach = measureReach('server', collectedChangedFiles.filter((path) => isServerRunnerFile(path)
-    && MODULE_SOURCE_RE.test(path) && !isTestFile(path)), serverRunnerTestPredicate());
+  const serverReach = measureReach('server', relatedServerSources, serverRunnerTestPredicate());
   // The client runner's related sources (buildSuitePlan's isClientSource): any
   // client source, plus a shared server/lib module the browser bundle imports.
   const clientDependencySet = new Set(clientDependencies ?? []);
