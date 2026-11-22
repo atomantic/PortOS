@@ -73,7 +73,7 @@ export function diagnosePtySpawnFailure(err, { cwd, probeCwd, runtimeProbe }) {
   if (!runtimeProbe(probeCwd)) {
     return {
       diagnosed: true,
-      message: `${PTY_UNAVAILABLE_PREFIX} node-pty cannot fork any process, so this is not specific to the requested command. The usual cause is an emptied or partially installed \`server/node_modules\` — node-pty execs its \`spawn-helper\` binary from disk on every spawn. Repair it with \`npm install --prefix server\` and restart the runner (\`pm2 restart portos-cos\`). Original error: ${raw}`,
+      message: `${PTY_UNAVAILABLE_PREFIX} node-pty cannot fork any process, so this is not specific to the requested command. The usual cause is an emptied or partially installed \`server/node_modules\` — node-pty execs its \`spawn-helper\` binary from disk on every spawn. Repair it with \`node scripts/ensure-deps.js\` in the primary checkout (plain \`npm install\` skips the node-pty rebuild because of \`ignore-scripts=true\`) and restart the runner (\`node ./node_modules/pm2/bin/pm2 restart portos-cos\`). Original error: ${raw}`,
     };
   }
 

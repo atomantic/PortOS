@@ -340,9 +340,9 @@ see `server/lib/ptySpawnDiagnostics.js`.
 **Recovery**:
 ```bash
 # In the PRIMARY checkout, never in a worktree
-npm install --prefix server
-npm install --prefix client
-npx pm2 restart portos-cos
+# Plain `npm install` skips the node-pty rebuild (server/.npmrc ignore-scripts=true)
+node scripts/ensure-deps.js
+node ./node_modules/pm2/bin/pm2 restart portos-cos
 ```
 
 **Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
