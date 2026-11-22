@@ -45,14 +45,15 @@ function TemplatesContent() {
     if (unknownSelection) setSearchParams({}, { replace: true });
   }, [unknownSelection, setSearchParams]);
 
-  const resetForm = () => {
+  // Form fields are not in the URL, so any selection change (including Browser Back
+  // to another ?template=) must drop them or Create would scaffold A with B's inputs.
+  useEffect(() => {
     setAppName('');
     setTargetPath('');
     setError(null);
-  };
+  }, [selectedId]);
 
   const handleSelectTemplate = (template) => {
-    resetForm();
     setSearchParams({ template: template.id });
   };
 

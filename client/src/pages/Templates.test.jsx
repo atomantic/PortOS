@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getTemplates: vi.fn(),
@@ -109,5 +109,22 @@ describe('Templates list resources (#12171)', () => {
       { templateId: 'tpl-1', name: 'my-app', targetPath: '/tmp/x' },
       { silent: true }
     );
+  });
+
+  it('drops typed form values when the selection changes', async () => {
+    api.getTemplates.mockResolvedValue([...TPL, { id: 'tpl-2', name: 'Other', description: 'd', icon: 'code' }]);
+    const Swap = () => {
+      const nav = useNavigate();
+      return <button onClick={() => nav('/templates?template=tpl-2')}>swap</button>;
+    };
+    render(
+      <MemoryRouter initialEntries={['/templates?template=tpl-1']}>
+        <Templates />
+        <Swap />
+      </MemoryRouter>
+    );
+    fireEvent.change(await screen.findByLabelText(/App Name/), { target: { value: 'my-app' } });
+    fireEvent.click(screen.getByText('swap'));
+    await waitFor(() => expect(screen.getByLabelText(/App Name/)).toHaveValue(''));
   });
 });
