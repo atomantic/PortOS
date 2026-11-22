@@ -35,8 +35,10 @@ vi.mock('../aiProvider.js', async (importOriginal) => {
 
 const {
   computeGoalVelocity, getGoals, decomposeGoal, generateGoalPhases,
-  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress, getGoalsTree
+  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress, getGoalsTree,
+  createGoal, linkActivity, linkCalendarToGoal
 } = await import('./goals.js');
+const { addTodo } = await import('./todos.js');
 
 describe('computeGoalVelocity', () => {
   it('returns null with fewer than two progress entries', () => {
@@ -311,5 +313,56 @@ describe('getGoalsTree tag index', () => {
     expect(serialized.toString).toEqual(['goal-b']);
     expect(tree.tagIndex['__proto__']).toEqual(['goal-a']);
     expect(serialized.plain).toEqual(['goal-a']);
+  });
+});
+
+describe('identity logs keep user-authored text out of stdout', () => {
+  const SECRET_TITLE = 'Quit smoking before the wedding';
+  const SECRET_ACTIVITY = 'Therapy with Dr Example';
+  const SECRET_CALENDAR = 'Private family calendar';
+  let logs;
+
+  beforeEach(() => {
+    logs = [];
+    vi.spyOn(console, 'log').mockImplementation((...args) => { logs.push(args.join(' ')); });
+    h.goalsData = { goals: [], birthDate: null };
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('createGoal logs the goal id but not the title', async () => {
+    const goal = await createGoal({ title: SECRET_TITLE, horizon: 'short' });
+    const out = logs.join('\n');
+    expect(out).toContain(goal.id);
+    expect(out).not.toContain(SECRET_TITLE);
+  });
+
+  it('linkActivity and linkCalendarToGoal log ids, not activity, calendar or goal names', async () => {
+    h.goalsData = { goals: [{ id: 'goal-1', title: SECRET_TITLE, linkedActivities: [], linkedCalendars: [] }], birthDate: null };
+    await linkActivity('goal-1', { activityName: SECRET_ACTIVITY });
+    await linkCalendarToGoal('goal-1', { subcalendarId: 'cal-1', subcalendarName: SECRET_CALENDAR, matchPattern: '' });
+    const out = logs.join('\n');
+    expect(out).toContain('goal-1');
+    expect(out).not.toContain(SECRET_ACTIVITY);
+    expect(out).not.toContain(SECRET_CALENDAR);
+    expect(out).not.toContain(SECRET_TITLE);
+  });
+
+  it('updateGoalProgress logs percents and the goal id, not the title', async () => {
+    h.goalsData = { goals: [{ id: 'goal-1', title: SECRET_TITLE, progress: 10, progressHistory: [] }], birthDate: null };
+    await updateGoalProgress('goal-1', 25);
+    const out = logs.join('\n');
+    expect(out).toContain('10%');
+    expect(out).toContain('25%');
+    expect(out).not.toContain(SECRET_TITLE);
+  });
+
+  it('addTodo logs ids, not the todo title or the goal title', async () => {
+    const SECRET_TODO = 'Call the lawyer about the will';
+    h.goalsData = { goals: [{ id: 'goal-1', title: SECRET_TITLE, todos: [] }], birthDate: null };
+    await addTodo('goal-1', { title: SECRET_TODO });
+    const out = logs.join('\n');
+    expect(out).toContain('goal-1');
+    expect(out).not.toContain(SECRET_TODO);
+    expect(out).not.toContain(SECRET_TITLE);
   });
 });

@@ -183,7 +183,7 @@ export async function deriveChronotype({ withoutGenetics = false } = {}) {
   };
 
   await saveJSON(CHRONOTYPE_FILE, chronotype);
-  console.log(`🧬 Chronotype derived: ${type} (confidence: ${confidence})`);
+  console.log(`🧬 Chronotype derived: ${Object.keys(geneticMarkers).length} markers`);
 
   return chronotype;
 }
