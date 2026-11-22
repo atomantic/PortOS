@@ -56,14 +56,25 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(save).toContain("github.event_name != 'pull_request'");
   });
 
-  // Related selection needs the memo records from each distinct full-run shard.
-  it.each(['server', 'client'])('restores and merges each full-run %s shard lineage once', (family) => {
+  // Related selection and smoke browser ownership both need sibling records.
+  it.each([
+    ['server', FULL_SUITE_SHARDS.server],
+    ['client', FULL_SUITE_SHARDS.client],
+    ['browser', 2],
+  ])('restores and merges each full-run %s shard lineage once', (family, count) => {
     const job = jobs[family];
     const save = step(job, 'Save the test memo');
-    const count = FULL_SUITE_SHARDS[family];
-    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${count}\\n`));
+    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0'";
+    if (family === 'browser') {
+      const invocation = step(job, 'Restore the test memo');
+      expect(invocation).toContain('suite: browser\n');
+      expect(invocation).toContain(`merge-shards: \${{ ${mergeBrowserShards} }}\n`);
+      expect(save).toContain("steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    } else {
+      expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${count}\\n`));
+    }
     const initial = step(job, 'Restore from the trusted memo cache');
-    const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
+    const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123, [mergeBrowserShards]: count };
     const fullKeys = Array.from({ length: count }, (_, index) => expand(restoreKey(initial), {
       ...context, 'matrix.shard': index + 1, 'strategy.job-total': count,
     }));
