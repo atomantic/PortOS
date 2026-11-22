@@ -289,6 +289,26 @@ describe('buildOpencodeEnvVars', () => {
     expect(cfg.provider.mtplx.models.mtplx).toEqual({ name: 'mtplx', tool_call: true });
   });
 
+  it('hands an MTPLX Inkling run its full effort level through the chat template', () => {
+    // OpenCode's own ladder stops at high; Inkling's template takes up to max, and
+    // MTPLX reads the level from the template kwargs, not the OpenAI field.
+    const model = 'mtplx-inkling-2-mini-optimized-speed';
+    const cfg = JSON.parse(buildOpencodeEnvVars(
+      { command: 'opencode', mtplxBacked: true, models: [model], thinking: true, effort: 'max' },
+      model,
+    ).OPENCODE_CONFIG_CONTENT);
+    expect(cfg.agent.build).toEqual({
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: 'max' },
+      reasoningEffort: 'max',
+    });
+    // A model whose template takes no level keeps the portable ladder, clamped.
+    const qwen = JSON.parse(buildOpencodeEnvVars(
+      { command: 'opencode', mtplxBacked: true, models: ['mtplx-qwen38-27b-optimized-speed'], effort: 'max' },
+      'mtplx-qwen38-27b-optimized-speed',
+    ).OPENCODE_CONFIG_CONTENT);
+    expect(qwen.agent.build).toEqual({ chat_template_kwargs: { reasoning_effort: 'high' }, reasoningEffort: 'high' });
+  });
+
   it('injects the sibling OrcaRouter API key only into the composed spawn config', () => {
     const storedConfig = JSON.stringify({
       permission: 'allow',

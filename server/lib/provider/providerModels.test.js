@@ -268,6 +268,16 @@ describe('providerModels', () => {
       expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode' })).toBeNull();
     });
 
+    it('offers an MTPLX-backed OpenCode run the template ladder of a model that has one', () => {
+      const mtplx = { id: 'opencode-mtplx-tui', command: 'opencode', mtplxBacked: true };
+      expect(effortLevelsForProvider(mtplx, 'mtplx-inkling-2-mini-optimized-speed'))
+        .toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+      expect(effortLevelsForProvider(mtplx, 'mtplx-qwen38-27b-optimized-speed')).toEqual(['low', 'medium', 'high']);
+      // Ollama's OpenAI endpoint takes no template kwargs, so its OpenCode ladder stays portable.
+      expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode', ollamaBacked: true }, 'inkling-2-mini:26b-a5b'))
+        .toEqual(['low', 'medium', 'high']);
+    });
+
     it('drops the rung a gateway model rejects (NIM 400s Kimi K3 on "medium")', () => {
       const nim = { id: 'opencode-nvidia-nim-tui', command: 'opencode', gatewayBacked: 'nvidia-nim' };
       expect(effortLevelsForProvider(nim, 'moonshotai/kimi-k3')).toEqual(['low', 'high', 'max']);

@@ -229,14 +229,19 @@ export function buildAgentGeneration(generation, providerKey) {
   const effort = typeof generation.effort === 'string' && generation.effort.trim()
     ? generation.effort.trim()
     : undefined;
+  // MTPLX reads a thinking level from the chat template, not from the OpenAI
+  // `reasoning_effort` field OpenCode sends, so the level also rides in the template
+  // kwargs, as the MTPLX API provider sends it (`aiToolkit/runner.js`). A template
+  // without the variable ignores it.
+  const templateKwargs = {
+    ...(thinking === undefined || thinkingStyle !== 'chatTemplate' ? {} : { enable_thinking: thinking }),
+    ...(effort === undefined || providerKey !== 'mtplx' ? {} : { reasoning_effort: effort }),
+  };
   const build = {
     ...(temperature === undefined ? {} : { temperature }),
     ...(topP === undefined ? {} : { topP }),
-    ...(thinking === undefined || thinkingStyle === null
-      ? {}
-      : thinkingStyle === 'think'
-        ? { think: thinking }
-        : { chat_template_kwargs: { enable_thinking: thinking } }),
+    ...(thinking !== undefined && thinkingStyle === 'think' ? { think: thinking } : {}),
+    ...(Object.keys(templateKwargs).length > 0 ? { chat_template_kwargs: templateKwargs } : {}),
     ...(effort === undefined ? {} : { reasoningEffort: effort }),
   };
   return Object.keys(build).length > 0 ? build : null;
