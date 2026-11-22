@@ -18,7 +18,8 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 export const DEFAULT_OUT_DIR = join(REPO_ROOT, 'server/test/fixtures/prompt-surface');
@@ -207,7 +208,7 @@ async function main(argv) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   main(process.argv.slice(2)).then(() => process.exit(0), (error) => {
     console.error(`❌ ${error.message}`);
     process.exit(1);
