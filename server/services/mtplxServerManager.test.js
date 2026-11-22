@@ -166,9 +166,23 @@ describe('mtplxServerManager', () => {
       await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'lib', 'python3.11', 'site-packages', `mtplx-${locked}.dist-info`), { recursive: true });
       expect((await getMtplxServerStatus()).runtimeOutdated).toBe(false);
 
-      // A Homebrew or pip install is upgraded where it was installed, not from this lock.
-      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
-      expect(await getMtplxServerStatus()).toMatchObject({ runtimeVersion: null, lockedVersion: null, runtimeOutdated: false });
+    });
+
+    it('flags an older Homebrew mtplx from its venv dist-info without running it, and leaves a newer one alone', async () => {
+      const locked = mtplxRuntime.lockedMtplxVersion(await readFile(LOCK_PROFILES['mtplx-mlx'].lockFile, 'utf8'));
+      const venv = join(testLogDir, 'brew-venv');
+      await mkdir(join(venv, 'bin'), { recursive: true });
+      await writeFile(join(venv, 'bin', 'mtplx'), '#!/bin/sh\n');
+      await chmod(join(venv, 'bin', 'mtplx'), 0o755);
+      await mkdir(join(venv, 'lib', 'python3.13', 'site-packages', 'mtplx-0.0.1.dist-info'), { recursive: true });
+      const wrapper = await writeMtplxWrapper(testLogDir, venv);
+      vi.spyOn(processEnv, 'findCommandOnPath').mockImplementation((cmd) => (cmd === 'mtplx' ? wrapper : null));
+
+      expect(await getMtplxServerStatus()).toMatchObject({ runtimeVersion: '0.0.1', lockedVersion: locked, runtimeManaged: false, runtimeOutdated: true });
+
+      await rm(join(venv, 'lib', 'python3.13', 'site-packages', 'mtplx-0.0.1.dist-info'), { recursive: true });
+      await mkdir(join(venv, 'lib', 'python3.13', 'site-packages', 'mtplx-999.0.0.dist-info'), { recursive: true });
+      expect(await getMtplxServerStatus()).toMatchObject({ runtimeVersion: '999.0.0', runtimeOutdated: false });
     });
 
     it('reports the platform gate only when nothing is installed here', async () => {

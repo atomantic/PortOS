@@ -66,7 +66,7 @@ const contextMarkdown = (point, estimated) => {
 /** The report as a markdown table — what a copy of this is actually useful as. */
 export function toMarkdown(report) {
   const contexts = report?.contexts || [];
-  const header = ['Model', 'Runtime', 'Tuning', 'Rate basis', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', ...contexts.map((c) => `${formatContextTokens(c)} tok/s / elapsed`)];
+  const header = ['Model', 'Runtime', 'Tuning', 'Rate basis', 'tok/s', 'chars/s', 'Prefill tok/s', 'TTFT', 'Warm-up', ...contexts.map((c) => `${formatContextTokens(c)} tok/s / elapsed`)];
   const lines = [
     `| ${header.join(' | ')} |`,
     `| ${header.map(() => '---').join(' | ')} |`,
@@ -82,6 +82,7 @@ export function toMarkdown(report) {
       rateText(row.meanCharsPerSecond, false),
       rateText(row.meanPromptTokensPerSecond, row.tokensEstimated),
       Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : '—',
+      Number.isFinite(row.warmupMs) ? formatDurationMs(row.warmupMs) : '—',
       ...contexts.map((c) => contextMarkdown(byContext.get(c), row.tokensEstimated)),
     ].join(' | ')} |`);
   }
@@ -153,6 +154,7 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">chars/s</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">Prefill</th>
               <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">TTFT</th>
+              <th scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap" title="The first request, discarded before measuring: load and warm-up time, not counted in any rate">Warm-up</th>
               {contexts.map((context) => (
                 <th key={context} scope="col" className="text-right font-medium px-2 py-1.5 whitespace-nowrap">
                   <div>{formatContextTokens(context)}</div>
@@ -186,6 +188,9 @@ export default function ModelThroughputReport({ report, runtimeLabelFor }) {
                   <td className="px-2 py-1.5 text-right"><Rate value={row.meanPromptTokensPerSecond} estimated={row.tokensEstimated} /></td>
                   <td className="px-2 py-1.5 text-right text-gray-200 whitespace-nowrap">
                     {Number.isFinite(row.meanTtftMs) ? formatDurationMs(row.meanTtftMs) : <span className="text-gray-600">—</span>}
+                  </td>
+                  <td className="px-2 py-1.5 text-right text-gray-400 whitespace-nowrap">
+                    {Number.isFinite(row.warmupMs) ? formatDurationMs(row.warmupMs) : <span className="text-gray-600">—</span>}
                   </td>
                   {contexts.map((context) => {
                     const point = byContext.get(context);

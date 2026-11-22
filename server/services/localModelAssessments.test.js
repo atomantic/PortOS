@@ -424,16 +424,30 @@ describe('runAssessment', () => {
 
   it('stops after a resource failure instead of burning minutes on larger contexts', async () => {
     runLocalLlmTest
+      .mockResolvedValueOnce(okRun()) // discarded warm-up
       .mockResolvedValueOnce(okRun())
       .mockResolvedValueOnce({ text: '', error: 'model requires more system memory' })
       .mockResolvedValue(okRun());
 
     const result = await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096, 16384] });
-    expect(runLocalLlmTest).toHaveBeenCalledTimes(2);
+    expect(runLocalLlmTest).toHaveBeenCalledTimes(3);
     // A smaller context worked, so the model DOES fit — the largest working
     // context is what carries the nuance.
     expect(result.verdict).toBe('fits');
     expect(result.performance.maxWorkingContextTokens).toBe(512);
+  });
+
+  it('discards a cold first request: its time is recorded as warm-up, never averaged into throughput', async () => {
+    const cold = okRun();
+    cold.timings = { ...cold.timings, ttftMs: 9000, totalMs: 12000 };
+    runLocalLlmTest.mockResolvedValueOnce(cold).mockResolvedValue(okRun());
+
+    const result = await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512, 4096] });
+    expect(runLocalLlmTest).toHaveBeenCalledTimes(3);
+    expect(runLocalLlmTest.mock.calls[0][0].maxTokens).toBeLessThan(runLocalLlmTest.mock.calls[1][0].maxTokens);
+    expect(result.warmup).toMatchObject({ ok: true, ttftMs: 9000, totalMs: 12000 });
+    expect(result.samples).toHaveLength(2);
+    expect(result.samples.every((sample) => sample.ttftMs !== 9000)).toBe(true);
   });
 
   it('records does-not-fit when every context exhausted memory', async () => {
@@ -1094,7 +1108,9 @@ describe('tuning', () => {
   });
 
   it('reports which tuning won once a model has two measurements', async () => {
-    runLocalLlmTest.mockResolvedValueOnce(okRun(40, 90)).mockResolvedValueOnce(okRun(40, 150));
+    runLocalLlmTest
+      .mockResolvedValueOnce(okRun()).mockResolvedValueOnce(okRun(40, 90))
+      .mockResolvedValueOnce(okRun()).mockResolvedValueOnce(okRun(40, 150));
     await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512] });
     await svc.runAssessment({ backend: 'ollama', modelId: 'example-model:7b', contextTokens: [512], tuning: { numCtx: 8192 } });
     const report = await svc.getAssessmentReport();

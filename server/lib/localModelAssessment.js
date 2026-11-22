@@ -249,6 +249,8 @@ export function buildThroughputReport(assessments) {
       meanPromptTokensPerSecond: num(perf.meanPromptTokensPerSecond),
       meanCharsPerSecond: num(perf.meanCharsPerSecond),
       meanTtftMs: num(perf.meanTtftMs),
+      // The discarded first request (load / warm-up); `null` for records measured before it existed.
+      warmupMs: num(assessment?.warmup?.totalMs),
       timingSource: perf.timingSource || null,
       tokensEstimated: typeof perf.tokensEstimated === 'boolean' ? perf.tokensEstimated : null,
       points: points.sort((a, b) => a.contextTokens - b.contextTokens),

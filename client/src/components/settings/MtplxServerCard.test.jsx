@@ -228,8 +228,17 @@ describe('MtplxServerCard', () => {
       installed: true, running: true, managed: true, supported: true, runtimeReady: true,
       runtimeVersion: '2.12.2', lockedVersion: '2.13.0', runtimeOutdated: true, cachedModels: ['Example/Qwen-MTP'],
     });
-    expect(screen.getByText(/Restart MTPLX after updating/)).toBeTruthy();
+    expect(screen.getByText(/Restart MTPLX afterwards/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Update MTPLX runtime/ }));
+    expect(handlers.onInstall).toHaveBeenCalledTimes(1);
+  });
+  it('offers PortOS\'s own runtime when an older external mtplx is on PATH', async () => {
+    const handlers = await renderCard({
+      installed: true, running: false, supported: true, runtimeReady: true, runtimeManaged: false,
+      runtimeVersion: '2.12.3', lockedVersion: '2.13.0', runtimeOutdated: true, cachedModels: ['Example/Qwen-MTP'],
+    });
+    expect(screen.getByText(/older than the/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Install PortOS's MTPLX runtime/ }));
     expect(handlers.onInstall).toHaveBeenCalledTimes(1);
   });
 });

@@ -83,12 +83,14 @@ export default function MtplxServerCard({
       {status?.runtimeOutdated && (
         <div className="bg-port-accent/10 border border-port-accent/30 rounded-lg p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <p className="text-gray-300">
-            MTPLX <code className="text-gray-200">{status.runtimeVersion}</code> is installed; this PortOS version ships <code className="text-gray-200">{status.lockedVersion}</code>.
-            {status.running && ' Restart MTPLX after updating to use it.'}
+            {status.runtimeManaged === false
+              ? <>The <code className="text-gray-200">mtplx</code> on your PATH is <code className="text-gray-200">{status.runtimeVersion}</code>, older than the <code className="text-gray-200">{status.lockedVersion}</code> this PortOS version ships, so newer checkpoints may not load. Installing PortOS's own runtime takes precedence and leaves your install untouched.</>
+              : <>MTPLX <code className="text-gray-200">{status.runtimeVersion}</code> is installed; this PortOS version ships <code className="text-gray-200">{status.lockedVersion}</code>.</>}
+            {status.running && ' Restart MTPLX afterwards to use it.'}
           </p>
           <button onClick={onInstall} disabled={busy} className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}>
             {actionInProgress === 'runtime-install-mtplx' ? <BrailleSpinner /> : <Download size={13} />}
-            Update MTPLX runtime
+            {status.runtimeManaged === false ? "Install PortOS's MTPLX runtime" : 'Update MTPLX runtime'}
           </button>
         </div>
       )}
