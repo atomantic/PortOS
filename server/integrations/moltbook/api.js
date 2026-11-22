@@ -35,9 +35,9 @@ function inferActionFromEndpoint(endpoint, method) {
 async function handleVerification(data, apiKey, aiConfig) {
   if (!data?.verification_required || !data?.verification) return data;
 
+  // The code and answer are the capability that submits the post; never log them or the challenge text.
   const { code, challenge, expires_at } = data.verification;
-  console.log(`🔐 Moltbook verification required: code=${code}, expires=${expires_at}`);
-  console.log(`🔐 Challenge: "${challenge.substring(0, 100)}..."`);
+  console.log(`🔐 Moltbook verification required (expires=${expires_at})`);
 
   const answer = await solveChallenge(challenge, aiConfig);
   if (!answer) {
@@ -45,7 +45,7 @@ async function handleVerification(data, apiKey, aiConfig) {
     return data;
   }
 
-  console.log(`🔐 Submitting verification: code=${code} answer=${answer}`);
+  console.log(`🔐 Submitting Moltbook verification`);
 
   const resp = await fetchWithTimeout(`${API_BASE}/verify`, {
     method: 'POST',
