@@ -67,6 +67,9 @@ vi.mock('../taskDataInputs.js', () => ({
   appendTaskDataInputs: vi.fn((desc) => desc),
 }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../taskLearning.js', () => ({
+  getTaskTypeConfidence: vi.fn(async () => ({ confidence: 1, autoApprove: true, reason: 'mocked' })),
+}));
 vi.mock('../preflightTaskCard.js', () => ({
   recordPreflightOutcome: vi.fn(async () => {}),
   preflightReporter: vi.fn(() => () => {}),
