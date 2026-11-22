@@ -6,7 +6,10 @@ import CatalogLockButton from './CatalogLockButton';
 import CatalogImageAction from './CatalogImageAction';
 import { ingredientCoverUrl, ingredientPath, usageSummary } from '../../lib/creativeLibraries';
 
-export default function CharacterCard({ ingredient, to = null, onUpdated, actions = null, unavailable = false }) {
+// headingLevel: the card name's heading rank. Callers pass the level that
+// keeps the page outline stepping one level at a time (2 when no section
+// heading above the grid, 3 under a story or kind heading).
+export default function CharacterCard({ ingredient, to = null, onUpdated, actions = null, unavailable = false, headingLevel = 3 }) {
   const [locking, setLocking] = useState(false);
   const [generatedCover, setGeneratedCover] = useState(null);
   const name = ingredient.name || '(untitled)';
@@ -17,13 +20,14 @@ export default function CharacterCard({ ingredient, to = null, onUpdated, action
   const href = to || (ingredient.id ? ingredientPath(ingredient) : null);
   const role = typeof ingredient.payload?.role === 'string' ? ingredient.payload.role : '';
   const description = [ingredient.payload?.physicalDescription, ingredient.payload?.description].find(value => typeof value === 'string' && value) || 'No description yet.';
+  const NameHeading = `h${headingLevel}`;
   const content = <>
     <div className="aspect-[3/4] w-full bg-port-bg flex items-center justify-center overflow-hidden">
       {cover ? <MediaImage thumbnail src={cover} alt={name} className="w-full h-full object-cover" loading="lazy" />
         : <Sparkles size={22} className="text-gray-500" aria-hidden="true" />}
     </div>
     <div className="p-3 space-y-1 min-w-0">
-      <h3 className="text-sm text-white font-semibold break-words">{name}</h3>
+      <NameHeading className="text-sm text-white font-semibold break-words">{name}</NameHeading>
       {role && <p className="text-xs text-port-accent line-clamp-2 break-words">{role}</p>}
       <p className="text-[11px] text-gray-400 break-words">{ingredient.owningUniverse ? `Universe: ${ingredient.owningUniverse.name}` : 'Ownership needs review'}</p>
       <p className="text-xs text-gray-400 line-clamp-3 break-words">{description}</p>

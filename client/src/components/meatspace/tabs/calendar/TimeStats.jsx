@@ -20,7 +20,7 @@ export default function TimeStats({ stats }) {
   const r = stats.remaining;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 h-full">
-      <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Time Remaining</h3>
+      <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Time Remaining</h2>
       <div className="divide-y divide-port-border">
         <CompactStat icon={Sun} iconColor="text-yellow-400" label="Saturdays" value={r.saturdays} sub={`${Math.round(r.saturdays / 52)}y`} />
         <CompactStat icon={Sun} iconColor="text-orange-400" label="Sundays" value={r.sundays} sub={`${Math.round(r.sundays / 52)}y`} />

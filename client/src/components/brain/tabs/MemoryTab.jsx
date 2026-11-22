@@ -738,7 +738,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
           <div className="flex-1 min-w-0 w-full">
             {activeType === 'people' && (
               <>
-                <h3 className="font-medium text-white">{record.name}</h3>
+                <h2 className="font-medium text-white">{record.name}</h2>
                 {record.context && <p className="text-sm text-gray-400 mt-1">{record.context}</p>}
                 {record.followUps?.length > 0 && (
                   <div className="mt-2">
@@ -754,7 +754,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'projects' && (
               <>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">{record.name}</h3>
+                  <h2 className="font-medium text-white">{record.name}</h2>
                   <span className={`px-2 py-0.5 text-xs rounded border ${PROJECT_STATUS_COLORS[record.status]}`}>
                     {record.status}
                   </span>
@@ -767,7 +767,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'ideas' && (
               <>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">
+                  <h2 className="font-medium text-white">
                     <button
                       onClick={() => navigate(`${basePath}/ideas/${encodeURIComponent(record.id)}${location.search}`)}
                       className="text-left hover:text-port-accent"
@@ -775,7 +775,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
                     >
                       {record.title}
                     </button>
-                  </h3>
+                  </h2>
                   <span className={`px-2 py-0.5 text-xs rounded border ${IDEA_STATUS_COLORS[record.status || 'active']}`}>
                     {record.status || 'active'}
                   </span>
@@ -788,7 +788,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'admin' && (
               <>
                 <div className="flex items-center gap-2">
-                  <h3 className="font-medium text-white">{record.title}</h3>
+                  <h2 className="font-medium text-white">{record.title}</h2>
                   <span className={`px-2 py-0.5 text-xs rounded border ${ADMIN_STATUS_COLORS[record.status]}`}>
                     {record.status}
                   </span>
@@ -805,7 +805,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
             {activeType === 'memories' && (
               <>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="font-medium text-white"><button className="text-left hover:text-port-accent" onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}>{record.title}</button></h3>
+                  <h2 className="font-medium text-white"><button className="text-left hover:text-port-accent" onClick={() => navigate(`${basePath}/memories/${encodeURIComponent(record.id)}${location.search}`)}>{record.title}</button></h2>
                   {record.mood && (
                     <span className="px-2 py-0.5 text-xs rounded border bg-pink-500/20 text-pink-400 border-pink-500/30">
                       {record.mood}
@@ -1020,7 +1020,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
           {/* Add form */}
           {showAdd && (
             <div className="p-4 bg-port-card border border-port-accent/50 rounded-lg">
-              <h3 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h3>
+              <h2 className="font-medium text-white mb-3">Add {DESTINATIONS[activeType].label}</h2>
               {renderForm(addForm, setAddForm)}
               <div className="flex items-center gap-2 mt-3">
                 <button

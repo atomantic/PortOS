@@ -412,7 +412,7 @@ export default function Security() {
       {/* Settings panel */}
       {showSettings && (
         <div className="mb-6 p-4 bg-port-card border border-port-border rounded-xl">
-          <h3 className="text-lg font-semibold text-white mb-4">Device Settings</h3>
+          <h2 className="text-lg font-semibold text-white mb-4">Device Settings</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Video device selector */}
             <FormField
@@ -555,7 +555,7 @@ export default function Security() {
           <div className="bg-port-card border border-port-border rounded-xl p-4">
             <div className="flex items-center gap-2 mb-4">
               <Volume2 size={20} className="text-port-accent" />
-              <h3 className="font-semibold text-white">Audio Level</h3>
+              <h2 className="font-semibold text-white">Audio Level</h2>
             </div>
 
             <div className="space-y-3">
@@ -606,7 +606,7 @@ export default function Security() {
 
           {/* Status info */}
           <div className="bg-port-card border border-port-border rounded-xl p-4">
-            <h3 className="font-semibold text-white mb-4">Status</h3>
+            <h2 className="font-semibold text-white mb-4">Status</h2>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-gray-400">Stream</span>

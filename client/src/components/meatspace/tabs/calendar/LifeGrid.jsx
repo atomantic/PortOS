@@ -387,7 +387,7 @@ export default function LifeGrid({ grid, stats, birthDate, deathDate, lifeEvents
       {/* Header: title + unit toggle + controls */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <Calendar size={16} className="text-port-accent" />
-        <h3 className="text-sm font-medium text-white">Life Calendar</h3>
+        <h2 className="text-sm font-medium text-white">Life Calendar</h2>
         {/* Unit toggle */}
         <div className="flex items-center gap-0.5 pointer-coarse:gap-1 ml-1 bg-port-bg rounded-md p-0.5 border border-port-border">
           {UNIT_MODES.map(u => (

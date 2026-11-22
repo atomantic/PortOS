@@ -51,7 +51,7 @@ function CompactCountdown({ deathDate, lifeExpectancy, percentComplete, lev }) {
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Time Remaining</h3>
+        <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Time Remaining</h2>
         <ProvenanceChip
           level="inferred"
           explainer="Estimated from an actuarial baseline, then adjusted by your genome and lifestyle data — a model, not a fixed date."
@@ -109,7 +109,7 @@ function CompactLEV({ lev }) {
     <div>
       <div className="flex items-center gap-2 mb-3">
         <Rocket size={14} className="text-port-accent" />
-        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">LEV Tracker</h3>
+        <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">LEV Tracker</h2>
         <ProvenanceChip
           level="speculative"
           explainer="Longevity Escape Velocity assumes medical progress outpaces aging by ~2045 — a forward-looking bet on the future, not a measurement."
