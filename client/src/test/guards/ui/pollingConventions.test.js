@@ -38,7 +38,7 @@ const ALLOWED = {
   'src/components/meatspace/post/PostDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/PostLlmDrillRunner.jsx': 'drill countdown timer; no I/O',
   'src/components/meatspace/post/WordplayDrillUI.jsx': 'elapsed-time clock tick; no I/O',
-  'src/components/music/MusicGenPanel.jsx': 'elapsed-time clock for a running generation (job state arrives through socket events)',
+  'src/components/music/useMusicGenerationJob.js': 'elapsed-time clock for a running generation (job state arrives through socket events)',
   'src/components/music/strudelFrame.js': 'source text for the sandboxed player frame: its recording-progress tick runs inside the iframe, not in PortOS; no I/O',
   'src/components/sprites/LoopTrimmer.jsx': 'advances the sprite playback frame; no I/O',
   'src/components/universeBuilder/graph/GraphTimeline.jsx': 'advances the universe-graph playback position one issue per tick; no I/O',
