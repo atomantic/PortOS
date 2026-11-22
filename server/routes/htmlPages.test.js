@@ -30,7 +30,14 @@ describe('POST /api/html-pages/runs', () => {
     const res = await request(app).post('/api/html-pages/runs').send({ models: [model], pages: ['  A lighthouse at dusk \n', 'A tide-pool'] });
     expect(res.status).toBe(202);
     expect(res.body).toEqual([{ id: 'run-1', status: 'queued' }]);
-    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [model], pages: ['  A lighthouse at dusk \n', 'A tide-pool'] });
+    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [model], routes: [], pages: ['  A lighthouse at dusk \n', 'A tide-pool'] });
+  });
+
+  it('accepts provider routes on their own, with a blank model meaning the provider default', async () => {
+    mocks.startRuns.mockResolvedValue([{ id: 'run-1', status: 'queued' }]);
+    const res = await request(app).post('/api/html-pages/runs').send({ routes: [{ providerId: 'example-cli', model: '', effort: 'high' }], pages: ['A'] });
+    expect(res.status).toBe(202);
+    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [], routes: [{ providerId: 'example-cli', model: null, effort: 'high' }], pages: ['A'] });
   });
 
   it.each([
@@ -43,6 +50,9 @@ describe('POST /api/html-pages/runs', () => {
     ['a blank brief', { models: [model], pages: ['   '] }],
     ['a brief over the length limit, which is refused rather than cut', { models: [model], pages: ['x'.repeat(2001)] }],
     ['too many models at once', { models: Array.from({ length: 9 }, (_, i) => ({ backend: 'ollama', modelId: `m${i}` })), pages: ['A'] }],
+    ['too many models and routes together', { models: Array.from({ length: 5 }, (_, i) => ({ backend: 'ollama', modelId: `m${i}` })), routes: Array.from({ length: 4 }, (_, i) => ({ providerId: `p${i}` })), pages: ['A'] }],
+    ['a repeated route', { routes: [{ providerId: 'p' }, { providerId: 'p' }], pages: ['A'] }],
+    ['an unknown effort', { routes: [{ providerId: 'p', effort: 'turbo' }], pages: ['A'] }],
   ])('refuses %s before reaching any model', async (_label, body) => {
     const res = await request(app).post('/api/html-pages/runs').send(body);
     expect(res.status).toBe(400);

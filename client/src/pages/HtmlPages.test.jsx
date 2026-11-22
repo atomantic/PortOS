@@ -27,6 +27,23 @@ vi.mock('../components/htmlPages/HtmlPreviewFrame', () => ({
   default: ({ html, title }) => <div data-testid="frame" aria-label={title}>{html ? 'page' : 'empty'}</div>,
 }));
 
+// The real picker and its provider fetch are covered by their own suites; here a provider is one tap.
+vi.mock('../hooks/useProviderModels', async () => {
+  const { useState } = await import('react');
+  return {
+    default: () => {
+      const [selectedProviderId, setSelectedProviderId] = useState('');
+      const [selectedModel, setSelectedModel] = useState('');
+      return { providers: [], loading: false, selectedProviderId, selectedModel, availableModels: [], setSelectedProviderId, setSelectedModel };
+    },
+  };
+});
+vi.mock('../components/ProviderModelSelector', () => ({
+  default: ({ label, onProviderChange, onModelChange, onEffortChange }) => (
+    <button type="button" onClick={() => { onProviderChange('example-cli'); onModelChange('example-model'); onEffortChange('high'); }}>{`Pick ${label}`}</button>
+  ),
+}));
+
 import HtmlPages from './HtmlPages';
 import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
 
@@ -91,9 +108,24 @@ describe('HtmlPages', () => {
     await waitFor(() => expect(startHtmlPageRuns).toHaveBeenCalledTimes(1));
     expect(startHtmlPageRuns.mock.calls[0][0]).toEqual({
       models: [{ backend: 'ollama', modelId: 'example-a:7b' }, { backend: 'ollama', modelId: 'example-b:7b' }],
+      routes: [],
       pages: ['  A lighthouse at dusk\nwith a sweeping beam  ', CATALOG.defaultPages[1]],
     });
     expect(await screen.findAllByText('Queued')).toHaveLength(2);
+  });
+
+  it('runs a provider, model and effort picked in the form alongside local models', async () => {
+    startHtmlPageRuns.mockImplementation(async (body) => body.routes.map((r, i) => run(`route-${i}`, r.model, { status: 'queued', backend: 'provider', route: { ...r, providerName: 'Example CLI' } })));
+    renderPage();
+    await screen.findByText('Run a comparison');
+    fireEvent.click(screen.getByRole('button', { name: /Add a provider, model and effort/ }));
+    // A row with no provider picked yet is not a target.
+    expect(screen.getByRole('button', { name: /Select models to run/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Pick Provider 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run 1 model × 3 pages' }));
+    await waitFor(() => expect(startHtmlPageRuns).toHaveBeenCalledTimes(1));
+    expect(startHtmlPageRuns.mock.calls[0][0]).toMatchObject({ models: [], routes: [{ providerId: 'example-cli', model: 'example-model', effort: 'high' }] });
+    expect(await screen.findByText(/Example CLI · high/)).toBeInTheDocument();
   });
 
   it('shows the fixed PortOS text and the full prompt built from the brief being typed', async () => {
@@ -194,11 +226,13 @@ describe('HtmlPages', () => {
     await waitFor(() => expect(screen.getByLabelText('query')).not.toHaveTextContent('compare'));
   });
 
-  it('offers Resume only on a failed run and shows it queued again', async () => {
+  it('offers Resume on a failed run, Retry on a finished one with a failing page, and shows it queued again', async () => {
     resumeHtmlPageRun.mockResolvedValue(run('r2', 'example-b:7b', { status: 'queued', pages: [] }));
     renderPage();
     await screen.findByText('model server went away');
     expect(screen.queryByRole('button', { name: 'Resume the example-a:7b run' })).not.toBeInTheDocument();
+    // example-a finished, but one of its pages failed a check.
+    expect(screen.getByRole('button', { name: 'Retry the example-a:7b run' })).toHaveTextContent('Retry failed pages');
     fireEvent.click(screen.getByRole('button', { name: 'Resume the example-b:7b run' }));
     await waitFor(() => expect(resumeHtmlPageRun).toHaveBeenCalledWith('r2', expect.anything()));
     await waitFor(() => expect(screen.queryByText('model server went away')).not.toBeInTheDocument());

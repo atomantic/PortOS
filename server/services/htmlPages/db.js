@@ -42,13 +42,15 @@ export async function getRun(id, { includeDeleted = false } = {}) {
   return run;
 }
 
-export async function createRun({ backend, modelId, pageCount, themes, prompts }) {
+export async function createRun({ backend, modelId, route = null, pageCount, themes, prompts }) {
   const now = new Date().toISOString();
   const run = {
     id: `htmlpages-${randomUUID()}`,
     schemaVersion: 1,
     backend,
     modelId,
+    // A provider route ({ providerId, providerName, model, effort }) when `backend` is 'provider'; null for a local model.
+    route,
     pageCount,
     // The person's brief for each page, and the full prompt each one sent (the brief inside PortOS's fixed text).
     themes,

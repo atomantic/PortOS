@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Check, GalleryVertical, LoaderCircle, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -8,6 +8,8 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
 import HtmlPreviewFrame from '../components/htmlPages/HtmlPreviewFrame';
+import ProviderModelSelector from '../components/ProviderModelSelector';
+import useProviderModels from '../hooks/useProviderModels';
 import toast from '../components/ui/Toast';
 import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
 import { formatDurationMs, timeAgo } from '../utils/formatters';
@@ -16,6 +18,8 @@ const RUN_EVENTS = ['html-page-run:changed'];
 // The installed-model list changes when the user installs a model, not when a run changes.
 const NO_EVENTS = [];
 const MAX_COMPARE = 4;
+// Mirrors HTML_PAGES_MAX_MODELS on the server: local models and provider routes together.
+const MAX_TARGETS = 8;
 
 const STATUS = {
   queued: { label: 'Queued', cls: 'bg-port-border text-gray-300' },
@@ -43,10 +47,44 @@ function StatusChip({ run }) {
 
 /** A short name for a page brief: its first clause, for column rows and frame titles. The full text is always kept on the run. */
 const briefLabel = (brief) => {
-  const first = String(brief || '').trim().split('\n')[0];
+  // A bullet list of guidelines (the default brief) labels by its first guideline, without the bullet.
+  const first = String(brief || '').trim().split('\n')[0].replace(/^[-*•]\s*/, '');
   const clause = /^(.{1,40}?)[:.]/.exec(first)?.[1] || first;
   return clause.length > 40 ? `${clause.slice(0, 40).trimEnd()}…` : clause;
 };
+
+/** Where a run's pages came from, for card and column subtitles: the provider and effort for a route, else the runtime. */
+const runSource = (run) => (run.route ? [run.route.providerName, run.route.effort].filter(Boolean).join(' · ') : run.backend);
+
+/** One provider > model > effort pick. It owns its picker state and reports the triple up whenever it changes. */
+function RouteRow({ index, onChange, onRemove }) {
+  const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ withEffort: true, silent: true, preselectDefaults: true });
+  const [effort, setEffort] = useState('');
+  useEffect(() => {
+    onChange(index, selectedProviderId ? { providerId: selectedProviderId, model: selectedModel || null, effort: effort || null } : null);
+  }, [index, onChange, selectedProviderId, selectedModel, effort]);
+  return (
+    <div className="flex flex-wrap items-end gap-2 rounded-lg border border-port-border p-2">
+      <div className="min-w-0 flex-1">
+        <ProviderModelSelector
+          providers={providers}
+          loading={loading}
+          selectedProviderId={selectedProviderId}
+          selectedModel={selectedModel}
+          availableModels={availableModels}
+          onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
+          onModelChange={setSelectedModel}
+          effort={effort}
+          onEffortChange={setEffort}
+          label={`Provider ${index + 1}`}
+          modelLabel={`Model ${index + 1}`}
+          dense
+        />
+      </div>
+      <button type="button" onClick={() => onRemove(index)} aria-label={`Remove provider ${index + 1}`} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-gray-500 hover:text-port-error"><X size={14} /></button>
+    </div>
+  );
+}
 
 /**
  * Pick installed models and write the page briefs, then queue one run per model.
@@ -54,6 +92,12 @@ const briefLabel = (brief) => {
  */
 function RunForm({ catalog, onStarted }) {
   const [selected, setSelected] = useState(() => new Set());
+  // Provider routes: each slot a stable key plus the triple its row last reported (null until a provider is picked).
+  const [routes, setRoutes] = useState([]);
+  const [nextRouteKey, setNextRouteKey] = useState(0);
+  const setRoute = useCallback((index, value) => setRoutes((prev) => prev.map((r, i) => (i === index ? { ...r, value } : r))), []);
+  const addRoute = () => { setRoutes((prev) => [...prev, { key: nextRouteKey, value: null }]); setNextRouteKey((k) => k + 1); };
+  const removeRoute = (index) => setRoutes((prev) => prev.filter((_, i) => i !== index));
   const [pages, setPages] = useState(() => catalog.defaultPages.slice(0, 3));
   const [starting, setStarting] = useState(false);
   const keyOf = (m) => `${m.backend}\u0000${m.modelId}`;
@@ -75,19 +119,22 @@ function RunForm({ catalog, onStarted }) {
   const { before, after } = catalog.promptParts;
   const problems = pages.map((brief) => (!brief.trim() ? 'Write a brief for this page, or remove it.' : (brief.length > catalog.briefMaxChars ? `${brief.length} characters — the limit is ${catalog.briefMaxChars}.` : null)));
   const chosen = catalog.models.filter((m) => selected.has(keyOf(m)));
-  const ready = chosen.length > 0 && problems.every((p) => !p);
+  const chosenRoutes = routes.map((r) => r.value).filter(Boolean);
+  const targetCount = chosen.length + chosenRoutes.length;
+  const ready = targetCount > 0 && targetCount <= MAX_TARGETS && problems.every((p) => !p);
 
   const start = async (event) => {
     event.preventDefault();
     if (!ready || starting) return;
     setStarting(true);
     const runs = await startHtmlPageRuns(
-      { models: chosen.map(({ backend, modelId }) => ({ backend, modelId })), pages },
+      { models: chosen.map(({ backend, modelId }) => ({ backend, modelId })), routes: chosenRoutes, pages },
       { silent: true },
     ).catch((err) => { toast.error(err?.message || 'Could not start the runs'); return null; });
     setStarting(false);
     if (!runs) return;
     setSelected(new Set());
+    setRoutes([]);
     onStarted(runs);
   };
 
@@ -96,7 +143,7 @@ function RunForm({ catalog, onStarted }) {
       <div>
         <h2 className="text-sm font-medium text-white">Run a comparison</h2>
         <p className="mt-1 text-xs text-gray-400">
-          Every selected model gets the same page briefs, one request per page, one model after another.
+          Every selected model gets the same page briefs, one request per page, one model after another. A downloaded MTPLX pack that isn&apos;t serving is switched in for its run and switched back after.
         </p>
       </div>
 
@@ -122,6 +169,18 @@ function RunForm({ catalog, onStarted }) {
             </div>
           </fieldset>
         ))}
+      </div>
+
+      <div className="space-y-2">
+        <h3 className="text-xs font-medium text-gray-300">Any provider</h3>
+        {routes.map((route, index) => (
+          <RouteRow key={route.key} index={index} onChange={setRoute} onRemove={removeRoute} />
+        ))}
+        {targetCount < MAX_TARGETS && (
+          <button type="button" onClick={addRoute} className="inline-flex min-h-[44px] items-center gap-1.5 rounded border border-dashed border-port-border px-3 text-xs text-gray-300 hover:border-port-accent hover:text-white">
+            <Plus size={12} /> Add a provider, model and effort
+          </button>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -177,13 +236,16 @@ function RunForm({ catalog, onStarted }) {
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" disabled={!ready || starting} className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 text-sm font-medium text-port-on-accent hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
           {starting ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
-          {chosen.length ? `Run ${chosen.length} model${chosen.length === 1 ? '' : 's'} × ${pages.length} page${pages.length === 1 ? '' : 's'}` : 'Select models to run'}
+          {targetCount ? `Run ${targetCount} model${targetCount === 1 ? '' : 's'} × ${pages.length} page${pages.length === 1 ? '' : 's'}` : 'Select models to run'}
         </button>
         <span className="text-[11px] text-gray-500">Pages preview in a sandbox with network access blocked. The model&apos;s HTML is stored exactly as it returned it.</span>
       </div>
     </form>
   );
 }
+
+// Mirrors the server's isRetryable: a failed run, or a finished one with a page that did not pass every check (summaries carry passed/total, not the HTML).
+const retryable = (run) => run.status === 'failed' || (run.status === 'complete' && run.pages.some((page) => page.passed !== page.total));
 
 function RunCard({ run, selected, compareFull, onToggle, onDelete, onResume }) {
   const [confirming, setConfirming] = useState(false);
@@ -198,7 +260,7 @@ function RunCard({ run, selected, compareFull, onToggle, onDelete, onResume }) {
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="break-all font-mono text-sm text-white">{run.modelId}</h3>
-          <p className="text-[11px] text-gray-500">{run.backend} · {timeAgo(run.createdAt)}</p>
+          <p className="text-[11px] text-gray-500">{runSource(run)} · {timeAgo(run.createdAt)}</p>
         </div>
         <StatusChip run={run} />
       </div>
@@ -212,9 +274,9 @@ function RunCard({ run, selected, compareFull, onToggle, onDelete, onResume }) {
         <button type="button" onClick={() => onToggle(run.id)} disabled={!selected && compareFull} aria-pressed={selected} className={`min-h-[44px] rounded border px-3 text-xs ${selected ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-300 hover:border-port-accent'} disabled:opacity-40`}>
           {selected ? 'In comparison' : 'Compare'}
         </button>
-        {run.status === 'failed' && (
-          <button type="button" onClick={resume} disabled={resuming} aria-label={`Resume the ${run.modelId} run`} className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent px-3 text-xs text-white hover:bg-port-accent/10 disabled:opacity-40">
-            <RotateCcw size={13} aria-hidden="true" /> Resume
+        {retryable(run) && (
+          <button type="button" onClick={resume} disabled={resuming} aria-label={`${run.status === 'failed' ? 'Resume' : 'Retry'} the ${run.modelId} run`} className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent px-3 text-xs text-white hover:bg-port-accent/10 disabled:opacity-40">
+            <RotateCcw size={13} aria-hidden="true" /> {run.status === 'failed' ? 'Resume' : 'Retry failed pages'}
           </button>
         )}
         {confirming ? (
@@ -252,7 +314,7 @@ function Comparison({ ids, onRemove }) {
             <div key={run.id} className="flex items-start justify-between gap-2 rounded-lg border border-port-border bg-port-card px-3 py-2">
               <div className="min-w-0">
                 <p className="break-all font-mono text-sm text-white">{run.modelId}</p>
-                <p className="text-[11px] text-gray-500">{run.backend}</p>
+                <p className="text-[11px] text-gray-500">{runSource(run)}</p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
                 <StatusChip run={run} />
@@ -336,7 +398,7 @@ export default function HtmlPages() {
         <PageHeader
           icon={GalleryVertical}
           title="HTML Pages"
-          subtitle="Ask local models for creative standalone web pages and compare them side by side. Every run is kept here as a reference."
+          subtitle="Ask local models or any provider for creative standalone web pages and compare them side by side. Every run is kept here as a reference."
         />
       )}
     >

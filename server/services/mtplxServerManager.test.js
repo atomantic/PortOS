@@ -4,7 +4,7 @@ import * as os from 'os';
 vi.mock('os', async (importOriginal) => ({ ...(await importOriginal()), release: vi.fn(() => '23.0.0') }));
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, installMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
+import { getMtplxServerStatus, startMtplxServer, stopMtplxServer, relaunchMtplxServerWithTuning, runOnMtplxCheckpoint, installMtplx, _resetMtplxServerStateForTests, ensureMtplxRunning, ensureMtplxProviderReady, isMtplxProvider, MTPLX_APP } from './mtplxServerManager.js';
 import { mtplxCachedModelIds } from './localCachedModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as platform from '../lib/platform.js';
@@ -453,6 +453,45 @@ describe('mtplxServerManager', () => {
       const launch = start.slice(start.indexOf('--') + 1);
       expect(launch).toEqual(['serve', '--port', expect.any(String), '--model', 'Example/Qwen-MTP']);
       expect(result.config.tuning).toEqual({});
+    });
+  });
+
+  describe('runOnMtplxCheckpoint', () => {
+    beforeEach(() => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
+      resetForTest({ logFiles: {
+        stdout: join(testLogDir, 'portos-mtplx-out.log'),
+        stderr: join(testLogDir, 'portos-mtplx-error.log'),
+      } });
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => {
+        if (pm2State?.status !== 'online') return { reachable: false, models: null };
+        const args = pm2State.args || [];
+        return { reachable: true, models: [`served-${args[args.indexOf('--model') + 1]}`] };
+      });
+    });
+    const servedModel = () => { const launch = execPm2Calls.filter((a) => a[0] === 'start').pop(); return launch[launch.indexOf('--model') + 1]; };
+
+    it('serves the asked-for pack while fn runs, then puts the previous pack back', async () => {
+      await startMtplxServer({ port: 8010 });
+      let during = null;
+      const out = await runOnMtplxCheckpoint('Example/Other-MTP', async (served) => { during = { served, model: servedModel() }; return 'done'; });
+      expect(out).toBe('done');
+      expect(during).toEqual({ served: 'served-Example/Other-MTP', model: 'Example/Other-MTP' });
+      expect(servedModel()).toBe('Example/Qwen-MTP');
+      expect(pm2State?.status).toBe('online');
+    });
+
+    it('does not relaunch when the pack is already serving', async () => {
+      await startMtplxServer({ model: 'Example/Qwen-MTP' });
+      const starts = execPm2Calls.filter((a) => a[0] === 'start').length;
+      const served = await runOnMtplxCheckpoint('Example/Qwen-MTP', async (id) => id);
+      expect(served).toBe('served-Example/Qwen-MTP');
+      expect(execPm2Calls.filter((a) => a[0] === 'start')).toHaveLength(starts);
+    });
+
+    it('stops MTPLX again afterwards when it was not running before, even when fn throws', async () => {
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', async () => { throw new Error('page failed'); })).rejects.toThrow('page failed');
+      expect(pm2State?.status).not.toBe('online');
     });
   });
 
