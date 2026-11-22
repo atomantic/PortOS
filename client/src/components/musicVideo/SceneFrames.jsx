@@ -4,7 +4,7 @@ import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoS
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneFrameReferenceLimitNotice from './SceneFrameReferenceLimitNotice.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import BlurCommitTextarea from '../ui/BlurCommitTextarea.jsx';
@@ -116,6 +116,14 @@ export default function SceneFrames({
     setInstruction('');
     setIncludeReferences(true);
   };
+  // Refine take sits in the take strip below the form, so opening it brings the instruction box into view and focus.
+  const refineInputRef = useRef(null);
+  useEffect(() => {
+    const input = refineInputRef.current;
+    if (!refining || !input) return;
+    input.focus({ preventScroll: true });
+    input.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [refining]);
   // A return shows the source shot's frame and does not render one of its own.
   const sourceWindow = resolveSourceTake(scene, project?.scenes);
   const frames = {
@@ -229,7 +237,7 @@ export default function SceneFrames({
             <p className="text-xs text-port-text-muted">Creates a new take. The frame in use stays selected.</p>
             <div className="flex min-w-0 gap-2">
               <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
-              <AutoSizeTextarea id={id(`${which}-refine`)} rows={2} value={instruction} onChange={(e) => setInstruction(e.target.value)}
+              <AutoSizeTextarea ref={refineInputRef} id={id(`${which}-refine`)} rows={2} value={instruction} onChange={(e) => setInstruction(e.target.value)}
                 placeholder="What to change, e.g. remove the hand"
                 className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
               <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
