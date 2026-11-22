@@ -57,7 +57,8 @@ import {
   getCodexAccountReadiness,
   startCodexChatGptLogin,
 } from '../services/codexAppServer.js';
-import { isLocalInstanceEndpoint, localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { isLocalInstanceEndpoint, localEndpointPort, localRuntimeForProvider, LOCAL_RUNTIMES } from '../lib/localProviderRuntime.js';
+import { expandPageToken } from '../lib/navManifest.js';
 import {
   isAuthoringOneShotProvider,
   isToolFreeOneShotProvider,
@@ -257,7 +258,7 @@ async function wakeManagedMtpxForRefresh(serviceSlug) {
   if (!saved || Object.keys(saved.raw ?? {}).length === 0) {
     console.log('🚄 MTPLX catalog refresh refused — the server is stopped and has no saved launch line');
     throw new ServerError(
-      'MTPLX is stopped and has no saved launch line — open Models → Runtimes to start it and save its launch line, then refresh again.',
+      expandPageToken('MTPLX is stopped and has no saved launch line — open the MTPLX card in {page} to start it and save its launch line, then refresh again.', LOCAL_RUNTIMES.mtplx),
       { status: 409, code: 'MTPLX_STOPPED' },
     );
   }
