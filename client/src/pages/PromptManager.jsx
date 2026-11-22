@@ -9,12 +9,14 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import StagesEditor from '../components/prompts/StagesEditor';
 import VariablesEditor from '../components/prompts/VariablesEditor';
 import JobSkillsEditor from '../components/prompts/JobSkillsEditor';
+import AgentSkillsEditor from '../components/prompts/AgentSkillsEditor';
 import { PROMPT_TABS, canonicalPromptsUrl } from '../components/prompts/promptTabs';
 
 const EDITORS = {
   stages: StagesEditor,
   variables: VariablesEditor,
   'job-skills': JobSkillsEditor,
+  'agent-skills': AgentSkillsEditor,
 };
 
 // The page keeps catalogue and editor side by side only while its own content
@@ -51,13 +53,14 @@ function PromptManagerTabs({ tab }) {
   const stage = searchParams.get('stage');
   const variable = searchParams.get('var');
   const skill = searchParams.get('skill');
+  const agentSkill = searchParams.get('agentSkill');
 
   // Opening a record lands on its editor. In the narrow layout the catalogue
   // that was scrolled through unmounts and the editor takes its place; without
   // this the scroll offset of the old, longer content can be kept.
   useEffect(() => {
     pageRef.current?.scrollTo?.({ top: 0 });
-  }, [pageRef, tab, stage, variable, skill]);
+  }, [pageRef, tab, stage, variable, skill, agentSkill]);
 
   // A clean editor has nothing to discard, so the question goes once the edit
   // is undone or saved.
@@ -66,7 +69,7 @@ function PromptManagerTabs({ tab }) {
   }, [dirtyLabel]);
 
   // The tab is a view toggle, so it replaces history; each tab's open record
-  // (`?stage=` / `?var=` / `?skill=`) rides along so a round-trip restores it.
+  // (`?stage=` / `?var=` / `?skill=` / `?agentSkill=`) rides along so a round-trip restores it.
   const switchTab = (next) => {
     setPendingTab(null);
     navigate(`/prompts/${next}${search}`, { replace: true });

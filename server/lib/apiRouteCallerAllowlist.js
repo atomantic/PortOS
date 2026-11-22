@@ -176,16 +176,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/ports/allocate',
     '/api/ports/scan',
     // docs/features/agent-skills.md (P5 surfaces): the Skill Registry routes, for agents and API callers.
-    '/api/skills',
-    '/api/skills/:ref/:action',
     '/api/skills/config',
-    '/api/skills/curator/run',
-    '/api/skills/curator/status',
-    '/api/skills/edit',
-    '/api/skills/ledger',
-    '/api/skills/ledger/:entryId/rollback',
     '/api/skills/manage',
-    '/api/skills/view',
     // scripts/ops/reconcile-maintenance-reservations.mjs confirms terminal runner ownership.
     '/api/system/maintenance/runner-owner/:agentId',
     '/api/universe-builder/:id/canon/backfill-descriptions',

@@ -124,6 +124,7 @@ const RAW_NAV_COMMANDS = [
   // route, and a pre-route `/prompts?tab=` link redirects onto it in the page.
   { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', navGroup: 'Agents', aliases: ['prompts', 'prompt-stages'], keywords: ['stage', 'template', 'prompt manager'] },
   { id: 'nav.settings.prompts.variables', path: '/prompts/variables', label: 'Prompt Variables', section: 'Settings', aliases: ['prompt-variables'], keywords: ['variable', 'snippet', 'prompt manager'] },
+  { id: 'nav.settings.prompts.agent-skills', path: '/prompts/agent-skills', label: 'Agent Skills', section: 'Settings', aliases: ['agent-skills', 'skill-curator', 'procedural-skills'], keywords: ['skill', 'curator', 'pin', 'lock', 'archive', 'rollback', 'agentskills', 'prompt manager'] },
   { id: 'nav.settings.prompts.job-skills', path: '/prompts/job-skills', label: 'Job Skills', section: 'Settings', aliases: ['job-skills', 'prompt-job-skills'], keywords: ['job skill', 'autonomous job', 'skill template', 'prompt manager'] },
   // The AI Providers page is three views over the composed model (#7567, epic
   // #7561): Presets (the stored records, the page's index), Harnesses (the
