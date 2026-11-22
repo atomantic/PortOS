@@ -51,7 +51,6 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | **Server devDependencies** | | | | |
 | `eslint` | — | REMOVED | Former cyclomatic complexity reporter | The report now computes classic scores from the Babel AST |
 | `vitest` | 1 | KEEP | test runner | |
-| `@vitest/coverage-v8` | 1 | KEEP | coverage | Paired with vitest |
 | **Client dependencies** | | | | |
 | `@dnd-kit/core` | 1 | KEEP | drag/drop | |
 | `@dnd-kit/sortable` | 1 | KEEP | drag/drop | |

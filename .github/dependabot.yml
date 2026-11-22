@@ -27,7 +27,6 @@ updates:
       vitest:
         patterns:
           - vitest
-          - "@vitest/coverage-v8"
       react:
         patterns:
           - react
