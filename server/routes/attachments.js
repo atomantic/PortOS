@@ -74,7 +74,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
 
   await unlinkGuarded(filepath);
 
-  console.log(`🗑️ Attachment deleted: ${safeFilename}`);
+  console.log(`🗑️ Attachment deleted`);
 
   res.json({ success: true, filename: safeFilename });
 })));

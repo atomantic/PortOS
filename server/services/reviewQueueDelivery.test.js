@@ -18,6 +18,7 @@ vi.mock('../lib/fileUtils.js', async (original) => makePathsProxy(await original
 }));
 
 import { claimActionDelivery, claimQueueDelivery } from './reviewQueueDelivery.js';
+import { getDomainAutonomyMode } from './cos/cosState.js';
 import { forwardNotification } from './telegramForward.js';
 import { listReviewQueueTriage, resetReviewQueueTriageStore } from './reviewQueueTriageStore.js';
 
@@ -50,6 +51,16 @@ describe('durable action delivery', () => {
     await forwardNotification(legacy, deps);
     await forwardNotification(legacy, deps);
     expect(sendMessage).toHaveBeenCalledTimes(4);
+  });
+
+  it('dry-run logging names the notification id and type, never its title', async () => {
+    getDomainAutonomyMode.mockResolvedValueOnce('dry-run');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await forwardNotification({ id: 'notif-1', type: 'agent_warning', title: 'Private diagnosis', metadata: {} }, { cachedForwardTypes: [], sendMessage: vi.fn() });
+    const lines = log.mock.calls.map((c) => c.join(' '));
+    log.mockRestore();
+    expect(lines.some((l) => l.includes('notif-1'))).toBe(true);
+    expect(lines.some((l) => l.includes('Private diagnosis'))).toBe(false);
   });
 
   it('claims once across tabs and reloads, ignores text revisions, and advances one generation only on escalation', async () => {

@@ -255,7 +255,7 @@ router.get('/downloads/:name', asyncHandler(async (req, res) => {
 router.delete('/downloads/:name', asyncHandler(async (req, res) => {
   const removed = await browserService.deleteDownload(req.params.name);
   if (!removed) throw new ServerError('File not found', { status: 404 });
-  console.log(`🗑️ Browser download deleted: ${req.params.name}`);
+  console.log(`🗑️ Browser download deleted`);
   res.json({ success: true });
 }));
 
