@@ -39,11 +39,13 @@ function bindingNames(pattern) {
 }
 
 // Lazy so `@babel/parser` stays out of the boot and ordinary-request closures.
-// Error recovery keeps recoverable faults (a redeclared const) on the AST's
-// `errors`: writers refuse them, best-effort discovery reads past them.
+// Error recovery keeps recoverable faults on the AST's `errors`. Writers refuse
+// any of them; discovery reads past only a redeclaration (the name itself is
+// never resolved), because other recovered trees are partial guesses.
 function parseProgram(content) {
   const file = require('@babel/parser').parse(content, { sourceType: 'unambiguous', errorRecovery: true });
-  return { ast: file.program, recovered: file.errors?.length > 0 };
+  const errors = file.errors || [];
+  return { ast: file.program, recovered: errors.length > 0, readable: errors.every(error => error.reasonCode === 'VarRedeclaration') };
 }
 
 // The root binding a write lands on, and whether it writes through a member.
@@ -532,8 +534,9 @@ export function discoverEcosystemConfig(content, { currentUsername = defaultUser
   try {
     parsed = parseProgram(content);
   } catch {
-    return { processes: [], pm2Home: null, portsEditable: false };
+    parsed = null;
   }
+  if (!parsed?.readable) return { processes: [], pm2Home: null, portsEditable: false };
   const pm2Home = extractPm2Home(parsed.ast, content, currentUsername);
   const strict = analyzeProgram(parsed, content);
   const processes = (strict ?? discoverLenient(parsed.ast, content)).map(publicProcess);

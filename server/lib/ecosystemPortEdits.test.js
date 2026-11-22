@@ -58,9 +58,20 @@ module.exports = { apps: [app] };`;
       .toBe('/srv/example-user/${process.env.SUFFIX}');
   });
 
-  it('discovers nothing from source that cannot be parsed', () => {
-    expect(discoverEcosystemConfig('module.exports = { apps: [ { name: "x" ')).toEqual({
-      processes: [], pm2Home: null, portsEditable: false,
-    });
+  it('never resolves a binding declared after the export that reads it', () => {
+    const content = `module.exports = { apps: [{ name: NAME, env: { PORT } }, { name: 'example-worker', env: { PORT } }] };
+var PORT = 6100;
+const NAME = 'example-api';`;
+    const result = discoverEcosystemConfig(content);
+    expect(result.processes).toEqual([
+      { name: 'example-worker', ports: {}, port: null, cwd: null, usesVite: false },
+    ]);
+  });
+
+  it.each([
+    'module.exports = { apps: [ { name: "x" ',
+    "const PM2_HOME = '/srv/pm2'; module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] }; let let = 1;",
+  ])('discovers nothing from source that is not fully parseable: %s', (content) => {
+    expect(discoverEcosystemConfig(content)).toEqual({ processes: [], pm2Home: null, portsEditable: false });
   });
 });
