@@ -51,12 +51,13 @@ const ALLOWED = {
 
 describe('stale-response tests flush before asserting absence', () => {
   const files = trackedTestFiles(CLIENT_ROOT).filter((file) => /\.test\.jsx?$/.test(file));
-  const found = files.flatMap((file) =>
-    findVacuousAbsenceWaits(readText(join(CLIENT_ROOT, file))).map((title) => `${file} :: ${title}`));
+  let found;
+  const findings = () => (found ??= files.flatMap((file) =>
+    findVacuousAbsenceWaits(readText(join(CLIENT_ROOT, file))).map((title) => `${file} :: ${title}`)));
 
   it('has no un-flushed absence waitFor after a bare resolve', () => {
     expect(files.length).toBeGreaterThan(100);
-    const violations = found.filter((key) => !(key in ALLOWED));
+    const violations = findings().filter((key) => !(key in ALLOWED));
     expect(
       violations,
       'waitFor checks synchronously first, so an absence assertion right after a bare resolve passes '
@@ -67,7 +68,7 @@ describe('stale-response tests flush before asserting absence', () => {
   });
 
   it('has no stale allowlist entry', () => {
-    const seen = new Set(found);
+    const seen = new Set(findings());
     expect(Object.keys(ALLOWED).filter((key) => !seen.has(key))).toEqual([]);
   });
 });
