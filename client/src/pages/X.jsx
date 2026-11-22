@@ -74,6 +74,7 @@ export default function XPage() {
   const [draftBody, setDraftBody] = useState('');
   const selectedLoadRef = useRef({ posts: 0, drafts: 0 });
   const accountsLoadRef = useRef(0);
+  const accountsLoadedRef = useRef(false);
   const currentAccountIdRef = useRef(accountId);
   const selectedAccountIdRef = useRef(null);
   const savedAccountRef = useRef(emptyAccount);
@@ -125,10 +126,13 @@ export default function XPage() {
     try {
       const result = await getXAccounts({ silent: true });
       if (accountsLoadRef.current !== requestId) return;
+      accountsLoadedRef.current = true;
       setAccountsReadError('');
       setAccounts(result.accounts || []);
     } catch (err) {
       if (accountsLoadRef.current !== requestId) return;
+      // A silent refresh keeps a list already on screen; the next socket event retries it.
+      if (refresh && accountsLoadedRef.current) return;
       setAccountsReadError(err.message || 'Could not load X accounts.');
     } finally {
       if (accountsLoadRef.current === requestId) setLoading(false);
@@ -150,7 +154,9 @@ export default function XPage() {
       setRead({ status: 'ready', error: '' });
     } catch (err) {
       if (selectedLoadRef.current[kind] !== requestId || currentAccountIdRef.current !== requestedAccountId) return;
-      setRead({ status: 'error', error: err.message || `Could not load X ${kind}.` });
+      const message = err.message || `Could not load X ${kind}.`;
+      // A silent reload keeps items already shown; the error replaces only a read with no data.
+      setRead((previous) => (refresh && previous.status === 'ready' ? previous : { status: 'error', error: message }));
     }
   }, [accountId]);
 

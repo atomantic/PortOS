@@ -277,6 +277,29 @@ describe('X page', () => {
     expect(screen.getByRole('heading', { name: 'Second X' })).toBeInTheDocument();
   });
 
+  it('keeps loaded drafts on screen when a silent x:changed reload fails', async () => {
+    api.getXDrafts.mockResolvedValueOnce({ drafts: [{ id: 'kept', body: 'Already loaded draft', state: 'draft' }] });
+    renderPage(`/x/${account.id}/drafts`);
+    expect(await screen.findByText('Already loaded draft')).toBeInTheDocument();
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXDrafts.mockRejectedValueOnce(new Error('Drafts blip'));
+    await act(async () => onChanged({ accountId: account.id }));
+    expect(api.getXDrafts).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Already loaded draft')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps loaded accounts on screen when a silent x:changed accounts reload fails', async () => {
+    renderPage('/x');
+    expect(await screen.findByRole('heading', { name: account.label })).toBeInTheDocument();
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'x:changed');
+    api.getXAccounts.mockRejectedValueOnce(new Error('Accounts blip'));
+    await act(async () => onChanged());
+    expect(api.getXAccounts).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('heading', { name: account.label })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('drops a pending x:changed drafts reload that resolves after the account was switched', async () => {
     const user = userEvent.setup();
     const secondAccount = { ...account, id: 'second-account', username: 'second_user' };
