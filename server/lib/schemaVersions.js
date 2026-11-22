@@ -5,116 +5,53 @@
  * Bump it for (a) a storage layout change (ship the matching `scripts/migrations/NNN-…js` too) or (b) an additive record-shape change a not-yet-upgraded peer would strip on round-trip.
  * The number flows through every outbound `portosMeta.schemaVersions`; receivers reject ahead-mismatches (sender too new) or behind-mismatches (sender too old for a forward-only field).
  * Absent categories default to 0; live record pushes also enforce the per-category minimums below.
+ *
+ * The NUMBERS live in the domain slices under `./schemaVersions/` (#17460): a bump edits only its slice, so CI selects the related tests instead of
+ * escalating to the full matrix that a change to this composer still triggers (`scripts/lib/ciPlanRules.js`). This file owns the category registry
+ * and its shipped key order (`syncOrchestrator` compares a stored snapshot by `JSON.stringify`), so a NEW category is added here and in its slice.
  */
 
 import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
+import { CREATIVE_MEDIA_SCHEMA_VERSIONS } from './schemaVersions/creativeMedia.js';
+import { MUSIC_SCHEMA_VERSIONS } from './schemaVersions/music.js';
+import { PLATFORM_SCHEMA_VERSIONS } from './schemaVersions/platform.js';
+import { STORY_CANON_SCHEMA_VERSIONS } from './schemaVersions/storyCanon.js';
 
+// The gate is per-category (`scopeVersionDiff`): a bump blocks only transfers of that category.
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
-  // Numeric-only peer wire payload for app quality (GET /api/apps/quality-federation); the .quality.json file format is versioned separately.
-  appQuality: 1,
-  // Memory pull capability; each receiver keeps its own monotonic history.
-  memoryHistory: 1,
-  // Universe canon layout (characters, places, objects, styles, mood-board link); v22 = place `world` map.
-  universes: 22,
-  // Pipeline issues; v7 omits stage run history, which older receivers would erase on overwrite.
-  pipelineIssues: 7,
-  // Pipeline series record (arc, styleGuide, characterArcs, exportSettings); v14 = author-owned `arc.seriesDesign`.
-  pipelineSeries: 14,
-  // Media collections; v2 = per-item `removedItems` removal records.
-  mediaCollections: 2,
-  // Video history snapshot rows; v1 = Make-primary designation (`primaryInstanceId`/`primaryAt`).
-  videoHistory: 1,
-  // Card decks; v2 = deck-level `cardOrientation` and `cardOrientationPrompt`.
-  decks: 2,
-  // Storyboards (boards, beats, panels, takes); v15 = panel `linkMedia`.
-  storyboards: 15,
-  // Author personas (per-record push).
-  authors: 1,
-  // Artists; v2 = press and submission profile.
-  artists: 2,
-  // Albums.
-  albums: 1,
-  // Tracks and render history; v13 = `sunoSongId` on takes.
-  tracks: 13,
-  // Creative ingredient catalog (ingredients, scraps, relations, tags, media, user types); live rows need an exact match, tombstones do not; v17 = place/object `size`.
-  catalog: 17,
-  // Story Builder sessions, synced only when `sync: true`.
-  storyBuilder: 1,
-  // FableLoom story graph; v16 = Google backend pins in `renderSettings`.
-  fableLoom: 16,
-  // Creative Director projects; v10 = validated assembled cuts and retained cut history.
-  creativeDirectorProjects: 10,
-  // Mood boards; v2 = `video` board items.
-  moodBoards: 2,
-  // Writers Room works (manifest, draft-version metadata, bible siblings); draft prose rides its own body manifest.
-  writersRoomWorks: 1,
-  // Writers Room folders (body-less, tombstoned).
-  writersRoomFolders: 1,
-  // Writers Room exercises (body-less).
-  writersRoomExercises: 1,
-  // Music video project body (LWW whole); v64 = last MIDI transcription failure.
-  musicVideoProjects: 64,
-  // Creative Commission feedback reactions (body-less, tombstoned).
-  commissionFeedback: 1,
-  // Creative Commission brief (schedule and runs stay machine-local); v9 = Google backend pins in `generation`.
-  creativeCommissions: 9,
-  // Media-library manifest envelope (receiver-pull; ahead senders are skipped, not rejected).
-  mediaLibrary: 1,
-  // CoS history archive manifest envelope (receiver-pull; ahead senders are skipped).
-  cosHistory: 1,
-  // CoS task queues and claim metadata (receiver-pull, claim-aware merge); v13 = one spawn counter and no spawn-budget proof metadata; a v12 peer would hold every such task (#16807).
-  cosTasks: 13,
-  // Eidoverse foundation offering envelope and withdrawal tombstones (receiver-pull); v3 = `tombstones`.
-  eidoverseFoundations: 3,
-  // Meatspace daily-log snapshot; v2 = identity-keyed blood, epigenetic and eye rows with `rowTombstones`.
-  meatspace: 2,
-  // Paired-peer credential handshake (`X-PortOS-Peer-Auth`), advertised in health details.
-  peerAuth: 1,
-  // Image `createdAt` on push asset manifests (capability, advertised in health details).
-  peerAssetStamps: 1,
-  // The gate is per-category (`scopeVersionDiff`): a bump blocks only transfers of that category.
+  appQuality: PLATFORM_SCHEMA_VERSIONS.appQuality,
+  memoryHistory: PLATFORM_SCHEMA_VERSIONS.memoryHistory,
+  universes: STORY_CANON_SCHEMA_VERSIONS.universes,
+  pipelineIssues: STORY_CANON_SCHEMA_VERSIONS.pipelineIssues,
+  pipelineSeries: STORY_CANON_SCHEMA_VERSIONS.pipelineSeries,
+  mediaCollections: CREATIVE_MEDIA_SCHEMA_VERSIONS.mediaCollections,
+  videoHistory: CREATIVE_MEDIA_SCHEMA_VERSIONS.videoHistory,
+  decks: CREATIVE_MEDIA_SCHEMA_VERSIONS.decks,
+  storyboards: CREATIVE_MEDIA_SCHEMA_VERSIONS.storyboards,
+  authors: STORY_CANON_SCHEMA_VERSIONS.authors,
+  artists: MUSIC_SCHEMA_VERSIONS.artists,
+  albums: MUSIC_SCHEMA_VERSIONS.albums,
+  tracks: MUSIC_SCHEMA_VERSIONS.tracks,
+  catalog: STORY_CANON_SCHEMA_VERSIONS.catalog,
+  storyBuilder: STORY_CANON_SCHEMA_VERSIONS.storyBuilder,
+  fableLoom: CREATIVE_MEDIA_SCHEMA_VERSIONS.fableLoom,
+  creativeDirectorProjects: CREATIVE_MEDIA_SCHEMA_VERSIONS.creativeDirectorProjects,
+  moodBoards: CREATIVE_MEDIA_SCHEMA_VERSIONS.moodBoards,
+  writersRoomWorks: STORY_CANON_SCHEMA_VERSIONS.writersRoomWorks,
+  writersRoomFolders: STORY_CANON_SCHEMA_VERSIONS.writersRoomFolders,
+  writersRoomExercises: STORY_CANON_SCHEMA_VERSIONS.writersRoomExercises,
+  musicVideoProjects: MUSIC_SCHEMA_VERSIONS.musicVideoProjects,
+  commissionFeedback: CREATIVE_MEDIA_SCHEMA_VERSIONS.commissionFeedback,
+  creativeCommissions: CREATIVE_MEDIA_SCHEMA_VERSIONS.creativeCommissions,
+  mediaLibrary: PLATFORM_SCHEMA_VERSIONS.mediaLibrary,
+  cosHistory: PLATFORM_SCHEMA_VERSIONS.cosHistory,
+  cosTasks: PLATFORM_SCHEMA_VERSIONS.cosTasks,
+  eidoverseFoundations: PLATFORM_SCHEMA_VERSIONS.eidoverseFoundations,
+  meatspace: PLATFORM_SCHEMA_VERSIONS.meatspace,
+  peerAuth: PLATFORM_SCHEMA_VERSIONS.peerAuth,
+  peerAssetStamps: PLATFORM_SCHEMA_VERSIONS.peerAssetStamps,
 });
-
-// First wire version guaranteed to round-trip each persisted render mode. Agy
-// (commission v3) and Reactor (commission v4 / loom v6) landed between bumps,
-// so only the following version guarantees every build understands them.
-export const RENDER_PIN_SENDER_VERSIONS = Object.freeze({
-  creativeCommissions: Object.freeze({
-    image: Object.freeze({ local: 3, codex: 3, grok: 3, agy: 4, fal: 5, runway: 6, higgsfield: 8, google: 9 }),
-    video: Object.freeze({ local: 3, grok: 3, fal: 5, reactor: 5, runway: 5, gemini: 7, higgsfield: 8, google: 9 }),
-  }),
-  fableLoom: Object.freeze({
-    image: Object.freeze({ local: 6, codex: 6, grok: 6, agy: 6, fal: 10, runway: 11, higgsfield: 15, google: 16 }),
-    video: Object.freeze({ local: 6, grok: 6, fal: 10, reactor: 7, runway: 10, gemini: 14, higgsfield: 15, google: 16 }),
-  }),
-});
-
-/** Restore a mode and its paired model only when the sender cannot represent the local pin. */
-export function preserveLegacyRenderPins(category, senderVersion, remote, local) {
-  let merged = remote;
-  const commission = category === 'creativeCommissions';
-  const fieldVersion = commission ? 3 : 6;
-  for (const kind of ['image', 'video']) {
-    const mode = `${kind}Mode`;
-    const value = local[mode];
-    const versions = RENDER_PIN_SENDER_VERSIONS[category][kind];
-    // Before commission v3 the whole pair was absent, including a standalone
-    // model override. Unknown abilities retain their raw field shapes.
-    const requiredVersion = typeof value === 'string' && Object.hasOwn(versions, value) ? versions[value] : fieldVersion;
-    if (senderVersion >= requiredVersion) continue;
-    const model = commission ? `${kind}ModelId` : `${kind}Model`;
-    for (const key of [mode, model]) {
-      // A commission's winning ability determines which slots exist. A loom
-      // always supports preferences, even when its incoming settings omit all.
-      if (Object.hasOwn(local, key) && (!commission || Object.hasOwn(remote, key))) {
-        if (merged === remote) merged = { ...remote };
-        merged[key] = local[key];
-      }
-    }
-  }
-  return merged;
-}
 
 /**
  * Map a federated record KIND to the `PORTOS_SCHEMA_VERSIONS` categories its storage layout touches. The gate only checks categories being written.
@@ -170,8 +107,7 @@ export const RECORD_SCHEMA_MIN_SENDER_VERSIONS = Object.freeze({
  */
 export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
 
-/**
- /** Lazy-read the PortOS version from the ROOT package.json (so a pull-and-restart picks it up); '0.0.0' when PATHS.root has none (tests). Mirrors `updateChecker.getCurrentVersion`. */
+/** Lazy-read the PortOS version from the ROOT package.json (so a pull-and-restart picks it up); '0.0.0' when PATHS.root has none (tests). Mirrors `updateChecker.getCurrentVersion`. */
 export async function getPortosVersion() {
   const pkgPath = join(PATHS.root, 'package.json');
   const raw = await tryReadFile(pkgPath);
@@ -181,10 +117,9 @@ export async function getPortosVersion() {
 }
 
 /**
- /**
-  * Build the `portosMeta` envelope every outbound sync payload carries (`{ portosVersion, schemaVersions }`). Receivers feed `schemaVersions` to
-  * `compareSchemaVersions(sender, PORTOS_SCHEMA_VERSIONS)`; `portosVersion` is a UI label only, since the on-disk shape is what the gate runs on.
-  */
+ * Build the `portosMeta` envelope every outbound sync payload carries (`{ portosVersion, schemaVersions }`). Receivers feed `schemaVersions` to
+ * `compareSchemaVersions(sender, PORTOS_SCHEMA_VERSIONS)`; `portosVersion` is a UI label only, since the on-disk shape is what the gate runs on.
+ */
 export async function buildPortosMeta(overrides = {}) {
   const portosVersion = await getPortosVersion();
   return {
@@ -194,13 +129,12 @@ export async function buildPortosMeta(overrides = {}) {
 }
 
 /**
- /**
-  * Compare a peer's schemaVersions against local expectations, returning a structured diff so callers can say WHICH category mismatched and which way.
-  *   ahead[]  - SENDER newer than RECEIVER; the payload can't be safely applied.
-  *   behind[] - SENDER older; the sanitizer can usually backfill but forward-only contracts may need an upgrade, so callers decide whether to gate.
-  *   compatible - `true` only when neither list has entries.
-  * Absent or invalid entries compare as zero; a legacy sender without `portosMeta` is behind every versioned category.
-  */
+ * Compare a peer's schemaVersions against local expectations, returning a structured diff so callers can say WHICH category mismatched and which way.
+ *   ahead[]  - SENDER newer than RECEIVER; the payload can't be safely applied.
+ *   behind[] - SENDER older; the sanitizer can usually backfill but forward-only contracts may need an upgrade, so callers decide whether to gate.
+ *   compatible - `true` only when neither list has entries.
+ * Absent or invalid entries compare as zero; a legacy sender without `portosMeta` is behind every versioned category.
+ */
 export function compareSchemaVersions(senderVersions = {}, receiverVersions = PORTOS_SCHEMA_VERSIONS) {
   const sender = senderVersions && typeof senderVersions === 'object' ? senderVersions : {};
   const receiver = receiverVersions && typeof receiverVersions === 'object' ? receiverVersions : {};
@@ -233,11 +167,10 @@ export function catalogEnvelopeHasLiveRows(envelope) {
 }
 
 /**
- /**
-  * Restrict a comparator result to the categories actually being transferred. `compareSchemaVersions` walks the UNION for diagnostics, but the GATE must be per-category
-  * so an unrelated bumped category can't block this transfer (and the scoped `ahead` doesn't mis-attribute a gap).
-  * Non-array `categories` returns the diff unchanged (whole-payload gate); an empty array means nothing can block.
-  */
+ * Restrict a comparator result to the categories actually being transferred. `compareSchemaVersions` walks the UNION for diagnostics, but the GATE must be per-category
+ * so an unrelated bumped category can't block this transfer (and the scoped `ahead` doesn't mis-attribute a gap).
+ * Non-array `categories` returns the diff unchanged (whole-payload gate); an empty array means nothing can block.
+ */
 export function scopeVersionDiff(diff = {}, categories) {
   if (!Array.isArray(categories)) return diff;
   const allow = new Set(categories);
@@ -247,10 +180,9 @@ export function scopeVersionDiff(diff = {}, categories) {
 }
 
 /**
- /**
-  * Human-readable explanation of a comparator result (log lines, UI badge tooltip, peer-sync 409), kept in one place so they describe the gap identically:
-  *   formatVersionGap({ ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }] }) → 'sender ahead of receiver on universes (v5 vs v4)'
-  */
+ * Human-readable explanation of a comparator result (log lines, UI badge tooltip, peer-sync 409), kept in one place so they describe the gap identically:
+ *   formatVersionGap({ ahead: [{ category: 'universes', senderV: 5, receiverV: 4 }] }) → 'sender ahead of receiver on universes (v5 vs v4)'
+ */
 export function formatVersionGap({ ahead = [], behind = [] } = {}) {
   const parts = [];
   if (ahead.length) {

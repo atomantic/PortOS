@@ -1047,6 +1047,24 @@ describe('CI test impact planner', () => {
     }
   });
 
+  // #17460: routine version bumps edit a domain slice, never the composer above.
+  it('scopes a schema-version domain slice to its related suites and the registry contract test', () => {
+    const slice = 'server/lib/schemaVersions/music.js';
+    const contract = 'server/lib/schemaVersions.test.js';
+    const plan = buildCiTestPlan([slice], {
+      trackedFiles: [...TRACKED, slice, contract],
+      // collectPlanInputs finds the contract test because it names the slice's basename.
+      pathContractTests: { [slice]: [contract] },
+    });
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toEqual([slice]);
+    expect(plan.server.files).toContain(contract);
+    expect(plan.client.mode).toBe('skip');
+    expect(plan.windowsMode).toBe('skip');
+  });
+
   it('scopes an App.jsx change only when its diff contains route declarations', () => {
     const routeDiff = [
       'diff --git a/client/src/App.jsx b/client/src/App.jsx',

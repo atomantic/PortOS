@@ -37,7 +37,7 @@ import { draftStoryMember, joinStory, listCatalogStories } from '../services/cat
 import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../services/musicVideo/catalogCast.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalog/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { STORY_CANON_SCHEMA_VERSIONS } from '../lib/schemaVersions/storyCanon.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
 import catalogPrimitivesRouter from './catalogPrimitives.js';
@@ -1147,7 +1147,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
   const changes = await catalogSync.getChangesSince(since, limit);
   res.json({
     ...changes,
-    portosMeta: { schemaVersions: { catalog: PORTOS_SCHEMA_VERSIONS.catalog } },
+    portosMeta: { schemaVersions: { catalog: STORY_CANON_SCHEMA_VERSIONS.catalog } },
   });
 }));
 
