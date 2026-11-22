@@ -370,8 +370,8 @@ export function effortLevelsForProvider(provider, model = null) {
   if (harness === 'opencode' || isOpencodeLocalProvider(provider)) {
     if (!isOpencodeLocalProvider(provider)) return null;
     // MTPLX applies the model's own chat template, so a model whose template takes a thinking
-    // level (Inkling) gets its full ladder, not the portable three rungs; the level rides to the
-    // template as `chat_template_kwargs.reasoning_effort` (`buildAgentGeneration`).
+    // level (Inkling) gets its full ladder, not the portable three rungs; MTPLX hands OpenCode's
+    // `reasoning_effort` to that template.
     const templateLevels = provider.mtplxBacked === true ? ollamaThinkingLevelsForModel(model) : null;
     return templateLevels ?? opencodeEffortLevelsForModel(model);
   }
