@@ -43,7 +43,6 @@ const TRACKED_UNLISTENED_EVENTS = [
   'health:xml:complete',
   'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:started',
   'provider:error',
-  'x:changed', // no client listener yet: #17314
 ];
 const isAckOrTemplate = (event) => /:(?:un)?subscribed$/.test(event) || /[{}]/.test(event);
 
