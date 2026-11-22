@@ -188,6 +188,8 @@ describe('HtmlPages', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete run' }));
     await waitFor(() => expect(deleteHtmlPageRun).toHaveBeenCalledWith('r1', expect.anything()));
     await waitFor(() => expect(screen.queryByText(/2 of 2 pages pass every check/)).not.toBeInTheDocument());
-    expect(screen.getByLabelText('query')).not.toHaveTextContent('compare');
+    // The router commits location inside startTransition, which can land after the urgent list update
+    // because the delete resolves outside act(); wait for it rather than reading it synchronously.
+    await waitFor(() => expect(screen.getByLabelText('query')).not.toHaveTextContent('compare'));
   });
 });
