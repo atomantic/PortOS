@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router';
 import { Check, GalleryVertical, LoaderCircle, Play, Plus, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
 import PageHeader from '../components/PageHeader';
+import PageLayout from '../components/PageLayout';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
@@ -313,34 +314,38 @@ export default function HtmlPages() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5">
-      <PageHeader
-        icon={GalleryVertical}
-        title="HTML Pages"
-        subtitle="Ask local models for creative standalone web pages and compare them side by side. Every run is kept here as a reference."
-      />
+    <PageLayout
+      header={(
+        <PageHeader
+          icon={GalleryVertical}
+          title="HTML Pages"
+          subtitle="Ask local models for creative standalone web pages and compare them side by side. Every run is kept here as a reference."
+        />
+      )}
+    >
+      <div className="mx-auto max-w-7xl space-y-5">
+        {catalogError
+          ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
+          : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton label="Loading installed models" />)}
 
-      {catalogError
-        ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
-        : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton label="Loading installed models" />)}
+        {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
 
-      {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
-
-      <section>
-        <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h2>
-        {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
-        {!error && loading && <PageSkeleton label="Loading runs" />}
-        {!error && !loading && runs && runs.length === 0 && (
-          <EmptyState icon={GalleryVertical} title="No runs yet" message="Select one or more models above and run the brief." />
-        )}
-        {!error && runs && runs.length > 0 && (
-          <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {runs.map((run) => (
-              <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} />
-            ))}
-          </ul>
-        )}
-      </section>
-    </div>
+        <section>
+          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h2>
+          {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
+          {!error && loading && <PageSkeleton label="Loading runs" />}
+          {!error && !loading && runs && runs.length === 0 && (
+            <EmptyState icon={GalleryVertical} title="No runs yet" message="Select one or more models above and run the brief." />
+          )}
+          {!error && runs && runs.length > 0 && (
+            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {runs.map((run) => (
+                <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} />
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </PageLayout>
   );
 }
