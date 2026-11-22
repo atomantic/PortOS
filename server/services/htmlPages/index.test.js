@@ -33,7 +33,8 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
 }));
 
 import { generate } from '../modelCapabilityTests.js';
-import { listRuns, listSelectableModels, readRun, removeRun, startRuns } from './index.js';
+import { listActiveRenders } from '../renderActivity.js';
+import { listRuns, listSelectableModels, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
 const model = { backend: 'ollama', modelId: 'example-coder:7b' };
@@ -160,5 +161,56 @@ describe('interrupted and deleted runs', () => {
     await vi.waitFor(() => expect(store.get(queued.id).deleted).toBe(true));
     expect(store.get(queued.id).pages).toHaveLength(0);
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a queued or generating run in Live activity until it settles, so the updater waits for it', async () => {
+    let release;
+    generate.mockImplementation(() => new Promise((resolve) => { release = () => resolve({ text: goodPage }); }));
+    const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
+    expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'html-pages', noun: 'HTML pages run', to: '/html-pages' })]);
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+    expect((await readRun(queued.id)).status).toBe('generating');
+    release();
+    await settled(queued.id);
+    await vi.waitFor(() => expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0));
+  });
+});
+
+describe('resumeRun', () => {
+  const cutOff = (pages) => store.set('cut', {
+    id: 'cut', ...model, pageCount: 2, themes: PAGES, prompts: ['first prompt', 'second prompt'], status: 'generating',
+    progress: { done: pages.length, total: 2 }, pages, detail: null, error: null, deleted: false,
+  });
+
+  it('re-queues a run a restart cut off from its first unfinished page, with the prompts it recorded', async () => {
+    cutOff([{ theme: PAGES[0], html: goodPage }]);
+    expect((await readRun('cut')).status).toBe('failed');
+    generate.mockResolvedValue({ text: goodPage });
+    const resumed = await resumeRun('cut');
+    expect(resumed).toMatchObject({ status: 'queued', error: null, progress: { done: 1, total: 2 } });
+    const run = await settled('cut');
+    expect(run.status).toBe('complete');
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0][0].prompt).toBe('second prompt');
+    expect(run.pages.map((p) => p.theme)).toEqual(PAGES);
+  });
+
+  it('redoes a page that came back without HTML and every page after it', async () => {
+    cutOff([{ theme: PAGES[0], html: '', error: 'model server went away' }, { theme: PAGES[1], html: goodPage }]);
+    generate.mockResolvedValue({ text: goodPage });
+    await resumeRun('cut');
+    const run = await settled('cut');
+    expect(generate.mock.calls.map(([args]) => args.prompt)).toEqual(['first prompt', 'second prompt']);
+    expect(run.pages.every((p) => p.html === goodPage)).toBe(true);
+  });
+
+  it('refuses a complete run and a run that is still live', async () => {
+    generate.mockResolvedValue({ text: goodPage });
+    const [done] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
+    await expect(resumeRun(done.id)).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_RUN_ACTIVE' });
+    await settled(done.id);
+    await vi.waitFor(() => expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0));
+    await expect(resumeRun(done.id)).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_RUN_NOT_RESUMABLE' });
+    expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0);
   });
 });
