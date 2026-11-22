@@ -493,6 +493,8 @@ jobs:
     if: fromJSON(needs.impact.outputs.plan).browser
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
     strategy:
       # Keep every shard's evidence if another fails; CI Gate requires all.
       fail-fast: false
@@ -531,14 +533,15 @@ jobs:
         with:
           setup-node: 'false'
 
-      # The browser profile is part of every per-test memo key, so a smoke
-      # verdict never stands in for a full one.
+      # Smoke uses both trusted full-run lineages because its shard owners
+      # differ. Per-test keys still require compatible inputs and coverage.
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0' }}
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
@@ -551,7 +554,6 @@ jobs:
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
-          PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           CI_TEST_MODE: files
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_CI_BROWSER_OWNER: browser
