@@ -25,6 +25,8 @@ describe('rejecting a take versus marking it bad', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Bad' })[1]);
     expect(onMark).toHaveBeenCalledWith(scene.takes[1], 'bad');
     rerender(<SceneTakeStrip scene={scene} kind="image" marks={{ 'image:b.png': 'bad' }} onMark={onMark} />);
+    // The pressed toggle carries the mark; the frame itself wears no Bad label.
+    expect(screen.queryByText('Bad', { selector: 'span' })).toBeNull();
     const toggle = screen.getAllByRole('button', { name: 'Bad' })[1];
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(toggle);
