@@ -435,7 +435,8 @@ export async function recoverInterruptedStoryboardNodes() {
         }
       }
     }).catch((err) => {
-      if (err?.code !== 'NOT_FOUND') throw err;
+      // One unreadable board must not leave the rest locked in flight.
+      if (err?.code !== 'NOT_FOUND') console.error(`❌ Storyboard ${raw.id} run recovery failed: ${err.message}`);
     });
   }
   if (recovered) console.log(`🎬 Recovered ${recovered} interrupted storyboard panel run(s)`);

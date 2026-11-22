@@ -419,9 +419,9 @@ export const runPostRouteSequence = ({
     .then(whileRunning(timed('mediaQueue', () => initMediaJobQueue({ deferCompletionRecovery: true }))))
     .then(whileRunning(timed('lora', () => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))))
     .then(whileRunning(initMediaJobDependentHooks))
-    .then(whileRunning(() => {
-      bestEffort(recoverStoryboardRuns(), logFailure('Storyboard run recovery failed'));
-    }))
+    // Awaited: recovery and the completion hooks both rewrite whole boards, so
+    // the hooks must not arm until recovery has finished its saves.
+    .then(whileRunning(() => bestEffort(recoverStoryboardRuns(), logFailure('Storyboard run recovery failed'))))
     .then(whileRunning(() => {
       // Recovery may wait behind a backup cut; arm it without blocking boot.
       resumeMediaJobCompletions();
