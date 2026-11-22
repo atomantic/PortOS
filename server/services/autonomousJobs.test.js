@@ -49,6 +49,15 @@ vi.mock('./worktreeManager.js', () => ({
   cleanupOrphanedWorktrees: vi.fn().mockResolvedValue(0)
 }))
 
+// The daily job's merged-branch retirement (#17377). Mocked at the entry point:
+// branchReconcile.test.js pins the holds behind retireMergedCheckouts itself.
+vi.mock('./branchReconcile.js', async () => ({
+  buildActiveOwnerIds: (await vi.importActual('./branchRetirementDecision.js')).buildActiveOwnerIds,
+  retireMergedCheckouts: vi.fn(async () => ({ cleaned: [], skipped: [], inFlight: [] }))
+}))
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: vi.fn(async () => []) }))
+vi.mock('./prWatcher.js', () => ({ readPendingMergePrs: (app) => app.pendingMergePrs }))
+
 vi.mock('./cos/cosAgentRepository.js', () => ({ listStoredAgentStatuses: vi.fn(async () => []) }))
 vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([])
@@ -84,6 +93,9 @@ import { cosEvents } from './cos/cosEvents.js'
 import { checkAndPrompt } from './autobiography.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees } from './worktreeManager.js'
 import { getActiveAgentIds } from './agent/agentState.js'
+import { retireMergedCheckouts } from './branchReconcile.js'
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnershipState.js'
+import { resolveRetirementApp } from './retirementAppScope.js'
 
 describe('autonomousJobs', () => {
   const mockJobsData = {
@@ -1335,6 +1347,72 @@ describe('autonomousJobs', () => {
       await expect(agentDataCleanup()).resolves.toMatchObject({ cleaned: 0, mergedReaped: 0, worktreesReaped: 0 })
       expect(reapMergedWorktrees).not.toHaveBeenCalled()
       expect(cleanupOrphanedWorktrees).not.toHaveBeenCalled()
+    })
+  })
+
+  // Shipped `/claim` checkouts are held by the merged-worktree reap and only
+  // branch-reconcile's merged retirement can prove them done (#17377).
+  describe('agentDataCleanup — merged-branch retirement', () => {
+    beforeEach(() => {
+      vi.clearAllMocks()
+      reapMergedWorktrees.mockResolvedValue({ reaped: [], skipped: [] })
+      cleanupOrphanedWorktrees.mockResolvedValue(0)
+      getActiveAgentIds.mockReturnValue([])
+      readClaimOwnershipAgents.mockResolvedValue([])
+      retireMergedCheckouts.mockResolvedValue({ cleaned: ['claim/issue-1'], skipped: [], inFlight: [{ branch: 'claim/issue-2', state: 'NEEDS_PR' }] })
+    })
+
+    it('retires merged checkouts for the retirement app with the live owners, and dispatches nothing', async () => {
+      listStoredAgentStatuses.mockResolvedValueOnce([{ id: 'paused-agent-1', status: 'paused' }])
+      getActiveAgentIds.mockReturnValue(['agent-live'])
+      const claimRun = { id: 'agent-claim', status: 'running', workspacePath: '/mock/root/data/cos/worktrees/claim-issue-9' }
+      readClaimOwnershipAgents.mockResolvedValue([claimRun])
+
+      const result = await agentDataCleanup()
+
+      expect(retireMergedCheckouts).toHaveBeenCalledOnce()
+      const [repoPath, opts] = retireMergedCheckouts.mock.calls[0]
+      expect(repoPath).toBe('/mock/root')
+      expect(opts).toMatchObject({ appId: 'app-1', forgeAccount: null, claimOwners: { agents: [claimRun], readAgents: readClaimOwnershipAgents } })
+      expect(opts).not.toHaveProperty('pendingMergeBranches')
+      expect([...opts.activeAgentIds]).toEqual(expect.arrayContaining(['agent-live', 'paused-agent-1', 'agent-claim', 'claim-issue-9']))
+      expect(result).toMatchObject({ branchesRetired: 1 })
+      expect(result).not.toHaveProperty('branchRetirementHold')
+      // The in-flight branch is information only: no coordinator task is queued.
+      expect(cosEvents.emit).not.toHaveBeenCalled()
+    })
+
+    it('holds queued merges and pins the app forge account', async () => {
+      resolveRetirementApp.mockResolvedValueOnce({ app: { id: 'app-1', repoPath: '/mock/root', forgeAccount: 'octo', pendingMergePrs: [{ prBranch: 'claim/issue-3' }] } })
+
+      await agentDataCleanup()
+
+      const [, opts] = retireMergedCheckouts.mock.calls[0]
+      expect(opts.forgeAccount).toBe('octo')
+      expect([...opts.pendingMergeBranches]).toEqual(['claim/issue-3'])
+    })
+
+    it('retires nothing when the claim registry is unreadable', async () => {
+      readClaimOwnershipAgents.mockResolvedValueOnce(null)
+
+      await expect(agentDataCleanup()).resolves.toMatchObject({ branchesRetired: 0, branchRetirementHold: 'claim-ownership-unreadable' })
+      expect(retireMergedCheckouts).not.toHaveBeenCalled()
+    })
+
+    it('reports a skipped forge cycle and a failed retirement as holds', async () => {
+      retireMergedCheckouts.mockResolvedValueOnce({ cleaned: [], inFlight: [], forgeUnavailable: true })
+      await expect(agentDataCleanup()).resolves.toMatchObject({ branchesRetired: 0, branchRetirementHold: 'forge-unavailable' })
+
+      retireMergedCheckouts.mockRejectedValueOnce(new Error('git unavailable'))
+      await expect(agentDataCleanup()).resolves.toMatchObject({ branchesRetired: 0, branchRetirementHold: 'merged-branch-retirement-failed' })
+    })
+
+    it('leaves worktrees alone when no retirement app resolves', async () => {
+      resolveRetirementApp.mockResolvedValueOnce({ reason: 'retirement-app-unavailable' })
+
+      await agentDataCleanup()
+
+      expect(retireMergedCheckouts).not.toHaveBeenCalled()
     })
   })
 })

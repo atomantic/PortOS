@@ -195,7 +195,8 @@ async function agentDataCleanup() {
   // First pass — SAFE reap: remove any worktree (CoS or `.claude/worktrees/`) whose
   // branch is fully merged into the default branch AND whose working tree is clean.
   // This is the bulk of the cleanup and cannot lose work (merged+clean ⇒ nothing
-  // pending). It guards active agents and human `claim-*` worktrees.
+  // pending). It guards active agents and holds every human `claim-*` worktree
+  // (the third pass below retires the ones proven shipped).
   const merged = await reapMergedWorktrees(scope.app.repoPath, { activeAgentIds: getLiveProtectedIds, appId: scope.app.id }).catch((err) => {
     console.warn(`⚠️ Merged-worktree reap failed: ${err.message}`)
     return null
@@ -213,13 +214,58 @@ async function agentDataCleanup() {
     return 0
   }) : 0
 
+  // Third pass — merged-branch retirement (#17377). The first pass holds every
+  // `claim-*` checkout: a claim is retired only on forge proof (exact merged PR
+  // head, idle past SHIPPED_CLAIM_IDLE_MS), which branch-reconcile computes. That
+  // coordinator wakes only when the user runs it or opts into `autoStart`, so
+  // shipped claims sat on disk indefinitely. Run its deterministic cleanup here
+  // instead of dispatching it: same holds, no pull request touched.
+  const branchRetirement = await retireMergedBranches(scope.app, getLiveProtectedIds).catch((err) => {
+    console.warn(`⚠️ Merged-branch retirement failed: ${err.message}`)
+    return { cleaned: [], hold: 'merged-branch-retirement-failed' }
+  })
+  const branchesRetired = branchRetirement.cleaned?.length || 0
+
   const mergedCount = merged?.reaped?.length || 0
   // Reaps whose checkout survived removal: not counted above, surfaced here so a
   // retryable failure is visible in the job log instead of reading as a clean day.
   const removalFailures = merged?.skipped?.filter(s => s.reason === 'remove-failed').length || 0
   const worktreeHolds = merged?.skipped || [{ reason: 'merged-worktree-reap-failed' }]
-  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s)${removalFailures ? `, ${removalFailures} worktree removal(s) failed (retry next run)` : ''}`)
-  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped, removalFailures, worktreeHolds }
+  console.log(`🧹 Agent data cleanup: removed ${cleaned} dir(s) older than 7 days, ${sentinelsRemoved} stale sentinel(s), reaped ${mergedCount} merged + ${worktreesReaped} orphaned worktree(s), retired ${branchesRetired} merged branch(es)${branchRetirement.hold ? ` (branch retirement held: ${branchRetirement.hold})` : ''}${removalFailures ? `, ${removalFailures} worktree removal(s) failed (retry next run)` : ''}`)
+  return { cleaned, sentinelsRemoved, mergedReaped: mergedCount, worktreesReaped, branchesRetired, removalFailures, worktreeHolds, ...(branchRetirement.hold && { branchRetirementHold: branchRetirement.hold }) }
+}
+
+/**
+ * branch-reconcile's merged-branch retirement for the retirement app, with the
+ * ownership inputs a branch-reconcile run builds: live + paused runtime ids, the
+ * trusted claim registry (re-read before each removal) and the merge queue.
+ * Holds everything when the registry is unreadable, and skips a cycle whose
+ * forge probe failed rather than guessing.
+ */
+async function retireMergedBranches(app, getLiveProtectedIds) {
+  const [{ retireMergedCheckouts, buildActiveOwnerIds }, { readClaimOwnershipAgents }] = await Promise.all([
+    import('../branchReconcile.js'),
+    import('../cos/cosClaimOwnershipState.js')
+  ])
+  const liveAgents = await readClaimOwnershipAgents().catch(() => null)
+  if (!Array.isArray(liveAgents)) return { cleaned: [], hold: 'claim-ownership-unreadable' }
+  const pendingMergeBranches = await readPendingMergeBranches(app)
+  const result = await retireMergedCheckouts(app.repoPath, {
+    appId: app.id,
+    activeAgentIds: buildActiveOwnerIds(getLiveProtectedIds(), liveAgents),
+    claimOwners: { agents: liveAgents, readAgents: readClaimOwnershipAgents },
+    forgeAccount: app.forgeAccount || null,
+    ...(pendingMergeBranches !== undefined && { pendingMergeBranches })
+  })
+  return result.forgeUnavailable ? { cleaned: result.cleaned || [], hold: 'forge-unavailable' } : result
+}
+
+// Mirrors branch-reconcile's read, minus its merge nudge: this job never drives
+// a merge. `undefined` = nothing queued; the Set holds queued PR branches.
+async function readPendingMergeBranches(app) {
+  if (!app.pendingMergePrs?.length) return undefined
+  const { readPendingMergePrs } = await import('../prWatcher.js')
+  return new Set(readPendingMergePrs(app).map(entry => entry?.prBranch).filter(Boolean))
 }
 
 /**
