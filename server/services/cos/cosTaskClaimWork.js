@@ -185,7 +185,11 @@ export async function buildClaimWorkTask(app, {
   issueContext,
   overrideContext,
   preverified = false,
-  nonEpic = false
+  nonEpic = false,
+  commentsClear = false,
+  linkedWorkClear = false,
+  forgeContext = null,
+  linkedItems = null,
 } = {}) {
   const { getTaskPrompt } = await import('../taskPromptService.js');
   const taskSchedule = await import('../taskSchedule.js');
@@ -213,7 +217,21 @@ export async function buildClaimWorkTask(app, {
   // overrides the tracker-specific body for both paths.
   const promptResult = await getTaskPrompt(
     interval.prompt ? 'claim-work' : promptTaskType,
-    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion, preverified, nonEpic, serverCheckout } }
+    {
+      claimFlow: true,
+      withSource: true,
+      claimIssueOptions: {
+        target: targetRef,
+        prCompletion: effectivePrCompletion,
+        preverified,
+        nonEpic,
+        serverCheckout,
+        commentsClear,
+        linkedWorkClear,
+        forgeContext,
+        linkedItems,
+      },
+    }
   );
   // The string case keeps callers that replace the prompt getter (including
   // integrations/tests) on the conservative, customized-prompt path.
@@ -248,22 +266,31 @@ export async function buildClaimWorkTask(app, {
   const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount, { leaveOpen });
 
   const policyHeader = composed ? '' : `## Claim target and completion policy\n\nTarget: ${targetRef || 'selected from the configured tracker'}. Effective PR completion policy: ${effectivePrCompletion}. Follow the runtime safety and completion contracts for this run.\n\n`;
-  const prompt = policyHeader + applyAppPlaceholders(`${swarmBlock}${template}`, app)
+  const renderedTemplate = applyAppPlaceholders(`${swarmBlock}${template}`, app)
     // Function-form replacers so literal `$`/`$1` in the substituted text isn't
     // interpreted as a backreference (see the scheduler's same-pattern note).
     .replace(/\{reviewers\}/g, () => reviewersCsv || 'none')
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, resolvedAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
-    .replace(/\{issueMinAgeRule\}/g, () => resolveIssueMinAgeRuleBlock(metadata.issueMinAgeMinutes, { gitlab: promptTaskType === 'claim-issue-gitlab' }))
+    .replace(/\{issueMinAgeRule\}/g, () => resolveIssueMinAgeRuleBlock(metadata.issueMinAgeMinutes, { gitlab: promptTaskType === 'claim-issue-gitlab' }));
+  const prefetchedIssueBlock = appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext);
+  const overrideBlock = appendClaimOverrideContext(overrideContext);
+  // Surface the prefetched issue and user guidance right after the opening
+  // policy paragraph on composed prompts so smaller local models read what they
+  // are solving before the phase rules.
+  const frontContext = `${prefetchedIssueBlock}${overrideBlock}`;
+  const selectionMarker = '\n\n## Selection exit';
+  const bodyWithContext = composed && frontContext && renderedTemplate.includes(selectionMarker)
+    ? renderedTemplate.replace(selectionMarker, () => `${frontContext}${selectionMarker}`)
+    : `${renderedTemplate}${frontContext}`;
+  const prompt = policyHeader + bodyWithContext
     + reviewerIdentityNotice
     + (composed ? '' : appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock))
-    + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)
-    + appendClaimOverrideContext(overrideContext)
     + appendReviewerEffortBlock(reviewersList, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)
     + appendReviewerMaxRoundsBlock(reviewersList, promptReviewerMaxRounds, claimReviewers.usernames)
     + buildLocalReviewerInstructions(reviewersList, promptReviewerModels, promptReviewerEfforts, {
-      claimCommentGate: promptTaskType === 'claim-issue',
+      claimCommentGate: promptTaskType === 'claim-issue' && commentsClear !== true,
       enforceIsolation: promptTaskType.startsWith('claim-issue'),
     });
 

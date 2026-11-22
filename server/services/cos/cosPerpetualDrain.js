@@ -142,7 +142,7 @@ export async function applyPerpetualWorkGate(app, taskType, promptTaskType, meta
     metadata.perpetual = true;
     // The dispatch is SPENT BY THE CALLER, once a task is certain — see the note
     // on `spendDispatch` in the JSDoc above.
-    return { skip: false, spendDispatch: true, signature: drainSignature };
+    return { skip: false, spendDispatch: true, signature: drainSignature, candidates: detection.candidates || [] };
   }
   if (detection.transient) {
     // Record BEFORE logging, so the log line (and the escalation decision) can

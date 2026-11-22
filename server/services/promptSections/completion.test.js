@@ -260,6 +260,24 @@ describe('claim flow workflow-scope handoff', () => {
       expect(buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status } })).not.toContain('lacks the `workflow` scope');
     }
   });
+
+  it('defers the missing workflow-scope handoff behind a staged pointer when provided', () => {
+    const staged = buildClaimFlowCompletionSection({
+      rawPrCompletion: 'merge-on-green',
+      workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' },
+      workflowScopeStagedPath: '/install/data/cos/slashdo-resolved/claim-workflow-scope-abc.md',
+    });
+    expect(staged).toContain('READ `/install/data/cos/slashdo-resolved/claim-workflow-scope-abc.md`');
+    expect(staged).not.toContain('Never refresh credentials or retry the denied merge yourself.');
+  });
+
+  it('replaces the full claim ownership binding block with a concise note for server-provisioned checkouts', () => {
+    const provisioned = buildClaimFlowCompletionSection({ agentId: 'agent-1', serverCheckout: true });
+    expect(provisioned).toContain('## Claim ownership');
+    expect(provisioned).toContain('do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`');
+    expect(provisioned).not.toContain('## Claim ownership binding');
+    expect(provisioned).not.toContain('curl -sS -X POST');
+  });
 });
 
 describe('publish_reviewed_branch tag scope', () => {

@@ -50,6 +50,7 @@ import {
   buildExternalRepositoryCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
+  buildWorkflowScopeSection,
   buildMergeAdmissionSection,
   buildClaimResumeOverride,
   claimResumeContext,
@@ -523,7 +524,14 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   });
   // Stage the claim's conditional procedures at the install root, which local
   // file-tool hosts can read even when working in a managed app's checkout.
-  if (hasFileTools) task = await deferClaimSections(task, writeResolvedSlashdoBody, PATHS.installRoot);
+  let workflowScopeStagedPath = null;
+  if (hasFileTools) {
+    task = await deferClaimSections(task, writeResolvedSlashdoBody, PATHS.installRoot);
+    const scopeBody = buildWorkflowScopeSection(task.metadata?.forgeWorkflowScope);
+    if (scopeBody && isClaimFlowTask(task)) {
+      workflowScopeStagedPath = await writeResolvedSlashdoBody('claim-workflow-scope', scopeBody).catch(() => null);
+    }
+  }
 
   const {
     isFollowUpNeedingRecipes, localAgentLoopBody,
@@ -535,7 +543,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);
-    const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli, promptTrace: options.promptTrace || null };
+    const lightOptions = { isTui, providerId, providerCommand, providerModel, leanMode, agentId, defaultReviewers, codeReviewDefaults, localAgentLoopBody: localAgentLoopBodyForInline, localAgentLoopBodyPath, forgeCli, promptTrace: options.promptTrace || null, workflowScopeStagedPath };
     return finalizePrompt(options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, lightOptions));
@@ -696,6 +704,8 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       agentId,
       ...mergeAdmissionOptions(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
+      workflowScopeStagedPath,
+      serverCheckout: isTruthyMeta(task.metadata?.claimServerCheckout),
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
@@ -1095,7 +1105,7 @@ This run must leave its changes in a DRAFT pull request for human review. This o
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null, promptTrace = null } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = true, providerId = null, providerCommand = null, providerModel = null, leanMode = false, agentId = null, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null, localAgentLoopBodyPath = null, forgeCli = null, promptTrace = null, workflowScopeStagedPath = null } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -1286,6 +1296,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       agentId,
       ...mergeAdmissionOptions(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
+      workflowScopeStagedPath,
+      serverCheckout: isTruthyMeta(task.metadata?.claimServerCheckout),
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {

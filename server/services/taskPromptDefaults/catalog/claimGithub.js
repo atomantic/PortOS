@@ -1,9 +1,8 @@
 import { GITHUB_HOST_SETUP } from '../../promptSections/constants.js';
 import { CLAIM_QUEUE_ORDER } from './claimForgePolicy.js';
 import { ISSUE_BLOCKER_RECONCILIATION_GH } from './guidance.js';
-import { claimGithubCommentFailureExit, buildClaimGithubHandoff } from '../../promptSections/claimOnDemand.js';
+import { claimGithubCommentFailureExit, buildClaimGithubHandoff, buildClaimMergeSection } from '../../promptSections/claimOnDemand.js';
 import { CLAIM_COMMENT_CLASSIFIER } from './claimEvidence.js';
-import { buildManagedGithubMergeScript } from '../../../lib/mergeGateContract.js';
 
 export const CLAIM_GITHUB_QUEUE = `## Phase 1 — Pick the target issue
 
@@ -67,8 +66,4 @@ export const CLAIM_GITHUB_QUEUE_END = `6. **If no eligible issue exists**, exit 
 
 Capture the issue number as \`NUM\`, its title, and its full body — you'll reuse them in the PR and the \`Closes #<num>\` trailer.`;
 
-export const CLAIM_GITHUB_MERGE = `5. **Merge immediately via \`gh pr merge\`** — NEVER a local \`git merge\`. A queued provider auto-merge remains pending until MERGED is confirmed. Select merge, squash or rebase only from verified allowed repository methods. An unreadable state or unconfirmed mutation stops this phase; no write is retried with another method:
-   \`\`\`bash
-${buildManagedGithubMergeScript()}
-   \`\`\`
-   The exact comparison MUST succeed. \`OPEN\` means CI, review, or branch protection still blocks the merge; investigate, fix, and retry. \`CLOSED\` is also not success. Do not enter Phase 7 until remote GitHub state is exactly \`MERGED\`.`;
+export const CLAIM_GITHUB_MERGE = buildClaimMergeSection('github');
