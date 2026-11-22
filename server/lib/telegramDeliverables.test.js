@@ -185,6 +185,7 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
   it('collects structured attachments and text paths with the prose tokens that located them, and fails open', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await collectNotificationDeliverables({
+      type: 'briefing_ready',
       description: `Today: /data/images/daily.png\nMissing: /data/images/gone.png\nCode: \`/data/images/clip.ogg\``,
       metadata: {
         audioAsVoice: true,
@@ -197,6 +198,17 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
       ['clip.ogg', 'sendVoice', []],
       ['daily.png', 'sendPhoto', ['/data/images/daily.png']]
     ]);
+  });
+
+  it('never mines prose paths from untrusted notification types, but still honors explicit attachments', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const description = 'Leaked: /data/images/daily.png';
+    for (const type of ['github_audit', 'agent_warning', undefined]) {
+      expect(await collectNotificationDeliverables({ type, description }, opts), String(type)).toEqual([]);
+    }
+    const explicit = await collectNotificationDeliverables({ type: 'github_audit', description, metadata: { attachments: [{ path: join(images, 'daily.png') }] } }, opts);
+    log.mockRestore();
+    expect(explicit.map(a => [a.filename, a.rawTokens])).toEqual([['daily.png', []]]);
   });
 
   it('applies metadata.asDocument to every attachment', async () => {
@@ -217,7 +229,7 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const many = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE }, (_, i) => ({ path: join(images, `n${i}.png`) }));
     await Promise.all(many.map(({ path }) => writeFile(path, 'x')));
-    const result = await collectNotificationDeliverables({ description: 'again /data/images/n0.png', metadata: { attachments: many } }, opts);
+    const result = await collectNotificationDeliverables({ type: 'briefing_ready', description: 'again /data/images/n0.png', metadata: { attachments: many } }, opts);
     log.mockRestore();
     expect(result).toHaveLength(MAX_ATTACHMENTS_PER_MESSAGE);
     expect(result[0].rawTokens).toEqual(['/data/images/n0.png']);
@@ -229,5 +241,30 @@ describe('resolveDeliverable / collectNotificationDeliverables (filesystem jail)
     const result = await collectNotificationDeliverables({ metadata: { attachments: [...refused, { path: join(images, 'daily.png') }] } }, opts);
     log.mockRestore();
     expect(result).toEqual([]);
+  });
+});
+
+describe('default artifact roots', () => {
+  it('refuse data/runs (raw agent prompts and outputs) even for an explicit attachment', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'tg-runs-'));
+    try {
+      await mkdir(join(base, 'data', 'runs', 'run-1'), { recursive: true });
+      await mkdir(join(base, 'data', 'cos', 'reports'), { recursive: true });
+      await writeFile(join(base, 'data', 'runs', 'run-1', 'prompt.txt'), 'private prompt');
+      await writeFile(join(base, 'data', 'cos', 'reports', 'ok.pdf'), 'pdf');
+      vi.resetModules();
+      const real = await vi.importActual('./paths.js');
+      vi.doMock('./paths.js', () => ({
+        PATHS: { ...real.PATHS, data: join(base, 'data'), runs: join(base, 'data', 'runs'), reports: join(base, 'data', 'cos', 'reports') }
+      }));
+      const fresh = await import('./telegramDeliverables.js');
+      expect(await fresh.resolveDeliverable({ path: join(base, 'data', 'runs', 'run-1', 'prompt.txt') }))
+        .toEqual({ ok: false, reason: 'outside artifact directories' });
+      expect((await fresh.resolveDeliverable({ path: join(base, 'data', 'cos', 'reports', 'ok.pdf') })).ok).toBe(true);
+    } finally {
+      vi.doUnmock('./paths.js');
+      vi.resetModules();
+      await rm(base, { recursive: true, force: true });
+    }
   });
 });
