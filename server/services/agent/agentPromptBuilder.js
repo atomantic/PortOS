@@ -706,7 +706,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     .filter(Boolean).join('\n\n');
 
   const {
-    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection,
   } = await buildFullPathOptionalSections({
     task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
@@ -736,7 +736,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
     worktreeSection, pipelineSection, jiraSection, orchestrationSection,
     issueFilingSection, simplifySection, tuiCompletionSection,
-    reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection, uiAuditRuntimeSection,
     completionBullet, completionInstructions, noChangeSuccess, completionMode,
   }));
@@ -931,6 +931,15 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // Keep the existing lifecycle template first, then append one narrow domain
   // guide when the task explicitly concerns a supported visual stack.
   const skillSection = await loadSkillTemplates(detectSkillTemplates(task));
+  // Level 0 of the Skill Registry (#17387): ids and one-line descriptions only,
+  // so the briefing stays lean; the agent loads a full skill with skills.view.
+  // Lazy and failure-tolerant: a broken skill tree must never block a spawn.
+  const skillIndexSection = await import('../skills/skillService.js')
+    .then(({ buildSkillIndexPromptSection }) => buildSkillIndexPromptSection({ appId: task.metadata?.app || undefined }))
+    .catch((err) => {
+      console.log(`⚠️ Skill index unavailable for the agent briefing: ${err.message}`);
+      return '';
+    });
 
   // Build onboard tools section for agent awareness
   const toolsSection = skipDevContext
@@ -961,7 +970,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     }
   }
   return {
-    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection, skillIndexSection,
     toolsSection, planningContextSection,
   };
 }
@@ -979,7 +988,7 @@ function buildFullAgentPrompt({
   task, workspaceDir, agentInstructionsSection, memorySection, digitalTwinSection, contextBlock,
   worktreeSection, pipelineSection, jiraSection, orchestrationSection,
   issueFilingSection, simplifySection, tuiCompletionSection,
-  reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+  reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection, skillIndexSection,
   toolsSection, planningContextSection, uiAuditRuntimeSection,
   completionBullet, completionInstructions, noChangeSuccess, completionMode,
 }) {
@@ -1005,7 +1014,7 @@ ${buildUnnecessaryDispatchSection(task)}
 ${reviewLoopSection}
 ${reviewLoopFollowUpSection}
 ${compactionSection}
-${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${toolsSection ? `\n${toolsSection}\n` : ''}${planningContextSection}
+${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${skillIndexSection ? `\n${skillIndexSection}\n` : ''}${toolsSection ? `\n${toolsSection}\n` : ''}${planningContextSection}
 ## Instructions
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
