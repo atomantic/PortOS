@@ -11,6 +11,7 @@ vi.mock('../sharing/recordEvents.js', () => ({
 
 const { flushBaseHashes, __resetBaseHashCacheForTests } = await import('../../lib/conflictJournal.js');
 const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+const { sanitizeStoryboard } = await import('../../lib/storyboardRecord.js');
 const { buildStoryboardAssetManifest } = await import('../sharing/peerSyncAssets.js');
 const { PORTOS_SCHEMA_VERSIONS, RECORD_KIND_SCHEMA_CATEGORIES, compareSchemaVersions, scopeVersionDiff } = await import('../../lib/schemaVersions.js');
 const events = await import('../sharing/recordEvents.js');
@@ -150,5 +151,118 @@ describe('storyboard conflict restore', () => {
     expect(restored.plot).toBe('The original plot');
     expect(restored.tempTrack.sections.map((s) => s.id)).toEqual(['sec-1']);
     expect(restored.beats[0].pin).toBe('sec-1');
+  });
+});
+
+describe('storyboard merge from an older sender', () => {
+  const TRACK = { filename: 'track.mp3', name: 'Demo', sections: [{ id: 'sec-1', label: 'Verse', at: 1 }], lines: [] };
+
+  // A live board using every field an older sanitizer could not emit.
+  async function richBoard() {
+    const board = await svc.createStoryboard({ name: 'Rich Board' });
+    const { beatId: openId } = await svc.addBeat(board.id, { title: 'Cold open' });
+    const { beatId: verseId } = await svc.addBeat(board.id, { title: 'Verse' });
+    const { panelId } = await svc.addPanel(board.id, verseId, { action: 'Wide of the gym doors' });
+    const { board: local } = await svc.mutateStoryboard(board.id, (draft) => {
+      draft.plot = 'The original plot';
+      draft.tempTrack = TRACK;
+      const [open, verse] = draft.beats;
+      open.beforeSong = true;
+      verse.pin = 'sec-1';
+      Object.assign(verse.panels[0], {
+        castIds: ['char-a1'],
+        environmentIds: ['place-b1'],
+        linkMedia: { 'char-a1': 'pick.png' },
+        setShot: { environmentId: 'place-b1', shotId: 'wide' },
+        move: 'push-in',
+      });
+    });
+    return { local, openId, verseId, panelId };
+  }
+
+  // The local board as an older peer would push it: newer, with `omit` keys
+  // missing from the board, every beat and every panel, and the panel edited.
+  function olderPush(local, { board = [], beat = [], panel = [] } = {}) {
+    const drop = (entry, keys) => Object.fromEntries(Object.entries(entry).filter(([key]) => !keys.includes(key)));
+    const wire = asWire(local, { updatedAt: later(local.updatedAt, 60_000) });
+    return {
+      ...drop(wire, board),
+      beats: wire.beats.map((b) => ({
+        ...drop(b, beat),
+        panels: b.panels.map((p) => ({ ...drop(p, panel), action: 'Edited on the older peer' })),
+      })),
+    };
+  }
+
+  const panelOf = (board, beatId) => board.beats.find((b) => b.id === beatId).panels[0];
+
+  it('keeps linkMedia a version-14 sender omits and applies its other panel edits', async () => {
+    const { local, verseId } = await richBoard();
+    expect(await svc.mergeStoryboardsFromSync([olderPush(local, { panel: ['linkMedia'] })], { senderSchemaVersions: { storyboards: 14 } }))
+      .toEqual({ applied: true, count: 1 });
+    const panel = panelOf(await svc.getStoryboard(local.id), verseId);
+    expect(panel.linkMedia).toEqual({ 'char-a1': 'pick.png' });
+    expect(panel.action).toBe('Edited on the older peer');
+  });
+
+  it('clears linkMedia a version-15 sender omits', async () => {
+    const { local, verseId } = await richBoard();
+    await svc.mergeStoryboardsFromSync([olderPush(local, { panel: ['linkMedia'] })], { senderSchemaVersions: { storyboards: 15 } });
+    expect(panelOf(await svc.getStoryboard(local.id), verseId)).not.toHaveProperty('linkMedia');
+  });
+
+  it('keeps beforeSong a sender below version 12 omits; a version-12 sender clears it', async () => {
+    const first = await richBoard();
+    await svc.mergeStoryboardsFromSync([olderPush(first.local, { beat: ['beforeSong'] })], { senderSchemaVersions: { storyboards: 11 } });
+    expect((await svc.getStoryboard(first.local.id)).beats.find((b) => b.id === first.openId).beforeSong).toBe(true);
+
+    const second = await richBoard();
+    await svc.mergeStoryboardsFromSync([olderPush(second.local, { beat: ['beforeSong'] })], { senderSchemaVersions: { storyboards: 12 } });
+    expect((await svc.getStoryboard(second.local.id)).beats.find((b) => b.id === second.openId)).not.toHaveProperty('beforeSong');
+  });
+
+  it('keeps setShot, tempTrack, plot, beat pin and panel move a raw remote omits; an explicit null clears them', async () => {
+    const omitted = await richBoard();
+    const push = olderPush(omitted.local, { board: ['tempTrack', 'plot'], beat: ['pin'], panel: ['setShot', 'move'] });
+    await svc.mergeStoryboardsFromSync([push], { senderSchemaVersions: { storyboards: 15 } });
+    const kept = await svc.getStoryboard(omitted.local.id);
+    expect(kept).toMatchObject({ plot: 'The original plot', tempTrack: TRACK });
+    expect(kept.beats.find((b) => b.id === omitted.verseId).pin).toBe('sec-1');
+    expect(panelOf(kept, omitted.verseId)).toMatchObject({
+      setShot: { environmentId: 'place-b1', shotId: 'wide' }, move: 'push-in', action: 'Edited on the older peer',
+    });
+
+    const nulled = await richBoard();
+    const clear = olderPush(nulled.local);
+    Object.assign(clear, { tempTrack: null, plot: null });
+    for (const beat of clear.beats) {
+      beat.pin = null;
+      for (const panel of beat.panels) Object.assign(panel, { setShot: null, move: null });
+    }
+    await svc.mergeStoryboardsFromSync([clear], { senderSchemaVersions: { storyboards: 15 } });
+    const cleared = await svc.getStoryboard(nulled.local.id);
+    expect(cleared).toMatchObject({ plot: '', tempTrack: null });
+    expect(cleared.beats.find((b) => b.id === nulled.verseId).pin).toBeNull();
+    expect(panelOf(cleared, nulled.verseId)).toMatchObject({ setShot: null, move: null });
+  });
+
+  it('restores nothing onto a remote tombstone', async () => {
+    const { local, verseId } = await richBoard();
+    const push = olderPush(local, { board: ['tempTrack', 'plot'], beat: ['pin', 'beforeSong'], panel: ['linkMedia', 'setShot', 'move'] });
+    const tomb = { ...push, deleted: true, deletedAt: push.updatedAt };
+    expect(await svc.mergeStoryboardsFromSync([tomb], { senderSchemaVersions: { storyboards: 11 } })).toEqual({ applied: true, count: 1 });
+    const stored = await svc.getStoryboardForSync(local.id);
+    expect(stored).toMatchObject({ deleted: true, plot: '', tempTrack: null });
+    expect(stored.beats.find((b) => b.id === verseId).pin).toBeNull();
+    expect(panelOf(stored, verseId)).toMatchObject({ setShot: null, move: null });
+    expect(panelOf(stored, verseId)).not.toHaveProperty('linkMedia');
+  });
+
+  it('stores a same-version full board exactly as sent', async () => {
+    const { local } = await richBoard();
+    const wire = asWire(local, { name: 'Renamed On Peer', updatedAt: later(local.updatedAt, 60_000) });
+    delete wire.beats[0].beforeSong;
+    await svc.mergeStoryboardsFromSync([wire], { senderSchemaVersions: { storyboards: PORTOS_SCHEMA_VERSIONS.storyboards } });
+    expect(await svc.getStoryboardForSync(local.id)).toEqual(sanitizeStoryboard(wire));
   });
 });
