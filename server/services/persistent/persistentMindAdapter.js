@@ -360,6 +360,14 @@ export function persistentMindHarnessInfo(provider) {
       detail: 'Best fit for a persistent service: structured HTTP, clean cancellation, streaming, and no terminal state. Ollama, llama.cpp, LM Studio, vLLM, and compatible cloud endpoints use this lane.',
     };
   }
+  if (type === 'moa') {
+    return {
+      type,
+      label: 'Mixture of Agents',
+      recommendation: 'supported',
+      detail: 'API reference models advise in parallel, tool-free; the aggregator writes the turn and is the acting, billed run. Every member is billed as its own run, and image turns are refused.',
+    };
+  }
   const refusal = persistentMindToolFreeRefusal(provider);
   if (type === 'cli') {
     if (refusal) return { type, label: 'Headless CLI', recommendation: 'unavailable', detail: refusal };

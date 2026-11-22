@@ -39,7 +39,8 @@ describe('MoA preset routes', () => {
     expect(listed.body.instructions.advisor).toMatch(/advisor instruction/);
     expect(listed.body.maxReferenceModels).toBe(5);
 
-    expect(await resolveMoaProvider('moa:expert-council')).toMatchObject({ id: 'moa:expert-council', type: 'moa', defaultModel: null, moaPresetId: 'expert-council' });
+    // An aggregator left on its provider's default reports that model.
+    expect(await resolveMoaProvider('moa:expert-council')).toMatchObject({ id: 'moa:expert-council', type: 'moa', defaultModel: 'agg-model', models: ['agg-model'], moaPresetId: 'expert-council' });
 
     const edited = await api('put', '/expert-council', { privacyFilter: 'full', enabled: false, aggregator: { providerId: 'agg', model: 'agg-big' } });
     expect(edited.status).toBe(200);

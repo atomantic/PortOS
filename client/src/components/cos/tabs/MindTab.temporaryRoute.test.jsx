@@ -70,6 +70,8 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
+// Thinking presets also offer saved Mixture of Agents presets (#17386); none here.
+vi.mock('../../../services/apiMoaPresets.js', () => ({ listMoaPresets: vi.fn(async () => ({ presets: [] })) }));
 vi.mock('../../../hooks/useSocket', () => ({ useSocket: () => socket }));
 
 import MindTab from './MindTab';
