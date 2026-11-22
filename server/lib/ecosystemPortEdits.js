@@ -64,33 +64,59 @@ function writeTargets(target) {
   return [];
 }
 
+// Names whose object a value expression may share (an alias's possible origins).
+function valueRoots(node) {
+  if (!node) return [];
+  if (node.type === 'Identifier') return [node.name];
+  if (['MemberExpression', 'OptionalMemberExpression'].includes(node.type)) return valueRoots(node.object);
+  if (node.type === 'ArrayExpression') return node.elements.flatMap(valueRoots);
+  if (node.type === 'ConditionalExpression') return [...valueRoots(node.consequent), ...valueRoots(node.alternate)];
+  if (node.type === 'LogicalExpression') return [...valueRoots(node.left), ...valueRoots(node.right)];
+  if (node.type === 'SequenceExpression') return valueRoots(node.expressions.at(-1));
+  if (node.type === 'AssignmentExpression') return valueRoots(node.right);
+  return [];
+}
+
 /**
  * Discovery-only binding pruning: a binding written anywhere is no longer a
- * reliable static value, and a write through a member also poisons the chain
- * of aliases it was initialized from. A write under module.exports/exports
- * changes the exported value itself.
+ * reliable static value, and a write through a member also poisons every name
+ * the written object may alias. Alias edges come from every declaration,
+ * assignment and loop binding in any scope (by name, deliberately not
+ * scope-aware: over-poisoning only hides discovery). A write under
+ * module.exports/exports changes the exported value itself.
  */
 function pruneWrittenBindings(ast, bindings, exportAssignment) {
   const writes = [];
+  const aliases = new Map();
+  const link = (names, source) => {
+    const roots = valueRoots(source);
+    for (const name of names) aliases.set(name, [...(aliases.get(name) || []), ...roots]);
+  };
   walk(ast, node => {
-    if (node.type === 'AssignmentExpression' && node !== exportAssignment) writes.push(...writeTargets(node.left));
-    else if (node.type === 'UpdateExpression') writes.push(...writeTargets(node.argument));
+    if (node.type === 'VariableDeclarator') link(bindingNames(node.id), node.init);
+    if (node.type === 'AssignmentExpression' && node !== exportAssignment) {
+      writes.push(...writeTargets(node.left));
+      link(bindingNames(node.left), node.right);
+    } else if (node.type === 'UpdateExpression') writes.push(...writeTargets(node.argument));
     else if (node.type === 'UnaryExpression' && node.operator === 'delete') writes.push(...writeTargets(node.argument));
-    else if (['ForInStatement', 'ForOfStatement'].includes(node.type) && node.left.type !== 'VariableDeclaration') writes.push(...writeTargets(node.left));
+    else if (['ForInStatement', 'ForOfStatement'].includes(node.type)) {
+      const target = node.left.type === 'VariableDeclaration' ? node.left.declarations[0].id : node.left;
+      if (node.left.type !== 'VariableDeclaration') writes.push(...writeTargets(target));
+      link(bindingNames(target), node.right);
+    }
   });
   for (const { root, member, mutation } of writes) {
     if (root.type !== 'Identifier') continue;
     if (root.name === 'exports' || (root.name === 'module' && member && !isExport(member))) throw new Error('Exported value mutated');
-    let name = root.name;
+    if (!mutation) { bindings.set(root.name, null); continue; }
+    const pending = [root.name];
     const seen = new Set();
-    while (name && !seen.has(name)) {
+    while (pending.length) {
+      const name = pending.pop();
+      if (seen.has(name)) continue;
       seen.add(name);
-      const value = bindings.get(name);
-      bindings.set(name, null);
-      if (!mutation) break;
-      let source = value;
-      while (['MemberExpression', 'OptionalMemberExpression'].includes(source?.type)) source = source.object;
-      name = source?.type === 'Identifier' ? source.name : null;
+      if (bindings.has(name)) bindings.set(name, null);
+      pending.push(...(aliases.get(name) || []));
     }
   }
 }

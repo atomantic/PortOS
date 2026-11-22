@@ -44,12 +44,25 @@ module.exports = { apps };`;
     expect(result.processes.map(proc => proc.name)).toEqual(['example-worker']);
   });
 
-  it('drops an alias chain written through a member during lenient discovery', () => {
+  it.each([
+    'const env = app.env;\nenv.PORT = 6200;',
+    'let env; env = app.env;\nenv.PORT = 6200;',
+    'const { env } = app;\nenv.PORT = 6200;',
+    'for (const env of [app.env]) env.PORT = 6200;',
+  ])('drops an object written through an alias during lenient discovery: %s', (write) => {
     const content = `const app = { name: 'example-api', env: { PORT: 6100 } };
-const env = app.env;
-env.PORT = 6200;
+${write}
 module.exports = { apps: [app] };`;
     expect(discoverEcosystemConfig(content)).toMatchObject({ processes: [], portsEditable: false });
+  });
+
+  it('keeps discovering apps beside a helper that mutates its own local object', () => {
+    const content = `function label() { const tags = {}; tags.kind = 'worker'; return tags; }
+module.exports = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
+label();`;
+    expect(discoverEcosystemConfig(content).processes.map(proc => [proc.name, proc.ports])).toEqual([
+      ['example-api', { api: 6100 }],
+    ]);
   });
 
   it('uses the supplied username resolver and leaves unknown template expressions verbatim', () => {
