@@ -56,6 +56,35 @@ describe('WebsiteLoginsSection (#17397)', () => {
     expect(await screen.findByText('New portal')).toBeTruthy();
   });
 
+  it('keeps New login disabled until the list has loaded', async () => {
+    let finish;
+    api.getWebsiteLogins.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<WebsiteLoginsSection subjectId="subject-a" />);
+    expect(screen.getByRole('button', { name: /new login/i })).toBeDisabled();
+    finish([LOGIN]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /new login/i })).toBeEnabled());
+  });
+
+  it('refetches after a create when the list had failed to load', async () => {
+    api.getWebsiteLogins.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([LOGIN, { ...LOGIN, id: 'login-2', label: 'Second portal', hasTotp: false }]);
+    api.createWebsiteLogin.mockResolvedValue({ ...LOGIN, id: 'login-2', label: 'Second portal' });
+    render(<WebsiteLoginsSection subjectId="subject-a" />);
+    expect(await screen.findByText('Website logins could not be loaded.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /new login/i }));
+    const form = await openDrawerForm();
+    fireEvent.change(form.getByLabelText('Label'), { target: { value: 'Second portal' } });
+    // A comma inside a pasted URL stays one origin.
+    fireEvent.change(form.getByLabelText('Allowed origins'), { target: { value: 'https://example.com/?ids=1,2' } });
+    fireEvent.change(form.getByLabelText('Username or email'), { target: { value: 'alice@example.com' } });
+    fireEvent.change(form.getByLabelText('Password'), { target: { value: 'pw-client-test-2' } });
+    fireEvent.click(form.getByRole('button', { name: 'Save login' }));
+    await waitFor(() => expect(api.createWebsiteLogin).toHaveBeenCalled());
+    expect(api.createWebsiteLogin.mock.calls[0][0].origins).toEqual(['https://example.com/?ids=1,2']);
+    expect(await screen.findByText('Distributor portal')).toBeTruthy();
+    expect(screen.getByText('Second portal')).toBeTruthy();
+    expect(api.getWebsiteLogins).toHaveBeenCalledTimes(2);
+  });
+
   it('edits without resending blank secrets and can remove the 2FA key', async () => {
     api.updateWebsiteLogin.mockResolvedValue({ ...LOGIN, hasTotp: false });
     render(<WebsiteLoginsSection subjectId="subject-a" />);

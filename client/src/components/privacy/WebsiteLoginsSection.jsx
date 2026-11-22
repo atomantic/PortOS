@@ -40,6 +40,9 @@ export default function WebsiteLoginsSection({ subjectId }) {
 
   const handleSaved = (saved, wasEditing) => {
     setDrawerOpen(false);
+    // After a failed list read only a refetch shows the whole list; patching the
+    // empty local copy would present the new login as the only one.
+    if (loadFailed) { load(); return; }
     setLogins((prev) => (wasEditing ? prev.map((row) => (row.id === saved.id ? saved : row)) : [saved, ...prev]));
   };
 
@@ -68,10 +71,13 @@ export default function WebsiteLoginsSection({ subjectId }) {
             Filled into the managed browser only on an exact origin match. Passwords and 2FA keys are never shown again.
           </p>
         </div>
+        {/* Disabled while the list loads: a create applied locally then would be
+            overwritten by the in-flight read. */}
         <button
           type="button"
           onClick={openCreate}
-          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-200 hover:text-white hover:border-port-accent"
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-200 hover:text-white hover:border-port-accent disabled:opacity-50"
         >
           <Plus size={16} /> New login
         </button>

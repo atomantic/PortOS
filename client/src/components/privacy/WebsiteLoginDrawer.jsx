@@ -12,9 +12,10 @@ import { INPUT_CLS } from './constants';
 // value". Only the label, origins and notes are prefilled.
 const EMPTY = { label: '', origins: '', username: '', password: '', totpSecret: '', removeTotp: false, notes: '' };
 
-// One origin per line (commas also split). The server reduces each to its exact
-// scheme://host[:port] origin and rejects anything that isn't http(s).
-const parseOrigins = (text) => text.split(/[\n,]/).map((line) => line.trim()).filter(Boolean);
+// One origin per line: a pasted URL may contain commas in its query. The server
+// reduces each to its exact scheme://host[:port] origin and rejects anything
+// that isn't http(s).
+const parseOrigins = (text) => text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
 export default function WebsiteLoginDrawer({ open, login, subjectId, onClose, onSaved }) {
   const editing = !!login;
