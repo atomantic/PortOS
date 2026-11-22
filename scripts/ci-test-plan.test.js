@@ -55,6 +55,7 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const REAL_TREE_SOURCES = [
   'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
   'server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+  'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js',
   'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
@@ -733,7 +734,10 @@ it('runs the whole-tree import-cycle guard on a PR that touches one server/servi
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
-  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
+  // The backup facade re-exports its snapshot, file-restore and database-restore
+  // modules, so a change to any of them must still reach backup.db.test.js.
+  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+    'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js'];
   const inputs = realTree();
   for (const source of sources) {
     expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });

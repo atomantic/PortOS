@@ -2,7 +2,8 @@
  * Where a project-specific jev head, its corpora and cached embeddings live under `data/jev/`.
  *
  * Machine-local and never federated (ADR privacy-records-machine-local); one definition shared by the head store,
- * `services/jev.js` and `services/backup.js`.
+ * corpus builder, trainer and `services/jev.js`. `DEFAULT_EXCLUDES` in `services/backup/excludes.js` hard-codes the same
+ * `data/jev/` layout, so change both together.
  */
 
 import { join } from 'path';
