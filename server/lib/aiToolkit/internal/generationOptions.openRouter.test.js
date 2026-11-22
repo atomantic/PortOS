@@ -39,9 +39,6 @@ describe('resolveOpenRouterProviderField', () => {
       expect(openRouterBodyFragment({ endpoint, providerRouting: routing }, 'm')).toEqual({});
     }
   });
-
-  it('recognizes the service definition id', () => {
-    expect(resolveOpenRouterProviderField({ serviceDefinitionId: 'openrouter', providerRouting: { sort: 'price' } }, 'm')).toEqual({ sort: 'price' });
   });
 });
 

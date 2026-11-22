@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { FormField } from '../ui/FormField';
 
 const inputClass = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden';
+
+const ROUTING_KEYS = ['routingSort', 'routingDataCollection', 'routingRequireParameters', 'routingOnly', 'routingIgnore', 'routingOrder', 'routingModelsText'];
 
 const LIST_FIELDS = [
   ['routingOnly', 'Only providers', 'anthropic, openai'],
@@ -10,9 +13,11 @@ const LIST_FIELDS = [
 
 /** OpenRouter `provider` routing preferences; rendered only for an OpenRouter endpoint. */
 export default function ProviderRoutingSection({ formData, setFormData }) {
+  // Initial state only: a controlled `open` would collapse the panel the moment the last watched field is cleared.
+  const [initiallyOpen] = useState(() => ROUTING_KEYS.some((key) => Boolean(formData[key])));
   const set = (patch) => setFormData((prev) => ({ ...prev, ...patch }));
   return (
-    <details className="border-t border-port-border pt-4 mt-4" open={Boolean(formData.routingSort || formData.routingDataCollection || formData.routingOnly || formData.routingIgnore)}>
+    <details className="border-t border-port-border pt-4 mt-4" open={initiallyOpen}>
       <summary className="text-sm font-medium text-gray-300 cursor-pointer">OpenRouter Routing</summary>
       <p className="text-xs text-gray-500 my-3">
         Sent as OpenRouter's <code className="text-gray-400">provider</code> object on every request to this endpoint.

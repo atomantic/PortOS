@@ -64,10 +64,9 @@ const OPENROUTER_HOSTS = new Set(['openrouter.ai', 'api.openrouter.ai']);
 /** Both `foo` and `openrouter/foo` name the same model. */
 const stripPrefix = (model) => String(model || '').replace(/^openrouter\//i, '');
 
-/** True for an OpenRouter service instance or any endpoint on openrouter.ai. */
+/** True for an endpoint on openrouter.ai (provider records carry no service-definition id; the host is the signal). Mirrored by `isOpenRouterEndpoint` in the client editor. */
 export function isOpenRouterProvider(provider) {
   if (!provider) return false;
-  if (provider.serviceDefinitionId === 'openrouter') return true;
   try {
     return OPENROUTER_HOSTS.has(new URL(String(provider.endpoint || '')).hostname.toLowerCase());
   } catch {
