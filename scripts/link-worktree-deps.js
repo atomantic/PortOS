@@ -39,7 +39,7 @@ try {
     .map(inspectWorkspaceDependencies)
     .filter(({ issues }) => issues.length > 0);
   if (stale.length) {
-    console.log(`⚠️  Linked node_modules lag this worktree's lockfiles; \`npm run pregate\` will stop at its dependency preflight:`);
+    console.log('⚠️  Worktree dependency consistency issues will be reported again before pregate runs lint or tests:');
     for (const { label, issues } of stale) {
       for (const issue of issues.slice(0, 10)) console.log(`   - ${label}: ${issue}`);
       if (issues.length > 10) console.log(`   - ${label}: ...and ${issues.length - 10} more`);

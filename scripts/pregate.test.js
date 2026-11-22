@@ -536,23 +536,31 @@ describe('pregate hidden-content invocation', () => {
     expect(full.stdout).toContain('fixture-planner');
   });
 
-  // This regression catches stale inherited packages before any lint/test child
-  // can produce a misleading product failure or repair the shared source tree.
-  // A fresh worktree with no links (or only cache dirs) is linked from its
-  // primary checkout by pregate itself (#16802); a dangling link, a stale
-  // install or any real directory stays a read-only diagnostic.
-  it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
+  // Exercise the real branch and working-tree inventory before stage dispatch.
+  // Pregate can provision fresh links (#16802) without repairing the source install.
+  it.each(['matching', 'stale', 'stale-with-lock-edit', 'stale-with-manifest-edit',
+    'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
       // The server lockfile selects the native Windows job.
       prepareWindowsInventory();
+      const lock = version => JSON.stringify({ packages: {
+        '': {}, 'node_modules/express': { version },
+        'node_modules/optional-platform-package': { version: '1.0.0', optional: true },
+      } });
+      write('server/package-lock.json', lock('5.3.0'));
+      // The linker only visits workspaces that have a manifest.
+      write('server/package.json', '{}');
+      git('add', 'server/package.json', 'server/package-lock.json');
+      git('commit', '-qm', 'commit workspace dependency baseline');
+      base = git('rev-parse', 'HEAD');
+
       const worktree = join(scratch, 'linked-worktree');
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
       for (const workspace of ['', 'client', 'server']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
       const shared = join(scratch, 'primary', 'server', 'node_modules');
       const autoLinks = ['missing-link', 'unlinked'].includes(state);
-      // The linker only visits workspaces that have a manifest.
-      write('server/package.json', '{}');
+      const stale = state.startsWith('stale');
       // The sandbox copies only pregate's builtin-only entrypoints, so the
       // linker entrypoint delegates to the real worktreeManager module.
       write('scripts/link-worktree-deps.js', `import { linkWorktreeDependencies } from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'server/services/worktreeManager.js')).href)};
@@ -560,7 +568,7 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       const installed = join(shared, 'express', 'package.json');
       const modules = join(root, 'server', 'node_modules');
       mkdirSync(dirname(installed), { recursive: true });
-      writeFileSync(installed, state === 'unreadable-package' ? '{broken' : JSON.stringify({ version: state === 'stale' ? '5.2.1' : '5.3.0' }));
+      writeFileSync(installed, state === 'unreadable-package' ? '{broken' : JSON.stringify({ version: stale ? '5.2.1' : '5.3.0' }));
       if (state === 'missing-package') rmSync(installed);
       mkdirSync(join(scratch, 'source'));
       const sourceReceipt = join(scratch, 'source', 'deps-hashes.json');
@@ -577,25 +585,42 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
       if (state === 'unlinked') mkdirSync(join(modules, '.cache'), { recursive: true });
       else if (state !== 'missing-link') symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
-      write('server/package-lock.json', JSON.stringify({ packages: {
-        '': {}, 'node_modules/express': { version: '5.3.0' },
-        'node_modules/optional-platform-package': { version: '1.0.0', optional: true },
-      } }));
-      // Changing scripts selects full lint; any accidental stage run leaves a
-      // durable marker. Startup/package-manager repair is a separate trap.
+      if (state === 'stale-with-lock-edit') {
+        write('server/package-lock.json', lock('5.3.1'));
+        git('add', 'server/package-lock.json');
+        git('commit', '-qm', 'change server lockfile');
+      }
+      if (state === 'stale-with-manifest-edit') write('server/package.json', '{"dependencies":{"express":"^5.3.0"}}');
+      const focusedTest = 'server/lib/bufferedSpawn.test.js';
+      write(focusedTest, '// Changed test fixture\n');
+      // Changing scripts selects full lint. Record each stage independently.
       for (const name of ['run-ci-lint.js', 'run-actionlint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
-        write(`scripts/${name}`, `import { mkdirSync, writeFileSync } from 'fs';
+        write(`scripts/${name}`, `import { mkdirSync, appendFileSync } from 'fs';
           mkdirSync('.cache', { recursive: true });
-          writeFileSync('.cache/unexpected-stage', '${name}');`);
+          appendFileSync('.cache/stages', '${name}\\n');`);
       }
       const result = run();
-      if (state === 'matching' || autoLinks) {
+      const stagesPath = join(root, '.cache/stages');
+      if (state === 'matching' || state === 'stale' || autoLinks) {
         expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain('Dependency consistency preflight passed');
         expect(result.stdout.includes('Linked worktree dependencies from the primary checkout')).toBe(autoLinks);
-        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(true);
+        const stages = readFileSync(stagesPath, 'utf8').trim().split('\n');
+        expect(stages).toContain('run-ci-lint.js');
+        expect(stages).toContain('run-ci-tests.js');
+        expect(stages).not.toContain('ensure-deps.js');
+        if (stale) {
+          expect(result.stdout).toContain('Linked dependency version drift; continuing');
+          expect(result.stdout).toContain('expected 5.3.0, installed 5.2.1');
+          expect(result.stdout).not.toContain('Dependency consistency preflight passed');
+          const report = JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+          expect(report.plan.server).toMatchObject({ mode: 'files', files: expect.arrayContaining([focusedTest]) });
+          expect(report.stages).toContainEqual(expect.objectContaining({ name: 'server tests', status: 'passed' }));
+        } else {
+          expect(result.stdout).toContain('Dependency consistency preflight passed');
+        }
       } else {
         expect(result.status).toBe(1);
+        expect(result.stderr).toContain('Dependency consistency preflight failed');
         const needsLink = state === 'dangling';
         expect(result.stderr).toContain('server (linked node_modules)');
         if (needsLink) expect(result.stderr).toContain('Re-link with: node scripts/link-worktree-deps.js');
@@ -607,13 +632,14 @@ await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
           expect(result.stderr).not.toContain('Re-link with:');
         }
         const diagnostic = {
-          stale: 'expected 5.3.0, installed 5.2.1',
+          'stale-with-lock-edit': 'expected 5.3.1, installed 5.2.1',
+          'stale-with-manifest-edit': 'expected 5.3.0, installed 5.2.1',
           'missing-package': 'missing package.json (ENOENT)',
           'unreadable-package': 'unreadable package.json (invalid JSON)',
           dangling: 'linked target unavailable',
         }[state];
         expect(result.stderr).toContain(diagnostic);
-        expect(existsSync(join(root, '.cache/unexpected-stage'))).toBe(false);
+        expect(existsSync(stagesPath)).toBe(false);
       }
       expect(lstatSync(modules).isSymbolicLink()).toBe(true);
       expect(sourceSnapshot()).toEqual(before);

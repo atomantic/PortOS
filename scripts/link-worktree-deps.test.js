@@ -180,6 +180,7 @@ describe('link-worktree-deps stale-install detection (#17511)', () => {
     const { source, worktree } = setup('6.6.11');
     const result = runScript(source, worktree);
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Worktree dependency consistency issues');
     expect(result.stdout).toContain('server: node_modules/engine.io: expected 6.6.12, installed 6.6.11');
     expect(result.stdout).toContain('Never run npm install/ci through the link');
   });
@@ -188,6 +189,6 @@ describe('link-worktree-deps stale-install detection (#17511)', () => {
     const { source, worktree } = setup('6.6.12');
     const result = runScript(source, worktree);
     expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain('lag this worktree');
+    expect(result.stdout).not.toContain('Worktree dependency consistency issues');
   });
 });

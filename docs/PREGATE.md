@@ -75,16 +75,18 @@ pass. `scripts/ensure-deps.test.js` is selected by changes to `ensure-deps.js`,
 worker caps still apply.
 
 Before lint or tests, pregate checks installed package versions against all
-three workspace lockfiles without modifying dependency trees. Stale, missing or
-unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate
-requires development dependencies (`npm ci --include=dev` in an owning
-workspace); a production-only installation cannot run its checks. A fresh
-linked git worktree whose `node_modules` are missing (or hold only cache
-directories) is linked from its primary checkout automatically, once, by
+three workspace lockfiles without modifying dependency trees. A Git worktree
+with linked dependencies can continue with a warning when the only discrepancies
+are package version mismatches and the combined branch and working-tree diff
+leaves npm manifests and lockfiles untouched. Its results reflect the installed
+versions. Dependency edits with drift, drift in owned installs, and missing or
+unreadable dependency evidence stop lint and tests with a reconciliation
+diagnostic. Pregate requires development dependencies (`npm ci --include=dev`
+in an owning workspace). A fresh linked worktree whose `node_modules` are
+missing (or hold only cache directories) is linked from its primary checkout by
 `scripts/link-worktree-deps.js` before the check reruns; pregate never runs npm.
-A dangling link, stale versions and real directories keep the diagnostic. Ordinary
-worktree links must be repaired only in their owning source checkout; a
-separate clone with its own locked installs is also suitable for validation.
+Reconcile shared installs in their owning source checkout when idle. A separate
+clone with its own locked installs is also suitable for validation.
 `--plan-only` prints the plan without checking installed dependencies.
 
 ## Interrupting pregate
