@@ -79,7 +79,8 @@ require('node:module').syncBuiltinESMExports();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('mode: native');
     expect(result.stdout).toContain('ready on port 6543');
-    expect(commands()).toBe('psql\n');
+    // On darwin setup-db also probes `brew` (stale-server check); the stub fails it, which is treated as current.
+    expect(commands()).toBe(process.platform === 'darwin' ? 'psql\nbrew\n' : 'psql\n');
     const config = run(process.execPath, pm2Args());
     expect(config.status, config.stderr).toBe(0);
     expect(JSON.parse(config.stdout)).toMatchObject({
