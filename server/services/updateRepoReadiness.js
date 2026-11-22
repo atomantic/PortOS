@@ -33,7 +33,6 @@ import { PATHS } from '../lib/fileUtils.js';
 import { execGitSafe } from '../lib/execGit.js';
 import * as gitService from './git.js';
 import { countAheadBehind, detectOperationInProgress } from './repoSync.js';
-import { classifyWorktreeDirt } from './worktreeManager.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { inspectPinnedSubmoduleDrift } from './gitPinnedSubmodules.js';
 import { REPO_REPAIR_TASK_DESCRIPTION, captureRepoRepairContract } from './updateRepoRepairCompletion.js';
@@ -155,6 +154,7 @@ export async function checkUpdateRepoReadiness({ repoPath, fetch = false, exclud
   const { repairablePaths: submodulePaths } = porcelain.trim()
     ? await inspectPinnedSubmoduleDrift(dir)
     : { repairablePaths: [] };
+  const { classifyWorktreeDirt } = await import('./worktreeManager.js');
   const dirt = classifyWorktreeDirt(porcelain, { ignoredPaths: submodulePaths });
   const conflicted = porcelain.split('\n').some((line) => /^(DD|AU|UD|UA|DU|AA|UU) /.test(line));
   const detached = branch === 'HEAD';

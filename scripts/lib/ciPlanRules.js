@@ -90,7 +90,7 @@ const FULL_TRIGGER_RULES = [
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
   // Own the cost honestly: a full plan, sharded in CI. It also owns cross-platform
   // worktree lifecycle, so Windows escalates (matches WINDOWS_RISK_RULES).
-  { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsRelevant: true },
+  { re: /^server\/services\/worktree(Manager\.js$|\/)/, reason: 'worktree manager source changed (broad import fanout)', windowsRelevant: true },
   // Measured log socket hotspot (#10030): changing this source fans out through
   // nearly the full server suite, so make the cost explicit in CI. The socket
   // starts and supervises a real child process; retain the native Windows job.

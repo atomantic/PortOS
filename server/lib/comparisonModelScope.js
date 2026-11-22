@@ -33,7 +33,7 @@
  */
 
 import { isConfiguredDefaultModel } from './provider/providerModels.js';
-import { BACKENDS, LOCAL_LLM_CATALOG, entryIdsForBackend, normalizeBackendModelId } from './localLlmCatalog.js';
+import { BACKENDS, LOCAL_LLM_CATALOG, RETIRED_MODEL_MAPPINGS, entryIdsForBackend, normalizeBackendModelId } from './localLlmCatalog.js';
 
 /**
  * Every install id the local-LLM catalog recognizes, mapped to the benchmark
@@ -49,7 +49,7 @@ import { BACKENDS, LOCAL_LLM_CATALOG, entryIdsForBackend, normalizeBackendModelI
  * retired alias still resolves.
  */
 const LOCAL_INSTALL_IDS = new Map(
-  BACKENDS.flatMap(backend => LOCAL_LLM_CATALOG
+  BACKENDS.flatMap(backend => [...LOCAL_LLM_CATALOG, ...RETIRED_MODEL_MAPPINGS]
     .filter(entry => entry.benchmarkModel)
     .flatMap(entry => entryIdsForBackend(entry, backend)
       .map(id => [`${backend}:${normalizeBackendModelId(backend, id)}`, entry.benchmarkModel])))
@@ -61,7 +61,7 @@ const LOCAL_INSTALL_IDS = new Map(
 // name wrong (see file header), which is exactly the case an undeclared entry
 // is asking to be routed around.
 const LOCAL_CATALOG_IDS = new Set(
-  BACKENDS.flatMap(backend => LOCAL_LLM_CATALOG
+  BACKENDS.flatMap(backend => [...LOCAL_LLM_CATALOG, ...RETIRED_MODEL_MAPPINGS]
     .flatMap(entry => entryIdsForBackend(entry, backend)
       .map(id => `${backend}:${normalizeBackendModelId(backend, id)}`)))
 );
@@ -78,7 +78,7 @@ function catalogSlugForLocalModel(modelId) {
 
 /** Benchmark names every catalog entry declares — the local half of seed scope. */
 export const localCatalogBenchmarkModels = () =>
-  new Set(LOCAL_LLM_CATALOG.map(entry => entry.benchmarkModel).filter(Boolean));
+  new Set([...LOCAL_LLM_CATALOG, ...RETIRED_MODEL_MAPPINGS].map(entry => entry.benchmarkModel).filter(Boolean));
 
 // Effort and mode suffixes a harness appends to a model id, plus the
 // local-runtime quantization/packaging suffixes that name the same weights as

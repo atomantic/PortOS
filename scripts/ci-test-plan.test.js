@@ -55,6 +55,7 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const REAL_TREE_SOURCES = [
   'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
   'server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+  'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js',
   'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
@@ -733,7 +734,10 @@ it('runs the whole-tree import-cycle guard on a PR that touches one server/servi
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
-  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
+  // The backup facade re-exports its snapshot, file-restore and database-restore
+  // modules, so a change to any of them must still reach backup.db.test.js.
+  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+    'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js'];
   const inputs = realTree();
   for (const source of sources) {
     expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
@@ -1784,14 +1788,19 @@ describe('CI test impact planner', () => {
     expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
   });
 
-  it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
-    const plan = buildCiTestPlan(['server/services/worktreeManager.js'], { trackedFiles: TRACKED });
-    expect(plan.full).toBe(true);
-    expect(plan.reason).toMatch(/worktree manager source changed/);
-    expect(plan.server.mode).toBe('full');
-    expect(plan.client.mode).toBe('full');
-    expect(plan.windowsMode).toBe('files');
-    // Its test file alone stays a scoped plan.
+  it.each(['server/services/worktreeManager.js', 'server/services/worktree/create.js'])(
+    'routes %s to a full plan instead of a broad nominal scoped plan (#9999)',
+    (path) => {
+      const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
+      expect(plan.full).toBe(true);
+      expect(plan.reason).toMatch(/worktree manager source changed/);
+      expect(plan.server.mode).toBe('full');
+      expect(plan.client.mode).toBe('full');
+      expect(plan.windowsMode).toBe('files');
+    },
+  );
+
+  it('keeps the worktree manager facade test on a scoped plan', () => {
     expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
   });
 

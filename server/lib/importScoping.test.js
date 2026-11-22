@@ -117,6 +117,8 @@ describe('instance identity stays a leaf (#6836)', () => {
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
 const SELECTION_CUTS = [
+  ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
+    'classifies observed facts without importing reconciliation or CoS orchestration'],
   ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
@@ -143,7 +145,16 @@ const importTargets = (entry) => {
 
 describe('CI-selection cuts stay cut (#12285)', () => {
   it.each(SELECTION_CUTS)('%s imports %s neither statically nor dynamically — it %s', (entry, target) => {
-    expect(importTargets(entry)).not.toContain(target);
+    expect(importTargets(entry)).not.toContainEqual(typeof target === 'string' ? target : expect.stringMatching(target));
+  });
+
+  it('keeps worktree modules on the shared ownership fence', () => {
+    const entries = readdirSync(abs('services/worktree')).filter(file => file.endsWith('.js') && !file.endsWith('.test.js'));
+    expect(entries.length).toBeGreaterThan(0);
+    for (const file of entries) {
+      const entry = `services/worktree/${file}`;
+      expect(importTargets(entry), entry).not.toContain('services/cos/cosClaimOwnership.js');
+    }
   });
 
   it('the leaves the cut entries import stay import-free', () => {
@@ -357,6 +368,9 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   );
   it('arms local model subscriptions before either HTTP router loads', () => {
     expect(closure.files.has(abs('services/localModelObservations.js'))).toBe(true);
+  });
+  it('loads the worktree manager on demand', () => {
+    expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
   it('loads at most half of the original 3,023 local modules before boot', () => {
     expect(closure.files.size).toBeLessThanOrEqual(1511);

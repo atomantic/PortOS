@@ -373,7 +373,7 @@ imported server cluster: across the server's sources the median selected 1,392
 suites, nearly all of them because some module in their closure has a
 non-literal edge (#16424). A test with a version 2 record whose recorded key is
 memoizable (the gate the record was written under) is now selected through
-`recordedReach` (`scripts/lib/testMemo.js`):
+`recordedReach` (`scripts/lib/testMemo/analyzer.js`):
 
 - the test, every module its green run loaded, and those modules' non-JS
   inputs;

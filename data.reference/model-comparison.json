@@ -59055,6 +59055,38 @@
       "notes": "Publisher result for the base checkpoint; local quantization and hardware are unmeasured. Keep this harness-specific score separate from the AA intelligence index."
     },
     {
+      "id": "omlx-community-20260721-ornith-1.0-35b-m3-ultra-bf16-32k",
+      "provider": "Ornith",
+      "model": "ornith-1.0-35b",
+      "effort": "reasoning",
+      "configuration": "oMLX community benchmark; Apple M3 Ultra (60-core GPU, 256 GB); bf16; 32k context",
+      "billing": "local",
+      "benchmark": "oMLX community benchmark (local throughput)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": {
+        "value": 19.68,
+        "source": {
+          "url": "https://omlx.ai/benchmarks/a3sozhpg",
+          "retrievedAt": "2026-11-22T00:00:00Z",
+          "methodology": "oMLX community benchmark time to first token for a 32k-token prompt (19,677 ms; 1,665 prompt-processing tok/s) on one M3 Ultra, bf16, single request. Prefill latency, not a reasoning-inclusive time to first answer token."
+        }
+      },
+      "tokensPerSecond": {
+        "value": 57.2,
+        "source": {
+          "url": "https://omlx.ai/benchmarks/a3sozhpg",
+          "retrievedAt": "2026-11-22T00:00:00Z",
+          "methodology": "oMLX community benchmark token-generation tok/s at 32k context on one M3 Ultra (60c, 256 GB), bf16, batch size 1, submitted 2026-07-21. Decode speed only; excludes prompt processing."
+        }
+      },
+      "quota": null,
+      "notes": "Single user-submitted run on one machine; throughput is hardware-, quantization- and runtime-specific and will differ on other hosts. Other community reports (about 35 tok/s on an M4 Max, about 9 tok/s on a GB10 NVFP4 transformers stack) are unverified or not comparable and are not stored."
+    },
+    {
       "id": "aa-v4.3.2-anthropic-claude-haiku-5.5-low",
       "provider": "Anthropic",
       "model": "claude-haiku-5.5",
