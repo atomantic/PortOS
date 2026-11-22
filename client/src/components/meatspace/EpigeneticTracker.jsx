@@ -126,7 +126,9 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   }, [fetchData]);
 
   const handleDelete = useCallback(async (id, name) => {
-    await deleteEpigeneticIntervention(id).catch(() => null);
+    // A 204 resolves to null, so success is "did not reject", never a truthy body.
+    const removed = await deleteEpigeneticIntervention(id).then(() => true, () => false);
+    if (!removed) return;
     toast.success(`Removed ${name}`);
     await fetchData();
   }, [fetchData]);

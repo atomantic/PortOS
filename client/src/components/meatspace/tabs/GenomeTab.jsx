@@ -339,17 +339,20 @@ export default function GenomeTab() {
   }, [searchResult, fetchSummary]);
 
   const handleDeleteMarker = useCallback(async (markerId) => {
-    await deleteGenomeMarker(markerId).catch(() => null);
+    // A 204 resolves to null, so success is "did not reject", never a truthy body.
+    const removed = await deleteGenomeMarker(markerId).then(() => true, () => false);
+    if (!removed) return;
     toast.success('Marker removed');
     await fetchSummary();
   }, [fetchSummary]);
 
   const handleDeleteGenome = useCallback(async () => {
     setDeleting(true);
-    await deleteGenomeData().catch(() => null);
+    const deleted = await deleteGenomeData().then(() => true, () => false);
+    setDeleting(false);
+    if (!deleted) return;
     toast.success('Genome data deleted');
     setConfirmDelete(false);
-    setDeleting(false);
     setSummary({ uploaded: false });
     setClinvarResults(null);
   }, []);
