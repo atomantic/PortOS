@@ -8,10 +8,11 @@ const TASK_REF_KIND = 'cos.task';
 
 export async function ensureTaskThread({ taskId, title, nextAction, notes, priority = 'normal' }) {
   if (!taskId || !title) return null;
-  const threads = await brainStorage.getThreads();
+  const threads = await brainStorage.getThreadListRows();
   const existing = threads.find(thread => thread.status !== 'archived'
     && thread.refs?.some(ref => ref?.kind === TASK_REF_KIND && ref?.id === taskId));
-  if (existing) return existing;
+  // Callers get the full record (notes included), not the cached list row.
+  if (existing) return brainStorage.getThreadById(existing.id) ?? existing;
   return brainStorage.createThread({
     title,
     status: 'open',
@@ -59,7 +60,7 @@ function legacyCleanupThread(thread, task) {
  */
 export async function reconcileCleanupThreads({ dryRun = true } = {}) {
   const { getTaskById } = await import('./cos/cosTaskStore.js');
-  const threads = await brainStorage.getThreads();
+  const threads = await brainStorage.getThreadListRows();
   let candidates = 0;
   let archived = 0;
   for (const thread of threads) {

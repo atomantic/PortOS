@@ -4,7 +4,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/brainStorage.js', () => ({
-  getAll: vi.fn(),
+  getThreadListRows: vi.fn(),
   getById: vi.fn(),
   create: vi.fn(),
   updateWith: vi.fn(),
@@ -15,11 +15,22 @@ vi.mock('../services/brainStorage.js', () => ({
 // Postgres; here it is a seam so these tests assert the ROUTE's contract.
 vi.mock('../services/threadSync.js', () => ({ syncGithubThreads: vi.fn(async () => ({ created: 1 })) }));
 
+// `?q=` reads notes from the search projection; the list rows never carry them.
+vi.mock('../services/brainSearchIndex.js', () => ({ getBrainProjections: vi.fn() }));
+
 vi.mock('../services/threadRefs.js', () => ({ resolveThreadRefs: vi.fn() }));
 
 import * as brainStorage from '../services/brainStorage.js';
+import { getBrainProjections } from '../services/brainSearchIndex.js';
 import { resolveThreadRefs } from '../services/threadRefs.js';
 import threadRoutes from './brainThreads.js';
+
+// Seed the two sources the list route reads: cached rows without `notes`, and
+// the search projection that carries them.
+const seedThreads = (threads) => {
+  brainStorage.getThreadListRows.mockResolvedValue(threads.map(({ notes, ...row }) => row));
+  getBrainProjections.mockResolvedValue(threads.map(({ id, notes }) => ({ id, notes })));
+};
 
 const THREAD_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -204,14 +215,14 @@ describe('Brain Threads routes', () => {
   });
 
   it('omits the markdown body from list rows', async () => {
-    brainStorage.getAll.mockResolvedValue([baseThread()]);
+    seedThreads([baseThread()]);
     const res = await request(app).get('/api/brain/threads');
     expect(res.body.threads[0]).not.toHaveProperty('notes');
     expect(res.body.threads[0].title).toBe('Renew the domain');
   });
 
   it('filters by status, tag, pinned and refKind', async () => {
-    brainStorage.getAll.mockResolvedValue([
+    seedThreads([
       baseThread({ id: 'a', status: 'open', tags: ['ops'], pinned: true, refs: [{ kind: 'github.issue', id: 'https://example.com/1' }] }),
       baseThread({ id: 'b', status: 'waiting', tags: ['ops'], pinned: false, refs: [] }),
       baseThread({ id: 'c', status: 'open', tags: ['home'], pinned: false, refs: [] }),
@@ -229,17 +240,30 @@ describe('Brain Threads routes', () => {
   });
 
   it('searches title, next action and notes with ?q=', async () => {
-    brainStorage.getAll.mockResolvedValue([
+    seedThreads([
       baseThread({ id: 'a', title: 'Renew the domain', notes: '' }),
       baseThread({ id: 'b', title: 'Other', nextAction: '', notes: 'registrar paperwork' }),
       baseThread({ id: 'c', title: 'Other', nextAction: '', notes: '' }),
     ]);
     const res = await request(app).get('/api/brain/threads?q=REGISTRAR');
     expect(res.body.threads.map((t) => t.id)).toEqual(['a', 'b']);
+    expect(res.body.threads.every((t) => !('notes' in t))).toBe(true);
+  });
+
+  it('searches ref labels with ?q= and reads no notes projection without it', async () => {
+    seedThreads([
+      baseThread({ id: 'a', title: 'Other', nextAction: '', notes: '', refs: [{ kind: 'github.issue', id: 'x', label: 'Fix the Frobnicator' }] }),
+      baseThread({ id: 'b', title: 'Other', nextAction: '', notes: '' }),
+    ]);
+    getBrainProjections.mockClear();
+    await request(app).get('/api/brain/threads');
+    expect(getBrainProjections).not.toHaveBeenCalled();
+    const res = await request(app).get('/api/brain/threads?q=frobnicator');
+    expect(res.body.threads.map((t) => t.id)).toEqual(['a']);
   });
 
   it('sorts pinned first, then soonest-due', async () => {
-    brainStorage.getAll.mockResolvedValue([
+    seedThreads([
       baseThread({ id: 'undated', dueAt: null, pinned: false }),
       baseThread({ id: 'later', dueAt: '2026-10-01T00:00:00.000Z', pinned: false }),
       baseThread({ id: 'sooner', dueAt: '2026-09-20T00:00:00.000Z', pinned: false }),
@@ -254,7 +278,7 @@ describe('Brain Threads routes', () => {
     // them yields NaN. A comparator that returns NaN abandons the remaining
     // tiebreaks, so the order goes engine-defined — and the pagination slice
     // below drops or duplicates rows at its boundary when that happens.
-    brainStorage.getAll.mockResolvedValue([
+    seedThreads([
       baseThread({ id: 'c', dueAt: null, updatedAt: '2026-09-01T00:00:00.000Z' }),
       baseThread({ id: 'a', dueAt: null, updatedAt: '2026-09-03T00:00:00.000Z' }),
       baseThread({ id: 'b', dueAt: null, updatedAt: '2026-09-02T00:00:00.000Z' }),
@@ -264,7 +288,7 @@ describe('Brain Threads routes', () => {
     expect(res.body.threads.map((t) => t.id)).toEqual(['a', 'b', 'c']);
   });
   it('returns the paginated envelope only when a pagination param is passed', async () => {
-    brainStorage.getAll.mockResolvedValue([baseThread({ id: 'a' }), baseThread({ id: 'b' })]);
+    seedThreads([baseThread({ id: 'a' }), baseThread({ id: 'b' })]);
     const plain = await request(app).get('/api/brain/threads');
     expect(plain.body).not.toHaveProperty('limit');
     expect(plain.body.total).toBe(2);

@@ -1347,6 +1347,41 @@ export const deleteBucket = (id) => remove('buckets', id);
 // the siblings above; the ref registry that gives a thread its links lives in
 // lib/threadRefKinds.js + services/threadRefs.js.
 export const getThreads = (filters) => filters ? query('threads', filters) : getAll('threads');
+
+// ─── List-row caches (songs, threads) ───────────────────────────────────────
+// The Songbook and Threads list views return every record minus one heavy field
+// (`content.text`, up to 200k chars; `notes`, up to 20k). Reading and parsing
+// whole bodies per request just to drop that field scaled with the repertoire.
+// These record indexes hold the already-stripped row, so a warm list reads no
+// bodies; freshness rides the same per-record events/`record:changed`/
+// `caches:invalidated` wiring as every other index above. Rows are shared:
+// callers treat them as read-only.
+const projectSongListRow = (record) => {
+  if (!record || isTombstone(record)) return null;
+  const { content, ...rest } = record;
+  return { ...rest, content: { format: content?.format || 'tab' } };
+};
+const projectThreadListRow = (record) => {
+  if (!record || isTombstone(record)) return null;
+  const { notes: _notes, ...rest } = record;
+  return rest;
+};
+const songListIndex = createRecordIndex(projectSongListRow);
+const threadListIndex = createRecordIndex(projectThreadListRow);
+
+async function resolveListRows(index, type) {
+  const rows = await resolveRecordIndex(index, type, 0);
+  return rows.flatMap(([id, row]) => (row ? [{ id, ...row }] : []));
+}
+
+/** Live songs without `content.text` (`content` is `{ format }`), `listIds()` order. */
+export const getSongListRows = () => resolveListRows(songListIndex, 'songs');
+
+/** Live threads without `notes`, `listIds()` order. Use `getThreadById` for the body. */
+export const getThreadListRows = () => resolveListRows(threadListIndex, 'threads');
+
+/** Ids on disk for a store, tombstones and corrupt records included. No body reads. */
+export const listStoredIds = (type) => storeFor(type).listIds();
 export const getThreadById = (id) => getById('threads', id);
 export const createThread = (data) => create('threads', data);
 export const updateThread = (id, data) => update('threads', id, data);

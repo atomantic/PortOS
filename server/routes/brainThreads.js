@@ -42,6 +42,7 @@ import {
 import { isTerminalThreadStatus as isTerminal, compareThreads } from '../lib/brainThreads.js';
 import { canonicalThreadRefKind } from '../lib/threadRefKinds.js';
 import * as brainStorage from '../services/brainStorage.js';
+import { getBrainProjections } from '../services/brainSearchIndex.js';
 import { resolveThreadRefs } from '../services/threadRefs.js';
 import { isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
 
@@ -90,20 +91,14 @@ function mergeRef(existing, ref) {
   return merged;
 }
 
-// The list projection: everything the Threads list and the dashboard widget
-// render, minus the markdown body. `notes` is capped at 20k per thread, so a
-// few hundred open loops would ship megabytes nobody reads; the full record
-// comes from GET /:id.
-const toListRow = ({ notes, ...rest }) => rest;
-
 // Case-insensitive substring match over the fields a user would expect `?q=` to
-// search. `notes` IS searched even though the list projection drops it — the
-// filter runs on the full record, and finding a thread by something written in
-// its body is the point of a search box.
-function matchesQuery(thread, q) {
+// search. `notes` IS searched even though the cached list rows drop it: the body
+// comes from brainSearchIndex's thread projection (`notes` argument), because
+// finding a thread by something written in its body is the point of a search box.
+function matchesQuery(thread, notes, q) {
   const needle = q.toLowerCase();
   const haystack = [
-    thread.title, thread.nextAction, thread.waitingOn, thread.notes,
+    thread.title, thread.nextAction, thread.waitingOn, notes,
     ...(Array.isArray(thread.tags) ? thread.tags : []),
     ...(Array.isArray(thread.refs) ? thread.refs.map((r) => r?.label) : []),
   ];
@@ -155,7 +150,12 @@ router.post('/attach', asyncHandler(async (req, res) => {
 
 router.get('/', asyncHandler(async (req, res) => {
   const filters = validateRequest(threadQuerySchema, req.query);
-  const all = await brainStorage.getAll('threads');
+  // The list rows (no `notes`) come from brainStorage's cache, so a warm list
+  // reads no thread bodies; only a `?q=` consults the search projection for notes.
+  const all = await brainStorage.getThreadListRows();
+  const notesById = filters.q
+    ? new Map((await getBrainProjections('threads', { ranked: false })).map((p) => [p.id, p.notes]))
+    : null;
 
   const matching = all.filter((thread) => {
     if (filters.status && !filters.status.includes(thread.status)) return false;
@@ -169,16 +169,15 @@ router.get('/', asyncHandler(async (req, res) => {
       const refs = Array.isArray(thread.refs) ? thread.refs : [];
       if (!refs.some((r) => canonicalThreadRefKind(r?.kind) === wanted)) return false;
     }
-    if (filters.q && !matchesQuery(thread, filters.q)) return false;
+    if (filters.q && !matchesQuery(thread, notesById.get(thread.id), filters.q)) return false;
     return true;
   }).sort(compareThreads);
 
-  const rows = matching.map(toListRow);
   if (isPaginationRequested(req.query)) {
-    const { items, total, limit, offset } = paginateArray(rows, req.query);
+    const { items, total, limit, offset } = paginateArray(matching, req.query);
     return res.json({ threads: items, total, limit, offset });
   }
-  return res.json({ threads: rows, total: rows.length });
+  return res.json({ threads: matching, total: matching.length });
 }));
 
 // The detail shape: the record plus `resolvedRefs`, hydrated for display only —
