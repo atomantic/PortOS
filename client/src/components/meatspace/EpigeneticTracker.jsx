@@ -31,6 +31,7 @@ const EVIDENCE_COLORS = {
 
 export default function EpigeneticTracker({ markerCategories = [] }) {
   const [interventions, setInterventions] = useState({});
+  const [intError, setIntError] = useState(null);
   const [compliance, setCompliance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -46,11 +47,19 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
   });
 
   const fetchData = useCallback(async () => {
+    // A failed tracked-list read must stay distinct from an empty map: keep the last
+    // good list and flag the error so Start Tracking is not offered for ids that may
+    // already be tracked (addIntervention on an existing id rewrites its record).
     const [intData, compData] = await Promise.all([
-      getEpigeneticInterventions().catch(() => ({ interventions: {} })),
+      getEpigeneticInterventions({ silent: true }).catch((err) => ({ failed: err || new Error('request failed') })),
       getEpigeneticCompliance(30).catch(() => null)
     ]);
-    setInterventions(intData.interventions || {});
+    if (intData.failed) {
+      setIntError(intData.failed);
+    } else {
+      setIntError(null);
+      setInterventions(intData.interventions || {});
+    }
     setCompliance(compData);
     setLoading(false);
   }, []);
@@ -252,6 +261,10 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
         </div>
       )}
 
+      {intError && (
+        <ListLoadError what="tracked interventions" error={intError} onRetry={fetchData} />
+      )}
+
       {/* Currently Tracked */}
       {trackedList.length > 0 && (
         <div className="space-y-2">
@@ -361,7 +374,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
       {recState === 'error' && (
         <ListLoadError what="recommended interventions" error={recError} onRetry={retryRecs} />
       )}
-      {untrackedRecs.length > 0 && (
+      {!intError && untrackedRecs.length > 0 && (
         <div className="space-y-2">
           <h4 className="text-sm font-medium text-gray-400 uppercase tracking-wider">
             Recommended Interventions ({untrackedRecs.length})
