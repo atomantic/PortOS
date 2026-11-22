@@ -5,7 +5,8 @@ const mgr = vi.hoisted(() => ({
   getBaseUrl: vi.fn(() => 'http://localhost:11434'),
   getInFlightOllamaWorkCount: vi.fn(),
   getResidentModelContext: vi.fn(),
-  unloadModel: vi.fn()
+  unloadModel: vi.fn(),
+  waitForOllamaReload: vi.fn(async () => {})
 }))
 vi.mock('./ollamaManager.js', () => mgr)
 
