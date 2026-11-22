@@ -15,7 +15,7 @@ import { reviewEvents } from '../services/review.js';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { creativeCommissionCreateSchema, creativeCommissionUpdateSchema, commissionFeedbackSchema } from '../lib/creativeCommissionValidation.js';
-import { paginationQuerySchema, isPaginationRequested, paginateArray } from '../lib/queryValidation.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
 import * as svc from '../services/creativeCommissions/store.js';
 
 const router = Router();
@@ -27,10 +27,11 @@ const SERVICE_ERROR_STATUS = {
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 router.get('/', asyncHandler(async (req, res) => {
-  const items = await svc.listCommissions();
-  const query = validateRequest(paginationQuerySchema, req.query);
-  if (!isPaginationRequested(query)) return res.json(items);
-  res.json(paginateArray(items, query, { defaultLimit: 50, maxLimit: 500 }));
+  const query = validateRequest(boundedPaginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) return res.json(await svc.listCommissions());
+  const page = { limit: query.limit ?? BOUNDED_PAGE_DEFAULT_LIMIT, offset: query.offset ?? 0 };
+  const { items, total } = await svc.listCommissionsPage(page);
+  res.json(pageEnvelope(items, total, page));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

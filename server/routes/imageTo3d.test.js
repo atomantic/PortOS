@@ -52,6 +52,7 @@ vi.mock('../services/hfToken.js', () => ({
 
 vi.mock('../services/imageTo3d/models.js', () => ({
   listModels: vi.fn(),
+  listModelsPage: vi.fn(),
   getModel: vi.fn(),
   createModel: vi.fn(),
   startGeneration: vi.fn(),
@@ -86,6 +87,22 @@ const sseFrames = (text) => text
   .map((l) => JSON.parse(l.slice(6)));
 
 describe('image-to-3d routes', () => {
+  it('GET /models keeps the legacy array, pages as an envelope, and rejects limit over 500 (#17475)', async () => {
+    const app = makeApp();
+    models.listModels.mockResolvedValue([{ id: 'image3d-1' }]);
+    expect((await request(app).get('/api/image-to-3d/models')).body).toEqual([{ id: 'image3d-1' }]);
+
+    models.listModelsPage.mockResolvedValue({ items: [{ id: 'image3d-2' }], total: 9 });
+    const paged = await request(app).get('/api/image-to-3d/models?limit=1&offset=4');
+    expect(models.listModelsPage).toHaveBeenCalledWith({ limit: 1, offset: 4 });
+    expect(paged.body).toEqual({ items: [{ id: 'image3d-2' }], total: 9, limit: 1, offset: 4 });
+
+    for (const bad of ['limit=501', 'limit=0', 'offset=-1']) {
+      expect((await request(app).get(`/api/image-to-3d/models?${bad}`)).status, bad).toBe(400);
+    }
+  });
+
+
   it('GET /targets returns host capabilities and annotated targets', async () => {
     const res = await request(makeApp()).get('/api/image-to-3d/targets');
     expect(res.status).toBe(200);
