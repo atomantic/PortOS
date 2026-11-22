@@ -191,7 +191,8 @@ describe('local-tier management', () => {
   it('validates and saves external directory config', async () => {
     expect((await request(buildApp()).put('/api/skills/config').send({ externalDirs: ['relative/dir'] })).status).toBe(400);
     const saved = await request(buildApp()).put('/api/skills/config').send({ externalDirs: [external] });
-    expect(saved.body).toEqual({ externalDirs: [external] });
-    expect((await request(buildApp()).get('/api/skills/config')).body).toEqual({ externalDirs: [external] });
+    const curator = { staleAfterDays: 14, archiveAfterDays: 30, ledgerMaxBytes: 5 * 1024 * 1024 };
+    expect(saved.body).toEqual({ externalDirs: [external], curator });
+    expect((await request(buildApp()).get('/api/skills/config')).body).toEqual({ externalDirs: [external], curator });
   });
 });

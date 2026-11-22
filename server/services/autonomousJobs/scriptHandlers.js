@@ -28,6 +28,16 @@ async function eidoverseProjection(options = {}) {
   return projectEidoverseWorld({ ...options, compact: true })
 }
 
+// Loaded lazily: the skill service is not in this registry's closure.
+// Deterministic Skill Curator pass (#17391); no provider call.
+async function skillCurator() {
+  const { runCuratorPass } = await import('../skills/skillCurator.js')
+  const result = await runCuratorPass()
+  const archived = result.transitions.filter((entry) => entry.to === 'archived').length - result.failures.length
+  const stale = result.transitions.filter((entry) => entry.to === 'stale').length
+  return { summary: `${stale} stale, ${archived} archived`, transitions: result.transitions.length, failures: result.failures.length }
+}
+
 // Loaded lazily: the inbox pulls in Postgres and the gh client, which this
 // registry must not load at import time. Deterministic, no provider call.
 async function githubNotificationsCheck() {
@@ -277,6 +287,7 @@ const SCRIPT_HANDLERS = {
   'moltworld-exploration': runMoltworldExploration,
   'agent-data-cleanup': agentDataCleanup,
   'goal-check-in': runGoalCheckIn,
+  'skill-curator': skillCurator,
   // Daily self-diagnostics (#2464): reads task-learning per-category metrics and
   // files a single `monitoring`-labeled GitHub summary of failing self-healing
   // categories. Deterministic — no LLM calls (cold-bootstrap-safe).

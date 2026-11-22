@@ -16,7 +16,16 @@
  * supporting files) — agentskills.io-compatible directories the user may edit
  * by hand or sync with Git; machine-local, backed up with `data/`, never
  * federated. Management writes only the `local` tier and is serialized on one
- * tail, since create/delete race on the same directory tree.
+ * tail (`withSkillWriteLock`), since create/delete race on the same directory
+ * tree; the Skill Curator (`skillCurator.js`) shares that tail.
+ *
+ * Curator integration (#17391): every Level 1/2 read counts toward the skill's
+ * telemetry (`skillUsageStore.js`), every local write is recorded in the
+ * mutation ledger (`skillLedger.js`) with before/after blobs, and an `agent`
+ * write is refused on a `locked` skill (and when the usage file cannot be read,
+ * so a lock is never assumed absent). Deleting a `pinned` skill is refused for
+ * every actor. The Level 0 index is not counted: it is injected into every
+ * full briefing, so counting it would make every listed skill look in use.
  */
 
 import { join } from 'path';
@@ -40,8 +49,10 @@ import {
   skillRunsOnPlatform,
   toSkillSummary,
 } from '../../lib/skills/skillRegistry.js';
-import { skillsManageSchema, skillsSettingsSchema } from '../../lib/skillsValidation.js';
+import { SKILL_CURATOR_DEFAULTS, skillsCuratorSettingsSchema, skillsManageSchema, skillsSettingsSchema } from '../../lib/skillsValidation.js';
+import { appendLedgerEntry, ARCHIVE_DIR, captureSkillDir } from './skillLedger.js';
 import { scanSkill } from './skillScanner.js';
+import { ensureRecord, readUsage, recordSkillEvents, toUsageSummary, tryReadUsage, updateUsage } from './skillUsageStore.js';
 
 const UNTRUSTED_TIERS = new Set(['project', 'external']);
 
@@ -52,6 +63,8 @@ const ERROR_STATUS = Object.freeze({
   SKILL_AMBIGUOUS: 409,
   SKILL_EXISTS: 409,
   SKILL_QUARANTINED: 403,
+  SKILL_LOCKED: 423,
+  SKILL_PINNED: 409,
   SKILL_FILE_TOO_LARGE: 413,
   SKILL_FILE_BINARY: 415,
 });
@@ -76,15 +89,23 @@ const failVerdict = (verdict) => fail(verdict.code, verdict.message,
 export const localSkillsRoot = () => join(PATHS.data, 'skills');
 const shippedSkillsRoot = () => join(PATHS.root, 'data.reference', 'skills');
 
-async function readExternalDirs() {
+async function readSkillsSettings() {
   const { getSettings } = await import('../settings.js');
   const settings = await getSettings();
   const parsed = skillsSettingsSchema.safeParse(settings?.skills ?? {});
   if (!parsed.success) {
-    console.log('⚠️ settings.skills is malformed; external skill directories are ignored');
-    return [];
+    console.log('⚠️ settings.skills is malformed; external skill directories are ignored and curator defaults apply');
+    return {};
   }
-  return parsed.data.externalDirs || [];
+  return parsed.data;
+}
+
+const readExternalDirs = async () => (await readSkillsSettings()).externalDirs || [];
+
+/** Curator thresholds and the ledger cap, shipped defaults filled in. */
+export async function getCuratorConfig() {
+  const { curator } = await readSkillsSettings();
+  return { ...SKILL_CURATOR_DEFAULTS, ...(curator || {}) };
 }
 
 async function projectSources(appId) {
@@ -153,11 +174,32 @@ async function collectIndex({ appId } = {}) {
   return { index, quarantined, invalid, hiddenByPlatform, truncatedSources };
 }
 
-/** Level 0 listing plus the quarantine, shadow, ambiguity and invalid-skill reports. */
+const archiveSource = () => ({ tier: 'local', key: 'archive', root: join(localSkillsRoot(), ARCHIVE_DIR) });
+
+/** Skills the curator (or a human) archived under `data/skills/.archive/`, indexed on their own. */
+export async function scanArchivedSkills() {
+  const scanned = await scanSkillSource(archiveSource());
+  return { scanned, index: buildSkillIndex(scanned.skills) };
+}
+
+/**
+ * Level 0 listing plus the quarantine, shadow, ambiguity and invalid-skill
+ * reports, each visible skill annotated with its curator telemetry. When the
+ * usage file is unreadable the telemetry is omitted and `usageUnavailable` is
+ * set — never zero counts that would read as "never used".
+ */
 export async function listSkills({ appId } = {}) {
   const { index, quarantined, invalid, hiddenByPlatform, truncatedSources } = await collectIndex({ appId });
+  const usage = await tryReadUsage();
+  const withUsage = (summary) => (usage.ok ? { ...summary, usage: toUsageSummary(usage.doc.skills[summary.id]) } : summary);
+  const archived = (await scanArchivedSkills()).scanned.skills.map((skill) => ({
+    ...withUsage(toSkillSummary(skill)),
+    originalId: usage.ok ? usage.doc.skills[skill.id]?.originalId ?? null : null,
+  }));
   return {
-    skills: index.visible.map((skill) => ({ ...toSkillSummary(skill), ...(skill.ambiguous ? { ambiguous: true } : {}) })),
+    skills: index.visible.map((skill) => withUsage({ ...toSkillSummary(skill), ...(skill.ambiguous ? { ambiguous: true } : {}) })),
+    archived,
+    ...(usage.ok ? {} : { usageUnavailable: true }),
     quarantined,
     shadowed: index.shadowed,
     ambiguous: index.ambiguous,
@@ -167,8 +209,12 @@ export async function listSkills({ appId } = {}) {
   };
 }
 
-/** Level 1 (no `file`) or Level 2 (`file`) read. A quarantined skill is refused by name. */
-export async function viewSkill({ ref, appId, file } = {}) {
+/**
+ * Level 1 (no `file`) or Level 2 (`file`) read. A quarantined skill is refused
+ * by name. A successful read counts as a `view`; an `agent` read also counts
+ * as a `use`, since the skill's text then enters an agent's prompt.
+ */
+export async function viewSkill({ ref, appId, file } = {}, { actor = 'user' } = {}) {
   const { index, quarantined } = await collectIndex({ appId });
   const resolved = resolveSkillRef(index, ref);
   if (!resolved.ok) {
@@ -180,6 +226,9 @@ export async function viewSkill({ ref, appId, file } = {}) {
   }
   const result = file ? await readSkillSupportFile(resolved.skill, file) : await readSkillDocument(resolved.skill);
   if (!result.ok) failVerdict(result);
+  // Telemetry never blocks a read: an unreadable usage file skips the count.
+  await recordSkillEvents(resolved.skill.id, actor === 'agent' ? ['view', 'use'] : ['view'])
+    .catch((error) => console.log(`⚠️ Skill usage for ${resolved.skill.id} not counted: ${error.message}`));
   return result;
 }
 
@@ -190,19 +239,21 @@ export async function buildSkillIndexPromptSection({ appId } = {}) {
 }
 
 let manageTail = Promise.resolve();
-const serializeManage = (work) => {
+/** The one tail every local skill-tree write (manage, curator, rollback) runs on. */
+export const withSkillWriteLock = (work) => {
   const run = manageTail.then(work, work);
   manageTail = run.catch(() => {});
   return run;
 };
 
-async function localIndex() {
+/** Discover the `local` tier on its own (no other tier, no quarantine). */
+export async function scanLocalSkills() {
   const scanned = await scanSkillSource({ tier: 'local', key: 'local', root: localSkillsRoot() });
   return { scanned, index: buildSkillIndex(scanned.skills) };
 }
 
 async function resolveLocalSkill(ref) {
-  const { index } = await localIndex();
+  const { index } = await scanLocalSkills();
   const resolved = resolveSkillRef(index, ref);
   if (!resolved.ok) failVerdict(resolved);
   return resolved.skill;
@@ -220,7 +271,7 @@ async function lintLocalSkill(skillDir, content, frontmatter) {
 }
 
 async function refreshedSummary(dir) {
-  const { scanned } = await localIndex();
+  const { scanned } = await scanLocalSkills();
   const skill = scanned.skills.find((candidate) => candidate.dir === dir);
   return skill ? toSkillSummary(skill) : null;
 }
@@ -231,7 +282,7 @@ const MANAGE_ACTIONS = {
     if (parsed.frontmatter.name && parsed.frontmatter.name !== args.name) {
       fail('SKILL_INVALID', `Frontmatter name '${parsed.frontmatter.name}' does not match '${args.name}'`);
     }
-    const { scanned } = await localIndex();
+    const { scanned } = await scanLocalSkills();
     if (scanned.skills.some((skill) => skill.name.toLowerCase() === args.name.toLowerCase())) {
       fail('SKILL_EXISTS', `A local skill named '${args.name}' already exists`);
     }
@@ -246,11 +297,10 @@ const MANAGE_ACTIONS = {
     const dir = join(root, ...(args.category ? [args.category] : []), args.name);
     if (await tryReadFile(join(dir, SKILL_FILE)) !== null) fail('SKILL_EXISTS', `A local skill already exists at ${args.category ? `${args.category}/` : ''}${args.name}`);
     await atomicWrite(join(dir, SKILL_FILE), args.content);
-    const created = (await localIndex()).scanned.skills.find((skill) => skill.name.toLowerCase() === args.name.toLowerCase());
+    const created = (await scanLocalSkills()).scanned.skills.find((skill) => skill.name.toLowerCase() === args.name.toLowerCase());
     return { skill: created ? toSkillSummary(created) : null, warnings: await lintLocalSkill(dir, args.content, parsed.frontmatter) };
   },
-  async patch(args) {
-    const skill = await resolveLocalSkill(args.name);
+  async patch(args, skill) {
     const current = await tryReadFile(join(skill.dir, SKILL_FILE));
     if (current === null) fail('SKILL_FILE_NOT_FOUND');
     const occurrences = current.split(args.oldString).length - 1;
@@ -261,8 +311,7 @@ const MANAGE_ACTIONS = {
     await atomicWrite(join(skill.dir, SKILL_FILE), next);
     return { skill: await refreshedSummary(skill.dir), replacements: args.replaceAll ? occurrences : 1, warnings: await lintLocalSkill(skill.dir, next, parsed.frontmatter) };
   },
-  async write_file(args) {
-    const skill = await resolveLocalSkill(args.name);
+  async write_file(args, skill) {
     const jailed = await jailSupportPath(skill.dir, args.path, { mustExist: false });
     if (!jailed.ok) failVerdict(jailed);
     await atomicWrite(jailed.path, args.content);
@@ -270,15 +319,13 @@ const MANAGE_ACTIONS = {
     const parsed = parseSkillMarkdown(content);
     return { skill: toSkillSummary(skill), path: args.path, warnings: await lintLocalSkill(skill.dir, content, parsed.ok ? parsed.frontmatter : {}) };
   },
-  async remove_file(args) {
-    const skill = await resolveLocalSkill(args.name);
+  async remove_file(args, skill) {
     const jailed = await jailSupportPath(skill.dir, args.path);
     if (!jailed.ok) failVerdict(jailed);
     await unlinkGuarded(jailed.path);
     return { skill: toSkillSummary(skill), path: args.path, warnings: [] };
   },
-  async delete(args) {
-    const skill = await resolveLocalSkill(args.name);
+  async delete(_args, skill) {
     // Belt and braces: the resolved directory is a canonical child of the local root.
     if (skill.dir === skill.root || !isPathAtOrInsideDir(skill.root, skill.dir)) fail('SKILL_PATH_ESCAPE');
     await rmGuarded(skill.dir, { recursive: true, force: true });
@@ -287,28 +334,96 @@ const MANAGE_ACTIONS = {
 };
 
 /**
- * Create, patch, write/remove a supporting file, or delete a `local` skill.
- * Lint warnings are advisory and never block a valid write.
+ * Refuse an `agent` write on a locked skill, and a delete of a pinned one by
+ * anyone. Both read the usage file strictly: when it cannot be read the guard
+ * cannot be verified, so the write is refused rather than assumed allowed.
  */
-export function manageSkill(input) {
+async function assertManageAllowed(action, skill, actor) {
+  if (actor !== 'agent' && action !== 'delete') return;
+  const doc = await readUsage();
+  const record = skill ? doc.skills[skill.id] : null;
+  if (actor === 'agent' && record?.locked) fail('SKILL_LOCKED', `Skill ${skill.id} is locked; only a human edit through the PortOS UI may change it`);
+  if (action === 'delete' && record?.pinned) fail('SKILL_PINNED', `Skill ${skill.id} is pinned; unpin it before deleting`);
+}
+
+/**
+ * Append a ledger entry for a mutation that already happened. The `before`
+ * snapshot was taken (and could refuse the write) before mutating; a failure
+ * here leaves the change in place, so it is reported loudly instead.
+ */
+export async function recordSkillMutation({ actor, action, skill, before, after, ...extra }) {
+  const { ledgerMaxBytes } = await getCuratorConfig();
+  return appendLedgerEntry({ actor, action, skill, before, after, ...extra }, { maxBytes: ledgerMaxBytes })
+    .catch((error) => console.warn(`⚠️ Skill ledger entry for ${action} ${skill.id} not recorded: ${error.message}`));
+}
+
+function noteManageUsage(action, skillId, actor) {
+  const at = new Date().toISOString();
+  return updateUsage((doc) => {
+    if (action === 'delete') {
+      delete doc.skills[skillId];
+      return;
+    }
+    const record = ensureRecord(doc, skillId);
+    if (action === 'create') {
+      record.createdAt = at;
+      record.createdBy = actor === 'user' ? 'user' : 'agent';
+      return;
+    }
+    record.patchCount += 1;
+    record.lastPatchedAt = at;
+    if (record.state === 'stale') record.state = 'active';
+  }).catch((error) => console.log(`⚠️ Skill usage for ${skillId} not updated: ${error.message}`));
+}
+
+/**
+ * Create, patch, write/remove a supporting file, or delete a `local` skill.
+ * Lint warnings are advisory and never block a valid write. `actor` is
+ * `agent` for the CoS tool and the agent-facing REST route, `user` for the
+ * PortOS UI's edit route; only `agent` writes honor a skill's lock.
+ */
+export function manageSkill(input, { actor = 'agent' } = {}) {
   const parsed = skillsManageSchema.safeParse(input);
   if (!parsed.success) {
     fail('VALIDATION_ERROR', `Invalid skills.manage arguments: ${parsed.error.issues.map((issue) => `${issue.path.join('.')} ${issue.message}`).join('; ')}`);
   }
   const args = parsed.data;
-  return serializeManage(async () => {
-    const result = await MANAGE_ACTIONS[args.action](args);
-    console.log(`📚 Skill ${args.action}: ${result.skill?.id || args.name}`);
+  return withSkillWriteLock(async () => {
+    const skill = args.action === 'create' ? null : await resolveLocalSkill(args.name);
+    await assertManageAllowed(args.action, skill, actor);
+    const before = skill ? await captureSkillDir(skill.path) : null;
+    const result = await MANAGE_ACTIONS[args.action](args, skill);
+    const target = result.skill || (skill ? toSkillSummary(skill) : null);
+    if (target) {
+      const after = args.action === 'delete' ? null : await captureSkillDir(target.path).catch((error) => {
+        console.warn(`⚠️ Skill ledger snapshot of ${target.id} failed: ${error.message}`);
+        return null;
+      });
+      await recordSkillMutation({ actor, action: args.action, skill: target, before, after });
+      await noteManageUsage(args.action, target.id, actor);
+    }
+    console.log(`📚 Skill ${args.action}: ${target?.id || args.name}`);
     return { ok: true, action: args.action, ...result };
   });
 }
 
 export async function getSkillsConfig() {
-  return { externalDirs: await readExternalDirs() };
+  return { externalDirs: await readExternalDirs(), curator: await getCuratorConfig() };
 }
 
 export async function updateSkillsConfig(patch) {
-  const { updateSettingsWith } = await import('../settings.js');
-  await updateSettingsWith((current) => ({ ...current, skills: { ...(current.skills || {}), ...patch } }));
+  const { getSettings, updateSettingsWith } = await import('../settings.js');
+  // A partial curator save merges into the stored thresholds, so the merged
+  // pair is what must satisfy archiveAfterDays > staleAfterDays.
+  if (patch.curator) {
+    const stored = (await getSettings())?.skills?.curator || {};
+    const merged = skillsCuratorSettingsSchema.safeParse({ ...SKILL_CURATOR_DEFAULTS, ...stored, ...patch.curator });
+    if (!merged.success) fail('VALIDATION_ERROR', merged.error.issues.map((issue) => issue.message).join('; '));
+  }
+  await updateSettingsWith((current) => {
+    const skills = { ...(current.skills || {}), ...patch };
+    if (patch.curator) skills.curator = { ...(current.skills?.curator || {}), ...patch.curator };
+    return { ...current, skills };
+  });
   return getSkillsConfig();
 }

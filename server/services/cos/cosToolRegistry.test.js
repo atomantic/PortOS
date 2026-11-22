@@ -206,7 +206,7 @@ describe('cosToolRegistry', () => {
       .rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
     const viewed = await executeCosToolCall({ call: view, authority: { scope: 'mind', capabilities: { readPortos: true } } });
     expect(viewed.result).toMatchObject({ level: 2, content: 'steps' });
-    expect(mocks.skills.viewSkill).toHaveBeenCalledWith({ ref: 'local:deploy', file: 'references/a.md' });
+    expect(mocks.skills.viewSkill).toHaveBeenCalledWith({ ref: 'local:deploy', file: 'references/a.md' }, { actor: 'agent' });
 
     const manage = { requestId: 'skill-delete', name: 'skills.manage', arguments: { action: 'delete', name: 'deploy' } };
     await expect(executeCosToolCall({ call: manage, authority: { scope: 'mind', capabilities: { readPortos: true, writePortos: true } } }))
@@ -216,7 +216,7 @@ describe('cosToolRegistry', () => {
       .rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
     const managed = await executeCosToolCall({ call: manage, authority: { scope: 'mind', capabilities: { manageSkills: true } } });
     expect(managed.state).toBe('completed');
-    expect(mocks.skills.manageSkill).toHaveBeenCalledWith({ action: 'delete', name: 'deploy' });
+    expect(mocks.skills.manageSkill).toHaveBeenCalledWith({ action: 'delete', name: 'deploy' }, { actor: 'agent' });
 
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.filter((tool) => tool.name.startsWith('skills.')).map((tool) => [tool.name, tool.granted, tool.family]))

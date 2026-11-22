@@ -1,5 +1,5 @@
 /**
- * Zod schemas for the skill registry's REST routes and CoS tools: list/view queries, the per-action `skills.manage` union, and the external-directory config.
+ * Zod schemas for the skill registry's REST routes and CoS tools: list/view queries, the per-action `skills.manage` union, the external-directory and curator config, and the curator/ledger routes.
  */
 
 import { isAbsolute } from 'path';
@@ -71,9 +71,47 @@ export const skillsManageToolInputSchema = z.object({
   path: supportPathSchema.optional(),
 }).strict();
 
+// Skill Curator thresholds (#17391). All optional: the service fills the
+// shipped defaults, so a partial save keeps the rest.
+export const SKILL_CURATOR_DEFAULTS = Object.freeze({
+  staleAfterDays: 14,
+  archiveAfterDays: 30,
+  ledgerMaxBytes: 5 * 1024 * 1024,
+});
+
+export const skillsCuratorSettingsSchema = z.object({
+  staleAfterDays: z.number().int().min(1).max(365).optional(),
+  archiveAfterDays: z.number().int().min(2).max(3650).optional(),
+  ledgerMaxBytes: z.number().int().min(64 * 1024).max(1024 * 1024 * 1024).optional(),
+}).strict().refine(
+  (value) => value.staleAfterDays === undefined || value.archiveAfterDays === undefined || value.archiveAfterDays > value.staleAfterDays,
+  { message: 'archiveAfterDays must be greater than staleAfterDays', path: ['archiveAfterDays'] },
+);
+
 export const skillsSettingsSchema = z.object({
   externalDirs: z.array(z.string().trim().min(1).max(1000)
     .refine((dir) => isAbsolute(dir), 'external skill directories must be absolute paths'))
     .max(SKILLS_EXTERNAL_DIRS_MAX)
     .optional(),
+  curator: skillsCuratorSettingsSchema.optional(),
+}).strict();
+
+export const SKILL_LIFECYCLE_ACTIONS = Object.freeze(['pin', 'unpin', 'lock', 'unlock', 'archive', 'restore', 'adopt']);
+
+export const skillLifecycleParamsSchema = z.object({
+  ref: skillRefSchema,
+  action: z.enum(SKILL_LIFECYCLE_ACTIONS),
+}).strict();
+
+export const skillsCuratorRunSchema = z.object({
+  dryRun: z.boolean().optional(),
+}).strict();
+
+export const skillsLedgerQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  skill: skillRefSchema.optional(),
+}).strict();
+
+export const skillsLedgerParamsSchema = z.object({
+  entryId: z.string().uuid(),
 }).strict();
