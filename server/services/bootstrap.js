@@ -946,6 +946,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // no-op it: the reconcile needs a database the hermetic root does not have.
     initLoraTraining,
     initMediaJobDependentHooks,
+    // Needs the reloaded queue (live frame jobs keep their panel state) and the
+    // database; state repair only, never a provider or image call.
+    recoverStoryboardRuns: () => import('./storyboards/make.js')
+      .then(({ recoverInterruptedStoryboardNodes }) => recoverInterruptedStoryboardNodes()),
     resumeMediaJobCompletions: () => {
       resumeMediaJobCompletions();
       startAutomaticUpdateReservationRecovery();
