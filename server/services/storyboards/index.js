@@ -17,7 +17,7 @@ import {
   isValidStoryboardId, newStoryboardEntityId, newStoryboardId, STORYBOARD_LIMITS,
 } from '../../lib/storyboardVocabulary.js';
 import { autoSubscribeRecordToAllPeers, emitRecordDeleted, emitRecordUpdated } from '../sharing/recordEvents.js';
-import { listRaw, queueStoryboardWrite, readRaw, writeRaw } from './store.js';
+import { listRaw, listRawPage, queueStoryboardWrite, readRaw, writeRaw } from './store.js';
 import { STORYBOARD_KIND } from './sync.js';
 
 export * from './sync.js';
@@ -49,6 +49,13 @@ export async function listStoryboards() {
     .filter((board) => board && !board.deleted)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(summarizeStoryboard);
+}
+
+/** One bounded page of board summaries (newest first) with the live total. */
+export async function listStoryboardsPage({ limit, offset }) {
+  const { rows, total } = await listRawPage({ limit, offset });
+  const items = rows.map(sanitizeStoryboard).filter(Boolean).map(summarizeStoryboard);
+  return { items, total };
 }
 
 export async function getStoryboard(id) {

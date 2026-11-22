@@ -14,6 +14,26 @@ const scalar = z.string().optional();
 /** `?limit=&offset=` as read by `parsePagination` / `isPaginationRequested` / `paginateArray`. */
 export const paginationQuerySchema = z.object({ limit: scalar, offset: scalar });
 
+export const BOUNDED_PAGE_DEFAULT_LIMIT = 100;
+export const BOUNDED_PAGE_MAX_LIMIT = 500;
+
+/**
+ * Strict opt-in `?limit=&offset=` for list routes whose rows are large JSONB documents. Unlike
+ * `paginationQuerySchema` (lenient, clamps in the handler) an out-of-range value is a 400, so a
+ * caller cannot silently ask for more than the cap. Both fields stay optional: the route keeps its
+ * legacy full-array response when neither is sent (see `isPaginationRequested`) and the SQL page
+ * uses `limit` 100 when only `offset` is given.
+ */
+export const boundedPaginationQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(BOUNDED_PAGE_MAX_LIMIT).optional(),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
+/** Build the `{ items, total, limit, offset }` envelope shared by every paginated list. */
+export function pageEnvelope(items, total, { limit = BOUNDED_PAGE_DEFAULT_LIMIT, offset = 0 } = {}) {
+  return { items, total, limit, offset };
+}
+
 /** `?limit=` alone, for handlers that only take a count. */
 export const limitQuerySchema = z.object({ limit: scalar });
 

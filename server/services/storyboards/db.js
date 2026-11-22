@@ -23,6 +23,15 @@ export async function listRaw() {
   return rows.map((row) => row.data);
 }
 
+/** One live-board page (`LIMIT`/`OFFSET` in SQL, newest first) plus the live total. */
+export async function listRawPage({ limit, offset }) {
+  const [page, count] = await Promise.all([
+    query('SELECT data FROM storyboards WHERE deleted = FALSE ORDER BY updated_at DESC, id ASC LIMIT $1 OFFSET $2', [limit, offset]),
+    query('SELECT COUNT(*)::int AS total FROM storyboards WHERE deleted = FALSE'),
+  ]);
+  return { rows: page.rows.map((row) => row.data), total: count.rows[0].total };
+}
+
 export async function writeRaw(id, record) {
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(record?.createdAt, now);

@@ -48,6 +48,15 @@ export async function listModels({ includeDeleted = false } = {}) {
   return result.rows.map(rowToModel);
 }
 
+/** One live page (newest first, `LIMIT`/`OFFSET` in SQL) plus the live total. */
+export async function listModelsPage({ limit, offset }) {
+  const [page, count] = await Promise.all([
+    query('SELECT data FROM image_to_3d_models WHERE deleted = FALSE ORDER BY updated_at DESC, id ASC LIMIT $1 OFFSET $2', [limit, offset]),
+    query('SELECT COUNT(*)::int AS total FROM image_to_3d_models WHERE deleted = FALSE'),
+  ]);
+  return { items: page.rows.map(rowToModel), total: count.rows[0].total };
+}
+
 export async function listGeneratingModelSummaries() {
   const result = await query(
     "SELECT id, name FROM image_to_3d_models WHERE deleted = FALSE AND status = 'generating' ORDER BY updated_at DESC",
