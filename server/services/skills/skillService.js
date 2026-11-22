@@ -52,7 +52,7 @@ import {
 import { SKILL_CURATOR_DEFAULTS, skillsCuratorSettingsSchema, skillsManageSchema, skillsSettingsSchema } from '../../lib/skillsValidation.js';
 import { appendLedgerEntry, ARCHIVE_DIR, captureSkillDir } from './skillLedger.js';
 import { scanSkill } from './skillScanner.js';
-import { ensureRecord, readUsage, recordSkillEvents, toUsageSummary, tryReadUsage, updateUsage } from './skillUsageStore.js';
+import { emptyUsageRecord, ensureRecord, readUsage, recordSkillEvents, toUsageSummary, tryReadUsage, updateUsage } from './skillUsageStore.js';
 
 const UNTRUSTED_TIERS = new Set(['project', 'external']);
 
@@ -89,15 +89,21 @@ const failVerdict = (verdict) => fail(verdict.code, verdict.message,
 export const localSkillsRoot = () => join(PATHS.data, 'skills');
 const shippedSkillsRoot = () => join(PATHS.root, 'data.reference', 'skills');
 
+// Each field is parsed on its own, so a bad curator threshold never hides the
+// external skill directories (or the reverse).
+const SKILLS_SETTING_FIELDS = Object.freeze(['externalDirs', 'curator']);
+
 async function readSkillsSettings() {
   const { getSettings } = await import('../settings.js');
-  const settings = await getSettings();
-  const parsed = skillsSettingsSchema.safeParse(settings?.skills ?? {});
-  if (!parsed.success) {
-    console.log('⚠️ settings.skills is malformed; external skill directories are ignored and curator defaults apply');
-    return {};
+  const stored = (await getSettings())?.skills ?? {};
+  const settings = {};
+  for (const field of SKILLS_SETTING_FIELDS) {
+    if (stored[field] === undefined) continue;
+    const parsed = skillsSettingsSchema.safeParse({ [field]: stored[field] });
+    if (parsed.success) settings[field] = parsed.data[field];
+    else console.log(`⚠️ settings.skills.${field} is malformed; ${field === 'curator' ? 'curator defaults apply' : 'external skill directories are ignored'}`);
   }
-  return parsed.data;
+  return settings;
 }
 
 const readExternalDirs = async () => (await readSkillsSettings()).externalDirs || [];
@@ -352,6 +358,9 @@ async function assertManageAllowed(action, skill, actor) {
  * here leaves the change in place, so it is reported loudly instead.
  */
 export async function recordSkillMutation({ actor, action, skill, before, after, ...extra }) {
+  // `after: undefined` means the after-state could not be captured: recorded
+  // as such, never as `null` (which would claim the skill no longer exists).
+  if (after === undefined) Object.assign(extra, { afterUnavailable: true });
   const { ledgerMaxBytes } = await getCuratorConfig();
   return appendLedgerEntry({ actor, action, skill, before, after, ...extra }, { maxBytes: ledgerMaxBytes })
     .catch((error) => console.warn(`⚠️ Skill ledger entry for ${action} ${skill.id} not recorded: ${error.message}`));
@@ -366,8 +375,8 @@ function noteManageUsage(action, skillId, actor) {
     }
     const record = ensureRecord(doc, skillId);
     if (action === 'create') {
-      record.createdAt = at;
-      record.createdBy = actor === 'user' ? 'user' : 'agent';
+      // A brand-new skill never inherits a leftover row at its path.
+      doc.skills[skillId] = { ...emptyUsageRecord(), createdAt: at, createdBy: actor === 'user' ? 'user' : 'agent' };
       return;
     }
     record.patchCount += 1;
@@ -392,14 +401,17 @@ export function manageSkill(input, { actor = 'agent' } = {}) {
     const skill = args.action === 'create' ? null : await resolveLocalSkill(args.name);
     await assertManageAllowed(args.action, skill, actor);
     const before = skill ? await captureSkillDir(skill.path) : null;
+    // A delete drops the usage row; the ledger keeps it so a rollback can
+    // bring back the skill's provenance, lock and counters with its files.
+    const usageBefore = args.action === 'delete' ? (await tryReadUsage()).doc?.skills[skill.id] ?? null : null;
     const result = await MANAGE_ACTIONS[args.action](args, skill);
     const target = result.skill || (skill ? toSkillSummary(skill) : null);
     if (target) {
       const after = args.action === 'delete' ? null : await captureSkillDir(target.path).catch((error) => {
         console.warn(`⚠️ Skill ledger snapshot of ${target.id} failed: ${error.message}`);
-        return null;
+        return undefined;
       });
-      await recordSkillMutation({ actor, action: args.action, skill: target, before, after });
+      await recordSkillMutation({ actor, action: args.action, skill: target, before, after, ...(usageBefore ? { usageBefore } : {}) });
       await noteManageUsage(args.action, target.id, actor);
     }
     console.log(`📚 Skill ${args.action}: ${target?.id || args.name}`);

@@ -76,11 +76,18 @@ async function jailLedgerPath(root, relPath) {
   return target;
 }
 
+// Only ENOENT proves a path is absent; any other failure must refuse the
+// snapshot, or a write would proceed with a manifest missing real bytes.
+const absentOr = (fallback) => (error) => {
+  if (error?.code === 'ENOENT') return fallback;
+  throw error;
+};
+
 /** Every regular file under a skill directory (symlinks skipped), as root-relative posix paths. */
 async function listSkillFiles(root, relDir) {
   const files = [];
   const walk = async (dir, segments) => {
-    const entries = (await readdir(dir, { withFileTypes: true }).catch(() => []))
+    const entries = (await readdir(dir, { withFileTypes: true }).catch(absentOr([])))
       .sort((left, right) => left.name.localeCompare(right.name));
     for (const entry of entries) {
       if (files.length >= MAX_MANIFEST_FILES) fail('SKILL_LEDGER_TOO_MANY_FILES', `A skill holds more than ${MAX_MANIFEST_FILES} files; the ledger cannot snapshot it`, 413);
@@ -100,16 +107,19 @@ async function storeBlob(buffer) {
   return sha;
 }
 
+/** Snapshot existing files into blobs; also returns their bytes for an in-process revert. */
 async function snapshotPaths(root, relPaths) {
   const manifest = [];
+  const buffers = new Map();
   for (const relPath of relPaths) {
     const target = await jailLedgerPath(root, relPath);
-    const stats = await lstat(target).catch(() => null);
+    const stats = await lstat(target).catch(absentOr(null));
     if (!stats?.isFile()) continue;
     const buffer = await readFile(target);
     manifest.push({ path: relPath, sha256: await storeBlob(buffer), bytes: buffer.length });
+    buffers.set(relPath, buffer);
   }
-  return manifest;
+  return { manifest, buffers };
 }
 
 /**
@@ -119,9 +129,9 @@ async function snapshotPaths(root, relPaths) {
  * @returns {Promise<Array<{ path: string, sha256: string, bytes: number }>|null>} null when the directory has no files
  */
 export async function captureSkillDir(relDir) {
-  const root = await realpath(skillsRoot()).catch(() => null);
+  const root = await realpath(skillsRoot()).catch(absentOr(null));
   if (!root) return null;
-  const manifest = await snapshotPaths(root, await listSkillFiles(root, relDir));
+  const { manifest } = await snapshotPaths(root, await listSkillFiles(root, relDir));
   return manifest.length ? manifest : null;
 }
 
@@ -155,8 +165,11 @@ async function sweepBlobs(keep, now) {
     if (keep.has(name)) continue;
     const stats = await lstat(join(dir, name)).catch(() => null);
     if (!stats?.isFile() || now - stats.mtimeMs < BLOB_SWEEP_GRACE_MS) continue;
-    await unlinkGuarded(join(dir, name)).catch(() => {});
-    swept += 1;
+    const removed = await unlinkGuarded(join(dir, name)).then(() => true, (error) => {
+      console.warn(`⚠️ Skill ledger blob ${name} not swept: ${error.message}`);
+      return false;
+    });
+    if (removed) swept += 1;
   }
   return swept;
 }
@@ -241,6 +254,19 @@ async function removeEmptyDirs(root, relPath) {
 }
 
 /**
+ * Best-effort return of every touched path to the pre-rollback snapshot after
+ * a failed apply: files that existed are rewritten, files that did not are
+ * removed. The safety entry then describes a no-op and stays harmless.
+ */
+async function revertTouchedPaths(root, touched, buffers) {
+  for (const path of touched) {
+    const absolute = join(root, ...path.split('/'));
+    const restore = buffers.has(path) ? atomicWrite(absolute, buffers.get(path)) : unlinkGuarded(absolute).catch(absentOr(null));
+    await restore.catch((error) => console.warn(`⚠️ Skill ledger rollback revert of ${path} failed: ${error.message}`));
+  }
+}
+
+/**
  * Roll back one entry. Before touching a file it verifies every blob it
  * needs, snapshots the current state of every touched path, and appends that
  * snapshot as a `rollback` entry (itself reversible); any failure there aborts
@@ -252,6 +278,8 @@ export async function rollbackLedgerEntry(entryId, { actor = 'user', maxBytes, n
   const entries = await readLedgerEntries();
   const target = entries.find((entry) => entry.id === entryId);
   if (!target) fail('SKILL_LEDGER_ENTRY_NOT_FOUND', 'Ledger entry not found', 404);
+  // Its after-state is unknown, so the files it added cannot be told apart.
+  if (target.afterUnavailable) fail('SKILL_LEDGER_ENTRY_INCOMPLETE', 'This entry\'s after-state could not be recorded, so it cannot be rolled back exactly; restore the skill by hand or roll back a later entry', 409);
   const root = await realpath(skillsRoot()).catch(() => null);
   if (!root) fail('SKILL_NOT_FOUND', 'The local skills directory does not exist', 404);
 
@@ -269,23 +297,28 @@ export async function rollbackLedgerEntry(entryId, { actor = 'user', maxBytes, n
     actor,
     action: 'rollback',
     skill: target.skill,
-    before: current.length ? current : null,
+    before: current.manifest.length ? current.manifest : null,
     after: before.length ? before : null,
     rollbackOf: target.id,
   }, { maxBytes, now });
 
   const removed = [];
-  for (const path of removals) {
-    const absolute = await jailLedgerPath(root, path);
-    if (await lstat(absolute).then((stats) => stats.isFile(), () => false)) {
-      await unlinkGuarded(absolute);
-      removed.push(path);
+  try {
+    for (const path of removals) {
+      const absolute = await jailLedgerPath(root, path);
+      if (await lstat(absolute).then((stats) => stats.isFile(), absentOr(false))) {
+        await unlinkGuarded(absolute);
+        removed.push(path);
+      }
+      await removeEmptyDirs(root, path);
     }
-    await removeEmptyDirs(root, path);
-  }
-  for (const file of before) {
-    await atomicWrite(await jailLedgerPath(root, file.path), buffers.get(file.path));
+    for (const file of before) {
+      await atomicWrite(await jailLedgerPath(root, file.path), buffers.get(file.path));
+    }
+  } catch (error) {
+    await revertTouchedPaths(root, touched, current.buffers);
+    throw error;
   }
   console.log(`📚 Skill ledger rollback of ${target.action} ${target.skill?.id || ''}: restored ${before.length}, removed ${removed.length}`);
-  return { entry: safety, rolledBack: { id: target.id, action: target.action, skill: target.skill }, restored: before.map((file) => file.path), removed };
+  return { entry: safety, rolledBack: { id: target.id, action: target.action, skill: target.skill, usageBefore: target.usageBefore ?? null }, restored: before.map((file) => file.path), removed };
 }

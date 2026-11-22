@@ -151,6 +151,19 @@ describe('pin and lock guards', () => {
   });
 });
 
+describe('curator config', () => {
+  it('keeps the external directories when the stored curator thresholds are invalid', async () => {
+    state.settings = { skills: { externalDirs: [skillsDir()], curator: { staleAfterDays: 'soon' } } };
+    const config = (await request(app).get('/api/skills/config')).body;
+    expect(config).toMatchObject({ externalDirs: [skillsDir()], curator: { staleAfterDays: 14, archiveAfterDays: 30 } });
+
+    state.settings = { skills: { curator: { staleAfterDays: 20 } } };
+    expect((await request(app).put('/api/skills/config').send({ curator: { archiveAfterDays: 10 } })).status).toBe(400);
+    expect((await request(app).put('/api/skills/config').send({ curator: { archiveAfterDays: 40 } })).body.curator)
+      .toMatchObject({ staleAfterDays: 20, archiveAfterDays: 40 });
+  });
+});
+
 describe('curator pass', () => {
   const run = (dryRun) => request(app).post('/api/skills/curator/run').send(dryRun === undefined ? {} : { dryRun });
 
@@ -255,6 +268,39 @@ describe('mutation ledger', () => {
     expect((await rollback(deletion.id)).status).toBe(200);
     expect(await readFile(join(skillsDir(), 'deploy', 'references', 'checklist.md'), 'utf8')).toBe('- one\n');
     expect((await request(app).get('/api/skills/view?ref=deploy')).status).toBe(200);
+  });
+
+  it('brings back a deleted skill\'s lock and provenance, and never lets a new skill inherit a stale row', async () => {
+    await agentCreate('deploy');
+    await lifecycle('deploy', 'lock');
+    expect((await userEdit({ action: 'delete', name: 'deploy' })).status).toBe(200);
+    const [deletion] = await ledger();
+    await rollback(deletion.id);
+    expect((await listed('local:deploy')).usage).toMatchObject({ locked: true, createdBy: 'agent', state: 'active' });
+    expect((await agentManage({ action: 'patch', name: 'deploy', oldString: 'Follow', newString: 'Run' })).status).toBe(423);
+
+    // Rolling back a create removes the skill and its row.
+    await userEdit({ action: 'create', name: 'fresh', content: skillMd('fresh') });
+    await lifecycle('fresh', 'pin');
+    const [create] = await ledger();
+    expect(create).toMatchObject({ action: 'create', skill: { id: 'local:fresh' } });
+    expect((await rollback(create.id)).body.usageReconciled).toBe(true);
+    expect((await readUsageFile()).skills['local:fresh']).toBeUndefined();
+
+    // A leftover row (a hand-removed skill) is replaced, not inherited.
+    await editUsage('local:reborn', { locked: true, pinned: true, useCount: 9 });
+    await agentCreate('reborn');
+    expect((await listed('local:reborn')).usage).toMatchObject({ locked: false, pinned: false, useCount: 0, createdBy: 'agent' });
+  });
+
+  it('refuses to roll back an entry whose after-state was never captured', async () => {
+    await mkdir(join(skillsDir(), 'half'), { recursive: true });
+    await writeFile(join(skillsDir(), 'half', 'SKILL.md'), skillMd('half'));
+    const before = await captureSkillDir('half');
+    const entry = await appendLedgerEntry({ actor: 'agent', action: 'patch', skill: { id: 'local:half', name: 'half', path: 'half' }, before, after: null, afterUnavailable: true });
+    const refused = await rollback(entry.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('SKILL_LEDGER_ENTRY_INCOMPLETE');
   });
 
   it('rolls an archive back to the active tree', async () => {

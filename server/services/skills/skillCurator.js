@@ -28,7 +28,7 @@ import { ARCHIVE_DIR, captureSkillDir, rollbackLedgerEntry } from './skillLedger
 import {
   getCuratorConfig, recordSkillMutation, scanArchivedSkills, scanLocalSkills, withSkillWriteLock,
 } from './skillService.js';
-import { ensureRecord, lastActivityAt, readUsage, rekeyRecord, toUsageSummary, tryReadUsage, updateUsage } from './skillUsageStore.js';
+import { emptyUsageRecord, ensureRecord, lastActivityAt, readUsage, rekeyRecord, toUsageSummary, tryReadUsage, updateUsage } from './skillUsageStore.js';
 
 export const SKILL_CURATOR_JOB_ID = 'job-skill-curator';
 
@@ -262,27 +262,38 @@ export function applySkillLifecycleAction({ ref, action }, { actor = 'user', now
 export function rollbackSkillLedgerEntry(entryId, { actor = 'user', now = new Date() } = {}) {
   return withSkillWriteLock(async () => {
     const { ledgerMaxBytes } = await getCuratorConfig();
-    const result = await rollbackLedgerEntry(entryId, { actor, maxBytes: ledgerMaxBytes, now });
-    const skill = result.rolledBack.skill;
+    const { rolledBack, ...result } = await rollbackLedgerEntry(entryId, { actor, maxBytes: ledgerMaxBytes, now });
+    const skill = rolledBack.skill;
+    let usageReconciled = true;
     if (skill?.id && skill.path) {
       const { scanned } = await scanLocalSkills();
       const active = scanned.skills.some((candidate) => candidate.path === skill.path);
       const archivedFile = result.restored.find((path) => path.startsWith(`${ARCHIVE_DIR}/`) && path.endsWith(`/${SKILL_FILE}`));
-      await updateUsage((doc) => {
+      // The files are already back; a usage failure is reported, not hidden
+      // behind a plain success, and never undoes the restore.
+      usageReconciled = await updateUsage((doc) => {
         // The record may sit under the skill's own id or under an archive id
         // that remembers it; follow the files to wherever they now are.
         const fromId = doc.skills[skill.id] ? skill.id
           : Object.keys(doc.skills).find((id) => id.startsWith('archive:') && doc.skills[id].originalId === skill.id);
-        if (!fromId) return;
+        const activeFields = { state: 'active', archivedAt: null, originalId: null, restoredAt: now.toISOString() };
         if (active) {
-          Object.assign(rekeyRecord(doc, fromId, skill.id), { state: 'active', archivedAt: null, originalId: null, restoredAt: now.toISOString() });
+          if (fromId) Object.assign(rekeyRecord(doc, fromId, skill.id), activeFields);
+          // A resurrected delete gets back the provenance, lock and counters it had.
+          else if (rolledBack.usageBefore) doc.skills[skill.id] = { ...emptyUsageRecord(), ...rolledBack.usageBefore, ...activeFields };
         } else if (archivedFile) {
           const archiveId = archiveIdOf(archivedFile.slice(0, -(SKILL_FILE.length + 1)));
-          Object.assign(rekeyRecord(doc, fromId, archiveId), { state: 'archived', archivedAt: now.toISOString(), originalId: skill.id });
+          if (fromId) Object.assign(rekeyRecord(doc, fromId, archiveId), { state: 'archived', archivedAt: now.toISOString(), originalId: skill.id });
+        } else if (fromId) {
+          // The skill is gone: a later skill at this path must start fresh.
+          delete doc.skills[fromId];
         }
-      }).catch((error) => console.log(`⚠️ Skill usage for ${skill.id} not reconciled after rollback: ${error.message}`));
+      }).then(() => true, (error) => {
+        console.warn(`⚠️ Skill usage for ${skill.id} not reconciled after rollback: ${error.message}`);
+        return false;
+      });
     }
-    return { ok: true, ...result };
+    return { ok: true, ...result, rolledBack: { id: rolledBack.id, action: rolledBack.action, skill }, usageReconciled };
   });
 }
 
