@@ -123,4 +123,14 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     expect(readText(outside)).toBe('two');
     expect(readText(join(REPO_ROOT, 'AGENTS.md'))).toBe(readText(join(REPO_ROOT, 'AGENTS.md')));
   });
+
+  it('decodes an existing byte read without rereading the file', () => {
+    const path = join(root, 'bytes.txt');
+    const text = 'first café\n';
+    writeFileSync(path, text);
+    const corpus = createGuardCorpus(root);
+    expect(corpus.bytes(path)).toEqual(Buffer.from(text));
+    writeFileSync(path, 'second\n');
+    expect(corpus.read('bytes.txt')).toBe(text);
+  });
 });

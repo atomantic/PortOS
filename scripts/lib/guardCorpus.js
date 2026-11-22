@@ -196,7 +196,8 @@ export function createGuardCorpus(root = REPO_ROOT) {
       const abs = absolute(path);
       text = texts.get(abs);
       if (text === undefined) {
-        text = readFileSync(abs, 'utf8');
+        // Binary-aware checks may already have loaded the bytes.
+        text = buffers.get(abs)?.toString('utf8') ?? readFileSync(abs, 'utf8');
         texts.set(abs, text);
       }
       texts.set(path, text);

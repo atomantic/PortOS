@@ -14,8 +14,12 @@
  * and a test-only helper has no business in the browser barrel.
  */
 
+import { guardCorpus } from '../../../scripts/lib/guardCorpus.js';
+
 /** Blank out `//` and block comments so a quoted example class isn't scanned as markup. */
-export function maskComments(source) {
+export const maskComments = (source) => guardCorpus().derive('clientMaskedComments', source, () => blankComments(source));
+
+function blankComments(source) {
   let out = '';
   let i = 0;
   while (i < source.length) {
