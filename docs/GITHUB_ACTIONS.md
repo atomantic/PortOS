@@ -692,9 +692,9 @@ native selectors and never repeats a related-graph traversal. A scoped Linux pla
 overflow does not start three client shards, the DB/browser
 suites, and a Windows run (#11871). A `related` plan also fans out
 when its measured import reach (`serverReach.selected` / `clientReach.selected`,
-the suites that runner's related walk will select) exceeds the same per-runner cap, even with few explicit selectors: one
-server runner executing ~1,000 related suites set an 11-minute critical path (#16547), and one client
-runner walking a shared client module such as `client/src/services/apiCore.js` (~1,000 suites) took 16 minutes (#17456).
+the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
+runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
+(a shared module such as `client/src/services/apiCore.js`, #17456).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.
