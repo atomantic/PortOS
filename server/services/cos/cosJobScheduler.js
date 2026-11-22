@@ -35,7 +35,13 @@ import { remainingActionBudget } from '../../lib/domainBudgets.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getCosTasks } from './cosTaskStore.js';
-import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob, getJob, getEnabledJobs, getAllJobs } from '../autonomousJobs.js';
+import { generateTaskFromJob, recordJobGateSkip, recordJobBlockedConfig, clearJobBlockedConfig, setJobUnreachableRetryStep, isScriptJob, executeScriptJob, isShellJob, executeShellJob, getJob, getEnabledJobs, getAllJobs } from '../autonomousJobs.js';
+
+// Preflight, the incident ledger and the retry-ladder rules are only needed when a job fires or fails, so they load
+// at use instead of widening every boot's static import closure (server/AGENTS.md "Import scoping").
+const loadPreflight = () => import('../autonomousJobs/preflight.js');
+const loadIncidents = () => import('../autonomousJobs/incidents.js');
+const loadIncidentRules = () => import('../../lib/autonomousJobIncidents.js');
 import { checkJobGate, hasGate } from '../jobGates.js';
 import { clockCronExpression, nextIntervalJobFireTime } from '../autonomousJobs/scheduler.js';
 import {
@@ -188,10 +194,14 @@ export function clearSpawningJob(jobId, { spawned = false } = {}) {
  * fire time and re-fire every second.
  *  - 'held': a transient dispatch hold (runner down, capacity, maintenance...);
  *    keep the occurrence and retry on the 60s defer.
- *  - anything else (a real spawn error): record a skip so the job re-arms at its
+ *  - a real spawn error that names a transient network/DNS failure: no agent ever
+ *    started, so no model was reached or billed. Retry on the 5m → 15m → 30m ladder
+ *    (never past the job's own next natural fire) with the failure alert withheld
+ *    until the ladder is exhausted.
+ *  - anything else: record an incident and a skip so the job re-arms at its
  *    next real period, like a generation failure.
  */
-export async function handleJobSpawnFailed(jobId, reason) {
+export async function handleJobSpawnFailed(jobId, reason, error = null) {
   clearSpawningJob(jobId);
   if (reason === 'held') {
     emitLog('debug', `Job spawn held, retrying in 60s: ${jobId}`, { jobId });
@@ -204,11 +214,76 @@ export async function handleJobSpawnFailed(jobId, reason) {
     });
     return;
   }
+  if (await scheduleUnreachableRetry(jobId, error)) return;
   emitLog('warn', `Job spawn failed, re-arming at next period: ${jobId}`, { jobId });
+  await reportJobFailure(jobId, error || 'Agent spawn failed');
+  await setJobUnreachableRetryStep(jobId, 0).catch(err =>
+    console.error(`❌ Failed to reset unreachable retry step for ${jobId}: ${err.message}`)
+  );
   await recordJobGateSkip(jobId).catch(err =>
     console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
   );
   await registerSingleJobSchedule(jobId);
+}
+
+/** Record a deduplicated incident; never lets an incident-store failure break the scheduler. */
+async function reportJobFailure(jobId, error) {
+  const job = await getJob(jobId).catch(() => null);
+  const { recordJobFailureIncident } = await loadIncidents();
+  await recordJobFailureIncident(jobId, error, { job }).catch(err =>
+    console.error(`❌ Failed to record incident for ${jobId}: ${err.message}`)
+  );
+}
+
+/** A green run closes the job's open incidents; an incident-store failure never breaks the scheduler. */
+async function resolveJobIncidentsSafely(jobId) {
+  const { resolveJobIncidents } = await loadIncidents();
+  await resolveJobIncidents(jobId).catch(err =>
+    console.error(`❌ Failed to resolve incidents for ${jobId}: ${err.message}`)
+  );
+}
+
+/**
+ * Arm the next rung of the zero-spend unreachable ladder. Returns true when a retry was scheduled
+ * (the caller must then record nothing: the interim failure is suppressed), false when this failure
+ * is not eligible, the ladder is exhausted, or the retry would reach the next natural occurrence.
+ */
+async function scheduleUnreachableRetry(jobId, error) {
+  const { isUnreachableError, nextUnreachableRetryDelayMs } = await loadIncidentRules();
+  if (!isUnreachableError(error)) return false;
+  const job = await getJob(jobId);
+  if (!job?.enabled) return false;
+  const now = Date.now();
+  const timezone = await getUserTimezone();
+  // lastRun only advances on a spawn, so project the next occurrence from now, exactly where a skip would put it.
+  const nextNaturalFireAt = computeNextJobFireTime({ ...job, lastRun: new Date(now).toISOString() }, timezone);
+  // On-demand jobs have no recurrence to protect, and no retry is owed for them.
+  if (nextNaturalFireAt == null) return false;
+  const step = Number.isInteger(job.unreachableRetryStep) ? job.unreachableRetryStep : 0;
+  const delayMs = nextUnreachableRetryDelayMs(step, { now, nextNaturalFireAt });
+  if (delayMs == null) return false;
+  await setJobUnreachableRetryStep(jobId, step + 1);
+  emitLog('info', `Job ${job.name} unreachable before any model call, retry ${step + 1}/3 in ${formatDuration(delayMs)}`, { jobId, retryStep: step + 1 });
+  scheduleEvent({
+    id: `job:${jobId}`,
+    type: 'once',
+    delayMs,
+    handler: () => executeScheduledJob(jobId),
+    metadata: { description: `Autonomous job (unreachable retry ${step + 1}/3)`, jobId }
+  });
+  return true;
+}
+
+/** A finished agent run for a scheduled job feeds the incident ledger: failure dedupes, success resolves. */
+export async function handleJobAgentCompleted(agent) {
+  const jobId = agent?.metadata?.jobId;
+  if (!jobId || !agent?.metadata?.autonomousJob) return;
+  if (agent.result?.success === true) {
+    await resolveJobIncidentsSafely(jobId);
+    return;
+  }
+  const error = agent.result?.error || agent.result?.errorAnalysis?.message;
+  if (error) await reportJobFailure(jobId, error);
 }
 
 /**
@@ -294,6 +369,26 @@ export async function executeScheduledJob(jobId) {
     return;
   }
 
+  // Pre-dispatch validation: a job whose pinned provider, app repo or command is
+  // unusable would otherwise build a task, take a slot and fail in spawn every period.
+  // Advance like a gate skip and raise one deduplicated incident instead.
+  const { runJobPreflight } = await loadPreflight();
+  const preflight = await runJobPreflight(job);
+  if (!preflight.ok) {
+    emitLog('warn', `Job ${job.name} blocked by configuration: ${preflight.reason}`, { jobId, blocked: 'config' });
+    await recordJobBlockedConfig(jobId, preflight.reason).catch(err =>
+      console.error(`❌ Failed to record blocked_config for ${jobId}: ${err.message}`)
+    );
+    await reportJobFailure(jobId, `Configuration blocked: ${preflight.reason}`);
+    await registerSingleJobSchedule(jobId);
+    return;
+  }
+  if (job.lastStatus === 'blocked_config') {
+    await clearJobBlockedConfig(jobId).catch(err =>
+      console.error(`❌ Failed to clear blocked_config for ${jobId}: ${err.message}`)
+    );
+  }
+
   // Admitted to fire: reserve one daily action SYNCHRONOUSLY, before any further
   // await (#984). The budget gate above read the shared reservation count, and
   // there is no `await` between that read and this increment — so "read gate →
@@ -329,9 +424,11 @@ export async function executeScheduledJob(jobId) {
     // the autonomous action the gate above withholds when over budget.
     if (isScriptJob(job)) {
       const startedAt = Date.now();
+      let scriptError = null;
       const scriptOk = await executeScriptJob(job).then(() => true, err => {
         if (isMaintenanceHold(err)) return null;
         emitLog('error', `Script job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+        scriptError = err.message;
         return false;
       });
       if (scriptOk === null) {
@@ -344,17 +441,22 @@ export async function executeScheduledJob(jobId) {
       await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
         .catch(err => console.error(`❌ Failed to record CoS budget usage for script job ${job.id}: ${err.message}`));
       releaseReservation(); // recorded usage now owns the in-flight count for this action
-      if (scriptOk) emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
-      else {
+      if (scriptOk) {
+        emitLog('info', `Script job executed: ${job.name}`, { jobId: job.id });
+        await resolveJobIncidentsSafely(jobId);
+      } else {
+        await reportJobFailure(jobId, scriptError || 'Script job failed');
         await recordJobGateSkip(jobId).catch(err =>
           console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
         );
       }
     } else if (isShellJob(job)) {
       const startedAt = Date.now();
+      let shellError = null;
       const shellOk = await executeShellJob(job).then(() => true, err => {
         if (isMaintenanceHold(err)) return null;
         emitLog('error', `Shell job failed: ${job.name} - ${err.message}`, { jobId: job.id });
+        shellError = err.message;
         return false;
       });
       if (shellOk === null) {
@@ -364,8 +466,11 @@ export async function executeScheduledJob(jobId) {
       await recordDomainUsage('cos', { actions: 1, ms: Date.now() - startedAt })
         .catch(err => console.error(`❌ Failed to record CoS budget usage for shell job ${job.id}: ${err.message}`));
       releaseReservation(); // recorded usage now owns the in-flight count for this action
-      if (shellOk) emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
-      else {
+      if (shellOk) {
+        emitLog('info', `Shell job executed: ${job.name}`, { jobId: job.id });
+        await resolveJobIncidentsSafely(jobId);
+      } else {
+        await reportJobFailure(jobId, shellError || 'Shell job failed');
         await recordJobGateSkip(jobId).catch(err =>
           console.error(`❌ Failed to record failure-skip for ${jobId}: ${err.message}`)
         );
@@ -438,6 +543,7 @@ export async function executeScheduledJob(jobId) {
         } else {
           emitLog('error', `Failed to fire autonomous job: ${job.name} - ${err?.message || err}`, { jobId, category: job.category });
         }
+        await reportJobFailure(jobId, err?.message || 'Failed to generate job task');
         await recordJobGateSkip(jobId).catch(skipErr =>
           console.error(`❌ Failed to record failure-skip for ${jobId}: ${skipErr.message}`)
         );

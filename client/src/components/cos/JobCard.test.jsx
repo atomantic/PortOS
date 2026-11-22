@@ -6,8 +6,9 @@ vi.mock('../ui/Toast', () => ({
 }));
 vi.mock('../../services/apiAgents.js', () => ({
   updateCosJob: vi.fn(),
+  acknowledgeCosJobIncident: vi.fn(),
 }));
-const { updateCosJob } = await import('../../services/apiAgents.js');
+const { updateCosJob, acknowledgeCosJobIncident } = await import('../../services/apiAgents.js');
 
 const JobCard = (await import('./JobCard')).default;
 
@@ -262,5 +263,33 @@ describe('JobCard schedule anchor (#15395)', () => {
     expect(screen.getByRole('combobox', { name: 'Run on day of month' }).value).toBe('15');
     fireEvent.change(screen.getByRole('combobox', { name: 'Interval' }), { target: { value: 'daily' } });
     expect(screen.queryByRole('combobox', { name: /Run on/ })).toBeNull();
+  });
+});
+
+describe('JobCard failure incident', () => {
+  const INCIDENT = { id: 'inc-1', jobId: 'job-legacy', state: 'alerted', occurrenceCount: 3, sampleError: 'repo path missing' };
+
+  it('shows nothing without an open incident', () => {
+    renderCard(SCRIPT_JOB);
+    expect(screen.queryByTestId('job-incident')).toBeNull();
+  });
+
+  it('shows the badge with the occurrence count and acknowledges through the API', async () => {
+    acknowledgeCosJobIncident.mockResolvedValueOnce({ incident: { ...INCIDENT, state: 'acknowledged' } });
+    const onUpdate = vi.fn();
+    render(<JobCard job={{ ...SCRIPT_JOB, openIncident: INCIDENT, lastStatus: 'blocked_config' }} onToggle={noop} onTrigger={noop} onDelete={noop} onUpdate={onUpdate} />);
+
+    expect(screen.getByText(/Blocked by configuration/)).toBeTruthy();
+    expect(screen.getByText(/×3/)).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' })); });
+
+    expect(acknowledgeCosJobIncident).toHaveBeenCalledWith('inc-1', { silent: true });
+    expect(onUpdate).toHaveBeenCalled();
+  });
+
+  it('an acknowledged incident stays visible without an Acknowledge action', () => {
+    renderCard({ ...SCRIPT_JOB, openIncident: { ...INCIDENT, state: 'acknowledged' } });
+    expect(screen.getByText(/acknowledged/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Acknowledge' })).toBeNull();
   });
 });

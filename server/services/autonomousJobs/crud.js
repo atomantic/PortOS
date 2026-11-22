@@ -298,6 +298,9 @@ async function recordJobExecution(jobId) {
     job.lastRun = new Date().toISOString()
     job.runCount = (job.runCount || 0) + 1
     job.updatedAt = job.lastRun
+    // The run reached a model (or a direct executor): any pending unreachable
+    // ladder is over, and a config block is healed.
+    clearTransientJobStatus(job)
 
     await saveJobs(data)
 
@@ -319,6 +322,67 @@ async function recordJobGateSkip(jobId) {
 
     job.lastRun = new Date().toISOString()
     job.updatedAt = job.lastRun
+
+    await saveJobs(data)
+    return job
+  })
+}
+
+/** Drop the retry-ladder step and a `blocked_config` verdict; they only describe an unhealthy streak. */
+function clearTransientJobStatus(job) {
+  delete job.unreachableRetryStep
+  if (job.lastStatus === 'blocked_config') {
+    delete job.lastStatus
+    delete job.lastStatusReason
+  }
+}
+
+/**
+ * Record a pre-dispatch configuration block: `lastStatus = 'blocked_config'` and, like a gate skip, advance lastRun
+ * so the job re-arms at its next real period instead of re-firing every second.
+ */
+async function recordJobBlockedConfig(jobId, reason) {
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
+
+    job.lastRun = new Date().toISOString()
+    job.lastStatus = 'blocked_config'
+    job.lastStatusReason = reason
+    job.updatedAt = job.lastRun
+
+    await saveJobs(data)
+    return job
+  })
+}
+
+/** Clear a `blocked_config` verdict once preflight passes again. No-op for any other status. */
+async function clearJobBlockedConfig(jobId) {
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job || job.lastStatus !== 'blocked_config') return job || null
+
+    delete job.lastStatus
+    delete job.lastStatusReason
+    job.updatedAt = new Date().toISOString()
+
+    await saveJobs(data)
+    return job
+  })
+}
+
+/** Persist the unreachable retry-ladder step (0 deletes it). */
+async function setJobUnreachableRetryStep(jobId, step) {
+  return withLock(async () => {
+    const data = await loadJobs()
+    const job = data.jobs.find(j => j.id === jobId)
+    if (!job) return null
+
+    if (step > 0) job.unreachableRetryStep = step
+    else delete job.unreachableRetryStep
+    job.updatedAt = new Date().toISOString()
 
     await saveJobs(data)
     return job
@@ -378,6 +442,9 @@ export {
   deleteJob,
   recordJobExecution,
   recordJobGateSkip,
+  recordJobBlockedConfig,
+  clearJobBlockedConfig,
+  setJobUnreachableRetryStep,
   toggleJob,
   getJobStats
 }
