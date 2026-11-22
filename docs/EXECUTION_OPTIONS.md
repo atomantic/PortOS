@@ -118,6 +118,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/pipeline/stages/NounsStage.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/stages/VisualGenSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/prompts/StageModelField.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/providers/MoaPresetsSection.jsx` | Saved MoA member provider reference and model; members are API presets, so no execution option applies |
 | `client/src/components/providers/ProviderPresetsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/quotaBurn/StepSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/AiAssignmentsTab.jsx` | Shared structured options or saved provider reference |

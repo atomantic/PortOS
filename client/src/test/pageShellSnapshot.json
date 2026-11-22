@@ -11,6 +11,7 @@
   "/ai/harnesses/:harnessId": "full",
   "/ai/presets": "full",
   "/ai/presets/:presetId": "full",
+  "/ai/presets/moa/:moaId": "full",
   "/ai/presets/new": "full",
   "/ai/services": "full",
   "/ai/services/:serviceSlug": "full",

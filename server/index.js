@@ -169,6 +169,7 @@ const conflictJournalRoutes = createLazyRouter(() => import('./routes/conflictJo
 const openclawRoutes = createLazyRouter(() => import('./routes/openclaw.js'));
 const roundsRoutes = createLazyRouter(() => import('./routes/rounds.js'));
 const askRoutes = createLazyRouter(() => import('./routes/ask.js'));
+const moaPresetRoutes = createLazyRouter(() => import('./routes/moaPresets.js'));
 const appleHealthDaysRoutes = createLazyRouter(() => import('./routes/appleHealthDays.js'));
 const appleHealthRoutes = createLazyRouter(() => import('./routes/appleHealth.js'));
 const avatarRoutes = createLazyRouter(() => import('./routes/avatar.js'));
@@ -526,6 +527,7 @@ app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/peer-media', peerMediaRoutes);
 app.use('/api/ask', askRoutes);
+app.use('/api/moa-presets', moaPresetRoutes);
 
 
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
