@@ -12,6 +12,10 @@ import { join } from 'node:path';
 import { DEFAULT_OUT_DIR, diffSnapshots, readSnapshotDir } from '../../../../scripts/prompt-surface.js';
 import { REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
+// The render owns a throwaway PORTOS_DATA_ROOT (NODE_ENV=test, file backend). Vitest's marker would
+// make the runtime data-isolation backstop treat that root as live `data/` on a non-worktree checkout.
+const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('VITEST')));
+
 const tempRoots = [];
 afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -25,6 +29,7 @@ describe('prompt surface snapshot (#17395)', () => {
     const render = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts/prompt-surface.js'), 'render', '--out', out], {
       cwd: REPO_ROOT,
       encoding: 'utf8',
+      env: childEnv,
     });
     expect(render.status, render.stderr).toBe(0);
     const committed = readSnapshotDir(DEFAULT_OUT_DIR);
