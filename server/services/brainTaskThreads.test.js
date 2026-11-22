@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ threads: [], tasks: new Map(), beforeUpdate: null }));
 vi.mock('./brainStorage.js', () => ({
-  getThreads: async () => structuredClone(state.threads),
+  getThreadListRows: async () => structuredClone(state.threads),
   updateWith: async (_type, id, update) => {
     const row = state.threads.find(thread => thread.id === id);
     state.beforeUpdate?.(row);

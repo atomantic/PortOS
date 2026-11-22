@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const apps = { getAllApps: vi.fn(), getAppById: vi.fn() };
 vi.mock('./apps.js', () => apps);
 const brain = { getInboxLog: vi.fn(), markInboxDone: vi.fn() };
-const brainStorage = { getThreads: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
+const brainStorage = { getThreadListRows: vi.fn(), getThreadById: vi.fn(), updateWith: vi.fn() };
 const askConversations = { listConversations: vi.fn() };
 const cosTaskStore = { getCosApprovalView: vi.fn(), approveTask: vi.fn(), getTaskById: vi.fn() };
 const cosAgentFeedback = { getPendingAgentFeedback: vi.fn(), submitAgentFeedback: vi.fn() };
@@ -88,7 +88,7 @@ function resetEmpty() {
   apps.getAppById.mockResolvedValue(null);
   cosTaskStore.getTaskById.mockResolvedValue(null);
   brain.getInboxLog.mockResolvedValue([]);
-  brainStorage.getThreads.mockResolvedValue([]);
+  brainStorage.getThreadListRows.mockResolvedValue([]);
   brainStorage.getThreadById.mockResolvedValue(null);
   brainStorage.updateWith.mockResolvedValue(null);
   askConversations.listConversations.mockResolvedValue([]);
@@ -453,7 +453,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('projects active Brain commitments and manual todos into the all view', async () => {
-    brainStorage.getThreads.mockResolvedValue([
+    brainStorage.getThreadListRows.mockResolvedValue([
       {
         id: 'thread-1',
         title: 'Ship the example follow-up',
@@ -492,7 +492,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('shows the live blocker, managed app, task state, and PR link on a blocked follow-up commitment', async () => {
-    brainStorage.getThreads.mockResolvedValue([{
+    brainStorage.getThreadListRows.mockResolvedValue([{
       id: 'pr-follow-up',
       title: 'PR follow-up needs attention',
       status: 'open',
@@ -528,7 +528,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('hides a task-owned commitment as soon as its CoS task is completed', async () => {
-    brainStorage.getThreads.mockResolvedValue([{
+    brainStorage.getThreadListRows.mockResolvedValue([{
       id: 'resolved-follow-up',
       title: 'PR follow-up needs attention',
       status: 'open',
@@ -544,7 +544,7 @@ describe('reviewQueue.buildQueue', () => {
 
   it('keeps waiting and someday commitments out of Today unless their follow-up is due', async () => {
     userTimezone.getUserTimezone.mockResolvedValue('America/Los_Angeles');
-    brainStorage.getThreads.mockResolvedValue([
+    brainStorage.getThreadListRows.mockResolvedValue([
       { id: 'waiting-future', title: 'Waiting future', status: 'waiting', dueAt: '2026-09-22T12:00:00.000Z' },
       { id: 'waiting-due', title: 'Waiting due', status: 'waiting', dueAt: '2026-09-20T12:00:00.000Z' },
       { id: 'someday-undated', title: 'Someday undated', status: 'someday' },
@@ -563,7 +563,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('keeps terminal Brain commitments and completed manual todos in History', async () => {
-    brainStorage.getThreads.mockResolvedValue([
+    brainStorage.getThreadListRows.mockResolvedValue([
       { id: 'thread-done', title: 'Finished loop', status: 'done', updatedAt: '2026-09-20T10:00:00.000Z' },
       { id: 'thread-open', title: 'Open loop', status: 'open' },
     ]);
@@ -651,7 +651,7 @@ describe('reviewQueue.buildQueue', () => {
       { id: 'blocked', status: 'blocked', metadata: { blockedCategory: 'provider-config' } },
     ];
     cosTaskStore.getTaskById.mockImplementation(async id => tasks.find(task => task.id === id));
-    brainStorage.getThreads.mockResolvedValue([...tasks, { id: 'missing' }].map(task => ({
+    brainStorage.getThreadListRows.mockResolvedValue([...tasks, { id: 'missing' }].map(task => ({
       id: task.id, title: 'Example recovery', status: 'open', source: 'cos',
       refs: [{ kind: 'cos.task', id: task.id }]
     })).concat({ id: 'personal', title: 'My commitment', status: 'open' }));
@@ -665,7 +665,7 @@ describe('reviewQueue.buildQueue', () => {
   });
 
   it('reports unavailable task state instead of hiding unverified commitments', async () => {
-    brainStorage.getThreads.mockResolvedValue([{
+    brainStorage.getThreadListRows.mockResolvedValue([{
       id: 'recovery', title: 'Example recovery', status: 'open', source: 'cos',
       refs: [{ kind: 'cos.task', id: 'unreadable' }]
     }]);

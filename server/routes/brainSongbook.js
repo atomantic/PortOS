@@ -102,13 +102,11 @@ router.post('/import/url', asyncHandler(async (req, res) => {
 // =============================================================================
 
 router.get('/', asyncHandler(async (req, res) => {
-  // Index projection: the list view needs metadata only, and content.text can
-  // be 200k chars per song — a large repertoire would ship megabytes nobody
-  // reads. The full record (with text) comes from GET /:id.
-  const songs = (await brainStorage.getAll('songs')).map(({ content, ...rest }) => ({
-    ...rest,
-    content: { format: content?.format || 'tab' },
-  }));
+  // Index projection served from brainStorage's list-row cache: the list view
+  // needs metadata only, and content.text can be 200k chars per song, so the
+  // cached rows carry `content: { format }` and a warm list reads no bodies.
+  // The full record (with text) comes from GET /:id.
+  const songs = await brainStorage.getSongListRows();
   res.json({ songs });
 }));
 
