@@ -14,7 +14,15 @@ vi.mock('../provider/providerStatus.js', () => ({
   getProviderStatus: vi.fn(() => mocks.status),
 }));
 
+const moa = vi.hoisted(() => ({ record: null, refusals: [] }));
+vi.mock('../moaPresets.js', () => ({
+  resolveMoaProvider: vi.fn(async () => moa.record),
+  getMoaPreset: vi.fn(async () => ({ id: 'council' })),
+  moaPresetRefusals: vi.fn(async () => moa.refusals),
+}));
+
 const { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } = await import('./persistentMindProfile.js');
+const { persistentMindHarnessInfo } = await import('./persistentMindAdapter.js');
 
 const profile = { enabled: true, providerId: 'local', model: 'reasoner', effort: '', thinkingInterface: 'text' };
 
@@ -134,5 +142,37 @@ describe('resolvePersistentMindThinkingSession', () => {
     mocks.provider.models = [];
     await expect(resolvePersistentMindThinkingSession({ presetId: 'deep', selection, config }))
       .resolves.toMatchObject({ ok: false, error: /no available model catalog/ });
+  });
+});
+
+describe('a Mixture of Agents thinking preset (#17386)', () => {
+  const council = { id: 'council', label: 'Council', providerId: 'moa:council', model: 'agg-big', effort: '' };
+  const config = { persistentMindProfile: profile, persistentMindThinkingPresets: { presets: [council] } };
+  const borrow = (preset = council) => resolvePersistentMindThinkingSession({ presetId: preset.id, selection: preset, config: { ...config, persistentMindThinkingPresets: { presets: [preset] } } });
+
+  beforeEach(() => {
+    mocks.provider = null;
+    moa.record = { id: 'moa:council', type: 'moa', enabled: true, defaultModel: 'agg-big', models: ['agg-big'], moaPresetId: 'council' };
+    moa.refusals = [];
+  });
+
+  it('borrows the preset as a tool-free route on its aggregator model', async () => {
+    await expect(borrow()).resolves.toMatchObject({ ok: true, temporary: true, provider: { id: 'moa:council', type: 'moa' }, model: 'agg-big', effort: null });
+    expect(persistentMindHarnessInfo(moa.record)).toMatchObject({ label: 'Mixture of Agents', recommendation: 'supported' });
+  });
+
+  it('refuses a missing preset, an aggregator that cannot run, another model, or an effort pin', async () => {
+    moa.refusals = [{ role: 'reference', index: 0, refusal: 'provider "x" is disabled' }];
+    await expect(borrow()).resolves.toMatchObject({ ok: true });
+
+    moa.refusals = [{ role: 'aggregator', index: 0, refusal: 'provider "agg" is disabled' }];
+    await expect(borrow()).resolves.toMatchObject({ ok: false, error: /aggregator provider "agg" is disabled/ });
+
+    moa.refusals = [];
+    await expect(borrow({ ...council, model: 'other' })).resolves.toMatchObject({ ok: false, error: /not the aggregator model/ });
+    await expect(borrow({ ...council, effort: 'high' })).resolves.toMatchObject({ ok: false, error: /not supported by an MoA preset/ });
+
+    moa.record = null;
+    await expect(borrow()).resolves.toMatchObject({ ok: false, error: /"moa:council" is unavailable/ });
   });
 });

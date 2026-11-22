@@ -149,5 +149,11 @@ export async function resolveMoaProvider(providerId) {
   const presetId = presetIdFromMoaProviderId(providerId);
   if (!presetId) return null;
   const preset = await getMoaPreset(presetId);
-  return preset ? moaProviderRecord(preset) : null;
+  if (!preset) return null;
+  // An aggregator left on its provider's default reports that model, so a
+  // caller that pins or displays the acting model names the one that runs.
+  const aggregatorModel = preset.aggregator.model
+    || (await getProviderById(preset.aggregator.providerId).catch(() => null))?.defaultModel
+    || null;
+  return moaProviderRecord({ ...preset, aggregator: { ...preset.aggregator, model: aggregatorModel ?? undefined } });
 }

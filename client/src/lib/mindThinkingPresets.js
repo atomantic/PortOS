@@ -77,6 +77,14 @@ export function classifyMindRouteBilling(provider) {
       spendsAccount: true,
     };
   }
+  if (provider.type === 'moa') {
+    return {
+      billing: MIND_ROUTE_BILLING.UNKNOWN,
+      label: 'Mixture of Agents',
+      detail: 'Runs every reference model and then the aggregator, each billed as its own run on its own provider. Treat it as billable.',
+      spendsAccount: true,
+    };
+  }
   if (isSelfHostedRoute(provider)) {
     return {
       billing: MIND_ROUTE_BILLING.LOCAL,

@@ -6,6 +6,10 @@ A Mixture of Agents preset is a named group of 1–5 **reference models** (advis
 
 A preset is a virtual provider addressed as `moa:<presetId>`. Every caller that resolves a provider through `promptRunner.resolveProviderAndModel` or Ask's provider selection accepts it, and `runPromptThroughProvider` dispatches the `type: 'moa'` record to `server/services/moaRunner.js`. Every other run path refuses the unknown type, so a preset never reaches a CLI or TUI spawn. MoA runs only when a user or a user-configured job selects it. It makes no cold-bootstrap calls.
 
+## Persistent Mind
+
+A Persistent Mind thinking preset (and the home profile) may name `moa:<id>` with the aggregator's model and no effort pin. `resolveExactRoute` in `server/services/persistent/persistentMindProfile.js` resolves it live and refuses a missing preset, an aggregator that cannot run, any other model, or an effort pin. Advisors that cannot run are dropped at run time. Every member is an API provider, so the route passes the mind's tool-free check. Image turns are refused, and the mind's local prompt budget does not apply, because a preset has no single endpoint.
+
 ## Members
 
 - Every member must be an **enabled API provider** that is not itself an MoA preset. `moaValidation.js` refuses a `moa:` member structurally, and `lib/moaConfig.js#moaMemberRefusal` checks live eligibility on save and again on every run.

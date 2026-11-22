@@ -1,7 +1,9 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels';
 import { updateCosConfig } from '../../services/apiAgents.js';
+import { listMoaPresets } from '../../services/apiMoaPresets.js';
+import { moaProviderOptions } from '../../lib/moaProviderOptions.js';
 import { classifyMindRouteBilling, formatMindRoute, mintMindPresetId } from '../../lib/mindThinkingPresets.js';
 import MindRouteBadge, { BILLING_TONE } from './MindRouteBadge.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
@@ -34,12 +36,27 @@ export default function PersistentMindThinkingPresets({
 }) {
   const labelId = useId();
   const {
-    providers,
-    availableModels,
+    providers: presetProviders,
+    availableModels: presetModels,
     loading: providersLoading,
     setSelectedProviderId,
     setSelectedModel,
   } = useProviderModels({ allowDefault: true, withEffort: true, silent: true });
+  // Mixture of Agents presets (#17386) are offered beside the provider presets
+  // as `moa:<id>` routes; the server resolves them exact-or-refuse like any other.
+  const [moaPresets, setMoaPresets] = useState([]);
+  useEffect(() => {
+    let active = true;
+    listMoaPresets({ silent: true }).then(
+      (data) => { if (active) setMoaPresets(data?.presets ?? []); },
+      () => { if (active) setMoaPresets([]); },
+    );
+    return () => { active = false; };
+  }, []);
+  const providers = useMemo(
+    () => [...presetProviders, ...moaProviderOptions(moaPresets, presetProviders)],
+    [presetProviders, moaPresets],
+  );
   const [draft, setDraft] = useState(emptyDraft);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -147,6 +164,7 @@ export default function PersistentMindThinkingPresets({
   };
 
   const draftProvider = providers.find((provider) => provider.id === draft.providerId) || null;
+  const availableModels = draftProvider?.type === 'moa' ? draftProvider.models : presetModels;
   const draftBilling = classifyMindRouteBilling(draftProvider);
   const editorOpen = editingPresetId !== null;
   const atCapacity = presets.length >= MAX_PRESETS;

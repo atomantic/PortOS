@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { isToolFreeOneShotProvider } from '../provider/providerVendors.js';
+import { isMoaProvider } from '../provider/providerTypes.js';
 import { trimTo } from '../textUtils.js';
 
 export const PERSISTENT_MIND_PROFILE_SCHEMA_VERSION = 1;
@@ -113,7 +114,8 @@ export function mergePersistentMindProfile(previous, update) {
  * hatch because no operator is present for a wake.
  */
 export function persistentMindToolFreeRefusal(provider) {
-  if (!provider || isToolFreeOneShotProvider(provider)) return null;
+  // A Mixture of Agents preset admits only API members (lib/moaConfig.js), checked again on every run.
+  if (!provider || isToolFreeOneShotProvider(provider) || isMoaProvider(provider)) return null;
   const label = provider.id || provider.command || 'unknown';
   const lane = provider.type === 'tui' ? 'an interactive TUI' : `a ${provider.type || 'unknown'} provider`;
   return `Persistent Mind cannot use provider "${label}": it is ${lane} that cannot run without host shell and file tools, and the mind reads third-party text unattended. Choose an API provider or a tool-free CLI such as Claude Code or Grok.`;
