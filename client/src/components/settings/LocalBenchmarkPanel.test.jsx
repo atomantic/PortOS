@@ -9,7 +9,7 @@ vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } })
 import { startLocalLlmAssessmentBenchmark } from '../../services/apiLocalLlm.js';
 import LocalBenchmarkPanel, { benchmarkCandidates, benchmarkGenerations } from './LocalBenchmarkPanel.jsx';
 
-const profile = { contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1 };
+const profile = { contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1, minModels: 2, maxModels: 8 };
 const report = {
   benchmarkProfile: profile,
   assessments: [

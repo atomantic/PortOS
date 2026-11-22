@@ -354,7 +354,6 @@ async function beginSweep({ scope, backend, modelId, tunings, models, contextTok
   const resolvedScope = SWEEP_SCOPES.includes(scope) ? scope : 'unmeasured';
   const named = backend && modelId ? { backend, modelId } : null;
   const benchmark = Array.isArray(models);
-  if (benchmark && (named || tunings)) return { ...snapshot(), rejected: 'a benchmark names its models; it takes no single model or tuning sweep' };
 
   // A tuning sweep varies the configuration of ONE model, so without a model
   // there is nothing to hold constant and the request is meaningless.

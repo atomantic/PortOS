@@ -12,7 +12,7 @@
 import { z } from 'zod';
 import { PORTS } from './ports.js';
 import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
-import { BENCHMARK_MAX_MODELS, BENCHMARK_MIN_MODELS, SWEEP_SCOPES } from './localModelAssessment.js';
+import { BENCHMARK_PROFILE, SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 import { SPEC_MODEL_ROLES } from './specDecodePresets.js';
@@ -384,7 +384,7 @@ export const localLlmAssessmentSweepSchema = z.object({
 // generations the consent gate names are the ones that run. The cap bounds one click's work.
 export const localLlmAssessmentBenchmarkSchema = z.object({
   models: z.array(z.object({ backend: localLlmRuntimeSchema, modelId: localLlmModelIdSchema }))
-    .min(BENCHMARK_MIN_MODELS).max(BENCHMARK_MAX_MODELS)
+    .min(BENCHMARK_PROFILE.minModels).max(BENCHMARK_PROFILE.maxModels)
     .refine((models) => new Set(models.map((m) => `${m.backend}:${m.modelId}`)).size === models.length, {
       message: 'each model may appear only once',
     }),

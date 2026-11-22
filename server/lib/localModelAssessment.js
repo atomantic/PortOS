@@ -658,13 +658,11 @@ export function summarizeSweepScopes({ assessments, unassessed } = {}) {
  * `maxTokens` at one `contextTokens` prompt, under backend defaults. Fixed here, not sent by the
  * client, so the count the consent gate names is the count that runs.
  */
-export const BENCHMARK_PROFILE = Object.freeze({ contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1 });
+// `minModels`/`maxModels` bound one request; they ride on the report so the picker cannot drift from the schema.
+export const BENCHMARK_PROFILE = Object.freeze({ contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1, minModels: 2, maxModels: 8 });
 
 /** The repeated context list one benchmark measurement samples. */
 export const benchmarkContexts = () => Array.from({ length: BENCHMARK_PROFILE.runs }, () => BENCHMARK_PROFILE.contextTokens);
-
-export const BENCHMARK_MIN_MODELS = 2;
-export const BENCHMARK_MAX_MODELS = 8;
 
 /**
  * Resolve the models a user picked for a side-by-side benchmark into sweep targets.

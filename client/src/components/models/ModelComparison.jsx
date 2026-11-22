@@ -39,7 +39,7 @@ const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ul
 // X-axis choices. `kind` sets the unit and copy; `better` is which direction is preferred, so the
 // chart description and axis hint never call a lower latency worse. `localOnly` axes have no
 // published figure: only this machine's Models › Performance assessments fill them.
-export const AXES = [
+const AXES = [
   { id: 'costPerTask', label: 'Cost per benchmark task (recommended)', axis: 'USD / Intelligence Index task', kind: 'money', better: 'lower' },
   { id: 'blendedPerMillion', label: 'Blended token price (3:1 input/output)', axis: 'USD / 1M total tokens', kind: 'money', better: 'lower' },
   { id: 'inputPerMillion', label: 'Input token price', axis: 'USD / 1M input tokens', kind: 'money', better: 'lower' },
@@ -57,7 +57,7 @@ const formatAxisValue = (value, axis) => axis.kind === 'money' ? formatUsd(value
 const axisUnit = axis => axis?.kind === 'speed' ? ' tokens/s' : '';
 // A local runtime's missing speed or latency is a measurement this machine has not taken; anything
 // else missing is a research gap.
-export const isUnmeasuredLocal = (row, axis) => Boolean(row?.localInference && axis && axis.kind !== 'money' && !row[axis.id]);
+const isUnmeasuredLocal = (row, axis) => Boolean(row?.localInference && axis && axis.kind !== 'money' && !row[axis.id]);
 const valueText = (metric, axis = null, row = null) => metric
   ? `${metric.estimated ? '≈ ' : ''}${axis ? formatAxisValue(metric.value, axis) : formatCount(metric.value, { maximumFractionDigits: 1 })}`
   : isUnmeasuredLocal(row, axis) ? 'Not measured' : axis?.localOnly ? 'Not published' : 'Needs research';

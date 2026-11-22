@@ -25,8 +25,6 @@ import { formatContextTokens, formatCount, timeAgo } from '../../utils/formatter
 import { decodeLocalModelAssessmentKey, encodeLocalModelAssessmentKey } from '../../lib/localModelAssessmentKey';
 import { startLocalLlmAssessmentBenchmark } from '../../services/apiLocalLlm.js';
 
-const MIN_MODELS = 2;
-const MAX_MODELS = 8;
 const keyOf = (m) => `${m.backend}:${m.modelId}`;
 
 /**
@@ -182,8 +180,8 @@ export default function LocalBenchmarkPanel({ report, runtimeLabelFor, disabled 
     return next;
   }, { errorMessage: 'Could not start the benchmark' });
 
-  const tooFew = selected.length < MIN_MODELS;
-  const tooMany = selected.length > MAX_MODELS;
+  const tooFew = selected.length < (profile?.minModels ?? 2);
+  const tooMany = profile ? selected.length > profile.maxModels : false;
 
   return (
     <section className="bg-port-card border border-port-border rounded-xl p-4 space-y-3" aria-label="Side-by-side benchmark">
@@ -223,7 +221,7 @@ export default function LocalBenchmarkPanel({ report, runtimeLabelFor, disabled 
           <PlayCircle size={13} /> Benchmark {selected.length || ''} selected
         </button>
         <span className="text-[11px] text-gray-500">
-          {tooFew ? `Pick at least ${MIN_MODELS} models.` : tooMany ? `Pick at most ${MAX_MODELS} models per run.` : disabled ? 'Waiting for the current measurement to finish.' : null}
+          {tooFew ? `Pick at least ${profile?.minModels ?? 2} models.` : tooMany ? `Pick at most ${profile.maxModels} models per run.` : disabled ? 'Waiting for the current measurement to finish.' : null}
         </span>
         {selected.length > 0 && (
           <button onClick={() => writeSelection([])} className="px-3 py-1.5 text-xs rounded-lg border border-port-border text-gray-300 hover:border-port-accent">
