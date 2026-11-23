@@ -14,7 +14,7 @@ const X_STATUS_URL = /^https:\/\/x\.com\/(?:(?:[A-Za-z0-9_]{1,15}|i)\/)?status\/
 
 const POST_HELPERS = String.raw`
   const parseCount = (value) => {
-    const match = String(value || '').replace(/,/g, '').match(/(\\d+(?:\\.\\d+)?)(?:\\s*([KMB]))?/i);
+    const match = String(value || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)(?:\s*([KMB]))?/i);
     if (!match) return null;
     const multiplier = { K: 1_000, M: 1_000_000, B: 1_000_000_000 }[String(match[2] || '').toUpperCase()] || 1;
     return Math.round(Number(match[1]) * multiplier);
