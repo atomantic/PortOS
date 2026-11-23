@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -15,6 +15,7 @@ import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FormField from '../ui/FormField';
 import ListLoadError from '../ui/ListLoadError';
+import useMounted from '../../hooks/useMounted';
 import useListResource from '../../hooks/useListResource';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
@@ -100,6 +101,11 @@ export function VoiceTab() {
   };
 
   const currentEngine = cfg?.tts?.engine;
+  // Piper download callbacks resolve long after the click; they must see the
+  // engine/mount state at resolve time, not the closure from the click.
+  const mountedRef = useMounted();
+  const currentEngineRef = useRef(currentEngine);
+  currentEngineRef.current = currentEngine;
 
   // The selected engine's voice catalog. A failed read renders an error row with
   // Retry rather than an empty picker that offers only the saved voice.
@@ -563,9 +569,17 @@ export function VoiceTab() {
                   setDownloadingVoice(val);
                   fetchPiperVoice(val, { silent: true })
                     .then(() => listVoices('piper', { silent: true }))
-                    .then((fresh) => setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []))
-                    .catch((err) => toast.error(`Voice download failed: ${err.message}`))
-                    .finally(() => setDownloadingVoice(null));
+                    .then((fresh) => {
+                      if (mountedRef.current && currentEngineRef.current === 'piper') {
+                        setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []);
+                      }
+                    })
+                    .catch((err) => {
+                      if (mountedRef.current) toast.error(`Voice download failed: ${err.message}`);
+                    })
+                    .finally(() => {
+                      if (mountedRef.current) setDownloadingVoice((prev) => (prev === val ? null : prev));
+                    });
                 }
               }}
               className={`${inputCls} flex-1`}
