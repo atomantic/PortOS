@@ -459,7 +459,14 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     shape = {
       description: `${workflow.label} for ${appObj.name} — ${workflow.description}${depfreeArgs.slashdoArgs ? ` (${depfreeMode} mode)` : ''}`,
       slashdoCommand: command,
-      taskMetadata: { useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs },
+      // Caller guidance (e.g. the Git tab's "Open PR with agent") rides as the
+      // task prompt; prompt assembly renders it beside the slashdo invocation.
+      // `prCompletion` is persisted so the PR-completion policy isn't dropped.
+      ...(typeof overrideContext === 'string' && overrideContext.trim() ? { prompt: overrideContext } : {}),
+      taskMetadata: {
+        useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs,
+        ...(prCompletion !== undefined ? { prCompletion } : {})
+      },
     };
   }
 
