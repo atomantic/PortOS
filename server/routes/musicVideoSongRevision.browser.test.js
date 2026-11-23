@@ -11,6 +11,7 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/m
 import { waitForAbort } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../lib/browserSuiteGate.js';
+import { buildRecordedViteFixture, createRecordedStaticServer } from '../../scripts/lib/browserServedFiles.js';
 vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-song-browser-') }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({}), settingsEvents: new EventEmitter() }));
 const { _testChromeCaptureArgs, _waitForTestChrome, _cleanupTestBrowser, _testBrowserCleanupSettled, _createTestArtifactsRoot } = await import('../services/htmlComposition/testBrowserCleanup.js');
@@ -84,9 +85,14 @@ describe.skipIf(!canRun)('song revision in Chrome (client dependencies required)
     await writeFile(join(ui, 'entry.jsx'), `import ${JSON.stringify(join(client, 'src/index.css'))};\n` + entry);
     await writeFile(join(ui, 'index.html'), '<html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     const { build } = await import(bundler[0]); const { default: react } = await import(bundler[1]); const { default: tailwind } = await import(bundler[2]);
-    await build({ configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist') }, logLevel: 'warn' });
-    const app = express(); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/music', express.static(PATHS.music)); app.use(express.static(join(ui, 'dist'))); app.use(errorMiddleware);
-    server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
+    await buildRecordedViteFixture({
+      build,
+      recordedRoot: client,
+      temp: ui,
+      config: { configFile: false, root: ui, plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(ui, 'dist') }, logLevel: 'warn' },
+    });
+    const app = express(); const staticFiles = createRecordedStaticServer(express); app.use(express.json()); app.use('/api/music-video', router); app.use('/data/music', staticFiles.serve(PATHS.music)); app.use(staticFiles.serve(join(ui, 'dist'))); app.use(errorMiddleware);
+    server = await staticFiles.start(app);
     io = new Server(server); musicVideoEvents.on('song-revision', broadcast);
     proc = spawn(chrome, _testChromeCaptureArgs(join(PATHS.data, 'chrome')), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
     artifacts = _createTestArtifactsRoot();

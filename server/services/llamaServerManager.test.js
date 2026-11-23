@@ -54,8 +54,17 @@ const FAST_TIMING = {
 // Pinned to darwin so the Homebrew paths are exercised identically on every
 // developer's OS — otherwise the same assertions would run against winget on a
 // Windows checkout. The winget half pins `platform: 'win32'` the same way.
+// Per-launch log truncation writes these; keep it off the real PM2 log paths.
+const TEST_LOG_FILES = {
+  stdout: join(tmpdir(), 'portos-llama-server-test-out.log'),
+  stderr: join(tmpdir(), 'portos-llama-server-test-error.log'),
+};
+
+// Arguments PM2 hands the binary: everything after the `--` separator.
+const launchArgsOf = (startCall) => startCall.slice(startCall.indexOf('--') + 1);
+
 const resetForTest = (overrides = {}) => {
-  _resetLlamaServerStateForTests({ ...FAST_TIMING, platform: 'darwin', ...overrides });
+  _resetLlamaServerStateForTests({ ...FAST_TIMING, platform: 'darwin', logFiles: TEST_LOG_FILES, ...overrides });
 };
 
 const brewInfoJson = ({ installedVersion = 'build-100', latestVersion = '0.3.0', outdated = true, pinned = false, linkedKeg = 'build-100' } = {}) => JSON.stringify({
@@ -314,13 +323,15 @@ describe('llamaServerManager', () => {
     expect(result.pid).toBe(12345);
     const startCall = execPm2Calls.find((c) => c[0] === 'start');
     expect(startCall[1]).toBe('/usr/local/bin/llama-server');
-    expect(startCall.slice(2, 8)).toEqual([
+    expect(startCall.slice(2, 12)).toEqual([
       '--name', LLAMA_APP,
       '--interpreter', 'none',
       '--no-autorestart',
+      '--output', TEST_LOG_FILES.stdout,
+      '--error', TEST_LOG_FILES.stderr,
       '--',
     ]);
-    expect(startCall.slice(8)).toEqual([
+    expect(launchArgsOf(startCall)).toEqual([
       '-m', modelPath,
       '--model-draft', draftPath,
       '--spec-type', 'draft-dflash',
@@ -368,7 +379,7 @@ describe('llamaServerManager', () => {
     vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
 
     await startLlamaServer({ model: modelPath, specType: 'none', projector: projectorPath });
-    const withProjector = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    const withProjector = launchArgsOf(execPm2Calls.find((c) => c[0] === 'start'));
     expect(withProjector.slice(0, 4)).toEqual(['-m', modelPath, '--mmproj', projectorPath]);
     const running = await getLlamaServerStatus();
     expect(running.config.projector).toBe(projectorPath);
@@ -376,7 +387,7 @@ describe('llamaServerManager', () => {
     await stopLlamaServer();
     execPm2Calls = [];
     await startLlamaServer({ model: modelPath, specType: 'none' });
-    const withoutProjector = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    const withoutProjector = launchArgsOf(execPm2Calls.find((c) => c[0] === 'start'));
     expect(withoutProjector).not.toContain('--mmproj');
     expect(withoutProjector).toEqual(withProjector.filter((a) => a !== '--mmproj' && a !== projectorPath));
     expect((await getLlamaServerStatus()).config.projector).toBeNull();
@@ -1143,6 +1154,40 @@ describe('llamaServerManager', () => {
       await startLlamaServer({ model: modelPath, port: PORTS.LLAMA_SERVER });
     };
 
+    it('fails a relaunch fast, restoring the previous line, when the new process dies after the startup window', async () => {
+      await started();
+      // The process stays `online` through startLlamaServer's own wait, then
+      // dies while "loading". Without death detection the relaunch polled a
+      // dead port for the whole readiness budget.
+      let launches = 0;
+      const probe = vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => {
+        if (pm2State?.args?.includes('512') && launches === 0) {
+          launches += 1;
+          pm2State = { ...pm2State, status: 'errored' };
+        }
+        return { reachable: pm2State?.status === 'online' && !pm2State.args.includes('512') };
+      });
+      _resetLlamaServerStateForTests({ ...FAST_TIMING, relaunchReadyTimeout: 60_000, platform: 'darwin', logFiles: TEST_LOG_FILES });
+      const result = await relaunchLlamaServerWithTuning({ ubatchSize: 512 });
+      expect(result.applied).toBe(false);
+      expect(probe).toHaveBeenCalled();
+    });
+
+    it('serializes overlapping starts so one never deletes the other\'s PM2 app', async () => {
+      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+      probeTracksPm2();
+      const settled = await Promise.allSettled([
+        startLlamaServer({ model: modelPath, port: PORTS.LLAMA_SERVER }),
+        startLlamaServer({ model: modelPath, port: PORTS.LLAMA_SERVER }),
+      ]);
+      // The second start runs only after the first settles, so it sees the
+      // first's live process and refuses; unserialized, both would pass the
+      // check and the second `pm2 delete` would kill the first launch.
+      expect(settled.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+      const ops = execPm2Calls.map((c) => c[0]).filter((a) => a === 'delete' || a === 'start');
+      expect(ops).toEqual(['delete', 'start']);
+    });
+
     it('refuses when nothing is running — there is no model path to reuse', async () => {
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
       const result = await relaunchLlamaServerWithTuning({ ubatchSize: 512 });
@@ -1579,7 +1624,7 @@ describe('llamaServerManager', () => {
     const mockHelp = (text) => vi.spyOn(childProcess, 'execFile')
       .mockImplementation((_bin, _args, _opts, cb) => { cb(null, text, ''); return fakeSpawnProcess(); });
 
-    const startArgs = () => (execPm2Calls.find((c) => c[0] === 'start') || []).slice(8);
+    const startArgs = () => launchArgsOf(execPm2Calls.find((c) => c[0] === 'start') || ['--']);
 
     it('puts the window on the launch line in SECONDS when the build supports it', async () => {
       mockHelp('--sleep-idle-seconds SECONDS  number of seconds of idleness');

@@ -443,7 +443,7 @@ export async function buildSystemResourceReport() {
     listLoraStorage({ strict: true }).catch(() => null),
     Promise.all(MODEL_STORES.map(({ backend }) => listModelStore(backend).catch(() => null))),
     ollamaManager.getStatus(true).catch(() => null),
-    ollamaManager.listStoredModels().catch(() => null),
+    import('./ollamaDiskImport.js').then(({ listStoredModels }) => listStoredModels()).catch(() => null),
     ollamaManager.getLoadedModels().catch(() => null),
     dirSize(ollamaManager.getModelsDir(), { strict: true }).catch(() => null),
     lmStudioManager.checkLMStudioAvailable(true).catch(() => null),

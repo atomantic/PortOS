@@ -520,6 +520,31 @@ describe('CoS Schedule Routes', () => {
       expect(taskSchedule.triggerOnDemandTask).not.toHaveBeenCalled();
     });
 
+    it('rejects unknown effort, invalid provider refs, and unrecognized executionOptions with 400', async () => {
+      app.use(errorMiddleware);
+      for (const body of [
+        { taskType: 'review', effort: 'turbo' },
+        { taskType: 'review', provider: 'not a ref!' },
+        { taskType: 'review', executionOptions: { bogusOption: true } },
+      ]) {
+        const response = await request(app).post('/api/cos/schedule/trigger').send(body);
+        expect(response.status).toBe(400);
+      }
+      expect(taskSchedule.triggerOnDemandTask).not.toHaveBeenCalled();
+    });
+
+    it('normalizes an empty effort to null and an empty provider to undefined', async () => {
+      taskSchedule.triggerOnDemandTask.mockResolvedValue({ id: 'req-3' });
+      const response = await request(app)
+        .post('/api/cos/schedule/trigger')
+        .send({ taskType: 'review', effort: '', provider: '' });
+      expect(response.status).toBe(200);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('review', undefined, expect.objectContaining({
+        provider: undefined,
+        effort: null,
+      }));
+    });
+
     it('should return 409 when triggerOnDemandTask returns an error', async () => {
       taskSchedule.triggerOnDemandTask.mockResolvedValue({ error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' });
 

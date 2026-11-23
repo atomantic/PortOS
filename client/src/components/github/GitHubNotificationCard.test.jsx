@@ -43,3 +43,22 @@ describe('GitHubNotificationCard on your PR into another repo', () => {
     expect(screen.queryByText('Awaiting maintainer')).toBeNull();
   });
 });
+
+describe('GitHubNotificationCard merge button visibility', () => {
+  const mergeablePr = (subjectStatus) => ({
+    ...upstreamPr(subjectStatus),
+    subjectStatus: { state: 'open', draft: false, canMerge: true, awaitingReply: false, ...subjectStatus },
+    pullRequest: { number: 1701, mergeEligible: true, doReviewEligible: true, reviewEligible: false },
+  });
+
+  it('hides Merge when the PR is blocked on reviews or checks, and shows it when clean', () => {
+    const { unmount } = renderCard(mergeablePr({ mergeState: 'blocked' }));
+    expect(screen.getByText('Blocked: needs review or checks')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Merge$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Do:Review' })).toBeTruthy();
+    unmount();
+    renderCard(mergeablePr({ mergeState: 'clean' }));
+    expect(screen.getByText('Ready to merge')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Merge$/ })).toBeTruthy();
+  });
+});
