@@ -57,4 +57,15 @@ describe('getDigitalTwinSnapshot — checksum determinism', () => {
     // re-serializing must not reorder keys (what the checksum relies on)
     expect(JSON.stringify(data.documents)).toBe(JSON.stringify({ ...data.documents }));
   });
+
+  it('omits machine-local meta.settings.includePrivacyContext from the snapshot and checksum', async () => {
+    readdirMock.mockResolvedValue([]);
+    const metaWith = (flag) => ({ settings: { autoInjectToCoS: true, includePrivacyContext: flag } });
+    readJSONFileMock.mockImplementation((p) => Promise.resolve(String(p).endsWith('meta.json') ? metaWith(true) : null));
+    const on = await getDigitalTwinSnapshot();
+    readJSONFileMock.mockImplementation((p) => Promise.resolve(String(p).endsWith('meta.json') ? metaWith(false) : null));
+    const off = await getDigitalTwinSnapshot();
+    expect(on.data.meta.settings).toEqual({ autoInjectToCoS: true });
+    expect(on.checksum).toBe(off.checksum);
+  });
 });
