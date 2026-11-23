@@ -8,6 +8,7 @@
  * naming the parts, meshes or axes it is about. A build with any error is kept
  * and marked; only a build without errors can be published.
  */
+import { BLENDER_MODEL_BAKE_UV_OVERLAP_MAX, planBlenderModelBake } from './bakePlan.js';
 import { reviewFrameMeters } from './reviewCameras.js';
 
 export const BLENDER_MODEL_SEVERITIES = Object.freeze(['error', 'warning', 'note']);
@@ -24,11 +25,12 @@ const AXES = ['x', 'y', 'z'];
 
 /** Collects the events of one driver run; `facts()` is what `buildBlenderModelReport` reads. */
 export function collectBlenderModelFacts() {
-  const facts = { start: null, parts: [], described: null, meshes: [], scene: null, saved: null, reimport: null, done: null };
+  const facts = { start: null, parts: [], described: null, meshes: [], bakeSets: [], scene: null, saved: null, reimport: null, done: null };
   return {
     add(event) {
       if (event.event === 'part') facts.parts.push({ id: event.id, label: event.label, parent: event.parent });
       else if (event.event === 'mesh') facts.meshes.push(event);
+      else if (event.event === 'bakeSet') facts.bakeSets.push(event);
       else if (event.event in facts) facts[event.event] = event;
     },
     facts: () => facts,
@@ -124,11 +126,66 @@ function reimportChecks(facts, add) {
   };
 }
 
+const GLB_IMAGES_PER_SET = 3;
+
+// A baked set the report shows: what it was baked from, how, and each image's size and brightest byte.
+const bakedSetSummary = (set) => ({
+  id: set.id, partIds: set.partIds, hash: set.hash, size: set.size, samples: set.samples, reused: set.reused, reusedFrom: set.reusedFrom,
+  device: set.device, uvOverlap: set.uvOverlap, unwrapped: set.unwrapped, skipped: set.skipped, images: set.images,
+});
+
+/**
+ * describe().bake against what the bake stages did (`bake.sets`, see bake.js). A draft build skips baking and says so.
+ * An image that is missing, a set that is all black and a UV overlap over the limit are errors; the build is kept.
+ */
+function bakeChecks(facts, { quality, bake }, add) {
+  const asked = facts.described?.bake ?? null;
+  if (asked == null) return null;
+  const plan = planBlenderModelBake(asked, facts.parts.map((part) => part.id));
+  const summary = { size: plan.size, samples: plan.samples, skipped: null, sets: [] };
+  if (quality !== 'full') {
+    add('note', 'bake-skipped-draft', 'A draft build skips baking, so this GLB has no baked textures. Build full to bake them.');
+    return { ...summary, skipped: 'draft' };
+  }
+  for (const problem of plan.problems) add('error', problem.code, problem.message, problem.subjects ? { subjects: problem.subjects } : {});
+  if (plan.problems.length) return { ...summary, skipped: 'invalid' };
+  const sets = bake?.sets ?? [];
+  summary.sets = sets.map(bakedSetSummary);
+  if (!sets.length) {
+    add('error', 'bake-not-run', 'The build asked for a bake but no set was baked');
+    return summary;
+  }
+  const unprepared = sets.filter((set) => set.skipped === 'not-prepared').map((set) => set.id);
+  if (unprepared.length) add('error', 'bake-set-unprepared', 'A bake set could not be prepared: a part in it is not a mesh object', listed(unprepared));
+  const overlapping = sets.filter((set) => set.uvOverlap != null && set.uvOverlap > BLENDER_MODEL_BAKE_UV_OVERLAP_MAX);
+  if (overlapping.length) {
+    add('error', 'bake-uv-overlap', `More than ${BLENDER_MODEL_BAKE_UV_OVERLAP_MAX * 100}% of a set's UV area is covered twice, so it was not baked; give its parts separate UV islands`, {
+      ...listed(overlapping.map((set) => set.id)), values: Object.fromEntries(overlapping.map((set) => [set.id, round(set.uvOverlap, 4)])),
+    });
+  }
+  const baked = sets.filter((set) => set.skipped === null);
+  const images = baked.flatMap((set) => set.images.map((image) => ({ ...image, label: `${set.id}/${image.file}` })));
+  const missing = images.filter((image) => image.bytes == null).map((image) => image.label);
+  if (missing.length) add('error', 'bake-image-missing', 'A baked set wrote no image file', listed(missing));
+  const black = images.filter((image) => image.bytes != null && image.max === 0).map((image) => image.label);
+  if (black.length) add('error', 'bake-all-black', 'A baked image has no pixel above black, so its set did not bake', listed(black));
+  const reused = baked.filter((set) => set.reused).length;
+  add('note', 'bake-sets', `${baked.length} baked set(s) at ${plan.size} px, ${plan.samples} samples; ${reused} reused from an earlier build`, {
+    values: { size: plan.size, samples: plan.samples, sets: baked.length, reused },
+  });
+  const expected = baked.filter((set) => set.images.every((image) => image.bytes != null)).length * GLB_IMAGES_PER_SET;
+  if (facts.reimport?.images != null && facts.reimport.images < expected) {
+    add('warning', 'bake-glb-images', 'The re-imported GLB has fewer images than the baked sets', { values: { expected, reimported: facts.reimport.images } });
+  }
+  return summary;
+}
+
 /**
  * The report for one finished driver run. `glbBytes` is the GLB's size on disk
  * as the server found it (null: missing), which overrides what the driver said.
+ * `bake` is `{ sets }` from the bake stage, absent when none ran.
  */
-export function buildBlenderModelReport(facts, { modelId, buildId, quality, startedAt, finishedAt, srcHash, glbBytes }) {
+export function buildBlenderModelReport(facts, { modelId, buildId, quality, startedAt, finishedAt, srcHash, glbBytes, bake = null }) {
   const findings = [];
   const add = (severity, code, message, extra = {}) => findings.push({ severity, code, message, ...extra });
 
@@ -154,6 +211,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
   if (glbBytes == null) add('error', 'export-missing', 'The build wrote no model.glb');
   const reimport = glbBytes == null ? null : reimportChecks(facts, add);
   if (glbBytes != null && !reimport) add('error', 'reimport-missing', 'The GLB was not re-imported, so it was not verified');
+  const bakeCheck = bakeChecks(facts, { quality, bake }, add);
 
   const counts = Object.fromEntries(BLENDER_MODEL_SEVERITIES.map((severity) => [severity, findings.filter((finding) => finding.severity === severity).length]));
   const order = (finding) => BLENDER_MODEL_SEVERITIES.indexOf(finding.severity);
@@ -168,7 +226,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     checks: {
       parts, bounds, triangles, transforms,
       materials: facts.scene?.materials ?? null, images: facts.scene?.images ?? null, actions: facts.scene?.actions ?? null,
-      glbBytes, reimport,
+      glbBytes, reimport, bake: bakeCheck,
     },
     findings: findings.sort((a, b) => order(a) - order(b)),
     counts,

@@ -20,6 +20,7 @@ const router = Router();
 const models = () => import('../services/blenderModels/models.js');
 const references = () => import('../services/blenderModels/references.js');
 const builds = () => import('../services/blenderModels/build.js');
+const bakes = () => import('../services/blenderModels/bake.js');
 const reviews = () => import('../services/blenderModels/review.js');
 const compare = () => import('../services/blenderModels/compare.js');
 
@@ -92,6 +93,14 @@ router.post('/:id/builds/:buildId/cancel', asyncHandler(async (req, res) => {
   const { cancelBlenderModelBuild } = await builds();
   await requireBlenderModel(req.params.id);
   res.json({ ok: cancelBlenderModelBuild(req.params.id, req.params.buildId) });
+}));
+
+// One set's bake while a full build runs; canceling it ends that build, and an earlier build's baked set stays as it was.
+router.post('/:id/builds/:buildId/bakes/:setId/cancel', asyncHandler(async (req, res) => {
+  const { requireBlenderModel } = await models();
+  const { cancelBlenderModelBake } = await bakes();
+  await requireBlenderModel(req.params.id);
+  res.json({ ok: cancelBlenderModelBake(req.params.id, req.params.buildId, req.params.setId) });
 }));
 
 router.post('/:id/builds/:buildId/open', asyncHandler(async (req, res) => {

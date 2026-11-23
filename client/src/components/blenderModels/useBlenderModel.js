@@ -6,7 +6,7 @@ import {
   removeBlenderModelDifference, renderBlenderModelReview, updateBlenderModelCamera, updateBlenderModelDifference,
   addBlenderModelCloseup, attachBlenderModelReferenceImage, createBlenderModelPartsBrief, removeBlenderModelCloseup,
   renderBlenderModelReference, reviewBlenderModelReference, updateBlenderModelReferenceSource,
-  buildBlenderModel, cancelBlenderModelBuild, deleteBlenderModelFile, getBlenderModel, getBlenderModelBuildLog, listBlenderModelFiles,
+  buildBlenderModel, cancelBlenderModelBake, cancelBlenderModelBuild, deleteBlenderModelFile, getBlenderModel, getBlenderModelBuildLog, listBlenderModelFiles,
   openBlenderModelBuild, publishBlenderModelBuild, readBlenderModelFile, scaffoldBlenderModel, updateBlenderModel, writeBlenderModelFile,
 } from '../../services/apiBlenderModels.js';
 import { blenderModelBuildBlocker } from '../../lib/blenderModels.js';
@@ -66,8 +66,12 @@ export default function useBlenderModel(id) {
 
   const cancelBuild = (buildId, key = `cancel:${buildId}`) => run(key, () => cancelBlenderModelBuild(id, buildId, { silent: true }), 'Could not cancel the build');
   const cancelReview = (buildId, key = `cancelReview:${buildId}`) => run(key, () => cancelBlenderModelReview(id, buildId, { silent: true }), 'Could not cancel the review renders');
-  const cancelOne = (job, key) => (job.kind === 'review' ? cancelReview : cancelBuild)(job.buildId, key);
-  // Logs are read by build id: build.log in its folder, or its review's log.
+  const cancelBake = (buildId, setId, key = `cancelBake:${buildId}:${setId}`) => run(key, () => cancelBlenderModelBake(id, buildId, setId, { silent: true }), 'Could not cancel the bake');
+  const cancelOne = (job, key) => {
+    if (job.kind === 'bake') return cancelBake(job.buildId, job.setId, key);
+    return (job.kind === 'review' ? cancelReview : cancelBuild)(job.buildId, key);
+  };
+  // Logs are read by build id: build.log in its folder (a bake writes there too), or its review's log.
   const jobs = (data?.jobs || []).map((job) => ({ ...job, logFile: job.kind === 'review' ? `${REVIEW_LOG}${job.buildId}` : job.buildId }));
 
   return {
@@ -87,7 +91,7 @@ export default function useBlenderModel(id) {
       const job = jobs.find((entry) => entry.id === jobId);
       return job ? cancelOne(job, `cancel:${jobId}`) : Promise.resolve({ ok: false, answer: null });
     },
-    // At most one build and one review run per model.
+    // At most one build (with its bakes, one at a time) and one review run per model.
     cancelAll: () => Promise.all(jobs.filter((entry) => entry.status === 'queued' || entry.status === 'running')
       .map((job, index) => cancelOne(job, index ? `cancel:${job.id}` : 'cancel:all'))),
     publish: (buildId) => run('publish', () => publishBlenderModelBuild(id, buildId, { silent: true }), 'Could not publish the build'),

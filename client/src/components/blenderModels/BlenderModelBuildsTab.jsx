@@ -12,6 +12,15 @@ const STATUS = {
   running: ['Building', 'accent'], complete: ['Complete', 'success'], failed: ['Failed', 'error'], canceled: ['Canceled', 'warning'],
 };
 
+// "2 baked sets at 2048 px (1 reused)", "baking skipped (draft)": what a build's describe().bake came to.
+function bakeText(bake) {
+  if (!bake) return null;
+  if (bake.skipped === 'draft') return 'baking skipped (draft)';
+  if (bake.skipped === 'invalid') return 'bake not run (see the report)';
+  const reused = bake.reused ? ` (${formatCount(bake.reused)} reused)` : '';
+  return `${formatCount(bake.sets)} baked ${bake.sets === 1 ? 'set' : 'sets'} at ${formatCount(bake.size)} px${reused}`;
+}
+
 // Jobs live in the server's memory; a kept build's log stays readable here after a restart. Mounted keyed by build id.
 function BuildLog({ modelId, build }) {
   const [log, setLog] = useState({ text: '', status: 'loading', error: null });
@@ -45,7 +54,9 @@ export default function BlenderModelBuildsTab({ model, openBuildId, onOpenLog, o
       </section>
       <section aria-label="Build history" className="min-w-0 space-y-2">
         <h2 className="text-sm font-medium">History</h2>
-        <p className="text-xs text-port-text-muted">PortOS keeps the published build and the newest five.</p>
+        <p className="text-xs text-port-text-muted">
+          PortOS keeps the published build and the newest five. Draft builds skip texture baking; Full builds bake the sets describe() lists and reuse a set that did not change.
+        </p>
         {!builds.length && <p className="text-xs text-port-text-muted">Never built.</p>}
         {builds.length > 0 && (
           <ul className="min-w-0 divide-y divide-port-border rounded border border-port-border">
@@ -60,7 +71,7 @@ export default function BlenderModelBuildsTab({ model, openBuildId, onOpenLog, o
                     <Pill size="xs" tone={tone}>{label}</Pill>
                     {state.publishedBuildId === build.id && <Pill size="xs" tone="success">Published</Pill>}
                     <span className="min-w-0 flex-1 text-port-text-muted">
-                      {[build.quality, Number.isFinite(took) ? formatDurationMs(Math.max(0, took)) : null,
+                      {[build.quality, Number.isFinite(took) ? formatDurationMs(Math.max(0, took)) : null, bakeText(build.bake),
                         build.counts ? `${formatCount(build.counts.error)} errors, ${formatCount(build.counts.warning)} warnings` : null].filter(Boolean).join(' · ')}
                     </span>
                     {build.status === 'complete' && (

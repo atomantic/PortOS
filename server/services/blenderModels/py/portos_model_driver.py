@@ -10,6 +10,12 @@ an empty factory scene, measures what was built, saves `model.blend`, exports
 `model.glb`, imports that GLB into a fresh empty scene and measures it again.
 The model contract is documented in docs/features/blender-models.md.
 
+Jobs of mode `bake` and `bake-export` (texture baking, see portos_bake.py) open
+the build's saved `model.blend`: `bake` bakes one set's images with Cycles, and
+`bake-export` gives each baked set a plain glTF material, exports `model.glb`
+and re-imports it. A full build whose describe() asks for a bake saves
+`model.blend` and stops there (`saved.deferred`); the server runs the rest.
+
 A job with `"mode": "review"` instead opens a build's saved `model.blend` and
 renders each view it lists, textured and clay, under flat light. The server
 computes the cameras; the model's own cameras, lights, world, compositor and
@@ -29,8 +35,16 @@ import time
 import traceback
 from types import SimpleNamespace
 
-import bpy
-from mathutils import Matrix, Vector
+# No __pycache__ beside the staged driver, the kit or the model's own scripts.
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import bpy  # noqa: E402
+from mathutils import Matrix, Vector  # noqa: E402
+
+import portos_bake  # noqa: E402
 
 PREFIX = "PORTOS_MODEL "
 # The most parts and meshes a build reports by name; the rest are still counted.
@@ -58,13 +72,25 @@ def read_json(path):
         return json.load(handle)
 
 
+def install_kit():
+    """Register the portos_model kit (portos_model/package.py) as the package `portos_model`."""
+    path = os.path.join(HERE, "portos_model", "package.py")
+    if "portos_model" in sys.modules or not os.path.isfile(path):
+        return
+    spec = importlib.util.spec_from_file_location("portos_model", path, submodule_search_locations=[os.path.dirname(path)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["portos_model"] = module
+    spec.loader.exec_module(module)
+
+
 def load_model(src):
     path = os.path.join(src, "model.py")
     if not os.path.isfile(path):
         raise RuntimeError("src/model.py is missing: a model defines describe(ctx) and build(ctx) there")
-    # The model's own folders import as packages from src/.
+    # The model's own folders import as packages from src/; the kit is registered first and so wins.
     if src not in sys.path:
         sys.path.insert(0, src)
+    install_kit()
     spec = importlib.util.spec_from_file_location("model", path)
     model = importlib.util.module_from_spec(spec)
     sys.modules["model"] = model
@@ -100,8 +126,10 @@ def describe(model, ctx):
         sizeMeters=description.get("sizeMeters"),
         triangleBudget=description.get("triangleBudget"),
         controls=description.get("controls"),
+        bake=description.get("bake"),
         partsTruncated=len(parts) > MAX_LISTED,
     )
+    return description
 
 
 def mesh_facts(obj, depsgraph):
@@ -141,7 +169,8 @@ def used_images():
 def measure(report_meshes):
     """Measure every mesh object in the scene; `report_meshes` also emits one event per mesh."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
-    scene_objects = list(bpy.context.scene.objects)
+    # Bake-only objects shape a normal map and never reach the GLB, so they are not part of the model.
+    scene_objects = [obj for obj in bpy.context.scene.objects if not portos_bake.is_bake_only(obj)]
     meshes = [obj for obj in scene_objects if obj.type == "MESH"]
     total_triangles = 0
     bounds = None
@@ -187,13 +216,30 @@ def export_glb(path):
     )
 
 
+def wants_bake(job, description):
+    """A full build whose describe() lists bake sets leaves export to the bake stages."""
+    bake = description.get("bake")
+    return job.get("quality") == "full" and isinstance(bake, dict) and isinstance(bake.get("sets"), list) and bool(bake["sets"])
+
+
+def export_and_reimport(blend, glb):
+    export_glb(glb)
+    emit("saved", blend=blend, glb=glb, glbBytes=os.path.getsize(glb) if os.path.isfile(glb) else None)
+    # A fresh empty scene: what a consumer of the GLB gets back.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=glb)
+    reimported = measure(False)
+    reimported.pop("truncated", None)
+    emit("reimport", **reimported)
+
+
 def build(job):
     started = time.time()
     emit("start", blender=blender_version(), quality=job.get("quality", "draft"))
     bpy.ops.wm.read_factory_settings(use_empty=True)
     ctx = make_context(job)
     model = load_model(job["src"])
-    describe(model, ctx)
+    description = describe(model, ctx)
     model.build(ctx)
     scene = measure(True)
     emit("scene", **scene)
@@ -202,16 +248,37 @@ def build(job):
     os.makedirs(out, exist_ok=True)
     blend = os.path.join(out, "model.blend")
     glb = os.path.join(out, "model.glb")
+    deferred = wants_bake(job, description)
+    if deferred:
+        portos_bake.prepare_sets(description["bake"], emit, log)
     bpy.ops.wm.save_as_mainfile(filepath=blend, check_existing=False, copy=True)
-    export_glb(glb)
-    emit("saved", blend=blend, glb=glb, glbBytes=os.path.getsize(glb) if os.path.isfile(glb) else None)
+    if deferred:
+        emit("saved", blend=blend, glb=None, glbBytes=None, deferred=True)
+    else:
+        # The saved .blend keeps the bake-only objects; the GLB never has them.
+        portos_bake.remove_bake_only()
+        export_and_reimport(blend, glb)
+    emit("done", sec=round(time.time() - started, 3))
 
-    # A fresh empty scene: what a consumer of the GLB gets back.
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=glb)
-    reimported = measure(False)
-    reimported.pop("truncated", None)
-    emit("reimport", **reimported)
+
+def bake(job):
+    started = time.time()
+    emit("start", blender=blender_version(), quality=None)
+    bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False, use_scripts=False)
+    portos_bake.bake_set(job, emit, log)
+    emit("done", sec=round(time.time() - started, 3))
+
+
+def bake_export(job):
+    started = time.time()
+    emit("start", blender=blender_version(), quality=None)
+    bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False, use_scripts=False)
+    portos_bake.export_baked(job, emit, log)
+    scene = measure(False)
+    emit("scene", **scene)
+    # The baked scene replaces the build's .blend, so a review renders what the GLB holds.
+    bpy.ops.wm.save_as_mainfile(filepath=job["blend"], check_existing=False, copy=True)
+    export_and_reimport(job["blend"], job["glb"])
     emit("done", sec=round(time.time() - started, 3))
 
 
@@ -331,8 +398,15 @@ def main():
     job = read_json(os.path.abspath(arguments[0]))
     # Model source stays clean: no __pycache__ beside the authored scripts.
     sys.dont_write_bytecode = True
-    if job.get("mode") == "review":
+    # model.blend is saved over itself after a bake; no model.blend1 beside it.
+    bpy.context.preferences.filepaths.save_version = 0
+    mode = job.get("mode")
+    if mode == "review":
         review(job)
+    elif mode == "bake":
+        bake(job)
+    elif mode == "bake-export":
+        bake_export(job)
     else:
         build(job)
 
