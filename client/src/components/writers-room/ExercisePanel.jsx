@@ -10,7 +10,7 @@ import {
   promoteWritersRoomExercise,
 } from '../../services/apiWritersRoom';
 import { formatCount, formatCountdown } from '../../utils/formatters';
-import { countWords } from '../../lib/textUtils';
+import { countWords, pluralize } from '../../lib/textUtils';
 import { FormField } from '../ui/FormField';
 import useListResource from '../../hooks/useListResource';
 import useMounted from '../../hooks/useMounted';
@@ -93,7 +93,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
         return null;
       });
       if (!result) return;
-      toast.success(`Logged ${formatCount(wordsAdded)} words`);
+      toast.success(`Logged ${formatCount(wordsAdded)} ${wordsAdded === 1 ? 'word' : 'words'}`);
     } else {
       const result = await discardWritersRoomExercise(active.id, { silent: true }).catch((err) => {
         toast.error(`Discard failed: ${err.message}`);
@@ -121,7 +121,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
     promotingRef.current = false;
     if (mountedRef.current) setPromoting(false);
     if (!result || ownerKeyRef.current !== startOwner) return;
-    toast.success(`Added ${countWords(exercise.appendedText)} words to draft`);
+    toast.success(`Added ${pluralize(countWords(exercise.appendedText), 'word')} to draft`);
     onWorkChange?.(result.work, { ownerKey: startOwner });
     if (mountedRef.current) await refresh();
   };

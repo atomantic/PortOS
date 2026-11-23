@@ -30,7 +30,7 @@ export default function RetiredTrainingData() {
     if (!result) return;
     setConfirmId(null);
     const left = result.status === 'retained' ? ' New files appeared during removal; they remain.' : result.status === 'unavailable' ? ' Remaining files could not be read; reload to check.' : '';
-    toast.success(`Deleted ${formatCount(result.removedFiles)} files (${formatBytes(result.removedBytes)}) from ${row.path}.${left}`);
+    toast.success(`Deleted ${formatCount(result.removedFiles)} ${result.removedFiles === 1 ? 'file' : 'files'} (${formatBytes(result.removedBytes)}) from ${row.path}.${left}`);
     setRows((previous) => result.status === 'retained' || result.status === 'unavailable'
       ? previous.map((item) => item.id === row.id ? { ...item, bytes: result.remainingBytes, files: result.remainingFiles, status: result.status, actions: result.status === 'retained' ? ['delete'] : [] } : item)
       : previous.filter((item) => item.id !== row.id));
