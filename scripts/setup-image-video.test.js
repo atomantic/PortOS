@@ -321,7 +321,8 @@ exit 1
     const routes = source.match(/^path_routes_through\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
     const reset = `${routes}${source.match(/^reset_universal_venv\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0]}`;
     const apple = source.match(/^is_apple_silicon\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
-    const atLeast = source.match(/^python_at_least_310\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const atLeast = ['python_at_least_minor', 'python_at_least_310']
+      .map((name) => source.match(new RegExp(`^${name}\\(\\) \\{\\n(?:.*\\n)*?^\\}\\n`, 'm'))?.[0]).join('');
     expect(routes).toBeTruthy();
     expect(reset).toContain('reset_universal_venv() {');
     expect(atLeast).toBeTruthy();
@@ -540,7 +541,8 @@ esac
 
   it.skipIf(process.platform === 'win32')('does not choose a python inside the venv it may delete', () => {
     const newest = source.match(/^newest_supported_python\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
-    const atLeast = source.match(/^python_at_least_310\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+    const atLeast = ['python_at_least_minor', 'python_at_least_310']
+      .map((name) => source.match(new RegExp(`^${name}\\(\\) \\{\\n(?:.*\\n)*?^\\}\\n`, 'm'))?.[0]).join('');
     const have = source.match(/^have\(\) \{.*\}\n/m)?.[0];
     expect(newest).toBeTruthy();
     expect(atLeast).toBeTruthy();
@@ -2166,5 +2168,63 @@ describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) =
     let result;
     try { installer().run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
     expect(result?.stderr).toContain('ACE-Step 1.5 CUDA is locked to cu126');
+  });
+});
+
+describe('setup-image-video reproducibility and cleanup (issue #17745)', () => {
+  const grabFunction = (name) => source.match(new RegExp(`^${name}\\(\\) \\{\\n(?:.*\\n)*?^\\}\\n`, 'm'))?.[0];
+
+  it('defaults MusicGen mlx-examples to a 40-char commit SHA, not a floating branch', () => {
+    const pin = source.match(/^\s*MLX_EXAMPLES_PIN="\$\{MLX_EXAMPLES_PIN:-([^}"]+)\}"/m)?.[1];
+    expect(pin).toMatch(/^[a-f0-9]{40}$/);
+  });
+
+  it('fetches origin before checking out the pin on every existing ACE-Step clone', () => {
+    for (const dir of ['ACESTEP_DIR', 'ACESTEP15_DIR']) {
+      const lines = source.split('\n');
+      const checkouts = lines.flatMap((line, i) => (line.includes(`git_checkout_pin "\${${dir}}"`) ? [i] : []));
+      expect(checkouts).toHaveLength(2);
+      for (const i of checkouts) {
+        expect(lines.slice(i - 3, i).join('\n')).toContain(`git -C "\${${dir}}" fetch --progress origin`);
+      }
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('honors a 3.11 floor when choosing a base interpreter', () => {
+    const script = ['have() { command -v "$1" >/dev/null 2>&1; }', grabFunction('python_at_least_minor'), grabFunction('newest_supported_python')].join('\n');
+    const dir = mkdtempSync(join(tmpdir(), 'portos-py311-'));
+    tempVenvs.push(dir);
+    symlinkSync('/bin/bash', join(dir, 'bash'));
+    const stub = (name, minor) => {
+      writeFileSync(join(dir, name), `#!/bin/bash\n[[ "$2" =~ \\(3,\\ ([0-9]+)\\) ]] && (( ${minor} >= BASH_REMATCH[1] ))\n`);
+      chmodSync(join(dir, name), 0o755);
+    };
+    stub('python3', 10);
+    stub('python3.11', 11);
+    const run = (minor) => spawnSync('bash', ['-c', `${script}\nnewest_supported_python "" ${minor}`], {
+      env: { ...process.env, PATH: dir, PYTHON_BIN: 'python3' },
+      encoding: 'utf8',
+    });
+    expect(run(10).stdout.trim()).toBe(join(dir, 'python3'));
+    expect(run(11).stdout.trim()).toBe(join(dir, 'python3.11'));
+  });
+
+  it('builds FLUX.2 from a 3.11+ base and recreates older venvs', () => {
+    expect(source).toContain('newest_supported_python "$FLUX2_VENV" 11');
+    expect(source).toContain('! python_at_least_minor 11 "$(venv_python "$FLUX2_VENV")"');
+  });
+
+  it.each(['PIN_VENV_TMP', 'MFLUX_SELF_REQ', 'VIDEO_SELF_REQ'])('removes %s on exit even when the script fails', (name) => {
+    if (process.platform === 'win32') return;
+    const trapLine = source.match(/^trap '.*' EXIT$/m)?.[0];
+    expect(trapLine).toContain(`"$${name}"`);
+    const dir = mkdtempSync(join(tmpdir(), 'portos-exit-trap-'));
+    tempVenvs.push(dir);
+    const leaked = join(dir, 'leaked');
+    writeFileSync(leaked, 'x');
+    const decls = ['PIN_VENV_TMP', 'MFLUX_SELF_REQ', 'VIDEO_SELF_REQ'].map((n) => `${n}=""`).join('\n');
+    const result = spawnSync('bash', ['-c', `set -euo pipefail\n${decls}\n${trapLine}\n${name}="$1"\nfalse`, 'bash', leaked]);
+    expect(result.status).not.toBe(0);
+    expect(existsSync(leaked)).toBe(false);
   });
 });
