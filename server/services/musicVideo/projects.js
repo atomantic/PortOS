@@ -35,7 +35,6 @@ import { labelProjectReferences } from './referenceLabels.js';
 import { musicVideoEvents } from './events.js';
 import { audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { renumberShotLabels } from '../../lib/musicVideo/musicVideoColdOpen.js';
-import { removeProjectSegments } from './shotSegmentPaths.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -341,8 +340,9 @@ export async function deleteProject(id) {
   // Soft-delete tombstone — push the deletion to subscribed peers immediately.
   emitRecordDeleted('musicVideoProject', id);
   syncCatalogLinks(id);
-  // Its cached shot segments are regenerable, and only this machine's.
-  await removeProjectSegments(id).catch((err) => {
+  // Its cached shot segments are regenerable, and only this machine's. The leaf loads only on this
+  // rare path, keeping it out of the boot closure (importScoping.test.js).
+  await import('./shotSegmentPaths.js').then(({ removeProjectSegments }) => removeProjectSegments(id)).catch((err) => {
     console.warn(`⚠️ Music Video ${id.slice(0, 8)}: could not remove its cached shot segments: ${err.message}`);
   });
   return result;
