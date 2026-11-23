@@ -85,6 +85,9 @@ export default function VoiceWidget({ config, claimHeld }) {
   // module-level stream/recorder, so without this serialization the in-flight
   // stop can tear down tracks from the freshly-started capture.
   const cancelInFlightRef = useRef(null);
+  // Bumped by engage, disengage and unmount so an onEngage suspended on
+  // cancelInFlightRef can tell it was superseded and must not reopen the mic.
+  const engageSeqRef = useRef(0);
   const [handsFree, setHandsFree] = useState(() => {
     const stored = safeReadStorage(HANDS_FREE_KEY);
     return stored === null ? true : stored === '1';
@@ -548,6 +551,7 @@ export default function VoiceWidget({ config, claimHeld }) {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
+      engageSeqRef.current += 1;
       pendingEngageRef.current = false;
       disposeCaptureOwner();
       const teardown = handleCancelRef.current?.({ updateUi: false });
@@ -579,7 +583,8 @@ export default function VoiceWidget({ config, claimHeld }) {
     // Typed turns run through the same cascade (a typed "go to tasks" navigates
     // instantly). Falls through to the server pipeline when unhandled.
     const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
-    if (!handled) sendText(text);
+    if (disposedRef.current || handled) return;
+    sendText(text);
   }, [draft, runFastPath]);
 
   const toggleCapture = useCallback(() => {
@@ -675,7 +680,9 @@ export default function VoiceWidget({ config, claimHeld }) {
   useEffect(() => {
     let live = true;
     const onEngage = async () => {
+      const seq = ++engageSeqRef.current;
       if (cancelInFlightRef.current) await cancelInFlightRef.current;
+      if (!live || seq !== engageSeqRef.current) return;
       if (!enabled) {
         pendingEngageRef.current = true;
         return;
@@ -683,6 +690,7 @@ export default function VoiceWidget({ config, claimHeld }) {
       handleStartRef.current?.();
     };
     const onDisengage = () => {
+      engageSeqRef.current += 1;
       pendingEngageRef.current = false;
       const p = handleCancelRef.current?.();
       if (p && typeof p.then === 'function') {
@@ -879,6 +887,7 @@ export default function VoiceWidget({ config, claimHeld }) {
               if (visionEnabled) { disableVisionCapture(); setVisionEnabled(false); return; }
               // getDisplayMedia must run inside this click (user gesture).
               const ok = await enableVisionCapture();
+              if (disposedRef.current) { if (ok) disableVisionCapture(); return; }
               setVisionEnabled(ok);
               if (!ok) toast('Voice: screen sharing was declined or is unavailable.', { icon: '🖥️' });
             }}

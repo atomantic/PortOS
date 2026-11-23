@@ -795,6 +795,57 @@ describe('voice playback cancellation', () => {
   });
 });
 
+describe('screen-share capture teardown', () => {
+  let client;
+  const makeStream = () => {
+    const track = { stop: vi.fn(), addEventListener: vi.fn() };
+    return { track, active: true, getTracks: () => [track], getVideoTracks: () => [track] };
+  };
+
+  beforeAll(async () => {
+    client = await import('./voiceClient.js');
+  });
+
+  afterEach(() => {
+    client.disableVisionCapture();
+    delete navigator.mediaDevices;
+  });
+
+  const pendingPicker = () => {
+    let resolve;
+    const picker = new Promise((r) => { resolve = r; });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getDisplayMedia: vi.fn(() => picker) },
+    });
+    return resolve;
+  };
+
+  it.each([
+    ['disableVisionCapture', () => client.disableVisionCapture()],
+    ['disposeCaptureOwner', () => client.disposeCaptureOwner()],
+  ])('stops a stream that resolves after %s ran while the picker was open', async (_name, teardown) => {
+    const resolvePicker = pendingPicker();
+    const enabling = client.enableVisionCapture();
+    teardown();
+    const stream = makeStream();
+    resolvePicker(stream);
+    await expect(enabling).resolves.toBe(false);
+    expect(stream.track.stop).toHaveBeenCalledTimes(1);
+    expect(client.isVisionCaptureEnabled()).toBe(false);
+  });
+
+  it('keeps a stream that resolves with no teardown in between', async () => {
+    const resolvePicker = pendingPicker();
+    const enabling = client.enableVisionCapture();
+    const stream = makeStream();
+    resolvePicker(stream);
+    await expect(enabling).resolves.toBe(true);
+    expect(stream.track.stop).not.toHaveBeenCalled();
+    expect(client.isVisionCaptureEnabled()).toBe(true);
+  });
+});
+
 // The module now loads lazily, the first time voice is on, which is usually
 // after the socket connected: the `connect` handler that used to register the
 // tab has already been missed by then.
