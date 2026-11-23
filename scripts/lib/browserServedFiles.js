@@ -1,12 +1,15 @@
 /**
- * What a real-Chromium fixture's Vite server served, recorded for the test memo: the recorder plugin and the reader of its records.
+ * What a real-Chromium fixture's Vite server, Vite bundle or static server
+ * read, recorded for the test memo: the recorder plugin, instrumented
+ * Vite/static fixture helpers, and the reader of their records.
  *
  * The memo keys a real-browser suite by what Chrome could render, which
  * Vitest's module recording never sees. Without a record every file of the
- * root a suite hands to Vite is an input, so an edit to any unrelated client
- * page re-ran every client fixture (#17616). `startBrowserFixture` adds the
+ * root a suite hands to Vite or a static server is an input, so an edit to any
+ * unrelated client page re-ran every client fixture (#17616, #17894).
+ * `startBrowserFixture` and the instrumented Vite/static helpers below add the
  * recorder when the memo runner names a directory (`SERVED_FILES_ENV`) and
- * writes one record per fixture on close; `readServedFiles` folds them into
+ * write one record per fixture/root; `readServedFiles` folds them into
  * `{ roots, files }` per test, which the memo record stores and the analyzer
  * keys instead of the whole root (`servedTree` in `testMemo/analyzer.js`).
  */
@@ -36,6 +39,29 @@ const isFile = (path) => {
   try { return statSync(path).isFile(); } catch { return false; }
 };
 
+const isDir = (path) => {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+};
+
+const within = (base, path) => path === base || path.startsWith(`${base}${sep}`);
+
+const writeServedRecord = (dir, testFile, root, files) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${process.pid}-${randomBytes(6).toString('hex')}.json`),
+    JSON.stringify({ version: SERVED_FILES_VERSION, test: testFile, root, files: [...files].sort() }));
+};
+
+const walkFiles = (dir, out = []) => {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walkFiles(full, out);
+    else if (entry.isFile() || (entry.isSymbolicLink() && isFile(full))) out.push(full);
+  }
+  return out;
+};
+
 /** The test file Vitest is running in this worker, or null outside Vitest. */
 export const runningTestFile = () => {
   const worker = globalThis.__vitest_worker__;
@@ -55,7 +81,6 @@ export const runningTestFile = () => {
  */
 export function servedFilesRecorder({ root, publicDir, ignore = [] }) {
   const files = new Set();
-  const within = (base, path) => path === base || path.startsWith(`${base}${sep}`);
   // Vite ids use forward slashes on every platform; compare the ignored directories in that form.
   const slashed = (path) => path.replaceAll('\\', '/');
   const ignored = ignore.map(slashed);
@@ -82,6 +107,7 @@ export function servedFilesRecorder({ root, publicDir, ignore = [] }) {
   };
   return {
     files,
+    note,
     plugin: {
       name: 'portos-test-memo-served-files',
       enforce: 'pre',
@@ -94,32 +120,169 @@ export function servedFilesRecorder({ root, publicDir, ignore = [] }) {
   };
 }
 
+const addIgnoredDir = (ignore, path) => {
+  if (typeof path !== 'string' || !path) return;
+  ignore.push(resolve(path));
+  try { ignore.push(realpathSync(path)); } catch { /* a missing dir holds nothing to ignore */ }
+};
+
 /**
  * The recorder for one fixture's Vite config, or null when the memo runner
  * did not ask (`SERVED_FILES_ENV`) or no test file is running. `write()`
  * stores one record per fixture, so several fixtures of a file never race.
  * `temp` is the fixture's private directory, left out of the record.
+ * `recordedRoot` names the repository root to record when `config.root` is a
+ * temporary staging directory outside the repository.
  */
-export const servedFilesRecording = (config, env, testFile, temp = null) => {
+export const servedFilesRecording = (config, env, testFile, temp = null, { recordedRoot = null, ignore: extraIgnore = [] } = {}) => {
   const dir = env[SERVED_FILES_ENV];
   if (!dir || !testFile) return null;
-  const root = resolve(config.root ?? process.cwd());
-  const publicDir = config.publicDir === false ? null : resolve(root, config.publicDir ?? 'public');
+  const configRoot = resolve(config.root ?? process.cwd());
+  const root = recordedRoot ? resolve(recordedRoot) : configRoot;
+  const publicDir = config.publicDir === false ? null : resolve(configRoot, config.publicDir ?? 'public');
   const ignore = [];
-  if (temp) {
-    ignore.push(resolve(temp));
-    try { ignore.push(realpathSync(temp)); } catch { /* a missing temp holds nothing to ignore */ }
-  }
+  addIgnoredDir(ignore, temp);
+  addIgnoredDir(ignore, config.cacheDir);
+  if (typeof config.build?.outDir === 'string') addIgnoredDir(ignore, resolve(configRoot, config.build.outDir));
+  if (recordedRoot && configRoot !== root && !within(configRoot, root)) addIgnoredDir(ignore, configRoot);
+  for (const path of extraIgnore) addIgnoredDir(ignore, path);
   const recorder = servedFilesRecorder({ root, publicDir, ignore });
   return {
     plugin: recorder.plugin,
-    write: () => {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, `${process.pid}-${randomBytes(6).toString('hex')}.json`),
-        JSON.stringify({ version: SERVED_FILES_VERSION, test: testFile, root, files: [...recorder.files].sort() }));
-    },
+    files: recorder.files,
+    note: recorder.note,
+    root,
+    publicDir,
+    write: () => writeServedRecord(dir, testFile, root, recorder.files),
   };
 };
+
+/**
+ * Runs Vite `build()` with the served-file recorder attached (#17894): notes
+ * every module Vite loads or transforms plus any copied `publicDir` assets,
+ * and writes the served-file record once the build completes.
+ */
+export async function buildRecordedViteFixture({
+  build, config, recordedRoot = null, temp = null, ignore = [], env = process.env, testFile = runningTestFile(),
+}) {
+  const recording = servedFilesRecording(config, env, testFile, temp, { recordedRoot, ignore });
+  const result = await build({
+    ...config,
+    plugins: recording ? [config.plugins, recording.plugin] : config.plugins,
+  });
+  if (recording) {
+    const dir = env[SERVED_FILES_ENV];
+    const copiedPublic = config.publicDir !== false && config.build?.copyPublicDir !== false
+      && recording.publicDir && isDir(recording.publicDir);
+    const publicFiles = copiedPublic ? walkFiles(recording.publicDir) : [];
+    for (const file of publicFiles) recording.note(file);
+    recording.write();
+    if (copiedPublic && config.publicDir !== undefined && recording.publicDir !== recording.root) {
+      writeServedRecord(dir, testFile, recording.publicDir, publicFiles);
+    }
+  }
+  return result;
+}
+
+/**
+ * Starts and listens a Vite dev server with the served-file recorder attached
+ * (#17894). Closing the returned server writes its served-file record once
+ * before tearing down Vite.
+ */
+export async function startRecordedViteServer({
+  createServer, config, recordedRoot = null, temp = null, ignore = [], env = process.env, testFile = runningTestFile(),
+}) {
+  const recording = servedFilesRecording(config, env, testFile, temp, { recordedRoot, ignore });
+  const server = await createServer({
+    ...config,
+    plugins: recording ? [config.plugins, recording.plugin] : config.plugins,
+  });
+  try {
+    await server.listen();
+  } catch (error) {
+    await server.close().catch(() => {});
+    throw error;
+  }
+  if (recording) {
+    const close = server.close.bind(server);
+    let written = false;
+    server.close = async (...args) => {
+      let writeError;
+      if (!written) {
+        written = true;
+        try { recording.write(); } catch (error) { writeError = error; }
+      }
+      await close(...args);
+      if (writeError) throw writeError;
+    };
+  }
+  return server;
+}
+
+/**
+ * Instrumented Express static-middleware + HTTP listener helper (#17894).
+ * Each `serve(dir, options)` mount records every file requested under `dir`,
+ * and `start(app)` binds an ephemeral loopback port and writes one
+ * served-file record per mount when the server closes.
+ */
+export function createRecordedStaticServer(express, { env = process.env, testFile = runningTestFile() } = {}) {
+  const outDir = env[SERVED_FILES_ENV];
+  const mounts = [];
+
+  const serve = (dir, options) => {
+    const root = resolve(dir);
+    const handler = express.static(root, options);
+    if (!outDir || !testFile) return handler;
+    const files = new Set();
+    mounts.push({ root, files });
+    const indexOption = options?.index;
+    const indexNames = indexOption === false ? [] : Array.isArray(indexOption) ? indexOption : [typeof indexOption === 'string' ? indexOption : 'index.html'];
+    return (req, res, next) => {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        let pathname;
+        try { pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://fixture.invalid').pathname); } catch { pathname = null; }
+        if (pathname !== null) {
+          const candidate = resolve(root, `.${pathname}`);
+          if (within(root, candidate)) {
+            if (isFile(candidate)) files.add(candidate);
+            else if (isDir(candidate)) {
+              for (const name of indexNames) {
+                const indexFile = resolve(candidate, name);
+                if (within(root, indexFile) && isFile(indexFile)) { files.add(indexFile); break; }
+              }
+            }
+          }
+        }
+      }
+      handler(req, res, next);
+    };
+  };
+
+  let flushed = false;
+  const flush = () => {
+    if (flushed || !outDir || !testFile) return;
+    flushed = true;
+    for (const { root, files } of mounts) writeServedRecord(outDir, testFile, root, files);
+  };
+
+  const start = (app, host = '127.0.0.1') => new Promise((done, reject) => {
+    const server = app.listen(0, host, () => {
+      server.off('error', reject);
+      const close = server.close.bind(server);
+      server.close = (...args) => {
+        flush();
+        return close(...args);
+      };
+      server.once('close', () => {
+        try { flush(); } catch (error) { console.error(`❌ served-file record write failed: ${error.message}`); }
+      });
+      done(server);
+    });
+    server.once('error', reject);
+  });
+
+  return { serve, start, flush };
+}
 
 /**
  * What each real-Chromium suite's fixture served in this run, from the

@@ -38,23 +38,25 @@ const BROWSER_SUITE_OWNERS = {
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 
-// Four-shard owners (#17748), LPT-balanced from hosted per-file timings (run
-// 45125019450): the four heaviest serial capture suites sit on separate shards
+// Four-shard owners (#17748, rebalanced for client-bundling fan-out in #17894):
+// the four heaviest serial capture suites sit on separate shards
 // (documentRender 192s, htmlComposition 141s, animaticCapture 105s, filmLookGpu
-// 83s) and the light suites fill the gaps. Smoke needs no override here.
+// 83s), the light suites fill the gaps, and the 7 client-bundling suites are
+// distributed across all 4 shards (1/2/2/2) so shared client-style edits do
+// not pile onto shard 3. Smoke needs no override here.
 const FOUR_SHARD_OWNERS = {
   'server/lib/filmLook.browser.test.js': 2,
   'server/lib/filmLookGpu.browser.test.js': 4,
   'server/lib/musicVideo/musicVideoTitleCard.browser.test.js': 4,
   'server/routes/catalogGreyboxViewer.browser.test.js': 4,
   'server/routes/musicVideoProductionReview.browser.test.js': 3,
-  'server/routes/musicVideoRichAuthoring.browser.test.js': 3,
+  'server/routes/musicVideoRichAuthoring.browser.test.js': 2,
   'server/routes/musicVideoSongRevision.browser.test.js': 4,
-  'server/services/codeAnimation/export.realBrowser.test.js': 2,
+  'server/services/codeAnimation/export.realBrowser.test.js': 3,
   'server/services/fableLoom/static-player/player.browser.test.js': 3,
   'server/services/federatedMedia/sourceAudio.browser.test.js': 4,
-  'server/services/browserVaultFill.browser.test.js': 2,
-  'server/services/greyboxRender.browser.test.js': 3,
+  'server/services/browserVaultFill.browser.test.js': 3,
+  'server/services/greyboxRender.browser.test.js': 2,
   'server/services/htmlComposition/index.test.js': 2,
   'server/services/musicVideo/animaticCapture.browser.test.js': 3,
   'server/services/musicVideo/compositionRender.test.js': 4,
