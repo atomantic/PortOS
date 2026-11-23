@@ -37,7 +37,7 @@ const resolveKey = (context, key) => {
     // under the literal `'.'` key on a wrapper object — return that
     // ahead of the wrapper itself. For object-array iteration no `'.'` is
     // set; fall back to the spread context.
-    return Object.prototype.hasOwnProperty.call(context, '.') ? context['.'] : context;
+    return  Object.hasOwn(context, '.') ? context['.'] : context;
   }
   const segments = key.split('.');
   let cursor = context;

@@ -419,6 +419,7 @@ describe('POST /api/ask (streaming happy path)', () => {
     svc.runAsk.mockImplementation(async function* ({ signal }) {
       markStreamStarted(signal);
       await waitForAbort(signal);
+      yield* [];
     });
 
     const server = await startLoopbackServer(makeApp());

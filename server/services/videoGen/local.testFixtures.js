@@ -258,7 +258,7 @@ export const mediaModelsFactory = async () => {
       id: 'wan22_cuda_ti2v_5b', name: 'Wan TI2V CUDA', runtime: 'wan22_cuda',
       repo: 'Wan-AI/Wan2.2-TI2V-5B-Diffusers',
       revision: 'b8fff7315c768468a5333511427288870b2e9635',
-      supportedModes: ['text'], frameStride: 4, defaultFrames: 81,
+      supportedModes: ['text'], frameStride: 4,
       defaultWidth: 1280, defaultHeight: 704, resolutionStep: 16,
       defaultFrames: 121, steps: 50, guidance: 5,
     },

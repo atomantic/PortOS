@@ -680,15 +680,17 @@ async function executeEvent(event) {
  */
 function updateNextRunTime(event) {
   switch (event.type) {
-    case 'cron':
+    case 'cron': {
       const nextDate = parseCronToNextRun(event.cron, new Date(), event.timezone || 'UTC')
       event.nextRunAt = nextDate?.getTime() || null
       break
+    }
 
-    case 'recurrence':
+    case 'recurrence': {
       const nextRecurrence = parseRecurrenceToNextRun(event.recurrence, new Date(), event.timezone || 'UTC')
       event.nextRunAt = nextRecurrence?.getTime() || null
       break
+    }
 
     case 'interval':
       event.nextRunAt = Date.now() + event.intervalMs

@@ -404,7 +404,7 @@ export function parseServeListenAddr(text) {
     }
   }
   // Fallback: a bare tc… token (e.g. TAILCAT_ADDR_FILE contents).
-  const match = raw.match(/tc[A-Za-z0-9_+\/=-]{24,}/);
+  const match = raw.match(/tc[A-Za-z0-9_+/=-]{24,}/);
   return match && isValidTcAddress(match[0]) ? match[0] : null;
 }
 

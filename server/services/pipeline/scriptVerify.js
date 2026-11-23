@@ -25,7 +25,7 @@ const OUTPUT_RESERVE_TOKENS = 2_000;
 const VERIFY_PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
 const VERIFY_PANEL_RE = /^(?:###\s+)?Panel\s+([\dIVX]+)\s*(?:\([^)]+\))?\s*:?\s*$/i;
 const VERIFY_FIELD_RE = /^(?:\*\*)?(Description|Caption(?:\s+\d+)?|Dialogue|SFX)\s*:(?:\*\*)?\s*(.*)$/i;
-const EMPTY_DIALOGUE_RE = /^[-*]?\s*([A-Z][A-Z0-9 '"&./()\-]*?):\s*(?:"\s*"|'\s*'|“\s*”|‘\s*’)\s*$/;
+const EMPTY_DIALOGUE_RE = /^[-*]?\s*([A-Z][A-Z0-9 '"&./()-]*?):\s*(?:"\s*"|'\s*'|“\s*”|‘\s*’)\s*$/;
 const EXCERPT_MAX = 140;
 
 function excerpt(text, max = EXCERPT_MAX) {

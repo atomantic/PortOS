@@ -119,9 +119,9 @@ export const TOOL_CAPABLE_PATTERNS = [
   // `qwen2.5-omni`, `llama3.2-vision`) that can't do tool-calling. The
   // legitimate hyphenated instruct builds (`Qwen2.5-7B-Instruct-GGUF`) are
   // already covered by the `*instruct` patterns above.
-  /(?:^|[\/:])qwen2\.5(?::|$)/,
-  /(?:^|[\/:])qwen3(?::|$)/,
-  /(?:^|[\/:])llama3\.[1-9](?::|$)/,
+  /(?:^|[/:])qwen2\.5(?::|$)/,
+  /(?:^|[/:])qwen3(?::|$)/,
+  /(?:^|[/:])llama3\.[1-9](?::|$)/,
   /hermes-?3/,
   /mistral-small/,
   /mistral.*instruct-v0\.[3-9]/,
@@ -259,12 +259,12 @@ const scanBalancedArray = (text, start) => {
   if (text[i] !== '[') return null;
   let depth = 0;
   let inStr = false;
-  let escape = false;
+  let escaped = false;
   for (; i < text.length; i++) {
     const ch = text[i];
     if (inStr) {
-      if (escape) { escape = false; continue; }
-      if (ch === '\\') { escape = true; continue; }
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
       if (ch === '"') inStr = false;
       continue;
     }

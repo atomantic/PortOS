@@ -547,7 +547,7 @@ describe('fableLoomProduction', () => {
         loom: { id: 'loom-1', protagonistCharacterId: 'char-hero', protagonistWardrobeId: 'wardrobe-x' },
         universe: { id: 'u-1', characters: [{ id: 'char-hero', wardrobes: [{ id: 'wardrobe-y' }] }], places: [], objects: [] },
       });
-      const wardrobe = 'Canonical wardrobe \"wardrobe-x\" is not present on protagonist \"char-hero\".';
+      const wardrobe = 'Canonical wardrobe "wardrobe-x" is not present on protagonist "char-hero".';
       const stills = plan.plannedAssets.filter((asset) => asset.type === 'image');
       expect(stills.map((asset) => asset.nodeId)).toEqual(['a', 'b', 'c', 'd']);
       for (const still of stills) expect(still.readiness.reasons).toContain(wardrobe);
@@ -573,7 +573,7 @@ describe('fableLoomProduction', () => {
         loom: { id: 'loom-1', protagonistCharacterId: 'char-hero' },
       });
       const reasonsFor = (plan, nodeId) => plan.plannedAssets.find((asset) => asset.id === `asset-${nodeId}-still`).readiness.reasons;
-      expect(reasonsFor(missing, 'a')).toEqual(['Canonical protagonist \"char-hero\" is not present in the linked Universe.']);
+      expect(reasonsFor(missing, 'a')).toEqual(['Canonical protagonist "char-hero" is not present in the linked Universe.']);
       expect(reasonsFor(missing, 'b')).toEqual(reasonsFor(missing, 'a'));
       expect(reasonsFor(noUniverse, 'd')).toEqual([
         'Locked visual canon cannot be resolved because its Universe is unavailable.',
@@ -687,10 +687,10 @@ describe('fableLoomProduction', () => {
     const errors = verifyExactInputProvenance(manifest, { universe }).errors
       .filter((error) => error.includes('recorded visual bindings'));
     expect(errors).toEqual([
-      'Character \"ghost\" in recorded visual bindings no longer exists in Universe.',
-      'Wardrobe \"gone\" in recorded visual bindings is not present on character \"hero\".',
-      'Place \"nowhere\" in recorded visual bindings no longer exists in Universe.',
-      'Object \"missing-object\" in recorded visual bindings no longer exists in Universe.',
+      'Character "ghost" in recorded visual bindings no longer exists in Universe.',
+      'Wardrobe "gone" in recorded visual bindings is not present on character "hero".',
+      'Place "nowhere" in recorded visual bindings no longer exists in Universe.',
+      'Object "missing-object" in recorded visual bindings no longer exists in Universe.',
     ]);
     const noBindings = { ...manifest, bindings: null };
     expect(verifyExactInputProvenance(noBindings, { universe }).errors)

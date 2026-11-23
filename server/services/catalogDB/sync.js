@@ -67,8 +67,8 @@ export async function upsertRelationFromPeer(rel, batch) {
   // as "no opinion" symmetrically in case a forked peer omits the tombstone
   // fields — preserve local state on conflict rather than coercing to false.
   const hasTombstoneFields =
-    Object.prototype.hasOwnProperty.call(rel, 'deleted') ||
-    Object.prototype.hasOwnProperty.call(rel, 'deletedAt');
+    Object.hasOwn(rel, 'deleted') ||
+    Object.hasOwn(rel, 'deletedAt');
   if (hasTombstoneFields) {
     // #8347 revival guard: `updated_at` is the tombstone/revival change-clock
     // (bumped by the trg_catalog_relation_sync_seq trigger on every
@@ -124,12 +124,12 @@ export async function upsertMediaFromPeer(media, batch) {
   // writer's envelope wins for these tuple-unique rows, same as refs); an older
   // peer's absent metadata is no opinion.
   const hasTombstoneFields =
-    Object.prototype.hasOwnProperty.call(media, 'deleted') ||
-    Object.prototype.hasOwnProperty.call(media, 'deletedAt');
+    Object.hasOwn(media, 'deleted') ||
+    Object.hasOwn(media, 'deletedAt');
   // A peer that predates media provenance has no `metadata` key. Treat that as
   // no opinion on conflict, just like the tombstone-less compatibility path,
   // so an older peer cannot erase a prompt already stored locally.
-  const hasMetadata = Object.prototype.hasOwnProperty.call(media, 'metadata')
+  const hasMetadata = Object.hasOwn(media, 'metadata')
     && media.metadata && typeof media.metadata === 'object'
     && !Array.isArray(media.metadata) && Object.keys(media.metadata).length > 0;
   const metadataColumn = hasMetadata ? ', metadata' : '';
@@ -137,7 +137,7 @@ export async function upsertMediaFromPeer(media, batch) {
   const metadataUpdate = hasMetadata ? ', metadata = EXCLUDED.metadata' : '';
   const metadataParam = hasMetadata ? [toPgJson(media.metadata || {})] : [];
   // Casting reference library (catalog v12): absent = no opinion, same as metadata.
-  const hasLibrary = Object.prototype.hasOwnProperty.call(media, 'library')
+  const hasLibrary = Object.hasOwn(media, 'library')
     && media.library && typeof media.library === 'object' && !Array.isArray(media.library);
   const libraryColumn = hasLibrary ? ', library' : '';
   const libraryPlaceholder = hasLibrary ? `, $${(hasTombstoneFields ? 10 : 7) + (hasMetadata ? 1 : 0)}` : '';
@@ -393,8 +393,8 @@ export async function upsertRefFromPeer(ref, batch) {
   // its `deletedAt`/`createdAt`, which is always older than a genuine later
   // local tombstone.
   const hasTombstoneFields =
-    Object.prototype.hasOwnProperty.call(ref, 'deleted') ||
-    Object.prototype.hasOwnProperty.call(ref, 'deletedAt');
+    Object.hasOwn(ref, 'deleted') ||
+    Object.hasOwn(ref, 'deletedAt');
   if (hasTombstoneFields) {
     const updatedAtClock = ref.updatedAt || ref.deletedAt || ref.createdAt;
     const { rows } = await query(

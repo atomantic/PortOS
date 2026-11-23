@@ -322,7 +322,7 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   }
   const request = await updateSchedule(async (schedule) => {
     const tasks = schedule.tasks || {};
-    const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;
+    const config = Object.hasOwn(tasks, taskType) ? tasks[taskType] : null;
     const entry = config ? {
       enabled: manual || config.enabled === true,
       featureEnabled: await createFeatureGate()(config),

@@ -370,7 +370,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(gitlab.toLowerCase()).not.toContain('copilot');
     expect(gitlab).toContain('glab mr view');
     expect(gitlab).toContain('ascii_downcase');
-    expect(gitlab).toContain('--yes --sha \"$CI_VERIFIED_HEAD\"');
+    expect(gitlab).toContain('--yes --sha "$CI_VERIFIED_HEAD"');
     expect(gitlab).toContain('do not retry a failed mutation using another method');
     expect(gitlab).not.toContain('--remove-source-branch');
     expect(gitlab).toContain('PortOS cleans up the managed worktree and branch automatically after completion');
@@ -1276,7 +1276,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(github).toContain('--paginate "repos/${REPO}/issues/${EPIC}/sub_issues"');
     expect(github).toContain('-X POST "repos/${REPO}/issues/${EPIC}/sub_issues" -F sub_issue_id="$CHILD_ID"');
     expect(github).toMatch(/repos\/\$\{REPO\}\/issues\/<num>" --jq \.id/);
-    expect(github).toContain('Never pass \`replace_parent\`');
+    expect(github).toContain('Never pass `replace_parent`');
     expect(github).not.toContain('${GITHUB_HOST_SETUP}');
     expect(DEFAULT_TASK_PROMPTS['claim-issue-gitlab']).not.toContain('sub_issues');
 

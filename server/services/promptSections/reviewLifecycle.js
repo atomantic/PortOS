@@ -1220,7 +1220,7 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     // A pre-PR local phase already reviewed; only the PR-SIDE roster is empty.
     local: {
       headingPrefix: '',
-      label: () => `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The completed local phase survives later feedback pushes and conflict rebases without another automatic local reviewer${localReviewRequired ? '; a \`review-blocked\` result leaves the PR/MR open until the required review completes' : ''}.`,
+      label: () => `The pre-PR local review for ${localReviewers.map(reviewer => `\`${reviewer}\``).join(', ')} has completed; no PR-side code reviewer is configured. The completed local phase survives later feedback pushes and conflict rebases without another automatic local reviewer${localReviewRequired ? '; a `review-blocked` result leaves the PR/MR open until the required review completes' : ''}.`,
       objective: inline ? 'Land it yourself once CI is green.' : 'Your job is to land it once CI is green.',
       exitNote: inline
         ? 'Do NOT start a second PR-side code review — the pre-PR local review is the only configured review.'

@@ -105,7 +105,7 @@ export default {
       const spec = UPGRADES[entry?.id];
       if (!spec || entry.repo !== spec.oldRepo) continue;
       const preserved = Object.fromEntries(USER_TUNABLE_FIELDS
-        .filter((field) => Object.prototype.hasOwnProperty.call(entry, field))
+        .filter((field) => Object.hasOwn(entry, field))
         .map((field) => [field, entry[field]]));
       if (entry.name === spec.oldName) delete preserved.name;
       if (entry.steps === 25) delete preserved.steps;

@@ -25,7 +25,7 @@ export function isValidTcAddress(tc) {
   if (!raw.startsWith('tc')) return false;
   if (raw.length < 24 || raw.length > 2048) return false;
   // Letters, digits, _ - = + / (base64 / base64url) only after the tc prefix.
-  return /^tc[A-Za-z0-9_+\/=-]+$/.test(raw);
+  return /^tc[A-Za-z0-9_+/=-]+$/.test(raw);
 }
 
 /**
@@ -38,7 +38,7 @@ export function isValidTcAddress(tc) {
 export function redactTailcatDiagnostics(text) {
   const lines = String(text || '')
     // 8+ payload chars, so even a tail-truncated address fragment is scrubbed.
-    .replace(/tc[A-Za-z0-9_+\/=-]{8,}/g, 'tc…')
+    .replace(/tc[A-Za-z0-9_+/=-]{8,}/g, 'tc…')
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean);

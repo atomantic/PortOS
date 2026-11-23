@@ -134,7 +134,7 @@ function cleanStaleRuns() {
   }
 }
 
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const hasOwn = (value, key) => Object.hasOwn(value, key);
 
 function normalizedRenderOptions(options = {}) {
   const normalized = {};

@@ -582,7 +582,7 @@ function hasDrafterTag(model) {
 // declares `mlx` + `dspark` + `speculative-decoding` but no `draft-model` tag, so
 // the tag predicate alone would offer a 30B target's drafter as a one-click
 // install (docs/research/2026-08-19-dspark-vs-dflash2.md).
-const MLX_DRAFTER_NAME_RE = /(?:^|[\/_-])(?:mtp|dflash\d*|dspark|drafter)(?:[\/_\-.]|$)/i
+const MLX_DRAFTER_NAME_RE = /(?:^|[/_-])(?:mtp|dflash\d*|dspark|drafter)(?:[/_\-.]|$)/i
 
 function isMlxDrafter(model) {
   return hasDrafterTag(model) || MLX_DRAFTER_NAME_RE.test(repoIdOf(model))

@@ -44,11 +44,11 @@ async function nearestExisting(path) {
  * mount, and a rename between the two fails with EXDEV.
  */
 export function _parseMountInfo(text) {
-  const unescape = field => field.replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
+  const unescapeOctal = field => field.replace(/\\([0-7]{3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8)));
   return text.split('\n')
     .map(line => line.split(' '))
     .filter(fields => fields.length >= 5)
-    .map(fields => ({ id: fields[0], mountPoint: unescape(fields[4]) }));
+    .map(fields => ({ id: fields[0], mountPoint: unescapeOctal(fields[4]) }));
 }
 
 /** The mount holding a real directory: the longest covering mount point, the last row among equals (a later mount shadows an earlier one). */

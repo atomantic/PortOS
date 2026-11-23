@@ -85,7 +85,7 @@ export function track(keys, t) {
   const [t1, b, ease] = keys[i];
   let k = (t - t0) / (t1 - t0);
   if (ease === 'hold') k = 0;
-  else if (ease === 'linear') k = k;
+  else if (ease === 'linear') { /* k is already linear */ }
   else if (ease === 'in') k = easeIn(k, 2);
   else if (ease === 'out') k = easeOut(k, 2);
   else if (ease === 'back') k = overshoot(k);

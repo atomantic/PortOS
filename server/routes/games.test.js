@@ -170,10 +170,10 @@ describe('Game routes', () => {
   });
 
   it('rejects music destinations that escape the repository or are not audio', async () => {
-    const escape = await request(makeApp())
+    const escapeResponse = await request(makeApp())
       .patch('/api/games/game-1/music/music-1')
       .send({ destinationPath: '../outside.mp3' });
-    expect(escape.status).toBe(400);
+    expect(escapeResponse.status).toBe(400);
 
     const wrongExtension = await request(makeApp())
       .patch('/api/games/game-1/music/music-1')

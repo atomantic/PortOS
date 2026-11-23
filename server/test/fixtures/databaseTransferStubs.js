@@ -57,7 +57,7 @@ writer=none
 if [ -s "$R/writer.pid" ]; then
   wpid=$(cat "$R/writer.pid")
   if kill -0 "$wpid" 2>/dev/null; then
-    if [ -f "/proc/$wpid/stat" ] && awk '{if ($NF=="") exit; sub(/^.*\)/, ""); if ($1=="Z") exit 1}' "/proc/$wpid/stat" 2>/dev/null; then
+    if [ -f "/proc/$wpid/stat" ] && awk '{if ($NF=="") exit; sub(/^.*\\)/, ""); if ($1=="Z") exit 1}' "/proc/$wpid/stat" 2>/dev/null; then
       writer=alive
     elif [ ! -f "/proc/$wpid/stat" ]; then
       writer=alive

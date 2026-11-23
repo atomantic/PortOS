@@ -15,7 +15,7 @@ import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalog/catalogMedi
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+const hasOwn = (value, key) => Object.hasOwn(value || {}, key);
 const hasMeaningfulMetadata = (value) => value && typeof value === 'object'
   && !Array.isArray(value) && Object.keys(value).length > 0;
 

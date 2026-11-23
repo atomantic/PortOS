@@ -768,8 +768,6 @@ describe('planTestMemo and recordTestMemo', () => {
       'scripts/pregate.test.js': 25.1,
       'scripts/setup-image-video.test.js': 19.5,
       'scripts/lib/testMemo.test.js': 15,
-      'scripts/vitestTempRoot.test.js': 14,
-      'scripts/generate_ltx2.test.js': 13.8,
       'scripts/vitestSiblingSweep.test.js': 12.3,
       'scripts/update-headless-recovery.test.js': 11.4,
       'server/services/updateExecutor.deferred.test.js': 11.1,

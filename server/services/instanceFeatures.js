@@ -80,7 +80,7 @@ const storedOverride = (feature, settings) => {
   const instanceFeatures = settings?.instanceFeatures;
   if (instanceFeatures === undefined) return null;
   if (!isPlainObject(instanceFeatures)) return false;
-  if (!Object.prototype.hasOwnProperty.call(instanceFeatures, feature.id)) return null;
+  if (!Object.hasOwn(instanceFeatures, feature.id)) return null;
 
   const featureSettings = instanceFeatures[feature.id];
   if (!isPlainObject(featureSettings)) return false;
@@ -98,7 +98,7 @@ const storedGroupEnabled = (groupId, settings) => {
   const groups = settings?.instanceFeatureGroups;
   if (groups === undefined) return true;
   if (!isPlainObject(groups)) return false;
-  if (!Object.prototype.hasOwnProperty.call(groups, groupId)) return true;
+  if (!Object.hasOwn(groups, groupId)) return true;
 
   const groupSettings = groups[groupId];
   if (!isPlainObject(groupSettings)) return false;

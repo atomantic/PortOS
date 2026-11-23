@@ -34,7 +34,7 @@ import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMin
 import { getGoalsTree } from './identity/goals.js';
 import { getLatestMetricValues } from './appleHealthQuery.js';
 
-const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.-]/g, '_') || 'unknown';
 
 // Brain entity stores that belong in a personal legacy bundle. We deliberately
 // skip operational stores (`admin`, `buckets`, `inbox`) — they're workflow
@@ -585,7 +585,7 @@ function toWinAnsi(text) {
     .replace(/…/g, '...')
     .replace(/₂/g, '2')   // subscript 2 (VO₂)
     .replace(/[•·]/g, '-') // bullet / middot → ASCII dash (U+2022 is > 0xFF, would otherwise be stripped)
-    .replace(/[✅⚠️⚡]/g, '')  // ✅ ⚠ emoji-variation ⚡
+    .replace(/✅|⚠️|⚡/g, '')  // ✅ ⚠ emoji-variation ⚡
     .replace(/\t/g, ' ')
     .replace(/[\x00-\x1F\x7F-\x9F]/g, '')  // control bytes WinAnsi can't encode
     .replace(/[^\x00-\xFF]/g, '');         // anything still above the WinAnsi range

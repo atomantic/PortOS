@@ -189,7 +189,7 @@ beforeEach(async () => {
 
 // Mirrors backup.js's MACHINE_HOST derivation so expected paths can be built
 // without hardcoding this machine's hostname.
-const machineHost = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+const machineHost = hostname().toLowerCase().replace(/[^\w.-]/g, '_') || 'unknown';
 
 // Helper: build a fake child process whose close/error we can drive.
 function fakeProc() {

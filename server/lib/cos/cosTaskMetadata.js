@@ -103,7 +103,7 @@ function sanitizePipelineStage(raw) {
   if (!isPlainObject(raw)) return null;
   const clean = Object.create(null);
   for (const [field, maxLength] of Object.entries(PIPELINE_STAGE_STRING_LIMITS)) {
-    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
+    if (!Object.hasOwn(raw, field)) continue;
     if (raw[field] === null && ['providerId', 'model'].includes(field)) continue;
     if (typeof raw[field] !== 'string') return null;
     const value = raw[field].trim();
@@ -115,24 +115,24 @@ function sanitizePipelineStage(raw) {
     if (!fallback.success) return null;
     clean.largeInputFallback = fallback.data;
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'role')) {
+  if (Object.hasOwn(raw, 'role')) {
     if (!PIPELINE_STAGE_ROLES.includes(raw.role)) return null;
     clean.role = raw.role;
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'executionProfile')) {
+  if (Object.hasOwn(raw, 'executionProfile')) {
     if (!PIPELINE_EXECUTION_PROFILES.includes(raw.executionProfile)) return null;
     clean.executionProfile = raw.executionProfile;
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'effort')) {
+  if (Object.hasOwn(raw, 'effort')) {
     if (raw.effort !== null && !EFFORT_LEVELS.includes(raw.effort)) return null;
     if (raw.effort !== null) clean.effort = raw.effort;
   }
   for (const field of PIPELINE_STAGE_BOOLEAN_FIELDS) {
-    if (!Object.prototype.hasOwnProperty.call(raw, field)) continue;
+    if (!Object.hasOwn(raw, field)) continue;
     if (typeof raw[field] !== 'boolean') return null;
     clean[field] = raw[field];
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'precondition')) {
+  if (Object.hasOwn(raw, 'precondition')) {
     const precondition = safePipelinePrecondition(raw.precondition);
     if (!precondition) return null;
     clean.precondition = precondition;
@@ -291,7 +291,7 @@ export function sanitizeTaskMetadata(raw) {
   }
   // `reviewer` is a legacy single constrained string.
   const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && isReviewer(normalizedReviewer)) {
+  if (Object.hasOwn(raw, 'reviewer') && isReviewer(normalizedReviewer)) {
     clean.reviewer = normalizedReviewer;
   }
   // `reviewers` is the ordered multi-reviewer list — filter to known values, dedupe, preserve order.
@@ -327,13 +327,13 @@ export function sanitizeTaskMetadata(raw) {
   if (isBibleUniverseId(raw.universeId)) {
     clean.universeId = raw.universeId;
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'musicVideoAutopilot')) {
+  if (Object.hasOwn(raw, 'musicVideoAutopilot')) {
     const params = normalizeAutopilotParams(raw.musicVideoAutopilot);
     if (params) {
       clean.musicVideoAutopilot = params;
     }
   }
-  if (Object.prototype.hasOwnProperty.call(raw, 'pipeline')) {
+  if (Object.hasOwn(raw, 'pipeline')) {
     const pipeline = sanitizePipeline(raw.pipeline);
     if (!pipeline) return null;
     clean.pipeline = pipeline;

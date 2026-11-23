@@ -357,6 +357,7 @@ const MODEL_TARGET_RE = /\b(?:agents?|assistants?|models?|llms?|ai|claude|codex|
  * before the scan so a trailing CR on a Windows line is not a finding, while a
  * CR in the middle of a line (the terminal-overwrite trick) still is.
  */
+// biome-ignore lint/suspicious/noMisleadingCharacterClass: the class deliberately lists combining and joiner code points individually; each must be flagged on its own
 const HIDDEN_CODEPOINT_RE = /[\u0000\u0008\u000D\u001B\u007F\u0080-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF9-\uFFFB\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu;
 
 const normalizeForHiddenScan = (value) => value.replaceAll('\r\n', '\n').replace(/\r$/, '');

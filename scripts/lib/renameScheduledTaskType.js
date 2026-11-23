@@ -21,7 +21,7 @@ const LEARNING_KEYED_MAPS = ['byTaskType', 'routingAccuracy', 'byTaskTypeExecuti
 const APPS_PATH = join('data', 'apps.json');
 
 const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const hasOwn = (value, key) => Object.hasOwn(value, key);
 
 async function readJson(rootDir, relPath) {
   const fullPath = join(rootDir, relPath);

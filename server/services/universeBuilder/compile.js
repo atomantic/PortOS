@@ -61,10 +61,10 @@ export function buildUniverseStyleContext(universe, options = {}) {
   const {
     includePremise = false,
     includeEmbrace = true,
-    escape = false,
+    escape: escapeText = false,
     headerSuffix = '',
   } = options;
-  const safeText = escape ? stripPromptControlChars : identityText;
+  const safeText = escapeText ? stripPromptControlChars : identityText;
   const lines = [];
   if (universe.logline) lines.push(`LOGLINE: ${safeText(universe.logline)}`);
   if (includePremise && universe.premise) lines.push(`PREMISE: ${safeText(universe.premise)}`);

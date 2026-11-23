@@ -719,8 +719,8 @@ const preserveLegacyStoryOutline = (episode, localEpisode, senderVersion) => {
 const preserveLegacyDeliveryPlan = (remotePlan, localPlan, senderVersion) => (
   senderVersion < 4
     && localPlan
-    && Object.prototype.hasOwnProperty.call(localPlan, 'deliveryOptions')
-    && !Object.prototype.hasOwnProperty.call(remotePlan || {}, 'deliveryOptions')
+    && Object.hasOwn(localPlan, 'deliveryOptions')
+    && !Object.hasOwn(remotePlan || {}, 'deliveryOptions')
     ? {
       deliveryOptions: localPlan.deliveryOptions,
       interEpisodeVoicemails: localPlan.interEpisodeVoicemails,
@@ -738,8 +738,8 @@ const preserveLegacyDeliveryPlan = (remotePlan, localPlan, senderVersion) => (
 const preserveLegacyCharacterEvolutions = (remotePlan, localPlan, senderVersion) => (
   senderVersion < 8
     && localPlan
-    && Object.prototype.hasOwnProperty.call(localPlan, 'characterEvolutions')
-    && !Object.prototype.hasOwnProperty.call(remotePlan || {}, 'characterEvolutions')
+    && Object.hasOwn(localPlan, 'characterEvolutions')
+    && !Object.hasOwn(remotePlan || {}, 'characterEvolutions')
     ? { characterEvolutions: localPlan.characterEvolutions }
     : {}
 );
@@ -750,8 +750,8 @@ const preserveLegacyCharacterEvolutions = (remotePlan, localPlan, senderVersion)
 const preserveLegacySeriesDesign = (remotePlan, localPlan, senderVersion) => (
   senderVersion < 9
     && localPlan
-    && Object.prototype.hasOwnProperty.call(localPlan, 'seriesDesign')
-    && !Object.prototype.hasOwnProperty.call(remotePlan || {}, 'seriesDesign')
+    && Object.hasOwn(localPlan, 'seriesDesign')
+    && !Object.hasOwn(remotePlan || {}, 'seriesDesign')
     ? { seriesDesign: localPlan.seriesDesign }
     : {}
 );
@@ -813,7 +813,7 @@ const preserveLegacyVisualProduction = (incoming, local, senderVersion) => {
       renderSettings: senderVersion < 5 ? local.renderSettings : {
         ...remote.renderSettings,
         ...Object.fromEntries(FABLELOOM_RENDER_PREFERENCE_KEYS
-          .filter((key) => Object.prototype.hasOwnProperty.call(local.renderSettings, key))
+          .filter((key) => Object.hasOwn(local.renderSettings, key))
           .map((key) => [key, local.renderSettings[key]])),
       },
     } : {}),

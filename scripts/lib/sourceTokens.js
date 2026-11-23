@@ -36,7 +36,7 @@ function regexAllowed(tokens) {
   return false;
 }
 
-function unescape(ch) {
+function unescapeChar(ch) {
   return { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }[ch] ?? ch ?? '';
 }
 
@@ -56,7 +56,7 @@ function readEscape(src, at) {
   }
   if (ch === '\r' && src[at + 2] === '\n') return { text: '', length: 3 };
   if (ch === '\n' || ch === '\r') return { text: '', length: 2 };
-  return { text: unescape(ch), length: 2 };
+  return { text: unescapeChar(ch), length: 2 };
 }
 
 function readString(src, start) {
@@ -64,7 +64,7 @@ function readString(src, start) {
   let text = '';
   for (let i = start + 1; i < src.length; i += 1) {
     const ch = src[i];
-    if (ch === '\\') { const escape = readEscape(src, i); text += escape.text; i += escape.length - 1; continue; }
+    if (ch === '\\') { const escapeResult = readEscape(src, i); text += escapeResult.text; i += escapeResult.length - 1; continue; }
     if (ch === '\n') return null;
     if (ch === quote) return { text, end: i + 1 };
     text += ch;
@@ -197,7 +197,7 @@ export function tokenize(src, proseBackticks = new Set(), { jsx = true } = {}) {
         for (;;) {
           if (pos >= n) throw Object.assign(new Error('unterminated template literal'), { prose: start });
           const ch = src[pos];
-          if (ch === '\\') { const escape = readEscape(src, pos); quasi += escape.text; pos += escape.length; continue; }
+          if (ch === '\\') { const escapeResult = readEscape(src, pos); quasi += escapeResult.text; pos += escapeResult.length; continue; }
           if (ch === '`') { pos += 1; break; }
           if (ch === '$' && src[pos + 1] === '{') {
             quasis.push(quasi);

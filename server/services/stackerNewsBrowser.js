@@ -16,7 +16,7 @@ export const STACKER_NEWS_IDENTITY_EXPRESSION = `(() => {
   }
   const link = [...document.querySelectorAll('a[href]')].find((node) => {
     const href = node.getAttribute('href') || '';
-    return node.getAttribute('aria-label')?.toLowerCase().includes('profile') && /^\\\/[a-zA-Z0-9_-]+$/.test(href);
+    return node.getAttribute('aria-label')?.toLowerCase().includes('profile') && /^\\/[a-zA-Z0-9_-]+$/.test(href);
   });
   return { username: link ? link.getAttribute('href').slice(1) : null, id: null };
 })()`;

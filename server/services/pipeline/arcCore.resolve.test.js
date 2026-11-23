@@ -4,7 +4,6 @@ import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 const fileStore = new Map();
 let stageRunnerSpy;
-let stageContextSpy;
 
 vi.mock('../../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
@@ -28,11 +27,8 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('../stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),
   extractJson: (raw) => JSON.parse(raw),
-  // Large window by default so completeness runs as a single call (mode:
-  // 'whole'); a test can set `stageContextSpy` to force a small window.
-  resolveStageContext: vi.fn((...args) => (stageContextSpy
-    ? stageContextSpy(...args)
-    : Promise.resolve({ provider: { id: 'p' }, model: 'm', contextWindow: 1_000_000 }))),
+  // Large window so completeness runs as a single call (mode: 'whole').
+  resolveStageContext: vi.fn(() => Promise.resolve({ provider: { id: 'p' }, model: 'm', contextWindow: 1_000_000 })),
 }));
 
 const seriesSvc = await import('./series.js');

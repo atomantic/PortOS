@@ -78,7 +78,7 @@ describe('eidoverse foundation promote envelope never carries style or ledger-on
     const { outcome, candidate } = packageRecord();
     expect(outcome).toBe('packaged');
     for (const key of LEDGER_ONLY_KEYS) {
-      expect(Object.prototype.hasOwnProperty.call(candidate, key)).toBe(false);
+      expect(Object.hasOwn(candidate, key)).toBe(false);
     }
   });
 

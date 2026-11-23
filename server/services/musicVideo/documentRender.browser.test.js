@@ -932,6 +932,7 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
         // Keep the listener installed while ordinary page closure is pending.
         // If cancellation starts there, await its cached fixture verdict too.
         if (signal.aborted) await closeFixture().catch(error => cleanupErrors.push(error));
+        // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
         if (cleanupErrors.length) throw new AggregateError([...(bodyError ? [bodyError] : []), ...cleanupErrors],
           'Three test or owned browser cleanup failed', { cause: bodyError ?? cleanupErrors[0] });
       } finally { signal.removeEventListener('abort', abort); }

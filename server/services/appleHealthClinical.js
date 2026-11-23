@@ -37,7 +37,6 @@ export const LOINC_TO_KEY = {
   '6768-6': 'alk_phos',
   '1920-8': 'sgot_ast',
   '1742-6': 'alt',
-  '4548-4': 'hba1c',
   '17856-6': 'hba1c',
   '33037-3': 'anion_gap',
   '41653-7': 'glucose',            // Glucose [Mass/volume] in Capillary blood

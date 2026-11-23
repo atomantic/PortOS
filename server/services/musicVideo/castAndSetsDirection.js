@@ -669,7 +669,7 @@ export function parseCastAndSetsResponse(responseText) {
 
 // ---- merge + normalize ------------------------------------------------------
 
-const hasOwn = (obj, key) => obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+const hasOwn = (obj, key) => obj != null && Object.hasOwn(obj, key);
 
 const normalizeRole = (role) => {
   const r = String(role || '').trim().toLowerCase();

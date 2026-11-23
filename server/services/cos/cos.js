@@ -297,7 +297,7 @@ export async function updateConfig(updates) {
   }
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
   const improvePatch = Object.fromEntries(
-    improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),
+    improveKeys.filter((key) => Object.hasOwn(updates, key)).map((key) => [key, updates[key]]),
   );
   await logCosScheduleUpdate({
     target: 'cos-config',

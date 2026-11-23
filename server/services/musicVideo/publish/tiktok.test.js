@@ -7,7 +7,7 @@ const OVERLAY = '.react-joyride__overlay';
 // form. `buttons` are the tooltip's own buttons (each press closes one step),
 // `escape` says whether Escape closes a step, and `late` mounts the tour only
 // once the adapter waits for it. The overlay swallows clicks while it is up.
-const fakePage = ({ tourSteps = 0, buttons = ['Got it'], escape = false, late = false } = {}) => {
+const fakePage = ({ tourSteps = 0, buttons = ['Got it'], escape: pressEscape = false, late = false } = {}) => {
   let tour = late ? 0 : tourSteps;
   let pending = late ? tourSteps : 0;
   const calls = { editorClicked: false, editorClickedUnderTour: false, pressed: [], escapes: 0, buttonSelectors: new Set() };
@@ -20,7 +20,7 @@ const fakePage = ({ tourSteps = 0, buttons = ['Got it'], escape = false, late = 
       press: async (k) => {
         if (k !== 'Escape') return;
         calls.escapes += 1;
-        if (tour && escape) tour -= 1;
+        if (tour && pressEscape) tour -= 1;
       },
     },
     evaluate: async (_fn, arg) => {

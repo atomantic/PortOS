@@ -5,7 +5,7 @@
 
 /** Legacy XML points carry src (including null); legacy HAE points do not. */
 export function healthPointOrigin(point) {
-  return point.origin ?? (Object.prototype.hasOwnProperty.call(point, 'src') ? 'xml' : 'hae');
+  return point.origin ?? (Object.hasOwn(point, 'src') ? 'xml' : 'hae');
 }
 
 /** Identity within one metric: HAE is already device-merged; XML is per source. */

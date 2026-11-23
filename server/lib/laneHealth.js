@@ -54,7 +54,7 @@ function attributeIssueLanes(issue, lanes = auditLanes()) {
 // A repository-relative source path with at least one directory and an
 // extension, as the audit filing contract's `path/to/file.js:LINE` writes it.
 // Must follow a boundary character so URL path segments never match.
-const FILE_REFERENCE = /(?:^|[\s`'"(\[<,;])\.?\/?((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)(?::\d+(?::\d+)?)?(?=$|[\s`'"),\]>:;.!?])/g;
+const FILE_REFERENCE = /(?:^|[\s`'"([<,;])\.?\/?((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)(?::\d+(?::\d+)?)?(?=$|[\s`'"),\]>:;.!?])/g;
 
 // A path with a `..` segment is a broken traversal (`./../lib/x.js`), never a
 // repository-relative citation. The match includes its boundary character, so

@@ -2155,7 +2155,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 // refused to delete a dirty tree, and every pass instead spent a coordinator run
 // that came back "no real work product, a human should discard it".
 describe('reconcile — detached-HEAD worktrees (#10825)', () => {
-  const MAIN = { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
+  const MAIN = { path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
   const detachedTree = (path, extra = {}) => ({ path, head: 'bbb222', detached: true, ...extra });
   // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
   const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
@@ -2267,7 +2267,7 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
 
   it('never gathers the main checkout or a detached tree at unmerged commits', async () => {
     wt.listWorktrees.mockResolvedValue([
-      { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', detached: true },
+      { path: '/repo', head: 'aaa111', detached: true },
       detachedTree('/repo/data/cos/worktrees/unmerged-work'),
     ]);
     stubGit({ merged: false });

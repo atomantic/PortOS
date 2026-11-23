@@ -625,7 +625,7 @@ describe('executeTuiRun', () => {
       // Save + restore the original value: a PortOS-inside-Claude-Code dev
       // run starts the worker with CLAUDECODE already set, and an
       // unconditional `delete` would clobber the test of a sibling test.
-      const originalClaudecode = Object.prototype.hasOwnProperty.call(process.env, 'CLAUDECODE')
+      const originalClaudecode = Object.hasOwn(process.env, 'CLAUDECODE')
         ? process.env.CLAUDECODE
         : undefined;
       process.env.CLAUDECODE = '1';

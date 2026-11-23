@@ -345,11 +345,11 @@ describe('restore recovery admission', () => {
 
   it('withdraws recovery authority from work that outlives the maintenance context', async () => {
     const { id } = begin();
-    let escape;
+    let lateEscape;
     await withDatabaseMaintenance(async () => {
-      escape = () => query('SELECT late');
+      lateEscape = () => query('SELECT late');
     }, { restoreRecoveryId: id });
-    await expect(escape()).rejects.toMatchObject(FENCED);
+    await expect(lateEscape()).rejects.toMatchObject(FENCED);
   });
 
   it('fails closed on a damaged journal, including the boot fence', async () => {

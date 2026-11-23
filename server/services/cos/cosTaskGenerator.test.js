@@ -1180,7 +1180,7 @@ describe('emitOnDemandEmpty', () => {
   it('passes a remedy the detector already named straight through, without asking gh', async () => {
     // A per-repo permission the token lacks passes checkGhHealth's global-auth
     // probe, so consulting it would drop the remedy this channel exists to carry.
-    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
+    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
       forge: { cli: 'gh', remedy: 'Grant the token collaborator read.' }
     });
     expect(ghHealth).not.toHaveBeenCalled();

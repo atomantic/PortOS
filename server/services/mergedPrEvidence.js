@@ -7,7 +7,7 @@ import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value);
 const validBranchName = value => typeof value === 'string' && value.length > 0 && !value.startsWith('-')
-  && !/[\x00-\x20~^:?*\[\\]/.test(value) && !value.includes('..') && !value.includes('@{');
+  && !/[\x00-\x20~^:?*[\\]/.test(value) && !value.includes('..') && !value.includes('@{');
 
 /** Whether the forge reports `head` as a strict descendant of `tip`. A tip the
  * forge does not know (never pushed, or collected) is not contained. */

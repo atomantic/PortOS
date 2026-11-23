@@ -143,7 +143,7 @@ export function buildManuscriptMarkdown({ series, volumes }, settings) {
 const yamlValue = (v) => {
   const s = String(v ?? '');
   // Quote when the value could confuse a YAML parser (colons, leading specials).
-  return /[:#\-\[\]{}&*!|>'"%@`]/.test(s) ? JSON.stringify(s) : s;
+  return /[:#\-[\]{}&*!|>'"%@`]/.test(s) ? JSON.stringify(s) : s;
 };
 
 export async function buildManuscriptFile(seriesId) {

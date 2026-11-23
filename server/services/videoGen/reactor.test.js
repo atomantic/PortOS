@@ -390,7 +390,7 @@ describe('Reactor SDK adapter', () => {
     videoGenEvents.on('failed', failed);
     const job = await started({ sourceImagePath });
     await writeFile(input.outputPath, 'example-video');
-    child.stdout.emit('data', Buffer.from('{\"type\":\"complete\",\"clipId\":\"clip-example\",\"seconds\":6}\n'));
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
     child.emit('close', 0);
     // Job must finalize (success verdict unchanged even though cleanup rm failed).
     await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(

@@ -315,7 +315,7 @@ describe('ci.yml gate wiring', () => {
     // Without the token the reporter silently falls back to the cancelled
     // wording, which is exactly the misleading verdict this lookup replaced.
     expect(jobs[id]).toContain('GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}');
-    expect(jobs[id]).toMatch(/\n    permissions:\n      contents: read\n      actions: read\n/);
+    expect(jobs[id]).toMatch(/\n {4}permissions:\n {6}contents: read\n {6}actions: read\n/);
     // Listing jobs is a read. Cancelling stays a leaf-job privilege.
     expect(jobs[id]).not.toContain('actions: write');
   });

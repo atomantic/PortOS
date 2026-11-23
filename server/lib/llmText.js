@@ -34,7 +34,7 @@ export function parseLLMJSON(raw) {
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    const start = cleaned.search(/[\[{]/);
+    const start = cleaned.search(/[[{]/);
     const end = Math.max(cleaned.lastIndexOf('}'), cleaned.lastIndexOf(']'));
     if (start !== -1 && end > start && (start > 0 || end < cleaned.length - 1)) {
       try {

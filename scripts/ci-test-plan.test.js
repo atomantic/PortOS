@@ -2826,7 +2826,7 @@ describe('path-gated single-purpose jobs', () => {
       if (typeof output[key] === 'boolean') expect(comparison, `plan.${key} compared as a string`).toBeUndefined();
     }
     // Every other impact output stays a declared, separately emitted value.
-    const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^      (\w+): \$\{\{/gm)].map(([, name]) => name);
+    const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^ {6}(\w+): \$\{\{/gm)].map(([, name]) => name);
     expect(impactOutputs).toEqual(['plan', 'server_shards', 'client_shards', 'browser_shards', 'windows_shards', 'db_image']);
     for (const [, name] of ci.matchAll(/needs\.impact\.outputs\.(\w+)/g)) expect(impactOutputs, name).toContain(name);
   });
