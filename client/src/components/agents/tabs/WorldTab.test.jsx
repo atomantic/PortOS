@@ -145,3 +145,30 @@ describe('WorldTab activity history', () => {
     expect(screen.getByRole('heading', { name: 'Action Queue' }).parentElement.className).toContain('flex-wrap');
   });
 });
+
+describe('WorldTab account loading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    moltworldStatus.mockResolvedValue(null);
+    moltworldRateLimits.mockResolvedValue(null);
+    moltworldGetQueue.mockResolvedValue([]);
+    getAgentActivityTimeline.mockResolvedValue([]);
+  });
+
+  it('shows a retryable error instead of "No active Moltworld account" when the account read fails', async () => {
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([{ id: 'acct-1', status: 'active', credentials: { username: 'example' } }]);
+
+    render(<WorldTab agentId="agent-1" />);
+
+    expect(await screen.findByText(/Could not load Moltworld account — network unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('No active Moltworld account')).not.toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', 'moltworld', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('Activity History')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Moltworld account/)).not.toBeInTheDocument();
+  });
+});
