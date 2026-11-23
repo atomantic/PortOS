@@ -151,12 +151,18 @@ export const multiTurnTestHistoryEntrySchema = z.object({
   timestamp: z.string().datetime()
 });
 
+export const listItemSchema = z.object({
+  title: z.string().min(1).max(500),
+  note: z.string().max(2000).optional()
+});
+
 // Enrichment progress schema
 export const enrichmentProgressSchema = z.object({
   completedCategories: z.array(enrichmentCategoryEnum).default([]),
   lastSession: z.string().datetime().nullable().optional(),
-  questionsAnswered: z.record(enrichmentCategoryEnum, z.number().int().min(0)).optional(),
-  scaleQuestionsAnswered: z.record(z.string(), z.number().int().min(1).max(5)).optional()
+  questionsAnswered: z.partialRecord(enrichmentCategoryEnum, z.number().int().min(0)).optional(),
+  scaleQuestionsAnswered: z.record(z.string(), z.number().int().min(1).max(5)).optional(),
+  listItems: z.partialRecord(enrichmentCategoryEnum, z.array(listItemSchema)).optional()
 });
 
 // Digital Twin settings schema
