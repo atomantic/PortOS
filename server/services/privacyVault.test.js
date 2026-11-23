@@ -159,6 +159,9 @@ describe('listVaultRecords', () => {
   });
 });
 
+let OLD_ENC;
+beforeAll(() => { OLD_ENC = encryptValue('old value'); });
+
 describe('updateVaultRecord', () => {
   function mockLockedRow(row) {
     const client = {
@@ -192,51 +195,78 @@ describe('updateVaultRecord', () => {
   });
 
   it('scrubs the prior value and clears broker evidence when value is overwritten on an evidence-source type', async () => {
-    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { value: 'New Name' });
     expect(promptScrubMock).toHaveBeenCalledTimes(1);
-    expect(promptScrubMock).toHaveBeenCalledWith(['v1:old']);
+    expect(promptScrubMock).toHaveBeenCalledWith([OLD_ENC]);
     expect(clearEvidenceMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock.mock.calls[0][0]).toBe(SELF);
     expect(clearEvidenceMock.mock.calls[0][1]).toHaveProperty('client');
   });
 
   it('scrubs the prior value but does not clear broker evidence for non-evidence-source types', async () => {
-    mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { value: '503-555-0142' });
     expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
   it('clears broker evidence for an address record value overwrite', async () => {
-    mockLockedRow({ id: 'r1', type: 'address', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'address', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { value: '9 Oak Ave' });
     expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).toHaveBeenCalledTimes(1);
   });
 
   it('scrubs exactly once when value and shareWithTwin:false are both passed', async () => {
-    mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { value: '503-555-0142', shareWithTwin: false });
     expect(promptScrubMock).toHaveBeenCalledTimes(1);
   });
 
   it('scrubs on shareWithTwin:false alone without clearing broker evidence', async () => {
-    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { shareWithTwin: false });
     expect(promptScrubMock).toHaveBeenCalledTimes(1);
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
   it('does not scrub or clear broker evidence for a label-only update', async () => {
-    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: 'v1:old' });
+    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: OLD_ENC });
     await updateVaultRecord('r1', { label: 'New label' });
     expect(promptScrubMock).not.toHaveBeenCalled();
     expect(clearEvidenceMock).not.toHaveBeenCalled();
   });
 
+  it('erases drafts citing the record and scrubs the replaced value when the value changes', async () => {
+    eraseMock.mockClear(); draftScrubMock.mockClear();
+    mockLockedRow({ id: 'r1', type: 'phone', subject_id: SELF, value_enc: encryptValue('555-0100') });
+    await updateVaultRecord('r1', { value: '555-0199' });
+    const [predicate] = eraseMock.mock.calls[0];
+    expect(predicate({ privacyMeta: { vaultRecordIds: ['r1'] } })).toBe(true);
+    expect(predicate({ privacyMeta: { vaultRecordIds: ['x'] } })).toBe(false);
+    expect(draftScrubMock).toHaveBeenCalledWith(['555-0100']);
+  });
+
+  it('adds parsed city and city+state scrub needles when an address is overwritten', async () => {
+    draftScrubMock.mockClear();
+    mockLockedRow({ id: 'r1', type: 'address', subject_id: SELF, value_enc: encryptValue('1 Main St, Portland, OR 97201') });
+    await updateVaultRecord('r1', { value: '9 Oak Ave, Salem, OR 97301' });
+    expect(draftScrubMock).toHaveBeenCalledWith(['1 Main St, Portland, OR 97201', 'Portland', 'Portland, OR']);
+  });
+
+  it('does not touch drafts for a label-only update or decrypt a sensitive value', async () => {
+    eraseMock.mockClear(); draftScrubMock.mockClear();
+    mockLockedRow({ id: 'r1', type: 'legal_name', subject_id: SELF, value_enc: OLD_ENC });
+    await updateVaultRecord('r1', { label: 'x' });
+    expect(eraseMock).not.toHaveBeenCalled();
+    mockLockedRow({ id: 'r2', type: 'ssn', subject_id: SELF, value_enc: 'v1:not-decryptable' });
+    await updateVaultRecord('r2', { value: '000-00-0001' });
+    expect(draftScrubMock).toHaveBeenCalledWith([]);
+  });
+
   it('re-encrypts and re-masks when value changes', async () => {
-    const client = mockLockedRow({ id: 'r1', type: 'phone' });
+    const client = mockLockedRow({ id: 'r1', type: 'phone', value_enc: OLD_ENC });
     await updateVaultRecord('r1', { value: '503-555-0142' });
     const update = client.query.mock.calls.find(([sql]) => /UPDATE privacy_vault_records/.test(sql));
     expect(update[1][0]).toMatch(/^v1:/);
@@ -282,6 +312,16 @@ describe('deleteVaultRecord — privacy draft erasure (#17233)', () => {
     expect(predicate({ privacyMeta: { vaultRecordIds: ['x'] } })).toBe(false);
     expect(predicate({})).toBe(false);
     expect(draftScrubMock).toHaveBeenCalledWith(['555-0100']);
+  });
+
+  it('adds parsed city and city+state scrub needles for a deleted address', async () => {
+    draftScrubMock.mockClear();
+    const client = { query: vi.fn(async () => ({ rows: [{
+      id: 'r3', type: 'address', subject_id: 'subject-2', value_enc: encryptValue('1 Main St, Portland, OR 97201'),
+    }] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await deleteVaultRecord('r3');
+    expect(draftScrubMock).toHaveBeenCalledWith(['1 Main St, Portland, OR 97201', 'Portland', 'Portland, OR']);
   });
 
   it('never decrypts a sensitive-type value for the legacy scrub', async () => {

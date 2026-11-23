@@ -23,7 +23,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 const {
   listDrafts, createDraft, updateDraft, claimDraftForSend, releaseDraftSend,
-  erasePrivacyDrafts, scrubLegacyPrivacyDraftValues, PRIVACY_DRAFT_REDACTION_NOTICE
+  erasePrivacyDrafts, scrubLegacyPrivacyDraftValues, PRIVACY_DRAFT_REDACTION_NOTICE, PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE
 } = await import('./messageDrafts.js');
 
 // Seed the file store directly so we control accountId/status without relying on
@@ -169,7 +169,7 @@ describe('privacy draft erasure (#17233)', () => {
     expect(result).toEqual({ deleted: 3, redacted: 1, skipped: 1 });
     const left = Object.fromEntries(stored().map(d => [d.id, d]));
     expect(Object.keys(left).sort()).toEqual(['manual', 'other-subject', 'sending', 'sent']);
-    expect(left.sent).toMatchObject({ status: 'sent', body: PRIVACY_DRAFT_REDACTION_NOTICE, sendAttempts: [attempt] });
+    expect(left.sent).toMatchObject({ status: 'sent', body: PRIVACY_DRAFT_REDACTION_NOTICE, subject: PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE, sendAttempts: [attempt] });
     expect(left.sending.body).toBe('Name: Alex Example');
     expect(left.manual.body).toBe('Name: Alex Example');
   });

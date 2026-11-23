@@ -165,6 +165,23 @@ async function scrubVaultRecord(row) {
   await scrubRevokedPrivacyFacts([row.value_enc]);
 }
 
+// Plaintext needles a legacy (untagged) draft scrub must match for one vault
+// row. Address values are disclosed to brokers as separate City/State lines, so
+// the full address alone matches nothing there: add the parsed city and
+// "city, state" forms. Sensitive types are never rendered into drafts.
+async function draftScrubNeedles(row) {
+  if (PRIVACY_SENSITIVE_TYPES.includes(row.type)) return [];
+  const { decryptForScrub } = await import('./privacyDraftErasure.js');
+  const needles = decryptForScrub([row.value_enc]);
+  if (row.type === 'address') {
+    const { parseCityState } = await import('./privacyScan.js');
+    const { city, state } = parseCityState(needles[0]);
+    if (city) needles.push(city);
+    if (city && state) needles.push(`${city}, ${state}`);
+  }
+  return needles;
+}
+
 export async function updateVaultRecord(id, patch) {
   return withTransaction(async (client) => {
     // Row lock: label PATCH + value PATCH from different UI affordances can
@@ -210,6 +227,10 @@ export async function updateVaultRecord(id, patch) {
       const { clearSubjectIdentityEvidence } = await import('./privacyBrokers.js');
       await clearSubjectIdentityEvidence(existing.subject_id, { client });
     }
+    if (patch.value !== undefined) {
+      const { eraseVaultRecordDrafts } = await import('./privacyDraftErasure.js');
+      await eraseVaultRecordDrafts(id, await draftScrubNeedles(existing));
+    }
     console.log(`🔐 Updated vault record ${id} (type=${existing.type})`);
     return rowToRecord(rows[0]);
   });
@@ -239,8 +260,8 @@ export async function deleteVaultRecord(id) {
     // An earlier unshare may predate artifact scrubbing. Do not gate deletion
     // cleanup on the record's current share flag.
     await scrubVaultRecord(deleted);
-    const { eraseVaultRecordDrafts, decryptForScrub } = await import('./privacyDraftErasure.js');
-    await eraseVaultRecordDrafts(id, PRIVACY_SENSITIVE_TYPES.includes(deleted.type) ? [] : decryptForScrub([deleted.value_enc]));
+    const { eraseVaultRecordDrafts } = await import('./privacyDraftErasure.js');
+    await eraseVaultRecordDrafts(id, await draftScrubNeedles(deleted));
     console.log(`🗑️ Deleted vault record ${id} (type=${deleted.type})`);
     return { ok: true };
   });

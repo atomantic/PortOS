@@ -43,7 +43,7 @@ vi.mock('./messageSync.js', () => ({ getMessages: vi.fn(async () => ({ messages:
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({ privacy: { recheck: {} } })) }));
 
 const {
-  DISCLOSURE_ALLOWLIST, buildDisclosurePayload, computeDisclosedFields,
+  DISCLOSURE_ALLOWLIST, buildDisclosurePayload, buildDisclosureSelection, vaultRecordIdsForDisclosure, computeDisclosedFields,
   chooseLane, chooseEmailTemplate, fillTemplate, renderOptOutEmail,
   brokerDomains, scoreVerificationEmail, planOptOutActions,
   emailLane, webFormLane, runOptOutPass, runVerificationPass, getOptOutDigest,
@@ -222,13 +222,31 @@ describe('planOptOutActions ordering', () => {
   });
 });
 
+describe('buildDisclosureSelection', () => {
+  const vals = [
+    { id: 'n1', type: 'legal_name', value: 'Jane Q Doe', status: 'current' },
+    { id: 'e1', type: 'email', value: 'jane@example.com', status: 'current' },
+    { id: 'a-old', type: 'address', value: '1 Elm St, Salem, OR 97301', status: 'previous' },
+    { id: 'a-cur', type: 'address', value: '1 Main St, Portland, OR 97201', status: 'current' },
+  ];
+  it('keeps the payload identical and maps each field to its source record', () => {
+    const { payload, sources } = buildDisclosureSelection(vals);
+    expect(payload).toEqual(buildDisclosurePayload(vals));
+    expect(sources).toEqual({ full_name: 'n1', email: 'e1', city: 'a-cur', state: 'a-cur' });
+  });
+  it('returns only the deduplicated ids of disclosed fields', () => {
+    const { sources } = buildDisclosureSelection(vals);
+    expect(vaultRecordIdsForDisclosure(sources, ['city', 'state', 'full_name', 'listing_url'])).toEqual(['a-cur', 'n1']);
+  });
+});
+
 describe('emailLane', () => {
   const broker = { id: 'mylife', name: 'MyLife', optout: { method: 'email', email: 'privacy@mylife.com' }, disclosureFields: ['full_name', 'email'] };
   const payload = { full_name: 'Jane Q Doe', email: 'jane@example.com' };
   it('creates a draft locked to the broker address and transitions to submitted', async () => {
-    const res = await emailLane(broker, { id: 'c1', subjectId: 'sub-1' }, { disclosedFields: ['full_name', 'email'], payload, autoApprove: false });
+    const res = await emailLane(broker, { id: 'c1', subjectId: 'sub-1' }, { disclosedFields: ['full_name', 'email'], payload, vaultRecordIds: ['n1', 'e1'], autoApprove: false });
     expect(res.outcome).toBe('submitted');
-    expect(createDraft.mock.calls.at(-1)[0].privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: [], caseId: 'c1' });
+    expect(createDraft.mock.calls.at(-1)[0].privacyMeta).toEqual({ subjectId: 'sub-1', vaultRecordIds: ['n1', 'e1'], caseId: 'c1' });
     expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['privacy@mylife.com'], generatedBy: 'privacy-optout' }));
     expect(approveDraft).not.toHaveBeenCalled();
     const states = transitionCase.mock.calls.map((c) => c[1]);
