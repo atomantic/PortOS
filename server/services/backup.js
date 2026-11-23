@@ -307,7 +307,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     // unattended scheduled runs (which pass io=null) via the module-level io.
     if (pgResult.status === 'failed') {
       // Keep socket/auth initialization out of backup metadata reads and tests.
-      const errIo = io || (await import('./socket.js')).getIo();
+      const errIo = io || (await import('./socketIo.js')).getIo();
       if (errIo) {
         emitErrorEvent(errIo, new ServerError(
           `Backup DB dump failed: ${pgResult.reason}`,

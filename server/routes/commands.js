@@ -4,7 +4,7 @@ import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
 import * as commands from '../services/commands.js';
 import { requireHostControl } from '../services/authGate.js';
-import { broadcastToCommandSubscribers } from '../services/socket.js';
+import { broadcastToCommandSubscribers } from '../services/socketIo.js';
 import * as pm2Service from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
