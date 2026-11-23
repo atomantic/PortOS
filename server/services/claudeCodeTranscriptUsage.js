@@ -3,6 +3,7 @@ import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createInterface } from 'readline';
+import { createRevisionCache, fileRevision } from '../lib/fileRevisionCache.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { createNativeUsageStore } from './nativeUsageDayStore.js';
@@ -58,7 +59,20 @@ async function listTranscripts(root, fromMs) {
   return files;
 }
 
-async function collectFile(path, from, seen) {
+// Per-file candidates (before cross-file de-duplication), valid while the file revision and `from` are unchanged.
+const fileCache = createRevisionCache();
+
+function keepBest(seen, key, candidate) {
+  const previous = seen.get(key);
+  if (!previous
+    || candidate.output > previous.output
+    || (candidate.output === previous.output && candidate.stopped && !previous.stopped)) {
+    seen.set(key, candidate);
+  }
+}
+
+async function collectFile(path, from) {
+  const seen = new Map();
   const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
   for await (const line of lines) {
     if (!line.includes('"usage"')) continue;
@@ -71,8 +85,7 @@ async function collectFile(path, from, seen) {
     if (!DAY_RE.test(day) || (from && day < from)) continue;
     const key = message.id ? `${message.id}:${row.requestId || ''}` : row.uuid;
     if (!key) continue;
-    const previous = seen.get(key);
-    const candidate = {
+    keepBest(seen, key, {
       day,
       model: message.model,
       input: usage.input_tokens || 0,
@@ -80,13 +93,9 @@ async function collectFile(path, from, seen) {
       cacheRead: usage.cache_read_input_tokens || 0,
       cacheWrite: usage.cache_creation_input_tokens || 0,
       stopped: Boolean(message.stop_reason)
-    };
-    if (!previous
-      || candidate.output > previous.output
-      || (candidate.output === previous.output && candidate.stopped && !previous.stopped)) {
-      seen.set(key, candidate);
-    }
+    });
   }
+  return seen;
 }
 
 /**
@@ -99,9 +108,16 @@ async function scanTranscriptDays({ from = null, root = projectsRoot() } = {}) {
   for (const file of files) {
     // Non-strict: a transcript deleted or truncated mid-scan drops out of the
     // report rather than failing the whole read.
-    await collectFile(file, from, seen).catch((err) => {
-      console.warn(`⚠️ Skipped unreadable Claude Code transcript: ${err.message}`);
-    });
+    const revision = `${from ?? ''}|${await fileRevision(file)}`;
+    let candidates = fileCache.get(file, revision);
+    if (!candidates) {
+      candidates = await collectFile(file, from).catch((err) => {
+        console.warn(`⚠️ Skipped unreadable Claude Code transcript: ${err.message}`);
+        return null;
+      });
+      if (candidates) fileCache.set(file, revision, candidates);
+    }
+    for (const [key, candidate] of candidates ?? []) keepBest(seen, key, candidate);
   }
   const days = {};
   for (const entry of seen.values()) {
