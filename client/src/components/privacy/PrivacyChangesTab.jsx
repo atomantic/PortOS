@@ -41,12 +41,13 @@ function ProgressBar({ progress }) {
 function OrgRow({ org, status, eventId, hasReplacement, onChanged }) {
   const [busy, setBusy] = useState(false);
 
-  const act = async (fn, okMsg) => {
+  const act = async (fn, okMsg, errFallback) => {
     setBusy(true);
-    const res = await fn().catch(() => null);
+    let failure = null;
+    const res = await fn().catch((err) => { failure = err; return null; });
     setBusy(false);
     if (res) { onChanged(res); if (okMsg) toast.success(okMsg); }
-    else toast.error('Action failed');
+    else toast.error(failure?.message || errFallback);
   };
 
   return (
@@ -66,20 +67,20 @@ function OrgRow({ org, status, eventId, hasReplacement, onChanged }) {
           <>
             {hasReplacement && org.contactEmail && (
               <button
-                onClick={() => act(() => draftChangeUpdateEmail(eventId, org.orgId, { silent: true }), 'Draft added to Comms queue')}
+                onClick={() => act(() => draftChangeUpdateEmail(eventId, org.orgId, { silent: true }), 'Draft added to Comms queue', 'Couldn’t draft update email')}
                 disabled={busy} title="Draft update email" aria-label="Draft update email"
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-accent hover:bg-port-border/50 disabled:opacity-50">
                 <Mail size={14} />
               </button>
             )}
             <button
-              onClick={() => act(() => markChangeOrgUpdated(eventId, org.orgId, { silent: true }), 'Marked updated')}
+              onClick={() => act(() => markChangeOrgUpdated(eventId, org.orgId, { silent: true }), 'Marked updated', 'Couldn’t mark organization updated')}
               disabled={busy} title="Mark updated" aria-label="Mark updated"
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-success hover:bg-port-border/50 disabled:opacity-50">
               <Check size={15} />
             </button>
             <button
-              onClick={() => act(() => markChangeOrgRemoved(eventId, org.orgId, { silent: true }), 'Marked removed')}
+              onClick={() => act(() => markChangeOrgRemoved(eventId, org.orgId, { silent: true }), 'Marked removed', 'Couldn’t mark organization removed')}
               disabled={busy} title="Mark removed (org dropped this data)" aria-label="Mark removed"
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded text-gray-400 hover:text-port-error hover:bg-port-border/50 disabled:opacity-50">
               <Ban size={15} />

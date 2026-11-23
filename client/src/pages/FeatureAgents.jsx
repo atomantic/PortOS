@@ -37,28 +37,28 @@ export default function FeatureAgents() {
     startFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent activated');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t activate feature agent'));
   }, []);
 
   const handlePause = useCallback((id) => {
     pauseFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent paused');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t pause feature agent'));
   }, []);
 
   const handleResume = useCallback((id) => {
     resumeFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent resumed');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t resume feature agent'));
   }, []);
 
   const handleStop = useCallback((id) => {
     stopFeatureAgent(id, { silent: true }).then(agent => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, ...agent } : a));
       toast.success('Feature agent stopped');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t stop feature agent'));
   }, []);
 
   const handleTrigger = useCallback((id) => {
@@ -69,14 +69,14 @@ export default function FeatureAgents() {
       }
       if (result?.agent) setAgents(prev => prev.map(a => a.id === id ? { ...a, ...result.agent } : a));
       toast.success('Run started');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t start feature agent run'));
   }, []);
 
   const handleDelete = useCallback((id) => {
     deleteFeatureAgent(id, { silent: true }).then(() => {
       setAgents(prev => prev.filter(a => a.id !== id));
       toast.success('Feature agent deleted');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t delete feature agent'));
   }, []);
 
   const activeCount = agents.filter(a => a.status === 'active').length;

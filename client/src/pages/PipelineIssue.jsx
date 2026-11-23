@@ -216,7 +216,7 @@ export default function PipelineIssue() {
 
   const handleCancelAutoRun = async () => {
     await cancelPipelineAutoRunText(issueId, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Cancel failed');
+      toast.error(err.message || 'Couldn’t cancel text auto-run');
     });
   };
 
@@ -227,7 +227,7 @@ export default function PipelineIssue() {
     setLengthProfileSaving(true);
     updatePipelineIssue(issueId, patch, { silent: true })
       .then(applyIssueUpdate)
-      .catch((err) => { toast.error(err.message || 'Save failed'); })
+      .catch((err) => { toast.error(err.message || 'Couldn’t save length profile'); })
       .finally(() => setLengthProfileSaving(false));
   };
 
@@ -235,7 +235,7 @@ export default function PipelineIssue() {
     setArcRoleSaving(true);
     updatePipelineIssue(issueId, { arcRole }, { silent: true })
       .then(applyIssueUpdate)
-      .catch((err) => { toast.error(err.message || 'Save failed'); })
+      .catch((err) => { toast.error(err.message || 'Couldn’t save arc role'); })
       .finally(() => setArcRoleSaving(false));
   };
 
@@ -247,7 +247,7 @@ export default function PipelineIssue() {
     const updated = await updatePipelineIssue(issueId, {
       stages: { [stageId]: { genConfig: next } },
     }, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Save failed');
+      toast.error(err.message || 'Couldn’t save generation settings');
       return null;
     }).finally(() => setGenConfigSaving(false));
     applyIssueUpdate(updated);
