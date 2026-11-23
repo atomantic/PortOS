@@ -42,7 +42,7 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 
 ### External Contributor (out-of-band, low priority)
 - **Needs:** a working MIT-licensed codebase to read, fork, or occasionally PR against.
-- **Context:** not onboarded — no CODE_OF_CONDUCT.md exists; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) documents contribution expectations, but PRs are welcome without a dedicated onboarding path, and the project explicitly does not optimize for this persona's needs over the owner-operator's.
+- **Context:** not onboarded — no CODE_OF_CONDUCT.md exists; [CONTRIBUTING.md](./CONTRIBUTING.md) documents contribution expectations, but PRs are welcome without a dedicated onboarding path, and the project explicitly does not optimize for this persona's needs over the owner-operator's.
 
 ---
 
@@ -142,8 +142,8 @@ Reused verbatim (condensed to objective statements) from [GOALS.md](./GOALS.md)'
 | FR-39 | The system MUST support opt-in HTTPS provisioning with a loopback-only HTTP mirror for local tooling. | Must | After running cert setup, `:5555` serves TLS and `:5553` remains reachable only from loopback. |
 | FR-40 | The system MUST support federation with an unbounded number of peer instances (announce/connect/sync), each with its own per-peer Basic-auth credential for password-gated peers. | Must | Registering a third, fourth, or Nth peer works identically to registering the second — no fixed two-peer assumption anywhere in the peer registry (`data/instances.json`) or sync path. |
 | FR-41 | The system MUST support cross-instance data sharing via export buckets with an inbox promote/dismiss workflow on the receiving side. | Must | A record pushed to a subscribed peer's sharing inbox is neither auto-applied nor lost — it requires explicit promote or dismiss. |
-| FR-52 | The system MUST support delegating queued audio/music-generation jobs to a federated peer's local compute, gated behind that peer's opt-in enablement, model allowlist, and live capacity. (Image/video generation is not yet covered — see Out of Scope.) | Must | Submitting an audio/music job to a peer that is enabled, has the requested model allowlisted, and has queue headroom returns a queued job the caller can poll/cancel/download; a peer at capacity or without the model allowlisted rejects the submission rather than silently queuing it. |
-| FR-53 | The system MUST let a user assign an audio/music-generation job to a specific federated peer from the web UI, choosing among currently enabled and reachable peer providers. | Must | The provider picker only lists peers the user has explicitly enabled as media providers and that currently report ready status; selecting one routes the job to that peer, not an arbitrary one. |
+| FR-52 | The system MUST support delegating queued audio/music, image, and video generation jobs to a federated peer's local compute, gated behind that peer's opt-in enablement, model allowlist, and live capacity. | Must | Submitting an audio/music, image, or video job to a peer that is enabled, has the requested model allowlisted, and has queue headroom returns a queued job the caller can poll/cancel/download; a peer at capacity or without the model allowlisted rejects the submission rather than silently queuing it. |
+| FR-53 | The system MUST let a user assign an audio/music, image, or video generation job to a specific federated peer from the web UI, choosing among currently enabled and reachable peer providers. | Must | The provider picker only lists peers the user has explicitly enabled as media providers and that currently report ready status; selecting one routes the job to that peer, not an arbitrary one. |
 
 ### Health & Longevity (MeatSpace)
 
@@ -231,7 +231,7 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 - **Public internet deployment / public-facing hardening** — runs on a private Tailscale network only; HTTPS support exists for browser-API/cert-trust convenience, not public exposure.
 - **ORM or heavyweight database tooling** — deliberate plain-SQL usage against Postgres; no query builder or ORM layer.
 - **Cloud hosting** — runs on the user's own hardware; not offered as a hosted service.
-- **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./docs/CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
+- **General-purpose external-user onboarding** — no CODE_OF_CONDUCT.md; [CONTRIBUTING.md](./CONTRIBUTING.md) sets contribution expectations, but the project is not structured to actively onboard outside contributors even though it accepts PRs.
 - **Podcast/recording studio** — full audio-recording production tooling beyond generative music (Music Studio, FR-56, is implemented; a dedicated recording/podcast workflow is not).
 - **Federated peer-to-peer sharing beyond bucket-based Sharing** — direct P2P distribution between instances is a secondary goal, not yet built.
 - **Per-domain backup-style exports** — PortOS is locally hosted and is itself the backup of record (automatic snapshots); exports exist only for sharing or handoff to other tools, per NR-10.
@@ -244,7 +244,7 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 - The user operates on a private Tailscale network. A compromised network peer remains a host-access risk, so PortOS strongly recommends the optional instance password and requires explicit acknowledgement when it is absent.
 - The user maintains an arbitrary, unbounded number of federated PortOS installs (including local-inference machines) as sync peers and, where enabled, spare generation capacity — not a single fixed primary/secondary pair.
 - AI provider costs are assumed to run primarily through flat-rate subscriptions (Claude Max, Codex, Google AI Pro, SuperGrok) plus local Ollama/LM Studio inference, not metered per-call billing — this shapes the "no cold-bootstrap LLM calls" policy.
-- The project accepts external PRs but does not guarantee backward compatibility of its own conventions for third-party contributors; breaking changes may ship without notice, mitigated only by the mandatory migration/versioning discipline for on-disk data (NFR-5–NFR-8). Contribution expectations are documented in [CONTRIBUTING.md](./docs/CONTRIBUTING.md).
+- The project accepts external PRs but does not guarantee backward compatibility of its own conventions for third-party contributors; breaking changes may ship without notice, mitigated only by the mandatory migration/versioning discipline for on-disk data (NFR-5–NFR-8). Contribution expectations are documented in [CONTRIBUTING.md](./CONTRIBUTING.md).
 - MIT license; no funding/sponsorship model in place.
 - The `server/` and `client/` sub-package `version` fields are informational only and drift independently from the root `package.json` version — no release, build, or deployment tooling reads them, so their skew is not a compatibility risk.
 
@@ -255,14 +255,14 @@ CoS MUST assess the actual behavior proposed by external GitHub issues, comments
 - **CoS routing improvement over time** — provider/model-tier selection should measurably shift toward higher-success-rate choices as more task outcomes are recorded. *(No numeric target evidenced in the codebase — open question.)*
 - **Zero data-loss incidents from migrations or backup excludes across releases.** *(Qualitative target; no automated metric currently tracks this — open question whether to instrument it.)*
 - **Federation sync convergence** — peers should not silently diverge beyond a bounded delta-log lag. *(No numeric staleness threshold currently defined — open question.)*
-- **POST engagement** — sustained daily-session completion over time as a proxy for the "actively strengthening how you learn" goal. *(No target streak/percentage evidenced — open question.)*
+- **POST engagement** — sustained daily-session completion as a proxy for the "actively strengthening how you learn" goal; the live target is activity today and at least 5 active days in 7 (`METRICS.md`, `server/services/portosProductMetrics.js`).
 
 ---
 
 ## Risks & Open Questions
 
 
-No open questions remain unresolved as of this revision. Image/video queued-job delegation to federated peers (#4348) and explicit peer assignment of CoS tasks (#4520) have shipped, and the POST drill/benchmark buildout tracked in #4442/#4443 is complete; any further POST expansion lives in the issue tracker. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./docs/CONTRIBUTING.md) now exists.
+No open questions remain unresolved as of this revision. Image/video queued-job delegation to federated peers (#4348) and explicit peer assignment of CoS tasks (#4520) have shipped, and the POST drill/benchmark buildout tracked in #4442/#4443 is complete; any further POST expansion lives in the issue tracker. Video generation pipeline reliability, the workspace package-version skew, and the absence of contributor documentation were the other items previously tracked here — video generation is now stable, the version skew was confirmed cosmetic (see Assumptions & Constraints), and [CONTRIBUTING.md](./CONTRIBUTING.md) now exists.
 
 ---
 
