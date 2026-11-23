@@ -42,7 +42,7 @@ export default function ComparisonResearch({
     || JSON.stringify(saved?.executionOptions || {}) !== JSON.stringify(draft.executionOptions || {});
   const save = () => {
     setBusy(true); setError(''); setMessage('');
-    updateCosTaskInterval(TASK, { ...draft, enabled: true }, { silent: true }).then(result => {
+    updateCosTaskInterval(TASK, { ...draft, effort: draft.effort || null, enabled: true }, { silent: true }).then(result => {
       setSaved(result.interval); setMessage('Research provider saved. You can now run the task.');
     }).catch(err => setError(err.message)).finally(() => setBusy(false));
   };

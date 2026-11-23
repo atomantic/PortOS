@@ -242,6 +242,18 @@ describe('CoS Schedule Routes', () => {
       }
     });
 
+    it('normalizes empty effort to null and rejects invalid effort strings', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({});
+      expect((await request(app).put('/api/cos/schedule/task/documentation').send({ effort: '' })).status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('documentation', { effort: null });
+      expect((await request(app).put('/api/cos/schedule/task/documentation').send({ effort: 'high' })).status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('documentation', { effort: 'high' });
+      taskSchedule.updateTaskInterval.mockClear();
+      const response = await request(app).put('/api/cos/schedule/task/documentation').send({ effort: 'bogus' });
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+    });
+
     it('passes weekdaysOnly through so a weekday-only default can be turned off', async () => {
       taskSchedule.updateTaskInterval.mockResolvedValue({});
       for (const weekdaysOnly of [false, true]) {

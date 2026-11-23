@@ -11,7 +11,7 @@ import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema, parsePagination } from '../lib/queryValidation.js';
-import { taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
+import { effortUpdateSchema, taskDataInputsSchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/cos/cosValidation.js';
 import { sanitizeTaskMetadata } from '../lib/cos/cosTaskMetadata.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cos/cosValidation.js';
@@ -189,8 +189,13 @@ function pickScheduleSettings(body, executionFields, taskType) {
     }
     settings.promptSource = parsed.data ?? null;
   }
-  if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
-    throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
+  if (settings.effort !== undefined) {
+    // The provider picker's "default" is '' on the wire; effortUpdateSchema normalizes it to null (clear).
+    const parsed = effortUpdateSchema.safeParse(settings.effort);
+    if (!parsed.success) {
+      throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.effort = parsed.data ?? null;
   }
   // Advisory ordering. `normalizeSuggestedAfter` owns the shape rules (self,
   // blanks, duplicates, cap) and why an emptied list stays `[]` rather than

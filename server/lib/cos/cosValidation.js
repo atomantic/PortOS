@@ -99,7 +99,7 @@ const optionalBoolInputSchema = z.preprocess(
   z.boolean().optional()
 );
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
-const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
+export const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 // Federated instance this task is PINNED to (#4520) — only that instance's CoS
 // evaluator claims and runs it. On create, '' from the picker's "Any instance"
 // option → undefined (no pin persisted). On update, ''/null must survive as null
