@@ -28,6 +28,7 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { query, ensureSchema } from '../lib/db.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -36,6 +37,23 @@ import { runPromptThroughProvider } from './promptRunner.js';
 
 const DIR = PATHS.digitalTwin;
 const TASTE_OBSERVED_FILE = join(DIR, 'taste-observed.json');
+
+// One queue for every taste-observed.json read-modify-write (local aggregate,
+// interpretation, peer-sync merge). Held only around read+write — never across
+// DB fetches or provider calls.
+const queueTasteObservedWrite = createFileWriteQueue();
+
+/** Peer-sync entry: run `mergeFn(local) -> { merged, changed }` inside the queue. */
+export function applyTasteObservedMerge(mergeFn) {
+  return queueTasteObservedWrite(async () => {
+    const local = await readJSONFile(TASTE_OBSERVED_FILE, null, { strict: true });
+    const { merged, changed } = mergeFn(local);
+    if (!changed) return false;
+    await ensureDir(DIR);
+    await atomicWrite(TASTE_OBSERVED_FILE, merged);
+    return true;
+  });
+}
 const CHRONOTYPE_OBSERVED_FILE = join(DIR, 'chronotype-observed.json');
 
 // How far back each rollup window reaches, in days.
@@ -372,7 +390,6 @@ export async function aggregateTwinEvidence({ now = Date.now() } = {}) {
   const weekCutoff = daysAgoIso(WEEK_DAYS, now);
   const weekMedia = monthMedia.filter((e) => e.happenedAt >= weekCutoff);
 
-  const priorTaste = await getTasteEvidence();
   const taste = {
     source: 'observed',
     derivedAt,
@@ -381,11 +398,16 @@ export async function aggregateTwinEvidence({ now = Date.now() } = {}) {
       week: { days: WEEK_DAYS, listen: rollupListen(weekMedia), watch: rollupWatch(weekMedia) },
       month: { days: MONTH_DAYS, listen: rollupListen(monthMedia), watch: rollupWatch(monthMedia) },
     },
-    // Preserve a prior AI interpretation across LLM-free recomputes.
-    ...(priorTaste?.interpretation ? { interpretation: priorTaste.interpretation } : {}),
   };
-  await ensureDir(DIR);
-  await atomicWrite(TASTE_OBSERVED_FILE, taste);
+  await queueTasteObservedWrite(async () => {
+    // Preserve a prior AI interpretation across LLM-free recomputes (read inside the queue).
+    const priorTaste = await getTasteEvidence();
+    await ensureDir(DIR);
+    await atomicWrite(TASTE_OBSERVED_FILE, {
+      ...taste,
+      ...(priorTaste?.interpretation ? { interpretation: priorTaste.interpretation } : {}),
+    });
+  });
 
   // Chronotype window: outbound messages + meetings + media by local hour.
   const chronoEvents = await fetchWindow(
@@ -563,10 +585,12 @@ export async function interpretConsumption({ providerId, model } = {}) {
   // seconds, during which a sync-hook or the daily scheduler may have rewritten
   // this file with fresh rollup numbers. Overlay the interpretation onto the
   // LATEST record, not the pre-call snapshot, so we don't roll the numbers back.
-  const current = await getTasteEvidence();
-  const merged = { ...(current || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
-  await ensureDir(DIR);
-  await atomicWrite(TASTE_OBSERVED_FILE, merged);
+  await queueTasteObservedWrite(async () => {
+    const current = await getTasteEvidence();
+    const merged = { ...(current || { source: 'observed', derivedAt: interpretation.generatedAt }), interpretation };
+    await ensureDir(DIR);
+    await atomicWrite(TASTE_OBSERVED_FILE, merged);
+  });
   console.log(`🧭 Twin interpretation generated via ${interpretation.providerName} (${text.length} chars)`);
   return interpretation;
 }

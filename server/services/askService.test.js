@@ -112,6 +112,24 @@ beforeEach(() => {
 });
 
 describe('gatherSources', () => {
+  it('requests the query embedding once and shares it across memory and catalog retrieval', async () => {
+    await askService.gatherSources('shared embedding');
+    expect(memoryEmbeddings.generateQueryEmbedding).toHaveBeenCalledTimes(1);
+    expect(catalogDB.hybridSearchIngredients).toHaveBeenCalledWith('shared embedding', [0.1, 0.2, 0.3], expect.any(Object));
+  });
+
+  it('falls back to FTS-only catalog search when the embedding request fails', async () => {
+    memoryEmbeddings.generateQueryEmbedding.mockRejectedValue(new Error('embed down'));
+    catalogDB.hybridSearchIngredients.mockResolvedValue([
+      { ingredient: { id: 'cat-1', type: 'idea', name: 'Heist', tags: [], payload: {} }, rrfScore: 0.5 },
+    ]);
+    const sources = await askService.gatherSources('heist');
+    expect(memoryEmbeddings.generateQueryEmbedding).toHaveBeenCalledTimes(1);
+    expect(catalogDB.hybridSearchIngredients).toHaveBeenCalledWith('heist', null, expect.any(Object));
+    expect(sources.some((x) => x.kind === 'catalog')).toBe(true);
+    expect(memoryBackend.hybridSearchMemories).not.toHaveBeenCalled();
+  });
+
   it('returns memories with stable ids and tagged kind', async () => {
     memoryBackend.hybridSearchMemories.mockResolvedValue({
       memories: [{ id: 'mem-1', rrfScore: 0.9 }, { id: 'mem-2', rrfScore: 0.7 }],

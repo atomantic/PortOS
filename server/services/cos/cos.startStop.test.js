@@ -52,7 +52,7 @@ vi.mock('./cosTaskStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [], grouped: {} }, cos: { tasks: [], grouped: {} } })),
   getCosTasks: vi.fn(async () => ({ tasks: [] })),
-  readPendingTaskIds: vi.fn(async () => []),
+  getPendingTaskIds: vi.fn(async () => []),
 }));
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('./cosAgentIndex.js', async importOriginal => ({ ...(await importOriginal()), loadAgentIndex: vi.fn(async () => new Map()) }));

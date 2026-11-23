@@ -4,6 +4,7 @@ import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
   TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardSteadySupported,
 } from '../../../../server/lib/musicVideo/musicVideoTitleCard.js';
+import { onRadioGroupKeyDown } from '../../lib/a11yKeyboard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
 
@@ -240,16 +241,19 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
               {POSITIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </div>
-          <div role="radiogroup" aria-labelledby="mv-title-card-font-label">
+          <div role="radiogroup" aria-labelledby="mv-title-card-font-label" onKeyDown={onRadioGroupKeyDown}>
             <span id="mv-title-card-font-label" className={labelCls}>Font</span>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-              {FONTS.map(([value, label, stack, , weight]) => (
-                <button key={value} type="button" role="radio" aria-checked={card.font === value} onClick={() => commit({ font: value })}
+              {FONTS.map(([value, label, stack, , weight], index) => {
+                const selectedIndex = Math.max(0, FONTS.findIndex(([font]) => font === card.font));
+                return (
+                <button key={value} type="button" role="radio" aria-checked={card.font === value} tabIndex={index === selectedIndex ? 0 : -1} onClick={() => commit({ font: value })}
                   style={{ fontFamily: stack, fontWeight: weight }}
                   className={`min-h-[44px] truncate rounded border px-2 py-1 text-sm pointer-fine:sm:min-h-0 ${card.font === value ? 'border-port-accent bg-port-accent/15 text-white' : 'border-port-border bg-port-bg text-port-text-muted'}`}>
                   {label}
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-x-4 gap-y-2">

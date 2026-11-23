@@ -41,6 +41,11 @@ with that torch (no matching `+cu126` builds exist). A different
 validating both locks. Checkpoints download to `~/.cache/ace-step` on first
 generation, never during install.
 
+The set is inference-only: upstream's trainer packages (`tensorboard`,
+`tensorboardX`, `datasets`, `pytorch-lightning`, `matplotlib`) are not imported by
+`acestep.pipeline_ace_step` at the pinned commit and are not in the locks.
+Re-walk the import graph before bumping `ACESTEP_PIN`.
+
 ## Regenerating locks
 
 Edit `scripts/ml/requirements/requirements-acestep-cuda.txt` with exact direct pins, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks) with these values:

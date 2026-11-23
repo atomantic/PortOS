@@ -26,8 +26,8 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
-vi.mock('../instances.js', () => mockNoPeers());
-vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
+vi.mock('./instances.js', () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 
 vi.mock('./stageRunner.js', () => ({
   runStagedLLM: vi.fn((...args) => stageRunnerSpy(...args)),

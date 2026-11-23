@@ -1,17 +1,24 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { wsState } = vi.hoisted(() => ({ wsState: { connectionStatus: 'disconnected' } }));
+
 vi.mock('../../../services/apiAccounts.js', () => ({
   getPlatformAccounts: vi.fn(),
   moltworldStatus: vi.fn(),
   moltworldRateLimits: vi.fn(),
   moltworldGetQueue: vi.fn(),
+  moltworldAddToQueue: vi.fn(),
+  moltworldWsMove: vi.fn(),
+  moltworldWsThink: vi.fn(),
+  moltworldExplore: vi.fn(),
+  moltworldThink: vi.fn(),
 }));
 vi.mock('../../../services/apiAgents.js', () => ({
   getAgentActivityTimeline: vi.fn(),
 }));
 vi.mock('../../../hooks/useMoltworldWs', () => ({
-  default: () => ({ connectionStatus: 'disconnected', feedItems: [], presence: [], connect: vi.fn(), disconnect: vi.fn() }),
+  default: () => ({ connectionStatus: wsState.connectionStatus, feedItems: [], presence: [], connect: vi.fn(), disconnect: vi.fn() }),
 }));
 vi.mock('../../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -22,6 +29,9 @@ import {
   moltworldStatus,
   moltworldRateLimits,
   moltworldGetQueue,
+  moltworldAddToQueue,
+  moltworldWsMove,
+  moltworldExplore,
 } from '../../../services/apiAccounts.js';
 import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
 import socket from '../../../services/socket';
@@ -35,6 +45,7 @@ const rows = (count, prefix = 'r') => Array.from({ length: count }, (_, i) => ({
 describe('WorldTab activity history', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    wsState.connectionStatus = 'disconnected';
     getPlatformAccounts.mockResolvedValue([{ id: 'acct-1', status: 'active', credentials: { username: 'example' } }]);
     moltworldStatus.mockResolvedValue(null);
     moltworldRateLimits.mockResolvedValue(null);
@@ -132,5 +143,74 @@ describe('WorldTab activity history', () => {
     });
     expect(await screen.findByText('No queued actions')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load action queue/)).toBeNull();
+  });
+
+  it('labels the pending-queue cancel control and keeps the add form when queueing fails', async () => {
+    moltworldGetQueue.mockResolvedValue([
+      { id: 'q-1', actionType: 'mw_think', status: 'pending', params: { thought: 'hello' } },
+    ]);
+    moltworldAddToQueue.mockRejectedValue(new Error('queue failed'));
+    render(<WorldTab agentId="agent-1" />);
+    const cancel = await screen.findByRole('button', { name: 'Cancel pending think' });
+    expect(cancel.className).toContain('pointer-coarse:min-h-11');
+    expect(cancel.className).toContain('pointer-coarse:min-w-11');
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add' }));
+    fireEvent.change(screen.getByLabelText('Queued action thinking (optional)'), { target: { value: 'keep me' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add to Queue' })); });
+    expect(screen.getByLabelText('Queued action thinking (optional)')).toHaveValue('keep me');
+    expect(screen.getByRole('button', { name: 'Add to Queue' })).toBeInTheDocument();
+  });
+
+  it('does not toast a WebSocket move as sent when the relay rejects', async () => {
+    wsState.connectionStatus = 'connected';
+    moltworldWsMove.mockRejectedValue(new Error('ws down'));
+    render(<WorldTab agentId="agent-1" />);
+    await screen.findByRole('button', { name: 'Move Here' });
+    fireEvent.change(screen.getByLabelText('X (-240 to 240)'), { target: { value: '3' } });
+    fireEvent.change(screen.getByLabelText('Y (-240 to 240)'), { target: { value: '4' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Move Here' })); });
+    expect(moltworldWsMove).toHaveBeenCalled();
+    expect(screen.getByLabelText('X (-240 to 240)')).toHaveValue(3);
+    expect(screen.getByRole('button', { name: 'Move Here' })).toBeEnabled();
+    expect(moltworldExplore).not.toHaveBeenCalled();
+  });
+
+  it('wraps world headers and sizes compact actions for coarse pointers', async () => {
+    render(<WorldTab agentId="agent-1" />);
+    const history = await screen.findByRole('heading', { name: 'Activity History' });
+    expect(history.parentElement.className).toContain('flex-wrap');
+    const refresh = screen.getAllByRole('button', { name: 'Refresh' })[0];
+    expect(refresh.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByLabelText('Filter history').className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: '+ Add' }).className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('heading', { name: 'Action Queue' }).parentElement.className).toContain('flex-wrap');
+  });
+});
+
+describe('WorldTab account loading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    moltworldStatus.mockResolvedValue(null);
+    moltworldRateLimits.mockResolvedValue(null);
+    moltworldGetQueue.mockResolvedValue([]);
+    getAgentActivityTimeline.mockResolvedValue([]);
+  });
+
+  it('shows a retryable error instead of "No active Moltworld account" when the account read fails', async () => {
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([{ id: 'acct-1', status: 'active', credentials: { username: 'example' } }]);
+
+    render(<WorldTab agentId="agent-1" />);
+
+    expect(await screen.findByText(/Could not load Moltworld account — network unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('No active Moltworld account')).not.toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', 'moltworld', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('Activity History')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Moltworld account/)).not.toBeInTheDocument();
   });
 });

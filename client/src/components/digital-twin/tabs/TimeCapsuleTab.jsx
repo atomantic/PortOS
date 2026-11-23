@@ -368,7 +368,9 @@ export default function TimeCapsuleTab({ onRefresh: _onRefresh }) {
                         </button>
                         {confirmDelete === snap.id ? (
                           <ConfirmButtonPair
-                            confirmText="Confirm"
+                            prompt="Delete snapshot?"
+                            confirmText="Delete"
+                            ariaLabel="Confirm delete snapshot"
                             onConfirm={() => handleDelete(snap.id)}
                             onCancel={() => setConfirmDelete(null)}
                           />

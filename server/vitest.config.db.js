@@ -80,6 +80,7 @@ const config = defineConfig({
       // The runner's selection and memo directory are for THIS Vitest process only.
       PORTOS_CI_TEST_SELECTION: '',
       PORTOS_TEST_MEMO_DIR: '',
+      PORTOS_TEST_MEMO_READ_DIRS: '',
     },
     include: DB_TEST_INCLUDE,
     exclude: [

@@ -829,6 +829,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     width: sidebarWidth,
     maxWidth: sidebarMaxWidth,
     onMouseDown: onSplitMouseDown,
+    onKeyDown: onSplitKeyDown,
     reset: resetSidebarWidth,
   } = useSidebarResize({
     storageKey: SIDEBAR_WIDTH_KEY,
@@ -1080,13 +1081,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <div
           onMouseDown={onSplitMouseDown}
           onDoubleClick={resetSidebarWidth}
+          onKeyDown={onSplitKeyDown}
+          tabIndex={0}
           role="separator"
           aria-label="Resize storyboard sidebar"
           aria-orientation="vertical"
           aria-valuemin={SIDEBAR_MIN}
           aria-valuemax={Math.round(sidebarMaxWidth)}
           aria-valuenow={Math.round(sidebarWidth)}
-          title="Drag to resize · double-click to reset"
+          title="Drag to resize · double-click to reset · focus and use Left/Right arrows (Shift for larger steps), Home/End, Enter to reset"
           className="hidden lg:block w-1 shrink-0 cursor-col-resize bg-port-border hover:bg-port-accent/60 active:bg-port-accent transition-colors"
         />
         )}

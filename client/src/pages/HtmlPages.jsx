@@ -306,14 +306,30 @@ function RunCard({ run, selected, compareFull, onToggle, onDelete, onResume }) {
 }
 
 /** Selected runs as columns, themes as rows, so one theme reads across every model. */
-function Comparison({ ids, onRemove }) {
+function Comparison({ ids, onRemove, onClear, onPruneMissing }) {
   const key = ids.join(',');
-  const { data: runs, loading, error } = useSocketResource(
-    async ({ signal }) => Promise.all(ids.map((id) => getHtmlPageRun(id, { silent: true, signal }))),
+  const { data: runs, loading, error, refetch } = useSocketResource(
+    async ({ signal }) => {
+      const settled = await Promise.allSettled(ids.map((id) => getHtmlPageRun(id, { silent: true, signal })));
+      // A deleted run (stale bookmark, other tab) is dropped from ?compare= instead of failing the whole panel; any other failure still surfaces.
+      const isMissing = (r) => r.status === 'rejected' && (r.reason?.status === 404 || r.reason?.code === 'NOT_FOUND');
+      const other = settled.find((r) => r.status === 'rejected' && !isMissing(r));
+      if (other) throw other.reason;
+      const missing = ids.filter((_, i) => isMissing(settled[i]));
+      if (missing.length) onPruneMissing(missing);
+      return settled.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+    },
     { events: RUN_EVENTS, resourceKey: key, matchesEvent: (payload) => ids.includes(payload?.id), requestTimeoutMs: 30_000 },
   );
-  if (error) return <ListLoadError what="the selected runs" error={error} />;
-  if (loading || !runs) return <PageSkeleton label="Loading the selected runs" />;
+  if (error) {
+    return (
+      <div className="space-y-2">
+        <ListLoadError what="the selected runs" error={error} onRetry={refetch} />
+        <button type="button" onClick={onClear} className="min-h-[44px] rounded border border-port-border px-3 text-xs text-gray-300 hover:border-port-accent">Clear comparison</button>
+      </div>
+    );
+  }
+  if (loading || !runs || runs.length === 0) return <PageSkeleton label="Loading the selected runs" />;
 
   const rows = Math.max(0, ...runs.map((run) => run.themes.length));
   // A phone shows one column at a time, most of the screen wide, and swipes between them; wider screens fit what they can and scroll the rest.
@@ -429,7 +445,7 @@ export default function HtmlPages() {
           ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
           : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton label="Loading installed models" />)}
 
-        {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
+        {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} onClear={() => setCompare([])} onPruneMissing={(missing) => setCompare(compareIds.filter((id) => !missing.includes(id)))} />}
 
         <section className="space-y-3">
           <TabPills tabs={VIEWS} activeTab={view} onChange={setView} mobileCompact ariaLabel="Stored runs or every page" />

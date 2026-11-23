@@ -226,6 +226,27 @@ describe('CoS Job Routes', () => {
       expect(response.body.success).toBe(true);
     });
 
+    it('forwards Daily Briefing config and executionOptions to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+      const config = { dailyJoke: true, dailyQuote: false, dailyImage: true };
+      const executionOptions = { serviceTier: 'fast' };
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Briefing', type: 'agent', promptTemplate: 'x', config, executionOptions });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob.mock.calls[0][0]).toMatchObject({ config, executionOptions });
+    });
+
+    it('rejects unknown config keys', async () => {
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Briefing', type: 'agent', promptTemplate: 'x', config: { bogus: true } });
+
+      expect(response.status).toBe(400);
+    });
+
     it('should return 400 if name is missing', async () => {
       const response = await request(app)
         .post('/api/cos/jobs')
@@ -430,6 +451,18 @@ describe('CoS Job Routes', () => {
       expect(autonomousJobs.updateJob.mock.calls[0][0]).toBe('j1');
     });
 
+    it('forwards config and executionOptions to updateJob, including null config clear', async () => {
+      autonomousJobs.updateJob.mockResolvedValue({ id: 'j1' });
+      const config = { dailyJoke: true };
+
+      await request(app).put('/api/cos/jobs/j1').send({ config, executionOptions: { serviceTier: 'standard' } });
+      expect(autonomousJobs.updateJob.mock.calls[0][1]).toMatchObject({ config, executionOptions: { serviceTier: 'standard' } });
+
+      autonomousJobs.updateJob.mockClear();
+      await request(app).put('/api/cos/jobs/j1').send({ config: null });
+      expect(autonomousJobs.updateJob.mock.calls[0][1].config).toBeNull();
+    });
+
     it('should return 404 if job not found', async () => {
       autonomousJobs.updateJob.mockResolvedValue(null);
 
@@ -590,6 +623,19 @@ describe('CoS Job Routes', () => {
       expect(response.body.started).toBe(true);
       expect(response.body.taskId).toBe('task-1');
       expect(forceSpawnTask).toHaveBeenCalledWith('task-1');
+    });
+
+    it('carries the job executionOptions onto the queued task', async () => {
+      autonomousJobs.getJob.mockResolvedValue({ id: 'j1', type: 'agent', name: 'Review' });
+      autonomousJobs.isShellJob.mockReturnValue(false);
+      autonomousJobs.isScriptJob.mockReturnValue(false);
+      autonomousJobs.generateTaskFromJob.mockResolvedValue({ description: 'Review', priority: 'MEDIUM', metadata: { executionOptions: { serviceTier: 'fast' } } });
+      addTask.mockResolvedValue({ id: 'task-1' });
+      forceSpawnTask.mockResolvedValue({ success: true, taskId: 'task-1' });
+
+      await request(app).post('/api/cos/jobs/j1/trigger');
+
+      expect(addTask.mock.calls[0][0]).toMatchObject({ executionOptions: { serviceTier: 'fast' } });
     });
 
     it('re-aims one run with the request body values without touching the stored job', async () => {

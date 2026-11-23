@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { Music, Download } from 'lucide-react';
 import toast from '../ui/Toast';
+import { useEscLayer } from '../ui/Modal';
+import useFocusTrap from '../../hooks/useFocusTrap';
 import ListLoadError from '../ui/ListLoadError';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
 import MidiPlanningFacts from './MidiPlanningFacts.jsx';
@@ -44,6 +46,12 @@ export default function TrackPanel({
   // A pending change that would destroy timed data waits for explicit confirm.
   const [pending, setPending] = useState(null);
   const clearLabels = timedDataLabels(project);
+  const dialogRef = useRef(null);
+  const cancelRef = useRef(null);
+  const descId = useId();
+  // Focus the least-destructive action on open (APG alert dialog); Escape cancels.
+  useFocusTrap(Boolean(pending), dialogRef, { initialFocusRef: cancelRef });
+  useEscLayer(Boolean(pending), () => setPending(null));
   const requestChange = (change) => {
     if (clearLabels.length === 0) return runChange(change, {});
     setPending(change);
@@ -99,8 +107,8 @@ export default function TrackPanel({
         />
       </div>
       {pending && (
-        <div role="alertdialog" aria-label="Confirm track change" className="mt-2 rounded border border-port-warning/50 bg-port-warning/10 p-2 text-xs space-y-2">
-          <p>
+        <div ref={dialogRef} role="alertdialog" aria-modal="true" aria-label="Confirm track change" aria-describedby={descId} className="mt-2 rounded border border-port-warning/50 bg-port-warning/10 p-2 text-xs space-y-2">
+          <p id={descId}>
             {pending.kind === 'youtube' ? 'Importing new audio' : 'Changing the track'} will clear: {clearLabels.join(', ')}. Lyric text and scenes are kept. The new song is analyzed and the words re-aligned automatically.
           </p>
           <div className="flex flex-wrap gap-2">
@@ -114,7 +122,7 @@ export default function TrackPanel({
                 Fork &amp; change track
               </button>
             )}
-            <button type="button" onClick={() => setPending(null)}
+            <button ref={cancelRef} type="button" onClick={() => setPending(null)}
               className="min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded border border-port-border">Cancel</button>
           </div>
         </div>

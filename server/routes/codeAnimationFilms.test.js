@@ -21,7 +21,10 @@ vi.mock('../services/codeAnimation/projectStore.js', () => ({
     state.projects.set(id, project); return structuredClone(project);
   }),
 }));
-vi.mock('../services/socket.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
+vi.mock('../services/codeAnimation/events.js', () => ({
+  emitCodeAnimationChanged: vi.fn(),
+  emitCodeAnimationFilm: vi.fn(),
+}));
 vi.mock('../services/musicVideo/catalogLinks.js', () => ({ queueProjectCatalogLinkSync: vi.fn() }));
 vi.mock('../services/sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(), autoSubscribeRecordToAllPeers: vi.fn(async () => {}) }));
 vi.mock('../services/videoGen/history.js', () => ({ mutateVideoHistory: vi.fn(async change => { state.history = change(state.history); }) }));

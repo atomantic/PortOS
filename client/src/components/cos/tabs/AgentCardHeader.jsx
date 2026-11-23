@@ -172,7 +172,7 @@ function AgentControlBar({ agent, inactive, paused, completed, remote, hasOutput
             prompt="Kill?"
             className="flex-wrap max-w-full"
             largeTouchTargets
-            confirmText="Confirm"
+            confirmText="Kill"
             cancelText="Cancel"
             ariaLabel="Confirm kill agent"
             confirmIcon={Skull}

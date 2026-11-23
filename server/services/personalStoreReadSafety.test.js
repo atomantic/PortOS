@@ -31,7 +31,7 @@ vi.mock('../lib/db.js', () => ({ query: async () => ({ rows: [] }), ensureSchema
 vi.mock('./brainStorage.js', async () => {
   const { EventEmitter } = await import('events');
   return { brainEvents: new EventEmitter(), now: () => new Date().toISOString(),
-    getAll: async () => [], listStoredIds: async () => [], getById: async () => null, get: async () => null };
+    getAll: async () => [], listStoredIds: async () => [], getById: async () => null };
 });
 vi.mock('./obsidian.js', () => ({}));
 vi.mock('./notifications.js', () => ({ addNotification: vi.fn(), NOTIFICATION_TYPES: {}, exists: async () => false }));

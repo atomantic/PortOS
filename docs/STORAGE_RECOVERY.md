@@ -72,7 +72,10 @@ transcript, clear transcript warnings, or change the original task outcome.
 
 ### Interrupted maintenance transactions
 
-An interrupted journal write stays fail-closed across restarts. Settings → General
+An interrupted journal write stays fail-closed across restarts. A transaction lock
+younger than two seconds on a journal with no hold is a live write by the other
+process and reads as the committed state; an older lock, or any lock while a hold
+is set, is interrupted. Settings → General
 → Graceful maintenance reports `interrupted-transaction` and the lock time,
 `unreadable-journal` for damaged/incompatible state, or `process-uncertain` when
 this process could not confirm a write. The first transaction failure logs its

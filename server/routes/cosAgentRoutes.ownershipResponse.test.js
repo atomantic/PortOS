@@ -16,7 +16,6 @@ vi.mock('../services/cos/cosAgentIndex.js', () => ({
   pruneArchivedRecordCache: () => {},
   invalidateArchivedRecord: () => {},
 }));
-vi.mock('../services/cos/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cos/cosHealthMonitor.js', () => ({}));
 vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));

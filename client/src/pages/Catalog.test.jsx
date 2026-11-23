@@ -219,9 +219,9 @@ describe('Catalog page', () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
 
-    // Arm: the per-card Delete button reveals the Yes/No confirm.
+    // Arm: the per-card Delete button reveals the Delete/Cancel confirm.
     fireEvent.click(screen.getByLabelText(/Delete Echo Saint/i));
-    const yesBtn = await screen.findByRole('button', { name: /^Yes$/i });
+    const yesBtn = await screen.findByRole('button', { name: /^Delete$/i });
 
     await act(async () => { fireEvent.click(yesBtn); });
 
@@ -236,7 +236,7 @@ describe('Catalog page', () => {
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText(/Delete Echo Saint/i));
-    const yesBtn = await screen.findByRole('button', { name: /^Yes$/i });
+    const yesBtn = await screen.findByRole('button', { name: /^Delete$/i });
     await act(async () => { fireEvent.click(yesBtn); });
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -350,7 +350,7 @@ describe('Catalog page', () => {
     expect(screen.getByText('2 selected')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText(/Delete Echo Saint/i));
-    const yesBtn = await screen.findByRole('button', { name: /^Yes$/i });
+    const yesBtn = await screen.findByRole('button', { name: /^Delete$/i });
     await act(async () => { fireEvent.click(yesBtn); });
 
     await waitFor(() => expect(screen.getByText('1 selected')).toBeTruthy());

@@ -35,10 +35,22 @@ const stableId = (value) => createHash('sha256').update(String(value)).digest('h
 const cap = (value, max) => String(value ?? '').slice(0, max);
 const normalizedText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 const searchableText = (value) => normalizedText(value).slice(0, 2_000);
+const searchPiiReplacements = {
+  ...PII_REPLACEMENTS.bracketed,
+  'home-path': ' ',
+  'windows-path': ' ',
+};
+const redactContextText = (value, replacements = PII_REPLACEMENTS.bracketed) =>
+  redactPii(redactSecrets(normalizedText(value)), replacements);
+
+function redactSearchableText(value) {
+  // Search returns match counts, so both private values and redaction markers must stay out of it.
+  return searchableText(redactContextText(value, searchPiiReplacements).replace(/\[REDACTED[^\]]*\]/g, ' '));
+}
 
 export function redactAgentContextText(value) {
   return cap(
-    redactPii(redactSecrets(normalizedText(value)), PII_REPLACEMENTS.bracketed),
+    redactContextText(value),
     AGENT_CONTEXT_LIMITS.maxSummaryChars,
   );
 }
@@ -84,7 +96,7 @@ const workspaceItem = (workspace, profile) => ({
     summary: cap(`Active workspace with ${Number(workspace.taskCount) || 0} task(s).`, AGENT_CONTEXT_LIMITS.maxSummaryChars),
     path: '/apps',
   },
-  searchText: searchableText(`${workspace.appName} workspace app ${workspace.appId}`),
+  searchText: redactSearchableText(`${workspace.appName} workspace app ${workspace.appId}`),
 });
 
 const BRAIN_CONTEXT_TEXT_FIELDS = Object.freeze([
@@ -111,7 +123,7 @@ const brainItem = (type, record, profile) => {
         : `Read-only ${type} record metadata.`,
       path: cap(`/brain/${type}`, 300),
     },
-    searchText: searchableText(`${type} ${raw}`),
+    searchText: redactSearchableText(`${type} ${raw}`),
   };
 };
 

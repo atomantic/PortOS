@@ -9,6 +9,10 @@
 # other CUDA runtimes share, and mlx/mlx-lm, which are Apple-only.
 # torchvision/torchaudio stay the PyPI wheels that pair with that torch.
 # nano-vllm (an optional local-source accelerator) is omitted, as on Apple Silicon.
+# Inference only: scripts/ml/generate_acestep15.py runs AceStepHandler + generate_music offline. Upstream also
+# declares tensorboard, lightning, lycoris-lora, toml, matplotlib and modelscope for its training UI, LoKr adapter
+# loading and ModelScope download fallback; none is imported by acestep.handler / acestep.inference at ACESTEP15_PIN
+# (static import-graph walk), so they are omitted. Re-check the graph when bumping the pin.
 torch==2.14.1+cu126
 torchvision==0.29.2
 torchaudio==2.11.1
@@ -23,16 +27,10 @@ numba>=0.63.1
 vector-quantize-pytorch>=1.27.15
 torchcodec>=0.9.1
 torchao>=0.16.0,<0.17.0
-toml
-lycoris-lora
-lightning>=2.0.0
-tensorboard>=2.0.0
-modelscope
 typer-slim>=0.21.1
 pytorch-wavelets>=1.3.0
 pywavelets>=1.9.0
 loguru>=0.7.3
-matplotlib>=3.7.5
 scipy>=1.10.1
 soundfile>=0.13.1
 filelock>=4.2.1

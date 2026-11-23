@@ -1,16 +1,30 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 // taste-questionnaire binds PATHS.digitalTwin at module load; makePathsProxy
 // re-roots it (and every other data/-rooted member) into the temp tree so tests
 // never touch the real install profile.
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-taste-' });
+const state = vi.hoisted(() => ({ failMetaWrite: false }));
 
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return makeProxy(actual);
+  const proxied = makeProxy(actual);
+  return new Proxy(proxied, {
+    get(target, prop, receiver) {
+      if (prop === 'atomicWrite') {
+        return async (path, data, ...rest) => {
+          if (state.failMetaWrite && basename(String(path)) === 'meta.json') {
+            throw new Error('injected meta failure');
+          }
+          return Reflect.get(target, prop, receiver)(path, data, ...rest);
+        };
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 });
 
 // Avoid digitalTwinEvents side effects during answer submit
@@ -28,6 +42,7 @@ vi.mock('./aiProvider.js', () => ({
 }));
 
 beforeEach(() => {
+  state.failMetaWrite = false;
   vi.resetModules();
 });
 
@@ -400,5 +415,152 @@ describe('AESTHETICS.md stamping vs newer-peer document sync', () => {
       sync.applyDigitalTwinRemote(peerSnapshot('2020-06-01T00:00:00.000Z')),
     ]);
     expect(await stampOf() > OLD).toBe(true);
+  });
+});
+
+// A failed meta save must not leave AESTHETICS.md ahead of its stamp or publish
+// that stamp into the hot cache. The taste profile commits first, so a retry
+// republishes the same answer once (#17643).
+describe('AESTHETICS.md metadata write failures (#17643)', () => {
+  const OLD = '2020-01-01T00:00:00.000Z';
+  const ANSWER = 'Example Film One';
+  const SUMMARY = 'Overall example profile';
+  const PROVIDER = { id: 'provider-1', name: 'Example Provider', defaultModel: 'model-1' };
+  const twinDir = () => join(tempRoot, 'digital-twin');
+  const aestheticsPath = () => join(twinDir(), 'AESTHETICS.md');
+  const metaPath = () => join(twinDir(), 'meta.json');
+  const profilePath = () => join(twinDir(), 'taste-profile.json');
+  const readProfile = async () => JSON.parse(await readFile(profilePath(), 'utf8'));
+  const existingDoc = {
+    id: 'aesthetics-doc',
+    filename: 'AESTHETICS.md',
+    title: 'Aesthetic Preferences',
+    category: 'creative',
+    enabled: true,
+    priority: 30,
+    createdAt: OLD,
+    updatedAt: OLD,
+  };
+
+  async function seedTwin(previous) {
+    await rm(twinDir(), { recursive: true, force: true });
+    await mkdir(twinDir(), { recursive: true });
+    if (previous !== null) await writeFile(aestheticsPath(), previous);
+    const { cache, saveMeta } = await import('./digital-twin-meta.js');
+    cache.meta.data = null;
+    cache.meta.timestamp = 0;
+    await saveMeta({
+      version: '1.0.0',
+      documents: previous === null ? [] : [existingDoc],
+      deletedDocuments: [],
+    });
+    return cache;
+  }
+
+  async function expectMetaFailure(run) {
+    const { cache, loadMeta } = await import('./digital-twin-meta.js');
+    const cached = cache.meta.data;
+    const persisted = await readFile(metaPath());
+    state.failMetaWrite = true;
+    try {
+      await expect(run()).rejects.toThrow('injected meta failure');
+    } finally {
+      state.failMetaWrite = false;
+    }
+    expect(cache.meta.data).toBe(cached);
+    expect(await loadMeta()).toEqual(JSON.parse(persisted.toString('utf8')));
+    expect(await readFile(metaPath())).toEqual(persisted);
+  }
+
+  async function expectAgreedPublication(previous) {
+    const { loadMeta } = await import('./digital-twin-meta.js');
+    const meta = JSON.parse(await readFile(metaPath(), 'utf8'));
+    expect(await loadMeta()).toEqual(meta);
+    const docs = meta.documents.filter((doc) => doc.filename === 'AESTHETICS.md');
+    expect(docs).toHaveLength(1);
+    if (previous !== null) {
+      expect(docs[0].id).toBe('aesthetics-doc');
+      expect(docs[0].updatedAt > OLD).toBe(true);
+    }
+  }
+
+  // An invalid UTF-8 byte makes a text rewrite during rollback observable.
+  const priorBodies = [
+    ['absent', null],
+    ['prior bytes', Buffer.from('# Previous\r\n\xff', 'latin1')],
+  ];
+
+  it.each(priorBodies)('restores aesthetics bytes (%s) when an answer cannot save metadata, then retries once', async (_label, previous) => {
+    await seedTwin(previous);
+    const taste = await import('./taste-questionnaire.js');
+    await expectMetaFailure(() => taste.submitAnswer('movies', 'movies-core-1', ANSWER));
+
+    if (previous === null) await expect(readFile(aestheticsPath())).rejects.toMatchObject({ code: 'ENOENT' });
+    else expect(await readFile(aestheticsPath())).toEqual(previous);
+    expect((await readProfile()).sections.movies.responses.map((response) => response.answer)).toEqual([ANSWER]);
+
+    await taste.submitAnswer('movies', 'movies-core-1', ANSWER);
+    expect((await readFile(aestheticsPath(), 'utf8')).split(ANSWER)).toHaveLength(2);
+    expect((await readProfile()).sections.movies.responses).toHaveLength(1);
+    await expectAgreedPublication(previous);
+  });
+
+  it('does not repeat an answer already stored in the profile and markdown', async () => {
+    await seedTwin(null);
+    const taste = await import('./taste-questionnaire.js');
+    await taste.submitAnswer('movies', 'movies-core-1', ANSWER);
+    const body = await readFile(aestheticsPath());
+    const { cache } = await import('./digital-twin-meta.js');
+    const meta = JSON.parse(await readFile(metaPath(), 'utf8'));
+    meta.documents.find((doc) => doc.filename === 'AESTHETICS.md').updatedAt = OLD;
+    await writeFile(metaPath(), JSON.stringify(meta));
+    cache.meta.data = null;
+    cache.meta.timestamp = 0;
+
+    await taste.submitAnswer('movies', 'movies-core-1', ANSWER);
+
+    expect(await readFile(aestheticsPath())).toEqual(body);
+    expect((await readProfile()).sections.movies.responses).toHaveLength(1);
+    await expectAgreedPublication(null);
+    const stamped = JSON.parse(await readFile(metaPath(), 'utf8'));
+    expect(stamped.documents[0].updatedAt > OLD).toBe(true);
+  });
+
+  it.each(priorBodies)('restores aesthetics bytes (%s) when a summary cannot save metadata, then retries once', async (_label, previous) => {
+    await seedTwin(previous);
+    await writeFile(profilePath(), JSON.stringify({
+      version: '1.0.0',
+      createdAt: OLD,
+      updatedAt: OLD,
+      profileSummary: null,
+      lastSessionAt: OLD,
+      sections: {
+        movies: {
+          status: 'completed',
+          summary: null,
+          responses: [{ questionId: 'movies-core-1', answer: ANSWER, answeredAt: OLD }],
+        },
+      },
+    }));
+    const { resolveTextProvider, callProviderAISimple } = await import('./aiProvider.js');
+    resolveTextProvider.mockResolvedValue(PROVIDER);
+    callProviderAISimple.mockResolvedValue({ text: `  ${SUMMARY}  ` });
+    const taste = await import('./taste-questionnaire.js');
+    await expectMetaFailure(() => taste.generateOverallSummary());
+
+    if (previous === null) await expect(readFile(aestheticsPath())).rejects.toMatchObject({ code: 'ENOENT' });
+    else expect(await readFile(aestheticsPath())).toEqual(previous);
+    const failedProfile = await readProfile();
+    expect(failedProfile.profileSummary).toBe(SUMMARY);
+    expect(failedProfile.sections.movies.responses).toHaveLength(1);
+
+    await taste.generateOverallSummary();
+    const body = await readFile(aestheticsPath(), 'utf8');
+    expect(body.split(ANSWER)).toHaveLength(2);
+    expect(body.split(SUMMARY)).toHaveLength(2);
+    const retried = await readProfile();
+    expect(retried.profileSummary).toBe(SUMMARY);
+    expect(retried.sections.movies.responses).toHaveLength(1);
+    await expectAgreedPublication(previous);
   });
 });

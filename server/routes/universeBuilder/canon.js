@@ -21,13 +21,14 @@ import {
 } from '../../services/universeCastIntegrity.js';
 import { characterAugmentProposeSchema, characterAugmentApplySchema } from '../../lib/characterAugmentValidation.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../../services/canonUsage.js';
+import { BIBLE_KINDS } from '../../lib/storyBible.js';
 import { mapServiceError, lockParamsSchema } from './shared.js';
 
 const router = Router();
 
 const extractCanonSchema = z.object({
   corpus: z.string().trim().min(1).max(200_000),
-  kinds: z.array(z.string().trim().min(1)).optional(),
+  kinds: z.array(z.enum(BIBLE_KINDS)).max(BIBLE_KINDS.length).optional(),
   parallel: z.boolean().optional(),
   providerOverride: z.string().trim().max(64).optional(),
 });
@@ -173,6 +174,18 @@ router.patch('/:id/canon/:kind/:entryId/lock', asyncHandler(async (req, res) => 
   res.json(result);
 }));
 
+// Registered before `/:entryId`: both are 5-segment PATCHes, so the param
+// route would otherwise capture `lock-all` as an entry id and 404.
+// Bulk lock/unlock every canon entry of a single kind. Powers the
+// "Lock all / Unlock all" buttons in the Universe Builder canon section.
+router.patch('/:id/canon/:kind/lock-all', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(lockParamsSchema, req.params);
+  const body = validateRequest(setLockSchema, req.body ?? {});
+  const result = await canonSvc.setCanonKindLockAll(req.params.id, kind, body.locked)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // Rich canon fields use the same service sanitizer as whole-array PATCHes.
 // Identity comes from the URL and cannot be changed by a field edit.
 const entryPatchSchema = z.record(z.unknown()).refine(patch => !Object.hasOwn(patch, 'id'), {
@@ -207,16 +220,6 @@ const imageRefParamsSchema = lockParamsSchema.extend({
 router.delete('/:id/canon/:kind/:entryId/image-refs/:filename', asyncHandler(async (req, res) => {
   const { kind, filename } = validateRequest(imageRefParamsSchema, req.params);
   const result = await canonSvc.removeCanonEntryImageRef(req.params.id, kind, req.params.entryId, filename)
-    .catch((err) => { throw mapServiceError(err); });
-  res.json(result);
-}));
-
-// Bulk lock/unlock every canon entry of a single kind. Powers the
-// "Lock all / Unlock all" buttons in the Universe Builder canon section.
-router.patch('/:id/canon/:kind/lock-all', asyncHandler(async (req, res) => {
-  const { kind } = validateRequest(lockParamsSchema, req.params);
-  const body = validateRequest(setLockSchema, req.body ?? {});
-  const result = await canonSvc.setCanonKindLockAll(req.params.id, kind, body.locked)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

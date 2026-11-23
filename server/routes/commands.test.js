@@ -24,7 +24,7 @@ vi.mock('../services/history.js', () => ({
 
 // Command output reaches only subscribed sockets (#12019); the route never
 // touches the global io instance.
-vi.mock('../services/socket.js', () => ({
+vi.mock('../services/socketIo.js', () => ({
   broadcastToCommandSubscribers: vi.fn(),
 }));
 
@@ -72,7 +72,7 @@ vi.mock('../services/settings.js', () => ({
 }));
 
 import { authGate } from '../services/authGate.js';
-import { broadcastToCommandSubscribers } from '../services/socket.js';
+import { broadcastToCommandSubscribers } from '../services/socketIo.js';
 import { logAction } from '../services/history.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { existsSync, realpathSync, statSync } from 'fs';

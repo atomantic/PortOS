@@ -47,8 +47,9 @@ async function withGitRepoFlag(app) {
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
-  const { days, repository, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
-  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories);
+  const { days, repository, repositories, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
+  // `repository` keeps the v1 body. `repositories` is the list pull; older callers omit it.
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories, repositories);
   if (!payload) throw new ServerError('Quality sharing requires a registered enabled sync peer and a known repository', {
     status: 403,
     code: 'PEER_PULL_FORBIDDEN',
@@ -172,6 +173,8 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   // so the Quality tab's denominator and runner skip audits that cannot apply.
   const [enrichedApp] = includeQuality === 'true'
     ? await enrichAppsWithQuality([app], {
+      // A detail read is the explicit retry: drop the list's sleeping-peer backoff.
+      freshPeerPull: true,
       resolveApplicability: async (target) => (await import('../../services/appQualitySchedule.js')).inapplicableAuditReasons(target),
     })
     : [app];

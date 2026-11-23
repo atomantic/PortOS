@@ -162,6 +162,23 @@ const SELECTION_CUTS = [
     'reads and writes the project through the accessors the store hands in'],
   ['services/musicVideo/shotSegmentPaths.js', /^services\/musicVideo\/(?:shotSegments|projects)\.js$/,
     'is the leaf the store removes a deleted project\'s segments through'],
+  // #17619: getIo / command broadcast / film emit lived on the socket composition root.
+  ['services/backup.js', 'services/socket.js',
+    'reads the live io through the socketIo.js leaf'],
+  ['services/moodBoard/analyzeJob.js', 'services/socket.js',
+    'publishes analyze progress through the socketIo.js leaf'],
+  ['services/moodBoard/generateMore.js', 'services/socket.js',
+    'publishes generate progress through the socketIo.js leaf'],
+  ['services/moodBoard/renderItem.js', 'services/socket.js',
+    'publishes item-render progress through the socketIo.js leaf'],
+  ['services/storyboards/make.js', 'services/socket.js',
+    'publishes make progress through the socketIo.js leaf'],
+  ['services/stackerNewsScheduler.js', 'services/socket.js',
+    'publishes sync invalidation through the socketIo.js leaf'],
+  ['routes/commands.js', 'services/socket.js',
+    'broadcasts command output through the socketIo.js leaf'],
+  ['services/codeAnimation/films.js', 'services/socket.js',
+    'emits film frames through codeAnimation/events.js'],
 ];
 
 // Runtimes that import the queue back load through bootHookRegistry.js (#17499).
@@ -212,7 +229,16 @@ describe('CI-selection cuts stay cut (#12285)', () => {
       'services/readinessSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
+      'services/socketIo.js',
     ]) expect(importTargets(leaf), leaf).toEqual([]);
+  });
+
+  // Positive control: the cut callers still name the leaf, so an empty scan cannot pass.
+  it('still sees the socketIo.js and film-event edges the cut callers keep (#17619)', () => {
+    expect(importTargets('services/backup.js')).toContain('services/socketIo.js');
+    expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
+    expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
+    expect(importTargets('services/socket.js')).toContain('services/socketIo.js');
   });
 
   // Positive control for the media scan: the boot owner still names every runtime.
@@ -430,8 +456,11 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  it('loads at most half of the original 3,023 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1511);
+  // Half of the original 3,023-module boot closure is 1,511. socket.js publishes
+  // the import-free socketIo.js handle (#17619), so the composition root carries
+  // that one extra module.
+  it('loads at most 1,512 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1512);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);

@@ -26,6 +26,8 @@ import { backupSharedAdmission } from './backupSharedAdmission.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { assertDatabaseAdmission } from './databaseMaintenanceJournal.js';
 
+// An agent/runner row already fences maintenance for its recording writes (#17649).
+const AGENT_OWNER_KINDS = ['agent', 'runner'];
 const publicationScope = new AsyncLocalStorage();
 const DEFAULT_DRAIN_TIMEOUT_MS = 120_000;
 let admitted = 0;
@@ -62,7 +64,7 @@ export async function withBackupAssetPublication(work, { timeoutMs = DEFAULT_DRA
       return await maintenance.continueSettlement(() => withAdmittedBackupAssetPublication(() => {
         started = true;
         return work();
-      }, attemptMs), { hasStarted: () => started });
+      }, attemptMs), { hasStarted: () => started, lazyWhenOwnedBy: AGENT_OWNER_KINDS });
     } catch (error) {
       if (!onWait || started || error?.code !== 'BACKUP_SNAPSHOT_BUSY' || Date.now() >= deadline) throw error;
       onWait(error);

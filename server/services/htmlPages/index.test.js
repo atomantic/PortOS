@@ -51,7 +51,7 @@ vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
 import { generate } from '../modelCapabilityTests.js';
 import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
-import { runOnMtplxCheckpoint } from '../mtplxServerManager.js';
+import { getMtplxServerStatus, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { listRuns, listSelectableModels, pageFile, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
@@ -82,6 +82,16 @@ describe('listSelectableModels', () => {
     expect(result.defaultPages[0]).toBe('- look stunning\n- original\n- go full creative mode');
     // The fixed text around a brief ships with the picker so the form can show the exact prompt.
     expect(result.promptParts.before + result.defaultPages[0] + result.promptParts.after).toContain(result.defaultPages[0]);
+  });
+
+  it.each([
+    [[{ repo: 'Example/Valid-MTPLX', valid: true }, { repo: 'Example/Partial-MTPLX', valid: false }], ['Example/Valid-MTPLX']],
+    [[], []],
+  ])('uses cache rows as authoritative when they are present (%j)', async (cachedModelRows, expected) => {
+    getMtplxServerStatus.mockResolvedValueOnce({ cachedModelRows, cachedModels: ['Example/Partial-MTPLX'] });
+
+    const result = await listSelectableModels();
+    expect(result.models.filter(({ backend }) => backend === 'mtplx').map(({ modelId }) => modelId)).toEqual(expected);
   });
 });
 

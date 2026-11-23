@@ -36,6 +36,7 @@ const config = defineConfig({
       PORTOS_CI_TEST_SELECTION: '',
       // Same for the memo store: a nested Vitest must point at its own directory or stay off.
       PORTOS_TEST_MEMO_DIR: '',
+      PORTOS_TEST_MEMO_READ_DIRS: '',
     },
     // Four DOM workers exhausted Testing Library's async budget on the public
     // runner before ChiefOfStaff's config panel settled. Keep the proven

@@ -31,7 +31,17 @@ describe('vi.mock factory contract conventions', () => {
       "// vi.mock('./validateRequest.js', () => ({ commentedDeadKey: vi.fn() }));",
       "vi.mock('./validateRequest.js', async () => ({ ...(await vi.importActual('./validateRequest.js')), spreadKey: vi.fn() }));",
     ].join('\n');
-    expect(drift(probe, src)).toEqual(['server/lib/__probe.test.js:1 — ./validateRequest.js mocks plantedDeadKey']);
+    // The spread factory is read too: its explicit key is checked, the spread itself is not.
+    expect(drift(probe, src)).toEqual([
+      'server/lib/__probe.test.js:1 — ./validateRequest.js mocks plantedDeadKey',
+      'server/lib/__probe.test.js:3 — ./validateRequest.js duplicates the vi.mock at line 1, which this one replaces',
+      'server/lib/__probe.test.js:3 — ./validateRequest.js mocks spreadKey',
+    ]);
+  });
+
+  it('flags a dead relative specifier', () => {
+    const probe = join(ROOT, 'server/lib/__probe.test.js');
+    expect(drift(probe, "vi.mock('./noSuchModule.js', () => ({ x: vi.fn() }));")).toEqual(['server/lib/__probe.test.js:1 — ./noSuchModule.js does not resolve']);
   });
 
   it('does not read a JSX-text apostrophe as a string opener (#12794)', () => {

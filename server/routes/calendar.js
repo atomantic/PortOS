@@ -231,6 +231,7 @@ router.post('/google/auth/credentials', asyncHandler(async (req, res) => {
   });
   const data = validateRequest(schema, req.body);
   const result = await googleAuth.saveCredentials(data);
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 

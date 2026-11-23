@@ -39,8 +39,9 @@ describe('parseSegments', () => {
 
 describe('PlaygroundOutput rendering', () => {
   it('renders an HTML code block with a Preview toggle and a sandboxed iframe', () => {
-    const { container, getByText, queryByTitle } = render(
-      <PlaygroundOutput text={'```html\n<p>hello</p>\n```'} />,
+    const markup = '<style>p { color: blue; }</style><p>hello</p><script>document.title = "Hi";</script>';
+    const { getByText, getByTitle, queryByTitle } = render(
+      <PlaygroundOutput text={['```html', markup, '```'].join('\n')} />,
     );
     // Preview toggle present for html-like blocks
     const preview = getByText('Preview');
@@ -48,11 +49,23 @@ describe('PlaygroundOutput rendering', () => {
     // Defaults to code view — no iframe until toggled
     expect(queryByTitle('HTML preview')).toBeNull();
     fireEvent.click(preview);
-    const iframe = container.querySelector('iframe[title="HTML preview"]');
-    expect(iframe).toBeTruthy();
-    expect(iframe.getAttribute('sandbox')).toContain('allow-scripts');
-    expect(iframe.getAttribute('sandbox')).not.toContain('allow-same-origin');
-    expect(iframe.getAttribute('srcdoc')).toBe('<p>hello</p>');
+    const iframe = getByTitle('HTML preview');
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(iframe.getAttribute('referrerpolicy')).toBe('no-referrer');
+    const srcDoc = iframe.getAttribute('srcdoc');
+    const csp = srcDoc.match(/^<!doctype html><head><meta http-equiv="Content-Security-Policy" content="([^"]+)"><\/head>/)?.[1];
+    expect(csp?.split('; ')).toEqual(expect.arrayContaining([
+      "default-src 'none'",
+      "form-action 'none'",
+      "base-uri 'none'",
+      "object-src 'none'",
+      "frame-src 'none'",
+      "worker-src 'none'",
+      "script-src 'unsafe-inline'",
+      "style-src 'unsafe-inline'",
+      'img-src data: blob:',
+    ]));
+    expect(srcDoc.endsWith(markup)).toBe(true);
   });
 
   it('does NOT offer a Preview toggle for a non-HTML language', () => {

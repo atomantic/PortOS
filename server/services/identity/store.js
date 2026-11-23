@@ -170,6 +170,9 @@ export async function saveJSON(filePath, data, { mirrorGoals = true } = {}) {
   if (filePath === GOALS_FILE) dashboardEvents.emit('goals:changed');
 }
 
+// Shared by local derivations and peer sync, including the reads that inform their writes.
+export const queueDerivedIdentityWrite = createKeyCachedQueue();
+
 // Serializes goals.json read-modify-write across every caller that must run slow
 // work (an LLM call per goal, Google Calendar round-trips) BEFORE the write.
 // Doing the slow work first, then re-reading goals.json inside `fn` right before

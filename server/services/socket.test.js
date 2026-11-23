@@ -13,7 +13,7 @@ import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
 import { providerQuotaEvents } from './provider/providerQuotaEvents.js';
-import { codeAnimationEvents } from './codeAnimation/events.js';
+import { codeAnimationEvents, emitCodeAnimationFilm } from './codeAnimation/events.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
@@ -671,6 +671,21 @@ describe('socket.js — initSocket', () => {
 
     expect(subscriber.emitted).toContainEqual(['code-animation:changed', { id: 'anim-1', kind: 'poster' }]);
     expect(bystander.emitted.some(([ev]) => String(ev).startsWith('code-animation:'))).toBe(false);
+  });
+
+  it('forwards emitCodeAnimationFilm to code-animation subscribers only (#17619)', () => {
+    const subscriber = makeSocket('code-anim-film-sub');
+    const bystander = makeSocket('code-anim-film-bystander');
+    createdSockets.push(subscriber, bystander);
+    io.connect(subscriber);
+    io.connect(bystander);
+    subscriber.handlers['code-animation:subscribe']();
+
+    emitCodeAnimationFilm('film-1', { kind: 'state', phase: 'sync' });
+
+    expect(subscriber.emitted).toContainEqual(['code-animation:film', { projectId: 'film-1', kind: 'state', phase: 'sync' }]);
+    expect(bystander.emitted.some(([ev]) => String(ev).startsWith('code-animation:'))).toBe(false);
+    expect(io.emitted.some(([ev]) => String(ev).startsWith('code-animation:'))).toBe(false);
   });
 
   it('socket receives cos:subscribed ack after emitting cos:subscribe', () => {
