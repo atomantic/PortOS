@@ -727,8 +727,9 @@ export function buildWorkflowScopeSection(workflowScope) {
   if (workflowScope?.status !== 'missing') return '';
   return [
     '## Forge token lacks the `workflow` scope',
-    `The GitHub token PortOS gave this run has no \`workflow\` scope, so GitHub refuses to merge (or auto-merge) a PR that changes \`.github/workflows/**\`, reporting only a generic "base branch policy" error. If your PR touches \`.github/workflows/**\`, skip every merge and auto-merge attempt: publish it, wait for required CI, then leave it OPEN as an explicit human-merge handoff that names the missing scope and the fix (\`${workflowScope.remedy}\`). Keep the issue, claim markers and checkout. PRs that do not touch workflow files merge normally.`,
-    'For that workflow-scope handoff, write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Grant workflow scope through the supported GitHub authorization flow before delivery resumes"]}. Name the PR and missing scope in reason. A generic blocked/incomplete outcome without this recovery mode is treated as machine-recoverable and wastes automatic retry/spawn budget on the same permission boundary. Never refresh credentials or retry the denied merge yourself.',
+    'The GitHub token scope probe did not find the classic OAuth `workflow` scope. This is a warning, not a merge refusal. After the configured review and required CI gates pass, if merge is authorized and this PR changes `.github/workflows/**`, make one normal head-pinned merge attempt using the assigned credential and the repository’s normal merge settings. Do not use admin/bypass options, another credential, or a retry to work around a rejection.',
+    `If GitHub explicitly refuses the operation for missing workflow permission, keep the PR open and preserve the issue, claim markers and checkout. Write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Authorize the assigned GitHub credential for workflow changes before delivery resumes"]}. Name the PR and quote the actual permission error. For a supported CLI OAuth login, the owner can authorize it through GitHub (\`${workflowScope.remedy}\`). Never refresh credentials or retry a denied merge yourself.`,
+    'A generic branch-policy or merge conflict error is not proof of missing workflow permission. Report the actual result and follow the existing repository policy. Only a confirmed merge for this exact PR and head allows normal merged-claim cleanup. PRs without workflow changes follow the ordinary delivery path.',
   ].join('\n');
 }
 
@@ -739,9 +740,9 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   const ownershipSection = serverCheckout
     ? '## Claim ownership\nPortOS already bound this run\'s claim branch and retires the checkout after exit; do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`.'
     : buildClaimOwnershipSection(agentId);
-  const workflowScopeSection = workflowScope?.status === 'missing'
+  const workflowScopeSection = !prStaysOpen && workflowScope?.status === 'missing'
     ? (workflowScopeStagedPath
-      ? `## Forge token lacks the \`workflow\` scope\nIf your PR touches \`.github/workflows/**\`, READ \`${workflowScopeStagedPath}\` and follow its human-merge handoff (PRs that do not touch workflow files merge normally).`
+      ? `## Forge token lacks the \`workflow\` scope\nIf your PR touches \`.github/workflows/**\`, READ \`${workflowScopeStagedPath}\` before completing the normal head-pinned merge or a confirmed permission-denial handoff.`
       : buildWorkflowScopeSection(workflowScope))
     : '';
   const lines = [

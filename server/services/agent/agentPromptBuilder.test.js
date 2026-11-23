@@ -5261,7 +5261,7 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
   });
 
-  it('defers missing workflow-scope handoff on file-tool hosts and keeps it inline on API hosts', async () => {
+  it('defers advisory workflow scope instructions on file-tool hosts and keeps them inline on API hosts', async () => {
     const taskWithMissingScope = makeTask({
       description: 'Claim #42',
       metadata: {
@@ -5274,6 +5274,10 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     const cliPrompt = await buildAgentPrompt(taskWithMissingScope, {}, '/r', null,
       { providerType: 'cli', providerId: 'codex', providerCommand: 'codex', agentId: 'agent-1' });
     expect(cliPrompt).toContain(`READ \`${stagedPath('claim-workflow-scope')}\``);
+    expect(cliPrompt).toContain('normal head-pinned merge or a confirmed permission-denial handoff');
+    const stagedScope = vi.mocked(writeResolvedSlashdoBody).mock.calls.find(([name]) => name === 'claim-workflow-scope')?.[1];
+    expect(stagedScope).toContain('one normal head-pinned merge attempt using the assigned credential');
+    expect(stagedScope).not.toContain('skip every merge');
     expect(cliPrompt).not.toContain('## Claim ownership binding');
     expect(cliPrompt).toContain('do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`');
 
@@ -5282,6 +5286,9 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
       { providerType: 'api', providerId: 'openai', agentId: 'agent-1' });
     expect(stagedSections()).toEqual([]);
     expect(apiPrompt).toContain('gh auth refresh -h github.com -s workflow');
+    expect(apiPrompt).toContain('one normal head-pinned merge attempt using the assigned credential');
+    expect(apiPrompt).toContain('If GitHub explicitly refuses the operation for missing workflow permission');
+    expect(apiPrompt).not.toContain('skip every merge');
   });
 });
 

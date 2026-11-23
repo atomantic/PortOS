@@ -356,9 +356,9 @@ const DYNAMIC_CLAIM_HEADINGS = [
   {
     name: 'claim-workflow-scope',
     pattern: /(?:^|\n)(## Forge token lacks the `workflow` scope\n[\s\S]*?)(?=\n## |$)/,
-    matchesShipped: (body) => body.includes('The GitHub token PortOS gave this run has no `workflow` scope'),
+    matchesShipped: (body) => body.includes('The GitHub token scope probe did not find the classic OAuth `workflow` scope'),
     pointer: (_body, path) =>
-      `## Forge token lacks the \`workflow\` scope\n\nIf your PR touches \`.github/workflows/**\`, READ \`${path}\` and follow its human-merge handoff (PRs that do not touch workflow files merge normally).`,
+      `## Forge token lacks the \`workflow\` scope\n\nIf your PR touches \`.github/workflows/**\`, READ \`${path}\` before completing the normal head-pinned merge or a confirmed permission-denial handoff.`,
   },
 ];
 
