@@ -100,8 +100,8 @@ it('closes the stream, alerts, and preserves editor edits on a conflict SSE fram
 
     const es = lastEventSource();
     expect(es).toBeTruthy();
+    // Emit conflict without a preceding baseline frame (covers late-attach replay too).
     await act(async () => {
-      es.emit({ type: 'baseline', score: 90, wordCount: 50 });
       es.emit({ type: 'conflict', code: 'DRAFT_CONFLICT', message: 'Draft was modified concurrently — refusing to overwrite' });
     });
 
