@@ -24,9 +24,9 @@ const resolveRelative = (file, specifier) => {
 
 /**
  * A client file can only reach `server/` through a relative specifier spelling `../server`
- * (backslashes included) or an escape that could spell one; tokenizing the rest is wasted work.
+ * (backslashes and `./` segments included) or any escape that could spell one; tokenizing the rest is wasted work.
  */
-const MAY_REACH_SERVER = /\.\.[/\\]+(?:\.\.[/\\]+)*server\b|\\[.xu0-7/]/;
+const MAY_REACH_SERVER = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b|\\[^\\]/;
 
 function inspectClientImports(clientFiles, readSource) {
   const violations = [];
@@ -120,6 +120,8 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
     const source = String.raw`import { x } from '..\/..\/..\/server\/services\/x.js';`;
     expect(inspectClientImports([file], () => source).violations).toHaveLength(1);
     expect(inspectClientImports([file], () => String.raw`import { x } from '\x2e\x2e/../../server/services/x.js';`).violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => "import { x } from '../../.././server/services/x.js';").violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => String.raw`import { x } from '../../../\server/services/x.js';`).violations).toHaveLength(1);
     expect(inspectClientImports([file], () => "import { x } from './lib/other.js';").violations).toEqual([]);
   });
 
