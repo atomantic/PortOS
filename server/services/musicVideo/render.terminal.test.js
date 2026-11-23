@@ -277,7 +277,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     await tick();
   });
 
-  it('retains zero-exit success when cancellation arrives just before close', async () => {
+  it('settles as canceled when cancellation arrives just before a clean close', async () => {
     const pid = 'cancel-success';
     prime(pid);
     const { jobId } = await renderMusicVideo(pid);
@@ -285,8 +285,9 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(cancelRender(jobId)).toBe(true);
     lastProc().emit('close', 0, null);
     await tick();
-    expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expectSettled(pid, 'complete', { renderHistoryId: jobId });
+    await tick();
+    expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expect(cancelRender(jobId)).toBe(false);
   });
 
   it('a late stray error after a successful close does not clobber the completed job', async () => {
@@ -757,6 +758,21 @@ describe('film look finishing pass on a footage render', () => {
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expectSettled(pid, 'complete', { renderHistoryId: jobId });
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'complete' }));
+  });
+
+  it('a cancel in the gap after ffmpeg exits skips the film look pass', async () => {
+    const pid = 'look-gap';
+    primeLook(pid, 'complete');
+    const { jobId } = await renderMusicVideo(pid);
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    // Same tick: the process is cleared and no pass has started yet.
+    expect(cancelRender(jobId)).toBe(true);
+    await tick();
+    await tick();
+    expect(look.calls).toHaveLength(0);
+    expect(getRenderJobStatus(jobId).status).toBe('canceled');
+    expectSettled(pid, 'complete');
   });
 
   it('a cancel during the pass aborts it, removes the file and restores the prior status', async () => {
