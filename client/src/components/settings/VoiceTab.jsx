@@ -93,6 +93,8 @@ export function VoiceTab() {
   const [facetimeStatus, setFacetimeStatus] = useState(null);
   const [facetimeAction, setFacetimeAction] = useState(null);
   const [facetimeResult, setFacetimeResult] = useState(null);
+  // Persisted identity the server's /facetime/* routes actually use; form inputs may be ahead of it.
+  const [savedFacetime, setSavedFacetime] = useState(null);
 
   const toggleWidgetHidden = (next) => {
     writeVoiceHidden(next);
@@ -152,7 +154,7 @@ export function VoiceTab() {
 
   useEffect(() => {
     Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
-      .then(([config, s]) => { setCfg(config); setStatus(s); })
+      .then(([config, s]) => { setCfg(config); setSavedFacetime(config?.facetime || {}); setStatus(s); })
       .catch(() => toast.error('Failed to load voice settings'))
       .finally(() => setLoading(false));
     listVoiceEngines({ silent: true })
@@ -210,6 +212,7 @@ export function VoiceTab() {
       };
       const r = await updateVoiceConfig(payload, { silent: true });
       setCfg(r.config);
+      setSavedFacetime(r.config?.facetime || {});
       setTraitsText(null);
       const rec = r.reconciliation || {};
       if (rec.error) {
@@ -304,7 +307,10 @@ export function VoiceTab() {
   if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
 
   const facetime = cfg.facetime || {};
-  const faceTimeDirty = !facetime.targetHandle?.trim() || !facetime.targetName?.trim();
+  const trimmed = (v) => (v || '').trim();
+  const faceTimeDirty = !trimmed(savedFacetime?.targetHandle) || !trimmed(savedFacetime?.targetName)
+    || trimmed(facetime.targetHandle) !== trimmed(savedFacetime.targetHandle)
+    || trimmed(facetime.targetName) !== trimmed(savedFacetime.targetName);
 
   const configuredEngine = cfg.tts.engine || 'piper';
   const sttEngine = cfg.stt.engine || 'whisper';
@@ -497,7 +503,7 @@ export function VoiceTab() {
             Escalations and Persistent Mind calls share one budget: at most 3 calls per rolling 24 hours, at least 30 minutes apart, never during voice quiet hours. The Persistent Mind can only place calls when its own <Link to="/cos/mind?panel=tools" className="text-port-accent underline">call grant</Link> is enabled.
           </p>
         </div>
-        {faceTimeDirty && <p className="text-xs text-port-warning">Set and save both identity fields before FaceTime controls are available.</p>}
+        {faceTimeDirty && <p className="text-xs text-port-warning">Save both identity fields (and any changes to them) before FaceTime controls are available.</p>}
         {facetimeStatus && <ul className="text-xs text-gray-400">{Object.entries(facetimeStatus).map(([key, value]) => <li key={key}>{value.ok === 'ok' ? '✓' : '•'} {key}: {value.message}</li>)}</ul>}
         {facetimeResult && <pre className="text-xs text-gray-400 whitespace-pre-wrap break-all">{JSON.stringify(facetimeResult, null, 2)}</pre>}
       </section>}

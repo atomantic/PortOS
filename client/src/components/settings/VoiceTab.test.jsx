@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VoiceTab from './VoiceTab';
@@ -27,8 +27,9 @@ vi.mock('../../services/voiceVisibility', () => ({
   readVoiceHidden: vi.fn(() => false),
   writeVoiceHidden: vi.fn(),
 }));
+const featureFlags = vi.hoisted(() => ({ facetime: false }));
 vi.mock('../../hooks/useInstanceFeatures', () => ({
-  useInstanceFeatures: () => ({ isFeatureEnabled: () => false }),
+  useInstanceFeatures: () => ({ isFeatureEnabled: (name) => name === 'facetime' && featureFlags.facetime }),
 }));
 
 const config = {
@@ -312,5 +313,44 @@ describe('VoiceTab personality traits input', () => {
     await waitFor(() => expect(voiceApi.updateVoiceConfig).toHaveBeenCalled());
     expect(voiceApi.updateVoiceConfig.mock.calls[0][0].llm.personality.traits)
       .toEqual(['concise', 'warm', 'very direct']);
+  });
+});
+
+describe('VoiceTab FaceTime identity gating', () => {
+  const saved = { targetName: 'Alex', targetHandle: '+15550100' };
+  const buttons = () => ['Probe', 'Test call', 'Hangup'].map((n) => screen.getByRole('button', { name: n }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    featureFlags.facetime = true;
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+    voiceApi.getFaceTimeStatus.mockResolvedValue({});
+    getProviders.mockResolvedValue({ providers: [] });
+  });
+
+  afterEach(() => { featureFlags.facetime = false; });
+
+  it('keeps controls disabled for typed-but-unsaved identity until Save succeeds', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue(structuredClone(config));
+    voiceApi.updateVoiceConfig.mockImplementation(async (c) => ({ config: c, reconciliation: {} }));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    fireEvent.change(await screen.findByLabelText('Target name'), { target: { value: 'Alex' } });
+    fireEvent.change(screen.getByLabelText('Target handle'), { target: { value: '+15550100' } });
+    buttons().forEach((b) => expect(b).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => buttons().forEach((b) => expect(b).toBeEnabled()));
+  });
+
+  it('disables controls when a saved handle is edited and re-enables when reverted', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue({ ...structuredClone(config), facetime: { ...saved } });
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const handle = await screen.findByLabelText('Target handle');
+    await waitFor(() => buttons().forEach((b) => expect(b).toBeEnabled()));
+    fireEvent.change(handle, { target: { value: '+15550199' } });
+    buttons().forEach((b) => expect(b).toBeDisabled());
+    fireEvent.change(handle, { target: { value: '+15550100' } });
+    buttons().forEach((b) => expect(b).toBeEnabled());
   });
 });
