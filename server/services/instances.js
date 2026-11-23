@@ -304,7 +304,11 @@ function announcedHost(str) {
 // and relay into an SSRF read. LAN and tailnet answers stay allowed; a lookup
 // failure is left to the fetch itself to report as unreachable.
 async function assertPeerHostNotLocal(peer) {
-  if (peer.transport === 'tailcat' || !peer.host || net.isIP(peer.host)) return;
+  if (peer.transport === 'tailcat') return;
+  if (peer.address && isBlockedIngestHost(peer.address)) {
+    throw new Error(`peer address ${peer.address} is a loopback, unspecified or link-local address`);
+  }
+  if (!peer.host || net.isIP(peer.host)) return;
   const answers = await dns.lookup(peer.host, { all: true }).catch(() => []);
   if (answers.some(({ address }) => isBlockedIngestHost(address))) {
     throw new Error(`peer host ${peer.host} resolves to a loopback or link-local address`);
@@ -1054,7 +1058,11 @@ export async function queryPeer(id, apiPath) {
 
 // --- Announce (Bidirectional Registration) ---
 
-export async function handleAnnounce({ address, port, instanceId, name, host }) {
+// `viaRemoteIngress`: the request is remote Tailcat traffic that arrived over
+// loopback, so `address` (127.0.0.1) is the ingress hop, never a dialable
+// caller. Such an announce may only refresh an existing tailcat peer by
+// instanceId; it can never create, address-match or probe a loopback peer.
+export async function handleAnnounce({ address, port, instanceId, name, host, viaRemoteIngress = false }) {
   // Set only when this announce marked the peer online (not the forged-address
   // branch, which records a sighting without trusting it).
   let markedOnlinePeer = null;
@@ -1069,9 +1077,15 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     // already part of the match.
     let matchedByAddress = false;
     // Fallback: check by address + port
-    if (!existing) {
-      existing = data.peers.find(p => p.address === address && p.port === port);
+    // Tailcat peers sit on local forward coordinates (127.0.0.1:15555+), so an
+    // address+port match would let any caller on that hop hijack them.
+    if (!existing && !viaRemoteIngress) {
+      existing = data.peers.find(p => p.transport !== 'tailcat' && p.address === address && p.port === port);
       matchedByAddress = true;
+    }
+    if (viaRemoteIngress && existing?.transport !== 'tailcat') existing = undefined;
+    if (!existing && (viaRemoteIngress || isBlockedIngestHost(address))) {
+      throw new ServerError('Announce refused: caller address is not a dialable peer address', { status: 400 });
     }
 
     const instanceIdMatches = !existing || !existing.instanceId || existing.instanceId === instanceId;
@@ -1084,7 +1098,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
 
     const normalizedHost = announcedHost(host);
 
-    if (existing?.syncSecret) return { created: false, peer: existing };
+    if (existing?.syncSecret) return { created: false, peer: { instanceId: existing.instanceId } };
 
     // A forged announce: instanceId matches a stored peer, but the caller's
     // source address does not match the stored one. Record the sighting only
@@ -1099,7 +1113,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       console.warn(`⚠️ Peer announce instanceId matched but address mismatched — ignoring host/port/name update`);
       existing.lastSeen = new Date().toISOString();
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
-      return { created: false, peer: existing };
+      return { created: false, peer: { instanceId: existing.instanceId } };
     }
 
     if (existing) {
