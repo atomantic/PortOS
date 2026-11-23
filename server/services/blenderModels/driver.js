@@ -1,6 +1,6 @@
 /**
  * Runs the PortOS Blender model driver (py/portos_model_driver.py) for one
- * build through the shared Trusted local launcher
+ * build or review through the shared Trusted local launcher
  * (../blenderWorkspace/worker.js). The worker's own workspace holds only the
  * staged driver and job; the driver writes model.blend and model.glb straight
  * into builds/<buildId>/, so a canceled or crashed build leaves at most a
@@ -22,7 +22,8 @@ export const BLENDER_MODEL_NEEDS_TRUSTED_LOCAL = 'A Blender model build runs the
 export const requireBlenderModelTool = () => requireTrustedLocalBlender(BLENDER_MODEL_NEEDS_TRUSTED_LOCAL);
 
 /**
- * Run one build. `job` is `{ mode: 'build', workspace, src, out, quality }`.
+ * Run one job: `{ mode: 'build', workspace, src, out, quality }`, or
+ * `{ mode: 'review', blend, out, size, views, looks }` (see review.js).
  * Resolves `{ ok, canceled, error, traceback }` (see runBlenderDriverScript).
  */
 export async function runBlenderModelDriver({ tool, job, signal, onEvent, onLog }) {

@@ -23,6 +23,10 @@ vi.mock('../services/apiBlenderModels.js', () => ({
   getBlenderModelBuildReport: vi.fn(), getBlenderModelBuildLog: vi.fn(),
   updateBlenderModelReferenceSource: vi.fn(), addBlenderModelCloseup: vi.fn(), removeBlenderModelCloseup: vi.fn(), previewBlenderModelReference: vi.fn(),
   renderBlenderModelReference: vi.fn(), attachBlenderModelReferenceImage: vi.fn(), reviewBlenderModelReference: vi.fn(), createBlenderModelPartsBrief: vi.fn(),
+  renderBlenderModelReview: vi.fn(), cancelBlenderModelReview: vi.fn(), getBlenderModelReviewLog: vi.fn(),
+  addBlenderModelCamera: vi.fn(), updateBlenderModelCamera: vi.fn(), removeBlenderModelCamera: vi.fn(),
+  addBlenderModelDifference: vi.fn(), updateBlenderModelDifference: vi.fn(), removeBlenderModelDifference: vi.fn(),
+  blenderModelReviewFileUrl: (_id, buildId, name) => `/review/${buildId}/${name}`,
   blenderModelBuildFileUrl: (id, buildId, name) => `/api/blender-models/${id}/builds/${buildId}/files/${name}`,
   blenderModelAssetUrl: (id) => `/api/blender-models/${id}/asset`,
 }));
@@ -229,6 +233,126 @@ describe('BlenderModelDetail', () => {
     serve(modelState());
     await userEvent.click(retry);
     expect(await screen.findByRole('heading', { name: 'Example lamp' })).toBeInTheDocument();
+  });
+
+  describe('Compare', () => {
+    const sheet = { id: 'overall', role: 'overall', words: '', approvedImageId: 'img-1', file: 'refs/overall.png', locked: false, outOfDate: false, images: [{ id: 'img-1', filename: 'sheet.png', status: 'approved' }] };
+    const plate = { ...sheet, id: 'closeup-1', role: 'closeup', mechanism: 'Hinge', file: 'refs/hinge.png', images: [{ id: 'img-1', filename: 'hinge.png', status: 'approved' }] };
+    const review = (buildId, extra = {}) => ({ buildId, renderedAt: '2026-01-01T00:00:00.000Z', sizeMeters: { x: 1, y: 1, z: 1 }, views: ['front', 'top', 'camera-1'], sheets: [], outOfDate: false, outdatedCameraIds: [], ...extra });
+    const hinge = { id: 'camera-1', label: 'Hinge front', referenceId: 'closeup-1', crop: { x: 0.5, y: 0, width: 0.5, height: 1 }, view: null, orbit: { azimuth: 30, elevation: 10, distance: 0.4, lens: 85, partId: 'shade', target: [0, 0, 0.45] } };
+    const compared = (extra = {}) => modelState({
+      builds: [build(A), build(B)], references: [sheet, plate], cameras: [hinge], differences: [], reviews: [review(B), review(A, { outOfDate: true })], ...extra,
+    });
+
+    it('shows a reference beside two builds from the camera, surface and builds in the URL', async () => {
+      const user = userEvent.setup();
+      serve(compared());
+      renderAt(`/3d/blender/${ID}/compare?cam=top&look=clay&vs=${A}`);
+      const left = await screen.findByRole('figure', { name: /Build A/ });
+      expect(within(left).getByRole('img')).toHaveAttribute('src', `/review/${B}/top-clay.png`);
+      const right = screen.getByRole('figure', { name: /Build B/ });
+      expect(within(right).getByRole('img')).toHaveAttribute('src', `/review/${A}/top-clay.png`);
+      expect(within(right).getByText(/Out of date/)).toBeInTheDocument();
+      expect(within(left).queryByText(/Out of date/)).toBeNull();
+      expect(screen.getByRole('img', { name: 'Overall sheet reference' })).toHaveAttribute('src', '/data/images/sheet.png');
+
+      await user.selectOptions(screen.getByLabelText('Reference'), 'closeup-1');
+      await user.click(screen.getByRole('button', { name: 'Textured' }));
+      await user.selectOptions(screen.getByLabelText('Build B'), '');
+      expect(screen.getByLabelText('Current location')).toHaveTextContent(`/3d/blender/${ID}/compare?cam=top&ref=closeup-1`);
+      expect(screen.queryByRole('figure', { name: /Build B/ })).toBeNull();
+
+      // A saved camera brings its own reference and panel.
+      await user.selectOptions(screen.getByLabelText('Camera'), 'camera-1');
+      expect(screen.getByRole('img', { name: 'Hinge reference' })).toHaveAttribute('src', '/data/images/hinge.png');
+      expect(screen.getByRole('img', { name: 'Hinge reference' }).style.left).toBe('-100%');
+      expect(within(left).getByRole('img')).toHaveAttribute('src', `/review/${B}/camera-1-textured.png`);
+      expect(screen.getByLabelText('Reference')).toBeDisabled();
+    });
+
+    it('says what is not rendered or no longer matches, and renders again', async () => {
+      const user = userEvent.setup();
+      serve(compared({ reviews: [review(B, { outdatedCameraIds: ['camera-1'] })] }));
+      api.renderBlenderModelReview.mockResolvedValue({ job: { id: 'bj-1' } });
+      renderAt(`/3d/blender/${ID}/compare?cam=camera-1&vs=${A}`);
+      const left = await screen.findByRole('figure', { name: /Build A/ });
+      expect(within(left).getByText(/camera changed since/)).toBeInTheDocument();
+      expect(within(screen.getByRole('figure', { name: /Build B/ })).getByText('Not rendered yet.')).toBeInTheDocument();
+      await user.click(within(left).getByRole('button', { name: 'Render again' }));
+      expect(api.renderBlenderModelReview).toHaveBeenCalledWith(ID, B, { silent: true });
+    });
+
+    it('saves a new camera with its panel, and keeps the aim point when an orbit is edited', async () => {
+      const user = userEvent.setup();
+      serve(compared());
+      renderAt(`/3d/blender/${ID}/compare`);
+      await user.click(await screen.findByRole('button', { name: 'New camera' }));
+      expect(screen.getByRole('button', { name: 'Save camera' })).toBeDisabled();
+      await user.type(screen.getByLabelText('Camera name'), 'Sheet top');
+      await user.selectOptions(screen.getByLabelText('Seen from'), 'top');
+      await user.clear(screen.getByLabelText('Width'));
+      await user.type(screen.getByLabelText('Width'), '150');
+      expect(screen.getByRole('button', { name: 'Save camera' })).toBeDisabled();
+      await user.clear(screen.getByLabelText('Width'));
+      await user.type(screen.getByLabelText('Width'), '25');
+      api.addBlenderModelCamera.mockResolvedValue(compared({ cameras: [hinge, { ...hinge, id: 'camera-2', label: 'Sheet top', view: 'top', orbit: null }] }));
+      await user.click(screen.getByRole('button', { name: 'Save camera' }));
+      expect(api.addBlenderModelCamera).toHaveBeenCalledWith(ID, { label: 'Sheet top', referenceId: 'overall', crop: { x: 0, y: 0, width: 0.25, height: 1 }, view: 'top' }, { silent: true });
+      expect(await screen.findByLabelText('Current location')).toHaveTextContent('cam=camera-2');
+
+      await user.selectOptions(screen.getByLabelText('Camera'), 'camera-1');
+      await user.click(screen.getByRole('button', { name: 'Edit camera' }));
+      await user.clear(screen.getByLabelText(/Azimuth/));
+      await user.type(screen.getByLabelText(/Azimuth/), '45');
+      api.updateBlenderModelCamera.mockResolvedValue(compared());
+      await user.click(screen.getByRole('button', { name: 'Save camera' }));
+      expect(api.updateBlenderModelCamera).toHaveBeenCalledWith(ID, 'camera-1', expect.objectContaining({ orbit: { ...hinge.orbit, azimuth: 45 } }), { silent: true });
+    });
+
+    it('records a difference, closes it on the shown build, and puts open ones in the brief', async () => {
+      const user = userEvent.setup();
+      serve(compared());
+      renderAt(`/3d/blender/${ID}/compare?build=${A}`);
+      await user.type(await screen.findByLabelText('Difference'), 'No hinge pin');
+      await waitFor(() => expect(screen.getByRole('option', { name: 'Shade' })).toBeInTheDocument());
+      await user.selectOptions(screen.getByLabelText('Part (optional)'), 'shade');
+      const open = { id: 'difference-1', text: 'No hinge pin', partId: 'shade', referenceId: 'overall', status: 'open', reason: '', closedBuildId: null };
+      const accepted = { ...open, id: 'difference-2', text: 'Rounder base', status: 'accepted', reason: 'Easier to print', closedBuildId: A };
+      api.addBlenderModelDifference.mockResolvedValue(compared({ differences: [accepted, open] }));
+      await user.click(screen.getByRole('button', { name: 'Add' }));
+      expect(api.addBlenderModelDifference).toHaveBeenCalledWith(ID, { text: 'No hinge pin', partId: 'shade', referenceId: 'overall' }, { silent: true });
+      expect(await screen.findByRole('heading', { name: 'Differences · 1 open' })).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Copy agent brief' }));
+      const brief = copyToClipboard.mock.lastCall[0];
+      for (const text of ['difference-1: No hinge pin (part shade, src/refs/overall.png)', 'Rounder base: Easier to print', `renders/reviews/${B}/`, 'Hinge front: src/refs/hinge.png -> orbit azimuth 30']) expect(brief).toContain(text);
+      expect(brief).not.toContain('difference-2:');
+
+      api.updateBlenderModelDifference.mockResolvedValue(compared({ differences: [accepted] }));
+      await user.click(screen.getByRole('button', { name: 'Accept…' }));
+      await user.type(screen.getByLabelText('Why is this intended?'), 'Glued');
+      await user.click(screen.getByRole('button', { name: 'Accept' }));
+      expect(api.updateBlenderModelDifference).toHaveBeenLastCalledWith(ID, 'difference-1', { status: 'accepted', reason: 'Glued', buildId: A }, { silent: true });
+      await user.click(await screen.findByRole('button', { name: 'Reopen' }));
+      expect(api.updateBlenderModelDifference).toHaveBeenLastCalledWith(ID, 'difference-2', { status: 'open' }, { silent: true });
+    });
+
+    it('takes differences before the first build, and cancels a review job by its own route', async () => {
+      const user = userEvent.setup();
+      serve(compared({ builds: [], reviews: [], differences: [] }));
+      const { unmount } = renderAt(`/3d/blender/${ID}/compare`);
+      expect(await screen.findByText(/Build the model to compare/)).toBeInTheDocument();
+      expect(screen.getByLabelText('Difference')).toBeEnabled();
+      unmount();
+      serve(compared({ jobs: [{ id: 'bj-2', kind: 'review', status: 'running', buildId: B, index: 3, total: 14, startedAt: new Date().toISOString() }] }));
+      api.cancelBlenderModelReview.mockResolvedValue({ ok: true });
+      renderAt(`/3d/blender/${ID}/builds`);
+      const job = within(await screen.findByRole('list', { name: 'Jobs' })).getByRole('listitem');
+      expect(job).toHaveTextContent('Review renders');
+      await user.click(within(job).getByRole('button', { name: 'Cancel' }));
+      expect(api.cancelBlenderModelReview).toHaveBeenCalledWith(ID, B, { silent: true });
+      expect(api.cancelBlenderModelBuild).not.toHaveBeenCalled();
+    });
   });
 
   describe('References', () => {

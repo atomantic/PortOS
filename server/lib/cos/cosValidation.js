@@ -998,10 +998,10 @@ export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().d
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
   appId: nullishString,
-  provider: nonEmptyString.optional(),
+  provider: z.preprocess(emptyToUndefined, providerRefSchema.optional()),
   model: nonEmptyString.optional(),
-  effort: z.string().trim().nullable().optional(),
-  executionOptions: z.record(z.unknown()).optional(),
+  effort: effortUpdateSchema,
+  executionOptions: executionOptionsSchema.optional(),
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });
