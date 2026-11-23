@@ -13,8 +13,7 @@ import { adoptPathDirs, findCommandOnPath, safeChildProcessEnv, safeChildProcess
 import { expandHome, sleep } from '../lib/fileUtils.js';
 import { createDaemonWatcher, pm2ArgValue, LLAMA_APP } from '../lib/managedDaemon.js';
 import { execFile } from '../lib/childProcess.js';
-import { resolveSpecModelPath } from '../lib/specDecodePresets.js';
-import { parseSpecTypes, isDraftSpecType } from '../lib/specDecodePresets.js';
+import { parseSpecTypes, isDraftSpecType, resolveSpecModelPath } from '../lib/specDecodePresets.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isPortInUse } from '../lib/platform.js';
 import {
