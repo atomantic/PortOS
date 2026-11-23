@@ -1503,6 +1503,27 @@ describe('universe-builder routes', () => {
     });
   });
 
+  describe('PATCH /:id/canon/:kind/lock-all', () => {
+    it('is not shadowed by /:entryId: bulk locks and unlocks every entry of the kind', async () => {
+      const app = buildApp();
+      const created = await request(app).post('/api/universe-builder').send({
+        name: 'Bulk lock fixture',
+        characters: [{ id: 'c1', name: 'Alice' }, { id: 'c2', name: 'Bob' }],
+      });
+      const url = `/api/universe-builder/${created.body.id}/canon/character/lock-all`;
+      const locked = await request(app).patch(url).send({ locked: true });
+      expect(locked.status).toBe(200);
+      expect(locked.body).toMatchObject({ kind: 'character', locked: true, total: 2 });
+      expect(locked.body.universe.characters.every(c => c.locked === true)).toBe(true);
+      const unlocked = await request(app).patch(url).send({ locked: false });
+      expect(unlocked.status).toBe(200);
+      expect(unlocked.body).toMatchObject({ locked: false, changed: 2, total: 2 });
+      expect(unlocked.body.universe.characters.every(c => c.locked === false)).toBe(true);
+      const invalid = await request(app).patch(url).send({ locked: 'yes' });
+      expect(invalid.status).toBe(400);
+    });
+  });
+
   describe('DELETE /:id/canon/:kind/:entryId', () => {
     it('removes the entry from its canon bucket and returns the removed record', async () => {
       removeCanonEntryMock.mockClear();
