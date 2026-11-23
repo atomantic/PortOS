@@ -49,26 +49,32 @@ const LEGACY_MANIFEST_KINDS = new Set(['mediaCollection', 'universe', 'series', 
 export const PEER_MANIFEST_VERSION = 1;
 export const isLegacyManifestKind = (kind) => LEGACY_MANIFEST_KINDS.has(kind);
 
+// Null-prototype so a hostile `kind` like "constructor" can't resolve to an Object.prototype member.
+// Completeness against PEER_SUBSCRIBABLE_KINDS is pinned in integrity.test.js.
+export const INTEGRITY_RECORD_LISTERS = Object.assign(Object.create(null), {
+  mediaCollection: () => listCollections({ includeDeleted: true }),
+  universe: () => listUniverses({ includeDeleted: true }),
+  series: () => listSeries({ includeDeleted: true }),
+  fableLoom: () => listLooms({ includeDeleted: true }),
+  author: () => listAuthors({ includeDeleted: true }),
+  artist: () => listArtists({ includeDeleted: true }),
+  album: () => listAlbums({ includeDeleted: true }),
+  track: () => listTracks({ includeDeleted: true }),
+  creativeDirectorProject: () => listCreativeDirectorProjects({ includeDeleted: true }),
+  moodBoard: () => listBoards({ includeDeleted: true }),
+  musicVideoProject: () => listMusicVideoProjects({ includeDeleted: true }),
+  writersRoomWork: () => listWorksForIntegrity(),
+  writersRoomFolder: () => listFoldersForIntegrity(),
+  writersRoomExercise: () => listExercisesForIntegrity(),
+  commissionFeedback: () => listCommissionFeedbackForIntegrity(),
+  creativeCommission: () => listCommissionsForIntegrity(),
+  deck: () => listDecksForIntegrity(),
+  storyboard: () => listStoryboardsForIntegrity(),
+});
+
 async function recordsForKind(kind) {
-  if (kind === 'mediaCollection') return listCollections({ includeDeleted: true });
-  if (kind === 'universe') return listUniverses({ includeDeleted: true });
-  if (kind === 'series') return listSeries({ includeDeleted: true });
-  if (kind === 'fableLoom') return listLooms({ includeDeleted: true });
-  if (kind === 'author') return listAuthors({ includeDeleted: true });
-  if (kind === 'artist') return listArtists({ includeDeleted: true });
-  if (kind === 'album') return listAlbums({ includeDeleted: true });
-  if (kind === 'track') return listTracks({ includeDeleted: true });
-  if (kind === 'creativeDirectorProject') return listCreativeDirectorProjects({ includeDeleted: true });
-  if (kind === 'moodBoard') return listBoards({ includeDeleted: true });
-  if (kind === 'musicVideoProject') return listMusicVideoProjects({ includeDeleted: true });
-  if (kind === 'writersRoomWork') return listWorksForIntegrity();
-  if (kind === 'writersRoomFolder') return listFoldersForIntegrity();
-  if (kind === 'writersRoomExercise') return listExercisesForIntegrity();
-  if (kind === 'commissionFeedback') return listCommissionFeedbackForIntegrity();
-  if (kind === 'creativeCommission') return listCommissionsForIntegrity();
-  if (kind === 'deck') return listDecksForIntegrity();
-  if (kind === 'storyboard') return listStoryboardsForIntegrity();
-  return [];
+  const lister = INTEGRITY_RECORD_LISTERS[kind];
+  return lister ? lister() : [];
 }
 
 /**

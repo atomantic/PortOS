@@ -9,7 +9,9 @@ import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { getPeers, resolveEffectiveCategories } from '../instances.js';
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']);
+import { KIND_TO_CATEGORY } from '../../lib/instanceSyncCategories.js';
+
+export { PEER_SUBSCRIBABLE_KINDS, KIND_TO_CATEGORY } from '../../lib/instanceSyncCategories.js';
 
 /**
  * The optional top-level keys a NEWER sender may attach to a push envelope beyond the
@@ -108,28 +110,6 @@ export function withStateLock(fn) {
   writeTail = next.catch(() => {});
   return next;
 }
-
-// Subscribable record kind → the per-peer `syncCategories` key gating auto-subscribe (inverse of syncOrchestrator.js `categoriesCoveredByPeerSync`).
-export const KIND_TO_CATEGORY = Object.freeze({
-  universe: 'universe',
-  series: 'pipeline',
-  mediaCollection: 'mediaCollections',
-  author: 'authors',
-  artist: 'artists',
-  album: 'albums',
-  track: 'tracks',
-  creativeDirectorProject: 'creativeDirectorProjects',
-  moodBoard: 'moodBoards',
-  fableLoom: 'fableLoom',
-  writersRoomWork: 'writersRoomWorks',
-  writersRoomFolder: 'writersRoomFolders',
-  writersRoomExercise: 'writersRoomExercises',
-  musicVideoProject: 'musicVideoProjects',
-  commissionFeedback: 'commissionFeedback',
-  creativeCommission: 'creativeCommissions',
-  deck: 'decks',
-  storyboard: 'storyboards',
-});
 
 // The half every outbound predicate shares: the peer exists, is not disabled, and the relationship was
 // established FROM here. Absent/empty `directions` is legacy (permissive); `['inbound']` is a peer that

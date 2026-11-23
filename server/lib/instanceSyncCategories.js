@@ -117,3 +117,36 @@ export function allSyncCategoriesOn() {
   return Object.fromEntries(Object.keys(DEFAULT_SYNC_CATEGORIES).map((k) => [k, true]));
 }
 
+
+// Subscribable per-record kind → the per-peer `syncCategories` key gating auto-subscribe (inverse of
+// syncOrchestrator.js `categoriesCoveredByPeerSync`). Single source: the server validators, instance
+// toggle backfill, integrity listers and the client controls all derive from it (#17724). `series`
+// rides the `pipeline` category (it bundles child issues at push time).
+export const KIND_TO_CATEGORY = Object.freeze({
+  universe: 'universe',
+  series: 'pipeline',
+  mediaCollection: 'mediaCollections',
+  author: 'authors',
+  artist: 'artists',
+  album: 'albums',
+  track: 'tracks',
+  creativeDirectorProject: 'creativeDirectorProjects',
+  moodBoard: 'moodBoards',
+  fableLoom: 'fableLoom',
+  writersRoomWork: 'writersRoomWorks',
+  writersRoomFolder: 'writersRoomFolders',
+  writersRoomExercise: 'writersRoomExercises',
+  musicVideoProject: 'musicVideoProjects',
+  commissionFeedback: 'commissionFeedback',
+  creativeCommission: 'creativeCommissions',
+  deck: 'decks',
+  storyboard: 'storyboards',
+});
+
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(Object.keys(KIND_TO_CATEGORY));
+
+// `[category, kind]` pairs: categories whose records ride the per-record push pipeline, so a false→true
+// toggle backfills existing local records of that kind.
+export const PER_RECORD_CATEGORY_KINDS = Object.freeze(
+  Object.entries(KIND_TO_CATEGORY).map(([kind, cat]) => Object.freeze([cat, kind])),
+);

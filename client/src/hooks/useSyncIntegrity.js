@@ -8,17 +8,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getInstances } from '../services/apiSystem.js';
 import { fetchSyncIntegrity } from '../services/apiPeerSync.js';
-
-/**
- * Maps a record kind to the `syncCategories` key that gates whether a peer
- * participates in syncing that kind. Mirrors `KIND_TO_CATEGORY` in
- * `server/services/sharing/peerSync.js`.
- */
-const KIND_TO_CATEGORY = Object.freeze({
-  universe: 'universe',
-  series: 'pipeline',
-  mediaCollection: 'mediaCollections',
-});
+import { KIND_TO_CATEGORY } from '../../../server/lib/instanceSyncCategories.js';
 
 /**
  * Worst-case status ranking — lower index = worse / more actionable.
