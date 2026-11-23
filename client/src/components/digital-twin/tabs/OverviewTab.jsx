@@ -119,7 +119,9 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     // request() owns the failure toast, but the spinner must clear either way:
     // an uncaught rejection here left `saving` true, stranding the button
     // permanently disabled on "Saving..." with no way to retry.
-    const ok = await updateSoulSettings(settingsForm).then(saved => {
+    const tokens = Number(settingsForm.maxContextTokens);
+    const payload = { ...settingsForm, maxContextTokens: Math.min(100000, Math.max(1000, Number.isFinite(tokens) && tokens > 0 ? tokens : 4000)) };
+    const ok = await updateSoulSettings(payload).then(saved => {
       onSettingsChange?.(saved);
       return true;
     }).catch(() => false);
@@ -317,8 +319,9 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
                   max={100000}
                   value={settingsForm.maxContextTokens ?? 4000}
                   onChange={(e) => {
-                    const next = parseInt(e.target.value, 10);
-                    if (Number.isNaN(next)) return;
+                    // '' while the field is cleared mid-edit; never store NaN.
+                    const next = e.target.value === '' ? '' : parseInt(e.target.value, 10);
+                    if (next !== '' && Number.isNaN(next)) return;
                     setSettingsForm({ ...settingsForm, maxContextTokens: next });
                   }}
                   className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
