@@ -239,8 +239,27 @@ than eight speculative ones. Author each clip against the model's assembled pose
 starts from exactly the "position"/"rotationDegrees"/"scale" the part carries in "parts".
 `;
 
+export const THREEJS_REFERENCE_ROLES = ['front', 'side', 'back', 'top', 'turnaround-sheet', 'close-up'];
+export const MAX_THREEJS_REFERENCE_IMAGES = 5;
+
+// Empty string for no references, so a model without them keeps the exact
+// prompt it always had. Images are attached in this same order after the primary.
+export function buildReferenceImagesBlock(references = []) {
+  if (!Array.isArray(references) || references.length === 0) return '';
+  const lines = references.map((ref, index) => {
+    const label = ref.label ? ` — ${ref.label}` : '';
+    return `- Reference ${index + 1} (${ref.role}${label}): ${ref.path}`;
+  });
+  return `
+ADDITIONAL REFERENCE IMAGES (attached after the primary image, in this order; local agents can open the paths):
+${lines.join('\n')}
+The primary image wins on identity and color. These views only supply hidden sides and construction detail (mechanisms, joints, undersides). Where a reference disagrees with the primary image, follow the primary image and record the disagreement in "limitations".
+`;
+}
+
 export function buildThreejsGenerationPrompt({
   sourcePath,
+  references = [],
   name,
   prompt = '',
   currentSpec = null,
@@ -274,7 +293,7 @@ REFERENCE IMAGE:
 - A local/CLI/TUI agent can inspect the same image at: ${sourcePath}
 - Target name: ${name}
 - User direction: ${prompt || 'Faithfully reconstruct the main subject.'}
-${refinement}${familyChecklist}
+${buildReferenceImagesBlock(references)}${refinement}${familyChecklist}
 WORKFLOW:
 1. Inspect the image before deciding geometry.
 2. Classify the subject as object, character, or hybrid.

@@ -3,6 +3,7 @@ import { ArrowLeft, Box, Check, Code2, Download, Eye, Info, LoaderCircle, Refres
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import ReferenceImagesEditor from '../components/threejsModels/ReferenceImagesEditor';
 import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect';
 import ThreejsModelPreview from '../components/threejsModels/ThreejsModelPreview';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -321,6 +322,7 @@ export default function ThreejsModelDetail() {
   const [effort, setEffort] = useState('');
   const { families, status: familiesStatus, retry: retryFamilies } = useThreejsModelFamilies();
   const [family, setFamily] = useState(GENERAL_FAMILY_ID);
+  const [referenceImages, setReferenceImages] = useState([]);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [, setSearchParams] = useSearchParams();
   // Bumped on every "Show in preview" so the same moment can be requested again
@@ -367,6 +369,10 @@ export default function ThreejsModelDetail() {
     setFamily(record?.family || GENERAL_FAMILY_ID);
   }, [record?.id]);
 
+  useEffect(() => {
+    setReferenceImages(record?.referenceImages || []);
+  }, [record?.id]);
+
   const handleGenerate = async () => {
     if (!selectedProviderId || record?.status === 'generating') return;
     setStarting(true);
@@ -381,6 +387,8 @@ export default function ThreejsModelDetail() {
       // Resolved against the served taxonomy so what is sent is what the picker
       // is showing, even for a record holding a family this install dropped.
       family: resolveFamilyId(families, family),
+      // Always sent so removing every view clears them instead of keeping the stored set.
+      referenceImages,
       prompt: record.prompt || '',
       feedback: feedback.trim(),
     }, { silent: true }).catch((error) => {
@@ -607,6 +615,19 @@ export default function ThreejsModelDetail() {
             />
           </div>
           <p className="mt-2 break-all text-xs text-gray-500">{record.sourceImage?.filename}</p>
+          {record.referenceImages?.length > 0 && (
+            <div className="mt-3">
+              <h2 className="text-[10px] uppercase tracking-wide text-gray-500">Reference views</h2>
+              <ul className="mt-1 grid grid-cols-3 gap-1">
+                {record.referenceImages.map((ref) => (
+                  <li key={ref.filename} title={`${ref.role}${ref.label ? ` — ${ref.label}` : ''}`}>
+                    <MediaImage src={`/data/images/${encodeURIComponent(ref.filename)}`} alt={`${ref.role} reference`} className="aspect-square w-full rounded object-cover" />
+                    <span className="block truncate text-[10px] text-gray-500">{ref.role}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {record.spec?.summary && <p className="mt-3 text-xs leading-relaxed text-gray-300">{record.spec.summary}</p>}
           {record.spec?.limitations?.length > 0 && (
             <div className="mt-3">
@@ -645,6 +666,7 @@ export default function ThreejsModelDetail() {
           layout="stacked"
         />
         <div>
+          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={generating} />
           <SubjectFamilySelect
             id="threejs-family"
             families={families}
