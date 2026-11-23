@@ -2,7 +2,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MockEventSource, lastEventSource } from '../test/mockEventSource.js';
 import useMusicVideoExcerpts from './useMusicVideoExcerpts.js';
-import { getMusicVideoProject, renderMusicVideoExcerpt } from '../services/apiMusicVideo.js';
+import toast from '../components/ui/Toast';
+import { getMusicVideoProject, renderMusicVideoExcerpt, cancelMusicVideoExcerptRender } from '../services/apiMusicVideo.js';
 
 vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoProject: vi.fn(), renderMusicVideoExcerpt: vi.fn(),
@@ -55,4 +56,29 @@ it('does not reattach its own settled job while the terminal refresh is still pe
   act(() => lastEventSource().emit({ type: 'complete' }));
   expect(result.current.rendering).toBe(false);
   expect(MockEventSource.instances).toHaveLength(1);
+});
+
+it('reloads the project and toasts when an excerpt cancel returns { ok: false }, ignoring double-clicks', async () => {
+  const project = { id: 'first', excerpts: [{ id: 'draft-job', status: 'rendering' }] };
+  const fresh = { id: 'first', excerpts: [{ id: 'draft-job', status: 'complete' }] };
+  let resolveCancel;
+  cancelMusicVideoExcerptRender.mockReturnValue(new Promise((r) => { resolveCancel = r; }));
+  getMusicVideoProject.mockResolvedValue(fresh);
+  const replaceProject = vi.fn();
+  const { result } = renderHook(() => useMusicVideoExcerpts({ project, replaceProject }));
+  act(() => { result.current.cancelExcerpt('draft-job'); result.current.cancelExcerpt('draft-job'); });
+  expect(cancelMusicVideoExcerptRender).toHaveBeenCalledTimes(1);
+  expect(result.current.cancellingId).toBe('draft-job');
+  await act(async () => resolveCancel({ ok: false }));
+  await waitFor(() => expect(replaceProject).toHaveBeenCalledWith(fresh));
+  expect(toast.error).toHaveBeenCalledWith('This draft render is no longer running — refreshed status');
+  expect(result.current.cancellingId).toBe(null);
+});
+
+it('toasts the error when an excerpt cancel request rejects', async () => {
+  cancelMusicVideoExcerptRender.mockRejectedValue(new Error('Synthetic 500'));
+  const { result } = renderHook(() => useMusicVideoExcerpts({ project: { id: 'first', excerpts: [] }, replaceProject: vi.fn() }));
+  await act(async () => result.current.cancelExcerpt('draft-job'));
+  expect(toast.error).toHaveBeenCalledWith('Synthetic 500');
+  expect(result.current.cancellingId).toBe(null);
 });

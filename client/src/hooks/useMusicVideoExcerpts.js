@@ -47,6 +47,8 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   const seenJobs = useRef(new Set());
   const [noteBusyId, setNoteBusyId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [cancellingId, setCancellingId] = useState(null);
+  const cancellingRef = useRef(null);
 
   // Reload the project the render was STARTED for, not whichever one is
   // currently selected — `job.start` below captures `projectId` as the slot's
@@ -94,8 +96,21 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   };
   // An excerpt's id IS its render job id, so any rendering excerpt — including
   // one started before a reload, or by a revision — can be cancelled by id.
-  const cancelExcerpt = (excerptId) => cancelMusicVideoExcerptRender(excerptId, { silent: true })
-    .catch((err) => toast.error(err?.message || 'Failed to cancel the excerpt render'));
+  // `{ ok: false }` means the server no longer tracks the job (already settled/cleared), so
+  // reload the persisted record or the card stays on a dead "Checking render status" state.
+  const cancelExcerpt = (excerptId) => {
+    if (cancellingRef.current === excerptId) return Promise.resolve();
+    cancellingRef.current = excerptId;
+    setCancellingId(excerptId);
+    return cancelMusicVideoExcerptRender(excerptId, { silent: true })
+      .then((res) => {
+        if (res?.ok !== false) return;
+        reload(projectId);
+        toast.error('This draft render is no longer running — refreshed status');
+      })
+      .catch((err) => toast.error(err?.message || 'Failed to cancel the excerpt render'))
+      .finally(() => { cancellingRef.current = null; setCancellingId(null); });
+  };
 
   const deleteExcerpt = (excerptId) => {
     setDeletingId(excerptId);
@@ -136,6 +151,7 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
     connected: job.connected,
     progress: job.active && job.context === projectId ? job.percent : 0,
     deletingId,
+    cancellingId,
     noteBusyId,
     startExcerpt,
     cancelExcerpt,
