@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepOrphanedTestProcesses, sweepStaleRunRoots, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot, testProcessSettlement } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -201,24 +201,23 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
-  it('retains pending identities through partial inventories until terminal evidence permits root removal', () => {
+  it('keeps a root while its signalled child is still in the snapshot and removes it once gone', () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-pending-'));
     const root = join(host, 'pvt-owned'); mkdirSync(root);
     writeFileSync(join(root, '.owner.pid'), '999999 0\n');
     const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
-    const child = { pid: 900001, ppid: 1, start: 'original', env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+    const child = { pid: 900001, ppid: 1, start: 'original', args: ['node'], env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
     const terminate = vi.fn();
-    const sweep = records => sweepStaleRunRoots(host, { read: () => [...ancestors, ...records], probe: () => false, probePid: () => true, terminate });
+    const sweep = (records, probePid = () => true) => sweepStaleRunRoots(host, { read: () => [...ancestors, ...records], probe: () => false, probePid, terminate });
     try {
       sweep([child]);
       expect(terminate).toHaveBeenCalledTimes(1);
-      sweep([{ pid: child.pid, ppid: 1, start: child.start }]);
+      sweep([child]);
       expect(existsSync(root)).toBe(true);
-      sweep([]); // omitted rows plus a live PID remain unknown
+      sweep([{ pid: child.pid, ppid: 1, start: child.start }]); // partial inventory with a live PID stays unknown
       expect(existsSync(root)).toBe(true);
-      sweep([{ pid: child.pid, ppid: 1, start: 'replacement', args: ['node'], env: {} }]);
+      sweep([]);
       expect(existsSync(root)).toBe(false);
-      expect(terminate).toHaveBeenCalledTimes(1); // no signal to a replacement identity
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -237,7 +236,7 @@ describe('test process ownership boundaries', () => {
       sweepStaleRunRoots(host, { read, probe: () => ownerAlive });
       expect(kill).toHaveBeenCalledExactlyOnceWith(target.pid, 'SIGTERM');
       sweepStaleRunRoots(host, { read: () => null, probe: () => false, probePid: () => true });
-      expect(existsSync(root)).toBe(true); // unknown settlement cannot erase a prior pending stamp
+      expect(existsSync(root)).toBe(true); // no snapshot cannot prove the child gone
       sweepStaleRunRoots(host, { read: () => [...ancestors, { pid: target.pid, ppid: 1, start: target.start }], probe: () => false, probePid: () => true });
       expect(existsSync(root)).toBe(true); // a partial inventory cannot erase the still-live identity
       target.start = 'reused';
@@ -267,6 +266,147 @@ describe('test process ownership boundaries', () => {
       expect(lstatSync(link).isSymbolicLink()).toBe(true);
     } finally { kill.mockRestore(); rmSync(host, { recursive: true, force: true }); }
   });
+
+  it.skipIf(process.platform === 'win32')('darwin reader skips foreign-euid setuid rows on EPERM via PROC_PIDT_SHORTBSDINFO while keeping SZOMB terminal and failing closed on unreadable same-euid rows', () => {
+    const reader = fileURLToPath(new URL('./lib/darwinTestProcesses.py', import.meta.url));
+    const python = process.platform === 'darwin' ? '/usr/bin/python3' : 'python3';
+    const harness = `
+import ctypes, errno, importlib.util, json, struct, sys
+
+spec = importlib.util.spec_from_file_location('darwinTestProcesses', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+# Test rows:
+# 1001: normal live same-uid process (readable args/env)
+# 1002: setuid-root /usr/bin/login (EPERM on BSDINFO, SHORTBSDINFO pbsi_uid=0 != 501, kill succeeds)
+# 1003: SZOMB same-uid zombie (BSDINFO with arg=1 returns pbi_status=5, KERN_PROCARGS2 fails)
+# 1004: genuinely unreadable live same-euid process (EPERM on BSDINFO, SHORTBSDINFO pbsi_uid=501)
+# 1005: EPERM on BSDINFO, SHORTBSDINFO fails (0) while kill succeeds
+# 1006: EPERM on BSDINFO, SHORTBSDINFO returns mismatched pbsi_pid while kill succeeds
+# 1007: non-EPERM failure (EIO) on BSDINFO while kill succeeds (must not fall back to SHORTBSDINFO)
+# 1008: exited process (ESRCH on BSDINFO and ESRCH on kill)
+state = {'errno': 0}
+
+def pack_bsd(pid, ppid, uid, status, sec=100, usec=200):
+    return mod.BSDINFO_LAYOUT.pack(
+        0, status, 0, pid, ppid, uid, 20, uid, 20, uid, 20, 0,
+        b'node'.ljust(16, b'\\0'), b'node'.ljust(32, b'\\0'),
+        0, pid, 0, 0, 0, 0, sec, usec,
+    )
+
+def pack_short(pid, ppid, uid, ruid, status=2):
+    return mod.SHORT_BSDINFO_LAYOUT.pack(
+        pid, ppid, pid, status, b'login'.ljust(16, b'\\0'), 0,
+        uid, 0, ruid, 20, uid, 0, 0,
+    )
+
+class FakeLibProc:
+    def proc_pidinfo(self, pid, flavor, arg, buf, size):
+        arg_val = arg.value if hasattr(arg, 'value') else arg
+        if flavor == mod.PROC_PIDTBSDINFO:
+            if pid == 1001:
+                raw = pack_bsd(1001, 1, 501, 2)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            if pid == 1003:
+                if arg_val != 1:
+                    state['errno'] = errno.ESRCH
+                    return 0
+                raw = pack_bsd(1003, 1001, 501, 5, sec=101, usec=300)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            if pid in (1002, 1004, 1005, 1006):
+                state['errno'] = errno.EPERM
+                return 0
+            if pid == 1007:
+                state['errno'] = errno.EIO
+                return 0
+            state['errno'] = errno.ESRCH
+            return 0
+        if flavor == mod.PROC_PIDT_SHORTBSDINFO:
+            if pid == 1002:
+                raw = pack_short(1002, 1, 0, 501)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            if pid == 1004:
+                raw = pack_short(1004, 1, 501, 501)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            if pid == 1006:
+                raw = pack_short(9999, 1, 0, 501)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            if pid == 1007:
+                raw = pack_short(1007, 1, 0, 501)
+                ctypes.memmove(buf, raw, len(raw))
+                return len(raw)
+            state['errno'] = errno.EPERM
+            return 0
+        return 0
+
+class FakeLibC:
+    def sysctl(self, mib, namelen, oldp, oldlenp, newp, newlen):
+        pid = mib[2]
+        if pid != 1001:
+            return -1
+        payload = struct.pack('i', 1) + b'/bin/node\\0/bin/node\\0NODE_ENV=test\\0'
+        length_obj = oldlenp._obj
+        if oldp is None:
+            length_obj.value = len(payload)
+            return 0
+        ctypes.memmove(oldp, payload, len(payload))
+        length_obj.value = len(payload)
+        return 0
+
+def fake_kill(pid, sig):
+    if pid == 1008:
+        raise OSError(errno.ESRCH, 'No such process')
+
+def set_err(value):
+    state['errno'] = value
+
+rows = mod.snapshot(
+    [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008],
+    libc=FakeLibC(),
+    libproc=FakeLibProc(),
+    get_errno=lambda: state['errno'],
+    set_errno=set_err,
+    getuid=lambda: 501,
+    kill=fake_kill,
+)
+print(json.dumps(rows))
+`;
+    const run = spawnSync(python, ['-I', '-S', '-c', harness, reader], { encoding: 'utf8' });
+    expect(run.error).toBeUndefined();
+    expect(run.status, run.stderr).toBe(0);
+    const rows = JSON.parse(run.stdout);
+    expect(rows).toEqual([
+      { pid: 1001, ppid: 1, start: '100:200', terminal: false, args: ['/bin/node'], env: { NODE_ENV: 'test' } },
+      { pid: 1003, ppid: 1001, start: '101:300', terminal: true },
+      { pid: 1004, ownershipComplete: false },
+      { pid: 1005, ownershipComplete: false },
+      { pid: 1006, ownershipComplete: false },
+      { pid: 1007, ownershipComplete: false },
+    ]);
+
+    const host = mkdtempSync(join(tmpdir(), 'recovery-darwin-inspect-'));
+    try {
+      const ancestors = [
+        { pid: process.pid, ppid: process.ppid, start: 'self', terminal: false, args: ['node'], env: {} },
+        { pid: process.ppid, ppid: 1, start: 'parent', terminal: false, args: ['node'], env: {} },
+      ];
+      const completeRows = rows.filter(row => row.ownershipComplete !== false);
+      expect(sweepOrphanedTestProcesses(host, {
+        read: () => [...ancestors, ...completeRows],
+        probePid: () => true,
+      }).inspected).toBe(true);
+      expect(sweepOrphanedTestProcesses(host, {
+        read: () => [...ancestors, ...rows],
+        probePid: () => true,
+      }).inspected).toBe(false);
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
 });
 
 describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', () => {
@@ -288,6 +428,15 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       } while (!current?.[0]?.terminal && Date.now() < deadline);
       expect(current).toEqual([expect.objectContaining({ pid: child.pid, start: record.start, terminal: true })]);
       expect(testProcessSettlement(record, current, () => true)).toBe('terminated');
+      if (process.platform === 'darwin') {
+        const host = mkdtempSync(join(tmpdir(), 'recovery-darwin-full-'));
+        try {
+          const result = sweepOrphanedTestProcesses(host);
+          expect(result.inspected).toBe(true);
+          expect(result.records).toContainEqual(expect.objectContaining({ pid: child.pid, start: record.start, terminal: true }));
+          expect(result.records.filter(item => item.ownershipComplete === false)).toEqual([]);
+        } finally { rmSync(host, { recursive: true, force: true }); }
+      }
     } finally {
       child.kill('SIGKILL');
       await closed;
@@ -365,7 +514,6 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
-      expect(verifyPendingTestProcesses(dead, { read })).toBe(true);
       sweepStaleRunRoots(host, { read }); // both individually verified descendants have settled
       expect(existsSync(dead)).toBe(false);
       expect(existsSync(live)).toBe(true);

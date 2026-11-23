@@ -34,6 +34,7 @@ import {
   resampleTo16k,
   rmsLevel,
 } from '../lib/callAudioBridge';
+import { getVoiceConfig } from '../services/apiVoice';
 
 // A worklet has to be loaded from a URL, and this one is four lines, so it is
 // built from source at runtime rather than carried as a separate build entry.
@@ -52,6 +53,17 @@ registerProcessor('portos-call-tap', CallTapProcessor);
 
 const DEFAULT_INPUT_LABEL = 'BlackHole 16ch';
 const DEFAULT_OUTPUT_LABEL = 'BlackHole 2ch';
+const DEFAULT_LABELS = { input: DEFAULT_INPUT_LABEL, output: DEFAULT_OUTPUT_LABEL };
+
+// Device labels come from Settings > Voice (facetime.blackHole*Label); a failed
+// read keeps the stock names so the host still works offline from config.
+const loadDeviceLabels = () => Promise.resolve().then(() => getVoiceConfig({ silent: true }))
+  .then((cfg) => ({
+    input: cfg?.facetime?.blackHole16chLabel || DEFAULT_INPUT_LABEL,
+    output: cfg?.facetime?.blackHole2chLabel || DEFAULT_OUTPUT_LABEL,
+  }))
+  .catch(() => DEFAULT_LABELS);
+
 const LEVEL_INTERVAL_MS = 100;
 const LEVEL_DEADBAND = 0.002;
 const MODES = ['call', 'capture'];
@@ -84,6 +96,13 @@ export default function VoiceCallHost() {
   // mode switch between mount and the next attach/detach isn't missed.
   const modeRef = useRef(mode);
   modeRef.current = mode;
+
+  const [labels, setLabels] = useState(DEFAULT_LABELS);
+  useEffect(() => {
+    let cancelled = false;
+    loadDeviceLabels().then((next) => { if (!cancelled) setLabels((prev) => (prev.input === next.input && prev.output === next.output ? prev : next)); });
+    return () => { cancelled = true; };
+  }, []);
 
   const [blocked, setBlocked] = useState(null);
   const [attached, setAttached] = useState(false);
@@ -205,25 +224,26 @@ export default function VoiceCallHost() {
     }
 
     const currentMode = modeRef.current;
+    const deviceLabels = await loadDeviceLabels();
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
     if (generation !== startGenRef.current) {
       releaseStartLock();
       return;
     }
     const problem = describeDeviceProblem(devices, {
-      inputLabel: DEFAULT_INPUT_LABEL,
+      inputLabel: deviceLabels.input,
       // Capture only listens — it never plays a reply back, so it has no
       // BlackHole 2ch requirement.
-      outputLabel: currentMode === 'call' ? DEFAULT_OUTPUT_LABEL : undefined,
+      outputLabel: currentMode === 'call' ? deviceLabels.output : undefined,
     });
     if (problem) {
       setBlocked(problem);
       releaseStartLock();
       return;
     }
-    const input = devices.find((device) => device.label === DEFAULT_INPUT_LABEL && device.kind === 'audioinput');
+    const input = devices.find((device) => device.label === deviceLabels.input && device.kind === 'audioinput');
     const output = currentMode === 'call'
-      ? devices.find((device) => device.label === DEFAULT_OUTPUT_LABEL && device.kind === 'audiooutput')
+      ? devices.find((device) => device.label === deviceLabels.output && device.kind === 'audiooutput')
       : null;
 
     let stream;
@@ -241,7 +261,7 @@ export default function VoiceCallHost() {
         },
       });
     } catch (error) {
-      if (generation === startGenRef.current) setBlocked(`Could not open ${DEFAULT_INPUT_LABEL}: ${error.message}`);
+      if (generation === startGenRef.current) setBlocked(`Could not open ${deviceLabels.input}: ${error.message}`);
       releaseStartLock();
       return;
     }
@@ -513,9 +533,9 @@ export default function VoiceCallHost() {
         <h1 className="flex items-center gap-2 text-xl font-semibold text-white"><PhoneCall size={20} />Call host</h1>
         <p className="text-sm text-gray-400">
           Keep this tab open on the Mac running PortOS. In <strong>Call</strong> mode it carries the
-          audio for a FaceTime Audio call: FaceTime plays into {DEFAULT_INPUT_LABEL}, and PortOS
-          answers through {DEFAULT_OUTPUT_LABEL}. In <strong>Capture system audio</strong> mode it only
-          listens to {DEFAULT_INPUT_LABEL} and transcribes — route any meeting app's output there via a
+          audio for a FaceTime Audio call: FaceTime plays into {labels.input}, and PortOS
+          answers through {labels.output}. In <strong>Capture system audio</strong> mode it only
+          listens to {labels.input} and transcribes — route any meeting app's output there via a
           Multi-Output Device to capture it into the daily journal and the Brain inbox.
         </p>
       </header>

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { TABS } from '../components/models/ModelsTabsHeader';
 
@@ -81,6 +81,16 @@ const renderAt = (path) => render(
 );
 
 describe('Models', () => {
+  it('opens Coding benchmarks from Comparison and returns to the unchanged general view', async () => {
+    renderAt('/models/comparison');
+    expect(await screen.findByText('comparison panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Coding benchmarks' }));
+    expect(await screen.findByRole('heading', { name: 'Coding benchmark comparison' })).toBeInTheDocument();
+    expect(screen.queryByText('comparison panel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'General intelligence' }));
+    expect(await screen.findByText('comparison panel')).toBeInTheDocument();
+  });
+
   it('names every destination served outside /models', () => {
     // Asserted by id, not as a count: a moved or newly promoted destination must
     // be identified here, not hidden by a count that still happens to match.

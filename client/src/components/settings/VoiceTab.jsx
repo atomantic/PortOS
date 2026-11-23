@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
 import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -15,6 +15,7 @@ import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FormField from '../ui/FormField';
 import ListLoadError from '../ui/ListLoadError';
+import useMounted from '../../hooks/useMounted';
 import useListResource from '../../hooks/useListResource';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
@@ -72,6 +73,8 @@ export function VoiceTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
+  const [configError, setConfigError] = useState(null);
+  const mountedRef = useMounted();
   // Raw text of the Traits input while it has uncommitted edits; null means "show
   // the saved list". Parsing per keystroke would drop typed commas and spaces.
   const [traitsText, setTraitsText] = useState(null);
@@ -100,6 +103,11 @@ export function VoiceTab() {
   };
 
   const currentEngine = cfg?.tts?.engine;
+  // Piper download callbacks resolve long after the click; they must see the
+  // engine/mount state at resolve time, not the closure from the click.
+  const mountedRef = useMounted();
+  const currentEngineRef = useRef(currentEngine);
+  currentEngineRef.current = currentEngine;
 
   // The selected engine's voice catalog. A failed read renders an error row with
   // Retry rather than an empty picker that offers only the saved voice.
@@ -150,11 +158,26 @@ export function VoiceTab() {
     loadProviders();
   }, [loadProviders]);
 
+  // Config and status load independently: a failed status probe only degrades
+  // the status badges, and a failed config shows a retryable error row instead
+  // of an endless spinner. Silent: ListLoadError is the failure UI.
+  const loadConfig = useCallback(() => {
+    setLoading(true);
+    setConfigError(null);
+    getVoiceStatus({ silent: true })
+      .then((s) => { if (mountedRef.current) setStatus(s); })
+      .catch(() => { if (mountedRef.current) setStatus(null); });
+    return getVoiceConfig({ silent: true })
+      .then((config) => { if (mountedRef.current) setCfg(config); })
+      .catch((err) => { if (mountedRef.current) setConfigError(err instanceof Error ? err : new Error('Request failed')); })
+      .finally(() => { if (mountedRef.current) setLoading(false); });
+  }, [mountedRef]);
+
   useEffect(() => {
-    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
-      .then(([config, s]) => { setCfg(config); setStatus(s); })
-      .catch(() => toast.error('Failed to load voice settings'))
-      .finally(() => setLoading(false));
+    loadConfig();
+  }, [loadConfig]);
+
+  useEffect(() => {
     listVoiceEngines({ silent: true })
       .then((data) => {
         const engines = Array.isArray(data?.engines) ? data.engines : [];
@@ -301,6 +324,7 @@ export function VoiceTab() {
     }
   };
 
+  if (!loading && !cfg) return <ListLoadError what="voice settings" error={configError} onRetry={loadConfig} />;
   if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
 
   const facetime = cfg.facetime || {};
@@ -563,9 +587,17 @@ export function VoiceTab() {
                   setDownloadingVoice(val);
                   fetchPiperVoice(val, { silent: true })
                     .then(() => listVoices('piper', { silent: true }))
-                    .then((fresh) => setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []))
-                    .catch((err) => toast.error(`Voice download failed: ${err.message}`))
-                    .finally(() => setDownloadingVoice(null));
+                    .then((fresh) => {
+                      if (mountedRef.current && currentEngineRef.current === 'piper') {
+                        setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []);
+                      }
+                    })
+                    .catch((err) => {
+                      if (mountedRef.current) toast.error(`Voice download failed: ${err.message}`);
+                    })
+                    .finally(() => {
+                      if (mountedRef.current) setDownloadingVoice((prev) => (prev === val ? null : prev));
+                    });
                 }
               }}
               className={`${inputCls} flex-1`}

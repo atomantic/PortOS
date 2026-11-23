@@ -16,7 +16,11 @@ import { throwApiError } from '../services/apiCore';
 // broadcasting `paused` (budget/non-convergence/canon gate) and then closing
 // the SSE server-side, so the client must treat it as stream-ending. Inert for
 // other consumers — no other runner emits a `paused` frame.
-const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error', 'paused']);
+// `conflict` is terminal too: the Writers Room polish runner stops cleanly by
+// broadcasting `conflict` when a concurrent edit invalidates its expected
+// content hash, so the client closes the stream immediately instead of
+// waiting for teardown and retrying.
+const TERMINAL_TYPES = new Set(['complete', 'canceled', 'cancelled', 'error', 'paused', 'conflict']);
 
 /** True when a frame is one of the stream-ending types this hook closes on. */
 export const isTerminalSseFrame = (frame) => TERMINAL_TYPES.has(frame?.type);

@@ -11,8 +11,6 @@ vi.mock('../../services/apiLocalLlm.js', () => ({
 }));
 
 vi.mock('../../services/apiVoice.js', () => ({
-  getTtsStatus: vi.fn(async () => ({ kokoro: { state: 'lazy', loadedKey: null } })),
-  unloadKokoroTts: vi.fn(),
   controlWhisper: vi.fn(),
   getVoiceStatus: vi.fn(async () => ({ sttEngine: 'piper', services: {} })),
 }));
@@ -22,7 +20,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import { getLoadedLlmModels, unloadLmStudioModel } from '../../services/apiLocalLlm.js';
-import { getTtsStatus, getVoiceStatus } from '../../services/apiVoice.js';
+import { getVoiceStatus } from '../../services/apiVoice.js';
 import toast from '../ui/Toast';
 import MemoryManagement from './MemoryManagement.jsx';
 
@@ -34,7 +32,6 @@ describe('MemoryManagement', () => {
       lmstudio: [{ id: 'example/lmstudio-model', state: 'loaded' }],
     });
     unloadLmStudioModel.mockResolvedValue({ success: true });
-    getTtsStatus.mockResolvedValue({ kokoro: { state: 'lazy', loadedKey: null } });
     getVoiceStatus.mockResolvedValue({ sttEngine: 'piper', services: {} });
   });
 
@@ -56,7 +53,6 @@ describe('MemoryManagement', () => {
     expect(await screen.findByText('example/lmstudio-model')).toBeInTheDocument();
 
     getLoadedLlmModels.mockRejectedValueOnce(new Error('LLM status failed'));
-    getTtsStatus.mockRejectedValueOnce(new Error('TTS status failed'));
     getVoiceStatus.mockRejectedValueOnce(new Error('voice status failed'));
     fireEvent.click(screen.getByRole('button', { name: 'Unload listed resources' }));
 
@@ -71,7 +67,8 @@ describe('MemoryManagement', () => {
     render(<MemoryManagement />);
 
     expect(await screen.findByText(/does not measure free system memory/i)).toBeInTheDocument();
-    expect(screen.getByText(/Ollama, LM Studio, Whisper and Kokoro only/)).toBeInTheDocument();
+    expect(screen.getByText(/Ollama, LM Studio and Whisper only/)).toBeInTheDocument();
+    expect(screen.queryByText(/Kokoro/)).not.toBeInTheDocument();
     expect(screen.queryByText(/full unified memory/i)).not.toBeInTheDocument();
   });
 

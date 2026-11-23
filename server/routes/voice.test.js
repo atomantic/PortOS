@@ -368,6 +368,26 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
     });
 
+    it('accepts a legacy trigger key by stripping it instead of returning 400', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const res = await request(buildApp()).put('/api/voice/config').send({ trigger: 'hotword', enabled: true });
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith({ enabled: true });
+    });
+
+    it('broadcasts personality on voice:config:changed, null when disabled', async () => {
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const emit = vi.fn();
+      const personality = { name: 'Example', speechStyle: 'calm' };
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: true, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality }));
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: false, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality: null }));
+    });
+
     it('accepts Qwen3-TTS engine and voice configuration', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
       bootstrap.reconcile.mockResolvedValue({ skipped: true });

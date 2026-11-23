@@ -151,7 +151,13 @@ export async function addBlenderModelCloseup(id, mechanism) {
 export const removeBlenderModelCloseup = (id, referenceId) => serialize(id, async () => {
   const slot = requireSlot(await requireModel(id), referenceId);
   if (slot.role !== 'closeup') throw conflict('The overall sheet cannot be removed.', 'BLENDER_MODEL_OVERALL_REQUIRED');
-  await store.mutateModel(id, (current) => ({ ...current, references: slotsOf(current).filter((entry) => entry.id !== referenceId) }));
+  await store.mutateModel(id, (current) => ({
+    ...current,
+    references: slotsOf(current).filter((entry) => entry.id !== referenceId),
+    // What was compared against the plate goes with it; a recorded difference stays.
+    cameras: (current.cameras || []).filter((camera) => camera.referenceId !== referenceId),
+    differences: (current.differences || []).map((entry) => (entry.referenceId === referenceId ? { ...entry, referenceId: null } : entry)),
+  }));
   if (slot.file) await removeReferenceFile(id, slot.file);
 });
 

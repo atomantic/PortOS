@@ -29,7 +29,6 @@ export const DEFAULT_VOICE_BACKEND = 'ollama';
 
 export const VOICE_DEFAULTS = Object.freeze({
   enabled: false,
-  trigger: 'push-to-talk',
   hotkey: 'Space',
 
   // FaceTime control-plane configuration is machine-local.  It is deliberately
@@ -182,10 +181,18 @@ export const expandPath = expandHome;
 // manually via invalidateVoiceConfigCache() from the reconcile flow.
 let cachedConfig = null;
 
+// `voice.trigger` was never read; strip it from persisted configs so old data
+// does not linger and the strict route schema never sees it.
+const stripRetiredKeys = (voice) => {
+  if (!voice || typeof voice !== 'object') return voice || {};
+  const { trigger: _trigger, ...rest } = voice;
+  return rest;
+};
+
 export const getVoiceConfig = async () => {
   if (cachedConfig) return cachedConfig;
   const settings = await getSettings();
-  cachedConfig = deepMerge(VOICE_DEFAULTS, settings.voice || {});
+  cachedConfig = deepMerge(VOICE_DEFAULTS, stripRetiredKeys(settings.voice));
   cachedConfig.tts = migrateRetiredTtsConfig(cachedConfig.tts);
   return cachedConfig;
 };
@@ -194,8 +201,8 @@ export const invalidateVoiceConfigCache = () => { cachedConfig = null; };
 
 export const updateVoiceConfig = async (patch) => {
   const settings = await getSettings();
-  const current = deepMerge(VOICE_DEFAULTS, settings.voice || {});
-  const next = deepMerge(current, patch || {});
+  const current = deepMerge(VOICE_DEFAULTS, stripRetiredKeys(settings.voice));
+  const next = deepMerge(current, stripRetiredKeys(patch));
   next.tts = migrateRetiredTtsConfig(next.tts);
   if (next.tts.retiredEngine === null) delete next.tts.retiredEngine;
   await updateSettings({ voice: next });

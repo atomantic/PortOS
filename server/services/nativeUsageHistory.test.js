@@ -212,6 +212,30 @@ describe('native usage history', () => {
     });
   });
 
+  it.each([['per-prompt', false], ['cumulative', true]])('streams a 150k-line multi-day %s Grok session without a RangeError', async (_name, cumulative) => {
+    const base = Date.parse('2026-07-18T00:00:00Z');
+    const lines = [];
+    const expected = {};
+    let running = 0;
+    for (let i = 0; i < 150_000; i += 1) {
+      const ms = base + i * 1000;
+      if (i % 1000 === 0) {
+        // Per-prompt sizes alternate so the sequence is not monotone (which would read as cumulative).
+        const own = (i / 1000) % 2 ? 5 : 10;
+        running += own;
+        const day = new Date(ms).toISOString().slice(0, 10);
+        expected[day] = (expected[day] || 0) + own;
+        lines.push(JSON.stringify(grokTurn(`p${i}`, ms, { inputTokens: cumulative ? running : own, outputTokens: 0 })));
+      } else {
+        lines.push(JSON.stringify({ params: { sessionId: 'grok-session', _meta: { agentTimestampMs: ms }, update: { sessionUpdate: 'agent_message_chunk' } } }));
+      }
+    }
+    await write(join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'), 'grok-session', 'updates.jsonl'), lines.join('\n') + '\n');
+    const result = await history.NATIVE_USAGE_STORES.grok.refresh({ home, force: true, now: NOW });
+    for (const [day, input] of Object.entries(expected)) expect(result.days[day]['example-grok'].input).toBe(input);
+    expect(Object.keys(expected).length).toBeGreaterThan(1);
+  });
+
   it('keeps a Grok 4.7 fast turn on grok-4.7 with both the long and fast subsets', async () => {
     await write(join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'), 'grok-session', 'updates.jsonl'), jsonl([
       grokTurn('fast-long', Date.parse('2026-07-19T10:00:00Z'), { inputTokens: 250000, cachedReadTokens: 0, outputTokens: 5 }, 'grok-4.7[fast=true]'),

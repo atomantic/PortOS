@@ -1,6 +1,6 @@
 /**
- * Lifecycle pieces for the curated Safetensors import in ollamaManager.js:
- * the supervised `ollama create` child and the staged-checkpoint directory it
+ * Curated Hugging Face Safetensors import for Ollama (single caller:
+ * localLlm.js), split out of ollamaManager.js: the supervised `ollama create` child and the staged-checkpoint directory it
  * reads from.
  *
  * Neither the Ollama CLI nor its HTTP client puts a deadline on `create`, so a
@@ -23,7 +23,23 @@ import { spawn } from '../lib/childProcess.js'
 import { atomicWrite, safeJSONParse, sleep } from '../lib/fileUtils.js'
 import { killWithEscalation } from '../lib/killWithEscalation.js'
 import { findOpenFileHolders } from '../lib/openFileHolders.js'
+import { createWriteStream } from 'fs'
+import { dirname } from 'path'
+import { Readable, Transform } from 'stream'
+import { pipeline } from 'stream/promises'
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
+import { describeFetchError } from '../lib/fetchErrorChain.js'
+import { ensureDir } from '../lib/fileUtils.js'
+import { buildHfAuthHeaders, buildHfResolveUrl, HF_API } from '../lib/huggingfaceLora.js'
+import { commandExists } from '../lib/commandExists.js'
+import { compareSemver } from '../lib/versionUtils.js'
+import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
+import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
+import { checkOllamaAvailable, getVersion, getModelsDir, bustInstalledModelsCache } from './ollamaManager.js'
 
+const HF_IMPORT_METADATA_TIMEOUT_MS = 180_000
+// Model ids with a Safetensors import running in this process.
+const activeImports = new Set()
 const STAGING_PREFIX = 'portos-ollama-hf-import-'
 const MARKER_NAME = 'portos-import.json'
 const CREATE_IDLE_LIMIT_MS = 10 * 60_000
@@ -270,4 +286,238 @@ export async function removeImportStaging(tempRoot) {
   await rm(tempRoot, { recursive: true, force: true }).catch((err) => {
     console.error(`❌ Ollama Safetensors import cleanup failed: ${err.message}`)
   })
+}
+
+function hfImportError(status, statusText) {
+  if (status === 401 || status === 403) {
+    return 'Hugging Face denied access. Accept the repository terms, then configure a Hugging Face token in Settings.'
+  }
+  return `Hugging Face request failed: ${status} ${statusText}`
+}
+
+async function downloadHfImportFile({ repo, remotePath, destination, headers, progress }) {
+  const url = buildHfResolveUrl(repo, 'main', remotePath)
+  try {
+    const response = await fetchWithTimeout(url, { headers }, 0)
+    if (!response.ok || !response.body) throw new Error(hfImportError(response.status, response.statusText))
+    await ensureDir(dirname(destination))
+    const tracker = new Transform({
+      transform(chunk, _encoding, callback) {
+        progress(chunk.length)
+        callback(null, chunk)
+      }
+    })
+    await pipeline(Readable.fromWeb(response.body), tracker, createWriteStream(destination))
+  } catch (err) {
+    if (!(err instanceof TypeError) || !/^(fetch failed|terminated)$/.test(err.message)) throw err
+    throw new Error('Hugging Face checkpoint download was interrupted. Check the connection and retry the installation.', { cause: err })
+  }
+}
+
+/**
+ * Download a curated Hugging Face Safetensors subdirectory and import it through
+ * Ollama's supported `ollama create` path. The caller supplies only catalog-owned
+ * recipes; arbitrary free-text ids continue through pullModel instead.
+ *
+ * The create step is supervised (see ollamaSafetensorsImport.js): a silent
+ * create resolves `OLLAMA_IMPORT_STALLED`, or `OLLAMA_IMPORT_HELD` with
+ * `stagingRetained: true` when PortOS cannot prove nothing still reads the
+ * staged checkpoint — a retry then reuses that staging.
+ *
+ * @param {{ modelId: string, repo: string, subdir: string, minVersion?: string }} spec
+ * @param {(p: { status: string, percent: number|null, completed?: number, total?: number, importing?: boolean }) => void} [onProgress]
+ */
+export async function importModelFromHfSafetensors(spec, onProgress) {
+  const { modelId } = spec
+  // One import per model at a time: a second would mistake the first's live
+  // staging for one left behind. Checked before any network round-trip.
+  if (activeImports.has(modelId)) {
+    return { success: false, error: `${modelId} is already being imported.`, modelId, code: 'OLLAMA_IMPORT_IN_PROGRESS' }
+  }
+  activeImports.add(modelId)
+  try {
+    return await prepareSafetensorsImport(spec, onProgress)
+  } finally {
+    activeImports.delete(modelId)
+  }
+}
+
+async function prepareSafetensorsImport(spec, onProgress) {
+  const { modelId, repo, subdir, minVersion = '0.19.0' } = spec
+  if (!(await checkOllamaAvailable())) {
+    return { success: false, error: 'Ollama not available', modelId }
+  }
+  const version = await getVersion()
+  if (!version || compareSemver(version.replace(/^v/, ''), minVersion.replace(/^v/, '')) < 0) {
+    return {
+      success: false,
+      error: `This MLX import requires Ollama ${minVersion} or newer${version ? ` (installed: ${version})` : ''}.`,
+      modelId,
+      code: 'OLLAMA_OUTDATED'
+    }
+  }
+  const { getHfToken } = await import('./hfToken.js')
+  const token = await getHfToken()
+  if (!token) {
+    return {
+      success: false,
+      error: 'This gated model requires a Hugging Face token. Accept the repository terms, then configure a token in Settings.',
+      modelId,
+      code: 'HF_TOKEN_REQUIRED'
+    }
+  }
+  if (!(await commandExists('ollama', ['--version']))) {
+    return { success: false, error: 'The Ollama CLI is required to import Safetensors models.', modelId }
+  }
+
+  const headers = buildHfAuthHeaders(token)
+  const metadataUrl = `${HF_API}/${repo}?blobs=true`
+  const metadataResponse = await fetchWithTimeout(metadataUrl, { headers }, HF_IMPORT_METADATA_TIMEOUT_MS)
+    .catch((err) => ({ _err: describeFetchError(err) }))
+  if (metadataResponse._err) return { success: false, error: metadataResponse._err, modelId }
+  if (!metadataResponse.ok) {
+    return { success: false, error: hfImportError(metadataResponse.status, metadataResponse.statusText), modelId }
+  }
+  const metadata = await metadataResponse.json().catch(() => null)
+  const prefix = `${subdir.replace(/\/+$/, '')}/`
+  const files = (metadata?.siblings || [])
+    .filter((file) => typeof file.rfilename === 'string' && file.rfilename.startsWith(prefix))
+    .map((file) => ({
+      remotePath: file.rfilename,
+      relativePath: file.rfilename.slice(prefix.length),
+      size: Number(file.lfs?.size ?? file.size) || 0
+    }))
+    .filter((file) => isSafeHfRepoRelativePath(file.relativePath))
+  if (!files.some((file) => file.relativePath.endsWith('.safetensors')) || !files.some((file) => file.relativePath === 'config.json')) {
+    return { success: false, error: `The ${subdir} checkpoint is incomplete or unavailable on Hugging Face.`, modelId }
+  }
+
+  // Resolve-not-throw, like every other failure here. A staging write that
+  // throws leaves its marker behind; the next attempt reuses or retires it.
+  return runSafetensorsImport({ modelId, repo, subdir, files, headers, onProgress })
+    .catch((err) => ({ success: false, error: err.message, modelId }))
+}
+
+const heldImportResult = (modelId, error, reason) => ({
+  success: false,
+  modelId,
+  code: 'OLLAMA_IMPORT_HELD',
+  stagingRetained: true,
+  error: `${error} Ollama may still be reading the downloaded checkpoint (${reason}), so PortOS kept it instead of deleting it. Retry the installation to reuse it without downloading again.`
+})
+
+async function runSafetensorsImport({ modelId, repo, subdir, files, headers, onProgress }) {
+  let tempRoot = null
+  let reuse = false
+  // A staging directory from an earlier attempt (a stalled create, or a
+  // PortOS restart mid-import) is reused when it holds the whole checkpoint;
+  // an incomplete one is retired only once nothing holds it open.
+  await sweepImportStaging({ modelId, activeModelIds: activeImports })
+    .catch((err) => console.error(`❌ Safetensors staging sweep failed: ${err.message}`))
+  const retained = await findImportStaging(modelId)
+  if (retained) {
+    // Equal file sizes alone could pass a checkpoint from another repo or
+    // subdir off as this one; a marker that cannot name its source is retired.
+    const sameSource = retained.marker.repo === repo && retained.marker.subdir === subdir
+    const complete = sameSource && await stagedFilesComplete(join(retained.tempRoot, 'model'), files)
+    if (complete) {
+      // Reusing is non-destructive, but stacking a second create on one the
+      // daemon is still running is not; wait only for a holder we can see.
+      const release = await awaitStagingRelease(retained.tempRoot, { attempts: 1 })
+      if (release.pids?.length) {
+        return heldImportResult(modelId, `A previous import of ${modelId} is still running.`, release.reason)
+      }
+      tempRoot = retained.tempRoot
+      reuse = true
+      console.log(`♻️ Reusing retained Safetensors staging for ${modelId}`)
+    } else if (retained.marker.phase === 'downloading') {
+      // `ollama create` never started, so no other process ever read it.
+      await removeImportStaging(retained.tempRoot)
+    } else {
+      const release = await awaitStagingRelease(retained.tempRoot, { attempts: 1 })
+      if (!release.free) {
+        return heldImportResult(modelId, `A previous import of ${modelId} left a checkpoint it cannot reuse.`, release.reason)
+      }
+      await removeImportStaging(retained.tempRoot)
+    }
+  }
+
+  // This import writes the checkpoint TWICE — once staged under `tmpdir()`,
+  // once more when `ollama create` below lands it in the models dir — on
+  // volumes that can differ (a temp partition, or OLLAMA_MODELS pointed at
+  // external storage). The outer installModel() preflight only checked one
+  // copy against one of those volumes using a catalog-string size estimate;
+  // this uses the real per-file bytes this import already fetched from HF.
+  const total = files.reduce((sum, file) => sum + file.size, 0)
+  if (!reuse) {
+    const stagingPreflight = await assessDownloadPreflight({ destPath: tmpdir(), expectedBytes: total })
+    if (stagingPreflight.verdict === DOWNLOAD_VERDICTS.INSUFFICIENT) {
+      return { success: false, error: diskInsufficientError(stagingPreflight).message, modelId, code: 'DISK_INSUFFICIENT' }
+    }
+  }
+  const modelsDirPreflight = await assessDownloadPreflight({ destPath: getModelsDir(), expectedBytes: total })
+  if (modelsDirPreflight.verdict === DOWNLOAD_VERDICTS.INSUFFICIENT) {
+    return { success: false, error: diskInsufficientError(modelsDirPreflight).message, modelId, code: 'DISK_INSUFFICIENT' }
+  }
+
+  if (!tempRoot) tempRoot = await createImportStaging({ modelId, repo, subdir })
+  const modelDir = join(tempRoot, 'model')
+  if (!reuse) {
+    let completed = 0
+    let lastPercent = -1
+    const reportBytes = (bytes) => {
+      completed += bytes
+      const percent = total > 0 ? Math.min(100, Math.floor((completed / total) * 100)) : null
+      if (percent === lastPercent) return
+      lastPercent = percent
+      if (typeof onProgress === 'function') onProgress({ status: 'downloading MLX checkpoint', percent, completed, total })
+    }
+    const downloadError = await (async () => {
+      for (const file of files) {
+        await downloadHfImportFile({
+          repo,
+          remotePath: file.remotePath,
+          destination: join(modelDir, ...file.relativePath.split('/')),
+          headers,
+          progress: reportBytes
+        })
+      }
+    })().then(() => null, (err) => err)
+    if (downloadError) {
+      await removeImportStaging(tempRoot)
+      return { success: false, error: downloadError.message, modelId }
+    }
+  }
+
+  const modelfile = join(tempRoot, 'Modelfile')
+  await atomicWrite(modelfile, `FROM ${modelDir}\n`)
+  await updateImportStaging(tempRoot, { phase: 'creating' })
+  const report = (status) => {
+    if (typeof onProgress === 'function') onProgress({ status, percent: null, importing: true })
+  }
+  report('importing checkpoint into Ollama')
+  const outcome = await runSupervisedOllamaCreate({
+    modelId,
+    modelfile,
+    onStatus: (line) => report(`importing: ${line}`),
+    probeProgress: () => blobStoreSignature(getModelsDir())
+  })
+  if (outcome.status === 'completed') {
+    // A clean CLI exit means the daemon answered the whole create request.
+    await removeImportStaging(tempRoot)
+    bustInstalledModelsCache()
+    console.log(`✅ Ollama Safetensors import complete: ${modelId}`)
+    return { success: true, modelId }
+  }
+
+  const release = outcome.exited === false
+    ? { free: false, reason: 'the ollama create process did not exit after being stopped' }
+    : await awaitStagingRelease(tempRoot)
+  if (release.free) {
+    await removeImportStaging(tempRoot)
+    return { success: false, error: outcome.error, modelId, ...(outcome.status === 'stalled' ? { code: 'OLLAMA_IMPORT_STALLED' } : {}) }
+  }
+  await updateImportStaging(tempRoot, { phase: 'retained', retainedAt: new Date().toISOString(), reason: release.reason })
+  console.log(`⏭️ Kept Safetensors staging for ${modelId}: ${release.reason}`)
+  return heldImportResult(modelId, outcome.error, release.reason)
 }

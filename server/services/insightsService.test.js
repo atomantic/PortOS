@@ -19,7 +19,7 @@ vi.mock('./aiProvider.js', async (importOriginal) => {
 // mock that omits it breaks the import outright.
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, atomicWrite: vi.fn(), ensureDir: vi.fn(), readJSONFile: vi.fn() };
+  return { ...actual, atomicWrite: vi.fn(), ensureDir: vi.fn(), readJSONFile: vi.fn(), unlinkGuarded: vi.fn() };
 });
 vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
@@ -31,12 +31,13 @@ vi.mock('./meatspaceHealth.js', () => ({ getBloodTests: vi.fn().mockResolvedValu
 vi.mock('./appleHealthQuery.js', () => ({ getCorrelationData: vi.fn().mockResolvedValue(null) }));
 
 import { callProviderAISimple } from './aiProvider.js';
-import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { getActiveProvider } from './provider/providers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
 import {
   getThemeAnalysis,
   getCrossDomainNarrative,
+  clearCrossDomainNarrative,
   generateThemeAnalysis,
   refreshCrossDomainNarrative,
 } from './insightsService.js';
@@ -132,5 +133,28 @@ describe('insightsService generation — a provider error never overwrites the c
       themes: [{ title: 'New theme', strength: 'strong' }],
     });
     expect(result.themes).toHaveLength(1);
+  });
+});
+
+describe('clearCrossDomainNarrative', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('unlinks narrative.json and ignores ENOENT idempotently', async () => {
+    unlinkGuarded.mockResolvedValueOnce(undefined);
+    await expect(clearCrossDomainNarrative()).resolves.toBeUndefined();
+    expect(unlinkGuarded).toHaveBeenCalledTimes(1);
+    expect(unlinkGuarded.mock.calls[0][0]).toMatch(/insights[/\\]narrative\.json$/);
+
+    const enoent = Object.assign(new Error('not found'), { code: 'ENOENT' });
+    unlinkGuarded.mockRejectedValueOnce(enoent);
+    await expect(clearCrossDomainNarrative()).resolves.toBeUndefined();
+  });
+
+  it('surfaces non-ENOENT filesystem errors', async () => {
+    const eacces = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    unlinkGuarded.mockRejectedValueOnce(eacces);
+    await expect(clearCrossDomainNarrative()).rejects.toBe(eacces);
   });
 });

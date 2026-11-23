@@ -7,25 +7,60 @@ import struct
 import sys
 
 
-def snapshot():
-    libc = ctypes.CDLL(None, use_errno=True)
-    libproc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-    layout = struct.Struct('=12I16s32s6I2Q')
+PROC_PIDTBSDINFO = 3
+PROC_PIDT_SHORTBSDINFO = 13
+BSDINFO_LAYOUT = struct.Struct('=12I16s32s6I2Q')
+SHORT_BSDINFO_LAYOUT = struct.Struct('=4I16s8I')
+_UNSET = object()
+
+
+def snapshot(
+    requested=_UNSET,
+    *,
+    libc=None,
+    libproc=None,
+    get_errno=ctypes.get_errno,
+    set_errno=ctypes.set_errno,
+    getuid=os.getuid,
+    kill=os.kill,
+):
+    if libc is None:
+        libc = ctypes.CDLL(None, use_errno=True)
+    if libproc is None:
+        libproc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    uid = getuid()
 
     def identity(pid):
-        buf = ctypes.create_string_buffer(layout.size)
+        buf = ctypes.create_string_buffer(BSDINFO_LAYOUT.size)
         # arg=1 includes zombies. A signalled child stays one until its parent
         # reaps it, and only its birth identity proves that the signal landed.
-        if libproc.proc_pidinfo(pid, 3, ctypes.c_uint64(1), buf, layout.size) != layout.size:
+        set_errno(0)
+        rc = libproc.proc_pidinfo(pid, PROC_PIDTBSDINFO, ctypes.c_uint64(1), buf, BSDINFO_LAYOUT.size)
+        if rc != BSDINFO_LAYOUT.size:
+            if rc <= 0 and get_errno() == errno.EPERM:
+                # Setuid processes (e.g. /usr/bin/login with ruid=user, euid=0)
+                # deny PROC_PIDTBSDINFO with EPERM even though os.kill(pid, 0)
+                # succeeds. PROC_PIDT_SHORTBSDINFO exposes pbsi_uid so foreign-euid
+                # rows are excluded without relaxing fail-closed handling for
+                # unreadable same-euid processes.
+                short_buf = ctypes.create_string_buffer(SHORT_BSDINFO_LAYOUT.size)
+                short_rc = libproc.proc_pidinfo(
+                    pid, PROC_PIDT_SHORTBSDINFO, ctypes.c_uint64(1), short_buf, SHORT_BSDINFO_LAYOUT.size
+                )
+                if short_rc == SHORT_BSDINFO_LAYOUT.size:
+                    short_values = SHORT_BSDINFO_LAYOUT.unpack(short_buf.raw)
+                    if short_values[0] == pid and short_values[6] != uid:
+                        return False
             return None
-        values = layout.unpack(buf.raw)
+        values = BSDINFO_LAYOUT.unpack(buf.raw)
         if values[3] != pid:
             return None
-        if values[5] != os.getuid():
+        if values[5] != uid:
             return False
         return {'pid': pid, 'ppid': values[4], 'start': f'{values[-2]}:{values[-1]}', 'terminal': values[1] == 5}
 
-    requested = json.load(sys.stdin)
+    if requested is _UNSET:
+        requested = json.load(sys.stdin)
     inventory = requested is None
     if inventory:
         size = libproc.proc_listpids(1, 0, None, 0)
@@ -46,7 +81,7 @@ def snapshot():
             continue
         if before is None:
             try:
-                os.kill(pid, 0)
+                kill(pid, 0)
             except OSError as error:
                 if error.errno in (errno.ESRCH, errno.EPERM):
                     continue
@@ -98,8 +133,9 @@ def snapshot():
     return result
 
 
-try:
-    print(json.dumps(snapshot()))
-except Exception:
-    # No argv, environment, or OS error payload may escape through diagnostics.
-    sys.exit(1)
+if __name__ == '__main__':
+    try:
+        print(json.dumps(snapshot()))
+    except Exception:
+        # No argv, environment, or OS error payload may escape through diagnostics.
+        sys.exit(1)

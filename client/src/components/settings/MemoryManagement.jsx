@@ -6,7 +6,6 @@
 //   - Ollama models (multiple can be loaded simultaneously) → /api/local-llm/loaded
 //   - LM Studio models → /api/local-llm/loaded
 //   - Whisper STT (PM2 process `portos-whisper`) → /api/voice/status + /api/voice/whisper
-//   - Kokoro TTS (in-process kokoro-js) → /api/voice/tts/status + /api/voice/tts/unload
 //
 // Things NOT covered here on purpose:
 //   - Gemma text encoder for LTX video — only loaded inside the render subprocess, not resident
@@ -16,7 +15,7 @@
 // Shared server samples drive updates; explicit actions own their toast layer.
 
 import { useState, useCallback, useRef } from 'react';
-import { Cpu, Mic, Volume2, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Cpu, Mic, Trash2, Power, PowerOff, RefreshCw, AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -29,7 +28,7 @@ import {
   unloadLmStudioModel,
   unloadOllamaModel,
 } from '../../services/apiLocalLlm.js';
-import { getTtsStatus, unloadKokoroTts, controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
+import { controlWhisper, getVoiceStatus } from '../../services/apiVoice.js';
 
 const SILENT = { silent: true };
 
@@ -38,7 +37,6 @@ const MEMORY_EVENTS = ['loaded-models:changed', 'voice-readiness:changed'];
 const EMPTY_SNAPSHOT = {
   loadedOllama: [],
   loadedLmStudio: [],
-  ttsState: { state: 'lazy', loadedKey: null },
   whisperRunning: false,
   sttEngine: 'whisper',
   unavailableSources: [],
@@ -48,7 +46,6 @@ const EMPTY_SNAPSHOT = {
 const SOURCE_LABELS = {
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
-  tts: 'text-to-speech',
   voice: 'voice services',
 };
 
@@ -71,7 +68,6 @@ function Row({ icon: Icon, title, subtitle, status, action, danger }) {
 export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   const [loadedOllama, setLoadedOllama] = useState([]);
   const [loadedLmStudio, setLoadedLmStudio] = useState([]);
-  const [ttsState, setTtsState] = useState({ state: 'lazy', loadedKey: null });
   const [whisperRunning, setWhisperRunning] = useState(false);
   const [sttEngine, setSttEngine] = useState('whisper');
   const [loading, setLoading] = useState(true);
@@ -103,9 +99,8 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     if (!priority && priorityRefreshRef.current) return snapshotRef.current;
     if (priority) priorityRefreshRef.current = true;
     const generation = ++refreshGenerationRef.current;
-    const [llmResult, ttsResult, voiceResult] = await Promise.allSettled([
+    const [llmResult, voiceResult] = await Promise.allSettled([
       getLoadedLlmModels(priority ? { ...SILENT, fresh: true } : SILENT),
-      getTtsStatus(SILENT),
       getVoiceStatus(SILENT),
     ]);
     // A later-started event/action refresh owns the UI. Return its current
@@ -118,10 +113,8 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
 
     const previous = snapshotRef.current;
     const llm = llmResult.status === 'fulfilled' ? llmResult.value : null;
-    const tts = ttsResult.status === 'fulfilled' ? ttsResult.value : null;
     const voice = voiceResult.status === 'fulfilled' ? voiceResult.value : null;
     const llmValid = Array.isArray(llm?.ollama) && Array.isArray(llm?.lmstudio);
-    const ttsValid = typeof tts?.kokoro?.state === 'string';
     const voiceValid = voice != null && typeof voice === 'object';
     const llmSourceErrors = llmValid && Array.isArray(llm.sourceErrors) ? llm.sourceErrors : [];
       // Distinguish "field absent" from "present-but-empty" so a later failed read
@@ -130,13 +123,11 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     const llmDisabledSources = Array.isArray(llm?.disabled) ? llm.disabled : previous.disabledSources;
     const failedSources = [
       ...(!llmValid ? ['ollama', 'lmstudio'] : llmSourceErrors),
-      ...(!ttsValid ? ['tts'] : []),
       ...(!voiceValid ? ['voice'] : []),
     ];
     const snapshot = {
       loadedOllama: llmValid && !llmSourceErrors.includes('ollama') ? llm.ollama : previous.loadedOllama,
       loadedLmStudio: llmValid && !llmSourceErrors.includes('lmstudio') ? llm.lmstudio : previous.loadedLmStudio,
-      ttsState: ttsValid ? tts.kokoro : previous.ttsState,
       // voice.services.whisper.ok is the "PM2 process responsive" probe in
       // checkAll(). When the service block is missing (status fetch failed)
       // we default to "not running" — false negatives just mean the Stop
@@ -151,7 +142,6 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
     if (!mountedRef.current) return snapshot;
     setLoadedOllama(snapshot.loadedOllama);
     setLoadedLmStudio(snapshot.loadedLmStudio);
-    setTtsState(snapshot.ttsState);
     setWhisperRunning(snapshot.whisperRunning);
     setSttEngine(snapshot.sttEngine);
     setUnavailableSources(snapshot.unavailableSources);
@@ -177,11 +167,6 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   const [unloadLmStudio, unloadingLmStudio] = useAsyncAction(async (modelId) => {
     await unloadLmStudioModel(modelId, SILENT);
     toast.success(`Unloaded ${modelId}`);
-    await refresh();
-  });
-  const [unloadKokoro, unloadingKokoro] = useAsyncAction(async () => {
-    const result = await unloadKokoroTts(SILENT);
-    toast.success(result?.unloaded ? 'Kokoro TTS unloaded' : 'Kokoro was not loaded');
     await refresh();
   });
   const [stopWhisper, stoppingWhisper] = useAsyncAction(async () => {
@@ -212,7 +197,6 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
       ...(!sourceUnknown('ollama') ? fresh.loadedOllama.map((m) => unloadOllamaModel(m.id, SILENT)) : []),
       ...(!sourceUnknown('lmstudio') ? fresh.loadedLmStudio.map((m) => unloadLmStudioModel(m.id, SILENT)) : []),
       !sourceUnknown('voice') && fresh.whisperRunning ? controlWhisper('stop', SILENT) : Promise.resolve(),
-      !sourceUnknown('tts') && fresh.ttsState.state !== 'lazy' ? unloadKokoroTts(SILENT) : Promise.resolve(),
     ]);
     const failed = results.filter((r) => r.status === 'rejected').length;
     if (fresh.unavailableSources.length > 0) {
@@ -234,9 +218,9 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
   }
 
   const anythingLoaded = loadedOllama.length > 0 || loadedLmStudio.length > 0
-    || whisperRunning || ttsState.state !== 'lazy';
+    || whisperRunning;
   const anyActionRunning =
-    unloadingModel || unloadingLmStudio || unloadingKokoro || stoppingWhisper || startingWhisper || freeingAll;
+    unloadingModel || unloadingLmStudio || stoppingWhisper || startingWhisper || freeingAll;
    // The banner is the nag the user can opt out of per backend, so it drops
    // user-disabled backends. The free-everything guard and empty-state check
    // below still use the full unavailableSources, so a disabled-but-running
@@ -252,7 +236,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
             Free unified memory before running large diffusion / video models
           </div>
           <div className="text-xs text-gray-500">
-            This panel checks Ollama, LM Studio, Whisper and Kokoro only. Other runtimes and system memory are not measured.
+            This panel checks Ollama, LM Studio and Whisper only. Other runtimes and system memory are not measured.
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -289,7 +273,7 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
          )}
 
       {loadedOllama.length === 0 && loadedLmStudio.length === 0
-        && !whisperRunning && ttsState.state === 'lazy' && unavailableSources.length === 0 ? (
+        && !whisperRunning && unavailableSources.length === 0 ? (
         <div className="px-3 py-3 text-xs text-gray-500 italic">
           No models or voice services monitored by this panel are reported as loaded. This does not measure free system memory.
         </div>
@@ -352,25 +336,6 @@ export default function MemoryManagement({ onLoadedModelsChange } = {}) {
                 >
                   <PowerOff className="w-3 h-3" />
                   Stop
-                </button>
-              }
-              danger
-            />
-          )}
-          {!ttsState.retired && ttsState.state !== 'lazy' && (
-            <Row
-              icon={Volume2}
-              title="Kokoro TTS"
-              subtitle={ttsState.loadedKey || 'kokoro-js ONNX in-process'}
-              status={ttsState.state === 'loading' ? 'loading…' : 'loaded'}
-              action={
-                <button
-                  type="button"
-                  onClick={unloadKokoro}
-                  disabled={anyActionRunning || ttsState.state === 'loading'}
-                  className={`${btnClass} text-gray-300 border border-port-border hover:bg-port-border/40`}
-                >
-                  Unload
                 </button>
               }
               danger
