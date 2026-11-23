@@ -19,6 +19,7 @@ vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), 
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: router } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const boardEdits = await import('../services/musicVideo/projectBoardEdits.js');
 const { recordEvents } = await import('../services/sharing/recordEvents.js');
 const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 
@@ -185,7 +186,7 @@ describe('board edit replies carry what a reload would show', () => {
   // revisions, which no single edit result can describe.
   it('starting a shot from a frame is one write whose edit folds into the reloaded board', async () => {
     const before = await read();
-    const { scene, edit } = await projects.startSceneFromFrame(project.id, 'b', { imageId: 'spare.png', prompt: 'Out-frame of the previous shot', keepStillAsEnd: true });
+    const { scene, edit } = await boardEdits.startSceneFromFrame(project.id, 'b', { imageId: 'spare.png', prompt: 'Out-frame of the previous shot', keepStillAsEnd: true });
     expect(scene).toMatchObject({ sceneId: 'b', referenceImageId: 'spare.png', endImageId: 'b.png' });
     expect(edit.baseUpdatedAt).toBe(before.updatedAt);
     expect(applyMusicVideoEdit(before, edit)).toEqual(await read());

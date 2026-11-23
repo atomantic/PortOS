@@ -2,6 +2,8 @@
 // 'music-video') in step with the subjects it cast from Casting, Environments
 // and Objects, so a catalog record shows which videos use it. The subjects keep
 // their own name/description snapshot; only the link lives in the catalog.
+// The caller hands in the project store's `getProject`, so this module, which
+// the store imports, never imports it back.
 
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 
@@ -27,7 +29,7 @@ const syncing = new Map();
  * casts. A deleted (or missing) project unlinks everything. Fire-and-forget
  * from the project write paths: the save already succeeded.
  */
-function syncProjectCatalogLinks(projectId) {
+function syncProjectCatalogLinks(projectId, { getProject }) {
   if (!projectId || isFileBackend()) return Promise.resolve(null);
   const running = syncing.get(projectId);
   if (running) {
@@ -36,7 +38,7 @@ function syncProjectCatalogLinks(projectId) {
   }
   const state = { again: false, promise: null };
   state.promise = (async () => {
-    const [catalogDB, { getProject }] = await Promise.all([import('../catalog/catalogDB.js'), import('./projects.js')]);
+    const catalogDB = await import('../catalog/catalogDB.js');
     let stats = null;
     do {
       state.again = false;
@@ -63,9 +65,9 @@ function syncProjectCatalogLinks(projectId) {
 }
 
 // Fire-and-forget from the project write paths; resolves to the sync's
-// { linked, unlinked } (null on failure or the file backend).
-export function queueProjectCatalogLinkSync(projectId) {
-  return syncProjectCatalogLinks(projectId).catch((err) => {
+// { linked, unlinked } (null on failure or the file backend). `getProject` reads the project.
+export function queueProjectCatalogLinkSync(projectId, { getProject }) {
+  return syncProjectCatalogLinks(projectId, { getProject }).catch((err) => {
     console.error(`❌ Music Video ${String(projectId).slice(0, 8)}: catalog link sync failed: ${err.message}`);
     return null;
   });

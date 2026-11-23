@@ -12,6 +12,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { getTrack } from '../tracks/index.js';
+import { updateProject as updateProjectEdit } from './projectBoardEdits.js';
 import { updateProject } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { parseLyricCues } from './timedText.js';
@@ -43,7 +44,8 @@ export async function importTrackLyrics(projectId, { mode = 'replace', edit: ans
   if (cues.length > MAX_LYRIC_CUES) {
     throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const updated = await updateProject(project.id, { lyricCues: cues, lyricMarkers: markers }, { edit: answerEdit });
+  const patch = { lyricCues: cues, lyricMarkers: markers };
+  const updated = await (answerEdit ? updateProjectEdit(project.id, patch) : updateProject(project.id, patch));
   console.log(`🎼 Imported ${cues.length} track lyric lines (${markers.length} markers) into ${project.id}`);
   return { ...(answerEdit ? updated : { project: updated }), imported: cues.length, markers: markers.length, skipped: null };
 }

@@ -16,6 +16,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 const projects = await import('./projects.js');
+const filmActions = await import('./projectFilmActions.js');
 const { buildHandoffBundle, buildHandoffManifest } = await import('./handoff.js');
 
 afterAll(cleanupTempDataRoots);
@@ -120,7 +121,7 @@ describe('buildHandoffManifest typography (#8992)', () => {
    await projects.updateProject(p.id, { concept: { style: 'Monochrome' } });
    const saved = await projects.getProject(p.id);
    expect(saved.concept).toEqual({ ...concept, style: 'Monochrome' });
-   const clone = await projects.cloneProject(p.id, {});
+   const clone = await filmActions.cloneProject(p.id, {});
    expect(clone.concept).toEqual(saved.concept);
    await projects.addProjectScene(p.id, { framePrompt: 'A close-up', prompt: 'Slow push in' });
    const manifest = buildHandoffManifest(await projects.getProject(p.id));

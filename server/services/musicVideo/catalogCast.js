@@ -341,7 +341,8 @@ async function defaultDeps() {
     import('./catalogLinks.js'),
     import('../catalog/catalogPrimitives.js'),
   ]);
-  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
+  return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord,
+    queueProjectCatalogLinkSync: (projectId) => queueProjectCatalogLinkSync(projectId, { getProject: projects.getProject }) };
 }
 
 async function refreshCheckinRecords(project, catalogDB, selectedKey = null) {

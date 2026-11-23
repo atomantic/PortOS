@@ -15,7 +15,7 @@ vi.mock('./instances.js', async () => {
   return { ...actual, getPeers: async () => registry.peers };
 });
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
-vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
+vi.mock('./musicVideo/mediaPoolDelete.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');

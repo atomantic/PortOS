@@ -30,6 +30,7 @@ vi.mock('../services/musicVideo/excerptRender.js', () => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const { startExcerptRender } = await import('../services/musicVideo/excerptRender.js');
 const projects = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 
 const app = express();
 app.use(express.json());
@@ -124,7 +125,7 @@ describe('draft excerpt deletion (#8986)', () => {
 describe('excerpts survive a clone (#8986 acceptance)', () => {
   it('carries excerpts and their review notes onto the cloned project', async () => {
     const { project } = await projectWithExcerpt({ notes: [{ id: 'mvn-1', atSec: 2, note: 'kept across clone', verdict: null, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }] });
-    const cloned = await projects.cloneProject(project.id, {});
+    const cloned = await filmActions.cloneProject(project.id, {});
     expect(cloned.excerpts).toEqual(project.excerpts);
   });
 
@@ -133,7 +134,7 @@ describe('excerpts survive a clone (#8986 acceptance)', () => {
   // project's excerpt must not unlink a file the other still references.
   it('does not delete the shared excerpt file while a clone still references it, and does once neither does', async () => {
     const { project } = await projectWithExcerpt();
-    const cloned = await projects.cloneProject(project.id, {});
+    const cloned = await filmActions.cloneProject(project.id, {});
     const videoPath = join(ROOT(), 'videos', 'music-video-excerpt-1.mp4');
     const sheetPath = join(ROOT(), 'video-thumbnails', 'music-video-excerpt-1-sheet.png');
     mkdirSync(join(ROOT(), 'videos'), { recursive: true });

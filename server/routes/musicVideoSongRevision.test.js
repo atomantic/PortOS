@@ -12,6 +12,7 @@ const analyzers = vi.hoisted(() => ({ auto: vi.fn(), manual: vi.fn() }));
 vi.mock('../services/musicVideo/audioAnalysis.js', async (original) => ({ ...(await original()), analyzeAudioFile: analyzers.auto, analyzeAudioFileManual: analyzers.manual }));
 const { default: routes } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const service = await import('../services/musicVideo/songRevision.js');
 const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
 const { stripMusicVideoLocalRenderPins } = await import('../lib/syncWire.js');
@@ -36,7 +37,7 @@ async function fixture() {
     return { project };
   });
   const before = await store.getProject(source.id);
-  const fork = await store.cloneProject(source.id);
+  const fork = await filmActions.cloneProject(source.id);
   const draft = await post(fork.id, '', fields);
   expect(draft.status).toBe(200);
   return { before, fork, revisionId: draft.body.project.songRevision.id };
@@ -74,7 +75,7 @@ describe('fork song revision through HTTP', () => {
     expect(selected.body.project.excerpts[0].dependencyState.status).toBe('stale');
     expect(await store.getProject(before.id)).toEqual(before);
     expect((await post(fork.id, 'select', { revisionId, songId: 'take-b' })).status).toBe(409);
-    const next = await store.cloneProject(fork.id);
+    const next = await filmActions.cloneProject(fork.id);
     expect(next.songRevision).toBeNull();
     expect(next.songRevisionHistory.at(-1).selectedSongId).toBe('take-a');
     expect(stripMusicVideoLocalRenderPins(pending)).not.toHaveProperty('songRevision');
