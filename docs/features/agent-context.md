@@ -30,7 +30,7 @@ The default profile is **Metadata only** with only **Navigation** and **Workspac
 
 | Profile | Returned content |
 |---|---|
-| Metadata only | Generic record labels, bounded counts, routes, and opaque stable references. Private text can be used for matching but is not returned. |
+| Metadata only | Generic record labels, bounded counts, routes, and opaque stable references. Search matches against redacted text (secrets, PII, and redaction markers are stripped before matching) and never returns record bodies. |
 | Redacted summaries | Selected source summaries after high-confidence secret, email, IP address, home-directory, phone, and explicit coordinate redaction. This is an additional opt-in, not an anonymization guarantee. |
 
 Scopes are independently configurable:
