@@ -24,16 +24,16 @@ async function readStatus(app) {
   throw new ServerError('Eidoverse runtime status is unavailable.', { status: 503, code: 'EIDOVERSE_RUNTIME_UNKNOWN' });
 }
 
-/** Persist the loopback command on an app record saved by an older PortOS or edited by hand. */
+/** Persist the loopback command on an app record saved by an older PortOS or edited by hand, and return the current record. */
 async function syncStartCommand(app) {
   const stored = app.startCommands?.[0];
   const command = withLoopbackPreload(stored) ?? eidoverseStartCommand((await resolveBunRuntime())?.command ?? 'bun');
-  if (command !== stored) {
-    await updateApp(app.id, { startCommands: [command, ...(app.startCommands || []).slice(1)] });
-    notifyAppsChanged('update', app.id);
-    console.log('🔒 Eidoverse start command updated to bind loopback only');
-  }
-  return command;
+  if (command === stored) return app;
+  const startCommands = [command, ...(app.startCommands || []).slice(1)];
+  await updateApp(app.id, { startCommands });
+  notifyAppsChanged('update', app.id);
+  console.log('🔒 Eidoverse start command updated to bind loopback only');
+  return { ...app, startCommands };
 }
 
 /**
@@ -46,7 +46,7 @@ export async function launchEidoverseProcess(app) {
       status: 409, code: 'EIDOVERSE_LAUNCH_UNAVAILABLE',
     });
   }
-  const command = await syncStartCommand(app);
+  const { startCommands: [command] } = await syncStartCommand(app);
   if ((await readStatus(app)).status !== 'not_found') await deleteApp(EIDOVERSE_PROCESS_NAME, app.pm2Home);
   return startWithCommand(EIDOVERSE_PROCESS_NAME, app.repoPath, command, {
     pm2Home: app.pm2Home, port: EIDOVERSE_PORT, maxMemoryRestart: EIDOVERSE_MAX_MEMORY_RESTART,
@@ -67,9 +67,9 @@ export async function restartEidoverseProcess(app) {
  * process that was not already running.
  */
 export async function ensureEidoverseLoopback() {
-  const app = findManagedApp(await getAllApps());
-  if (!app) return { replaced: false };
-  await syncStartCommand(app);
+  const registered = findManagedApp(await getAllApps());
+  if (!registered) return { replaced: false };
+  const app = await syncStartCommand(registered);
   const current = await readStatus(app);
   if (current.status === 'not_found' || hasLoopbackPreload(current.args)) return { replaced: false };
   if (!RUNNING.has(current.status)) {

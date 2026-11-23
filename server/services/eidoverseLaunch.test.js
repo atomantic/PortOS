@@ -46,6 +46,7 @@ describe('upgrade of an existing managed app', () => {
     mock.status = { status, args: LEGACY_ARGS };
     await expect(ensureEidoverseLoopback()).resolves.toEqual({ replaced: true });
     expect(mock.apps[0].startCommands).toEqual([SAFE]);
+    expect(updateApp).toHaveBeenCalledOnce();
     expect(deleteApp).toHaveBeenCalledWith('eidoverse-worlds', '/example/pm2');
     expect(startWithCommand).toHaveBeenCalledExactlyOnceWith(...LAUNCH);
     expect(deleteApp.mock.invocationCallOrder[0]).toBeLessThan(startWithCommand.mock.invocationCallOrder[0]);
