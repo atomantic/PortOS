@@ -677,6 +677,8 @@ describe('DataManager independent read failures (#9446)', () => {
     getDataBackups = (await import('../services/apiSystem.js')).getDataBackups;
     getDataBackups.mockReset().mockResolvedValue([archive]);
     getDataOverview.mockReset().mockResolvedValue(overview);
+    // An earlier suite leaves this rejecting; its role="alert" would shadow the banner under test.
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
   });
 
   it('shows unavailable measurements on initial failure and recovers measured empty snapshots', async () => {
@@ -753,5 +755,69 @@ describe('DataManager archive action disclosure (#10728)', () => {
 
     expandRow('Reports');
     expect(await screen.findByRole('button', { name: 'Export backup (keeps originals)' })).toBeInTheDocument();
+  });
+});
+
+describe('DataManager accessibility semantics (#17715)', () => {
+  let getDataBackups;
+  const backups = [{ name: 'backup-2025-01-01.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' }];
+
+  beforeEach(async () => {
+    getDataBackups = (await import('../services/apiSystem.js')).getDataBackups;
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataBackups.mockReset().mockResolvedValue(backups);
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
+  });
+
+  it('keeps rowgroup -> row -> cell ownership and exposes disclosure state', async () => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [{ name: 'a.txt', type: 'file', size: 10 }] });
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('mystery-dir').length).toBeGreaterThan(0));
+    const toggle = document.querySelector('button[aria-controls="data-category-panel-mystery-dir"]');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls'))).toBeInTheDocument();
+
+    const cell = await screen.findByRole('cell', { name: /a\.txt/ });
+    const row = cell.parentElement.closest('[role="row"]');
+    expect(cell.parentElement.getAttribute('role')).toBe('none');
+    const wrappers = [];
+    for (let el = row.parentElement; el && el.getAttribute('role') !== 'rowgroup'; el = el.parentElement) wrappers.push(el);
+    expect(wrappers).toEqual([]);
+    expect(row.parentElement.getAttribute('role')).toBe('rowgroup');
+  });
+
+  it('scopes backup headers and labels the actions column', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    const headers = screen.getAllByRole('columnheader');
+    expect(headers).toHaveLength(4);
+    headers.forEach(th => expect(th).toHaveAttribute('scope', 'col'));
+    expect(headers[3]).toHaveTextContent('Actions');
+  });
+
+  it('announces a peer sync status failure', async () => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'x', items: [] });
+    getTombstoneSweepStatus.mockRejectedValue(new Error('503'));
+    render(<DataManager />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not read peer sync status/);
+  });
+
+  it.each([[true, 'instant'], [false, 'smooth']])('scrolls with reduced motion=%s using %s', async (reduced, behavior) => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'prompts', items: [] });
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      render(<DataManager />);
+      const tile = await screen.findByRole('button', { name: /^Prompts/, pressed: false });
+      fireEvent.click(tile);
+      fireEvent.click(await screen.findByRole('button', { name: 'Show actions and contents' }));
+      expect(scroll).toHaveBeenCalledWith({ behavior, block: 'start' });
+    } finally {
+      window.matchMedia = original;
+    }
   });
 });
