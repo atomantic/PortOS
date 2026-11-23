@@ -497,7 +497,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
        -- the inbound Message, so a later page that omits it must not flip a
        -- message the user actually sent onto the other side of the thread.
        is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
-       observed_at = EXCLUDED.observed_at, updated_at = NOW()
+       observed_at = GREATEST(beeper_messages.observed_at, EXCLUDED.observed_at), updated_at = NOW()
      WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
        AND ((EXCLUDED.unsent_at IS NOT NULL AND EXCLUDED.observed_at >= beeper_messages.observed_at) OR
          (beeper_messages.unsent_at IS NULL
@@ -576,7 +576,7 @@ async function commitMessages({ conversationId, accountId, sourceChatId, rows, c
 // ---------------------------------------------------------------------------
 
 async function sweepChat({
-  chat, stored, clientOptions, observedAt, personIndex,
+  chat, stored, clientOptions, personIndex,
 }) {
   const normalized = normalizeChatRow(chat);
   if (!normalized.accountId || !normalized.sourceChatId) return { messages: 0 };
@@ -584,6 +584,10 @@ async function sweepChat({
   const conversationId = await upsertConversation(normalized);
   if (!conversationId) return { messages: 0 };
 
+  // Stamped per chat, immediately before the fetch (like reconcileStoredRow):
+  // a sweep-wide timestamp predates socket/outbox writes made mid-sweep, so
+  // upsertMirroredMessage would reject newer HTTP observations as stale.
+  const observedAt = new Date().toISOString();
   const { messages, cursor, truncated } = await fetchNewMessages(
     normalized.sourceChatId, stored?.cursor, clientOptions,
   );
@@ -739,7 +743,7 @@ async function sweepChat({
  * resume next run, reserving one page to refresh the head. End-of-list resets
  * the checkpoint so failed chats remain reachable on subsequent traversals.
  */
-async function sweepAccount(account, clientOptions, observedAt, personIndex) {
+async function sweepAccount(account, clientOptions, personIndex) {
   await reconcileStoredMessages(account.accountId, clientOptions);
   const cursors = await readAccountCursors(account.accountId);
   const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [account.accountId]);
@@ -791,7 +795,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
       }
       // one chat at a time; each is its own transaction
       const result = await sweepChat({
-        chat, stored, clientOptions, observedAt, personIndex,
+        chat, stored, clientOptions, personIndex,
       }).catch((err) => {
         failedChats++;
         console.error(`❌ ${LOG_PREFIX}: chat ${String(chat?.id ?? 'unknown')} failed: ${err.message}`);
@@ -973,7 +977,6 @@ async function executeSweep(reason) {
     }
 
     const startedAt = Date.now();
-    const observedAt = new Date(startedAt).toISOString();
     const accounts = await refreshAccounts(clientOptions);
     updateBeeperSweepProgress({ accountsTotal: accounts.length });
     emitSweepInvalidation();
@@ -993,7 +996,7 @@ async function executeSweep(reason) {
     let cursorRestarts = 0;
     for (const account of accounts) {
       // accounts are swept in order; each owns its own cursors
-      const result = await sweepAccount(account, clientOptions, observedAt, personIndex).catch((err) => {
+      const result = await sweepAccount(account, clientOptions, personIndex).catch((err) => {
         failedAccounts++;
         console.error(`❌ ${LOG_PREFIX}: account ${account.accountId} failed: ${err.message}`);
         return null;
