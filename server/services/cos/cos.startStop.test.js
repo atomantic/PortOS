@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('persistentMindAdapter', () => import('../persistent/persistentMindAdapter.js'));
 
 const scheduled = new Set();
 const handlers = new Map();

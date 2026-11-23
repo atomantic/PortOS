@@ -44,7 +44,7 @@ vi.mock('./db.js', async (importOriginal) => ({
 vi.mock('../scripts/run-db-migrations.js', () => ({
   runDbMigrations: vi.fn(async () => 0),
 }));
-vi.mock('../services/syncOrchestrator.js', () => ({
+vi.mock('../services/syncCursors.js', () => ({
   rewindPostgresSyncCursors: vi.fn(async () => 2),
 }));
 // This suite isolates generic DB admission/release with a statement-free pg
@@ -266,7 +266,7 @@ describe('restore recovery admission', () => {
     expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'failed', reason: 'restore_execution_reconciliation', recovery: { id: record.id } });
     expect(databaseRestoreRecovery.read()).toEqual(record);
     await expect(query('SELECT ordinary')).rejects.toMatchObject(FENCED);
-    const { rewindPostgresSyncCursors } = await import('../services/syncOrchestrator.js');
+    const { rewindPostgresSyncCursors } = await import('../services/syncCursors.js');
     expect(rewindPostgresSyncCursors).not.toHaveBeenCalled();
     fixture.executionFault = false;
     expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });

@@ -1535,7 +1535,7 @@ const SCOPED_COVERAGE_KEY = {
 async function resolveExcludeSet(category, forPeerId) {
   const coverageKey = SCOPED_COVERAGE_KEY[category];
   if (!coverageKey || typeof forPeerId !== 'string' || forPeerId.length === 0) return new Set();
-  const { getOutboundCoverageForPeer } = await import('./sharing/peerSync.js');
+  const { getOutboundCoverageForPeer } = await import('./sharing/peerOutboundCoverage.js');
   const coverage = await getOutboundCoverageForPeer(forPeerId).catch(() => null);
   return coverage?.[coverageKey] instanceof Set ? coverage[coverageKey] : new Set();
 }

@@ -60,7 +60,7 @@ vi.mock('./ollamaAgentContext.js', () => ({
   ensureOllamaAgentContext: vi.fn(async () => ({ skipped: false, contextLength: null, applied: false, warning: null })),
   beginOllamaAgentWork: vi.fn(async () => () => {}),
 }));
-vi.mock('./agent/agentCliSpawning.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
+vi.mock('../lib/claudeSettingsEnv.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
 vi.mock('./visionCli.js', () => ({ prepareCliVisionRun: vi.fn(async () => ({
   invocation: { command: 'claude', args: ['-p', '-', '--add-dir', '/example/outside'], stdin: 'Read the staged image', cwd: process.cwd() },
   cleanup: async () => {},

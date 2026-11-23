@@ -527,7 +527,7 @@ export async function getAppWorkTracker(id) {
 export async function getAppLayeredIntelligenceConfig(id) {
   const app = await getAppById(id);
   if (!app) return null;
-  const { getEffectiveConfig } = await import('./layeredIntelligence.js');
+  const { getEffectiveConfig } = await import('./layeredIntelligence/config.js');
   return getEffectiveConfig({ ...app, isPortos: id === PORTOS_APP_ID });
 }
 

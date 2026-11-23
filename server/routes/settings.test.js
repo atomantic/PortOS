@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+
+registerLateBoundService('eidoverse', () => import('../services/eidoverse.js'));
+registerLateBoundService('eidoverseRuntime', () => import('../services/eidoverseRuntime.js'));
 
 const settingsDataRoot = await vi.hoisted(async () => {
   const { mkdtempSync } = await import('node:fs');

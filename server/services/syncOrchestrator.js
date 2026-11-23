@@ -8,8 +8,7 @@
 
 import { access } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
-import { createMutex } from '../lib/asyncMutex.js';
+import { PATHS } from '../lib/fileUtils.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, peerLogLabel, resolveEffectiveCategories, setPeerSchemaGap } from './instances.js';
@@ -26,6 +25,7 @@ import * as catalogSync from './catalog/catalogSync.js';
 import { pullMissingCatalogMediaBytes } from './catalog/catalogMediaBytesSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
+import { CATALOG_CURSOR_KINDS, getPostgresCursorGeneration, loadCursors, readCursors, withCursors } from './syncCursors.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -34,7 +34,6 @@ import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { formatPrunedByKind } from '../lib/tombstoneKindLabels.js';
 import { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
 
-const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
 // Categories whose changes reach peers as realtime frames (peerSyncEvents.js).
 // From a peer with a live subscription the periodic tick re-pulls their
@@ -56,7 +55,6 @@ const FETCH_TIMEOUT_MS = 15000;
 const TOMBSTONE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 export const BRAIN_TOMBSTONE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-const withLock = createMutex();
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
@@ -84,58 +82,6 @@ let lastBrainSweepAt = 0;
 // Fire-and-forget; a missing/uninitialized emitter must never break a sync.
 function emitSyncProgress(payload) {
   if (typeof instanceEvents?.emit === 'function') instanceEvents.emit('sync:progress', payload);
-}
-
-// --- Cursor persistence ---
-
-async function loadCursors() {
-  return await readJSONFile(CURSORS_FILE, {}, { strict: true });
-}
-
-async function saveCursors(cursors) {
-  await ensureDir(PATHS.data);
-  await atomicWrite(CURSORS_FILE, cursors);
-}
-
-async function readCursors(fn) {
-  return withLock(async () => {
-    const cursors = await loadCursors();
-    return fn(cursors);
-  });
-}
-
-async function withCursors(fn) {
-  return withLock(async () => {
-    const cursors = await loadCursors();
-    const result = await fn(cursors);
-    await saveCursors(cursors);
-    return result;
-  });
-}
-
-// Bumped by every rewind. A sync cycle that read its cursors under an older
-// generation pulled against the pre-restore database, so its advanced
-// memory/Catalog cursors must not overwrite the rewind.
-let postgresCursorGeneration = 0;
-
-/**
- * Rewind every peer's PostgreSQL delta cursors (memory + Catalog) to the start
- * after a database restore discarded rows those cursors had already passed
- * (#8710). The next sync replays each peer's streams through the idempotent
- * LWW / ON CONFLICT apply paths. Only these two streams have no reconcile
- * to fall back on; brain cursors and snapshot checksums are left alone.
- * @returns {Promise<number>} peers rewound
- */
-export async function rewindPostgresSyncCursors() {
-  return withCursors((cursors) => {
-    postgresCursorGeneration += 1;
-    const peers = Object.values(cursors).filter(isPlainObjectShallow);
-    for (const cursor of peers) {
-      cursor.memorySeq = '0';
-      cursor.catalogSeqs = Object.fromEntries(CATALOG_CURSOR_KINDS.map((kind) => [kind, '0']));
-    }
-    return peers.length;
-  });
 }
 
 // --- Peer fetch helper ---
@@ -388,14 +334,6 @@ async function syncMemoryFromPeer(peer, cursor) {
 
   return { memorySeq, totalApplied };
 }
-
-// The seven INDEPENDENT feed-position cursors the catalog sync envelope tracks.
-// Each table is its own commit-ordered feed stream (#8315), so the receiver
-// carries seven cursors (not one) — see catalogSync.js for the protocol
-// rationale. A pre-#8315 cursor (a write-time sync_sequence) is below every
-// feed position, so the first pull after a peer upgrades replays each stream
-// once; a cursor above a downgraded peer's maximum rewinds via the reset check.
-const CATALOG_CURSOR_KINDS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
 
 // Build the `?since[scraps]=A&since[ingredients]=B&...` query string the
 // catalog `/sync` route parses back into per-kind cursors. A missing kind
@@ -936,7 +874,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
     // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
     let cursorGeneration;
     const cursor = await readCursors((cursors) => {
-      cursorGeneration = postgresCursorGeneration;
+      cursorGeneration = getPostgresCursorGeneration();
       const raw = { ...(cursors[peerId] || {}) };
       return detectCursorReset(raw, peer);
     });
@@ -1041,7 +979,7 @@ export async function syncWithPeer(peer, { logStart = true, onCategoryFailure, p
       }
       // A DB restore rewound the Postgres cursors mid-cycle: this cycle's
       // positions describe rows the restore discarded, so keep the rewind.
-      const postgresCursorsCurrent = cursorGeneration === postgresCursorGeneration;
+      const postgresCursorsCurrent = cursorGeneration === getPostgresCursorGeneration();
       if (postgresCursorsCurrent && memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;
       // Persist the per-kind catalog cursor only when the drain wasn't blocked
       // by a schema gap — a blocked cycle leaves the prior cursor so we re-try

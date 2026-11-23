@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { checkHealth, ensureSchema, query, close } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import recipeRoutes from './mindToolRecipeRoutes.js';
@@ -12,6 +13,17 @@ import { createRecipe, updateRecipe, archiveRecipe, restoreRecipe, getRecipe, ge
 const health = await checkHealth().catch((error) => ({ connected: false, error: error.message }));
 const ready = requireDbOrSkip('routes/mindToolRecipes.db.test', health.connected, health.error);
 if (ready) await ensureSchema();
+// The recipe library, not the shipped catalog, is under test; mindToolRecipeRuntime.test.js
+// validates against the real registry.
+const readTool = (name, input) => ({
+  name, policy: { sideEffect: 'read', scopes: ['mind'] },
+  input_schema: { type: 'object', additionalProperties: false, ...input },
+  output_schema: { type: 'object', additionalProperties: true },
+});
+registerLateBoundService('cosToolRegistry', () => ({ getCosToolCatalog: () => ({ tools: [
+  readTool('catalog.search', { properties: { query: { type: 'string' } }, required: ['query'] }),
+  readTool('goals.list', { properties: {} }),
+] }) }));
 const ids = [];
 afterAll(async () => {
   if (ready && ids.length) await query('DELETE FROM mind_tool_recipes WHERE id = ANY($1::uuid[])', [ids]);

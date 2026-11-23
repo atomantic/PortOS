@@ -1,5 +1,8 @@
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('creativeFirstPassGen', () => import('./firstPassGen.js'));
 
 // Mocks declared before importing the module under test.
 const mockReadJSONFile = vi.fn();

@@ -24,7 +24,7 @@ vi.mock('./instances.js', async (importOriginal) => mockNoPeers({}, {
   updatePeer: async () => {},
 }));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
-vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
+vi.mock('./sharing/peerOutboundCoverage.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));
 // The queue owns data/media-jobs.json (its unreadable-snapshot latch is pinned in mediaJobQueue/index.lanes.test.js).

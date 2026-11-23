@@ -23,7 +23,7 @@
 
 import { posix } from 'path';
 import { GUARD_CHECK_DIRS } from './guardScanners.js';
-import { moduleImports } from './sourceTokens.js';
+import { MOCK_CALL_RE, moduleImports, moduleMockCalls } from './sourceTokens.js';
 
 export const MODULE_SOURCE_RE = /\.[cm]?[jt]sx?$/i;
 const TYPESCRIPT_RE = /\.[cm]?ts$/i;
@@ -83,6 +83,8 @@ export function resolveModuleCandidates(fromRel, spec, known) {
     ...RESOLVE_EXTENSIONS.map((extension) => `${path}/index${extension}`)].filter((candidate) => known.has(candidate));
 }
 
+const NO_DEPENDENCIES = Object.freeze({ dependencies: [], inconclusive: false });
+
 /**
  * A lazily evaluated graph over the repo-relative `files`. `readText(rel)`
  * returns the source, or null/throws when it cannot be read.
@@ -95,6 +97,11 @@ export function resolveModuleCandidates(fromRel, spec, known) {
  * - `closure(entries, dependenciesFor)`: sorted members reachable from
  *   `entries` (themselves included), or null when any member is unreadable or
  *   any edge is inconclusive, so a partial walk can never look complete.
+ * - `suiteClosure(suite)`: the test-view closure of one suite, stopping at each
+ *   module its own sealed `vi.mock` calls replace (the module itself stays a
+ *   member, its subtree does not unless another edge reaches it). A mock prunes
+ *   only while nothing in the walked closure can load the module behind it;
+ *   otherwise the full subtree is walked.
  */
 export function createModuleGraph(files, readText) {
   const known = new Set(files);
@@ -102,6 +109,8 @@ export function createModuleGraph(files, readText) {
   const specifiers = new Map();
   const staticEdges = new Map();
   const testEdges = new Map();
+  const mockCalls = new Map();
+  const escapes = new Map();
 
   const read = (file) => {
     if (!sources.has(file)) {
@@ -176,5 +185,50 @@ export function createModuleGraph(files, readText) {
     return inconclusive ? null : [...seen].sort();
   };
 
-  return { files, known, specifiersOf, staticDependencies, testDependencies, closure };
+  const mockCallsOf = (file) => {
+    if (!mockCalls.has(file)) {
+      mockCalls.set(file, MOCK_CALL_RE.test(read(file))
+        ? moduleMockCalls(read(file), { jsx: !TYPESCRIPT_RE.test(file) })
+        : { calls: [], opaque: false });
+    }
+    return mockCalls.get(file);
+  };
+  // Modules `file` can load for real despite a mock: null when it may be any module.
+  const mockEscapes = (file) => {
+    if (!escapes.has(file)) {
+      const { calls, opaque } = mockCallsOf(file);
+      const { statics, deferred } = specifiersOf(file);
+      // A query names a second module instance that the registry does not replace.
+      const specs = [...calls.filter(({ sealed }) => !sealed).map(({ spec }) => spec),
+        ...[...statics, ...deferred].filter((spec) => /[?#]/.test(spec))];
+      escapes.set(file, opaque ? null : new Set(specs.flatMap((spec) => resolveModuleCandidates(file, spec, known))));
+    }
+    return escapes.get(file);
+  };
+  // `importActual` and a mock without a sealed factory load the real module with no import edge.
+  const suiteDependencies = (file) => {
+    const { dependencies, inconclusive } = testDependencies(file);
+    return { dependencies: [...dependencies, ...(mockEscapes(file) ?? [])], inconclusive };
+  };
+  const sealedMocks = (suite) => {
+    const sealed = mockCallsOf(suite).calls.filter((call) => call.sealed && !/[?#]/.test(call.spec))
+      .map(({ spec }) => resolveModuleCandidates(suite, spec, known));
+    return new Set(sealed.filter((candidates) => candidates.length === 1).flat());
+  };
+  const suiteClosure = (suite) => {
+    try {
+      for (let sealed = sealedMocks(suite); ;) {
+        const members = closure([suite], (file) => (sealed.has(file) ? NO_DEPENDENCIES : suiteDependencies(file)));
+        if (members === null || sealed.size === 0) return members;
+        const walked = members.filter((file) => MODULE_SOURCE_RE.test(file) && !sealed.has(file)).map(mockEscapes);
+        const kept = walked.includes(null) ? [] : [...sealed].filter((file) => !walked.some((real) => real.has(file)));
+        if (kept.length === sealed.size) return members;
+        sealed = new Set(kept);
+      }
+    } catch {
+      return null;
+    }
+  };
+
+  return { files, known, specifiersOf, staticDependencies, testDependencies, closure, suiteClosure };
 }

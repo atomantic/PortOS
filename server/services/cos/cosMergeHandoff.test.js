@@ -1,8 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+registerLateBoundService('agentWorktreeCleanup', () => import('../agent/agentWorktreeCleanup.js'));
 
 // Agent → server pending-merge handoff (#12247), end to end through the real
 // admission service and the real pr-watcher coordinator over synthetic stores.
