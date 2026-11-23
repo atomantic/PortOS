@@ -657,7 +657,7 @@ export async function searchIngredientsByEmbedding(vector, { type, limit = 20, t
     params.push(type);
   }
   const result = await query(
-    `SELECT *, 1 - (embedding <=> $1) AS score
+    `SELECT ${INGREDIENT_LIGHT_COLS}, 1 - (embedding <=> $1) AS score
        FROM catalog_ingredients
        WHERE ${conditions.join(' AND ')}
          AND 1 - (embedding <=> $1) >= $2
@@ -701,7 +701,7 @@ export async function searchIngredientsByText(q, { type, limit = 20 } = {}) {
     params.push(type);
   }
   const result = await query(
-    `SELECT *, ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS rank
+    `SELECT ${INGREDIENT_LIGHT_COLS}, ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS rank
        FROM catalog_ingredients
        WHERE ${conditions.join(' AND ')}
        ORDER BY rank DESC
@@ -729,7 +729,7 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
     let idx = 3;
     if (type) { conds.push(`type = $${idx++}`); params.push(type); }
     const r = await query(
-      `SELECT *, ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS rank
+      `SELECT ${INGREDIENT_LIGHT_COLS}, ts_rank_cd(search_tsv, websearch_to_tsquery('english', $1)) AS rank
          FROM catalog_ingredients WHERE ${conds.join(' AND ')}
          ORDER BY rank DESC LIMIT $2`,
       params,
@@ -744,7 +744,7 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
     let idx = 4;
     if (type) { conds.push(`type = $${idx++}`); params.push(type); }
     const r = await query(
-      `SELECT *, 1 - (embedding <=> $1) AS similarity
+      `SELECT ${INGREDIENT_LIGHT_COLS}, 1 - (embedding <=> $1) AS similarity
          FROM catalog_ingredients WHERE ${conds.join(' AND ')}
          ORDER BY embedding <=> $1 LIMIT $3`,
       params,
