@@ -140,7 +140,7 @@ export function summaryProblems(dir, root = ROOT) {
       : `${path}: missing header — open the file with a one-sentence summary comment`));
 }
 
-export function searchCatalog(terms, { dirs = discoverSearchDirs(root), root = ROOT } = {}) {
+export function searchCatalog(terms, { root = ROOT, dirs = discoverSearchDirs(root) } = {}) {
   const needles = terms.map((term) => term.toLowerCase());
   return dirs.flatMap((dir) => catalogDir(dir, root)).filter((entry) => {
     const haystack = `${entry.path} ${entry.exports.join(' ')} ${entry.header}`.toLowerCase();

@@ -97,6 +97,18 @@ describe('auto-discovery', () => {
     expect(dirs.some((dir) => dir.startsWith('server/services'))).toBe(false);
   });
 
+  it('searchCatalog defaults dirs from the given root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lib-catalog-'));
+    try {
+      mkdirSync(join(root, 'server/lib/nested'), { recursive: true });
+      writeFileSync(join(root, 'server/lib/nested/deep.js'), '// Deep.\nexport const deepThing = 1;\n');
+      expect(searchCatalog(['deepthing'], { root }).map((entry) => entry.path)).toEqual(['server/lib/nested/deep.js']);
+      expect(searchCatalog(['directInvocation']).map((entry) => entry.path)).toContain('scripts/lib/directInvocation.js');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('finds modules in nested dirs and scripts/lib from the CLI', () => {
     const hit = spawnSync(process.execPath, [SCRIPT, 'directInvocation'], { encoding: 'utf8' });
     expect(hit.status, hit.stderr).toBe(0);
