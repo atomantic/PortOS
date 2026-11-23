@@ -109,7 +109,7 @@ export async function runMultiTurnTests(providerId, model, testIds = null, perso
   const scenarios = await parseMultiTurnSuite();
   // A persona flavors the embodied identity so the conversations measure
   // consistency *as* that persona (P7); none tests the base twin.
-  const twinContext = await getDigitalTwinForPrompt(personaId ? { personaId } : {});
+  const twinContext = await getDigitalTwinForPrompt({ respectAutoInject: false, ...(personaId ? { personaId } : {}) });
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {

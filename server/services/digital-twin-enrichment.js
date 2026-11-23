@@ -88,7 +88,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   const fallbackAlreadyAnswered = questionsAnswered > structuredTotal;
 
   // Generate follow-up question using AI
-  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000 });
+  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000, respectAutoInject: false });
 
   const prompt = await buildPrompt('soul-enrichment', {
     category,
