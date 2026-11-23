@@ -117,7 +117,7 @@ function BlenderMotionReferences({ blender, shot, sheet, still, playheadSec }) {
         return (
           <figure key={ref.id} className="min-w-0 space-y-0.5">
             <div className="relative">
-              <img src={`${musicVideoBlenderMediaUrl(projectId, ref.strip.file)}&v=${ref.strip.every}-${ref.strip.columns}-${ref.strip.sheet ?? ''}`} alt={`Motion reference strip: ${ref.filename}`} loading="lazy" decoding="async"
+              <img src={`${musicVideoBlenderMediaUrl(projectId, ref.strip.file)}&v=${[ref.inSec, ref.outSec, ref.speed, ref.strip.every, ref.strip.columns, ref.strip.sheet ?? ''].join('-')}`} alt={`Motion reference strip: ${ref.filename}`} loading="lazy" decoding="async"
                 className="w-full bg-black object-contain" />
               {box && <div aria-hidden="true" className="pointer-events-none absolute border-2 border-port-accent" style={box} />}
             </div>

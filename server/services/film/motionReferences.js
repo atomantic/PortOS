@@ -52,11 +52,12 @@ async function stripGrid(owner, shot, settings, sheetFile) {
     ? sheets.find((sheet) => sheet.file === sheetFile.split('/').pop())
     : [...sheets].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
   if (sheetFile && !chosen) throw blenderRefusal('That contact sheet is not on this machine', 'NOT_FOUND', 404);
-  if (chosen && Number.isInteger(chosen.every) && Number.isInteger(chosen.columns) && Number.isInteger(chosen.firstFrame) && Number.isInteger(chosen.tiles) && chosen.tiles > 0) {
+  const { startFrame, frameCount } = blenderShotFrameRange(shot, settings.fps);
+  // A sheet that starts before the shot (made before a sync moved it) has no reference time for its first tiles.
+  if (chosen && chosen.firstFrame >= startFrame && Number.isInteger(chosen.every) && Number.isInteger(chosen.columns) && Number.isInteger(chosen.firstFrame) && Number.isInteger(chosen.tiles) && chosen.tiles > 0) {
     return { every: chosen.every, columns: chosen.columns, firstFrame: chosen.firstFrame, tiles: chosen.tiles, sheet: chosen.file };
   }
   const { every, columns } = normalizeBlenderSheetOptions(null);
-  const { startFrame, frameCount } = blenderShotFrameRange(shot, settings.fps);
   return { every, columns, firstFrame: startFrame, tiles: Math.max(1, Math.min(SHEET_LIMITS.maxTiles, Math.ceil(frameCount / every))), sheet: null };
 }
 
@@ -146,12 +147,14 @@ export async function saveBlenderMotionReferences(owner, shotId, references) {
   if (next.length !== references.length) {
     throw blenderRefusal(`A shot holds at most ${LIMITS.perShot} distinct references, each with a video and an out point after its in point`, 'MUSIC_VIDEO_BLENDER_REFERENCE_INVALID', 400);
   }
-  for (const ref of next) {
+  const prior = normalizeBlenderRecord(await owner.readRecord()).motionReferences[shotId] || [];
+  // A video that already left Media History does not block editing its siblings.
+  const known = new Set(prior.map((old) => old.filename));
+  for (const ref of next.filter((candidate) => !known.has(candidate.filename))) {
     if (!resolveGalleryVideo(ref.filename)) {
       throw blenderRefusal(`"${ref.filename}" is not a video in Media History`, 'MUSIC_VIDEO_BLENDER_REFERENCE_INVALID', 400);
     }
   }
-  const prior = normalizeBlenderRecord(await owner.readRecord()).motionReferences[shotId] || [];
   const record = await owner.writeRecord((current) => {
     const { [shotId]: _replaced, ...others } = normalizeBlenderRecord(current).motionReferences;
     return { motionReferences: next.length ? { ...others, [shotId]: next } : others };

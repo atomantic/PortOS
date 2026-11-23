@@ -127,3 +127,18 @@ it('drops the references of a shot that a sync removed', async () => {
   expect((await getBlenderState(owner)).motionReferences).toEqual({});
   expect((await owner.readRecord()).motionReferences).toEqual({});
 });
+
+it('lets a sibling be edited while another reference video is gone, and ignores a sheet that starts before the shot', async () => {
+  const owner = await syncedFilm();
+  addVideo('example-walk.mp4');
+  addVideo('example-run.mp4');
+  await saveBlenderMotionReferences(owner, 's020', [ref(), ref({ filename: 'example-run.mp4' })]);
+  rmSync(join(ROOT(), 'videos', 'example-run.mp4'));
+  const [walk, run] = (await getBlenderState(owner)).motionReferences.s020;
+  await saveBlenderMotionReferences(owner, 's020', [{ ...walk, note: 'edited' }, run]);
+  expect((await getBlenderState(owner)).motionReferences.s020.map((entry) => entry.note)).toEqual(['edited', run.note]);
+  const sheets = join(owner.workspaceDir, 'renders', 's020', 'sheets');
+  mkdirSync(sheets, { recursive: true });
+  writeFileSync(join(sheets, 'sheets.json'), JSON.stringify([{ file: 'sheet--24-0-e6.jpg', firstFrame: -24, lastFrame: 0, every: 6, columns: 4, tiles: 5, createdAt: '2026-10-01T10:00:00.000Z' }]));
+  expect(await makeBlenderMotionStrip(owner, 's020', walk.id)).toMatchObject({ sheet: null, columns: 6 });
+});
