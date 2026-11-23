@@ -245,6 +245,23 @@ describe("universeBuilderRefine.buildWorldRefinePrompt — structure-aware path"
 });
 
 describe("universeBuilderRefine.mergeCategoriesWithLocks", () => {
+  it("keeps custom bucket kinds (characters/places/objects) across a merge", () => {
+    const original = {
+      heroes: { kind: "characters", variations: [{ label: "A", prompt: "a" }] },
+      vistas: { kind: "places", variations: [{ label: "B", prompt: "b" }] },
+      gadgets: { kind: "objects", variations: [{ label: "C", prompt: "c" }] },
+    };
+    const fromLlm = {
+      heroes: { variations: [{ label: "A2", prompt: "a2" }] },
+      vistas: { variations: [{ label: "B2", prompt: "b2" }] },
+      gadgets: { variations: [{ label: "C2", prompt: "c2" }] },
+    };
+    const merged = mergeCategoriesWithLocks(original, fromLlm);
+    expect(merged.heroes.kind).toBe("characters");
+    expect(merged.vistas.kind).toBe("places");
+    expect(merged.gadgets.kind).toBe("objects");
+  });
+
   it("preserves locked variations and replaces unlocked ones from LLM output", () => {
     const original = {
       factions: {
