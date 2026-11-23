@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import SettingsLoadError from '../../ui/SettingsLoadError';
 import { Save, Loader2, MonitorPlay, RefreshCw, CheckCircle2, AlertCircle, ShieldQuestion, Search, ExternalLink, Download, X } from 'lucide-react';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
 import FormField from '../../ui/FormField';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatDateTime } from '../../../utils/formatters';
@@ -32,6 +33,7 @@ export function YoutubeTab() {
   const [setup, setSetup] = useState(null);
   const [playlists, setPlaylists] = useState(null);
   const [playlistsLoading, setPlaylistsLoading] = useState(true);
+  const [playlistsError, setPlaylistsError] = useState(null);
   const [playlistsSyncing, setPlaylistsSyncing] = useState(false);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const [requestedVideoId, setRequestedVideoId] = useState(null);
@@ -39,9 +41,10 @@ export function YoutubeTab() {
 
   const loadPlaylists = () => {
     setPlaylistsLoading(true);
+    setPlaylistsError(null);
     return getYoutubePlaylists({ silent: true })
       .then((result) => setPlaylists(result?.snapshot || null))
-      .catch(() => null)
+      .catch((err) => setPlaylistsError(err || new Error('Request failed')))
       .finally(() => setPlaylistsLoading(false));
   };
 
@@ -297,6 +300,8 @@ export function YoutubeTab() {
             )}
             {playlists.warnings?.length > 0 && <p className="mt-4 text-xs text-port-warning">Some playlist pages could not be refreshed; existing references were retained where available.</p>}
           </>
+        ) : playlistsError ? (
+          <ListLoadError what="YouTube playlists" error={playlistsError} onRetry={loadPlaylists} />
         ) : (
           <div className="rounded border border-dashed border-port-border p-6 text-center text-sm text-gray-500">
             Sync playlists to build your local YouTube video reference library.
@@ -333,11 +338,12 @@ function YoutubePlaylistCard({ playlist, downloading, downloadingVideoId, onDown
                 type="button"
                 onClick={() => onDownload(video)}
                 disabled={downloading}
-                className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-1.5 text-[11px] text-gray-300 hover:border-port-accent hover:text-port-accent disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={`Download ${video.title}`}
+                className="inline-flex shrink-0 items-center justify-center gap-1 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 rounded border border-port-border px-2 py-1.5 text-[11px] text-gray-300 hover:border-port-accent hover:text-port-accent disabled:cursor-not-allowed disabled:opacity-40"
                 title={downloadingVideoId === video.id ? 'Downloading this video' : 'Download this video'}
               >
                 {downloadingVideoId === video.id ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-                <span className="hidden sm:inline">{downloadingVideoId === video.id ? 'Downloading' : 'Download'}</span>
+                <span className="max-sm:sr-only">{downloadingVideoId === video.id ? 'Downloading' : 'Download'}</span>
               </button>
             </div>
           ))}

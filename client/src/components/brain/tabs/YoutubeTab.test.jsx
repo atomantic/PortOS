@@ -52,3 +52,24 @@ describe('YoutubeTab setup check', () => {
     expect(toast.error).toHaveBeenCalledWith('Setup check failed');
   });
 });
+
+describe('YoutubeTab load errors and download button (#17971)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('shows ListLoadError with Retry when the playlist read fails', async () => {
+    api.getYoutubePlaylists.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ snapshot: null });
+    render(<YoutubeTab />);
+    expect(await screen.findByText(/Could not load YouTube playlists — boom/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    expect(await screen.findByText(/Sync playlists to build/)).toBeInTheDocument();
+  });
+
+  it('gives each video Download button an accessible name and a 44px mobile hit area', async () => {
+    api.getYoutubePlaylists.mockResolvedValue({ snapshot: { playlists: [{ id: 'p1', name: 'Mix', url: 'https://example.com/p', videoCount: 1, videos: [{ id: 'v1', title: 'Clip One', url: 'https://example.com/v' }] }] } });
+    render(<YoutubeTab />);
+    const btn = await screen.findByRole('button', { name: 'Download Clip One' });
+    expect(btn.className).toContain('min-h-[44px]');
+    expect(btn.className).toContain('min-w-[44px]');
+    expect(btn.className).toContain('pointer-fine:sm:min-h-0');
+  });
+});
