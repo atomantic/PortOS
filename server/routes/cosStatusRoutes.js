@@ -24,6 +24,7 @@ import { persistentMindProfileSchema, persistentMindToolFreeRefusal } from '../l
 import { persistentMindThinkingPresetsSchema } from '../lib/persistent/persistentMindThinkingPresets.js';
 import { persistentMindPromptSchema } from '../lib/persistent/persistentMindPrompt.js';
 import { persistentMindPlaybookSchema } from '../lib/persistent/persistentMindPlaybook.js';
+import { OUTWARD_SAFETY_KINDS } from '../services/taskLearning/safetyKind.js';
 
 const router = Router();
 
@@ -97,12 +98,29 @@ export const cosConfigSchema = z.object({
   completedAgentRetentionMs: z.number().int().min(0).optional(),
   embeddingProviderId: z.string().optional(),
   embeddingModel: z.string().optional(),
+  // Confidence auto-approval is read on every improvement task. Partial
+  // objects are field-merged in updateConfig(); when both thresholds are in
+  // this patch, low must not exceed high (the merge also checks stored siblings).
+  confidenceAutoApproval: z.object({
+    enabled: z.boolean().optional(),
+    highThreshold: z.number().int().min(0).max(100).optional(),
+    lowThreshold: z.number().int().min(0).max(100).optional(),
+    minSamples: z.number().int().min(1).optional(),
+  }).strict().superRefine((value, ctx) => {
+    if (value.lowThreshold != null && value.highThreshold != null && value.lowThreshold > value.highThreshold) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['lowThreshold'],
+        message: 'lowThreshold must be less than or equal to highThreshold',
+      });
+    }
+  }).optional(),
   // Safety-kind override (#2440): which outward-facing/irreversible kinds always
-  // require human approval, orthogonal to confidence. updateConfig() replaces the
-  // whole object, so the client sends the full slice.
+  // require human approval, orthogonal to confidence. updateConfig() field-merges
+  // the object; alwaysApproveKinds, when present, replaces the list.
   safetyKindApproval: z.object({
     enabled: z.boolean().optional(),
-    alwaysApproveKinds: z.array(z.string()).optional()
+    alwaysApproveKinds: z.array(z.enum(OUTWARD_SAFETY_KINDS)).optional()
   }).strict().optional()
 }).strict().transform((config) => {
   const supportedConfig = { ...config };

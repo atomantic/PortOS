@@ -365,6 +365,85 @@ describe('owned composition capture browser lifecycle', () => {
     }
   });
 
+  const expectOwnedTemp = (env) => {
+    const temp = env.TMPDIR;
+    expect(basename(temp)).toMatch(/^pcb-/);
+    for (const key of ['TMPDIR', 'TMP', 'TEMP', 'MAC_CHROMIUM_TMPDIR']) expect(env[key]).toBe(temp);
+    return temp;
+  };
+
+  it('gives a non-Vitest launch an owned temp directory and deletes it on close', async () => {
+    vi.stubEnv('PORTOS_TEST_TEMP_ROOT', undefined);
+    const owner = await launchCompositionBrowser();
+    const temp = expectOwnedTemp(launch.spawn.mock.calls[0][2].env);
+    await expect(access(temp)).resolves.toBeUndefined();
+    await owner.close();
+    await expect(access(temp)).rejects.toThrow();
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('injects the owned temp directory into a jailed non-Vitest launch and deletes it on close', async () => {
+    vi.stubEnv('PORTOS_TEST_TEMP_ROOT', undefined);
+    const restorePlatform = pinPlatform('linux');
+    try {
+      answerHandshake();
+      const owner = await launchCompositionBrowser({
+        isolation: 'required',
+        support: { platform: 'linux', seatbeltAvailable: false, bubblewrapAvailable: true },
+      });
+      const options = launch.spawn.mock.calls[0][2];
+      const temp = expectOwnedTemp(options.env);
+      expect(options.env.USER).toBe('portos-preview');
+      expect(options.env.PORTOS_API_TOKEN).toBeUndefined();
+      await expect(access(temp)).resolves.toBeUndefined();
+      await owner.close();
+      await expect(access(temp)).rejects.toThrow();
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  it('deletes the owned temp directory when the browser fails during startup', async () => {
+    vi.stubEnv('PORTOS_TEST_TEMP_ROOT', undefined);
+    let temp;
+    launch.spawn.mockImplementationOnce((command, args, options) => {
+      temp = options.env.TMPDIR;
+      profile = args.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+      throw new Error('spawn failed');
+    });
+    await expect(launchCompositionBrowser()).rejects.toThrow('spawn failed');
+    expect(basename(temp)).toMatch(/^pcb-/);
+    await expect(access(temp)).rejects.toThrow();
+    await expect(access(profile)).rejects.toThrow();
+  });
+
+  it('deletes the owned temp directory when profile allocation fails before close', async () => {
+    vi.stubEnv('PORTOS_TEST_TEMP_ROOT', undefined);
+    const fsPromises = await import('node:fs/promises');
+    const actualMkdtemp = fsPromises.mkdtemp;
+    const created = [];
+    vi.spyOn(fsPromises, 'mkdtemp').mockImplementation(async (prefix) => {
+      if (String(prefix).endsWith('portos-composition-browser-')) throw new Error('profile allocation failed');
+      const dir = await actualMkdtemp(prefix);
+      created.push(dir);
+      return dir;
+    });
+    await expect(launchCompositionBrowser()).rejects.toThrow('profile allocation failed');
+    expect(created.map(dir => basename(dir))).toEqual([expect.stringMatching(/^pcb-/)]);
+    await expect(access(created[0])).rejects.toThrow();
+    expect(launch.spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps forwarding the inherited Chromium temp root while Vitest owns one', async () => {
+    expect(process.env.PORTOS_TEST_TEMP_ROOT).toBeTruthy();
+    const inherited = process.env.MAC_CHROMIUM_TMPDIR;
+    const owner = await launchCompositionBrowser();
+    expect(launch.spawn.mock.calls[0][2].env.MAC_CHROMIUM_TMPDIR).toBe(inherited);
+    expect(launch.spawn.mock.calls[0][2].env.TMPDIR).toBe(process.env.TMPDIR);
+    await owner.close();
+    expect(vi.mocked(rm).mock.calls.some(([path]) => basename(String(path)).startsWith('pcb-'))).toBe(false);
+  });
+
   it('keeps the egress negative control on the pipe without a jail or network flags', async () => {
     answerHandshake();
     const owner = await launchCompositionBrowser({

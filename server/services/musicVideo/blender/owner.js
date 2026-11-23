@@ -72,3 +72,9 @@ export function musicVideoFilmOwner(id) {
     emit(event) { musicVideoEvents.emit('blender', { projectId: id, ...event }); },
   };
 }
+
+/** Compatibility entry for workspace creation, which already holds the project. */
+export async function writeBlenderSong(project, settings) {
+  const { writeBlenderSong: writeSong } = await import('../../film/song.js');
+  return writeSong(musicVideoFilmOwner(project.id), settings);
+}

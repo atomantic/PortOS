@@ -113,6 +113,170 @@ function recordGhCallOutcome(key, ok, maxMs = GH_BACKOFF_MAX_MS, now = Date.now(
 /** Test seam — drops the in-memory `execGh` backoff state between runs. */
 export function __resetGhCallBackoff() {
   ghCallBackoff.clear();
+  ghQuotaUntil = 0;
+  ghQuotaAnnounced = false;
+  ghCallCounts.clear();
+  ghAccountedSince = 0;
+}
+
+// Per-call-site counts for the commands that spend the hourly core quota.
+// `gh` itself does not say which PortOS job issued the call, and a busy
+// install was exhausting 5000 requests with nothing in the pm2 log. The
+// label is the first stack frame outside this module. A line is logged at
+// most once per window so the top callers stay visible without a new endpoint.
+const GH_ACCOUNT_LOG_MS = 15 * 60 * 1000;
+const ghCallCounts = new Map();
+let ghAccountedSince = 0;
+
+function ghCallerLabel() {
+  const frames = String(new Error().stack || '').split('\n').slice(1);
+  for (const frame of frames) {
+    if (frame.includes('/services/github.js') || frame.includes('\\services\\github.js')) continue;
+    const named = frame.match(/at (?:async )?([^\s(]+) \(/);
+    const file = frame.match(/\/(server\/[^:)]+):\d+:\d+/);
+    const site = file ? file[1] : null;
+    const fn = named && !named[1].includes('file:') && named[1] !== 'async' ? named[1].replace(/^Object\./, '') : '';
+    if (site || fn) return site && fn ? `${site}:${fn}` : (site || fn);
+  }
+  return 'unknown';
+}
+
+function noteGhCall(args) {
+  const kind = args?.[0];
+  if (kind !== 'api' && kind !== 'pr' && kind !== 'issue') return;
+  if (isGhRateLimitProbe(args)) return;
+  const now = Date.now();
+  if (ghAccountedSince === 0) ghAccountedSince = now;
+  if (now - ghAccountedSince >= GH_ACCOUNT_LOG_MS) {
+    const rows = ghCallAccountingSnapshot();
+    ghCallCounts.clear();
+    ghAccountedSince = now;
+    if (rows.length > 0) {
+      const totals = rows.reduce((sum, row) => ({
+        api: sum.api + row.api, pr: sum.pr + row.pr, issue: sum.issue + row.issue,
+      }), { api: 0, pr: 0, issue: 0 });
+      const top = rows.slice(0, 5).map((row) => `${row.caller}×${row.total}`).join(' ');
+      console.log(`📊 gh calls ${totals.api} api, ${totals.pr} pr, ${totals.issue} issue; top ${top}`);
+    }
+  }
+  const label = ghCallerLabel();
+  const row = ghCallCounts.get(label) || { api: 0, pr: 0, issue: 0 };
+  row[kind] += 1;
+  ghCallCounts.set(label, row);
+}
+
+/** In-memory counts since the last log window. Highest totals first. */
+export function ghCallAccountingSnapshot() {
+  return [...ghCallCounts.entries()]
+    .map(([caller, counts]) => ({ caller, ...counts, total: counts.api + counts.pr + counts.issue }))
+    .sort((a, b) => b.total - a.total || a.caller.localeCompare(b.caller));
+}
+
+// One process-wide pause when GitHub says the core (or secondary) quota is
+// spent. Opt-in `backoffKey` cooldowns do not cover the callers that never
+// pass one, and those were the ones that kept spawning `gh` after remaining
+// hit 0. The reset comes from stderr when it is present, otherwise from one
+// `gh api rate_limit` (that endpoint does not itself spend core quota).
+const GH_QUOTA_PROBE_MS = 15_000;
+const GH_QUOTA_FALLBACK_MS = 60_000;
+const GH_QUOTA_MAX_MS = 65 * 60 * 1000;
+let ghQuotaUntil = 0;
+let ghQuotaAnnounced = false;
+let ghQuotaProbe = null;
+
+function isGhRateLimitProbe(args) {
+  return Array.isArray(args) && args[0] === 'api' && args.includes('rate_limit') && !args.includes('--method');
+}
+
+function ghRateLimitExceeded(stderr) {
+  const text = String(stderr || '');
+  if (/rate limiting is not enabled/i.test(text)) return false;
+  return /rate limit exceeded/i.test(text) || /secondary rate limit/i.test(text);
+}
+
+function ghRetryAfterMs(stderr, now) {
+  const match = String(stderr || '').match(/retry[- ]after:?\s*(\d+)/i);
+  if (!match) return null;
+  const seconds = Number(match[1]);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(now + seconds * 1000, now + GH_QUOTA_MAX_MS);
+}
+
+function ghInlineResetMs(stderr, now) {
+  const match = String(stderr || '').match(/\breset(?:s| at)?[:\s]+(\d{10})\b/i);
+  if (!match) return null;
+  const ms = Number(match[1]) * 1000;
+  if (!Number.isFinite(ms)) return null;
+  if (ms <= now) return now + GH_QUOTA_FALLBACK_MS;
+  return Math.min(ms, now + GH_QUOTA_MAX_MS);
+}
+
+function coreResetMs(payload, now) {
+  const core = payload?.resources?.core;
+  if (!core || (typeof core.remaining === 'number' && core.remaining > 0)) return null;
+  const resetSec = Number(core.reset);
+  if (!Number.isFinite(resetSec)) return null;
+  const ms = resetSec * 1000;
+  if (ms <= now) return now + GH_QUOTA_FALLBACK_MS;
+  return Math.min(ms, now + GH_QUOTA_MAX_MS);
+}
+
+function extendGhQuota(until, backoffKey, announce) {
+  if (until > ghQuotaUntil) ghQuotaUntil = until;
+  if (backoffKey) {
+    const prev = ghCallBackoff.get(backoffKey);
+    ghCallBackoff.set(backoffKey, {
+      failures: prev?.failures || 1,
+      retryAfter: Math.max(prev?.retryAfter || 0, ghQuotaUntil),
+    });
+  }
+  if (!announce || ghQuotaAnnounced) return;
+  ghQuotaAnnounced = true;
+  console.log(`⏳ GitHub API rate limit exceeded; gh calls back off until ${new Date(ghQuotaUntil).toISOString()}`);
+}
+
+function clearExpiredGhQuota(now) {
+  if (ghQuotaUntil && now >= ghQuotaUntil) {
+    ghQuotaUntil = 0;
+    ghQuotaAnnounced = false;
+  }
+}
+
+function readRateLimitReset(env, now) {
+  return new Promise((resolve) => {
+    const child = spawn('gh', ['api', 'rate_limit'], { shell: false, ...(env ? { env } : {}) });
+    let stdout = '';
+    let settled = false;
+    const done = (ms) => { if (!settled) { settled = true; clearTimeout(timer); resolve(ms); } };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ gh rate-limit probe: failed to kill child: ${err.message}`); }
+      done(null);
+    }, GH_QUOTA_PROBE_MS);
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.on('error', () => done(null));
+    child.on('close', (code) => {
+      if (code !== 0) return done(null);
+      done(coreResetMs(safeJSONParse(stdout, null), now));
+    });
+  });
+}
+
+function armGhRateLimit(stderr, env, backoffKey) {
+  const now = Date.now();
+  const secondary = /secondary rate limit/i.test(String(stderr || ''));
+  const known = ghInlineResetMs(stderr, now) || (secondary ? (ghRetryAfterMs(stderr, now) || now + GH_QUOTA_FALLBACK_MS) : null);
+  if (known) {
+    extendGhQuota(known, backoffKey, true);
+    return;
+  }
+  // Hold callers immediately. The log waits for the probe so the one line
+  // names the real reset instead of this provisional minute.
+  extendGhQuota(now + GH_QUOTA_FALLBACK_MS, backoffKey, false);
+  if (ghQuotaProbe) return;
+  ghQuotaProbe = readRateLimitReset(env, now)
+    .then((ms) => { extendGhQuota(ms || Date.now() + GH_QUOTA_FALLBACK_MS, null, true); })
+    .catch((err) => { console.error(`❌ gh rate-limit probe failed: ${err.message}`); })
+    .finally(() => { ghQuotaProbe = null; });
 }
 
 /**
@@ -132,9 +296,15 @@ export function __resetGhCallBackoff() {
  * interval exceeds the 15-min default cap, so the backoff there was a no-op).
  */
 export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null, backoffKey = null, backoffMaxMs = GH_BACKOFF_MAX_MS } = {}) {
+  const now = Date.now();
+  clearExpiredGhQuota(now);
+  if (ghQuotaUntil > now && !isGhRateLimitProbe(args)) {
+    return Promise.reject(new Error(`gh command backing off until ${new Date(ghQuotaUntil).toISOString()} after the GitHub API rate limit`));
+  }
   if (backoffKey !== null && ghBackoffActive(backoffKey)) {
     return Promise.reject(new Error(`gh command backing off for ${backoffKey} after repeated failures`));
   }
+  noteGhCall(args);
   return new Promise((resolve, reject) => {
     const operation = 'gh command';
     const baseEnv = env || process.env;
@@ -183,7 +353,11 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
         // A missing OAuth scope is permanent until the token is refreshed, the
         // same as no-access: retrying cannot clear it, so it stays out of backoff.
         const missingScopes = parseForgeMissingScopes(detail);
-        settle(noAccess || missingScopes.length > 0 ? null : false);
+        const rateLimited = ghRateLimitExceeded(detail);
+        if (rateLimited) armGhRateLimit(detail, baseEnv, backoffKey);
+        // A rate-limit pause is the global quota window, not another
+        // exponential step on this key.
+        settle(noAccess || missingScopes.length > 0 || rateLimited ? null : false);
         const error = new Error(detail || `gh exited with ${signal ? `signal ${signal}` : `code ${code}`}`);
         error.ghExitCode = code;
         error.ghStderr = detail;

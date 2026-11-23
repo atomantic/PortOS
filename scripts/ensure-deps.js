@@ -65,6 +65,22 @@ function saveHashes(hashes) {
   }
 }
 
+// Current v2 receipts for every workspace under `root`. setup.js calls this
+// after its install step so the next `npm start` does not treat a fresh tree
+// as stale. The digest matches `dependencyHash` above and the copy in
+// scripts/update.mjs (that updater cannot import this module).
+export function writeDependencyHashes(root) {
+  const hashes = {};
+  for (const { dir, label } of dependencyWorkspaces(root)) {
+    const hash = dependencyHash(dir);
+    if (hash != null) hashes[label] = hash;
+  }
+  const file = join(root, 'data', 'deps-hashes.json');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(hashes, null, 2));
+  return hashes;
+}
+
 // Filesystem fallback for the no-baseline case (first run after this feature
 // lands, or a fresh manual checkout): npm writes node_modules/.package-lock.json
 // at the end of every install, so its mtime is the last-install time. If

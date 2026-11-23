@@ -10,7 +10,8 @@ vi.mock('../lib/fileUtils.js', async importOriginal => {
 vi.mock('./memoryBackend.js', () => ({
   DEFAULT_MEMORY_CONFIG: { maxContextTokens: 2000, minRelevanceThreshold: 0.5 },
   getMemories: vi.fn(),
-  getMemory: vi.fn(async id => ({ id, type: 'preference', content: `content of ${id}`, importance: 0.9 })),
+  peekMemories: vi.fn(async ids => ids.map(id => ({ id, type: 'preference', content: `content of ${id}`, importance: 0.9 }))),
+  recordMemoryAccess: vi.fn(async () => []),
   searchMemories: vi.fn(), hybridSearchMemories: vi.fn(),
 }));
 vi.mock('./memoryEmbeddings.js', () => ({

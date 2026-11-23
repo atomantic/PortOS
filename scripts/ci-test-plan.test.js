@@ -26,6 +26,7 @@ import {
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   LINUX_CONTAINMENT_TESTS,
+  CLIENT_BROWSER_FANOUT_SUITES,
   CLIENT_FANOUT_TEST_FILES,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
@@ -389,7 +390,7 @@ describe('real shared-source import chains', () => {
   });
 });
 
-// The eight gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
+// The gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
 // narrowing record and `related` selection used to fail closed into every plan (#16798).
 describe('gate-tooling tests in a related plan', () => {
   const inputs = realTree();
@@ -400,8 +401,9 @@ describe('gate-tooling tests in a related plan', () => {
     return plan;
   };
 
-  it('lists eight existing suites, each under an owner path', () => {
-    expect(TOOLING_TESTS).toHaveLength(8);
+  it('lists the gate-tooling suites, each an existing file under an owner path', () => {
+    expect(TOOLING_TESTS).toContain('scripts/ci-test-plan.test.js');
+    expect(TOOLING_TESTS).toHaveLength(9);
     for (const test of TOOLING_TESTS) {
       expect(existsSync(join(REPO_ROOT, test)), test).toBe(true);
       expect(TOOLING_OWNER_RE.test(test), test).toBe(true);
@@ -414,7 +416,7 @@ describe('gate-tooling tests in a related plan', () => {
   });
 
   it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
-    'selects all eight for a diff of %s, an owner path', (path) => {
+    'selects every gate-tooling suite for a diff of %s, an owner path', (path) => {
       const plan = relatedPlan(path);
       expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
     });
@@ -678,6 +680,77 @@ it('measures client related import reach and fans a broad shared client module o
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+it('counts the real-Chromium client suites a change reaches and fans the client out at four (#17616)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-browser-reach-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const inspect = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: root });
+    return { inputs, plan: buildCiTestPlan(inputs.changedFiles, inputs) };
+  };
+  // A fixture names what it renders only inside strings: the virtual module and optimizeDeps.entries.
+  const suite = (entry) => [
+    "import { startBrowserFixture } from '../../../scripts/lib/browserFixture.js';",
+    `const config = { optimizeDeps: { entries: ['${entry}'] } };`,
+    `const fixture = \`import Rendered from '/${entry}';\`;`,
+  ].join('\n');
+  const suites = Array.from({ length: 5 }, (_, i) => `client/src/components/s${i}.browser.test.js`);
+  try {
+    git('init', '-q');
+    write('scripts/lib/browserFixture.js', 'export const startBrowserFixture = () => null;\n');
+    write('client/package.json', '{"name":"client"}\n');
+    write('client/postcss.config.js', 'export default {};\n');
+    write('client/src/index.css', '@import "tailwindcss";\n');
+    write('client/src/themes/tokens.js', "import { palette } from '../palette.js';\nexport const tokens = palette;\n");
+    write('client/src/palette.js', 'export const palette = 1;\n');
+    write('client/src/components/ui/Menu.jsx', "import './Menu.css';\nexport const Menu = () => null;\n");
+    write('client/src/components/ui/Menu.css', '.menu {}\n');
+    write('client/src/pages/Other.jsx', 'export const Other = () => null;\n');
+    write('client/src/pages/HtmlPages.jsx', 'export const HtmlPages = () => null;\n');
+    suites.forEach((path, i) => write(path, suite(i < 4 ? 'src/components/ui/Menu.jsx' : 'src/pages/Other.jsx')));
+    git('add', '--all');
+
+    const reach = (changed) => inspect(changed).inputs.clientBrowserReach?.selected;
+    expect(reach(['client/src/components/ui/Menu.jsx'])).toBe(4);
+    expect(reach(['client/src/components/ui/Menu.css'])).toBe(4);
+    expect(reach(['client/src/pages/Other.jsx'])).toBe(1);
+    expect(reach(['client/src/pages/HtmlPages.jsx'])).toBe(0);
+    // A module a shared input imports is on every served key too.
+    for (const shared of ['client/src/index.css', 'client/src/themes/tokens.js', 'client/src/palette.js', 'client/postcss.config.js', 'client/package.json', 'scripts/lib/browserFixture.js']) {
+      expect(reach([shared]), shared).toBe(5);
+    }
+    expect(inspect(['docs/notes.md']).inputs.clientBrowserReach).toBeNull();
+
+    const menu = inspect(['client/src/components/ui/Menu.jsx']).plan;
+    expect(menu).toMatchObject({ full: false, client: { mode: 'related' } });
+    expect(menu.client.files.length).toBeLessThan(CLIENT_FANOUT_TEST_FILES);
+    expect(menu.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    expect(menu.suiteReasons.client).toContain(`4 real-Chromium suites selected (at least ${CLIENT_BROWSER_FANOUT_SUITES}), sharded ${FULL_SUITE_SHARDS.client} ways`);
+    expect(inspect(['client/src/index.css']).plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    for (const narrow of ['client/src/pages/HtmlPages.jsx', 'client/src/pages/Other.jsx']) {
+      const plan = inspect([narrow]).plan;
+      expect(plan.client.mode, narrow).toBe('related');
+      expect(plan.shards.client, narrow).toEqual([1]);
+      expect(plan.suiteReasons.client, narrow).not.toMatch(/sharded/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('fans a test-only client plan out once it names four real-Chromium suites (#17616)', () => {
+  const browser = Array.from({ length: 4 }, (_, i) => `client/src/components/s${i}.browser.test.js`);
+  const trackedFiles = [...browser, 'client/src/components/plain.test.jsx'];
+  const four = buildCiTestPlan(browser, { trackedFiles });
+  expect(four.client).toMatchObject({ mode: 'files', files: browser });
+  expect(four.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+  const three = buildCiTestPlan([...browser.slice(0, 3), 'client/src/components/plain.test.jsx'], { trackedFiles });
+  expect(three.shards.client).toEqual([1]);
 });
 
 it('shares source reads within one collection and observes edits and unreadable sources in the next', () => {

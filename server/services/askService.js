@@ -20,7 +20,7 @@
  */
 
 import { getActiveProvider, getProviderById } from './provider/providers.js';
-import { hybridSearchMemories, getMemory } from './memoryBackend.js';
+import { hybridSearchMemories, peekMemories, recordMemoryAccess } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
 import { hybridSearchIngredients } from './catalog/catalogDB.js';
 import { getCatalogType } from '../lib/catalog/catalogTypes.js';
@@ -108,19 +108,28 @@ async function retrieveMemories(question, queryEmbeddingPromise = generateQueryE
     vectorWeight: 0.6,
   });
   const hits = result?.memories || [];
-  // Single missing record shouldn't drop the whole batch — allSettled per id.
-  const fetched = await Promise.allSettled(hits.map((h) => getMemory(h.id)));
+  const hitIds = [];
+  const seen = new Set();
+  for (const hit of hits) {
+    if (!hit?.id || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    hitIds.push(hit.id);
+  }
+  // One peek for the whole hit list. A missing id is skipped; the rest stay.
+  const fetched = hitIds.length > 0 ? await peekMemories(hitIds) : [];
+  const byId = new Map(fetched.filter(Boolean).map(memory => [memory.id, memory]));
   const sources = [];
-  for (let i = 0; i < hits.length; i++) {
-    const settled = fetched[i];
-    const mem = settled.status === 'fulfilled' ? settled.value : null;
+  const foundIds = [];
+  for (const hit of hits) {
+    const mem = byId.get(hit.id);
     if (!mem) continue;
+    if (!foundIds.includes(mem.id)) foundIds.push(mem.id);
     sources.push({
       kind: 'memory',
       id: `memory:${mem.id}`,
       title: mem.summary || mem.type || 'Memory',
       snippet: normalizeSnippet(mem.content),
-      relevance: hits[i].rrfScore ?? hits[i].similarity ?? 0.5,
+      relevance: hit.rrfScore ?? hit.similarity ?? 0.5,
       // Memory tab doesn't yet honour an `id` query param, so the chip
       // navigates to the section landing page; the memory's id is still
       // surfaced via `meta` so a future deep-link can use it without
@@ -129,6 +138,7 @@ async function retrieveMemories(question, queryEmbeddingPromise = generateQueryE
       meta: { id: mem.id, type: mem.type, importance: mem.importance, updatedAt: mem.updatedAt },
     });
   }
+  if (foundIds.length > 0) await recordMemoryAccess(foundIds);
   return sources;
 }
 

@@ -335,7 +335,7 @@ export async function createItem({ type, title, description = '', metadata = {} 
 
     items.push(item);
     await saveItems(items);
-    console.log(`📋 Review item created: ${type} — ${title}`);
+    console.log(`📋 Review item created: ${type} (${item.id})`);
     return { result: item, events: [['item:created', item]] };
   });
 }
@@ -369,7 +369,7 @@ async function applyItemStatus(id, status, { allowSourceOwned = false } = {}) {
   item.status = status;
   item.updatedAt = new Date().toISOString();
   await save(items);
-  console.log(`📋 Review item ${status}: ${item.type} — ${item.title}`);
+  console.log(`📋 Review item ${status}: ${item.type} (${item.id})`);
   return { result: item, events: [['item:updated', item]] };
 }
 
@@ -412,7 +412,7 @@ export async function reopenItem(id) {
     const reopened = { ...item, status: 'pending', updatedAt: new Date().toISOString() };
     await saveItems([...liveItems, reopened]);
     await atomicWrite(ARCHIVE_FILE, archive);
-    console.log(`📋 Review item reopened: ${reopened.type} — ${reopened.title}`);
+    console.log(`📋 Review item reopened: ${reopened.type} (${reopened.id})`);
     return { result: reopened, events: [['item:updated', reopened]] };
   });
 }

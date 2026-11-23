@@ -684,7 +684,7 @@ longest of those.
 Primary server/client test jobs use matrices. The impact job emits
 `server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 4).
 Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
-turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
+turns `CI_SHARD=<index>/<count>` into a disjoint file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
 native selectors and never repeats a related-graph traversal. A scoped Linux plan fans out the same way
 (`fansOut()` in the planner) only when its explicit selection exceeds its cap: `MAX_TARGETED_TEST_FILES` (125) for the server,
@@ -695,6 +695,7 @@ when its measured import reach (`serverReach.selected` / `clientReach.selected`,
 the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
 runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
 (a shared module such as `client/src/services/apiCore.js`, #17456).
+4 Chrome client suites do too ([why](./TEST_MEMO.md#shards)).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.

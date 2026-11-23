@@ -116,6 +116,28 @@ A directory a test reads as a whole is an input as a whole.
   directory or by its proven containing tree. An unbounded rooting option
   refuses the browser test. A Node test that passes a directory along keeps
   the older reading.
+- **A served root narrows to what the fixture served** (#17616). Keyed
+  whole, `client/` is ~4,600 files, so any client edit re-ran every
+  real-Chromium suite. When the runner records (`--experimental.recordDependencies`)
+  it also sets `PORTOS_TEST_MEMO_SERVED_DIR`, and `startBrowserFixture` adds
+  a recorder plugin (`scripts/lib/browserServedFiles.js`) that notes every
+  file its Vite server loads, transforms or answers a request from. The
+  suite's memo record stores those files (`served: { roots, files }`,
+  repo-relative, installed packages and paths outside the repository
+  dropped). For a root the record names, the recorded key and
+  `recordedReach` then key only the served files, what served CSS
+  `@import`s, the shared inputs no request names
+  (`BROWSER_SERVED_SHARED_INPUTS`: `client/src/index.css`,
+  `client/src/themes/`), the root's own direct non-dot files (its
+  manifests and PostCSS config) and the manifests above it (`servedTree`).
+  A served module is not walked, as with the recorded key: the importer
+  that gains an edge is itself served. A Tailwind class an unrelated page
+  adds styles only elements that use it, and those live in served files.
+  The whole tree stays keyed, failing closed, when there is no record or
+  the record names another root, a served path leaves the repository, or
+  the test file serves or bundles through a call of its own
+  (`UNRECORDED_SERVER_CALL`: `createServer(`, `express.static(`, …), which
+  the recorder never sees. The floor key is unchanged.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is
@@ -306,6 +328,21 @@ walk the closures of the files it is about to skip (#17617). Every file
 that runs has had its floor key computed before Vitest starts, which the
 after-run comparison above relies on.
 
+Parsing every file the plan reaches (about 9k on the server side) was the
+rest of the planning time, so the parsed facts persist too
+(`scripts/lib/testMemo/factsCache.js`, `facts/<workspace>.json` in the
+store). An entry is keyed by the file's bytes and path, the workspace, the
+three sources the setup files replace, and the version of the extraction code
+(`FACTS_CODE`, the Node version and the platform). Every constant the file
+imported from another module (`exportedConstant`) is recorded with it and
+looked up again on reuse; a different answer re-parses the file. Facts or
+lookups that would not decode to exactly what extraction returned are never
+stored. A save keeps what the run used and anything another branch used in
+the last 14 days. A pull request reads it from the parked lineages and never
+writes it, and the merge copies it into a store that has none. Over the real
+tree, keys, closures and narrowed reach match an uncached analysis exactly,
+and a warm server plan parses 2 of about 12k files.
+
 A store can also be several directories: `PORTOS_TEST_MEMO_READ_DIRS` (a
 `path.delimiter` list) adds read-only ones after the usual directory. An
 entry is the first valid one across them, a record the newest by
@@ -393,6 +430,16 @@ hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
 The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
+
+The planner sizes the client matrix before any memo is restored, so it
+counts real-Chromium suites itself (#17616): a client plan fans out across
+`FULL_SUITE_SHARDS.client` once it selects `CLIENT_BROWSER_FANOUT_SUITES` (4)
+of them, explicitly or, for `related`, by reach (`clientBrowserSuiteReach()`
+in `scripts/lib/importReach.js`: the suite's own import closure, the closure
+of the `/src/…` entries its fixture renders, or a shared input such as
+`client/src/index.css`, `client/src/themes/` or a direct file of `client/`).
+Each costs a Chrome launch and a cold Vite graph, so 32 of them on one runner
+took 282–402 s against 55–91 s across four shards.
 
 ## Related selection
 

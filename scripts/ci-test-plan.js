@@ -11,7 +11,7 @@
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
-import { formatReachSummary } from './lib/importReach.js';
+import { formatReachSummary, isClientBrowserSuite } from './lib/importReach.js';
 import { guardRunnerFor, isGuardCheck } from './lib/guardScanners.js';
 import {
   DB_RISK_RULES, DOCKER_CONTAINMENT_LIVE_PATH_RE, LINUX_CONTAINMENT_PATH_RE, MACOS_NATIVE_PATH_RE,
@@ -19,7 +19,7 @@ import {
   SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_PATH_RE, browserSuitesIn, featureDirectory, fixtureOwnerFor,
   fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGeneratedData,
   isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isSharedClientDependency, isTestFile,
-  pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
+  TOOLING_TESTS, pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
   uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
@@ -42,7 +42,7 @@ export {
   PLATFORM_PACKAGE_RES, WINDOWS_INSTALLED_WORKSPACES, classifyDependencyChange,
 } from './lib/ciPlanDependencies.js';
 export {
-  CLIENT_FANOUT_TEST_FILES, FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, formatPlanSummary,
+  CLIENT_BROWSER_FANOUT_SUITES, CLIENT_FANOUT_TEST_FILES, FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, formatPlanSummary,
   githubPlanOutput, shardIndexes,
 } from './lib/ciPlanOutput.js';
 export {
@@ -158,6 +158,9 @@ function buildSuitePlan(changedFiles, {
   // cap only.
   serverReach = null,
   clientReach = null,
+  // clientBrowserSuiteReach(): the real-Chromium client suites the change
+  // reaches; at CLIENT_BROWSER_FANOUT_SUITES they fan the client runner out.
+  clientBrowserReach = null,
   forceFull = false,
   forceFullReason = 'full CI requested',
   appRouteOnly = false,
@@ -330,9 +333,12 @@ function buildSuitePlan(changedFiles, {
   // additively: unlike python, a JS/TS source is already reachable through the
   // import graph or a feature directory, so an empty hit list here is not an
   // error — it just means nothing reads this file as text.
+  // Gate-tooling suites name many paths while proving the planner. Basename
+  // selection would run them on those diffs; toolingTestsFor and the memo
+  // closure are the selectors that actually own them.
   for (const source of jsSources) {
     const namedTests = (pathContractTests[source] || [])
-      .filter((path) => trackedSet.has(path) && runnerForTest(path));
+      .filter((path) => trackedSet.has(path) && runnerForTest(path) && !TOOLING_TESTS.includes(path));
     selectedTests.push(...namedTests);
   }
 
@@ -412,14 +418,22 @@ function buildSuitePlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
-  }, { appRouteOnly, serverReach, clientReach });
+  }, { appRouteOnly, serverReach, clientReach, clientBrowserReach });
 }
 
 /** The derived fields every plan carries: per-suite reasons and shard matrices. */
 const finishPlan = (plan, options = {}) => {
   const reachSelected = { server: reachCount(options.serverReach), client: reachCount(options.clientReach) };
+  // Explicit real-Chromium selectors, plus the ones a related walk reaches.
+  const browserSuites = {
+    server: 0,
+    client: new Set([
+      ...plan.client.files.filter(isClientBrowserSuite),
+      ...(plan.client.mode === 'related' ? options.clientBrowserReach?.suites ?? [] : []),
+    ]).size,
+  };
   const linuxShards = (runner) => shardIndexes(
-    fansOut(runner, plan[runner], reachSelected[runner]) ? 'full' : plan[runner].mode,
+    fansOut(runner, plan[runner], reachSelected[runner], browserSuites[runner]) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {
@@ -433,7 +447,7 @@ const finishPlan = (plan, options = {}) => {
   return {
     ...plan,
     slashdo: needsSlashdoSubmodule(plan),
-    suiteReasons: suiteReasonsFor({ ...plan, shards, reachSelected }, options),
+    suiteReasons: suiteReasonsFor({ ...plan, shards, reachSelected, browserSuites }, options),
     shards,
   };
 };
@@ -499,7 +513,7 @@ function main() {
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
-    clientReach, gatedChangedFiles, gatedDependencyChanges,
+    clientReach, clientBrowserReach, gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
@@ -524,6 +538,7 @@ function main() {
     dockerContainmentLiveInputs,
     serverReach,
     clientReach,
+    clientBrowserReach,
     gatedChangedFiles,
     gatedDependencyChanges,
   });

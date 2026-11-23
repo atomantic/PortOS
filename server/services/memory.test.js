@@ -86,6 +86,8 @@ import { cosEvents } from './cos/cosEvents.js';
 import {
   createMemory,
   getMemory,
+  peekMemories,
+  recordMemoryAccess,
   countMemories,
   getMemories,
   updateMemory,
@@ -110,6 +112,25 @@ import {
   invalidateCaches,
   flushBM25Index
 } from './memory.js';
+
+describe('batch memory reads', () => {
+  it('peeks without copying embeddings and increments access once per id', async () => {
+    const stored = { id: 'm1', content: 'kept', embedding: [1, 2, 3], accessCount: 0, status: 'active' };
+    readJSONFile.mockImplementation((path, def) => {
+      if (String(path).includes(`${'m1'}/memory.json`) || String(path).endsWith('m1/memory.json')) return Promise.resolve(stored);
+      return Promise.resolve(def);
+    });
+    const peeked = await peekMemories(['m1', 'missing', 'm1']);
+    expect(peeked).toEqual([{ id: 'm1', content: 'kept', accessCount: 0, status: 'active' }]);
+    expect(stored.embedding).toEqual([1, 2, 3]);
+    const withEmbedding = await peekMemories(['m1'], { includeEmbedding: true });
+    expect(withEmbedding[0].embedding).toEqual([1, 2, 3]);
+    expect(await recordMemoryAccess(['m1', 'missing', 'm1'])).toBe(1);
+    const saved = atomicWrite.mock.calls.find((call) => String(call[0]).includes('memory.json'));
+    expect(saved[1].accessCount).toBe(1);
+    expect(saved[1].embedding).toEqual([1, 2, 3]);
+  });
+});
 
 describe('memory service', () => {
   beforeEach(() => {
@@ -405,6 +426,17 @@ describe('memory service', () => {
       const result = await getMemories({ offset: 1, limit: 1 });
 
       expect(result.memories).toHaveLength(1);
+    });
+
+    it('filters by source task and can skip the in-memory total', async () => {
+      const withTask = { ...mem1, sourceTaskId: 'turn-1' };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve(makeIndex([withTask, mem2]));
+        return Promise.resolve(def);
+      });
+      const matched = await getMemories({ sourceTaskId: 'turn-1', includeCount: false });
+      expect(matched.total).toBeNull();
+      expect(matched.memories.map((memory) => memory.id)).toEqual(['m1']);
     });
 
     it('should return empty when no memories match filters', async () => {

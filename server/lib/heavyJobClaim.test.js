@@ -470,6 +470,43 @@ describe('claimHeavyLocalJob', () => {
     });
   });
 
+  it('stops waiting when the caller aborts and leaves the accelerator free', async () => {
+    await withClaimPath(async (claimPath) => {
+      const end = beginHeavyJobRecovery('trainer');
+      try {
+        const controller = new AbortController();
+        const wait = vi.fn(() => new Promise(() => {}));
+        const pending = claimHeavyLocalJob({
+          kind: 'assessment', id: 'cancelled-bench', claimPath, timeoutMs: 60_000, signal: controller.signal, wait, now: () => 0,
+        });
+        await vi.waitFor(() => expect(wait).toHaveBeenCalled());
+        controller.abort();
+        await expect(pending).resolves.toMatchObject({
+          ok: false, aborted: true, message: expect.stringContaining('cancelled'),
+        });
+        expect(maintenance.operations().some((op) => op.resource === 'cancelled-bench')).toBe(false);
+      } finally { end(); }
+      const next = await claimHeavyLocalJob({ kind: 'image', id: 'after-cancel', claimPath });
+      expect(next.ok).toBe(true);
+      await next.release();
+    });
+  });
+
+  it('returns an aborted claim without waiting when the signal is already aborted', async () => {
+    await withClaimPath(async (claimPath) => {
+      const controller = new AbortController();
+      controller.abort();
+      const wait = vi.fn();
+      const claim = await claimHeavyLocalJob({
+        kind: 'assessment', id: 'already-cancelled', claimPath, timeoutMs: 60_000, signal: controller.signal, wait,
+      });
+      expect(claim).toMatchObject({ ok: false, aborted: true });
+      expect(wait).not.toHaveBeenCalled();
+      expect(existsSync(claimPath)).toBe(false);
+      expect(maintenance.operations().some((op) => op.resource === 'already-cancelled')).toBe(false);
+    });
+  });
+
   it('reports a live holder that has exceeded the stale-age ceiling without stealing it', async () => {
     await withClaimPath(async (claimPath) => {
       await writeFile(claimPath, JSON.stringify({ kind: 'training', id: 'held', pid: 42, startedAt: 0, token: 'old' }));

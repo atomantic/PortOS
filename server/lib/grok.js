@@ -384,7 +384,7 @@ export function grokServiceTierModel(model, tier, modelBase) {
     ? confirmed
     : inferUnconfirmedGrokSpeedBase(model);
   if (!base || base === GROK_CONFIGURED_DEFAULT) return null;
-  return `${base}[fast=${tier === 'fast' ? 'true' : 'false'}]`;
+  return tier === 'fast' ? `${base}${GROK_BUILD_FAST_SUFFIX}` : base;
 }
 
 function inferUnconfirmedGrokSpeedBase(model) {

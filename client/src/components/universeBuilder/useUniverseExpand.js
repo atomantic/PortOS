@@ -43,6 +43,9 @@ const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => 
  */
 export default function useUniverseExpand({
   selectedId,
+  selectedIdRef,
+  mountedRef,
+  draftRef,
   draft,
   setDraft,
   setSaving,
@@ -73,7 +76,11 @@ export default function useUniverseExpand({
 
   useEffect(() => { resetRefinePanel(); }, [selectedId, resetRefinePanel]);
 
+  // True while the user is still on the universe that started the request.
+  const isStillOn = (capturedId) => mountedRef.current && selectedIdRef.current === capturedId;
+
   const handleExpand = async () => {
+    const capturedId = selectedId;
     if (!draft.starterPrompt?.trim()) {
       toast.error('Add a starter prompt to expand');
       return;
@@ -92,8 +99,8 @@ export default function useUniverseExpand({
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
     }, { silent: true }).catch((error) => { toast.error(`Expansion failed: ${error.message}`); return null; });
-    setExpanding(false);
-    if (!result) return;
+    if (mountedRef.current) setExpanding(false);
+    if (!result || !isStillOn(capturedId)) return;
 
     const {
       expandedDraft,
@@ -127,6 +134,10 @@ export default function useUniverseExpand({
       };
       if (selectedId) {
         const fresh = await getUniverse(selectedId).catch(() => null);
+        if (!isStillOn(capturedId)) {
+          if (mountedRef.current) setSaving(false);
+          return;
+        }
         if (!fresh) {
           setSaving(false);
           toast.success(expandToast({
@@ -161,6 +172,10 @@ export default function useUniverseExpand({
         logline: expandedDraft.logline || '',
         premise: expandedDraft.premise || '',
         styleNotes: expandedDraft.styleNotes || '',
+        // Fields tracked by the draft baseline must ship too, or create-then-hydrate
+        // drops them and markDraftSaved records a baseline that never matches.
+        factual: expandedDraft.factual === true,
+        visualProfile: expandedDraft.visualProfile || null,
         // Linked mood board (#4188) — without it the create path lands the
         // new universe unlinked and hydration silently drops the pick.
         moodBoardId: expandedDraft.moodBoardId || null,
@@ -170,17 +185,20 @@ export default function useUniverseExpand({
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
+        ...(expandedDraft.imageMode ? { imageMode: expandedDraft.imageMode } : {}),
+        ...(expandedDraft.imageModelId ? { imageModelId: expandedDraft.imageModelId } : {}),
       };
       const saved = await (selectedId
-        ? updateUniverse(selectedId, payload, { silent: true })
+        ? updateUniverse(selectedId, { ...payload, replaceCategories: true }, { silent: true })
         : createUniverse(payload, { silent: true }))
         .catch((error) => { toast.error(`Auto-save after expand failed: ${error.message}`); return null; })
-        .finally(() => setSaving(false));
+        .finally(() => { if (mountedRef.current) setSaving(false); });
       if (saved) {
         setWorlds((previous) => upsertByIdPrepend(previous, saved));
+        if (!isStillOn(capturedId)) return;
         setCanonDirty(false);
         clearPendingCanonAdditions();
-        markDraftSaved(payload);
+        markDraftSaved({ ...payload, id: saved.id, updatedAt: saved.updatedAt });
         if (!selectedId) goToWorld(saved.id);
         toast.success(expandToast({
           variationCount,
@@ -199,8 +217,10 @@ export default function useUniverseExpand({
     }));
   };
 
-  const applyRefinement = async (patch = {}) => {
-    const next = { ...draft };
+  const applyRefinement = async (patch = {}, capturedId = selectedId) => {
+    if (!isStillOn(capturedId)) return;
+    // Patch the live draft so edits typed during the LLM call survive.
+    const next = { ...(draftRef.current || draft) };
     for (const key of WORLD_LOCKABLE_FIELDS) {
       if (isInfluenceLockField(key)) continue;
       if (!(key in patch) || patch[key] == null) continue;
@@ -217,6 +237,8 @@ export default function useUniverseExpand({
         logline: next.logline || '',
         premise: next.premise || '',
         styleNotes: next.styleNotes || '',
+        factual: next.factual === true,
+        visualProfile: next.visualProfile || null,
         moodBoardId: next.moodBoardId || null,
         categories: next.categories,
         compositeSheets: next.compositeSheets || [],
@@ -224,16 +246,18 @@ export default function useUniverseExpand({
         locked: next.locked || {},
         llm: next.llm || {},
       };
-      const updated = await updateUniverse(selectedId, refinePayload, { silent: true })
+      const updated = await updateUniverse(selectedId, { ...refinePayload, replaceCategories: true }, { silent: true })
         .catch((error) => { toast.error(`Auto-save after refine failed: ${error.message}`); return null; });
       if (updated) {
         setWorlds((previous) => upsertByIdPrepend(previous, updated));
-        markDraftSaved(refinePayload);
+        if (!isStillOn(capturedId)) return;
+        markDraftSaved({ ...refinePayload, id: updated.id, updatedAt: updated.updatedAt });
       }
     }
   };
 
   const runRefine = async (visionOverride = null) => {
+    const capturedId = selectedId;
     const feedback = refineFeedback.trim();
     if (!feedback) {
       toast.error('Add feedback to refine');
@@ -272,8 +296,8 @@ export default function useUniverseExpand({
         ? (visionOverride?.model || undefined)
         : (draft.llm?.model || undefined),
     }).catch(() => null);
-    setRefining(false);
-    if (!result) return;
+    if (mountedRef.current) setRefining(false);
+    if (!result || !isStillOn(capturedId)) return;
 
     const patch = {};
     for (const key of WORLD_LOCKABLE_FIELDS) {
@@ -295,7 +319,8 @@ export default function useUniverseExpand({
     if (result.categories && typeof result.categories === 'object') patch.categories = result.categories;
     if (Array.isArray(result.compositeSheets)) patch.compositeSheets = result.compositeSheets;
 
-    await applyRefinement(patch);
+    await applyRefinement(patch, capturedId);
+    if (!isStillOn(capturedId)) return;
     setRefineRationale(result.rationale || '');
     setRefineChanges(Array.isArray(result.changes) ? result.changes : []);
     setRefineFeedback('');

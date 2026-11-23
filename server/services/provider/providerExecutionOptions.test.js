@@ -136,7 +136,7 @@ describe('grok execution speed', () => {
     expect(args.join(' ')).not.toContain('service_tier');
   });
 
-  it.each(['cli', 'tui'])('requests Fast as a model setting on %s without a Codex flag', async (type) => {
+  it.each(['cli', 'tui'])('requests Fast as the catalog fast id on %s, keeping --effort, without a Codex flag', async (type) => {
     const prepared = await prepareExecutionOptions(
       { ...grokProvider, type, effort: 'high' },
       grokModel,
@@ -145,8 +145,10 @@ describe('grok execution speed', () => {
     const args = type === 'cli'
       ? buildCliArgs(prepared.provider)
       : buildTuiInvocation(prepared.provider, grokModel).args;
-    expect(args).toContain('grok-4.7[fast=true]');
-    expect(args).not.toContain('grok-4.7-build-fast');
+    // Grok Build 1.0.92 rejects the old `grok-4.7[fast=true]` setting as an
+    // unknown model id and drops `--effort`, so Fast must be the catalog id.
+    expect(args).toContain('grok-4.7-build-fast');
+    expect(args.join(' ')).not.toContain('[fast=');
     expect(args).not.toContain('--fast');
     expect(args.join(' ')).not.toContain('service_tier');
     expect(prepared.provider.defaultModel).toBe(grokModel);
@@ -156,7 +158,7 @@ describe('grok execution speed', () => {
     if (type === 'tui') {
       expect(args).toContain('--effort');
       expect(args).toContain('high');
-      expect(args).not.toContain('grok-4.7[fast=true] high');
+      expect(args).not.toContain('grok-4.7-build-fast high');
     }
   });
 
@@ -171,8 +173,8 @@ describe('grok execution speed', () => {
       effort: 'high',
       safetyProfile: PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
     });
-    expect(args).toContain('grok-4.7[fast=false]');
-    expect(args).not.toContain('grok-4.7[fast=true]');
+    expect(args).toContain(grokModel);
+    expect(args).not.toContain('grok-4.7-build-fast');
     expect(args).toEqual(expect.arrayContaining(['--sandbox', 'workspace', '--permission-mode', 'acceptEdits', '--effort', 'high']));
     expect(args).not.toContain('--fast');
     expect(args.join(' ')).not.toContain('service_tier');
@@ -182,7 +184,8 @@ describe('grok execution speed', () => {
   it('maps a selected flat fast id and the configured-default sentinel back to the advertised base', async () => {
     const flat = await prepareExecutionOptions(grokProvider, 'grok-4.7-build-fast', { serviceTier: 'standard' });
     expect(flat.provider.defaultModel).toBe('grok-4.7-build-fast');
-    expect(buildCliArgs(flat.provider)).toContain('grok-4.7[fast=false]');
+    expect(buildCliArgs(flat.provider)).toContain('grok-4.7');
+    expect(buildCliArgs(flat.provider)).not.toContain('grok-4.7-build-fast');
 
     const sentinel = await prepareExecutionOptions(
       { ...grokProvider, type: 'tui', defaultModel: 'grok-configured-default' },
@@ -191,8 +194,8 @@ describe('grok execution speed', () => {
     );
     expect(sentinel.provider.defaultModel).toBe('grok-4.7-build-fast');
     expect(sentinel.provider.executionOptionSupport.modelBase).toBe('grok-4.7');
-    expect(buildTuiShellLaunch(sentinel.provider).commandLine).toContain('grok-4.7[fast=true]');
-    expect(buildTuiInvocation(sentinel.provider, 'grok-configured-default').args).toContain('grok-4.7[fast=true]');
+    expect(buildTuiShellLaunch(sentinel.provider).commandLine).toContain('grok-4.7-build-fast');
+    expect(buildTuiInvocation(sentinel.provider, 'grok-configured-default').args).toContain('grok-4.7-build-fast');
   });
 
   it('refuses a model that did not advertise a fast sibling', async () => {

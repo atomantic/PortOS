@@ -699,22 +699,13 @@ async function requireDocument(project) {
 }
 
 /**
- * Whether the project's composition document can play in the viewer's browser:
- * `{ native: true }` for the unmodified shipped layered template, else
- * `{ native: false, reason }`. Authored or customized documents stay in the
- * isolated preview worker.
+ * The absolute folder of the project's composition document when it is in
+ * `document` mode and present on this install, else null. documentRender.js
+ * builds the native-playback verdict on it (it sits above this module).
  */
-export async function documentNativePlayback(project) {
-  if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return { native: false, reason: 'no-document' };
-  const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
-  const result = await shippedLayeredDocument(resolveDocumentDirectory(project.composition.document));
-  if (!result.shipped) return { native: false, reason: result.reason, ...(result.file ? { file: result.file } : {}), ...(result.upgradable ? { upgradable: true } : {}) };
-  const { buildDocumentData, documentRenderClock, documentSongDuration, documentAspect, DOCUMENT_FRAME_SIZES } = await import('./documentRender.js');
-  const durationSec = documentSongDuration(project);
-  const data = buildDocumentData(project, {
-    frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(durationSec, 24), songDurationSec: durationSec,
-  });
-  return { native: true, data };
+export async function availableDocumentDirectory(project) {
+  if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return null;
+  return resolveDocumentDirectory(project.composition.document);
 }
 
 /** The document's file list: `{ document, files: [{ path, bytes }], totalBytes }`. */

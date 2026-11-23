@@ -282,6 +282,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate the decision summary after an appended or collapsed decision.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'cos:jobs:incidents-changed': {
+    direction: 'server-to-client',
+    summary: 'A failure incident for an autonomous job was opened, resolved or acknowledged; refetch the Jobs list.',
+    payloadSchema: { type: 'object', required: ['jobId'], additionalProperties: false, properties: { jobId: { type: 'string' } } },
+  },
   'cos:schedule:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate upcoming tasks after schedule persistence.',

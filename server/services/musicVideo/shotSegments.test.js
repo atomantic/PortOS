@@ -14,7 +14,7 @@ const ROOT = () => lazyTempDataRoot('mv-shot-segments-test-');
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 
 const fixture = { clips: [], audioPath: null, coldOpen: null };
-vi.mock('./render.js', async (importOriginal) => {
+vi.mock('./renderPlan.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -31,7 +31,7 @@ vi.mock('./filmLookFinish.js', () => ({ applyFilmLookFinish: vi.fn(async () => t
 vi.mock('./projects.js', () => ({ getProject: vi.fn(async (id) => (id === fixture.project?.id ? fixture.project : null)), withProjectMediaMutation: async work => work({}) }));
 
 const { planShotSegments, renderMissingSegments, renderSegment, segmentConcurrency, stitchSegments, pruneSegments, listFilmLooks, deleteFilmLook, buildRenderPreview, segmentRendering, cleanupShotSegments, getSegmentCleanup, startShotRender, shotSegmentDir, assertSegmentCleanupIdle, cancelShotRender } = await import('./shotSegments.js');
-const { buildMusicVideoFfmpegArgs } = await import('./render.js');
+const { buildMusicVideoFfmpegArgs } = await import('./renderFfmpegArgs.js');
 const { assertRenderCleanupIdle } = await import('./renderCleanupActivity.js');
 const { musicVideoEvents } = await import('./events.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');

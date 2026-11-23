@@ -1,7 +1,8 @@
 /** Explicit, fork-scoped song revision. Never advances on boot or selects audio automatically. */
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getProject, mutateProjectRecord, cloneProject } from './projects.js';
+import { getProject, mutateProjectRecord } from './projects.js';
+import { cloneProject } from './projectFilmActions.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch, addScenes } from './projectsLogic.js';
 import { parseLyricCues } from './timedText.js';
@@ -16,7 +17,7 @@ const defaults = {
   getTrack: async (...args) => getTrack(...args),
   cloneProject,
   proposeShotRevisions: async (...args) => (await import('./planner.js')).proposeShotRevisions(...args),
-  startRetime: async (id) => (await import('./lyricAlignJob.js')).startLyricAlign(id, { retimeSong: true }),
+  startRetime: async (id) => (await import('./lyricAlignJob.js')).startLyricAlign(id, { retimeSong: true, retime: retimeRevisedSong }),
 };
 
 // The director's choice of the new song is the request to re-time it; a start

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/apiAccounts.js', () => ({
@@ -22,6 +22,7 @@ vi.mock('../../../services/apiPersonalities.js', () => ({
 import { getPlatformAccounts, getAgentRateLimits, testPlatformAccount, deletePlatformAccount, registerPlatformAccount } from '../../../services/apiAccounts.js';
 import { getProviders } from '../../../services/apiProviders.js';
 import { getAgentActivityStats } from '../../../services/apiAgents.js';
+import { updateAgentPersonality } from '../../../services/apiPersonalities.js';
 import OverviewTab from './OverviewTab';
 
 const providers = [
@@ -138,6 +139,68 @@ it('stacks personality fields below sm and wraps the tone row', async () => {
   const tone = screen.getByText('Tone').closest('.flex');
   expect(tone.className).toContain('flex-wrap');
   expect(screen.getByText('Tone').parentElement.className).toContain('min-w-0');
+});
+
+describe('unsaved edit protection', () => {
+  const activeAccount = { id: 'account-1', platform: 'moltbook', status: 'active', credentials: { username: 'example-user' } };
+  const baseAgent = { id: 'agent-1', name: 'Example Agent', enabled: true, personality: {}, avatar: {}, aiConfig: {} };
+  const renderTab = (agent = baseAgent) => render(
+    <MemoryRouter><OverviewTab agentId="agent-1" agent={agent} onAgentUpdate={vi.fn()} /></MemoryRouter>,
+  );
+
+  it('saving AI config keeps unsaved Personality edits, even when the agent prop refreshes', async () => {
+    updateAgentPersonality.mockResolvedValue({});
+    const { rerender } = renderTab();
+    const name = await screen.findByRole('textbox', { name: 'Name' });
+    fireEvent.change(name, { target: { value: 'Renamed Draft' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Engagement' }), { target: { value: 'api-1' } });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save AI Config' })); });
+
+    expect(updateAgentPersonality).toHaveBeenCalledWith('agent-1', { aiConfig: { engagement: { providerId: 'api-1' } } });
+    rerender(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ ...baseAgent, aiConfig: { engagement: { providerId: 'api-1' } } }} onAgentUpdate={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Renamed Draft');
+    expect(screen.getByRole('button', { name: 'Save AI Config' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  });
+
+  it('keeps Personality edits when the enabled flag changes on the agent prop', async () => {
+    const { rerender } = renderTab();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Draft' } });
+    rerender(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ ...baseAgent, enabled: false }} onAgentUpdate={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Draft');
+  });
+
+  it('disables Quick Actions with an inline notice until edits are saved', async () => {
+    getPlatformAccounts.mockResolvedValue([activeAccount]);
+    updateAgentPersonality.mockResolvedValue({});
+    renderTab();
+    const engage = await screen.findByRole('button', { name: 'Engage Now' });
+    await waitFor(() => expect(engage).toBeEnabled());
+    expect(screen.queryByText(/Save your Personality and AI Provider changes/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Draft' } });
+    expect(engage).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Check Posts' })).toBeDisabled();
+    expect(screen.getByText(/Save your Personality and AI Provider changes/)).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Changes' })); });
+    expect(engage).toBeEnabled();
+    expect(screen.queryByText(/Save your Personality and AI Provider changes/)).not.toBeInTheDocument();
+  });
+
+  it('shows busy state while saving and keeps the draft and Save enabled after a failure', async () => {
+    let rejectSave;
+    updateAgentPersonality.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject; }));
+    renderTab();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), { target: { value: 'Draft' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save Changes' })); });
+    expect(screen.getByRole('button', { name: 'Saving...' })).toBeDisabled();
+
+    await act(async () => { rejectSave(new Error('save failed')); });
+    expect(screen.getByRole('textbox', { name: 'Name' })).toHaveValue('Draft');
+    expect(screen.getByRole('button', { name: 'Save Changes' })).toBeEnabled();
+  });
 });
 
 it('confirms account deletion and drops the row locally without refetching', async () => {

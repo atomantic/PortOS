@@ -18,7 +18,9 @@ import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
   memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
+import { saveFactsCache } from './lib/testMemo/factsCache.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
+import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
@@ -124,7 +126,7 @@ export function toRunnerPath(scope, path) {
  * This runner's slice of the job matrix. `CI_SHARD` is `<index>/<count>`
  * (ci.yml); a single shard is no shard, so the one-runner invocation stays
  * identical to a local `npm run test:ci`. The slice is taken by the runner
- * itself (scripts/lib/testMemoRunner.js vitestShardSlice), never by Vitest:
+ * itself (scripts/lib/testMemoRunner.js serverShardSlice), never by Vitest:
  * each shard subtracts a different memo state, and a `--shard` applied after
  * that subtraction could leave a file to no shard at all.
  */
@@ -546,6 +548,8 @@ async function main() {
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
+    // The next run's planner starts from these parsed facts; a pull request's store is discarded.
+    if (!readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
@@ -574,11 +578,16 @@ async function main() {
   const passes = guardRun.length > 0 && rest.length > 0
     ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
+  // What each real-Chromium fixture's Vite server served, for the records written below (#17616).
+  let servedDir = null;
   if (extraArgs.length) {
     clearVitestDependencies(repoRoot, scope);
     // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
     if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
+    servedDir = mkdtempSync(join(tmpdir(), 'portos-served-files-'));
+    process.env[SERVED_FILES_ENV] = servedDir;
   }
+  let served = new Map();
   const passed = [];
   const results = [];
   // Each structural guard runner logs its checks' load times here (registerGuardChecks).
@@ -611,6 +620,11 @@ async function main() {
     }
   } finally {
     delete process.env.PORTOS_GUARD_LOAD_LOG;
+    delete process.env[SERVED_FILES_ENV];
+    if (servedDir) {
+      served = readServedFiles(servedDir, repoRoot);
+      rmSync(servedDir, { recursive: true, force: true });
+    }
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
   process.exitCode = status;
@@ -628,6 +642,7 @@ async function main() {
   const { written, unrecorded } = recordTestMemo({
     scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
     dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
+    served,
     source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
   });
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);

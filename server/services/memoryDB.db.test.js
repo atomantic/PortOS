@@ -28,6 +28,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import pg from 'pg';
 import { checkHealth, ensureSchema, close, query, withTransaction } from '../lib/db.js';
+import * as dbConnection from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { mockNoPeers, mockTestIdentity, mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { DEFAULT_MEMORY_CONFIG } from './memoryConfig.js';
@@ -46,11 +47,23 @@ vi.mock('../lib/fileUtils.js', async () => {
 // booted (a fresh worktree has no instance file and would get the 'unknown'
 // sentinel).
 const TEST_INSTANCE_ID = '00000000-0000-4000-8000-0000000c0ffe';
+vi.mock('./memoryEmbeddings.js', async () => {
+  const { DEFAULT_MEMORY_CONFIG: embeddingConfig } = await import('./memoryConfig.js');
+  const embedding = new Array(embeddingConfig.embeddingDimension).fill(0);
+  embedding[0] = 1;
+  return {
+    generateQueryEmbedding: vi.fn(async () => embedding.slice()),
+    estimateTokens: (text) => Math.ceil(String(text ?? '').length / 4),
+  };
+});
 vi.mock('./instances.js', async (importOriginal) => mockNoPeers(await importOriginal()));
 vi.mock('./instanceIdentity.js', () =>
   mockTestIdentity({ getInstanceId: () => Promise.resolve(TEST_INSTANCE_ID) }));
 
 const memoryDB = await import('./memoryDB.js');
+// Captured before any spy replaces the live export. Retrieval tests call this
+// from the spy so the real pool still runs.
+const originalQuery = query;
 
 let dbReady = false;
 let skipReason = '';
@@ -374,6 +387,45 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
     expect((await memoryDB.getMemories({ sourceAgentId: 'persistent-mind' })).memories.map((m) => m.id)).toEqual([brainFact.id]);
   });
 
+  it('filters by source task, skips the count, and batches peek and access', async () => {
+    const matched = await memoryDB.createMemory({
+      type: 'fact', content: 'Turn fact.', category: 'science', sourceTaskId: 'turn-batch', sourceAgentId: 'persistent-mind',
+    }, VEC_A);
+    const other = await memoryDB.createMemory({
+      type: 'fact', content: 'Other turn.', category: 'science', sourceTaskId: 'turn-other',
+    });
+    const original = pg.Client.prototype.query;
+    const sqls = [];
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function queryObserver(...args) {
+      if (typeof args[0] === 'string') sqls.push(args[0]);
+      return original.apply(this, args);
+    });
+    try {
+      const page = await memoryDB.getMemories({ sourceTaskId: 'turn-batch', includeCount: false, limit: 10 });
+      expect(page.total).toBeNull();
+      expect(page.memories.map((memory) => memory.id)).toEqual([matched.id]);
+      expect(await memoryDB.peekMemories([])).toEqual([]);
+      const peeked = await memoryDB.peekMemories([other.id, matched.id, matched.id, 'not-a-uuid']);
+      expect(peeked.map((memory) => memory.id)).toEqual([other.id, matched.id]);
+      expect(peeked.every((memory) => memory.embedding == null)).toBe(true);
+      expect(peeked[1].content).toBe('Turn fact.');
+      const withEmbedding = await memoryDB.peekMemories([matched.id], { includeEmbedding: true });
+      expect(withEmbedding[0].embedding).toEqual(VEC_A);
+      expect(await memoryDB.recordMemoryAccess([matched.id, other.id, 'not-a-uuid'])).toBe(2);
+      expect((await memoryDB.peekMemory(matched.id)).accessCount).toBe(1);
+      expect((await memoryDB.peekMemory(other.id)).accessCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((sql) => sql.includes('COUNT(*)') && sql.includes('source_task_id'))).toBe(false);
+    const peeks = sqls.filter((sql) => sql.includes('ANY($1::uuid[])') && sql.startsWith('SELECT'));
+    expect(peeks).toHaveLength(2);
+    expect(peeks[0]).not.toMatch(/(?<![_])embedding(?![_])/);
+    expect(peeks[1]).toMatch(/(?<![_])embedding(?![_])/);
+    expect(sqls.filter((sql) => sql.startsWith('UPDATE memories SET access_count'))).toHaveLength(1);
+    await query('DELETE FROM memories WHERE id = ANY($1::uuid[])', [[matched.id, other.id]]);
+  });
+
   it('sorts and paginates while reporting the unpaginated total', async () => {
     const page = await memoryDB.getMemories({ sortBy: 'importance', sortOrder: 'desc', limit: 1 });
     expect(page.total).toBe(2);
@@ -382,6 +434,19 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
 
     const next = await memoryDB.getMemories({ sortBy: 'importance', sortOrder: 'desc', limit: 1, offset: 1 });
     expect(next.memories[0].id).toBe(studioPreference.id);
+  });
+
+  it('skips the COUNT scan when includeCount is false and reports total as unknown', async () => {
+    const spy = vi.spyOn(dbConnection, 'query');
+    try {
+      const page = await memoryDB.getMemories({ includeCount: false, limit: 1 });
+      expect(page.total).toBeNull();
+      expect(page.memories).toHaveLength(1);
+      expect(spy.mock.calls.filter(([sql]) => String(sql).includes('COUNT'))).toHaveLength(0);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('countMemories applies the same filters without fetching rows', async () => {
@@ -610,6 +675,107 @@ describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
     expect((await memoryDB.hybridSearchMemories('pantry', VEC_UNSEEN)).memories.map((m) => m.id)).toEqual([pantry.id]);
   });
 
+  it('runs the FTS and pgvector rankers concurrently when both inputs are present', async () => {
+    let inflight = 0;
+    let maxInflight = 0;
+    const spy = vi.spyOn(dbConnection, 'query').mockImplementation(async (...args) => {
+      const sql = String(args[0]);
+      const hybrid = sql.includes('search_tsv') || sql.includes('<=>');
+      if (hybrid) {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+      }
+      try {
+        return await originalQuery(...args);
+      } finally {
+        if (hybrid) inflight -= 1;
+      }
+    });
+    try {
+      const fused = await memoryDB.hybridSearchMemories('quasar', VEC_A);
+      expect(fused.memories[0].id).toBe(quasar.id);
+      expect(maxInflight).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+});
+
+describe.skipIf(!runDb)('getRelevantMemories query budget (#17602)', () => {
+  it('hydrates one task with at most six SQL statements and bumps access only for kept rows', async () => {
+    process.env.MEMORY_BACKEND = 'postgres';
+    const { getRelevantMemories } = await import('./memoryRetriever.js');
+    await getRelevantMemories({ description: 'warmup' });
+
+    await resetMemories();
+    const short = 'Quasar telescope fact.';
+    const keptTokens = Math.ceil(short.length / 4);
+    const dropped = 'y'.repeat((keptTokens + 8) * 4);
+    const kept = await memoryDB.createMemory({
+      type: 'fact', content: short, category: 'other', importance: 0.4,
+    }, VEC_A);
+    const preference = await memoryDB.createMemory({
+      type: 'preference', content: dropped, category: 'style', importance: 0.99,
+    });
+    const codebase = await memoryDB.createMemory({
+      type: 'fact', content: dropped, category: 'codebase', importance: 0.95, sourceAppId: 'studio',
+    });
+    const linked = await memoryDB.createMemory({ type: 'fact', content: 'Linked detail.' });
+    await memoryDB.linkMemories(kept.id, linked.id);
+
+    let inflight = 0;
+    let maxInflight = 0;
+    const spy = vi.spyOn(dbConnection, 'query').mockImplementation(async (...args) => {
+      const sql = String(args[0]);
+      const hybrid = sql.includes('search_tsv') || sql.includes('<=>');
+      if (hybrid) {
+        inflight += 1;
+        maxInflight = Math.max(maxInflight, inflight);
+      }
+      try {
+        return await originalQuery(...args);
+      } finally {
+        if (hybrid) inflight -= 1;
+      }
+    });
+    try {
+      const selected = await getRelevantMemories({
+        description: 'quasar telescope',
+        metadata: { app: 'studio' },
+      }, { maxTokens: keptTokens });
+      expect(selected.map(memory => memory.id)).toEqual([kept.id]);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(6);
+      expect(spy.mock.calls.length).toBeGreaterThan(0);
+      const sql = spy.mock.calls.map(([text]) => String(text));
+      expect(sql.some(text => text.includes('COUNT'))).toBe(false);
+      expect(sql.some(text => text.includes('memory_links'))).toBe(false);
+      expect(sql.some(text => text.includes('SELECT *'))).toBe(false);
+      expect(sql.filter(text => text.includes('search_tsv'))).toHaveLength(1);
+      expect(sql.filter(text => text.includes('<=>'))).toHaveLength(1);
+      expect(sql.filter(text => text.includes('access_count = access_count + 1'))).toHaveLength(1);
+      const peekSql = sql.find(text => text.includes('FROM memories WHERE id = ANY'));
+      expect(peekSql).toBeTruthy();
+      expect(peekSql).not.toMatch(/(?<![_])embedding(?![_])/);
+      expect(maxInflight).toBe(2);
+      const update = spy.mock.calls.find(([text]) => String(text).includes('access_count = access_count + 1'));
+      expect(update[1][0]).toEqual([kept.id]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect((await memoryDB.peekMemory(kept.id)).accessCount).toBe(1);
+    expect((await memoryDB.peekMemory(preference.id)).accessCount).toBe(0);
+    expect((await memoryDB.peekMemory(codebase.id)).accessCount).toBe(0);
+    const detail = await memoryDB.getMemory(kept.id);
+    expect(detail.relatedMemories).toEqual([linked.id]);
+    expect(detail.embedding).toHaveLength(DIM);
+    const peeked = await memoryDB.peekMemories([kept.id, preference.id]);
+    expect(peeked).toHaveLength(2);
+    expect(peeked.every(memory => memory.embedding === null && memory.relatedMemories === undefined)).toBe(true);
+    expect(await memoryDB.peekMemories([])).toEqual([]);
+    expect(await memoryDB.recordMemoryAccess([])).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

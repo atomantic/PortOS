@@ -121,6 +121,53 @@ export async function peekMemory(id) {
   return withMemoryLock(() => loadMemory(id));
 }
 
+function memoryIdList(ids) {
+  const unique = [];
+  const seen = new Set();
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
+/** One locked pass. The stored record keeps its embedding; the default return does not. */
+export async function peekMemories(ids, { includeEmbedding = false } = {}) {
+  const unique = memoryIdList(ids);
+  if (unique.length === 0) return [];
+  return withMemoryLock(async () => {
+    const memories = [];
+    for (const id of unique) {
+      const memory = await loadMemory(id);
+      if (!memory) continue;
+      const copy = { ...memory };
+      if (!includeEmbedding) delete copy.embedding;
+      memories.push(copy);
+    }
+    return memories;
+  });
+}
+
+/** Increments access stats for every existing id under one lock. */
+export async function recordMemoryAccess(ids) {
+  const unique = memoryIdList(ids);
+  if (unique.length === 0) return 0;
+  return withMemoryLock(async () => {
+    let updated = 0;
+    const now = new Date().toISOString();
+    for (const id of unique) {
+      const memory = await loadMemory(id);
+      if (!memory) continue;
+      memory.accessCount = (memory.accessCount || 0) + 1;
+      memory.lastAccessed = now;
+      await saveMemory(memory);
+      updated += 1;
+    }
+    return updated;
+  });
+}
+
 /**
  * Get a memory by ID (updates access stats)
  */
@@ -158,7 +205,8 @@ export async function getMemories(options = {}) {
   // Paginate
   const offset = options.offset || 0;
   const limit = options.limit || 50;
-  const total = memories.length;
+  const includeCount = options.includeCount !== false;
+  const total = includeCount ? memories.length : null;
   memories = memories.slice(offset, offset + limit);
 
   return { total, memories };

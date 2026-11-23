@@ -28,10 +28,11 @@ import { pluralize } from '../lib/textUtils';
  */
 export default function useUniverseRender({
   selectedId,
+  selectedIdRef,
+  mountedRef,
   draft,
   availableBackends,
   defaultMode,
-  runs,
   setRuns,
   // Same contract as `useUniverseAction`'s `preflight`: runs after the cheap
   // guards, owns its own error toast, and a falsy return aborts the action.
@@ -102,6 +103,8 @@ export default function useUniverseRender({
       ? renderOpts.loras
       : undefined;
 
+    const capturedId = selectedId;
+    const isCurrent = () => mountedRef.current && selectedIdRef.current === capturedId;
     setRendering(true);
     const result = await renderWorld(selectedId, {
       mode: effectiveMode,
@@ -133,8 +136,10 @@ export default function useUniverseRender({
     await syncEntryIdsFromServer?.();
     enqueueEntryJobs(result.entryJobs);
     toast.success(`Queued ${pluralize(result.promptCount, 'render')} → "${result.collectionName}"`);
-    const updatedRuns = await listWorldRuns(selectedId).catch(() => runs);
-    setRuns(updatedRuns);
+    const updatedRuns = await listWorldRuns(capturedId).catch(() => null);
+    // Runs belong to the universe that queued the render; drop them if the
+    // user has since opened another one.
+    if (updatedRuns && isCurrent()) setRuns(updatedRuns);
   };
 
   return {

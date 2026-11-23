@@ -37,6 +37,7 @@ import {
   __resetGitHubDataCache,
   __resetGhCallBackoff,
   execGh,
+  ghCallAccountingSnapshot,
   getGitHubAuthStatus,
   getIssueDispatchHint,
   getPullRequestState,
@@ -62,6 +63,7 @@ describe('execGh', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    __resetGhCallBackoff();
   });
 
   afterEach(() => {
@@ -374,6 +376,88 @@ describe('execGh backoffKey', () => {
   });
 });
 
+describe('execGh rate limit and call accounting', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    __resetGhCallBackoff();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    __resetGhCallBackoff();
+  });
+
+  it('backs off every caller until the probed reset and logs that time once', async () => {
+    const failing = makeChild();
+    const probe = makeChild();
+    spawn.mockReturnValueOnce(failing).mockReturnValueOnce(probe);
+    const resetSec = Math.floor(Date.now() / 1000) + 180;
+    const first = execGh(['api', 'repos/o/r'], 5000);
+    first.catch(() => {});
+    failing.stderr.emit('data', Buffer.from('HTTP 403: API rate limit exceeded for user ID 1'));
+    failing.emit('close', 1);
+    await expect(first).rejects.toThrow(/API rate limit exceeded/);
+
+    await expect(execGh(['pr', 'list'], 5000)).rejects.toThrow(/after the GitHub API rate limit/);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(console.log).not.toHaveBeenCalled();
+
+    probe.stdout.emit('data', Buffer.from(JSON.stringify({
+      resources: { core: { limit: 5000, remaining: 0, reset: resetSec, used: 5000 } },
+    })));
+    probe.emit('close', 0);
+    await Promise.resolve();
+
+    const until = new Date(resetSec * 1000).toISOString();
+    expect(console.log).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(`until ${until}`));
+    await expect(execGh(['issue', 'list'], 5000)).rejects.toThrow(until);
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    vi.advanceTimersByTime(181_000);
+    const after = makeChild();
+    spawn.mockReturnValueOnce(after);
+    const again = execGh(['api', 'repos/o/r'], 5000);
+    after.emit('close', 0);
+    await expect(again).resolves.toBe('');
+  });
+
+  it('counts api, pr and issue calls by the caller outside github.js', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const first = execGh(['api', 'user', '--jq', '.login'], 5000);
+    child.stdout.emit('data', Buffer.from('octocat'));
+    child.emit('close', 0);
+    await expect(first).resolves.toBe('octocat');
+    const secondChild = makeChild();
+    spawn.mockReturnValue(secondChild);
+    const second = execGh(['pr', 'list'], 5000);
+    secondChild.emit('close', 0);
+    await second;
+    expect(ghCallAccountingSnapshot()).toEqual([
+      expect.objectContaining({ caller: expect.stringContaining('github.test.js'), api: 1, pr: 1, issue: 0, total: 2 }),
+    ]);
+  });
+
+  it('logs the top call sites once the accounting window elapses', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const call = execGh(['pr', 'list'], 5000);
+    child.emit('close', 0);
+    await call;
+    vi.advanceTimersByTime(15 * 60 * 1000);
+    const next = makeChild();
+    spawn.mockReturnValue(next);
+    const second = execGh(['issue', 'view', '1'], 5000);
+    next.emit('close', 0);
+    await second;
+    expect(console.log).toHaveBeenCalledWith(expect.stringMatching(/📊 gh calls 0 api, 1 pr, 0 issue/));
+  });
+});
+
 // The merge-follow-up reaper turns "the forge says this PR is OPEN" into a
 // needs-manual-finish failure and "we could not ask" into leave-prior-behavior-
 // alone, so collapsing those two answers is the whole hazard this shape exists
@@ -382,6 +466,7 @@ describe('getPullRequestState', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    __resetGhCallBackoff();
   });
 
   const run = (prRef, drive) => {
@@ -453,6 +538,7 @@ describe('getIssueDispatchHint', () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    __resetGhCallBackoff();
   });
 
   const run = (issueNumber, drive) => {
@@ -567,6 +653,7 @@ describe('GitHub repository sync account selection', () => {
     mock.atomicWrite.mockReset();
     mock.atomicWrite.mockResolvedValue(undefined);
     __resetGitHubDataCache();
+    __resetGhCallBackoff();
     mock.readJSONFile.mockResolvedValue({
       repos: { 'legacy-owner/old-repo': { fullName: 'legacy-owner/old-repo' } },
       secrets: {},

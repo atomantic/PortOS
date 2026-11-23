@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const store = vi.hoisted(() => ({ project: null, beforeLock: null }));
-vi.mock('./projects.js', () => ({
+const store = { project: null, beforeLock: null };
+// The project store's accessors, as projects.js hands them in.
+const projectStore = {
   getProject: async () => structuredClone(store.project),
   mutateProjectRecord: async (_id, transform) => {
     store.beforeLock?.(store.project);
@@ -9,9 +10,10 @@ vi.mock('./projects.js', () => ({
     if (!outcome.skipPersist) store.project = outcome.project;
     return { ...outcome, project: structuredClone(store.project) };
   },
-}));
+};
 
-const { labelProjectReferences } = await import('./referenceLabels.js');
+const { labelProjectReferences: labelWith } = await import('./referenceLabels.js');
+const labelProjectReferences = (id, options) => labelWith(id, { ...projectStore, ...options });
 
 const owners = new Map([
   ['nora-sheet.png', { ingredientId: 'cat-nora', name: 'Nora Example', preferredId: 'cat-nora-alias' }],

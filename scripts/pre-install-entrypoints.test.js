@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { moduleSpecifiers } from './lib/moduleGraph.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -76,11 +77,14 @@ const BARE_CHECKOUT_SCRIPTS = [
 const BUILTINS = new Set(builtinModules);
 const isBuiltin = (specifier) => BUILTINS.has(specifier.replace(/^node:/, ''));
 
-/** Static `from '...'` / bare `import '...'` specifiers, comments stripped. */
-function importSpecifiers(source) {
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  return [...code.matchAll(/(?:from|import)\s*['"]([^'"]+)['"]/g)].map(([, s]) => s);
-}
+/**
+ * Static import/export specifiers. Uses the planner's own tokenizer, which
+ * skips comments and string literals, so a keyword table such as
+ * `['from', 'import']` cannot fake a specifier (#17700). Literal `import()`
+ * calls stay excluded: a guarded dynamic import (doctor.js's `pg`) is lazy on
+ * purpose.
+ */
+const importSpecifiers = (source) => moduleSpecifiers(source).statics;
 
 /**
  * Every specifier reachable from `entry`, transitively, split into the bare
@@ -120,6 +124,20 @@ describe('scripts that must load from a bare checkout', () => {
     expect(found).toContain('fs');
     expect(found.every(isBuiltin)).toBe(true);
     expect(isBuiltin('zod')).toBe(false);
+  });
+
+  it('importSpecifiers ignores string literals that merely contain from/import', () => {
+    expect(importSpecifiers("const WORDS = ['from', 'import'];")).toEqual([]);
+  });
+
+  it('importSpecifiers still collects real import, export-from and bare imports', () => {
+    const source = [
+      "import x from 'zod';",
+      "export { y } from './z.js';",
+      "import 'side-effect';",
+      "const WORDS = ['from', 'import'];",
+    ].join('\n');
+    expect(importSpecifiers(source)).toEqual(['zod', './z.js', 'side-effect']);
   });
 
   it.each(PRE_INSTALL_ENTRYPOINTS)('%s is still wired into the CI impact job', (entry) => {

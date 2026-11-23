@@ -274,10 +274,10 @@ describe('grok — speed pairing', () => {
     });
   });
 
-  it('requests fast and standard as a model setting and does not guess a flat fast id', () => {
-    expect(grokServiceTierModel('grok-4.7', 'fast', 'grok-4.7')).toBe('grok-4.7[fast=true]');
-    expect(grokServiceTierModel('grok-4.7-build-fast', 'standard', 'grok-4.7')).toBe('grok-4.7[fast=false]');
-    expect(grokServiceTierModel(null, 'fast', 'grok-4.7')).toBe('grok-4.7[fast=true]');
+  it('requests fast and standard as catalog ids and does not guess a base from a flat fast id', () => {
+    expect(grokServiceTierModel('grok-4.7', 'fast', 'grok-4.7')).toBe('grok-4.7-build-fast');
+    expect(grokServiceTierModel('grok-4.7-build-fast', 'standard', 'grok-4.7')).toBe('grok-4.7');
+    expect(grokServiceTierModel(null, 'fast', 'grok-4.7')).toBe('grok-4.7-build-fast');
     expect(grokServiceTierModel('grok-4.7-build-fast', 'fast', null)).toBeNull();
     expect(grokServiceTierModel('grok-configured-default', 'standard', null)).toBeNull();
     expect(grokServiceTierModel('grok-code-fast-1', null, null)).toBe('grok-code-fast-1');

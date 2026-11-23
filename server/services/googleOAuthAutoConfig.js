@@ -491,7 +491,7 @@ export async function runAutomatedSetup(userEmail, io, requestId) {
     // Save credentials
     await saveCredentials(credentials);
     emit('done', 'Credentials captured and saved!');
-    console.log(`📅 OAuth credentials captured: ${credentials.clientId}`);
+    console.log(`📅 OAuth credentials captured`);
 
     const authResult = await getAuthUrl();
     result = {

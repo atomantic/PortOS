@@ -126,6 +126,14 @@ export const JS_EXT = /\.(?:[cm]?js|jsx|tsx?)$/;
 export const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.json'];
 export const RESOLVE_INDEXES = ['/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
+/**
+ * A test file call that serves or bundles files outside the browser
+ * fixture's recorder. A suite that makes one keeps keying every handed
+ * directory whole, served record or not: the record vouches only for what
+ * the fixture's own Vite server served.
+ */
+export const UNRECORDED_SERVER_CALL = /\b(?:createServer|express\.static|serveStatic|sirv|build|preview)\s*\(|\.listen\s*\(/;
+
 /** Never repository inputs: installs, caches, build output, machine-local state. */
 export const SKIP_TREE_DIRS = new Set(['node_modules', '.git', '.cache', 'coverage', 'dist', '.vite', '__pycache__']);
 export const IGNORED_INPUT_PREFIXES = ['data/', '.cache/', 'coverage/', 'dist/', 'client/dist/', 'server/.cache/', 'client/.cache/'];
