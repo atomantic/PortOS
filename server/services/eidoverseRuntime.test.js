@@ -20,7 +20,6 @@ vi.mock('./apps.js', () => ({
     pm2ProcessNames: ['eidoverse-worlds'], startCommands: ['bun --env-file=.env.portos server/server.ts'] }),
   notifyAppsChanged: vi.fn(),
 }));
-vi.mock('./eidoverse.js', () => ({ EIDOVERSE_PROCESS_NAME: 'eidoverse-worlds' }));
 vi.mock('./eidoverseLaunch.js', () => ({ ensureEidoverseLoopback: mock.loopback, launchEidoverseProcess: mock.start }));
 vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: mock.ready }));
 vi.mock('./eidoverseWorld.js', () => ({

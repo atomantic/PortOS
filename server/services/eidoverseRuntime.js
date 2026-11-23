@@ -1,5 +1,6 @@
 /** Restore the opted-in, installed world at boot without installing or inferring. */
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { EIDOVERSE_PROCESS_NAME } from '../lib/eidoversePort.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const startup = createSingleFlight();
@@ -25,7 +26,6 @@ export function reconcileEidoverseRuntime() {
     let started = false;
     if (!['online', 'launching'].includes(setup.runtimeStatus)) {
       const { getAppById, notifyAppsChanged } = await import('./apps.js');
-      const { EIDOVERSE_PROCESS_NAME } = await import('./eidoverse.js');
       const app = await getAppById(setup.appId);
       if (app?.archived || !app?.repoPath || !app?.startCommands?.[0]
         || app.pm2ProcessNames?.length !== 1 || app.pm2ProcessNames[0] !== EIDOVERSE_PROCESS_NAME) {

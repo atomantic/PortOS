@@ -31,8 +31,8 @@ export function withLoopbackPreload(command) {
   if (!isBun(bun)) return null;
   const kept = [];
   for (let i = 0; i < args.length; i += 1) {
-    if (['--preload', '-r', '--require', '--import'].includes(args[i]) && isPortosPreload(args[i + 1])) i += 1;
-    else if (!(args[i].startsWith('-') && args[i].includes('=') && isPortosPreload(args[i]))) kept.push(args[i]);
+    if (args[i] === '--preload' && isPortosPreload(args[i + 1])) i += 1;
+    else if (!(args[i].startsWith('--preload=') && isPortosPreload(args[i]))) kept.push(args[i]);
   }
   return bunCommand(bun, kept);
 }
