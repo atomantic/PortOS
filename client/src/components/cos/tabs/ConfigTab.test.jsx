@@ -385,6 +385,56 @@ describe('domain guardrails and embedding provider autosave', () => {
   });
 });
 
+describe('approval gates', () => {
+  it('saves confidence thresholds and a safety-kind change', async () => {
+    api.updateCosConfig.mockResolvedValue({ success: true });
+    renderConfig({
+      config: {
+        ...config,
+        confidenceAutoApproval: { enabled: true, highThreshold: 80, lowThreshold: 50, minSamples: 5 },
+        safetyKindApproval: { enabled: true, alwaysApproveKinds: ['content', 'publish', 'federation', 'external-pr'] },
+      },
+    });
+    await screen.findByText('Approval gates');
+
+    expect(screen.getByRole('checkbox', { name: /Confidence auto-approval/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /^Publish/ })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /Confidence auto-approval/ }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { confidenceAutoApproval: { enabled: false } },
+      { silent: true },
+    ));
+
+    const low = screen.getByRole('spinbutton', { name: 'Low confidence' });
+    fireEvent.change(low, { target: { value: '30' } });
+    fireEvent.blur(low);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { confidenceAutoApproval: { lowThreshold: 30 } },
+      { silent: true },
+    ));
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Publish/ }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { safetyKindApproval: { alwaysApproveKinds: ['content', 'federation', 'external-pr'] } },
+      { silent: true },
+    ));
+  });
+
+  it('shows a saved safety list that omits a kind', async () => {
+    renderConfig({
+      config: {
+        ...config,
+        safetyKindApproval: { enabled: false, alwaysApproveKinds: ['content'] },
+      },
+    });
+    await screen.findByText('Approval gates');
+    expect(screen.getByRole('checkbox', { name: /Outward safety approval/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /^Content/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /^Federation/ })).not.toBeChecked();
+  });
+});
+
 describe('boot startup compatibility', () => {
   it('shows alwaysOn as the boot setting and clears the legacy alias when autosaving it off', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
