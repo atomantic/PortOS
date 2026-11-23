@@ -6,7 +6,7 @@
  * with branching follow-up questions based on responses.
  */
 
-import { readFile } from 'fs/promises';
+import { readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -1075,12 +1075,44 @@ function findQuestionDef(sectionId, questionId) {
 // AESTHETICS.md write must stamp its meta entry in the same meta-locked section
 // (lock order: taste queue → backup lease → meta lock; sync takes the taste
 // queue outside the meta lock).
+//
+// The taste-profile write already committed before this helper runs. Publication
+// stamps a private meta clone and, if that save fails, puts the previous
+// markdown bytes back (or removes a file this attempt created). The hot cache
+// stays on the persisted record because loadMeta returns that object and
+// saveMeta replaces it only after the write lands. A retry then appends the
+// already-saved answer once onto the restored document.
 const publishAestheticsDoc = (write) => withBackupAssetPublication(() => withMetaLock(async () => {
-  await write();
-  const meta = await loadMeta();
-  ensureDocumentInMeta(meta, AESTHETICS_DOC, 'Aesthetic Preferences', 'creative');
-  await saveMeta(meta);
+  const targetPath = join(DIGITAL_TWIN_DIR, AESTHETICS_DOC);
+  const previousContent = await readAestheticsBytes(targetPath);
+  const wrote = await write();
+  try {
+    const meta = structuredClone(await loadMeta());
+    ensureDocumentInMeta(meta, AESTHETICS_DOC, 'Aesthetic Preferences', 'creative');
+    await saveMeta(meta);
+  } catch (err) {
+    if (wrote) await restoreAestheticsBytes(targetPath, previousContent);
+    throw err;
+  }
 }));
+
+async function readAestheticsBytes(targetPath) {
+  try {
+    return await readFile(targetPath);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function restoreAestheticsBytes(targetPath, previousContent) {
+  try {
+    if (previousContent === null) await unlink(targetPath);
+    else await atomicWrite(targetPath, previousContent);
+  } catch (restoreErr) {
+    console.error(`❌ Taste aesthetics restore failed: ${restoreErr.message}`);
+  }
+}
 
 const appendToAestheticsDoc = (...args) => publishAestheticsDoc(() => appendToAestheticsFile(...args));
 
@@ -1097,19 +1129,20 @@ async function appendToAestheticsFile(sectionId, config, questionId, answer) {
   const qDef = findQuestionDef(sectionId, questionId);
   const questionText = qDef?.text || questionId;
   const sectionHeader = `## ${config.label}`;
+  const entry = `### ${questionText}\n\n${answer}\n\n`;
 
   // Add section header if not present
   if (!content.includes(sectionHeader)) {
     content += `\n${sectionHeader}\n\n`;
   }
 
-  // Append the Q&A
-  const entry = `### ${questionText}\n\n${answer}\n\n`;
-
-  // Insert after the section header
+  // Insert after the section header. A retry whose profile row already saved
+  // must not copy the same block again when the body still has it.
   const headerIdx = content.indexOf(sectionHeader);
   const afterHeader = headerIdx + sectionHeader.length;
   const nextSection = content.indexOf('\n## ', afterHeader + 1);
+  const sectionBody = nextSection > -1 ? content.slice(afterHeader, nextSection) : content.slice(afterHeader);
+  if (sectionBody.includes(entry)) return false;
 
   if (nextSection > -1) {
     content = content.slice(0, nextSection) + entry + content.slice(nextSection);
@@ -1118,6 +1151,7 @@ async function appendToAestheticsFile(sectionId, config, questionId, answer) {
   }
 
   await atomicWrite(targetPath, content);
+  return true;
 }
 
 const writeAestheticsDocument = (...args) => publishAestheticsDoc(() => writeAestheticsFile(...args));
@@ -1143,4 +1177,5 @@ async function writeAestheticsFile(profileSummary, completedSections) {
   }
 
   await atomicWrite(targetPath, content);
+  return true;
 }
