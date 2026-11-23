@@ -13,14 +13,14 @@ describe('projectIndexMeta', () => {
     const memory = {
       id: 'm1', type: 'fact', category: 'work', tags: ['a'], summary: 's',
       importance: 0.7, createdAt: '2024-01-01T00:00:00Z', status: 'active',
-      sourceAppId: 'brain', sourceAgentId: 'agent-1',
+      sourceAppId: 'brain', sourceAgentId: 'agent-1', sourceTaskId: 'turn-1',
       // fields that must NOT leak into the index entry
       content: 'long content', embedding: [1, 2, 3], confidence: 0.9, accessCount: 5
     };
     expect(projectIndexMeta(memory)).toEqual({
       id: 'm1', type: 'fact', category: 'work', tags: ['a'], summary: 's',
       importance: 0.7, createdAt: '2024-01-01T00:00:00Z', status: 'active',
-      sourceAppId: 'brain', sourceAgentId: 'agent-1'
+      sourceAppId: 'brain', sourceAgentId: 'agent-1', sourceTaskId: 'turn-1'
     });
   });
 });
@@ -62,6 +62,12 @@ describe('filterMemoryIndex', () => {
 
   it('excludes brain entries with __not_brain sentinel', () => {
     expect(filterMemoryIndex(memories, { appId: '__not_brain' }).map(m => m.id)).toEqual(['2']);
+  });
+
+  it('filters by source task, treating a missing index field as null', () => {
+    const tagged = memories.map((memory, index) => index === 0 ? { ...memory, sourceTaskId: 'turn-1' } : memory);
+    expect(filterMemoryIndex(tagged, { sourceTaskId: 'turn-1' }).map(m => m.id)).toEqual(['1']);
+    expect(filterMemoryIndex(tagged, { sourceTaskId: null }).map(m => m.id)).toEqual(['2']);
   });
 });
 

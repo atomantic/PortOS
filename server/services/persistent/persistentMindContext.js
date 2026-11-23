@@ -98,7 +98,7 @@ export function clearPersistentMindRollups(mindId = PERSISTENT_MIND_ID) {
 
 /** Protected memories take precedence over ordinary importance-ranked context. */
 export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
-  const options = { status: 'active', sourceAgentId: mindId, sortBy: 'importance', sortOrder: 'desc', limit: 100 };
+  const options = { status: 'active', sourceAgentId: mindId, sortBy: 'importance', sortOrder: 'desc', limit: 100, includeCount: false };
   // Query each protection tier separately so a low-score identity cannot fall
   // outside the first page of ordinary memories before we get to sort it.
   const pages = await Promise.all([
@@ -107,7 +107,7 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
     ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS).map((tag) => memoryBackend.getMemories({ ...options, tags: [tag] })),
   ]);
   const candidates = [...new Map(pages.flatMap((page) => page.memories || []).map((memory) => [memory.id, memory])).values()];
-  const details = await Promise.all(candidates.map((memory) => memoryBackend.peekMemory(memory.id)));
+  const details = candidates.length ? await memoryBackend.peekMemories(candidates.map((memory) => memory.id)) : [];
   return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId
     && !isPersistentMindContinuationNote(memory))
     .sort(comparePersistentMindMemories).slice(0, 100).map(projectPersistentMindMemory);
@@ -207,7 +207,7 @@ export async function readPersistentMindRecall(wake, mindId = PERSISTENT_MIND_ID
       lexicalMatch: 'any',
       limit: PERSISTENT_MIND_RECALL_LIMITS.candidates,
     });
-    const candidates = await Promise.all(hits.map((hit) => memoryBackend.peekMemory(hit.id)));
+    const candidates = hits.length ? await memoryBackend.peekMemories(hits.map((hit) => hit.id)) : [];
     // The continuation note has its own context section and budget.
     const recallable = candidates.filter((memory) => !isPersistentMindContinuationNote(memory));
     const memories = selectPersistentMindRecall({ message, candidates: recallable, mindId }).map(projectPersistentMindMemory);
@@ -220,9 +220,11 @@ export async function readPersistentMindRecall(wake, mindId = PERSISTENT_MIND_ID
 
 /** Counts as access only records that were in a prompt a turn actually sent. */
 export async function recordPersistentMindRecallAccess(memoryIds = []) {
-  const results = await Promise.allSettled(memoryIds.map((id) => memoryBackend.getMemory(id)));
-  const failed = results.filter((result) => result.status === 'rejected').length;
-  if (failed > 0) console.error(`❌ Failed to record access for ${failed} recalled persistent mind memories`);
+  try {
+    await memoryBackend.recordMemoryAccess(memoryIds);
+  } catch (error) {
+    console.error(`❌ Failed to record access for recalled persistent mind memories: ${error.message}`);
+  }
 }
 
 /** Named installs need only one record for frequent page/turn identity refreshes. */
@@ -254,13 +256,14 @@ export function archivePersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
       if (candidates.length === 0) break;
       let batchArchived = 0;
       for (const candidate of candidates) {
-        const memory = await memoryBackend.peekMemory(candidate.id);
-        if (memory?.status !== 'active' || memory.sourceAgentId !== mindId) continue;
-        if (persistentMindMemoryProtection(memory) !== 'standard') {
+        // getMemories already returns tags, status and sourceAgentId. Protection
+        // is tag-only, so a second full-row peek would only repeat that metadata.
+        if (candidate?.status !== 'active' || candidate.sourceAgentId !== mindId) continue;
+        if (persistentMindMemoryProtection(candidate) !== 'standard') {
           preserved += 1;
           continue;
         }
-        await memoryBackend.archiveMemory(memory.id);
+        await memoryBackend.archiveMemory(candidate.id);
         archived += 1;
         batchArchived += 1;
       }
@@ -514,14 +517,14 @@ async function findExistingAutomaticMemory({ memoryApi, mindId, turnId, content 
   const result = await memoryApi.getMemories({
     status: 'active',
     sourceAgentId: mindId,
+    sourceTaskId: turnId,
     limit: 1000,
+    includeCount: false,
   });
-  const candidates = result.memories || [];
-  for (const candidate of candidates) {
-    const memory = await memoryApi.peekMemory(candidate.id);
-    if (memory?.sourceTaskId === turnId && memory.content === content) return memory;
-  }
-  return null;
+  const ids = (result.memories || []).map((candidate) => candidate.id);
+  if (ids.length === 0) return null;
+  const hydrated = await memoryApi.peekMemories(ids);
+  return hydrated.find((memory) => memory?.content === content) ?? null;
 }
 
 async function performAutomaticMemoryCreation({

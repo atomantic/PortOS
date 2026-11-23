@@ -8,6 +8,8 @@ const mock = vi.hoisted(() => ({
   memoryApi: {
     getMemories: vi.fn(async () => ({ memories: [] })),
     peekMemory: vi.fn(),
+    peekMemories: vi.fn(async () => []),
+    recordMemoryAccess: vi.fn(async () => 0),
     getMemory: vi.fn(),
     hybridSearchMemories: vi.fn(),
     selectMindMemoryForReview: vi.fn(),
@@ -79,6 +81,8 @@ beforeEach(() => {
   mock.appendMindEvent.mockClear();
   mock.memoryApi.getMemories.mockReset().mockResolvedValue({ memories: [] });
   mock.memoryApi.peekMemory.mockReset();
+  mock.memoryApi.peekMemories.mockReset().mockResolvedValue([]);
+  mock.memoryApi.recordMemoryAccess.mockReset().mockResolvedValue(0);
   mock.memoryApi.updateMemory.mockReset();
   mock.memoryApi.createMemory.mockClear();
   mock.memoryApi.archiveMemory.mockReset().mockImplementation(async (id) => ({ success: true, id }));
@@ -101,6 +105,7 @@ describe('current-message memory recall', () => {
   const seedStore = (records) => {
     const byId = new Map(records.map((memory) => [memory.id, memory]));
     mock.memoryApi.peekMemory.mockImplementation(async (id) => byId.get(id));
+    mock.memoryApi.peekMemories.mockImplementation(async (ids) => ids.map((id) => byId.get(id)).filter(Boolean));
     mock.memoryApi.getMemories.mockImplementation(async ({ tags, limit = 100 }) => ({
       memories: records
         .filter((memory) => !tags || memory.tags.some((tag) => tags.includes(tag)))
@@ -144,6 +149,7 @@ describe('current-message memory recall', () => {
     const foreign = owned('foreign', 'The zebra migration belongs to another agent.', { sourceAgentId: 'other-agent' });
     mock.memoryApi.hybridSearchMemories.mockResolvedValue({ memories: [foreign, relevant] });
     mock.memoryApi.peekMemory.mockImplementation(async (id) => ({ foreign, relevant, identity })[id]);
+    mock.memoryApi.peekMemories.mockImplementation(async (ids) => ids.map((id) => ({ foreign, relevant, identity })[id]).filter(Boolean));
 
     const context = await outbound('zebra migration status');
 
@@ -221,13 +227,25 @@ describe('current-message memory recall', () => {
 
   it('records access only through the explicit sent-context step, surviving one failure', async () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mock.memoryApi.getMemory.mockResolvedValueOnce(relevant).mockRejectedValueOnce(new Error('synthetic write failure'));
+    mock.memoryApi.recordMemoryAccess.mockRejectedValueOnce(new Error('synthetic write failure'));
 
     await expect(recordPersistentMindRecallAccess(['relevant', 'missing'])).resolves.toBeUndefined();
 
-    expect(mock.memoryApi.getMemory.mock.calls).toEqual([['relevant'], ['missing']]);
+    expect(mock.memoryApi.recordMemoryAccess).toHaveBeenCalledWith(['relevant', 'missing']);
+    expect(mock.memoryApi.getMemory).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledOnce();
     stderr.mockRestore();
+  });
+
+  it('hydrates context and recall with one batch peek and skips list counts', async () => {
+    seedStore([identity, relevant, ...irrelevant.slice(0, 5)]);
+    await readPersistentMindMemories();
+    expect(mock.memoryApi.getMemories.mock.calls.every(([opts]) => opts.includeCount === false)).toBe(true);
+    expect(mock.memoryApi.peekMemories).toHaveBeenCalledTimes(1);
+    expect(mock.memoryApi.peekMemory).not.toHaveBeenCalled();
+    mock.memoryApi.peekMemories.mockClear();
+    await readPersistentMindRecall(wake('zebra migration'));
+    expect(mock.memoryApi.peekMemories).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -236,6 +254,7 @@ describe('chosen identity continuity', () => {
     const records = new Map();
     mock.memoryApi.getMemories.mockImplementation(async ({ offset = 0 }) => ({ memories: [...records.values()].filter((m) => m.status === 'active').slice(offset, offset + 100) }));
     mock.memoryApi.peekMemory.mockImplementation(async (id) => records.get(id));
+    mock.memoryApi.peekMemories.mockImplementation(async (ids) => ids.map((id) => records.get(id)).filter(Boolean));
     mock.memoryApi.createMemory.mockImplementationOnce(async (input) => {
       const memory = { id: 'chosen-identity', ...input };
       records.set(memory.id, memory);
@@ -520,6 +539,7 @@ describe('persistent mind memory cleanup', () => {
       memories: [...records.values()].filter((memory) => memory.status === 'active' && (!tags || tags.some((tag) => memory.tags.includes(tag)))).sort((a, b) => sortBy === 'importance' ? b.importance - a.importance : 0).slice(offset, offset + limit),
     }));
     mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
+    mock.memoryApi.peekMemories.mockImplementation(async (ids) => ids.map((id) => structuredClone(records.get(id))).filter(Boolean));
     mock.memoryApi.archiveMemory.mockImplementation(async (id) => { records.get(id).status = 'archived'; });
 
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 102 });
@@ -552,13 +572,14 @@ describe('persistent mind memory cleanup', () => {
 
   it('archives active memories owned by the mind without hard-deleting them', async () => {
     mock.memoryApi.getMemories
-      .mockResolvedValueOnce({ memories: [{ id: 'memory-owned' }, { id: 'memory-foreign' }] })
+      .mockResolvedValueOnce({ memories: [
+        { id: 'memory-owned', status: 'active', sourceAgentId: 'cos-persistent-mind', tags: [] },
+        { id: 'memory-foreign', status: 'active', sourceAgentId: 'other-agent', tags: [] },
+      ] })
       .mockResolvedValueOnce({ memories: [] });
-    mock.memoryApi.peekMemory
-      .mockResolvedValueOnce({ id: 'memory-owned', status: 'active', sourceAgentId: 'cos-persistent-mind' })
-      .mockResolvedValueOnce({ id: 'memory-foreign', status: 'active', sourceAgentId: 'other-agent' });
 
     await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 0 });
+    expect(mock.memoryApi.peekMemory).not.toHaveBeenCalled();
     expect(mock.memoryApi.archiveMemory).toHaveBeenCalledWith('memory-owned');
     expect(mock.memoryApi.archiveMemory).not.toHaveBeenCalledWith('memory-foreign');
   });
@@ -579,6 +600,9 @@ describe('trajectory annotations and Brain promotion', () => {
     });
 
     expect(created).toMatchObject({ success: true, duplicate: false, memory: { id: 'memory-automatic-1', status: 'active' } });
+    expect(mock.memoryApi.getMemories).toHaveBeenCalledWith(expect.objectContaining({
+      sourceTaskId: 'turn-automatic', includeCount: false, limit: 1000,
+    }));
     expect(mock.memoryApi.createMemory).toHaveBeenCalledWith({
       content: 'Remember this automatically created fact.',
       summary: 'Automatic fact',
@@ -699,6 +723,7 @@ describe('continuation note', () => {
         .slice(offset, offset + limit),
     }));
     mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
+    mock.memoryApi.peekMemories.mockImplementation(async (ids) => ids.map((id) => structuredClone(records.get(id))).filter(Boolean));
     mock.memoryApi.createMemory.mockImplementation(async (input) => {
       const memory = { id: `note-${++created}`, version: 1, updatedAt: '2026-01-01T00:00:00.000Z', ...input };
       records.set(memory.id, memory);
