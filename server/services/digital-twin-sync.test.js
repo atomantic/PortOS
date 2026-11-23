@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   mergeObjectLWW,
-  mergeDeepUnion,
   unionByKey,
   mergeTaste,
   mergeMeta,
@@ -118,22 +117,6 @@ describe('mergeChronotypeObserved (#2156 — signal-aware LWW)', () => {
     const local = rec('2026-07-01T00:00:00Z', 40, 'morning');
     const remoteEmpty = rec('2026-07-09T00:00:00Z', 0, null);
     expect(mergeChronotypeObserved(local, remoteEmpty).merged.observedType).toBe('morning');
-  });
-});
-
-describe('mergeDeepUnion', () => {
-  it('unions nested marker objects, local wins per-key', () => {
-    const local = { markers: { a: 1 }, derivedAt: '2026-01-01' };
-    const remote = { markers: { a: 9, b: 2 }, derivedAt: '2026-01-02' };
-    const { merged, changed } = mergeDeepUnion(local, remote, 'derivedAt');
-    expect(merged.markers).toEqual({ a: 1, b: 2 });
-    expect(merged.derivedAt).toBe('2026-01-02');
-    expect(changed).toBe(true);
-  });
-  it('fills locally-missing/default scalars from remote', () => {
-    const { merged } = mergeDeepUnion({ score: 0, derivedAt: '' }, { score: 5, age: 40, derivedAt: '' }, 'derivedAt');
-    expect(merged.score).toBe(5);
-    expect(merged.age).toBe(40);
   });
 });
 

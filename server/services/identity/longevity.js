@@ -5,7 +5,8 @@ import {
   DEFAULT_GOALS,
   DEFAULT_LONGEVITY,
   loadJSON,
-  saveJSON
+  saveJSON,
+  queueDerivedIdentityWrite
 } from './store.js';
 import {
   computeLifeExpectancy,
@@ -49,10 +50,17 @@ export async function readLongevity() {
 export async function getLongevity() {
   const existing = await readLongevity();
   if (existing.derivedAt) return existing;
-  return deriveLongevity();
+  return queueDerivedIdentityWrite(LONGEVITY_FILE, async () => {
+    const latest = await readLongevity();
+    return latest.derivedAt ? latest : saveLongevity();
+  });
 }
 
-export async function deriveLongevity(birthDate, { withoutGenetics = false } = {}) {
+export function deriveLongevity(birthDate, options) {
+  return queueDerivedIdentityWrite(LONGEVITY_FILE, () => saveLongevity(birthDate, options));
+}
+
+async function saveLongevity(birthDate, { withoutGenetics = false } = {}) {
   const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
   const savedMarkers = genomeSummary?.savedMarkers || {};
 
