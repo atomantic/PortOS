@@ -7,8 +7,13 @@ import {
   closeProductionFeedback,
   reviseProductionFromFeedback,
 } from '../productionReviewService.js';
-import { randomUUID } from 'crypto';
 import { join } from 'path';
+import {
+  AUTONOMOUS_PROCESS_ID as PROCESS_ID,
+  __autonomousProcessId,
+  presentAutonomousRun,
+  presentProjectAutonomousRun,
+} from '../processPins.js';
 import { PATHS } from '../../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../../lib/ffmpeg.js';
 import { ServerError } from '../../../lib/errorHandler.js';
@@ -21,7 +26,7 @@ import { supportsSourceAudioWindow } from '../../federatedMedia/sourceAudio.js';
 
 export const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 
-export const PROCESS_ID = `proc-${randomUUID()}`;
+export { PROCESS_ID, presentAutonomousRun, presentProjectAutonomousRun, __autonomousProcessId };
 
 export const short = (id) => String(id).slice(0, 8);
 
@@ -107,19 +112,6 @@ export async function requireRun(projectId) {
   if (!run) throw runError(404, 'NO_AUTONOMOUS_RUN', 'This project has no autonomous run');
   return { project, run };
 }
-
-/** The run as the client sees it: `interrupted` when it was pinned to a previous server process. */
-export const presentAutonomousRun = (run) => (run
-  ? { ...run, interrupted: run.status === 'running' && run.processId !== PROCESS_ID }
-  : null);
-
-/** `presentAutonomousRun` for a project read; reader-only — never persist the result. */
-export const presentProjectAutonomousRun = (project) => (project?.autonomousRun
-  ? { ...project, autonomousRun: presentAutonomousRun(project.autonomousRun) }
-  : project);
-
-/** Test seam: this process's pin id. */
-export const __autonomousProcessId = () => PROCESS_ID;
 
 export function publish(project, run) {
   musicVideoEvents.emit('autonomous', { projectId: project.id, runId: run.id, run: presentAutonomousRun(run), project: { ...project, autonomousRun: presentAutonomousRun(run) } });

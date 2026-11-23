@@ -165,6 +165,13 @@ const SELECTION_CUTS = [
     'broadcasts command output through the socketIo.js leaf'],
   ['services/codeAnimation/films.js', 'services/socket.js',
     'emits film frames through codeAnimation/events.js'],
+  // #17576: a project read presents process pins without the stage orchestrators.
+  ['services/musicVideo/projectPresentation.js', 'services/musicVideo/castAndSetsService.js',
+    'presents Cast & Sets through the processPins.js leaf'],
+  ['services/musicVideo/projectPresentation.js', /^services\/musicVideo\/(?:autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'presents an autonomous run through the processPins.js leaf'],
+  ['services/musicVideo/processPins.js', /^services\/musicVideo\/(?:projects\.js|castAndSetsService\.js|autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'owns the process pins without the stage orchestrators or the project store'],
 ];
 
 // Runtimes that import the queue back load through bootHookRegistry.js (#17499).
@@ -216,6 +223,11 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
     expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
     expect(importTargets('services/socket.js')).toContain('services/socketIo.js');
+  });
+
+  it('still sees the processPins.js edge a project read keeps (#17576)', () => {
+    expect(importTargets('services/musicVideo/projectPresentation.js')).toContain('services/musicVideo/processPins.js');
+    expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
   // Positive control for the media scan: the boot owner still names every runtime.
