@@ -17,7 +17,10 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async () => 'example prompt' }));
-vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => '' }));
+vi.mock('./digital-twin-context.js', () => ({
+  getDigitalTwinForPrompt: async () => '',
+  getDigitalTwinContextWithDocs: async () => ({ content: '', documentsUsed: [] })
+}));
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));
 vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 

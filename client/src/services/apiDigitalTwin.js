@@ -226,6 +226,12 @@ export const submitBehavioralFeedback = (data, options = {}) => request('/digita
   ...options
 });
 export const getBehavioralFeedbackStats = () => request('/digital-twin/feedback/stats');
+export const recalculateBehavioralFeedbackWeights = (options = {}) => request('/digital-twin/feedback/recalculate', { method: 'POST', ...options });
+export const getRecentBehavioralFeedback = (contentType, limit = 20) => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (contentType) params.set('contentType', contentType);
+  return request(`/digital-twin/feedback/recent?${params}`);
+};
 
 // Digital Twin - Taste Questionnaire
 export const getTasteProfile = (options) => request('/digital-twin/taste', options);

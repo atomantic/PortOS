@@ -31,6 +31,7 @@ import ValuesAlignmentPanel from './ValuesAlignmentPanel';
 import AdversarialBoundaryPanel from './AdversarialBoundaryPanel';
 import MultiTurnPanel from './MultiTurnPanel';
 import PersonaBadge from '../PersonaBadge';
+import FeedbackWeightsPanel from '../FeedbackWeightsPanel';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
 import useProviderList from '../../../hooks/useProviderList';
@@ -100,7 +101,15 @@ export default function TestTab({ onRefresh }) {
     getBehavioralFeedbackStats().catch(() => null).then(fbStats => {
       if (active && fbStats) setFeedbackStats(fbStats);
     });
-    return () => { active = false; };
+    // Feedback from any tab (or peer sync) invalidates the stats; refetch on push.
+    const refresh = () => getBehavioralFeedbackStats().catch(() => null).then(fbStats => {
+      if (active && fbStats) setFeedbackStats(fbStats);
+    });
+    socket.on('digital-twin:changed', refresh);
+    return () => {
+      active = false;
+      socket.off('digital-twin:changed', refresh);
+    };
   }, []);
 
   // Merge each provider/model result into the visible set as the server reports
@@ -124,7 +133,7 @@ export default function TestTab({ onRefresh }) {
     };
   }, []);
 
-  const submitFeedback = async (providerId, model, testId, testName, response, validation) => {
+  const submitFeedback = async (providerId, model, testId, testName, response, validation, documentsUsed) => {
     const key = `${providerId}:${model}:${testId}`;
     setFeedbackGiven(prev => ({ ...prev, [key]: validation }));
 
@@ -134,7 +143,8 @@ export default function TestTab({ onRefresh }) {
       contentSnippet: response?.slice(0, 2000),
       context: `Test: ${testName} | Model: ${model}`,
       providerId,
-      model
+      model,
+      documentsUsed
     }, { silent: true }).catch(() => {
       toast.error('Failed to save feedback');
       setFeedbackGiven(prev => { const next = { ...prev }; delete next[key]; return next; });
@@ -635,7 +645,7 @@ export default function TestTab({ onRefresh }) {
                               <p className="text-xs text-gray-500 mb-2">Does this response sound like you?</p>
                               <div className="flex flex-wrap items-center gap-2">
                                 <button
-                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'sounds_like_me')}
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'sounds_like_me', r.documentsUsed)}
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'sounds_like_me'
@@ -647,7 +657,7 @@ export default function TestTab({ onRefresh }) {
                                   Sounds like me
                                 </button>
                                 <button
-                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'not_quite')}
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'not_quite', r.documentsUsed)}
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'not_quite'
@@ -659,7 +669,7 @@ export default function TestTab({ onRefresh }) {
                                   Not quite
                                 </button>
                                 <button
-                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'doesnt_sound_like_me')}
+                                  onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'doesnt_sound_like_me', r.documentsUsed)}
                                   disabled={!!currentFeedback}
                                   className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'doesnt_sound_like_me'
@@ -772,6 +782,8 @@ export default function TestTab({ onRefresh }) {
               }
             </div>
           )}
+
+          <FeedbackWeightsPanel />
         </div>
       )}
 

@@ -159,8 +159,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/database/maintenance/preflight',
     '/api/database/switch',
     '/api/digital-twin/enrich/categories',
-    '/api/digital-twin/feedback/recalculate',
-    '/api/digital-twin/feedback/recent',
     '/api/docker-containment/run',
     '/api/eidoverse/world/controllers/:id/riddle',
     '/api/eidoverse/world/foundations/:id/adopt',

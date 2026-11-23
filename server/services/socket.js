@@ -675,7 +675,7 @@ function broadcastToAgents(event, data) { broadcastToSet(agentSubscribers, event
 // Forward only invalidations, never private traits, interview text or settings.
 // All status/settings writers save meta; sync also signals after document I/O.
 function setupDigitalTwinEventForwarding() {
-  for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+  for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed', 'feedback:submitted', 'feedback:weights-recalculated']) {
     digitalTwinEvents.on(event, () => getIo()?.emit('digital-twin:changed', {}));
   }
 }

@@ -383,12 +383,12 @@ describe('socket.js — initSocket', () => {
 
   it('forwards Digital Twin changes without leaking source records', () => {
     io.emitted.length = 0;
-    for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
+    for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed', 'feedback:submitted', 'feedback:weights-recalculated']) {
       const handler = queueListeners.twin.find(([name]) => name === event)?.[1];
       expect(handler).toBeTypeOf('function');
       handler({ privateContent: 'example private record' });
     }
-    expect(io.emitted).toEqual(Array.from({ length: 5 }, () => ['digital-twin:changed', {}]));
+    expect(io.emitted).toEqual(Array.from({ length: 7 }, () => ['digital-twin:changed', {}]));
   });
 
   it('forwards bounded MeatSpace invalidations once after repeated initialization', () => {
