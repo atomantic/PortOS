@@ -108,6 +108,7 @@ async function buildStrip(owner, shot, ref, settings, sheetFile = null) {
   const grid = await stripGrid(owner, shot, settings, sheetFile);
   const times = blenderMotionReferenceTimes({ shot, ref, fps: settings.fps, every: grid.every, firstFrame: grid.firstFrame, tiles: grid.tiles });
   const count = times.filter((time) => time !== null).length;
+  if (times[0] === null) throw blenderRefusal('That contact sheet starts before the shot; render it again', 'MUSIC_VIDEO_BLENDER_REFERENCE_OUT_OF_RANGE', 409);
   if (!count) throw blenderRefusal('The reference window ends before the first tile of this sheet', 'MUSIC_VIDEO_BLENDER_REFERENCE_OUT_OF_RANGE', 409);
   const output = stripFile(owner, shot.id, ref.id);
   await mkdir(referencesDir(owner, shot.id), { recursive: true });

@@ -195,7 +195,9 @@ export function normalizeBlenderMotionReferences(input) {
  */
 export function blenderMotionReferenceTimes({ shot, ref, fps, every, firstFrame, tiles }) {
   return Array.from({ length: tiles }, (_, index) => {
-    const local = (firstFrame + index * every) / fps - shot.start;
+    // A shot boundary off the frame grid rounds its first frame down by under half a frame: that is still its start.
+    const raw = (firstFrame + index * every) / fps - shot.start;
+    const local = raw < 0 && raw >= -0.5 / fps ? 0 : raw;
     const at = ref.inSec + local * ref.speed;
     return local >= 0 && at < ref.outSec ? roundSec(at) : null;
   });

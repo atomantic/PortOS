@@ -70,6 +70,11 @@ it('lines a 2x reference up with a 4 s shot column for column', () => {
   expect(times).toEqual([1, 2, 3, 4, null, null, null, null]);
 });
 
+it('treats a first tile under half a frame before an off-grid shot start as its start', () => {
+  const times = blenderMotionReferenceTimes({ shot: { start: 0.51 }, ref: { inSec: 0, outSec: 5, speed: 1 }, fps: 24, every: 24, firstFrame: 12, tiles: 2 });
+  expect(times).toEqual([0, 0.99]);
+});
+
 it('reads a record written before motion references as having none', () => {
   expect(normalizeBlenderRecord({ settings: { fps: 24 } }).motionReferences).toEqual({});
   expect(normalizeBlenderRecord({ motionReferences: { s010: [{ id: 'a', filename: 'v.mp4', inSec: 3, outSec: 1, speed: 1 }] } }).motionReferences).toEqual({});
