@@ -73,7 +73,7 @@ const CATALOG = {
   ],
   listErrors: [{ id: 'lmstudio', label: 'LM Studio', error: 'not reachable', offline: true }],
   defaultPages: ['Rain on Glass: droplets. Make it stunning.', 'Brass Orrery: clockwork. Make it stunning.', 'Ant Colony: nest. Make it stunning.', 'Geoboard: pegs', 'Parlour: a keyboard'],
-  promptParts: { before: 'Create one standalone HTML file.\n\n', after: '\n\nRules:\n- Everything inline.' },
+  promptParts: { planBefore: 'Plan this page.\n\nBrief:\n', planAfter: '\n\nReply with only the plan.', before: 'Create one standalone HTML file.\n\n', planLabel: '\n\nBuild it from this plan:\n\n', after: '\n\nRules:\n- Everything inline.' },
   pageCountMax: 5,
   briefMaxChars: 200,
 };
@@ -90,9 +90,10 @@ const run = (id, modelId, extra = {}) => ({
 const fullRun = (r) => ({ ...r, pages: r.pages.map((p) => ({ ...p, html: '<html></html>' })) });
 
 function Probe() {
-  return <output aria-label="query">{useLocation().search}</output>;
+  const { pathname, search } = useLocation();
+  return <><output aria-label="path">{pathname}</output><output aria-label="query">{search}</output></>;
 }
-const renderPage = (entry = '/media/pages') => render(<MemoryRouter initialEntries={[entry]}><HtmlPages /><Probe /></MemoryRouter>);
+const renderPage = (entry = '/html-pages') => render(<MemoryRouter initialEntries={[entry]}><HtmlPages /><Probe /></MemoryRouter>);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -104,7 +105,7 @@ beforeEach(() => {
 
 describe('HtmlPages', () => {
   it('shows stored runs with their outcome, and stays quiet about runtimes that are not running', async () => {
-    renderPage();
+    renderPage('/html-pages/runs');
     expect(await screen.findByText(/2 of 2 pages pass every check/)).toBeInTheDocument();
     expect(screen.getByText('model server went away')).toBeInTheDocument();
     expect(screen.queryByText(/Could not read/)).not.toBeInTheDocument();
@@ -136,6 +137,8 @@ describe('HtmlPages', () => {
       routes: [],
       pages: ['  A lighthouse at dusk\nwith a sweeping beam  ', CATALOG.defaultPages[1]],
     });
+    // A queued run lands on the Runs tab.
+    await waitFor(() => expect(screen.getByLabelText('path')).toHaveTextContent('/html-pages/runs'));
     expect(await screen.findAllByText('Queued')).toHaveLength(2);
   });
 
@@ -162,16 +165,14 @@ describe('HtmlPages', () => {
     expect(await screen.findByText(/Example CLI · high/)).toBeInTheDocument();
   });
 
-  it('shows the fixed PortOS text and the full prompt built from the brief being typed', async () => {
+  it('shows both full prompts each page sends, the plan request and the page prompt that carries the plan, built from the brief being typed', async () => {
     renderPage();
     await screen.findByText('Models');
     fireEvent.change(screen.getByLabelText('Page 1'), { target: { value: 'A lighthouse' } });
-    fireEvent.click(screen.getByText('Show the full prompt for each page'));
-    const full = 'Create one standalone HTML file.\n\nA lighthouse\n\nRules:\n- Everything inline.';
-    expect(screen.getAllByText((_, el) => el?.tagName === 'PRE' && el.textContent === full)).toHaveLength(1);
-    fireEvent.click(screen.getByText('Text PortOS adds around each brief'));
-    expect(screen.getByText('Create one standalone HTML file.', { selector: 'pre' })).toBeInTheDocument();
-    expect(screen.getByText('Rules: - Everything inline.', { selector: 'pre' })).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Show the full prompts for each page'));
+    const pre = (text) => screen.getAllByText((_, el) => el?.tagName === 'PRE' && el.textContent === text);
+    expect(pre('Plan this page.\n\nBrief:\nA lighthouse\n\nReply with only the plan.')).toHaveLength(1);
+    expect(pre("Create one standalone HTML file.\n\nA lighthouse\n\nBuild it from this plan:\n\n[the model's plan]\n\nRules:\n- Everything inline.")).toHaveLength(1);
   });
 
   it('blocks a blank or over-long brief instead of altering it, and shows the count', async () => {
@@ -208,14 +209,14 @@ describe('HtmlPages', () => {
       run('none', 'example-none:7b', { detail: { verdict: 'failed', summary: '0 of 2 pages pass every check' } }),
       run('some', 'example-some:7b', { detail: { verdict: 'partial', summary: '1 of 2 pages pass every check' } }),
     ]);
-    renderPage();
+    renderPage('/html-pages/runs');
     expect(await screen.findByText('No usable pages')).toBeInTheDocument();
     expect(screen.getByText('Partial')).toBeInTheDocument();
     expect(screen.getAllByText('Complete')).toHaveLength(1);
   });
 
   it('puts the selection in the URL and renders every theme for every selected run side by side', async () => {
-    renderPage();
+    renderPage('/html-pages/runs');
     await screen.findByText(/2 of 2 pages pass every check/);
     const [first] = screen.getAllByRole('button', { name: 'Compare' });
     fireEvent.click(first);
@@ -249,9 +250,15 @@ describe('HtmlPages', () => {
       // Stored before pages recorded their own token count and finish time: dated by its run, counts shown as missing.
       run('old', 'example-b:7b', { finishedAt: '2026-11-20T09:00:00Z', pages: [page('Old', { tokensPerSecond: 40 }), page('Empty', { bytes: 0 })] }),
     ]);
-    getHtmlPageRun.mockImplementation(async (id) => ({ ...run(id, 'example-b:7b'), pages: [{ html: '<html>a</html>' }, { html: '<html>b</html>' }] }));
-    renderPage('/media/pages?view=gallery');
+    getHtmlPageRun.mockImplementation(async (id) => ({
+      ...run(id, 'example-b:7b'),
+      pages: [{ html: '<html>a</html>', prompt: 'old page prompt' }, { html: '<html>b</html>', planPrompt: 'plan request', plan: 'the plan', prompt: 'page prompt with the plan' }],
+    }));
+    renderPage('/html-pages?view=gallery');
 
+    // The gallery's old deep link lands on the Gallery tab.
+    await waitFor(() => expect(screen.getByLabelText('path')).toHaveTextContent('/html-pages/gallery'));
+    expect(screen.getByLabelText('query')).not.toHaveTextContent('view');
     const cards = await screen.findAllByRole('listitem');
     expect(cards).toHaveLength(3);
     expect(cards.map((c) => within(c).getByText(/example-/).textContent)).toEqual(['example-a:7b', 'example-a:7b', 'example-b:7b']);
@@ -270,18 +277,29 @@ describe('HtmlPages', () => {
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('/example/data/html-pages/new/2-two.html', 'File path copied'));
     expect(getHtmlPageFilePath).toHaveBeenCalledWith('new', 1, { silent: true });
 
+    // What the page was asked and what its model planned, each copyable for another model.
+    fireEvent.click(within(cards[0]).getByText('Prompt and plan'));
+    for (const [label, text] of [['plan request', 'plan request'], ['plan', 'the plan'], ['page prompt', 'page prompt with the plan']]) {
+      fireEvent.click(within(cards[0]).getByRole('button', { name: `Copy the ${label} of example-a:7b — page 2` }));
+      expect(copyToClipboard).toHaveBeenLastCalledWith(text, expect.stringMatching(/copied$/));
+    }
+    // A page stored before the plan step shows only its page prompt.
+    fireEvent.click(within(cards[1]).getByText('Prompt and plan'));
+    expect(within(cards[1]).queryByRole('button', { name: /Copy the plan of/ })).not.toBeInTheDocument();
+    expect(within(cards[1]).getByRole('button', { name: 'Copy the page prompt of example-a:7b — page 1' })).toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'ollama::example-b:7b' } });
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Compare: the example-b:7b run' }));
     expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('compare')).toBe('old');
-    expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('view')).toBe('gallery');
+    expect(screen.getByLabelText('path')).toHaveTextContent('/html-pages/gallery');
     const comparison = await screen.findByRole('region', { name: 'Comparison' });
     expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
     vi.unstubAllGlobals();
   });
 
   it('restores a comparison from a deep link', async () => {
-    renderPage('/media/pages?compare=r2');
+    renderPage('/html-pages/runs?compare=r2');
     const comparison = await screen.findByRole('region', { name: 'Comparison' });
     expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
     expect(getHtmlPageRun).toHaveBeenCalledWith('r2', expect.anything());
@@ -292,7 +310,7 @@ describe('HtmlPages', () => {
       if (id === 'gone') throw Object.assign(new Error('Run not found'), { status: 404, code: 'NOT_FOUND' });
       return fullRun(run(id, 'example-a:7b'));
     });
-    renderPage('/media/pages?compare=gone,r1');
+    renderPage('/html-pages/runs?compare=gone,r1');
     const comparison = await screen.findByRole('region', { name: 'Comparison' });
     expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
     await waitFor(() => expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('compare')).toBe('r1'));
@@ -301,7 +319,7 @@ describe('HtmlPages', () => {
 
   it('retries a failed comparison load in place', async () => {
     getHtmlPageRun.mockRejectedValueOnce(new Error('boom'));
-    renderPage('/media/pages?compare=r1');
+    renderPage('/html-pages/runs?compare=r1');
     const alert = (await screen.findAllByRole('alert')).find((el) => /selected runs/.test(el.textContent));
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
     const comparison = await screen.findByRole('region', { name: 'Comparison' });
@@ -310,14 +328,14 @@ describe('HtmlPages', () => {
 
   it('clears a failed comparison without editing the URL', async () => {
     getHtmlPageRun.mockRejectedValue(new Error('boom'));
-    renderPage('/media/pages?compare=r1');
+    renderPage('/html-pages/runs?compare=r1');
     fireEvent.click(await screen.findByRole('button', { name: 'Clear comparison' }));
     await waitFor(() => expect(screen.getByLabelText('query')).not.toHaveTextContent('compare'));
     expect(screen.queryByRole('button', { name: 'Clear comparison' })).not.toBeInTheDocument();
   });
 
   it('refetches the list when a run changes, so progress arrives without polling', async () => {
-    renderPage();
+    renderPage('/html-pages/runs');
     await screen.findByText(/2 of 2 pages pass every check/);
     listHtmlPageRuns.mockResolvedValue([run('r1', 'example-a:7b', { status: 'generating', progress: { done: 1, total: 2 } })]);
     await emitRun({ id: 'r1' });
@@ -326,7 +344,7 @@ describe('HtmlPages', () => {
 
   it('asks before deleting, then removes the run and drops it from the comparison', async () => {
     deleteHtmlPageRun.mockResolvedValue({ id: 'r1', deleted: true });
-    renderPage('/media/pages?compare=r1');
+    renderPage('/html-pages/runs?compare=r1');
     await screen.findByText(/2 of 2 pages pass every check/);
     fireEvent.click(screen.getByRole('button', { name: 'Delete the example-a:7b run' }));
     expect(deleteHtmlPageRun).not.toHaveBeenCalled();
@@ -340,7 +358,7 @@ describe('HtmlPages', () => {
 
   it('offers Resume on a failed run, Retry on a finished one with a failing page, and shows it queued again', async () => {
     resumeHtmlPageRun.mockResolvedValue(run('r2', 'example-b:7b', { status: 'queued', pages: [] }));
-    renderPage();
+    renderPage('/html-pages/runs');
     await screen.findByText('model server went away');
     expect(screen.queryByRole('button', { name: 'Resume the example-a:7b run' })).not.toBeInTheDocument();
     // example-a finished, but one of its pages failed a check.

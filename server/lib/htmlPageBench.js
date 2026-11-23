@@ -1,7 +1,7 @@
 /**
  * Default page briefs, prompt and mechanical page checks for the HTML Pages bench: ask a local model for one to five creative standalone HTML pages and judge them side by side.
  *
- * The person writes each page's brief (by default generic creative guidelines that leave the subject to the model); PortOS only adds fixed standalone-file rules around it, shown beside it before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
+ * The person writes each page's brief (by default generic creative guidelines that leave the subject to the model); PortOS asks the model to plan the page from it first, then to build the page from the brief and that plan, adding only fixed text that is shown beside the brief before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
  */
 
 /** The most pages one run may ask for; the default is what the form pre-selects. */
@@ -20,10 +20,20 @@ export const HTML_PAGE_DEFAULT_BRIEF = '- look stunning\n- original\n- go full c
 export const HTML_PAGE_DEFAULT_BRIEFS = Object.freeze(Array.from({ length: HTML_PAGES_MAX }, () => HTML_PAGE_DEFAULT_BRIEF));
 
 /**
- * The fixed text PortOS puts around a page brief. Exported on its own so the form can show exactly what is added before and after what the person typed, built by the same code that sends it.
+ * The fixed text PortOS puts around a page brief. Exported on its own so the form can show exactly what is added, built by the same code that sends it.
+ *
+ * Each page is two requests to the same model: first `planBefore + brief + planAfter` asks for a detailed plan, then `before + brief + planLabel + plan + after` asks for the page built from that plan. A page whose plan step failed is asked with `before + brief + after` alone.
  */
 export const htmlPagePromptParts = () => ({
+  planBefore: 'You will build one standalone HTML page from the brief below. First write the detailed plan for it.\n\nBrief:\n',
+  planAfter: [
+    '',
+    '',
+    'Write the plan as a detailed prompt another developer could build the page from: the concept, the content and sections, the layout, the visual style (palette, type, motion), the interactions, and how it all fits in one self-contained file with inline CSS and JavaScript and no external resources. Check that every part can really be built that way.',
+    'Reply with only the plan, no code.',
+  ].join('\n'),
   before: 'Create one standalone HTML file.\n\n',
+  planLabel: '\n\nBuild it from this plan:\n\n',
   after: [
     '',
     '',
@@ -33,11 +43,20 @@ export const htmlPagePromptParts = () => ({
   ].join('\n'),
 });
 
-/** The prompt for one page: the brief exactly as written between the fixed parts. One request per page, so each page gets the model's full attention and token budget. */
-export const htmlPagePrompt = (brief) => {
-  const { before, after } = htmlPagePromptParts();
-  return `${before}${brief}${after}`;
+/** The planning request for one page: the brief exactly as written, asking for a detailed plan of the page. */
+export const htmlPagePlanPrompt = (brief) => {
+  const { planBefore, planAfter } = htmlPagePromptParts();
+  return `${planBefore}${brief}${planAfter}`;
 };
+
+/** The page request: the brief exactly as written and, when the plan step produced one, the model's plan, between the fixed parts. One request per page, so each page gets the model's full attention and token budget. */
+export const htmlPagePrompt = (brief, plan = null) => {
+  const { before, planLabel, after } = htmlPagePromptParts();
+  return `${before}${brief}${plan ? `${planLabel}${plan}` : ''}${after}`;
+};
+
+/** The plan out of a planning reply: a reasoning block a model wrote inline is dropped so only the plan is shown and sent on. Empty when the reply held no plan. */
+export const extractHtmlPagePlan = (text) => String(text || '').replace(/^\s*<think>[\s\S]*?<\/think>/i, '').trim();
 
 // ---- scoring ----------------------------------------------------------------
 

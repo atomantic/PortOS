@@ -472,6 +472,8 @@ export default function App() {
             <Route path="creative-commission" element={<CreativeCommissions />} />
             <Route path="creative-commission/new" element={<CreativeCommissions />} />
             <Route path="html-pages" element={<HtmlPages />} />
+            <Route path="html-pages/runs" element={<HtmlPages />} />
+            <Route path="html-pages/gallery" element={<HtmlPages />} />
             <Route path="game" element={<Game />} />
             <Route path="game/:id" element={<Game />} />
             <Route path="wiki/:tab" element={<Wiki />} />

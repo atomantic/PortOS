@@ -5,6 +5,8 @@
  *
  * Each page is also written as a file under `data/html-pages/<runId>/` (`pageFiles.js`) so it can be downloaded or opened by path; the record stays authoritative, and a page whose file is missing gets it written from the record when it is first asked for.
  *
+ * Each page is two requests to the run's model: a planning request that expands the brief into a detailed plan, then the page request built from the brief and that plan. Both prompts and the plan are stored on the page so they can be copied and reused on another model.
+ *
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
@@ -14,7 +16,7 @@ import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import {
-  HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, scoreHtmlPage, scoreHtmlPages,
+  HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
 import { listRuntimeModels } from '../localModelAssessments.js';
 import { generate } from '../modelCapabilityTests.js';
@@ -85,8 +87,10 @@ export async function listSelectableModels() {
   };
 }
 
-/** A run without its generated HTML: the list refetches on every progress event, and the pages are read one run at a time. */
-const summarize = (run) => ({ ...run, pages: (run.pages || []).map(({ html, ...page }) => page) });
+/** A run without its generated HTML, plans and prompts: the list refetches on every progress event, and the pages are read one run at a time. */
+const summarize = ({ prompts, planPrompts, ...run }) => ({
+  ...run, pages: (run.pages || []).map(({ html, plan, planPrompt, prompt, ...page }) => page),
+});
 
 /** Stored run summaries, newest first. A run still marked active that this process is not working on was cut off by a restart. */
 export async function listRuns() {
@@ -128,15 +132,15 @@ export async function startRuns({ models = [], routes = [], pages }) {
     });
   }
   const resolvedRoutes = await Promise.all(routes.map(resolveRoute));
-  // The exact prompt each page sends is recorded on the run, so a later change to the fixed text never rewrites what an old run was asked.
-  const prompts = pages.map(htmlPagePrompt);
+  // The exact planning request each page sends is recorded on the run, so a later change to the fixed text never rewrites what an old run was asked; the page request, which carries the model's plan, is recorded on each page.
+  const planPrompts = pages.map((brief) => htmlPagePlanPrompt(brief));
   const runs = [];
   const targets = [
     ...models.map((m) => ({ backend: m.backend, modelId: m.modelId, route: null })),
     ...resolvedRoutes.map((route) => ({ backend: 'provider', modelId: route.model || route.providerName, route })),
   ];
   for (const target of targets) {
-    const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
+    const run = await createRun({ ...target, pageCount: pages.length, themes: pages, planPrompts });
     enqueue(run.id);
     runs.push(run);
   }
@@ -236,8 +240,23 @@ async function processRun(id) {
         // A resumed run keeps the pages it already finished.
         if (index < run.pages.length) continue;
         if (controller.signal.aborted) return;
+        // A run stored before the plan step recorded its page prompts up front and has no planning request.
+        const planPrompt = run.planPrompts?.[index] ?? null;
+        let plan = null;
+        let planError = null;
+        let planElapsedMs = null;
+        if (planPrompt) {
+          const planStartedAt = Date.now();
+          const planned = await send(planPrompt);
+          if (controller.signal.aborted) return;
+          plan = extractHtmlPagePlan(planned?.text) || null;
+          // A failed plan step degrades to the brief alone; the page records why, and its prompt shows what was really sent.
+          planError = plan ? null : (planned?.error || 'The plan step returned no plan');
+          planElapsedMs = Math.max(0, Date.now() - planStartedAt);
+        }
+        const prompt = planPrompt ? htmlPagePrompt(theme, plan) : (run.prompts?.[index] ?? htmlPagePrompt(theme));
         const startedAt = Date.now();
-        const result = await send(run.prompts?.[index] ?? htmlPagePrompt(theme));
+        const result = await send(prompt);
         if (controller.signal.aborted) return;
         // Cut to the document, never repaired: a truncated page must read as truncated.
         const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
@@ -253,6 +272,12 @@ async function processRun(id) {
           // What the runtime reported generating, reasoning included; null when it reported no count (a provider route). Pages stored before this field have neither it nor finishedAt.
           completionTokens: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null,
           finishedAt: new Date().toISOString(),
+          // Exactly what each request sent and what the plan step returned, so both can be copied and reused on another model.
+          planPrompt,
+          plan,
+          planError,
+          planElapsedMs,
+          prompt,
         };
         await mutateRun(id, (c) => ({ ...c, pages: [...c.pages, page], progress: { done: c.pages.length + 1, total: c.pageCount } }));
         // The record is what counts; a file that could not be written is written from it when first asked for.

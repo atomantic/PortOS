@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HTML_PAGE_DEFAULT_BRIEF, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, extractHtmlDocument, htmlPagePrompt, htmlPagePromptParts, scoreHtmlPage, scoreHtmlPages,
+  HTML_PAGE_DEFAULT_BRIEF, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, extractHtmlDocument, extractHtmlPagePlan, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, scoreHtmlPage, scoreHtmlPages,
 } from './htmlPageBench.js';
 
 const good = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
@@ -17,6 +17,19 @@ describe('brief', () => {
     const { before, after } = htmlPagePromptParts();
     expect(htmlPagePrompt(brief)).toBe(before + brief + after);
     expect(after).toContain('<!doctype html>');
+  });
+
+  it('asks for a plan from the brief as written, then carries that plan into the page prompt', () => {
+    const brief = '- look stunning\n- original';
+    const plan = 'A tide-pool explorer with a drifting canvas.';
+    const { planBefore, planAfter, before, planLabel, after } = htmlPagePromptParts();
+    expect(htmlPagePlanPrompt(brief)).toBe(planBefore + brief + planAfter);
+    expect(htmlPagePrompt(brief, plan)).toBe(before + brief + planLabel + plan + after);
+  });
+
+  it('reads the plan from a reply without an inline reasoning block', () => {
+    expect(extractHtmlPagePlan('<think>hmm</think>\n\n  The plan.  ')).toBe('The plan.');
+    expect(extractHtmlPagePlan('   ')).toBe('');
   });
 });
 
