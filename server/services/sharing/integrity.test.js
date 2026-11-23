@@ -89,7 +89,6 @@ import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 import { buildLocalManifest, getPeerIntegrity, INTEGRITY_RECORD_LISTERS } from './integrity.js';
-import { PEER_SUBSCRIBABLE_KINDS } from '../../lib/instanceSyncCategories.js';
 import { INTEGRITY_STATUS } from '../../lib/syncIntegrity.js';
 
 const makeCollection = (overrides = {}) => ({
