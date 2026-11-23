@@ -584,6 +584,8 @@ function setupCosEventForwarding() {
   // without waiting for the file watcher to rebuild the entire task list.
   cosEvents.on('tasks:changed', (data) => broadcastToCos('cos:tasks:changed', data));
 
+  cosEvents.on('jobs:incidents-changed', (data) => broadcastToCos('cos:jobs:incidents-changed', { jobId: data?.jobId }));
+
   cosEvents.on('maintenance:updated', (data) => broadcastToCos('cos:maintenance:updated', data));
 
   // Agent events. These three carry a whole agent RECORD, and every consumer —

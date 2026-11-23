@@ -726,6 +726,16 @@ describe('socket.js — initSocket', () => {
     expect(socket.emitted).toContainEqual(['cos:tasks:changed', payload]);
   });
 
+  it('forwards job incident changes to CoS subscribers with only the jobId', () => {
+    const socket = makeSocket('incident-events');
+    createdSockets.push(socket);
+    io.connect(socket);
+    socket.handlers['cos:subscribe']();
+    const listener = queueListeners.cos.find(([event]) => event === 'jobs:incidents-changed')?.[1];
+    listener({ jobId: 'job-1', extra: 'dropped' });
+    expect(socket.emitted).toContainEqual(['cos:jobs:incidents-changed', { jobId: 'job-1' }]);
+  });
+
   it('invalidates Actions globally without exposing domain payloads or requiring a CoS subscription', () => {
     for (const [event, listener] of queueListeners.cos) {
       if (event === 'tasks:changed') listener({ type: 'user', task: { id: 'example', description: 'Private source text' } });
