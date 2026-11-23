@@ -2,9 +2,9 @@
 // a today-summary. Free-form category presets keep the spoken UX terse ("I had
 // a beer" needs no oz/ABV recitation).
 
-import { logDrink, getAlcoholSummary } from '../../meatspaceAlcohol.js';
-import { logNicotine, getNicotineSummary } from '../../meatspaceNicotine.js';
-import { addBodyEntry, addWorkout } from '../../meatspaceHealth.js';
+import { logDrink, getAlcoholSummary } from '../../meatspace/meatspaceAlcohol.js';
+import { logNicotine, getNicotineSummary } from '../../meatspace/meatspaceNicotine.js';
+import { addBodyEntry, addWorkout } from '../../meatspace/meatspaceHealth.js';
 
 // `run`/`ran` were dropped — they collide with common command phrasing
 // ("run the pipeline", "I ran the report") and would expose the workout tool

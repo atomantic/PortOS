@@ -15,7 +15,7 @@ import {
   dailyRangeQuerySchema,
   substanceEventQuerySchema,
 } from '../lib/meatspaceValidation.js';
-import * as nicotineService from '../services/meatspaceNicotine.js';
+import * as nicotineService from '../services/meatspace/meatspaceNicotine.js';
 import { parseIndexParam } from '../lib/queryValidation.js';
 
 const router = Router();

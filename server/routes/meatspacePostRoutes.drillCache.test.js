@@ -7,7 +7,7 @@ import { request } from '../lib/testHelper.js';
 // meatspacePostRoutes.js already imports several other services with no
 // dedicated test file of its own; broadening this file to cover them is out
 // of scope for the drill-cache consent change that added these two routes.
-vi.mock('../services/meatspacePostDrillCache.js', () => ({
+vi.mock('../services/meatspace/meatspacePostDrillCache.js', () => ({
   // postValidation.js's postDrillCacheFillSchema enum-validates against this.
   getCacheStats: vi.fn(() => ({
     'compound-chain': { count: 3, cold: false },
@@ -18,7 +18,7 @@ vi.mock('../services/meatspacePostDrillCache.js', () => ({
   triggerReplenish: vi.fn(),
 }));
 
-import { requestCacheFill } from '../services/meatspacePostDrillCache.js';
+import { requestCacheFill } from '../services/meatspace/meatspacePostDrillCache.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

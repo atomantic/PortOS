@@ -10,7 +10,7 @@ poll that ran only when the socket was down would be asleep during two of the th
 The socket makes ingestion *prompt*; the sweep makes it *complete*, and it runs unconditionally
 on its own timer.
 
-`server/services/beeperScheduler.js` is the fifth instance of the shared `createSyncScheduler`,
+`server/services/beeper/beeperScheduler.js` is the fifth instance of the shared `createSyncScheduler`,
 alongside iMessage, Signal, Spotify and YouTube. It is gated twice, and the two flags are
 deliberately different things:
 
@@ -30,7 +30,7 @@ right away and the registered interval fires on its own schedule after that, una
 
 The interval itself is read fresh at every *registration*, but a **running** registration does not
 notice a settings change mid-flight — changing `intervalMinutes` alone used to take effect only at
-the next process restart. `restartBeeperScheduler()` (`server/services/beeperScheduler.js`) is the
+the next process restart. `restartBeeperScheduler()` (`server/services/beeper/beeperScheduler.js`) is the
 fix: cancel the current registration and register a fresh one, which reads
 `getBeeperSyncConfig()` again. `PUT /api/settings` calls it when a save changes
 `beeper.intervalMinutes` without also flipping `enabled`. An `enabled` flip alone does not always
@@ -219,7 +219,7 @@ are untouched).
 wholesale by every sweep — so opening a thread in PortOS cannot clear it by zeroing that column
 directly; the very next sweep would put it right back. Fork issue #83's fix is a second, LOCAL
 column instead: `seen_at`, stamped with the server's own clock (`markConversationSeen` in
-`server/services/beeperConversations.js`) when the chat surface opens a thread, and again, cheaply,
+`server/services/beeper/beeperConversations.js`) when the chat surface opens a thread, and again, cheaply,
 whenever a new message lands in a thread that is already open. Every read path that shows an
 unread count — the row badge, `unreadOnly` in `GET /api/beeper/conversations`, and both aggregates
 `GET /api/beeper/networks` returns — treats a conversation as read when `seen_at` is at or after
@@ -292,7 +292,7 @@ survives one conversation being purged).
 
 ### Realtime
 
-`server/services/beeperSocket.js` holds one long-lived WebSocket from the PortOS server to
+`server/services/beeper/beeperSocket.js` holds one long-lived WebSocket from the PortOS server to
 `/v1/ws`. The browser cannot hold it: Beeper binds to loopback with CORS locked to the machine,
 and a browser cannot set an `Authorization` header on `new WebSocket()`. It uses the `ws`
 package rather than Node's built-in WebSocket because a protocol-level server ping is the only
@@ -318,7 +318,7 @@ most want to catch.
   needs while deciding whether to turn ingestion on. With the ingestion toggle off it connects,
   subscribes and relays invalidations, and writes no conversation or message body.
 
-**The relay to the browser is invalidation-only.** `server/services/beeperSocketEvents.js` is a
+**The relay to the browser is invalidation-only.** `server/services/beeper/beeperSocketEvents.js` is a
 leaf event bus; `socket.js` bridges it onto Socket.IO and broadcasts to the `beeper` subscriber
 set — never `io.emit`, because the peer relay opens a Socket.IO client to every online peer and a
 global emit would cross the wire to other installs. Frames carry ids, kinds and transport
@@ -331,7 +331,7 @@ Before fork issue #80, nothing on screen distinguished "connected, first sync ru
 "nothing connected" — the empty inbox told a user who had just connected nine accounts to go
 connect one. Two pieces close that gap:
 
-- **`server/services/beeperSweepProgress.js`** is a small standalone leaf module (same reason
+- **`server/services/beeper/beeperSweepProgress.js`** is a small standalone leaf module (same reason
   `beeperSocketEvents.js` is one: a read-only status route has no business importing the sweep's
   whole DB/HTTP dependency graph just to report a few numbers) holding one in-memory, process-wide
   snapshot: `running`, `startedAt`, `finishedAt`, `reason`, `accountsDone`, `accountsTotal`,

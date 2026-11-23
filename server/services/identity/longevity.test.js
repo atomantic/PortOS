@@ -28,7 +28,7 @@ vi.mock('./store.js', () => ({
 }));
 
 vi.mock('../genome.js', () => ({ getGenomeSummary: vi.fn(async () => ({ savedMarkers: {} })) }));
-vi.mock('../meatspaceCalendar.js', () => ({ getActivities: vi.fn(async () => []) }));
+vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: vi.fn(async () => []) }));
 
 const { computeTimeHorizons } = await import('./markers.js');
 const { applyFreshTimeHorizons, readLongevity, getLongevity, deriveLongevity } = await import('./longevity.js');

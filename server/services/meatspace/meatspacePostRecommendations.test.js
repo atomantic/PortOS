@@ -1,0 +1,859 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Recommendation composition (issue #2100). The pure functions
+// (composePostRecommendations / weakestSkillFromStats / stalledProgressions)
+// need no mocks; getPostRecommendations is exercised through the same
+// mocked-fileUtils harness the other POST service tests use.
+const state = { sessions: [], training: [], memoryItems: [], reviewSchedule: { skills: {} }, morse: { kochLevel: null, settings: null, rounds: [] }, config: {} };
+
+vi.mock('../../lib/fileUtils.js', () => ({
+  sleep: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  readJSONFile: vi.fn((path, defaultValue) => {
+    if (typeof path === 'string') {
+      if (path.includes('post-sessions')) return Promise.resolve({ sessions: state.sessions });
+      if (path.includes('post-training-log')) return Promise.resolve({ entries: state.training });
+      if (path.includes('memory-items')) return Promise.resolve({ items: state.memoryItems });
+      if (path.includes('post-review-schedule')) return Promise.resolve(state.reviewSchedule);
+      if (path.includes('post-morse')) return Promise.resolve(state.morse);
+      if (path.includes('post-config')) return Promise.resolve(state.config);
+    }
+    return Promise.resolve(defaultValue);
+  }),
+}));
+
+// POST recommendation and stats day keys derive from getUserTimezone → getSettings
+// (issue #2681). Pin it to UTC by default so the day boundary is deterministic;
+// tz-specific tests set the mutable state below.
+const settingsState = vi.hoisted(() => ({ timezone: 'UTC' }));
+vi.mock('../settings.js', () => ({
+  getSettings: () => Promise.resolve(settingsState),
+}));
+
+import {
+  composePostRecommendations,
+  weakestSkillFromStats,
+  stalledProgressions,
+  updatePostConfig,
+  isRecDrillRunnable,
+  memoryPracticeDeepLink,
+  memoryItemIdFromReview,
+  practicedTodayFromActivity,
+  recentPracticeFromActivity,
+  weakestSkillsFromStats,
+} from './meatspacePost.js';
+import { getPostRecommendations } from './meatspacePostRecommendations.js';
+import { atomicWrite } from '../../lib/fileUtils.js';
+
+beforeEach(() => {
+  state.sessions = [];
+  state.training = [];
+  state.memoryItems = [];
+  state.reviewSchedule = { skills: {} };
+  state.morse = { kochLevel: null, settings: null, rounds: [] };
+  state.config = {};
+  settingsState.timezone = 'UTC';
+  atomicWrite.mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+// Read back the config object written to post-config.json by the most recent
+// updatePostConfig call (atomicWrite is the mocked writer).
+function lastWrittenConfig() {
+  const call = [...atomicWrite.mock.calls].reverse().find(([p]) => typeof p === 'string' && p.includes('post-config'));
+  return call?.[1];
+}
+
+describe('weakestSkillFromStats', () => {
+  it('returns the lowest-accuracy drill with samples', () => {
+    const stats = {
+      byDrillAccuracy: { 'mental-math:multiplication': 0.9, 'cognitive:n-back': 0.5 },
+      byDrillCount: { 'mental-math:multiplication': 4, 'cognitive:n-back': 3 },
+    };
+    const w = weakestSkillFromStats(stats);
+    expect(w.type).toBe('n-back');
+    expect(w.module).toBe('cognitive');
+    expect(w.accuracy).toBe(0.5);
+  });
+
+  it('ignores drills with zero samples', () => {
+    const stats = {
+      byDrillAccuracy: { 'cognitive:n-back': 0.2, 'mental-math:powers': 0.8 },
+      byDrillCount: { 'cognitive:n-back': 0, 'mental-math:powers': 5 },
+    };
+    expect(weakestSkillFromStats(stats).type).toBe('powers');
+  });
+
+  it('returns null when there is no accuracy signal', () => {
+    expect(weakestSkillFromStats({ byDrillAccuracy: {}, byDrillCount: {} })).toBeNull();
+    expect(weakestSkillFromStats(null)).toBeNull();
+  });
+});
+
+describe('stalledProgressions', () => {
+  const stalledLadder = { level: 1, atHardest: false, currentMastered: false, thresholds: { minSamples: 12 }, levels: [
+    { level: 0, label: '1×1-digit', samples: 20, mastered: true },
+    { level: 1, label: '1×2-digit', samples: 4, mastered: false },
+    { level: 2, label: '1×1×1-digit', samples: 0, mastered: false },
+  ] };
+
+  it('reports remaining reps to the next multiplication rung', () => {
+    const out = stalledProgressions(stalledLadder, null, {}, {});
+    expect(out).toHaveLength(1);
+    expect(out[0].drillType).toBe('multiplication');
+    expect(out[0].remaining).toBe(8); // 12 - 4
+    expect(out[0].nextLabel).toBe('1×1×1-digit');
+  });
+
+  it('omits a ladder that is mastered-and-advancing or at its hardest rung', () => {
+    expect(stalledProgressions({ ...stalledLadder, currentMastered: true }, null, {}, {})).toHaveLength(0);
+    expect(stalledProgressions({ ...stalledLadder, atHardest: true }, null, {}, {})).toHaveLength(0);
+  });
+
+  it('reports an engaged Powers technique that still needs mastery reps', () => {
+    const powers = {
+      ...stalledLadder,
+      levels: stalledLadder.levels.map(rung => ({ ...rung, label: `Technique ${rung.level}` })),
+    };
+    const out = stalledProgressions(null, powers, {}, {});
+    expect(out).toEqual([expect.objectContaining({
+      drillType: 'powers',
+      label: 'Powers',
+      remaining: 8,
+      nextLabel: 'Technique 2',
+    })]);
+  });
+
+  it('includes cognitive ladders and a Morse Koch step once level is set', () => {
+    const cognitiveLadder = (label) => ({ level: 0, atHardest: false, currentMastered: false, thresholds: { minSamples: 3 }, levels: [
+      { level: 0, label, samples: 1, mastered: false },
+      { level: 1, label: `Harder ${label}`, samples: 0, mastered: false },
+    ] });
+    const cog = {
+      'n-back': cognitiveLadder('1-back @ 2500ms'),
+      'task-switching': cognitiveLadder('Two rules'),
+      'go-no-go': cognitiveLadder('Distinct lures'),
+      flanker: cognitiveLadder('Mostly congruent'),
+    };
+    const out = stalledProgressions(null, null, cog, { kochLevel: 5, kochLevelSet: true, maxKochLevel: 41 });
+    const nback = out.find(o => o.drillType === 'n-back');
+    expect(nback.remaining).toBe(2); // 3 - 1
+    const morse = out.find(o => o.drillType === 'morse-copy');
+    expect(morse.deepLink).toBe('/post/morse/copy');
+    expect(morse.nextLabel).toBe('Koch level 6');
+    expect(out).toEqual(expect.arrayContaining([
+      expect.objectContaining({ drillType: 'task-switching', label: 'Task Switching' }),
+      expect.objectContaining({ drillType: 'go-no-go', label: 'Go No Go' }),
+      expect.objectContaining({ drillType: 'flanker', label: 'Flanker' }),
+    ]));
+  });
+
+  it('does not surface Morse for a fresh install (level not set)', () => {
+    const out = stalledProgressions(null, null, {}, { kochLevel: 2, kochLevelSet: false, maxKochLevel: 41 });
+    expect(out.find(o => o.drillType === 'morse-copy')).toBeUndefined();
+  });
+
+  it('skips an untouched ladder (fresh install: level 0, no samples, no floor)', () => {
+    const fresh = { level: 0, floorLevel: 0, atHardest: false, currentMastered: false, thresholds: { minSamples: 12 }, levels: [
+      { level: 0, label: '1×1-digit', samples: 0, mastered: false },
+      { level: 1, label: '1×2-digit', samples: 0, mastered: false },
+    ] };
+    expect(stalledProgressions(fresh, null, { 'n-back': fresh }, {})).toHaveLength(0);
+  });
+
+  it('surfaces a ladder once the user has earned a higher floor even with no windowed samples', () => {
+    const earned = { level: 1, floorLevel: 1, atHardest: false, currentMastered: false, thresholds: { minSamples: 12 }, levels: [
+      { level: 0, label: '1×1-digit', samples: 0, mastered: true },
+      { level: 1, label: '1×2-digit', samples: 0, mastered: false },
+      { level: 2, label: '1×1×1-digit', samples: 0, mastered: false },
+    ] };
+    const out = stalledProgressions(earned, null, {}, {});
+    expect(out).toHaveLength(1);
+    expect(out[0].remaining).toBe(12);
+  });
+});
+
+describe('isRecDrillRunnable (issue #2100)', () => {
+  it('memory is always runnable (its own tab)', () => {
+    expect(isRecDrillRunnable({ sessionModules: [] }, 'memory', 'memory-sequence')).toBe(true);
+  });
+
+  it('false when the module is excluded from session composition', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['mental-math'] }, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('null/absent sessionModules means all modules allowed', () => {
+    expect(isRecDrillRunnable({}, 'cognitive', 'n-back')).toBe(true);
+  });
+
+  it('false when the module or the specific drill is disabled', () => {
+    expect(isRecDrillRunnable({ cognitive: { enabled: false } }, 'cognitive', 'n-back')).toBe(false);
+    expect(isRecDrillRunnable({ cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: false } } } }, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('true when the module and drill are both enabled and allowed', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['cognitive'], cognitive: { enabled: true, drillTypes: { 'n-back': { enabled: true } } } }, 'cognitive', 'n-back')).toBe(true);
+  });
+});
+
+describe('isRecDrillRunnable topic/standalone gating (issue #3252)', () => {
+  it('a disabled TOPIC blocks its drills even when the module is allowed', () => {
+    const config = { sessionModules: ['cognitive'], topics: { cognitive: { enabled: false } } };
+    expect(isRecDrillRunnable(config, 'cognitive', 'n-back')).toBe(false);
+  });
+
+  it('topic granularity splits the three llm-drills topics apart', () => {
+    // wordplay / verbal / imagination all collapse into `llm-drills`, so only a
+    // topic-level gate can express "wordplay only".
+    const config = { sessionModules: ['llm-drills'], topics: { verbal: { enabled: false }, imagination: { enabled: false } } };
+    expect(isRecDrillRunnable(config, 'llm-drills', 'bridge-word')).toBe(true);
+    expect(isRecDrillRunnable(config, 'llm-drills', 'wit-comeback')).toBe(false);
+    expect(isRecDrillRunnable(config, 'llm-drills', 'what-if')).toBe(false);
+  });
+
+  it('morse is gated by its own block, never by sessionModules (it is not a POST module)', () => {
+    expect(isRecDrillRunnable({ sessionModules: ['mental-math'] }, 'morse', 'morse-copy')).toBe(true);
+    expect(isRecDrillRunnable({ morse: { enabled: false } }, 'morse', 'morse-copy')).toBe(false);
+    expect(isRecDrillRunnable({ topics: { morse: { enabled: false } } }, 'morse', 'morse-copy')).toBe(false);
+  });
+
+  it('memory honors the module block, the drill type, and the per-ITEM toggle', () => {
+    expect(isRecDrillRunnable({ memory: { enabled: false } }, 'memory', 'memory-sequence')).toBe(false);
+    expect(isRecDrillRunnable({ memory: { drillTypes: { 'memory-sequence': { enabled: false } } } }, 'memory', 'memory-sequence')).toBe(false);
+    const perItem = { memory: { items: { 'elements-song': { enabled: false } } } };
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence', 'elements-song')).toBe(false);
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence', 'raven')).toBe(true);
+    // No item id supplied → nothing to filter on.
+    expect(isRecDrillRunnable(perItem, 'memory', 'memory-sequence')).toBe(true);
+  });
+
+  it('a legacy config with no topics/memory/morse keys runs everything (no migration)', () => {
+    const legacy = { sessionModules: ['mental-math', 'cognitive', 'llm-drills', 'memory'] };
+    expect(isRecDrillRunnable(legacy, 'memory', 'memory-sequence', 'elements-song')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'morse', 'morse-copy')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'llm-drills', 'wit-comeback')).toBe(true);
+    expect(isRecDrillRunnable(legacy, 'cognitive', 'n-back')).toBe(true);
+  });
+});
+
+describe('getPostRecommendations config filtering (issue #2100)', () => {
+  it('drops a weakest-skill rec for a drill excluded from session composition', async () => {
+    // History makes n-back the weakest skill, but the config excludes cognitive
+    // from composition — so it must not surface as a runnable recommendation.
+    state.config = { sessionModules: ['mental-math'] };
+    state.sessions = [{
+      date: new Date().toISOString().split('T')[0], durationMs: 60000, score: 40,
+      tasks: [{ module: 'cognitive', type: 'n-back', score: 40, accuracy: 0.4, completion: 1, questions: [{ answered: 'match', correct: false }] }],
+    }];
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'weak-skill')).toBe(false);
+  });
+});
+
+describe('getPostRecommendations topic/item filtering (issue #3252)', () => {
+  const dueItem = (id, title) => ({
+    id, title, type: 'song', content: { chunks: [] },
+    schedule: { ease: 2.5, intervalDays: 1, nextReview: new Date(Date.now() - 86400000).toISOString() },
+    mastery: { overallPct: 40, chunks: {} },
+  });
+
+  it('drops a due memory item the user switched off, keeping its siblings', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { items: { 'elements-song': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toContain('memory-due:raven');
+    expect(dueIds).not.toContain('memory-due:elements-song');
+  });
+
+  it('a disabled memory TOPIC drops every due item', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { topics: { memory: { enabled: false } } };
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'memory-due')).toBe(false);
+  });
+
+  it('keeps every due item under a legacy config with no memory block', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = {};
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toEqual(expect.arrayContaining(['memory-due:elements-song', 'memory-due:raven']));
+  });
+
+  // Regression: the due-item filter used to probe isRecDrillRunnable with a
+  // hardcoded 'memory-sequence', so switching off that ONE practice mode blanked
+  // the entire spaced-repetition feed — including items whose recs deep-link to
+  // `spaced` / `element-flash` and never run memory-sequence at all.
+  it('keeps due items when a single memory DRILL TYPE is switched off', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { drillTypes: { 'memory-sequence': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const dueIds = recommendations.filter(r => r.kind === 'memory-due').map(r => r.id);
+    expect(dueIds).toEqual(expect.arrayContaining(['memory-due:elements-song', 'memory-due:raven']));
+  });
+
+  it('drops every due item when the memory MODULE is switched off', async () => {
+    state.memoryItems = [dueItem('elements-song', 'The Elements'), dueItem('raven', 'The Raven')];
+    state.config = { memory: { enabled: false } };
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.some(r => r.kind === 'memory-due')).toBe(false);
+  });
+
+  // Due re-verifications are config-dependent recs like weakest-skill and
+  // stalled-progression, so they get the same gate — they used to pass through
+  // ungated, surfacing "Re-verify N-Back" for a topic the user had switched off
+  // while the stalled rec for that same ladder was correctly dropped.
+  it('drops a ladder re-verification whose topic is switched off', async () => {
+    state.reviewSchedule = {
+      skills: {
+        'n-back:L2': {
+          skillId: 'n-back:L2', kind: 'cognitive', drillType: 'n-back', label: 'N-Back level 2',
+          nextReview: new Date(Date.now() - 86400000).toISOString(), status: 'due',
+        },
+      },
+    };
+    state.config = {};
+    const before = await getPostRecommendations();
+    expect(before.recommendations.some(r => r.kind === 'skill-review')).toBe(true);
+
+    state.config = { topics: { cognitive: { enabled: false } } };
+    const after = await getPostRecommendations();
+    expect(after.recommendations.some(r => r.kind === 'skill-review')).toBe(false);
+  });
+
+  it('suppresses the morse-copy stalled rec when Morse is switched off', async () => {
+    // Mid-Koch progression: the stalled-progression rec fires for a user who has
+    // engaged with Morse and isn't at the final level.
+    state.morse = { kochLevel: 5, kochLevelSet: true, settings: null, rounds: [] };
+    state.config = {};
+    const before = await getPostRecommendations();
+    expect(before.recommendations.some(r => r.drillType === 'morse-copy')).toBe(true);
+
+    state.config = { morse: { enabled: false } };
+    const after = await getPostRecommendations();
+    expect(after.recommendations.some(r => r.drillType === 'morse-copy')).toBe(false);
+  });
+});
+
+describe('updatePostConfig goals (issue #2100)', () => {
+  it('replaces the goals block wholesale so a goal can be cleared', async () => {
+    state.config = { goals: { streakTarget: 5, dailyMinutes: 20 } };
+    // A partial goals patch replaces (not deep-merges) — dailyMinutes drops.
+    await updatePostConfig({ goals: { streakTarget: 10 } });
+    expect(lastWrittenConfig().goals).toEqual({ streakTarget: 10 });
+  });
+
+  it('clears all goals when sent an empty goals object', async () => {
+    state.config = { goals: { streakTarget: 5 } };
+    await updatePostConfig({ goals: {} });
+    expect(lastWrittenConfig().goals).toEqual({});
+  });
+
+  it('leaves goals untouched when the patch omits them', async () => {
+    state.config = { goals: { streakTarget: 5 } };
+    await updatePostConfig({ adaptive: { enabled: true } });
+    expect(lastWrittenConfig().goals).toEqual({ streakTarget: 5 });
+  });
+});
+
+describe('composePostRecommendations priority + composition', () => {
+  it('orders due memory items ahead of weak skills and stalled progressions', () => {
+    const recs = composePostRecommendations({
+      dueMemoryItems: [{ id: 'song', title: 'Elements' }],
+      weakestSkill: { key: 'cognitive:n-back', type: 'n-back', accuracy: 0.5 },
+      stalled: [{ drillType: 'multiplication', label: 'Multiplication', remaining: 5, nextLabel: '2×2-digit', deepLink: '/post/launcher' }],
+      hasHistory: true,
+    });
+    expect(recs.map(r => r.kind)).toEqual(['memory-due', 'weak-skill', 'stalled-progression']);
+    expect(recs[0].deepLink).toBe('/post/memory/song/spaced');
+    expect(recs.map(r => r.priority)).toEqual([0, 1, 2]);
+  });
+
+  it('places due skill re-verifications above weak skills', () => {
+    const recs = composePostRecommendations({
+      dueReviews: [{ skillId: 'multiplication:L1', label: 'Multiplication 1×2', drillType: 'multiplication', kind: 'multiplication', status: 'due' }],
+      weakestSkill: { key: 'cognitive:n-back', type: 'n-back', accuracy: 0.5 },
+      hasHistory: true,
+    });
+    expect(recs[0].kind).toBe('skill-review');
+    expect(recs[0].deepLink).toBe('/post/launcher');
+    expect(recs[1].kind).toBe('weak-skill');
+  });
+
+  it('routes a memory-chunk re-verification into a practice mode, not the launcher', () => {
+    const recs = composePostRecommendations({
+      dueReviews: [{ skillId: 'memory:song:c1', label: 'Elements — Chorus', kind: 'memory', status: 'due' }],
+      hasHistory: true,
+    });
+    expect(recs[0].kind).toBe('skill-review');
+    expect(recs[0].deepLink).toBe('/post/memory/song/spaced');
+  });
+
+  it('returns a sensible default for an empty (fresh) history', () => {
+    const recs = composePostRecommendations({ hasHistory: false });
+    expect(recs).toHaveLength(1);
+    expect(recs[0].kind).toBe('default');
+    expect(recs[0].deepLink).toBe('/post/launcher');
+    expect(recs[0].title).toMatch(/first POST/i);
+  });
+
+  it('defaults to a keep-sharp prompt when history exists but nothing is actionable', () => {
+    const recs = composePostRecommendations({ hasHistory: true });
+    expect(recs[0].kind).toBe('default');
+    expect(recs[0].title).toMatch(/streak/i);
+  });
+
+  it('caps the list at the limit', () => {
+    const recs = composePostRecommendations({
+      dueMemoryItems: Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, title: `Item ${i}` })),
+      limit: 3,
+    });
+    expect(recs).toHaveLength(3);
+  });
+});
+
+// "Continue Today's Routine" used to loop on one drill forever: it always took
+// the #1 rec, and the signals behind that rec (windowed accuracy, ladder stall)
+// barely move on a single rep, so it handed back the test just finished
+// (issue #3563).
+describe('practicedTodayFromActivity', () => {
+  it('collects scored-session drill types for the local day only', () => {
+    const done = practicedTodayFromActivity([
+      { date: '2026-08-05', tasks: [{ type: 'digit-span' }, { type: 'n-back' }] },
+      { date: '2026-08-04', tasks: [{ type: 'multiplication' }] },
+    ], [], '2026-08-05');
+    expect([...done.drillTypes].sort()).toEqual(['digit-span', 'n-back']);
+    expect(done.completedSession).toBe(true);
+  });
+
+  it('collects both training-log shapes: drill practice and memory practice', () => {
+    const done = practicedTodayFromActivity([], [
+      { date: '2026-08-05', module: 'morse', drillType: 'morse-copy' },
+      { date: '2026-08-05', memoryItemId: 'song', mode: 'spaced' },
+      { date: '2026-08-04', drillType: 'wordplay-anagram' },
+    ], '2026-08-05');
+    expect([...done.drillTypes]).toEqual(['morse-copy']);
+    expect([...done.memoryItemIds]).toEqual(['song']);
+    // Practice-only days never complete a scored session.
+    expect(done.completedSession).toBe(false);
+  });
+
+  it('normalizes an ISO-timestamped entry date to its day prefix', () => {
+    // Some training-log entries (memory practice) store a full ISO timestamp; a
+    // raw `!==` would read those as not-practiced and re-loop the routine.
+    const done = practicedTodayFromActivity([], [
+      { date: '2026-08-05T21:14:03.000Z', drillType: 'morse-copy' },
+    ], '2026-08-05');
+    expect([...done.drillTypes]).toEqual(['morse-copy']);
+  });
+
+  it('normalizes legacy ISO activity through the configured timezone', () => {
+    const done = practicedTodayFromActivity([
+      { date: '2026-07-17T15:30:00.000Z', tasks: [{ type: 'digit-span' }] },
+    ], [], '2026-07-18', 'Asia/Tokyo');
+    expect([...done.drillTypes]).toEqual(['digit-span']);
+    expect(done.completedSession).toBe(true);
+  });
+
+  it('reports nothing practiced when the local day cannot be resolved', () => {
+    const done = practicedTodayFromActivity([{ date: '2026-08-05', tasks: [{ type: 'digit-span' }] }], [], null);
+    expect(done.drillTypes.size).toBe(0);
+    expect(done.completedSession).toBe(false);
+  });
+});
+
+describe('composePostRecommendations already-practiced demotion (issue #3563)', () => {
+  const stalledDigitSpan = { drillType: 'digit-span', label: 'Digit Span', remaining: 3, nextLabel: 'Level 4', deepLink: '/post/launcher' };
+  const stalledMultiplication = { drillType: 'multiplication', label: 'Multiplication', remaining: 5, nextLabel: '2×2-digit', deepLink: '/post/launcher' };
+
+  it('sinks a stalled drill already practiced today below one that is not', () => {
+    const recs = composePostRecommendations({
+      stalled: [stalledDigitSpan, stalledMultiplication],
+      hasHistory: true,
+      practicedToday: { drillTypes: ['digit-span'] },
+    });
+    expect(recs.map(r => r.drillType)).toEqual(['multiplication', 'digit-span']);
+    expect(recs.map(r => r.practicedToday)).toEqual([false, true]);
+    // Priority is re-stamped AFTER the sort, so it still reads 0..n-1.
+    expect(recs.map(r => r.priority)).toEqual([0, 1]);
+  });
+
+  it('demotes rather than drops, so a fully-practiced day still shows what is next', () => {
+    const recs = composePostRecommendations({
+      stalled: [stalledDigitSpan],
+      hasHistory: true,
+      practicedToday: { drillTypes: ['digit-span'] },
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0].practicedToday).toBe(true);
+  });
+
+  it('preserves the priority order within each group', () => {
+    const recs = composePostRecommendations({
+      dueMemoryItems: [{ id: 'song', title: 'Elements' }],
+      weakestSkill: { key: 'cognitive:n-back', type: 'n-back', accuracy: 0.5 },
+      stalled: [stalledDigitSpan, stalledMultiplication],
+      hasHistory: true,
+      practicedToday: { drillTypes: ['n-back', 'digit-span'] },
+    });
+    expect(recs.map(r => r.kind)).toEqual(['memory-due', 'stalled-progression', 'weak-skill', 'stalled-progression']);
+    expect(recs.map(r => r.drillType)).toEqual(['memory-sequence', 'multiplication', 'n-back', 'digit-span']);
+  });
+
+  it('marks a due memory item practiced by its ITEM id, not its drill type', () => {
+    const recs = composePostRecommendations({
+      dueMemoryItems: [{ id: 'song', title: 'Elements' }, { id: 'pi', title: 'Pi' }],
+      // Both recs carry drillType 'memory-sequence'; only the item id separates them.
+      practicedToday: { memoryItemIds: ['song'], drillTypes: ['memory-sequence'] },
+    });
+    expect(recs.map(r => r.id)).toEqual(['memory-due:pi', 'memory-due:song']);
+    expect(recs.map(r => r.practicedToday)).toEqual([false, true]);
+  });
+
+  it('marks a memory-chunk re-verification by its item id and a ladder one by its drill', () => {
+    const recs = composePostRecommendations({
+      dueReviews: [
+        { skillId: 'memory:song:c1', label: 'Elements — Chorus', kind: 'memory', status: 'due' },
+        { skillId: 'multiplication:L1', label: 'Multiplication 1×2', drillType: 'multiplication', kind: 'multiplication', status: 'due' },
+      ],
+      practicedToday: { memoryItemIds: ['song'], drillTypes: [] },
+    });
+    expect(recs.map(r => r.practicedToday)).toEqual([false, true]);
+    expect(recs[0].drillType).toBe('multiplication');
+  });
+
+  it('treats the fallback "run a full POST" as done once a scored session lands today', () => {
+    const done = composePostRecommendations({ hasHistory: true, practicedToday: { completedSession: true } });
+    expect(done[0].kind).toBe('default');
+    expect(done[0].practicedToday).toBe(true);
+    const notDone = composePostRecommendations({ hasHistory: true, practicedToday: { completedSession: false } });
+    expect(notDone[0].practicedToday).toBe(false);
+  });
+
+  it('accepts the Set-bearing shape practicedTodayFromActivity returns', () => {
+    const recs = composePostRecommendations({
+      stalled: [stalledDigitSpan, stalledMultiplication],
+      practicedToday: practicedTodayFromActivity([{ date: 'D', tasks: [{ type: 'digit-span' }] }], [], 'D'),
+    });
+    expect(recs.map(r => r.drillType)).toEqual(['multiplication', 'digit-span']);
+  });
+
+  it('leaves the order untouched when nothing has been practiced today', () => {
+    const recs = composePostRecommendations({
+      weakestSkill: { key: 'cognitive:digit-span', type: 'digit-span', accuracy: 0.4 },
+      stalled: [stalledMultiplication],
+      hasHistory: true,
+      practicedToday: { drillTypes: [], memoryItemIds: [] },
+    });
+    expect(recs.map(r => r.kind)).toEqual(['weak-skill', 'stalled-progression']);
+    expect(recs.every(r => r.practicedToday === false)).toBe(true);
+  });
+});
+
+describe('getPostRecommendations (integration)', () => {
+  it('surfaces a due memory item as the top recommendation', async () => {
+    // A memory item overdue for review: nextReview in the past.
+    state.memoryItems = [{
+      id: 'song', title: 'Elements', type: 'song', content: { chunks: [] },
+      schedule: { ease: 2.5, intervalDays: 1, nextReview: new Date(Date.now() - 86400000).toISOString() },
+      mastery: { overallPct: 40, chunks: {} },
+    }];
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations[0].kind).toBe('memory-due');
+    // The built-in Elements Song is seeded (and also due), so address this
+    // item's rec by id rather than assuming it sorts first.
+    const songRec = recommendations.find(r => r.id === 'memory-due:song');
+    expect(songRec.deepLink).toBe('/post/memory/song/spaced');
+    // Every due-memory rec lands INSIDE a practice mode, not on the item list.
+    for (const rec of recommendations.filter(r => r.kind === 'memory-due')) {
+      expect(rec.deepLink).not.toBe('/post/memory');
+      expect(rec.deepLink.split('/').length).toBeGreaterThan(3);
+    }
+  });
+
+  it('stops handing back today\'s digit-span drill once it has been practiced (issue #3563)', async () => {
+    // The exact loop the user hit: a stalled digit-span ladder pinned the #1
+    // rec, "Continue Today's Routine" took rec[0], and the drill it started was
+    // the drill just finished. Seed a scored session containing digit-span for
+    // today plus a Morse practice track that has NOT been touched.
+    const today = new Date().toISOString().slice(0, 10);
+    state.sessions = [{
+      id: 's1', date: today, score: 60, durationMs: 60000,
+      tasks: [{ module: 'cognitive', type: 'digit-span', score: 60, accuracy: 0.4, completion: 1 }],
+    }];
+    state.morse = { kochLevel: 3, settings: { kochLevel: 3 }, rounds: [] };
+    // Memory off, so the only recs left are the drill-shaped ones.
+    state.config = { memory: { enabled: false }, topics: { memory: { enabled: false } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const digitSpan = recommendations.filter(r => r.drillType === 'digit-span');
+    expect(digitSpan.length).toBeGreaterThan(0);
+    for (const rec of digitSpan) expect(rec.practicedToday).toBe(true);
+    // Something the user has NOT done today outranks it, so the routine advances.
+    expect(recommendations[0].practicedToday).toBe(false);
+    expect(recommendations[0].drillType).not.toBe('digit-span');
+  });
+
+  it('uses the configured local day for legacy session dates', async () => {
+    settingsState.timezone = 'Asia/Tokyo';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-18T00:30:00.000Z'));
+    state.sessions = [{
+      id: 'legacy-local-day',
+      date: '2026-07-17T15:30:00.000Z',
+      score: 60,
+      durationMs: 60000,
+      tasks: [{ module: 'cognitive', type: 'digit-span', score: 60, accuracy: 0.4, completion: 1 }],
+    }];
+    state.morse = { kochLevel: 3, settings: { kochLevel: 3 }, rounds: [] };
+    state.config = { memory: { enabled: false }, topics: { memory: { enabled: false } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const digitSpan = recommendations.filter(r => r.drillType === 'digit-span');
+    expect(digitSpan.length).toBeGreaterThan(0);
+    for (const rec of digitSpan) expect(rec.practicedToday).toBe(true);
+  });
+
+  it('never returns an empty list on a fresh install', async () => {
+    // A fresh install still has the built-in Elements Song memory item (which
+    // may be due) so the list is never empty; every entry carries a deep link.
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations.length).toBeGreaterThanOrEqual(1);
+    for (const rec of recommendations) {
+      expect(typeof rec.deepLink).toBe('string');
+      expect(rec.deepLink.startsWith('/post')).toBe(true);
+    }
+  });
+});
+
+// An "Up next" rec should START the practice, not open a page the user still
+// has to navigate — memory recs used to point at the bare item list, which cost
+// 4 clicks to reach an actual drill (issue #3249).
+describe('memoryPracticeDeepLink', () => {
+  it('routes the built-in Elements Song to its own recall test', () => {
+    expect(memoryPracticeDeepLink('elements-song')).toBe('/post/memory/elements/element-flash');
+  });
+
+  it('routes any other item to spaced repetition, which targets its weakest chunks', () => {
+    expect(memoryPracticeDeepLink('raven')).toBe('/post/memory/raven/spaced');
+  });
+
+  it('degrades to the item list when there is no id to route to', () => {
+    expect(memoryPracticeDeepLink(null)).toBe('/post/memory');
+    expect(memoryPracticeDeepLink(undefined)).toBe('/post/memory');
+    expect(memoryPracticeDeepLink('')).toBe('/post/memory');
+  });
+});
+
+describe('memoryItemIdFromReview', () => {
+  it('prefers the explicit memoryItemId field', () => {
+    expect(memoryItemIdFromReview({ memoryItemId: 'raven', skillId: 'memory:other:c1' })).toBe('raven');
+  });
+
+  it('falls back to parsing the memory:<itemId>:<chunkId> skillId', () => {
+    expect(memoryItemIdFromReview({ skillId: 'memory:raven:v1' })).toBe('raven');
+  });
+
+  it('splits on the LAST colon so an item id containing one still resolves', () => {
+    expect(memoryItemIdFromReview({ skillId: 'memory:poe:raven:v1' })).toBe('poe:raven');
+  });
+
+  it('returns null for a non-memory or unparseable entry', () => {
+    expect(memoryItemIdFromReview({ skillId: 'multiplication:L1' })).toBeNull();
+    expect(memoryItemIdFromReview({ skillId: 'memory:' })).toBeNull();
+    expect(memoryItemIdFromReview({})).toBeNull();
+    expect(memoryItemIdFromReview(null)).toBeNull();
+  });
+});
+
+// Issue #5319: the heuristic tiers (weakest skill, stalled ladder) are driven by
+// windowed averages a single rep barely moves, so before this they resolved to
+// one fixed drill and the daily routine handed back the same practice every day.
+describe('recentPracticeFromActivity (issue #5319)', () => {
+  const day = (offset) => new Date(Date.UTC(2026, 2, 10 - offset)).toISOString().slice(0, 10);
+
+  it('collects drill types and memory items across the three-day window, from BOTH feeds', () => {
+    const recent = recentPracticeFromActivity(
+      [{ date: day(1), tasks: [{ type: 'digit-span' }] }],
+      [
+        { date: day(2), drillType: 'morse-copy' },
+        { date: day(0), memoryItemId: 'elements-song' },
+      ],
+      day(0),
+      'UTC',
+    );
+    expect(recent.dayKey).toBe(day(0));
+    expect([...recent.drillTypes].sort()).toEqual(['digit-span', 'morse-copy']);
+    expect([...recent.memoryItemIds]).toEqual(['elements-song']);
+  });
+
+  it('excludes activity older than the window so a rotation comes back around', () => {
+    const recent = recentPracticeFromActivity(
+      [{ date: day(3), tasks: [{ type: 'digit-span' }] }],
+      [],
+      day(0),
+      'UTC',
+    );
+    expect(recent.drillTypes.has('digit-span')).toBe(false);
+  });
+
+  it('re-derives each record\'s day in the CURRENT timezone, not its stored date', () => {
+    // Written under a UTC-ish zone as "the 10th", but its instant is the 11th in
+    // Tokyo — the window must read it as the local day it actually happened on.
+    const recent = recentPracticeFromActivity(
+      [{ date: '2026-03-10', startedAt: '2026-03-10T16:00:00.000Z', tasks: [{ type: 'n-back' }] }],
+      [],
+      '2026-03-11',
+      'Asia/Tokyo',
+    );
+    expect(recent.drillTypes.has('n-back')).toBe(true);
+  });
+
+  it('reports an empty window rather than guessing when the local day is unresolvable', () => {
+    const recent = recentPracticeFromActivity([{ date: day(0), tasks: [{ type: 'n-back' }] }], [], null, 'UTC');
+    expect(recent.dayKey).toBeNull();
+    expect(recent.drillTypes.size).toBe(0);
+  });
+});
+
+describe('weakestSkillsFromStats ranking (issue #5319)', () => {
+  it('ranks every sampled drill weakest-first so the caller can skip ineligible ones', () => {
+    const stats = {
+      byDrillAccuracy: { 'cognitive:digit-span': 0.4, 'mental-math:powers': 0.6, 'cognitive:n-back': 0.5 },
+      byDrillCount: { 'cognitive:digit-span': 3, 'mental-math:powers': 3, 'cognitive:n-back': 3 },
+    };
+    expect(weakestSkillsFromStats(stats).map(s => s.type)).toEqual(['digit-span', 'n-back', 'powers']);
+    // The single-value helper stays the head of that list.
+    expect(weakestSkillFromStats(stats).type).toBe('digit-span');
+  });
+});
+
+describe('getPostRecommendations drill rotation (issue #5319)', () => {
+  // Two enabled cognitive drills, both scored, both stalled — the exact shape
+  // that used to pin digit-span to the #1 slot indefinitely.
+  const scored = (date, type, accuracy) => ({
+    id: `s-${date}-${type}`, date, score: Math.round(accuracy * 100), durationMs: 60000,
+    tasks: [{ module: 'cognitive', type, score: Math.round(accuracy * 100), accuracy, completion: 1, questions: [{ answered: 'x', correct: false }] }],
+  });
+  // Memory off so the drill-shaped recs are the whole list.
+  const drillsOnlyConfig = { memory: { enabled: false }, topics: { memory: { enabled: false } } };
+
+  beforeEach(() => {
+    settingsState.timezone = 'UTC';
+    state.config = drillsOnlyConfig;
+  });
+
+  it('advances the top recommendation across days instead of repeating one drill', async () => {
+    vi.useFakeTimers();
+    // Baseline history OUTSIDE the three-day window, so both drills carry an
+    // accuracy signal and neither starts out "recently practiced".
+    state.sessions = [scored('2026-03-04', 'digit-span', 0.4), scored('2026-03-04', 'n-back', 0.4)];
+
+    const heads = [];
+    // Three consecutive days. Each day the user practices whatever was
+    // recommended, which is what feeds the next day's recency window.
+    for (const today of ['2026-03-10', '2026-03-11', '2026-03-12']) {
+      vi.setSystemTime(new Date(`${today}T12:00:00.000Z`));
+      const { recommendations } = await getPostRecommendations();
+      const head = recommendations[0];
+      expect(head.drillType, 'expected a drill-shaped top recommendation').toBeTruthy();
+      heads.push(head.drillType);
+      state.sessions = [...state.sessions, scored(today, head.drillType, 0.4)];
+    }
+    // Nothing is served two days running, and the rotation actually varies.
+    expect(new Set(heads).size).toBeGreaterThan(1);
+    expect(heads[0]).not.toBe(heads[1]);
+    expect(heads[1]).not.toBe(heads[2]);
+  });
+
+  it('picks the next eligible weakest skill when the lowest-accuracy one is excluded', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    state.sessions = [scored(today, 'digit-span', 0.3), scored(today, 'n-back', 0.5)];
+    // digit-span is weakest but the user switched that ONE drill off — the tier
+    // must walk past it rather than dropping the whole weak-skill slot.
+    state.config = { ...drillsOnlyConfig, cognitive: { drillTypes: { 'digit-span': { enabled: false } } } };
+
+    const { recommendations } = await getPostRecommendations();
+    const weak = recommendations.find(r => r.kind === 'weak-skill');
+    expect(weak?.drillType).toBe('n-back');
+  });
+
+  it('never deprioritizes a genuinely due memory item for being practiced yesterday', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00.000Z'));
+    state.config = {};
+    state.memoryItems = [{
+      id: 'raven', title: 'Example Poem', type: 'poem', content: { chunks: [] },
+      schedule: { ease: 2.5, intervalDays: 1, nextReview: '2026-03-10T00:00:00.000Z' },
+      mastery: { overallPct: 40, chunks: {} },
+    }];
+    // Practiced YESTERDAY (inside the heuristic window) but not today, so the
+    // unchanged same-day demotion doesn't apply either.
+    state.training = [{ date: '2026-03-10', memoryItemId: 'raven', mode: 'spaced' }];
+
+    const { recommendations } = await getPostRecommendations();
+    expect(recommendations[0].kind).toBe('memory-due');
+    expect(recommendations[0].practicedToday).toBe(false);
+    expect(recommendations.find(r => r.id === 'memory-due:raven')).toBeTruthy();
+  });
+
+  it('reports the window it used so the client rotates Quick session off the same signal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00.000Z'));
+    state.sessions = [scored('2026-03-10', 'digit-span', 0.4)];
+    state.training = [{ date: '2026-03-11', memoryItemId: 'elements-song', mode: 'spaced' }];
+
+    const { recentPractice } = await getPostRecommendations();
+    expect(recentPractice.dayKey).toBe('2026-03-11');
+    expect(recentPractice.drillTypes).toContain('digit-span');
+    expect(recentPractice.memoryItemIds).toContain('elements-song');
+  });
+});
+
+
+describe('daily challenge mix', () => {
+  it('keeps a fixed five-challenge set through completion, varies by local day, and needs no mastery history', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00Z'));
+    state.config = { topics: { memory: { enabled: false }, morse: { enabled: false }, wordplay: { enabled: false }, verbal: { enabled: false }, imagination: { enabled: false } } };
+    const first = (await getPostRecommendations()).dailyRecommendations;
+    expect(first).toHaveLength(5);
+    expect(new Set(first.map(r => r.id)).size).toBe(5);
+    expect((await getPostRecommendations({ limit: 1 })).dailyRecommendations[0]).toEqual(first[0]);
+    for (const rec of first) {
+      state.training.push({ date: '2026-03-11', drillType: rec.drillType });
+    }
+    const done = (await getPostRecommendations()).dailyRecommendations;
+    expect(done.map(r => r.id).sort()).toEqual(first.map(r => r.id).sort());
+    expect(done.every(r => r.practicedToday)).toBe(true);
+    vi.setSystemTime(new Date('2026-03-12T12:00:00Z'));
+    expect((await getPostRecommendations()).dailyRecommendations.map(r => r.id)).not.toEqual(first.map(r => r.id));
+  });
+
+  it('retains a completed memory slot after its review date advances and honors disabled topics', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00Z'));
+    state.config = { topics: { math: { enabled: false }, cognitive: { enabled: false }, morse: { enabled: false }, wordplay: { enabled: false }, verbal: { enabled: false }, imagination: { enabled: false } } };
+    const first = (await getPostRecommendations()).dailyRecommendations;
+    expect(first).toHaveLength(1);
+    expect(first[0].memoryItemId).toBe('elements-song');
+    state.memoryItems = [{ id: 'elements-song', title: 'Example Elements', content: {}, schedule: { nextReview: '2026-03-15T00:00:00Z' }, mastery: { overallPct: 10 } }];
+    state.training = [{ date: '2026-03-11', memoryItemId: 'elements-song', mode: 'element-flash' }];
+    const done = (await getPostRecommendations()).dailyRecommendations;
+    expect(done[0].id).toBe(first[0].id);
+    expect(done[0].practicedToday).toBe(true);
+    state.config.topics.memory = { enabled: false };
+    expect((await getPostRecommendations()).dailyRecommendations).toEqual([]);
+  });
+});

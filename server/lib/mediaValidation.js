@@ -79,7 +79,7 @@ export const youtubeConfigSchema = z.object({
 // for an install that genuinely runs Beeper Desktop elsewhere on the
 // network — off by default, so the dangerous posture is never the shipped one.
 // Both checks are re-applied inside `normalizeBaseUrl`
-// (`server/services/beeperClient.js`) because `getSettings()` reads
+// (`server/services/beeper/beeperClient.js`) because `getSettings()` reads
 // `settings.json` with no schema re-validation on read, so a hand-edited file
 // is a second path to the same value this schema exists to block.
 export const beeperSettingsSchema = z.object({
@@ -114,7 +114,7 @@ export const beeperSettingsSchema = z.object({
 // Beeper connect flow (#31). The token NEVER rides the generic settings route
 // (`beeperSettingsSchema` above is `.strict()` with no token field) — it is
 // accepted here, on its own dedicated write path, and stored AES-256-GCM
-// encrypted in Postgres by `services/beeperCredentials.js`. The upper bound is
+// encrypted in Postgres by `services/beeper/beeperCredentials.js`. The upper bound is
 // slack for an opaque bearer of unknown shape, not a claim about its format.
 export const beeperPastedTokenSchema = z.object({
   token: z.string().trim().min(1).max(4096),

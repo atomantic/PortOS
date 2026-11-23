@@ -57,9 +57,9 @@ const fail = (name) => () => Promise.reject(new Error(`${name} unavailable`));
 vi.mock('./universeBuilder.js', () => ({ countUniverses: vi.fn(async () => stats.universes) }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => stats.works) }));
 vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => stats.catalog) }));
-vi.mock('./meatspacePost.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
-vi.mock('./meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => stats.training) }));
-vi.mock('./meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => stats.logging) }));
+vi.mock('./meatspace/meatspacePost.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
+vi.mock('./meatspace/meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => stats.training) }));
+vi.mock('./meatspace/meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => stats.logging) }));
 vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn(async () => stats.goals) }));
 vi.mock('./memoryBackend.js', () => ({ countMemories: vi.fn(async () => stats.memories) }));
 vi.mock('./mediaAssetIndex/db.js', () => ({ countAssets: vi.fn(async () => stats.assets) }));
@@ -70,7 +70,7 @@ vi.mock('./instanceFeatures.js', () => ({
 import { getCharacterSkills, levelFromValue, SKILLS, MAX_SKILL_LEVEL } from './characterSkills.js';
 import { countUniverses } from './universeBuilder.js';
 import { getCatalogStats } from './catalog/catalogDB.js';
-import { getLoggingStats } from './meatspaceLoggingStats.js';
+import { getLoggingStats } from './meatspace/meatspaceLoggingStats.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';
 import { countWorks } from './writersRoom/local.js';
@@ -387,9 +387,9 @@ describe('the real read path: an unreadable file is unavailable, an absent one i
   // getters stay mocked (they need Postgres); only the file-backed graph is real,
   // which is exactly the wiring under test.
   const loadRealRegistry = async () => {
-    vi.doUnmock('./meatspacePost.js');
-    vi.doUnmock('./meatspacePostTraining.js');
-    vi.doUnmock('./meatspaceLoggingStats.js');
+    vi.doUnmock('./meatspace/meatspacePost.js');
+    vi.doUnmock('./meatspace/meatspacePostTraining.js');
+    vi.doUnmock('./meatspace/meatspaceLoggingStats.js');
     vi.doUnmock('./identity/goals.js');
     vi.resetModules();
     return (await import('./characterSkills.js')).getCharacterSkills();

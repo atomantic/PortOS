@@ -14,7 +14,7 @@ import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { _healthRestoreDrainingForTests, ingestHealthData, withLiveHealthRestore } from './appleHealthIngest.js';
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these

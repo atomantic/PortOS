@@ -31,19 +31,19 @@ import {
   postLimitQuerySchema,
   postSessionRangeQuerySchema,
 } from '../lib/postValidation.js';
-import * as postService from '../services/meatspacePost.js';
+import * as postService from '../services/meatspace/meatspacePost.js';
 import { reviewEvents } from '../services/review.js';
 // Named at their declaring modules, not through a re-export off meatspacePost.js
 // (that convenience re-export closed a static import cycle — issue #5690).
-import { getPostStats } from '../services/meatspacePostStats.js';
-import { getPostRecommendations } from '../services/meatspacePostRecommendations.js';
-import { resolveDrillConfig, getAdaptivePreview } from '../services/meatspacePostAdaptive.js';
-import * as memoryService from '../services/meatspacePostMemory.js';
-import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
-import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
-import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspacePostDrillCache.js';
-import * as trainingService from '../services/meatspacePostTraining.js';
-import * as morseService from '../services/meatspacePostMorse.js';
+import { getPostStats } from '../services/meatspace/meatspacePostStats.js';
+import { getPostRecommendations } from '../services/meatspace/meatspacePostRecommendations.js';
+import { resolveDrillConfig, getAdaptivePreview } from '../services/meatspace/meatspacePostAdaptive.js';
+import * as memoryService from '../services/meatspace/meatspacePostMemory.js';
+import { generateLlmDrill, scoreLlmDrill } from '../services/meatspace/meatspacePostLlm.js';
+import { evaluateRhetoricAttempt } from '../services/meatspace/meatspacePostRhetoric.js';
+import { getCachedDrill, triggerReplenish, getCacheStats, requestCacheFill } from '../services/meatspace/meatspacePostDrillCache.js';
+import * as trainingService from '../services/meatspace/meatspacePostTraining.js';
+import * as morseService from '../services/meatspace/meatspacePostMorse.js';
 // meatspacePostReminder.js is not imported here — updatePostConfig() itself
 // reschedules the daily reminder (via meatspacePost.js's postConfigEvents) so
 // any current or future caller gets that behavior for free (#2015). Loaded

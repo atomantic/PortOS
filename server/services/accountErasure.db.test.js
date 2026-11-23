@@ -13,7 +13,7 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as humanActivity from './humanActivity.js';
 import * as tribe from './tribe.js';
 import { purgeConversation, encodeChatKey } from './imessageManage.js';
-import { purgeConversation as purgeBeeperConversation } from './beeperConversations.js';
+import { purgeConversation as purgeBeeperConversation } from './beeper/beeperConversations.js';
 
 let dbReady = false;
 let skipReason = '';

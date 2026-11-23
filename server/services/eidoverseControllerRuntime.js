@@ -21,7 +21,7 @@
  * retiring, or disarming a controller all end in
  * `reconcileEidoverseControllerTicks()`, which registers the supervisor
  * schedule when at least one install is armed and cancels it when none is.
- * `services/beeperArming.js` is the worked example of the same contract; the
+ * `services/beeper/beeperArming.js` is the worked example of the same contract; the
  * failure it exists to prevent is background work whose gate moved while the
  * work kept running (or never started) until the next restart.
  *

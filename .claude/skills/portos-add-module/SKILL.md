@@ -14,7 +14,7 @@ Moved from the root `AGENTS.md` Module Organization section (#16087). Root keeps
 - Formatting helpers (pure, no React) → `client/src/utils/`
 - HTTP / socket / browser clients → `client/src/services/` (API wrappers `api*`)
 - Express handlers → `server/routes/`, validated with `validateRequest` + the route family's domain `lib/<domain>Validation.js` schemas
-- Domain orchestration → `server/services/`
+- Domain orchestration → `server/services/`. When a domain reaches `>= 5` cohesive modules in `server/services/` or `server/lib/` (a shared prefix like `meatspace*`, `beeper*`), create a named domain subdirectory (`services/meatspace/`, `services/beeper/`) and import its modules directly, with no barrel.
 - Persisted data → decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`; app-native relational records are `db-primary`, and its "Adding a new data store?" checklist is required in review. Record the chosen class, federation stance and reason as a ``Storage: `<class>` …`` paragraph in the store module's header (after the summary sentence), never as a new section in `docs/STORAGE.md`. For file-backed storage, choose the backend under `docs/STORAGE.md` first, then use `fileUtils.js` / `collectionStore.js`; a growing collection is not a reason to bypass the database policy.
 
 One concern per file; tests sit next to their source as `<name>.test.js`; names are camelCase with a domain prefix (`brainValidation.js`).

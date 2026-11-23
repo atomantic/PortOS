@@ -9,9 +9,9 @@ import { readdir } from 'fs/promises';
 import { PATHS } from '../lib/fileUtils.js';
 import { readDayFile } from './appleHealthIngest.js';
 import { healthPointOrigin } from '../lib/appleHealthPoints.js';
-import { getDailyAlcohol } from './meatspaceAlcohol.js';
-import { getDailyNicotine } from './meatspaceNicotine.js';
-import { getBloodTests } from './meatspaceHealth.js';
+import { getDailyAlcohol } from './meatspace/meatspaceAlcohol.js';
+import { getDailyNicotine } from './meatspace/meatspaceNicotine.js';
+import { getBloodTests } from './meatspace/meatspaceHealth.js';
 import { ymdShift } from '../lib/postStreak.js';
 import { userLocalToday } from './userTimezone.js';
 

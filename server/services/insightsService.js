@@ -14,7 +14,7 @@
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
-import { getBloodTests } from './meatspaceHealth.js';
+import { getBloodTests } from './meatspace/meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';

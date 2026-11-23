@@ -27,7 +27,7 @@ vi.mock('./provider/providers.js', () => ({
 }));
 vi.mock('./taste-questionnaire.js', () => ({ getTasteProfile: vi.fn() }));
 vi.mock('./genome.js', () => ({ getGenomeSummary: vi.fn().mockResolvedValue(null) }));
-vi.mock('./meatspaceHealth.js', () => ({ getBloodTests: vi.fn().mockResolvedValue([]) }));
+vi.mock('./meatspace/meatspaceHealth.js', () => ({ getBloodTests: vi.fn().mockResolvedValue([]) }));
 vi.mock('./appleHealthQuery.js', () => ({ getCorrelationData: vi.fn().mockResolvedValue(null) }));
 
 import { callProviderAISimple } from './aiProvider.js';

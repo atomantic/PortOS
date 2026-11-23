@@ -22,7 +22,7 @@ vi.mock('./sharing/peerOutboundCoverage.js', () => mockNoPeerSync({}, {
 vi.mock('./mediaJobQueue/index.js', () => ({ getJob: () => null }));
 vi.mock('./sharing/annotationIdentity.js', () => ({ resolveBucketSourceName: async () => 'Test' }));
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn(() => { throw new Error('Unexpected network request'); }) }));
-vi.mock('./meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
+vi.mock('./meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
 
 const dataSync = await import('./dataSync.js');
 const goalService = await import('./identity/goals.js');

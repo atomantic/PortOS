@@ -5,27 +5,27 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // Only the services these cases reach are stubbed; the barrel's other
 // sub-routers import their real services, as their own suites do.
-vi.mock('../services/meatspace.js', async (importOriginal) => ({
+vi.mock('../services/meatspace/meatspace.js', async (importOriginal) => ({
   ...await importOriginal(),
   getOverview: vi.fn(),
   updateBirthDate: vi.fn(),
 }));
-vi.mock('../services/meatspaceAlcohol.js', async (importOriginal) => ({
+vi.mock('../services/meatspace/meatspaceAlcohol.js', async (importOriginal) => ({
   ...await importOriginal(),
   getDailyAlcohol: vi.fn(),
   updateDrink: vi.fn(),
   removeDrink: vi.fn(),
 }));
-vi.mock('../services/meatspaceNicotine.js', async (importOriginal) => ({
+vi.mock('../services/meatspace/meatspaceNicotine.js', async (importOriginal) => ({
   ...await importOriginal(),
   getDailyNicotine: vi.fn(),
   updateNicotine: vi.fn(),
   removeNicotine: vi.fn(),
 }));
 
-import * as meatspace from '../services/meatspace.js';
-import * as alcohol from '../services/meatspaceAlcohol.js';
-import * as nicotine from '../services/meatspaceNicotine.js';
+import * as meatspace from '../services/meatspace/meatspace.js';
+import * as alcohol from '../services/meatspace/meatspaceAlcohol.js';
+import * as nicotine from '../services/meatspace/meatspaceNicotine.js';
 import meatspaceRoutes from './meatspace.js';
 
 const app = express();

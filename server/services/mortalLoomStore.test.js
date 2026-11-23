@@ -1105,7 +1105,7 @@ describe('evicted (dataless) iCloud store', () => {
 
 describe('overview invalidation from MortalLoom', () => {
   it('emits the changed collection only after persistence and suppresses failed writes', async () => {
-    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
     const changed = vi.fn();
     meatspaceEvents.on('changed', changed);
     try {
@@ -1129,7 +1129,7 @@ describe('overview invalidation from MortalLoom', () => {
     vi.useFakeTimers();
     store._resetMortalLoomInitForTest();
     settingsEvents.removeAllListeners();
-    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
     const changed = vi.fn();
     meatspaceEvents.on('changed', changed);
     const stamp = (ino) => ({ ino, size: 40, blocks: 8, mtimeMs: 1000, mtime: new Date(1000) });
@@ -1161,7 +1161,7 @@ describe('overview invalidation from MortalLoom', () => {
     vi.useFakeTimers();
     store._resetMortalLoomInitForTest();
     settingsEvents.removeAllListeners();
-    const { meatspaceEvents } = await import('./meatspaceEvents.js');
+    const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
     const { dashboardEvents } = await import('./dashboardEvents.js');
     const goalsChanged = vi.fn();
     dashboardEvents.on('goals:changed', goalsChanged);

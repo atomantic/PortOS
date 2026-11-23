@@ -23,7 +23,7 @@ const { deriveLongevity, getLongevity } = await import('./identity/longevity.js'
 const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE } = await import('./identity/store.js');
 const { getCrossDomainNarrative } = await import('./insightsService.js');
 const { createSnapshot, getSnapshot, listSnapshots } = await import('./timeCapsule.js');
-const { meatspaceEvents } = await import('./meatspaceEvents.js');
+const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
 
 const readJSON = async path => JSON.parse(await readFile(path, 'utf8'));
 const behavioralData = { preferredWakeTime: '06:00', preferredSleepTime: '22:00', notes: 'Synthetic preference' };

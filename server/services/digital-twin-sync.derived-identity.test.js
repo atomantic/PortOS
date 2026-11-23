@@ -15,7 +15,7 @@ const { applyDigitalTwinRemote } = await import('./digital-twin-sync.js');
 const { deriveChronotype, getChronotype, updateChronotypeBehavioral } = await import('./identity/chronotype.js');
 const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
 const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE, IDENTITY_FILE } = await import('./identity/store.js');
-const { meatspaceEvents } = await import('./meatspaceEvents.js');
+const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
 
 const earlier = '2026-01-01T00:00:00.000Z';
 const later = '2026-01-02T00:00:00.000Z';

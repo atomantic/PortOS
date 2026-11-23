@@ -4,7 +4,7 @@
  * meatspacePostTraining.js (entries, passed in by the caller): defining it in
  * either would create a circular import.
  */
-import { getPostSessions } from './meatspacePost.js';
+import { getPostSessions } from './meatspace/meatspacePost.js';
 import { computeUnifiedStreak } from '../lib/postStreak.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
