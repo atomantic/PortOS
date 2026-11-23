@@ -18,7 +18,7 @@ function BackfillRow({ row, publishing }) {
     setError(null);
     publishing.prepareCrossLinks(row.target)
       .then((res) => setFilled(res))
-      .catch((err) => setError({ message: err?.message || 'Failed', login: err?.code === 'PUBLISH_LOGIN_REQUIRED' }))
+      .catch((err) => setError({ message: err?.message || `Could not fill ${label} cross-links. Check that PortOS Browser is running and try again.`, login: err?.code === 'PUBLISH_LOGIN_REQUIRED' }))
       .finally(() => setBusy(null));
   };
   // Saved records the links this edit added (the ones listed when it was filled).
