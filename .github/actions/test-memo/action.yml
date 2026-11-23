@@ -152,9 +152,29 @@ runs:
           mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/4"
         fi
 
+    # A trusted run records into the merged store and saves it, so it needs
+    # one writable directory. The save prunes it first (pruneTestMemo in
+    # scripts/lib/testMemoRunner.js), which keeps this copy small.
     - name: Merge the full-run shard lineages
-      if: fromJSON(inputs.merge-shards) >= 1
+      if: fromJSON(inputs.merge-shards) >= 1 && github.event_name != 'pull_request'
       shell: bash
       run: |
         mkdir -p "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards"
         node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*
+
+    # A pull request only reads, and its store is discarded with the job, so
+    # copying every parked entry into one directory was pure overhead (#17617).
+    # The runner reads the parked lineages in place instead: the first valid
+    # entry across them, and per test the newest record, which is what the
+    # merge would have kept (scripts/lib/testMemoStore.js).
+    - name: Read the full-run shard lineages in place
+      if: fromJSON(inputs.merge-shards) >= 1 && github.event_name == 'pull_request'
+      shell: bash
+      run: |
+        separator=':'
+        if [ "$RUNNER_OS" = Windows ]; then separator=';'; fi
+        dirs=''
+        for dir in "$RUNNER_TEMP"/portos-test-memo-shards/*; do
+          if [ -d "$dir" ]; then dirs="${dirs:+$dirs$separator}$dir"; fi
+        done
+        echo "PORTOS_TEST_MEMO_READ_DIRS=$dirs" >> "$GITHUB_ENV"
