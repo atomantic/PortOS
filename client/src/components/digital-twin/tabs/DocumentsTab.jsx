@@ -62,6 +62,9 @@ export default function DocumentsTab({ onRefresh }) {
     selectDoc(target);
   };
 
+  // Saving or reverting the edits settles the parked navigation: nothing is left to discard.
+  useEffect(() => { if (!dirty) setPendingSelect(null); }, [dirty]);
+
   const selectedWeight = selectedDoc?.weight ?? 5;
   useEffect(() => { setWeightDraft(selectedWeight); }, [selectedDoc?.id, selectedWeight]);
 
@@ -354,7 +357,7 @@ export default function DocumentsTab({ onRefresh }) {
               </div>
             </div>
 
-            {pendingSelect && (
+            {dirty && pendingSelect && (
               <InlineConfirmRow
                 variant="separator"
                 tone="warning"

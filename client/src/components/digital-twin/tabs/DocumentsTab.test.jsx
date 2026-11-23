@@ -143,6 +143,19 @@ describe('DocumentsTab unsaved edits and weight slider', () => {
     await waitFor(() => expect(screen.getByLabelText('Soul document')).toHaveValue('other'));
   });
 
+  it('clears the discard prompt once the edit is saved', async () => {
+    updateSoulDocument.mockResolvedValue({ ...DOC, content: 'original edited' });
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /Core Values/ }));
+    await user.type(await screen.findByLabelText('Soul document'), ' edited');
+    await user.click(screen.getByRole('button', { name: /Other Doc/ }));
+    expect(screen.getByText('You have unsaved changes. Discard edits?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByText('You have unsaved changes. Discard edits?')).toBeNull());
+  });
+
   it('switches immediately when the editor is clean', async () => {
     const user = userEvent.setup();
     renderTab();
