@@ -1171,6 +1171,7 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
     offset: 0,
     embeddingMissing: !staleModel,
     staleEmbeddingModel: staleModel,
+    skipDecorations: true,
   });
 
   const seeds = todo.map((i) => ingredientEmbedSeed(i));
@@ -1298,7 +1299,7 @@ router.delete('/types/:id', asyncHandler(async (req, res) => {
     // drops them). force=true deletes the definition anyway; the rows survive
     // and just render under the fallback editor.
     if (!force) {
-      const { items } = await catalogDB.listIngredients({ type: req.params.id, limit: 1 });
+      const { items } = await catalogDB.listIngredients({ type: req.params.id, limit: 1, skipDecorations: true });
       if (items.length > 0) {
         throw new ServerError(
           `Catalog type "${req.params.id}" has ingredients — pass ?force=true to delete it anyway`,

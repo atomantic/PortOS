@@ -462,33 +462,40 @@ async function decorateIngredientPage(ids) {
   if (ids.length === 0) return new Map();
   const result = await query(
     `WITH page AS (SELECT DISTINCT unnest($1::text[]) AS id),
+     page_members AS (
+       SELECT p.id AS cid, member_id FROM page p
+         CROSS JOIN LATERAL unnest(catalog_identity_member_ids(p.id)) AS member_id
+     ),
+     page_refs AS (
+       SELECT pm.cid, r.ingredient_id, r.ref_kind, r.ref_id, r.role
+         FROM page_members pm
+         JOIN catalog_identity_read_refs r ON r.ingredient_id = pm.member_id
+        WHERE r.deleted = false AND r.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM page_members))
+     ),
      usage AS (
        SELECT cid, jsonb_object_agg(ref_kind, n) AS ref_usage FROM (
          SELECT r.cid, r.ref_kind, COUNT(DISTINCT r.ref_id) AS n
-           FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
-                   FROM catalog_identity_read_refs WHERE deleted = false AND NOT (ref_kind = 'universe' AND role = 'owner')) r
-          WHERE ${inSet('r.cid', 'SELECT id FROM page')}
+           FROM page_refs r
+          WHERE NOT (r.ref_kind = 'universe' AND r.role = 'owner')
             AND (r.ref_kind NOT IN (${HOMING_REF_KINDS_SQL}) OR ${liveHomingTargetSql('r')})
           GROUP BY r.cid, r.ref_kind
        ) u GROUP BY cid
      ),
      owners AS (
-       SELECT ingredient_id AS id, COUNT(DISTINCT ref_id) AS n, MIN(ref_id) AS universe_id
-         FROM catalog_identity_read_refs
-        WHERE ref_kind = 'universe' AND role = 'owner' AND deleted = false
-          AND ingredient_id = catalog_canonical_ingredient_id(ingredient_id)
-          AND ingredient_id = ANY($1)
-        GROUP BY ingredient_id
+       SELECT cid AS id, COUNT(DISTINCT ref_id) AS n, MIN(ref_id) AS universe_id
+         FROM page_refs
+        WHERE ref_kind = 'universe' AND role = 'owner' AND ingredient_id = cid
+        GROUP BY cid
      ),
      thumbs AS (
-       SELECT DISTINCT ON (m.cid) m.cid, m.media_key
-         FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, media_key, kind, role, created_at
-                 FROM catalog_identity_read_media
-                WHERE deleted = false AND kind IN ('portrait', 'reference')
-                  AND (role IS NULL OR NOT (role LIKE 'look:%' OR role LIKE 'archive:%' OR role = 'plate'
-                    OR (role LIKE 'design:%' AND COALESCE(library->>'guide', '') <> 'true')))) m
-        WHERE ${inSet('m.cid', 'SELECT id FROM page')}
-        ORDER BY m.cid, (m.kind = 'portrait') DESC, COALESCE(m.role LIKE 'sheet:%', false), m.created_at DESC
+       SELECT DISTINCT ON (pm.cid) pm.cid, m.media_key
+         FROM page_members pm
+         JOIN catalog_identity_read_media m ON m.ingredient_id = pm.member_id
+        WHERE m.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM page_members))
+          AND m.deleted = false AND m.kind IN ('portrait', 'reference')
+          AND (m.role IS NULL OR NOT (m.role LIKE 'look:%' OR m.role LIKE 'archive:%' OR m.role = 'plate'
+            OR (m.role LIKE 'design:%' AND COALESCE(m.library->>'guide', '') <> 'true')))
+        ORDER BY pm.cid, (m.kind = 'portrait') DESC, COALESCE(m.role LIKE 'sheet:%', false), m.created_at DESC
      )
      SELECT page.id, thumbs.media_key AS thumbnail_key, usage.ref_usage,
        CASE WHEN owners.n = 1 AND u.id IS NOT NULL THEN jsonb_build_object('id', u.id, 'name', u.name) ELSE NULL END AS owning_universe,
@@ -500,7 +507,7 @@ async function decorateIngredientPage(ids) {
   return new Map(result.rows.map((row) => [row.id, row]));
 }
 
-export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null } = {}) {
+export async function listIngredients({ ids, type, tag, query: q, refKind = null, refId = null, unlinked = false, orphaned = false, scrapId = null, limit = 50, offset = 0, includeEmbedding = false, embeddingMissing = false, staleEmbeddingModel = null, skipDecorations = false } = {}) {
   const conditions = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)'];
   const params = [];
   let idx = 1;
@@ -607,8 +614,9 @@ export async function listIngredients({ ids, type, tag, query: q, refKind = null
     `${withClause}SELECT ${cols} FROM catalog_ingredients ${where} ${orderBy} LIMIT $${idx++} OFFSET $${idx}`,
     params,
   );
-  const decorations = includeEmbedding ? new Map() : await decorateIngredientPage(result.rows.map((row) => row.id));
-  const access = includeEmbedding ? new Map() : await getCatalogIdentityAccessForIds(result.rows.map(row => row.id));
+  const rowIds = result.rows.map((row) => row.id);
+  const [decorations, access] = includeEmbedding || skipDecorations ? [new Map(), new Map()]
+    : await Promise.all([decorateIngredientPage(rowIds), getCatalogIdentityAccessForIds(rowIds)]);
   return {
     items: result.rows.map((row) => {
       const decoration = decorations.get(row.id);
@@ -632,8 +640,8 @@ export async function getIngredientCards(ids) {
     FROM unnest($1::text[]) WITH ORDINALITY requested(id, position)
     JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(requested.id) AND i.deleted = false
     ORDER BY requested.position`, [ids]);
-  const decorations = await decorateIngredientPage([...new Set(rows.map(row => row.id))]);
-  const access = await getCatalogIdentityAccessForIds(ids);
+  const [decorations, access] = await Promise.all([
+    decorateIngredientPage([...new Set(rows.map(row => row.id))]), getCatalogIdentityAccessForIds(ids)]);
   return rows.map(row => {
     const decoration = decorations.get(row.id);
     return { ...rowToIngredient(row), id: row.requested_key, canonicalId: row.id,

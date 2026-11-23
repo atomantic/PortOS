@@ -18,7 +18,7 @@
 import { query } from '../../lib/db.js';
 import { resolveRefs } from '../catalog/catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
-import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient } from './shared.js';
+import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient, MEMBERS_CTE } from './shared.js';
 import { catalogReferenceRole } from '../../lib/catalog/catalogTypes.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
@@ -196,10 +196,11 @@ export async function listRefsForIngredients(ingredientIds, { preserveIdentity =
   if (ids.length === 0) return new Map();
   const result = await query(
     preserveIdentity ? `SELECT * FROM ${includeRetained ? `${exportRefRows} exported_refs` : 'catalog_ingredient_refs'}
-      WHERE ingredient_id = ANY($1) AND deleted = false ORDER BY ingredient_id` : `SELECT r.*, requested.id AS requested_id FROM unnest($1::text[]) requested(id)
-      JOIN catalog_identity_read_refs r ON r.ingredient_id = ANY(catalog_identity_member_ids(requested.id))
-      WHERE r.deleted = false
-      ORDER BY ingredient_id`,
+      WHERE ingredient_id = ANY($1) AND deleted = false ORDER BY ingredient_id` : `${MEMBERS_CTE}
+      SELECT r.*, members.requested_id FROM members
+      JOIN catalog_identity_read_refs r ON r.ingredient_id = members.member_id
+      WHERE r.deleted = false AND r.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM members))
+      ORDER BY r.ingredient_id`,
     [ids],
   );
   const grouped = new Map(ids.map(id => [id, []]));
