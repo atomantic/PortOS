@@ -184,8 +184,8 @@ fi
 # Whisper model (GGUF) — only when whisper engine is active.
 ensure_whisper_model() {
   local path="${MODELS_DIR}/${MODEL_NAME}"
-  local url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}"
-  local state want have
+  local url state want have
+  url="$(asset url whisper "$MODEL_NAME")"
   state="$(asset state whisper "$path")"
   if [[ "$state" == "verified" ]]; then
     return 0
@@ -209,6 +209,10 @@ ensure_whisper_model() {
   fi
   echo "⬇️  Whisper model → ${path}"
   download_staged "$url" "$path"
+  if ! asset verify-model "$MODEL_NAME" "$STAGED_TMP"; then
+    echo "❌ ${MODEL_NAME} failed SHA-256 verification — refusing to promote" >&2
+    exit 1
+  fi
   mv -f "$STAGED_TMP" "$path"
   asset receipt whisper "$path"
 }
@@ -221,12 +225,16 @@ fi
 # automatically when present.
 if [[ "$STT_ENGINE" == "whisper" && "$INSTALL_COREML" == "1" ]] && is_macos; then
   ENCODER_BASE="${MODEL_NAME%.bin}"
+  ENCODER_ZIP="${ENCODER_BASE}-encoder.mlmodelc.zip"
   ENCODER_DIR="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc"
   if [[ ! -d "${ENCODER_DIR}" ]]; then
+    ENCODER_URL="$(asset url whisper "$ENCODER_ZIP")"
     echo "⬇️  CoreML encoder → ${ENCODER_DIR}"
-    download_staged \
-      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${ENCODER_BASE}-encoder.mlmodelc.zip" \
-      "${ENCODER_DIR}.zip"
+    download_staged "$ENCODER_URL" "${ENCODER_DIR}.zip"
+    if ! asset verify-model "$ENCODER_ZIP" "$STAGED_TMP"; then
+      echo "❌ ${ENCODER_ZIP} failed SHA-256 verification — refusing to extract" >&2
+      exit 1
+    fi
     # Extract beside the final path, then rename: the `-d` gate above must only
     # ever see a complete directory, never a half-extracted one.
     COREML_STAGE="$(mktemp -d "${MODELS_DIR}/.coreml.XXXXXX")"
@@ -247,7 +255,7 @@ fi
 ONNX_PATH="${VOICES_DIR}/${VOICE_NAME}.onnx"
 JSON_PATH="${VOICES_DIR}/${VOICE_NAME}.onnx.json"
 ensure_piper_voice() {
-  local state locale lang_ rest speaker quality base onnx_tmp json_tmp
+  local state base onnx_tmp json_tmp
   state="$(asset state piper "$ONNX_PATH")"
   if [[ "$state" == "verified" ]]; then
     return 0
@@ -259,15 +267,14 @@ ensure_piper_voice() {
     asset receipt piper "$ONNX_PATH"
     return 0
   fi
-  locale="${VOICE_NAME%%-*}"       # en_US
-  lang_="${locale%%_*}"            # en
-  rest="${VOICE_NAME#*-}"          # ryan-high
-  speaker="${rest%-*}"             # ryan
-  quality="${rest##*-}"            # high
-  base="https://huggingface.co/rhasspy/piper-voices/resolve/main/${lang_}/${locale}/${speaker}/${quality}"
+  base="$(asset url piper "$VOICE_NAME")"
   echo "⬇️  Piper voice → ${ONNX_PATH}"
   download_staged "${base}/${VOICE_NAME}.onnx" "$ONNX_PATH"
   onnx_tmp="$STAGED_TMP"
+  if ! asset verify-model "${VOICE_NAME}.onnx" "$onnx_tmp"; then
+    echo "❌ ${VOICE_NAME}.onnx failed SHA-256 verification — refusing to promote" >&2
+    exit 1
+  fi
   download_staged "${base}/${VOICE_NAME}.onnx.json" "$JSON_PATH"
   json_tmp="$STAGED_TMP"
   if ! asset check-config "$json_tmp"; then
