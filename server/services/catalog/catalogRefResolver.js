@@ -118,7 +118,8 @@ export async function resolveRefs(tuples) {
   }
   await Promise.all([...idsByKind].map(async ([refKind, ids]) => {
     const target = REF_TARGET_TABLES[refKind];
-    const { rows } = await query(`SELECT id FROM ${target.table} WHERE id = ANY($1) AND ${target.liveClause}`, [[...ids]]);
+    const live = target.liveClause ? ` AND ${target.liveClause}` : '';
+    const { rows } = await query(`SELECT id FROM ${target.table} WHERE id = ANY($1)${live}`, [[...ids]]);
     for (const row of rows) cache.set(cacheKey(refKind, row.id), { resolved: true });
   }));
   return tuples.map((t) => ({ refKind: t?.refKind, refId: t?.refId, ...cache.get(cacheKey(t?.refKind, t?.refId)) }));
