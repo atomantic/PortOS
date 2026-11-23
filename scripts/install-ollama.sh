@@ -33,5 +33,57 @@ if ! command -v zstd >/dev/null 2>&1; then
   fi
 fi
 
-# pipefail also reports download failures instead of treating an empty sh as success.
-curl -fsSL https://ollama.com/install.sh | sh
+# Install from GitHub release assets, never a piped remote shell script from a mutable
+# endpoint: the archive is SHA-256 verified against the release's sha256sum.txt
+# before anything is extracted or any system directory is touched.
+# OLLAMA_VERSION pins a release tag (e.g. v0.12.0); default is the latest.
+case "$(uname -m)" in
+  x86_64|amd64) arch=amd64 ;;
+  aarch64|arm64) arch=arm64 ;;
+  *) echo "Unsupported architecture: $(uname -m). Install Ollama manually." >&2; exit 1 ;;
+esac
+
+asset="ollama-linux-${arch}.tar.zst"
+if [ -n "${OLLAMA_VERSION:-}" ]; then
+  base="https://github.com/ollama/ollama/releases/download/${OLLAMA_VERSION}"
+else
+  base='https://github.com/ollama/ollama/releases/latest/download'
+fi
+
+# Pick the destination before downloading: /usr/local as root or with
+# passwordless sudo (server installs have no terminal), else ~/.local.
+sudo_cmd=()
+if [ -n "${OLLAMA_INSTALL_PREFIX:-}" ]; then
+  prefix="$OLLAMA_INSTALL_PREFIX"
+elif [ "$(id -u)" = 0 ]; then
+  prefix=/usr/local
+elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+  prefix=/usr/local
+  sudo_cmd=(sudo -n)
+else
+  prefix="${HOME:?HOME must be set for a user-level Ollama install}/.local"
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+echo "Downloading ${asset}…"
+curl -fsSL -o "$work/$asset" "$base/$asset"
+curl -fsSL -o "$work/sha256sum.txt" "$base/sha256sum.txt"
+
+expected="$(grep -E "[[:space:]]\*?(\./)?${asset}\$" "$work/sha256sum.txt" | head -n 1 || true)"
+if [ -z "$expected" ]; then
+  echo "sha256sum.txt has no entry for ${asset}; refusing to install." >&2
+  exit 1
+fi
+printf '%s\n' "${expected%%[[:space:]]*}  ${asset}" > "$work/expected.sha256"
+if ! (cd "$work" && sha256sum --check --status expected.sha256); then
+  echo "SHA-256 mismatch for ${asset}; refusing to install." >&2
+  exit 1
+fi
+
+echo "Installing Ollama into ${prefix}…"
+${sudo_cmd[@]+"${sudo_cmd[@]}"} mkdir -p "$prefix"
+${sudo_cmd[@]+"${sudo_cmd[@]}"} rm -rf "$prefix/lib/ollama"
+${sudo_cmd[@]+"${sudo_cmd[@]}"} tar --zstd -xf "$work/$asset" -C "$prefix"
+echo "Ollama installed. Ensure ${prefix}/bin is on PATH."

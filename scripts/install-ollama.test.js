@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, symlinkSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,39 +8,94 @@ import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./install-ollama.sh', import.meta.url));
 
+const ARCHIVE = 'fake-archive-bytes';
+const sha = (text) => createHash('sha256').update(text).digest('hex');
+
 // Execute the real shell flow with an isolated PATH: no network, sudo, or real
-// package manager can run. The fake package manager makes zstd discoverable.
-function run({ installed = false, manager = 'apt-get', uid = '0', fail = false, curlFails = false, missingAfter = false } = {}) {
+// package manager can run. The fake package manager makes zstd discoverable;
+// the fake curl serves a canned archive + sha256sum.txt.
+function run({ installed = false, manager = 'apt-get', uid = '0', fail = false, missingAfter = false,
+  arch = 'x86_64', curlFails = false, digest = sha(ARCHIVE), noEntry = false, version } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ollama-install-'));
+  const prefix = join(dir, 'prefix');
   const log = join(dir, 'calls');
   const bin = (name, body) => writeFileSync(join(dir, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
+  for (const tool of ['mktemp', 'rm', 'grep', 'head', 'mkdir', 'cat', 'cut']) {
+    const real = ['/bin', '/usr/bin'].map((d) => join(d, tool)).find((p) => existsSync(p));
+    if (real) symlinkSync(real, join(dir, tool));
+  }
+  const asset = `ollama-linux-${arch === 'aarch64' ? 'arm64' : 'amd64'}.tar.zst`;
   bin('id', `echo ${uid}`);
-  bin('curl', `echo curl >> '${log}'\n${curlFails ? 'exit 22' : "echo 'echo upstream'"}`);
-  bin('sh', `/bin/sh "$@"`);
+  bin('uname', `echo ${arch}`);
+  bin('curl', `echo "curl $*" >> '${log}'
+${curlFails ? 'exit 22' : ''}
+out=$3
+case "$4" in
+  *sha256sum.txt) ${noEntry ? `echo '${digest}  other.tgz'` : `echo '${digest}  ${asset}'`} > "$out" ;;
+  *) printf '%s' '${ARCHIVE}' > "$out" ;;
+esac`);
+  bin('sha256sum', `# fake GNU sha256sum --check built on shasum
+read -r want name < "$3"
+got=$(/usr/bin/shasum -a 256 "$name" | cut -d' ' -f1)
+[ "$want" = "$got" ]`);
+  bin('tar', `echo "tar $*" >> '${log}'`);
   bin('sudo', `echo "sudo $*" >> '${log}'\nshift\n"$@"`);
   if (installed) bin('zstd', 'exit 0');
   if (manager) bin(manager, `echo "${manager} $*" >> '${log}'\n${fail ? 'exit 1' : missingAfter ? ':' : `echo '#!/bin/bash' > '${dir}/zstd'\n/bin/chmod +x '${dir}/zstd'`}`);
-  const result = spawnSync('/bin/bash', [script], { env: { PATH: dir }, encoding: 'utf8' });
+  const env = { PATH: dir, OLLAMA_INSTALL_PREFIX: prefix, ...(version ? { OLLAMA_VERSION: version } : {}) };
+  const result = spawnSync('/bin/bash', [script], { env, encoding: 'utf8' });
   const calls = readFileSync(log, { encoding: 'utf8', flag: 'a+' });
+  const prefixCreated = existsSync(prefix);
   rmSync(dir, { recursive: true, force: true });
-  return { ...result, calls };
+  return { ...result, calls, prefixCreated };
 }
 
 describe.skipIf(process.platform === 'win32')('Linux Ollama installation', () => {
-  it('runs upstream directly when zstd is already installed', () => {
+  it('verifies the checksum, then extracts the release archive', () => {
     const result = run({ installed: true });
     expect(result.status).toBe(0);
-    expect(result.calls).toBe('curl\n');
-    expect(result.stdout).toContain('upstream');
+    expect(result.calls).toContain('releases/latest/download/ollama-linux-amd64.tar.zst');
+    expect(result.calls).toMatch(/tar --zstd -xf \S+ollama-linux-amd64\.tar\.zst -C \S+prefix\n$/);
+    expect(result.prefixCreated).toBe(true);
+  });
+
+  it('selects the arm64 asset and honours a pinned version', () => {
+    const result = run({ installed: true, arch: 'aarch64', version: 'v0.0.1' });
+    expect(result.status).toBe(0);
+    expect(result.calls).toContain('releases/download/v0.0.1/ollama-linux-arm64.tar.zst');
+  });
+
+  it('never pipes the remote installer into a shell', () => {
+    const src = readFileSync(script, 'utf8');
+    expect(src).not.toMatch(/ollama\.com\/install\.sh/);
+    expect(src).not.toMatch(/\|\s*(ba)?sh\b/);
+  });
+
+  it.each([
+    ['digest mismatch', { digest: sha('tampered') }, 'SHA-256 mismatch'],
+    ['missing checksum entry', { noEntry: true }, 'no entry for'],
+  ])('rejects %s before extracting or touching the prefix', (_n, options, message) => {
+    const result = run({ installed: true, ...options });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(message);
+    expect(result.calls).not.toContain('tar ');
+    expect(result.prefixCreated).toBe(false);
+  });
+
+  it('rejects an unsupported architecture without downloading', () => {
+    const result = run({ installed: true, arch: 'riscv64' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Unsupported architecture');
+    expect(result.calls).toBe('');
   });
 
   it.each([
     ['apt-get', 'install -y zstd'], ['dnf', 'install -y zstd'],
     ['yum', 'install -y zstd'], ['pacman', '-S --noconfirm zstd'],
-  ])('installs the prerequisite with %s before upstream runs', (manager, args) => {
+  ])('installs the prerequisite with %s before downloading', (manager, args) => {
     const result = run({ manager });
     expect(result.status).toBe(0);
-    expect(result.calls).toBe(`${manager} ${args}\ncurl\n`);
+    expect(result.calls.startsWith(`${manager} ${args}\ncurl `)).toBe(true);
   });
 
   it('uses non-interactive sudo for non-root installs', () => {
@@ -52,14 +108,16 @@ describe.skipIf(process.platform === 'win32')('Linux Ollama installation', () =>
     [{ fail: true }, 'Run: sudo apt-get install -y zstd'],
     [{ manager: null }, 'Install zstd with your package manager'],
     [{ missingAfter: true }, 'zstd is still missing from PATH'],
-  ])('stops before upstream cleanup when prerequisites fail: %j', (options, message) => {
+  ])('stops before downloading when prerequisites fail: %j', (options, message) => {
     const result = run(options);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(message);
     expect(result.calls).not.toContain('curl');
   });
 
-  it('does not report success when the upstream download fails', () => {
-    expect(run({ installed: true, curlFails: true }).status).toBe(22);
+  it('does not report success when the download fails', () => {
+    const result = run({ installed: true, curlFails: true });
+    expect(result.status).toBe(22);
+    expect(result.prefixCreated).toBe(false);
   });
 });
