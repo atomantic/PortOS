@@ -21,7 +21,6 @@
  * where `transcribe` returns words on the SONG clock.
  */
 
-import { existsSync } from 'fs';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { createServer } from 'net';
 import { homedir, tmpdir } from 'os';
@@ -33,6 +32,13 @@ import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { streamResumableDownload } from '../../lib/downloadPreflight.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import {
+  inspectVoiceAsset,
+  isVoiceAssetUsable,
+  pinnedVoiceModelSha256,
+  whisperModelUrl,
+  writeVoiceAssetReceipt,
+} from '../../lib/voiceModelAssets.js';
 import { getVoiceConfig, expandPath } from '../voice/config.js';
 import { transcribe as sttTranscribe } from '../voice/stt.js';
 import {
@@ -47,7 +53,8 @@ import {
 } from './lyricAlignCore.js';
 
 export const ALIGN_MODEL_FILE = 'ggml-large-v3-turbo.bin';
-export const ALIGN_MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${ALIGN_MODEL_FILE}`;
+export const ALIGN_MODEL_URL = whisperModelUrl(ALIGN_MODEL_FILE);
+export const ALIGN_MODEL_SHA256 = pinnedVoiceModelSha256(ALIGN_MODEL_FILE);
 export const alignModelDir = () => join(homedir(), '.portos', 'voice', 'models');
 
 // Homebrew's whisper-cpp ships `whisper-cli`; older builds named it `whisper-cpp`.
@@ -64,12 +71,17 @@ let modelDownload = null;
 // Callers sharing the one in-flight download each watch its progress.
 const modelDownloadListeners = new Set();
 
-async function downloadAlignmentModel(target, { download = streamResumableDownload } = {}) {
+async function downloadAlignmentModel(target, {
+  download = streamResumableDownload,
+  expectedSha256 = ALIGN_MODEL_SHA256,
+  writeReceipt = writeVoiceAssetReceipt,
+} = {}) {
   console.log(`⬇️ Downloading whisper alignment model ${ALIGN_MODEL_FILE} (about 1.6 GB, first alignment only)`);
   let lastDecile = -1;
   await download({
     url: ALIGN_MODEL_URL,
     destPath: target,
+    expectedSha256,
     onBytes: (received, total) => {
       if (!(total > 0)) return;
       for (const listener of modelDownloadListeners) listener({ received, total, percent: Math.round((received / total) * 100) });
@@ -79,6 +91,7 @@ async function downloadAlignmentModel(target, { download = streamResumableDownlo
       console.log(`⬇️ Whisper alignment model ${decile * 10}% (${Math.round(received / 1e6)} of ${Math.round(total / 1e6)} MB)`);
     },
   });
+  await writeReceipt('whisper', target);
   console.log(`✅ Whisper alignment model ready at ${target}`);
 }
 
@@ -87,14 +100,27 @@ async function downloadAlignmentModel(target, { download = streamResumableDownlo
  * use. A `large` model the voice settings already point at is used as is.
  * Concurrent callers share one download.
  */
-async function ensureAlignmentModel({ configuredModelPath = null, download, onDownloadProgress = null } = {}) {
-  const target = join(alignModelDir(), ALIGN_MODEL_FILE);
-  if (existsSync(target)) return target;
-  if (configuredModelPath && /large/i.test(basename(configuredModelPath)) && existsSync(configuredModelPath)) {
+export async function ensureAlignmentModel({
+  configuredModelPath = null,
+  modelDir = alignModelDir(),
+  download,
+  expectedSha256 = ALIGN_MODEL_SHA256,
+  inspect = inspectVoiceAsset,
+  writeReceipt = writeVoiceAssetReceipt,
+  onDownloadProgress = null,
+} = {}) {
+  const target = join(modelDir, ALIGN_MODEL_FILE);
+  if (isVoiceAssetUsable(inspect('whisper', target).state)) return target;
+  if (
+    configuredModelPath
+    && /large/i.test(basename(configuredModelPath))
+    && isVoiceAssetUsable(inspect('whisper', configuredModelPath).state)
+  ) {
     return configuredModelPath;
   }
   if (!modelDownload) {
-    modelDownload = downloadAlignmentModel(target, { download }).finally(() => { modelDownload = null; });
+    modelDownload = downloadAlignmentModel(target, { download, expectedSha256, writeReceipt })
+      .finally(() => { modelDownload = null; });
   }
   if (onDownloadProgress) modelDownloadListeners.add(onDownloadProgress);
   try {
