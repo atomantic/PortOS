@@ -426,4 +426,19 @@ describe('durable graceful maintenance', () => {
     expect(restarted.tryAdmit('agent', 'new')).toBeNull();
     expect(() => restarted.resume({ id: '00000000-0000-4000-8000-000000000000', revision: 1 })).toThrow();
   });
+
+  it("adds no settlement row for publications under a long-lived agent operation but still reserves under others", async () => {
+    const { admission } = gate();
+    const kinds = () => admission.operations().filter(op => op.kind === "settlement").length;
+    const agent = admission.admit("agent", "streaming");
+    const revision = admission.status().revision;
+    await agent.run(async () => {
+      for (let i = 0; i < 20; i++) await admission.continueSettlement(async () => { expect(kinds()).toBe(0); }, { lazyWhenOwnedBy: ["agent", "runner"] });
+    });
+    expect(admission.status().revision).toBe(revision);
+    const media = admission.admit("media", "render");
+    await media.run(() => admission.continueSettlement(async () => { expect(kinds()).toBe(1); }, { lazyWhenOwnedBy: ["agent", "runner"] }));
+    await media.finish();
+    await agent.finish();
+  });
 });
