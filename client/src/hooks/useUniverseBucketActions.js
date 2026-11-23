@@ -39,6 +39,7 @@ import { humanizeCategory } from '../lib/universeBuilderShared';
  */
 export default function useUniverseBucketActions({
   selectedId,
+  selectedIdRef,
   draft,
   draftRef,
   setDraft,
@@ -110,6 +111,8 @@ export default function useUniverseBucketActions({
     // subsequent auto-save can't clobber unrelated fields with a stale spread.
     const flushed = await flushDraftIfDirty();
     if (!flushed) return;
+    const capturedId = selectedId;
+    const isCurrent = () => mountedRef.current && selectedIdRef.current === capturedId;
     const current = draft.categories?.[cat]?.variations || [];
     const existingLabels = current.map((v) => v.label).filter(Boolean);
     const result = await generateCategoryVariations({
@@ -123,7 +126,9 @@ export default function useUniverseBucketActions({
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
     }, { silent: true }).catch((e) => { toast.error(`Generate failed: ${e.message}`); return null; });
-    if (!result) return;
+    // A universe switch mid-flight must not merge this universe's variations
+    // into the newly opened draft.
+    if (!result || !isCurrent()) return;
     const fresh = Array.isArray(result.variations) ? result.variations : [];
     const merged = mergeVariations(current, fresh);
     const additionCount = merged.length - current.length;
@@ -131,12 +136,15 @@ export default function useUniverseBucketActions({
       toast.error('LLM returned no new variations — try again or adjust the universe context');
       return;
     }
+    // Merge onto the live draft, not the pre-request closure, so edits typed
+    // while the LLM ran survive.
+    const baseDraft = draftRef.current || draft;
     const nextDraft = {
-      ...draft,
+      ...baseDraft,
       // Preserve the bucket's `kind` (mirror of updateCategory's behavior;
       // see comment there). Generate-more is the second write path that
       // could silently reset the trunk to default/other.
-      categories: { ...draft.categories, [cat]: { ...(draft.categories?.[cat] || {}), variations: merged } },
+      categories: { ...baseDraft.categories, [cat]: { ...(baseDraft.categories?.[cat] || {}), variations: mergeVariations(baseDraft.categories?.[cat]?.variations || [], fresh) } },
     };
     setDraft(nextDraft);
     if (selectedId && nextDraft.name?.trim()) {
@@ -144,6 +152,7 @@ export default function useUniverseBucketActions({
         .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
       if (updated) {
         setWorlds((prev) => upsertByIdPrepend(prev, updated));
+        if (!isCurrent()) return;
         markDraftSaved(nextDraft);
         toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
         return;

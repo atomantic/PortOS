@@ -43,6 +43,9 @@ const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => 
  */
 export default function useUniverseExpand({
   selectedId,
+  selectedIdRef,
+  mountedRef,
+  draftRef,
   draft,
   setDraft,
   setSaving,
@@ -73,7 +76,11 @@ export default function useUniverseExpand({
 
   useEffect(() => { resetRefinePanel(); }, [selectedId, resetRefinePanel]);
 
+  // True while the user is still on the universe that started the request.
+  const isStillOn = (capturedId) => mountedRef.current && selectedIdRef.current === capturedId;
+
   const handleExpand = async () => {
+    const capturedId = selectedId;
     if (!draft.starterPrompt?.trim()) {
       toast.error('Add a starter prompt to expand');
       return;
@@ -92,8 +99,8 @@ export default function useUniverseExpand({
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
     }, { silent: true }).catch((error) => { toast.error(`Expansion failed: ${error.message}`); return null; });
-    setExpanding(false);
-    if (!result) return;
+    if (mountedRef.current) setExpanding(false);
+    if (!result || !isStillOn(capturedId)) return;
 
     const {
       expandedDraft,
@@ -127,6 +134,10 @@ export default function useUniverseExpand({
       };
       if (selectedId) {
         const fresh = await getUniverse(selectedId).catch(() => null);
+        if (!isStillOn(capturedId)) {
+          if (mountedRef.current) setSaving(false);
+          return;
+        }
         if (!fresh) {
           setSaving(false);
           toast.success(expandToast({
@@ -181,9 +192,10 @@ export default function useUniverseExpand({
         ? updateUniverse(selectedId, payload, { silent: true })
         : createUniverse(payload, { silent: true }))
         .catch((error) => { toast.error(`Auto-save after expand failed: ${error.message}`); return null; })
-        .finally(() => setSaving(false));
+        .finally(() => { if (mountedRef.current) setSaving(false); });
       if (saved) {
         setWorlds((previous) => upsertByIdPrepend(previous, saved));
+        if (!isStillOn(capturedId)) return;
         setCanonDirty(false);
         clearPendingCanonAdditions();
         markDraftSaved({ ...payload, id: saved.id, updatedAt: saved.updatedAt });
@@ -205,8 +217,10 @@ export default function useUniverseExpand({
     }));
   };
 
-  const applyRefinement = async (patch = {}) => {
-    const next = { ...draft };
+  const applyRefinement = async (patch = {}, capturedId = selectedId) => {
+    if (!isStillOn(capturedId)) return;
+    // Patch the live draft so edits typed during the LLM call survive.
+    const next = { ...(draftRef.current || draft) };
     for (const key of WORLD_LOCKABLE_FIELDS) {
       if (isInfluenceLockField(key)) continue;
       if (!(key in patch) || patch[key] == null) continue;
@@ -236,12 +250,14 @@ export default function useUniverseExpand({
         .catch((error) => { toast.error(`Auto-save after refine failed: ${error.message}`); return null; });
       if (updated) {
         setWorlds((previous) => upsertByIdPrepend(previous, updated));
+        if (!isStillOn(capturedId)) return;
         markDraftSaved({ ...refinePayload, id: updated.id, updatedAt: updated.updatedAt });
       }
     }
   };
 
   const runRefine = async (visionOverride = null) => {
+    const capturedId = selectedId;
     const feedback = refineFeedback.trim();
     if (!feedback) {
       toast.error('Add feedback to refine');
@@ -280,8 +296,8 @@ export default function useUniverseExpand({
         ? (visionOverride?.model || undefined)
         : (draft.llm?.model || undefined),
     }).catch(() => null);
-    setRefining(false);
-    if (!result) return;
+    if (mountedRef.current) setRefining(false);
+    if (!result || !isStillOn(capturedId)) return;
 
     const patch = {};
     for (const key of WORLD_LOCKABLE_FIELDS) {
@@ -303,7 +319,8 @@ export default function useUniverseExpand({
     if (result.categories && typeof result.categories === 'object') patch.categories = result.categories;
     if (Array.isArray(result.compositeSheets)) patch.compositeSheets = result.compositeSheets;
 
-    await applyRefinement(patch);
+    await applyRefinement(patch, capturedId);
+    if (!isStillOn(capturedId)) return;
     setRefineRationale(result.rationale || '');
     setRefineChanges(Array.isArray(result.changes) ? result.changes : []);
     setRefineFeedback('');
