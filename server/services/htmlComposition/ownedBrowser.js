@@ -51,15 +51,38 @@ async function removeProfile(profile, attempts = 20, delayMs = 50) {
   }
 }
 
+// Chromium on macOS creates $TMPDIR/com.google.Chrome.*/SingletonSocket and only
+// symlinks it from the user-data-dir. Deleting the profile leaves that directory
+// in the host temp forever. A 4-character prefix keeps
+// <tmpdir>/pcb-XXXXXX/com.google.Chrome.XXXXXX/SingletonSocket under macOS's
+// 104-byte sockaddr_un limit, the same budget as Vitest's pvt- root.
+const OWNED_TEMP_KEYS = ['TMPDIR', 'TMP', 'TEMP', 'MAC_CHROMIUM_TMPDIR'];
+
+function applyOwnedTemp(env, browserTemp) {
+  if (!browserTemp) return env;
+  const owned = { ...env };
+  for (const key of OWNED_TEMP_KEYS) owned[key] = browserTemp;
+  return owned;
+}
+
+// Vitest already points TMPDIR at a pvt- root via PORTOS_TEST_TEMP_ROOT.
+// Nesting pcb- under it exceeds the socket-path limit, so those launches keep
+// the inherited temp variables.
+async function allocateOwnedBrowserTemp() {
+  if (process.env.PORTOS_TEST_TEMP_ROOT) return null;
+  return mkdtemp(join(tmpdir(), 'pcb-'));
+}
+
 // The preview browser must not inherit API tokens or the database password.
 // HOME and PATH stay so Chrome can start; the seatbelt or network namespace
-// still denies IP egress.
-function previewBrowserEnv() {
+// still denies IP egress. An owned temp root replaces the inherited temp
+// variables so the jail cannot write com.google.Chrome.* into the host temp.
+function previewBrowserEnv(browserTemp) {
   const env = { USER: 'portos-preview' };
   for (const key of ['PATH', 'HOME', 'TMPDIR', 'TEMP', 'TMP', 'MAC_CHROMIUM_TMPDIR', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT']) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  return env;
+  return applyOwnedTemp(env, browserTemp);
 }
 
 async function readPreviewIsolationSupport() {
@@ -99,7 +122,16 @@ export async function launchCompositionBrowser({
   } else if (isolation !== 'legacy' && isolation !== 'off') {
     throw isolationUnavailable('Unknown preview isolation mode');
   }
-  const profile = await mkdtemp(join(tmpdir(), 'portos-composition-browser-'));
+  const browserTemp = await allocateOwnedBrowserTemp();
+  let profile;
+  try {
+    profile = await mkdtemp(join(tmpdir(), 'portos-composition-browser-'));
+  } catch (error) {
+    // Profile allocation failed before close() exists. Drop the temp root now
+    // or this launch leaks the directory it was created to contain.
+    if (browserTemp) await removeProfile(browserTemp);
+    throw error;
+  }
   observe('allocated', profile);
   let proc;
   let transport;
@@ -152,7 +184,12 @@ export async function launchCompositionBrowser({
           await drainBrowserProcessGroup(proc.pid, deadline, Math.min(1000, shutdownMs / 2), groupTermination);
         }
         observe('remove-start', profile);
-        await removeProfile(profile);
+        try {
+          await removeProfile(profile);
+        } finally {
+          // A failed profile delete must not leave the Chromium temp root behind.
+          if (browserTemp) await removeProfile(browserTemp);
+        }
       })();
       // Observe settlement without replacing the cached promise or its verdict.
       if (lifecycle.hasSubscribers) profileCleanup.then(
@@ -290,8 +327,12 @@ export async function launchCompositionBrowser({
       '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank',
     ];
     proc = spawn(command, args, plan
-      ? { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], env: previewBrowserEnv(), detached: true }
-      : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], detached: ownsProcessGroup }));
+      ? { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], env: previewBrowserEnv(browserTemp), detached: true }
+      : safeChildProcessOptions({
+        stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
+        detached: ownsProcessGroup,
+        ...(browserTemp ? { env: applyOwnedTemp(process.env, browserTemp) } : {}),
+      }));
     proc.once('spawn', () => { spawned = true; observed.spawnMs = observedMs(); });
     proc.once('exit', onExit);
     proc.once('close', onClose);
