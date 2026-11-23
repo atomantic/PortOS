@@ -44,7 +44,7 @@ import { listVoiceProfiles } from '../voice/profiles.js';
 import * as media from './exportMedia.js';
 import * as voiceReferences from './exportVoice.js';
 import {
-  __testing, preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getFableLoomExportDownload,
+  __testing, preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getLatestFableLoomExport, getFableLoomExportDownload,
 } from './exports.js';
 import routes from '../../routes/fableLoom.js';
 import { fableLoomRunEvents } from './runEvents.js';
@@ -906,6 +906,33 @@ describe('portable FableLoom export boundary', () => {
       await expect(getFableLoomExport(loom.id, last)).rejects.toMatchObject({ code: 'EXPORT_STATE_INVALID', status: 503 });
     }
     await expect(getFableLoomExport(loom.id, '../../secret')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('serves the latest non-expired job for reload reattachment and skips unreadable or expired state', async () => {
+    loom.episodes[0].nodes[0].image = null;
+    const empty = await request(app()).get(`/api/fableloom/${loom.id}/export/latest`);
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual({ job: null });
+    const first = await begin();
+    await terminal(first);
+    await __testing.drain();
+    const second = await begin();
+    await terminal(second);
+    await __testing.drain();
+    const older = JSON.parse(await readFile(recordFile(first), 'utf8'));
+    older.createdAt -= 5_000;
+    await writeFile(recordFile(first), JSON.stringify(older));
+    const latest = await request(app()).get(`/api/fableloom/${loom.id}/export/latest`);
+    expect(latest.status).toBe(200);
+    expect(latest.body.job).toMatchObject({ jobId: second, loomId: loom.id });
+    const expired = JSON.parse(await readFile(recordFile(second), 'utf8'));
+    expired.createdAt = Date.now() - FABLELOOM_EXPORT_LIMITS.maxAgeMs - 1;
+    await writeFile(recordFile(second), JSON.stringify(expired));
+    expect((await getLatestFableLoomExport(loom.id)).jobId).toBe(first);
+    await writeFile(recordFile(first), '{invalid-json');
+    expect(await getLatestFableLoomExport(loom.id)).toBeNull();
+    getLoom.mockResolvedValueOnce(null);
+    await expect(getLatestFableLoomExport('another-loom')).rejects.toMatchObject({ status: 404 });
   });
 
   it('prunes missing, corrupt and future-version cache directories instead of blocking new exports', async () => {

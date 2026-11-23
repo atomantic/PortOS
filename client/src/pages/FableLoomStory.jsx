@@ -117,6 +117,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Once opened the export modal stays mounted (hidden) so closing it keeps the job id and socket subscription.
+  const [exportMountedFor, setExportMountedFor] = useState(null);
+  if (exportOpen && loom && exportMountedFor !== loom.id) setExportMountedFor(loom.id);
   const playOpen = searchParams.get('play') === '1';
   useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
@@ -857,7 +860,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         /></Suspense>
       )}
 
-      {exportOpen && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
+      {exportMountedFor === loom?.id && loom && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
 
       {settingsOpen && <Suspense fallback={null}><LoomSettingsDrawer
         open={settingsOpen}

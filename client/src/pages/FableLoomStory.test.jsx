@@ -129,6 +129,17 @@ vi.mock('../components/fableloom/LoomNodeEditor', () => ({
 vi.mock('../components/fableloom/LoomPlayPanel', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
+const exportModal = vi.hoisted(() => ({ mounts: 0, open: null }));
+vi.mock('../components/fableloom/LoomExportModal', async () => {
+  const { useEffect } = await import('react');
+  return {
+    default: ({ open, onClose }) => {
+      exportModal.open = open;
+      useEffect(() => { exportModal.mounts += 1; }, []);
+      return open ? <div role="dialog" aria-label="Export story"><button type="button" onClick={onClose}>Close export</button></div> : null;
+    },
+  };
+});
 const validationPanel = vi.hoisted(() => ({ onLoomUpdate: null }));
 vi.mock('../components/fableloom/LoomValidationPanel', () => ({
   default: ({ onLoomUpdate }) => {
@@ -236,6 +247,23 @@ describe('FableLoomStory navigation and series backlink', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Example Loom player' })).not.toBeInTheDocument());
     expect(document.body.style.overflow).toBe('');
+  });
+
+  it('keeps the export modal mounted while closed so an in-flight job survives close and reopen', async () => {
+    const user = userEvent.setup();
+    exportModal.mounts = 0;
+    getLoom.mockResolvedValue(loom({ episodes: [episode()] }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    expect(exportModal.open).toBeNull();
+    const [exportButton] = await screen.findAllByRole('button', { name: /^Export/ });
+    await user.click(exportButton);
+    await user.click(await screen.findByRole('button', { name: 'Close export' }));
+    expect(screen.queryByRole('dialog', { name: 'Export story' })).not.toBeInTheDocument();
+    expect(exportModal.open).toBe(false);
+    await user.click(screen.getAllByRole('button', { name: /^Export/ })[0]);
+    expect(await screen.findByRole('dialog', { name: 'Export story' })).toBeInTheDocument();
+    expect(exportModal.mounts).toBe(1);
   });
 
   it('opens an empty loom in the series plan before asking for episodes', async () => {

@@ -204,4 +204,6 @@ export const startLoomExport = (id, body = {}, options = {}) => request(loomPath
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 export const getLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}`), options);
+export const getLatestLoomExport = (id, options = {}) => request(loomPath(id, '/export/latest'), options);
+export const cancelLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}`), { method: 'DELETE', ...options });
 export const downloadLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}/download`), { ...options, responseType: 'blob' });

@@ -105,7 +105,7 @@ import {
   startFableLoomEditorialAutopilot,
 } from '../services/fableLoom/index.js';
 
-import { preflightFableLoomExport, startFableLoomExport, getFableLoomExport, cancelFableLoomExport, getFableLoomExportDownload } from '../services/fableLoom/exports.js';
+import { preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getLatestFableLoomExport, cancelFableLoomExport, getFableLoomExportDownload } from '../services/fableLoom/exports.js';
 const router = Router();
 
 // Summaries only — a woven episode carries pages of prose per node, and the
@@ -139,6 +139,10 @@ router.post('/:id/export/preflight', asyncHandler(async (req, res) => {
 router.post('/:id/export', asyncHandler(async (req, res) => {
   const input = validateRequest(exportOptionsSchema, req.body ?? {});
   res.status(202).json(await startFableLoomExport(req.params.id, input));
+}));
+
+router.get('/:id/export/latest', asyncHandler(async (req, res) => {
+  res.json({ job: await getLatestFableLoomExport(req.params.id) });
 }));
 
 router.get('/:id/export/:jobId', asyncHandler(async (req, res) => {
