@@ -4,7 +4,7 @@ import DataManager from './DataManager';
 import { formatBytes } from '../utils/formatters';
 vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
 import socket from '../services/socket';
-import { getTombstoneSweepStatus } from '../services/apiPeerSync.js';
+import { getTombstoneSweepStatus, sweepTombstonesNow } from '../services/apiPeerSync.js';
 
 // A directory with no server-side CATEGORIES entry comes back `classified: false`
 // with both permission flags off. The row must explain *why* Archive/Purge are
@@ -26,6 +26,8 @@ vi.mock('../services/apiPeerSync.js', () => ({
   sweepTombstonesNow: vi.fn(),
 }));
 
+const toastMock = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
 vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 const UNKNOWN_DESCRIPTION = "Not classified — PortOS doesn't know if this is safe to remove";
@@ -123,6 +125,20 @@ describe('DataManager tombstone GC status resource', () => {
     await act(async () => onPeers({}));
 
     await waitFor(() => expect(button).toBeDisabled());
+  });
+
+  it('reports prunes of newer federated kinds instead of "Nothing is ready" (#17722)', async () => {
+    toastMock.success.mockClear();
+    toastMock.mockClear();
+    sweepTombstonesNow.mockResolvedValue({
+      universes: 0, series: 0, issues: 0, collections: 0, decks: 3, authors: 1,
+      prunedByKind: { universe: 0, deck: 3, author: 1 },
+      refused: [],
+    });
+    render(<DataManager />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Clean up deleted records now' }));
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Pruned 3 decks / 1 author'));
+    expect(toastMock).not.toHaveBeenCalledWith('Nothing is ready to clean up.');
   });
 
   it('shows an error and keeps cleanup off when the status read fails instead of assuming no peer holds a deletion', async () => {
