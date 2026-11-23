@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -290,5 +290,51 @@ describe('native usage history', () => {
     const store = history.NATIVE_USAGE_STORES.codex;
     expect(await store.refresh({ home, force: true, now: NOW })).toMatchObject({ refreshed: false, coverageStart: null, incomplete: 'missing_identity' });
     await expect(readFile(store.file)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('native usage per-file revision cache', () => {
+  it('reuses unchanged Antigravity DBs and Grok sessions, and rescans on DB or WAL change', async () => {
+    const dbPath = join(home, '.gemini', 'antigravity-cli', 'conversations', 'conversation-a.db');
+    await agyDatabase(dbPath, [{ type: 15, at: '2026-07-19T09:00:00Z', usage: { input: 40, output: 12 } }]);
+    await utimes(dbPath, NOW / 1000, NOW / 1000);
+    await write(join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'), 'grok-session', 'updates.jsonl'), jsonl([
+      grokTurn('p1', Date.parse('2026-07-19T10:00:00Z'), { inputTokens: 500, cachedReadTokens: 200, outputTokens: 50 }),
+    ]));
+    const agy = history.NATIVE_USAGE_STORES.agy;
+    const grok = history.NATIVE_USAGE_STORES.grok;
+    const first = await agy.refresh({ home, force: true, now: NOW });
+    const firstGrok = await grok.refresh({ home, force: true, now: NOW });
+
+    // Corrupt both sources in place, keeping size and mtime: the revision is
+    // unchanged, so a cached pass never opens them (a re-read would differ).
+    const grokPath = join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'), 'grok-session', 'updates.jsonl');
+    const garble = async (path) => {
+      const { size } = await stat(path);
+      await writeFile(path, 'x'.repeat(size));
+      await utimes(path, NOW / 1000, NOW / 1000);
+    };
+    await garble(dbPath);
+    await garble(grokPath);
+    expect(await agy.refresh({ home, force: true, now: NOW })).toMatchObject({ days: first.days, filesScanned: 1 });
+    expect((await grok.refresh({ home, force: true, now: NOW })).days).toEqual(firstGrok.days);
+
+    // A changed mtime on the DB, or a WAL appearing, invalidates the entry.
+    await utimes(dbPath, (NOW + 5000) / 1000, (NOW + 5000) / 1000);
+    expect((await agy.refresh({ home, force: true, now: NOW })).filesScanned).toBe(0);
+  });
+
+  it('invalidates an Antigravity entry when only the -wal changes', async () => {
+    const dbPath = join(home, '.gemini', 'antigravity-cli', 'conversations', 'conversation-a.db');
+    await agyDatabase(dbPath, [{ type: 15, at: '2026-07-19T09:00:00Z', usage: { input: 40, output: 12 } }]);
+    await utimes(dbPath, NOW / 1000, NOW / 1000);
+    const agy = history.NATIVE_USAGE_STORES.agy;
+    const first = await agy.refresh({ home, force: true, now: NOW });
+    expect(first.days['2026-07-19']).toBeDefined();
+    const { size } = await stat(dbPath);
+    await writeFile(dbPath, 'x'.repeat(size));
+    await utimes(dbPath, NOW / 1000, NOW / 1000);
+    await writeFile(`${dbPath}-wal`, '');
+    expect((await agy.refresh({ home, force: true, now: NOW })).filesScanned).toBe(0);
   });
 });
