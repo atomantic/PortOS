@@ -45,7 +45,7 @@ import PersonalityTab from './PersonalityTab.jsx';
 import GoalsTab from './GoalsTab.jsx';
 import DocumentsTab from './DocumentsTab.jsx';
 
-const classes = (el) => el.className.split(/\s+/);
+const classes = (el) => Array.from(el.classList);
 
 beforeEach(() => {
   vi.clearAllMocks();
