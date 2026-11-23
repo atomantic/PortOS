@@ -64,6 +64,25 @@ export async function throwApiError(response) {
   throw err;
 }
 
+// Like throwApiError, but folds the first few zod field-level messages from
+// `context.details` into the message so streaming callers surface
+// "question: required" instead of a flat "HTTP 400". `.code`/`.status`/
+// `.context` and the session-expiry redirect are preserved.
+export async function throwStreamApiError(response) {
+  try {
+    await throwApiError(response);
+  } catch (err) {
+    const details = err.context?.details;
+    if (Array.isArray(details) && details.length) {
+      const notes = details.slice(0, 3)
+        .map((d) => (d?.path ? `${d.path}: ${d.message}` : d?.message))
+        .filter((m) => typeof m === 'string' && m.trim());
+      if (notes.length) err.message = `${err.message} — ${notes.join('; ')}`;
+    }
+    throw err;
+  }
+}
+
 // A request started from a tap marks the tapped button busy until it settles
 // (services/actionFeedback.js), so every action responds at once.
 export function request(endpoint, options = {}) {
