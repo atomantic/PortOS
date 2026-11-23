@@ -403,6 +403,48 @@ describe('pipeline issues service', () => {
     });
   });
 
+  it('deep-merges backCover sub-fields so a partial script patch preserves rendered slots', async () => {
+    // Back-cover script edits send `{ backCover: { script } }` only. Without
+    // backCover in the deep-merge set, the whole slot was replaced and its
+    // proof/final art references and in-flight jobId were cleared.
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Back deep merge' });
+    await svc.updateStage(i.id, 'comicPages', {
+      status: 'edited',
+      backCover: {
+        script: 'old back',
+        imageJobId: 'job-back1234',
+        prompt: 'bp1',
+        proofImage: { filename: 'back-proof.png', fromProof: true },
+        finalImage: { filename: 'back-final.png', fromProof: false },
+      },
+    });
+    const updated = await svc.updateIssue(i.id, {
+      stages: { comicPages: { backCover: { script: 'new back' } } },
+    });
+    expect(updated.stages.comicPages.backCover).toMatchObject({
+      script: 'new back',
+      imageJobId: 'job-back1234',
+      prompt: 'bp1',
+      proofImage: { filename: 'back-proof.png' },
+      finalImage: { filename: 'back-final.png', fromProof: false },
+    });
+  });
+
+  it('treats `backCover: null` as an explicit clear, not a deep merge', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Clear back cover' });
+    await svc.updateStage(i.id, 'comicPages', {
+      status: 'edited',
+      backCover: {
+        script: 'back concept',
+        finalImage: { filename: 'back-final.png', fromProof: false },
+      },
+    });
+    const updated = await svc.updateIssue(i.id, {
+      stages: { comicPages: { backCover: null } },
+    });
+    expect(updated.stages.comicPages.backCover).toBeNull();
+  });
+
   it('deep-merges genConfig sub-fields so a partial `{ genConfig: { imageMode } }` patch preserves the rest', async () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Gen merge' });
     // Start with local mode + a pinned model — imageModelId is valid for local mode.
