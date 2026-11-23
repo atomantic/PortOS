@@ -299,6 +299,29 @@ describe('genome capture', () => {
     await expect(stripGenomeFromSnapshots()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect((await getSnapshot(snap.id)).summary.genomeMarkers).toBe(1);
   });
+
+  it('stripGenomeFromSnapshots reconciles stale index hash/size/marker metadata on retry', async () => {
+    writeMeatspaceGenome({ uploaded: true, savedMarkers: { rs1: { rsid: 'rs1', status: 'typical' } } });
+    const snap = await createSnapshot('retry-index-sync');
+    await stripGenomeFromSnapshots();
+    const cleaned = await getSnapshot(snap.id);
+
+    // Simulate a prior crash between snapshot rewrite and index.json update.
+    const index = readIndex();
+    index.snapshots[0] = {
+      ...index.snapshots[0],
+      dataHash: 'stale00000000000',
+      sizeBytes: 999999,
+      summary: { ...index.snapshots[0].summary, genomeMarkers: 1 }
+    };
+    writeFileSync(indexPath(), JSON.stringify(index));
+
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 0 });
+    const [reconciled] = await listSnapshots();
+    expect(reconciled.summary.genomeMarkers).toBe(0);
+    expect(reconciled.dataHash).toBe(cleaned.dataHash);
+    expect(reconciled.sizeBytes).toBe(cleaned.sizeBytes);
+  });
 });
 
 describe('getSnapshot / deleteSnapshot', () => {
