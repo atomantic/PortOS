@@ -84,6 +84,12 @@ async function findLiveJob(jobId) {
   return job && (job.status === 'queued' || job.status === 'running') ? job : null;
 }
 
+/** The approved overall sheet's image file on disk, or null when none is approved (or its file is gone). */
+export function approvedOverallSheetPath(model) {
+  const image = approvedImage(slotsOf(model).find((slot) => slot.role === 'overall'));
+  return image ? galleryPath(image.filename) || null : null;
+}
+
 /** The record's reference fields with what a reader needs derived: locks, staleness and lost renders. */
 export async function presentBlenderModelReferences(model) {
   const overallId = approvedOverallId(model);

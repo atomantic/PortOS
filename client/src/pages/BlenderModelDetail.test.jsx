@@ -31,8 +31,10 @@ vi.mock('../services/apiBlenderModels.js', () => ({
   blenderModelBuildFileUrl: (id, buildId, name) => `/api/blender-models/${id}/builds/${buildId}/files/${name}`,
   blenderModelAssetUrl: (id) => `/api/blender-models/${id}/asset`,
 }));
+vi.mock('../services/apiCodeAnimationFilm.js', () => ({ createShowcaseFilm: vi.fn() }));
 vi.mock('../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => []), getMoodBoard: vi.fn() }));
 import * as api from '../services/apiBlenderModels.js';
+import { createShowcaseFilm } from '../services/apiCodeAnimationFilm.js';
 import { copyToClipboard } from '../lib/clipboard.js';
 import BlenderModelDetail from './BlenderModelDetail';
 
@@ -81,6 +83,22 @@ beforeEach(() => {
 });
 
 describe('BlenderModelDetail', () => {
+  it('makes a showcase film from a published model and opens it, and offers none before publishing', async () => {
+    const user = userEvent.setup();
+    createShowcaseFilm.mockResolvedValue({ id: 'film-1' });
+    serve(modelState({ status: 'published', publishedBuildId: A, builds: [build(A)] }));
+    renderAt();
+    await user.click(await screen.findByRole('button', { name: 'Make showcase film' }));
+    expect(createShowcaseFilm).toHaveBeenCalledWith(ID);
+    await waitFor(() => expect(screen.getByLabelText('Current location')).toHaveTextContent('/code-animation/production/films/film-1'));
+  });
+
+  it('has no showcase film button until a build is published', async () => {
+    renderAt();
+    await screen.findByRole('button', { name: 'Build draft' });
+    expect(screen.queryByRole('button', { name: 'Make showcase film' })).toBeNull();
+  });
+
   it('starts an empty model from the starter script', async () => {
     const user = userEvent.setup();
     serve(modelState({ workspace: { ...modelState().workspace, hasModel: false, files: 0 } }));

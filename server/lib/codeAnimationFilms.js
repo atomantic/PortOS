@@ -25,3 +25,9 @@ export const promoteFilmSchema = z.union([
   z.object({ trackId: z.string().min(1).max(128), name: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ uploadedAudioFilename: z.string().min(1).max(256).regex(/^[^/\\]+$/), name: z.string().trim().min(1).max(200).optional() }).strict(),
 ]);
+
+// Make showcase film from a published Blender model; options live in the film's own Film options.
+export const createShowcaseFilmSchema = z.object({
+  modelId: z.string().min(1).max(120),
+  title: z.string().trim().min(1).max(200).optional(),
+}).strict();

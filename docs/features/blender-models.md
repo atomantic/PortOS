@@ -167,6 +167,28 @@ On the **Model** tab, **Pose** sliders seek the GLB's own clips in the browser. 
 disabled with the reason, and returns to its default when what it depends on moves away. **Show pose** on an overlap sets
 the sliders to the first pose where it happens and tints the two parts. Nothing is saved.
 
+## Showcase film
+
+**Make showcase film** (model page header, once a build is published; `POST /api/code-animation/films/showcase` with `{ modelId, title? }`)
+makes a Code Animation film project (`kind: 'film'`) from the published build and opens it at
+`/code-animation/production/films/:filmId`. It starts no job: sync, stills and cuts are the usual explicit actions there.
+
+The film is self-contained and editable. `src/models/model.glb` is the published GLB (a film-model copy of kind `blender-model`;
+**Update copy** on the Files tab refreshes it), `src/showcase.json` holds the size, parts with their measured centers, controls,
+choreographed actions and up to six saved compare cameras from the published build's report, and the approved overall sheet, when
+there is one, is copied to `src/showcase/sheet.<ext>`. The `showcase` starter (`server/services/film/py/showcase/`) writes the shots:
+
+1. **Turntable**: one full turn, framed from the model's size.
+2. **Assembly**: each part moves in along its offset from the model center, in declared part order.
+3. **Controls**: each control goes 0 to 1 to 0 in turn (a control's dependencies are held satisfied), then each choreographed action. Skipped when there are none.
+4. **Close-ups**: one per saved compare camera.
+5. **Reference to model**: the approved sheet cross-dissolves to the render from the three-quarter view. Skipped without an approved sheet.
+
+Film options: background, accent color, turn length, label parts. Every shot is a pure function of time (`kit/plan.py`, standard
+library only, so describe needs no Blender). The timeline starts at the shots' natural length; a longer or shorter timeline scales
+every shot in proportion, and with a soundtrack attached each inner boundary snaps to the nearest downbeat. A model with no controls
+and no references still gives a valid film (turntable and assembly). Send to Music Video works as for any film.
+
 ## Baking textures
 
 Blender procedural materials do not survive glTF export, and modeling every bolt head as exported geometry makes a

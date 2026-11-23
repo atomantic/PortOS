@@ -82,7 +82,7 @@ A workspace with more than 5,000 supported source files is refused explicitly; i
 
 ### 3D models from the library
 
-**Add 3D model** on the Files tab picks an image-to-3D model (its animated, rigged or plain GLB, richest published asset first) or a Three.js model. The server copies a snapshot to `src/models/<slug>.glb` (or the generated factory module `src/models/<slug>.js`) beside `<slug>.json` (source kind and id, variant, source timestamp, SHA-256, size). Adding the same model twice gives a second slug; an explicit taken slug is `409 MUSIC_VIDEO_BLENDER_MODEL_EXISTS` unless `replace` is true. A model with no mesh yet is `409 MODEL_NOT_READY`.
+**Add 3D model** on the Files tab picks an image-to-3D model (its animated, rigged or plain GLB, richest published asset first) or a Three.js model. The server copies a snapshot to `src/models/<slug>.glb` (or the generated factory module `src/models/<slug>.js`) beside `<slug>.json` (source kind and id, variant, source timestamp, SHA-256, size). Adding the same model twice gives a second slug; an explicit taken slug is `409 MUSIC_VIDEO_BLENDER_MODEL_EXISTS` unless `replace` is true. A model with no mesh yet is `409 MODEL_NOT_READY`. A Blender model (`kind: "blender-model"`, its published build) is added the same way by [Make showcase film](blender-models.md#showcase-film); a model without a published build is `409 BLENDER_MODEL_NOT_PUBLISHED`. `models.load` leaves out the importer's hidden bone-shape helper, so a rigged model is sized and grounded by its own meshes.
 
 The copy is self-contained: deleting or re-rendering the source never changes it. When the library holds a different asset the Files tab shows **Update copy**; nothing updates by itself. In a Blender shot:
 

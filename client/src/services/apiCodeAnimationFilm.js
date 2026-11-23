@@ -8,6 +8,10 @@ import { request } from './apiCore.js';
 
 const blenderPath = (id) => `/code-animation/films/${encodeURIComponent(id)}/blender`;
 const blenderJson = (method, body, options) => ({ method, ...(body ? { body: JSON.stringify(body) } : {}), ...options });
+// A film from a published Blender model (turntable, assembly, controls, close-ups, reference). Starts no job; answers the film.
+export const createShowcaseFilm = (modelId, options = {}) =>
+  request('/code-animation/films/showcase', { method: 'POST', body: JSON.stringify({ modelId }), ...options });
+
 export const getMusicVideoBlender = (id, options = {}) => request(blenderPath(id), options);
 // `settings` holds only the fields that changed; film option values go as `{ options: { key: value } }`
 // (null clears one back to the film's default).

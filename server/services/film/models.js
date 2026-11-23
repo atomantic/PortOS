@@ -16,7 +16,7 @@ import { pathWithin } from '../../../lib/pathWithin.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderWorkspaceDir, resolveBlenderSourceFile } from './workspace.js';
 import { walkBlenderSources } from './sources.js';
 
-export const FILM_MODEL_KINDS = Object.freeze(['image-to-3d', 'threejs']);
+export const FILM_MODEL_KINDS = Object.freeze(['image-to-3d', 'threejs', 'blender-model']);
 export const FILM_MODEL_SLUG = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 // A mesh GLB can be large; refuse past this rather than fill the workspace.
 const MAX_MODEL_BYTES = 256 * 1024 * 1024;
@@ -48,6 +48,7 @@ async function resolveSource(kind, id, variant) {
     });
     return { name: record.name, sourceAt: record.updatedAt ?? null, variant: 'source', ext: 'js', text: source };
   }
+  if (kind === 'blender-model') return resolveBlenderModel(id);
   const { getModel } = await import('../imageTo3d/db.js');
   const record = await getModel(id);
   if (!record) throw notFound('That image-to-3D model is not in the library');
@@ -70,6 +71,19 @@ async function resolveSource(kind, id, variant) {
   if (!info?.isFile()) throw conflict('The library asset for this model is missing on disk', 'MODEL_ASSET_MISSING');
   if (info.size > MAX_MODEL_BYTES) throw blenderRefusal('That model is too large to copy into a film', 'MUSIC_VIDEO_BLENDER_FILE_TOO_LARGE', 413);
   return { name: record.name, sourceAt: record.updatedAt ?? null, variant: wanted, ext: 'glb', file, bytes: info.size };
+}
+
+/** A Blender model's published build: its GLB, as exported (a build carries a rig and clips for the model's controls). */
+async function resolveBlenderModel(id) {
+  const { requireBlenderModel, getBlenderModelAsset } = await import('../blenderModels/models.js');
+  const record = await requireBlenderModel(id).catch((error) => {
+    throw error.status === 404 ? notFound('That Blender model is not in the library') : error;
+  });
+  const { absolute } = await getBlenderModelAsset(id);
+  const info = await stat(absolute).catch(() => null);
+  if (!info?.isFile()) throw conflict('The published build for this model is missing on disk', 'MODEL_ASSET_MISSING');
+  if (info.size > MAX_MODEL_BYTES) throw blenderRefusal('That model is too large to copy into a film', 'MUSIC_VIDEO_BLENDER_FILE_TOO_LARGE', 413);
+  return { name: record.name, sourceAt: record.updatedAt ?? null, variant: 'published', ext: 'glb', file: absolute, bytes: info.size };
 }
 
 const sidecarPath = (slug) => `models/${slug}.json`;
