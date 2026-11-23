@@ -68,6 +68,9 @@ const currentCodeVersion = () => {
   return codeVersion;
 };
 
+/** The keys a tagged value is recognized by; a plain object owning one is wrapped (`$obj`) so it decodes as itself. */
+const TAGS = ['$set', '$map', '$re', '$obj'];
+
 const encodeValue = (value) => {
   if (value instanceof Set) return { $set: [...value].map(encodeValue) };
   if (value instanceof Map) return { $map: [...value].map(([k, v]) => [encodeValue(k), encodeValue(v)]) };
@@ -77,7 +80,7 @@ const encodeValue = (value) => {
     // Only plain data: an instance of anything else would decode as a plain object.
     const proto = Object.getPrototypeOf(value);
     if (proto !== Object.prototype && proto !== null) throw new TypeError('not plain data');
-    if (Object.hasOwn(value, '$set') || Object.hasOwn(value, '$map') || Object.hasOwn(value, '$re')) return { $obj: Object.entries(value).map(([k, v]) => [k, encodeValue(v)]) };
+    if (TAGS.some((tag) => Object.hasOwn(value, tag))) return { $obj: Object.entries(value).map(([k, v]) => [k, encodeValue(v)]) };
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, encodeValue(v)]));
   }
   return value;
@@ -97,9 +100,22 @@ const decodeValue = (value) => {
 
 /** `value` as a JSON-safe tree, or undefined when decoding it would not give back exactly `value`. */
 export function encodeExact(value) {
-  let encoded;
-  try { encoded = JSON.parse(JSON.stringify(encodeValue(value))); } catch { return undefined; }
-  return isDeepStrictEqual(decodeValue(encoded), value) ? encoded : undefined;
+  try {
+    const encoded = JSON.parse(JSON.stringify(encodeValue(value)));
+    return isDeepStrictEqual(decodeValue(encoded), value) ? encoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The entry's facts when every recorded lookup still answers the same; undefined (a miss) otherwise, malformed entries included. */
+function reuse(entry, lookup) {
+  try {
+    if (!entry.lookups.every(([spec, name, answer]) => isDeepStrictEqual(lookup(spec, name), decodeValue(answer)))) return undefined;
+    return decodeValue(entry.facts);
+  } catch {
+    return undefined;
+  }
 }
 
 
@@ -115,6 +131,7 @@ export function createFactsCache({ entries = {}, version = currentCodeVersion(),
   let misses = 0;
   return {
     version,
+    now,
     /**
      * The raw facts for `parts` (the key's inputs), from the cache when every
      * recorded lookup still answers the same through `lookup(spec, name)`,
@@ -124,10 +141,11 @@ export function createFactsCache({ entries = {}, version = currentCodeVersion(),
       if (version === null) return extract(lookup);
       const key = sha256([version, ...parts].join('\0'));
       const entry = used.get(key) ?? stored.get(key);
-      if (entry && entry.lookups.every(([spec, name, answer]) => isDeepStrictEqual(lookup(spec, name), decodeValue(answer)))) {
+      const reused = entry ? reuse(entry, lookup) : undefined;
+      if (reused !== undefined) {
         used.set(key, { ...entry, usedAt: now });
         hits += 1;
-        return decodeValue(entry.facts);
+        return reused;
       }
       misses += 1;
       const lookups = [];
@@ -157,31 +175,46 @@ export function createFactsCache({ entries = {}, version = currentCodeVersion(),
 
 const factsPath = (dir, workspace) => join(dir, 'facts', `${workspace}.json`);
 
+/** The well-formed entries of one facts file at `version`, or null when it is absent, unreadable or another version. */
+function readEntries(root, workspace, version) {
+  let parsed = null;
+  try { parsed = JSON.parse(readFileSync(factsPath(root, workspace), 'utf8')); } catch { return null; }
+  if (parsed?.version !== version || !parsed.entries || typeof parsed.entries !== 'object') return null;
+  return Object.fromEntries(Object.entries(parsed.entries).filter(([, entry]) => entry
+    && Array.isArray(entry.lookups) && entry.facts && typeof entry.facts === 'object' && Number.isFinite(Date.parse(entry.usedAt))));
+}
+
 /** A cache seeded from the first store directory whose facts file has the current version (an empty one otherwise). */
 export function loadFactsCache(dir, workspace, { version = currentCodeVersion(), now = Date.now() } = {}) {
   if (version !== null) {
     for (const root of memoDirs(dir)) {
-      let parsed = null;
-      try { parsed = JSON.parse(readFileSync(factsPath(root, workspace), 'utf8')); } catch { continue; }
-      if (parsed?.version === version && parsed.entries && typeof parsed.entries === 'object') {
-        const entries = Object.fromEntries(Object.entries(parsed.entries).filter(([, entry]) => entry
-          && Array.isArray(entry.lookups) && entry.facts && typeof entry.facts === 'object' && Number.isFinite(Date.parse(entry.usedAt))));
-        return createFactsCache({ entries, version, now });
-      }
+      const entries = readEntries(root, workspace, version);
+      if (entries) return createFactsCache({ entries, version, now });
     }
   }
   return createFactsCache({ version, now });
 }
 
-/** Write the cache to the store's first directory; a failure only costs the next run its warm start. */
+/**
+ * Write the cache to the store's first directory; a failure only costs the
+ * next run its warm start. The file is read again just before the write and
+ * its younger entries kept, so another worktree's save since this run loaded
+ * is not simply replaced. Two saves in the same instant can still drop each
+ * other's new entries: the cache is regenerable, so that costs a re-parse,
+ * and no lock is taken for it.
+ */
 export function saveFactsCache(dir, workspace, cache) {
   const [root] = memoDirs(dir);
   if (!root || !cache || cache.version === null) return false;
   const path = factsPath(root, workspace);
   const temp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   try {
+    const snapshot = cache.toJSON();
+    for (const [key, entry] of Object.entries(readEntries(root, workspace, cache.version) ?? {})) {
+      if (!Object.hasOwn(snapshot.entries, key) && cache.now - Date.parse(entry.usedAt) <= MAX_ENTRY_AGE_MS) snapshot.entries[key] = entry;
+    }
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(temp, JSON.stringify(cache.toJSON()));
+    writeFileSync(temp, JSON.stringify(snapshot));
     renameSync(temp, path);
     return true;
   } catch {

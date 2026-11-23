@@ -80,7 +80,7 @@ describe('test memo facts cache', () => {
   });
 
   it('round-trips only what decodes to exactly the same value', () => {
-    for (const value of [new Set(['a']), new Map([['k', new Set([1])]]), /x\/y/gi, { $set: 'literal key' }, { nested: [{ a: null, b: false }] }, null, 'text']) {
+    for (const value of [new Set(['a']), new Map([['k', new Set([1])]]), /x\/y/gi, { $set: 'literal key' }, { $obj: 1 }, { $obj: [['a', 1]] }, { nested: [{ a: null, b: false }] }, null, 'text']) {
       expect(encodeExact(value)).not.toBeUndefined();
     }
     for (const value of [{ a: undefined }, [undefined], Number.NaN, () => 1, new Date(0), Object.create({ inherited: 1 })]) {
@@ -120,6 +120,12 @@ describe('test memo facts cache', () => {
     expect(keysOf(edited, third)).toEqual(keysOf(edited));
     expect(third.stats().misses).toBe(1);
 
+    // A malformed stored entry (a hand-edited or truncated file) is a miss, never a throw.
+    const broken = Object.fromEntries(Object.entries(warm.toJSON().entries).map(([key, entry]) => [key, { ...entry, facts: { $obj: 1 }, lookups: [['./names.js', 'FIXTURE', { $set: 1 }]] }]));
+    const repaired = createFactsCache({ entries: broken, version: 'v1' });
+    expect(keysOf(TREE, repaired)).toEqual(keysOf(TREE));
+    expect(repaired.stats().hits).toBe(0);
+
     // Another extraction code version reuses nothing; a null version disables the cache.
     const other = createFactsCache({ entries: warm.toJSON().entries, version: 'v2' });
     keysOf(TREE, other);
@@ -144,14 +150,24 @@ describe('test memo facts cache', () => {
     expect(loadFactsCache([first, second], 'client', { version: 'v1', now }).toJSON().entries).toEqual({});
     expect(saveFactsCache(null, 'server', cache)).toBe(false);
 
+    // A save keeps what another worktree saved since this one loaded.
+    const racing = loadFactsCache(second, 'server', { version: 'v1', now });
+    const elsewhere = loadFactsCache(second, 'server', { version: 'v1', now });
+    keysOf({ ...TREE, 'server/lib/names.js': "export const FIXTURE = 'b.txt';\n" }, elsewhere);
+    expect(saveFactsCache(second, 'server', elsewhere)).toBe(true);
+    expect(saveFactsCache(second, 'server', racing)).toBe(true);
+    expect(Object.keys(loadFactsCache(second, 'server', { version: 'v1', now }).toJSON().entries).sort())
+      .toEqual(Object.keys(elsewhere.toJSON().entries).sort());
+    expect(Object.keys(elsewhere.toJSON().entries).length).toBeGreaterThan(cache.stats().entries);
+
     // An entry no run used within the age limit is dropped on the next save.
     const later = loadFactsCache(second, 'server', { version: 'v1', now: now + 15 * 24 * 60 * 60 * 1000 });
     expect(Object.keys(later.toJSON().entries)).toEqual([]);
     const soon = loadFactsCache(second, 'server', { version: 'v1', now: now + 60_000 });
-    expect(Object.keys(soon.toJSON().entries)).toHaveLength(cache.stats().entries);
+    expect(Object.keys(soon.toJSON().entries)).toHaveLength(Object.keys(elsewhere.toJSON().entries).length);
 
     // A trusted run's merged store starts from a lineage's facts.
     mergeMemoStore(merged, second);
-    expect(loadFactsCache(merged, 'server', { version: 'v1', now }).toJSON().entries).toEqual(cache.toJSON().entries);
+    expect(loadFactsCache(merged, 'server', { version: 'v1', now }).toJSON().entries).toEqual(loadFactsCache(second, 'server', { version: 'v1', now }).toJSON().entries);
   });
 });
