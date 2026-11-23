@@ -907,7 +907,7 @@ export const pullRequestRunSettingsSchema = pullRequestProviderOverrideSchema
 // dialog is a valid "resume exactly as it was". `description` only matters on
 // the fallback path where the paused task is gone and a fresh one is queued.
 export const resumeCosAgentSchema = createCosTaskSchema
-  .pick({ description: true, context: true, model: true, provider: true, effort: true, app: true, screenshots: true })
+  .pick({ description: true, context: true, model: true, provider: true, effort: true, executionOptions: true, app: true, screenshots: true })
   .partial();
 
 // A relaunch is a resume aimed at a RUNNING agent: the point is swapping the
