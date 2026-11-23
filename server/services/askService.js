@@ -99,8 +99,8 @@ const PERSONA_FALLBACK = `You are the user's digital twin — speak in the first
 // error here surfaces as `status: 'rejected'` rather than killing the answer
 // — that's why these functions don't carry their own try/catch.
 
-async function retrieveMemories(question) {
-  const queryEmbedding = await generateQueryEmbedding(question);
+async function retrieveMemories(question, queryEmbeddingPromise = generateQueryEmbedding(question)) {
+  const queryEmbedding = await queryEmbeddingPromise;
   if (!queryEmbedding) return [];
   const result = await hybridSearchMemories(question, queryEmbedding, {
     limit: PER_SOURCE_LIMIT.memory,
@@ -138,8 +138,8 @@ async function retrieveMemories(question) {
 // primary-content payload field (falling back to summary/description/name).
 // Vector matches only appear once embeddings are backfilled; FTS works
 // immediately. No try/catch — gatherSources' allSettled isolates failures.
-async function retrieveCatalog(question) {
-  const queryEmbedding = await generateQueryEmbedding(question);
+async function retrieveCatalog(question, queryEmbeddingPromise = generateQueryEmbedding(question).catch(() => null)) {
+  const queryEmbedding = await queryEmbeddingPromise;
   const hits = await hybridSearchIngredients(question, queryEmbedding, {
     limit: PER_SOURCE_LIMIT.catalog,
     ftsWeight: 0.4,
@@ -320,15 +320,19 @@ async function retrieveCalendar(queryTokens, timeWindow) {
 export async function gatherSources(question, { timeWindow, maxSources = 12 } = {}) {
   const queryTokens = tokenize(question);
 
+  // One embedding request shared by the memory and catalog retrievers; a
+  // failure resolves null so catalog falls back to FTS-only and memory to [].
+  const queryEmbeddingPromise = generateQueryEmbedding(question).catch(() => null);
+
   // Fan out — each retriever is independently failable, so allSettled keeps
   // a single-source outage from killing the answer.
   const [memSettled, brainSettled, autoSettled, goalSettled, calSettled, catSettled] = await Promise.allSettled([
-    retrieveMemories(question),
+    retrieveMemories(question, queryEmbeddingPromise),
     retrieveBrainNotes(question, queryTokens),
     retrieveAutobiography(queryTokens),
     retrieveGoals(queryTokens),
     retrieveCalendar(queryTokens, timeWindow),
-    retrieveCatalog(question),
+    retrieveCatalog(question, queryEmbeddingPromise),
   ]);
 
   const all = [
