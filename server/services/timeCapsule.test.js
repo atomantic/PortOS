@@ -22,6 +22,7 @@ const {
   getSnapshot,
   deleteSnapshot,
   compareSnapshots,
+  stripGenomeFromSnapshots,
 } = await import('./timeCapsule.js');
 
 const twinDir = () => PATHS.digitalTwin;
@@ -171,14 +172,39 @@ describe('genome capture', () => {
     writeFileSync(meatspaceGenomePath(), JSON.stringify(value));
   };
 
-  it('captures genome markers from the meatspace genome file', async () => {
-    writeMeatspaceGenome({ savedMarkers: { rs1: { id: 'rs1' }, rs2: { id: 'rs2' } } });
+  it('captures only aggregate genome summary counts and omits raw savedMarkers and filename', async () => {
+    writeMeatspaceGenome({
+      uploaded: true,
+      uploadedAt: '2026-01-01T00:00:00.000Z',
+      filename: 'private-23andme-export.txt',
+      snpCount: 500000,
+      build: 'Build 37',
+      lastScanAt: '2026-01-02T00:00:00.000Z',
+      savedMarkers: {
+        rs1: { rsid: 'rs1', genotype: 'GG', status: 'beneficial', notes: 'private-note' },
+        rs2: { rsid: 'rs2', genotype: 'CT', status: 'concern' }
+      }
+    });
 
     const snapshot = await createSnapshot('with genome');
 
     expect(snapshot.summary.genomeMarkers).toBe(2);
     const stored = await getSnapshot(snapshot.id);
-    expect(stored.data['genome.json']).toEqual({ savedMarkers: { rs1: { id: 'rs1' }, rs2: { id: 'rs2' } } });
+    expect(stored.data['genome.json']).toEqual({
+      uploaded: true,
+      uploadedAt: '2026-01-01T00:00:00.000Z',
+      snpCount: 500000,
+      build: 'Build 37',
+      markerCount: 2,
+      statusCounts: { beneficial: 1, typical: 0, concern: 1, major_concern: 0, not_found: 0 },
+      lastScanAt: '2026-01-02T00:00:00.000Z'
+    });
+    expect(stored.data['genome.json'].savedMarkers).toBeUndefined();
+    expect(stored.data['genome.json'].filename).toBeUndefined();
+    const raw = JSON.stringify(stored);
+    expect(raw).not.toContain('private-23andme-export.txt');
+    expect(raw).not.toContain('private-note');
+    expect(raw).not.toContain('rs1');
   });
 
   it('records zero genome markers when no genome file exists', async () => {
@@ -197,6 +223,81 @@ describe('genome capture', () => {
     const diff = await compareSnapshots(before.id, after.id);
 
     expect(diff.changes).toContainEqual({ field: 'Genome markers', before: 0, after: 1 });
+  });
+
+  it('stripGenomeFromSnapshots returns zero without creating snapshots dir when absent', async () => {
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 0 });
+    expect(existsSync(snapshotsDir())).toBe(false);
+  });
+
+  it('stripGenomeFromSnapshots scrubs genetic fields, updates index metadata, and is idempotent', async () => {
+    writeTwinJson('identity.json', { name: 'Example Twin' });
+    writeTwinJson('chronotype.json', {
+      type: 'morning',
+      geneticMarkers: { mtnr1b: { rsid: 'rs4753426', genotype: 'GG', status: 'concern' } },
+      caffeineMarkers: { cyp1a2: { rsid: 'rs762551', genotype: 'AA', status: 'beneficial' } },
+      behavioralData: { preferredWakeTime: '06:30' }
+    });
+    writeTwinJson('longevity.json', {
+      longevityMarkers: { foxo3a: { rsid: 'rs2802292', genotype: 'GG', status: 'beneficial' } },
+      cardiovascularMarkers: { cad9p21: { rsid: 'rs1333049', genotype: 'CC', status: 'concern' } }
+    });
+    writeTwinJson('goals.json', {
+      birthDate: '2000-01-01',
+      goals: [{ id: 'g1', title: 'Read more' }],
+      lifeExpectancy: { adjusted: 85 },
+      timeHorizons: { yearsRemaining: 59 }
+    });
+    writeMeatspaceGenome({ uploaded: true, savedMarkers: { rs1: { rsid: 'rs1', status: 'typical' } } });
+
+    const snap = await createSnapshot('pre-delete');
+    const beforeHash = snap.dataHash;
+    const beforeSize = snap.sizeBytes;
+
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 1 });
+
+    const after = await getSnapshot(snap.id);
+    expect(after.data['genome.json']).toBeUndefined();
+    expect(after.data['chronotype.json'].geneticMarkers).toEqual({});
+    expect(after.data['chronotype.json'].caffeineMarkers).toEqual({});
+    expect(after.data['chronotype.json'].behavioralData).toEqual({ preferredWakeTime: '06:30' });
+    expect(after.data['longevity.json'].longevityMarkers).toEqual({});
+    expect(after.data['longevity.json'].cardiovascularMarkers).toEqual({});
+    expect(after.data['goals.json'].lifeExpectancy).toBeNull();
+    expect(after.data['goals.json'].timeHorizons).toBeNull();
+    expect(after.data['goals.json'].goals).toEqual([{ id: 'g1', title: 'Read more' }]);
+    expect(after.summary.genomeMarkers).toBe(0);
+    expect(after.dataHash).not.toBe(beforeHash);
+    expect(after.sizeBytes).toBeLessThan(beforeSize);
+
+    const [indexed] = await listSnapshots();
+    expect(indexed.summary.genomeMarkers).toBe(0);
+    expect(indexed.dataHash).toBe(after.dataHash);
+    expect(indexed.sizeBytes).toBe(after.sizeBytes);
+
+    // Second pass is a no-op.
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 0 });
+  });
+
+  it('stripGenomeFromSnapshots rebuilds a corrupt index from scrubbed snapshot files', async () => {
+    writeMeatspaceGenome({ uploaded: true, savedMarkers: { rs1: { rsid: 'rs1', status: 'typical' } } });
+    const snap = await createSnapshot('corrupt-index-case');
+    writeFileSync(indexPath(), '{truncated');
+
+    await expect(stripGenomeFromSnapshots()).resolves.toEqual({ updated: 1 });
+    const listed = await listSnapshots();
+    expect(listed).toHaveLength(1);
+    expect(listed[0].id).toBe(snap.id);
+    expect(listed[0].summary.genomeMarkers).toBe(0);
+  });
+
+  it('stripGenomeFromSnapshots fails closed on an unreadable snapshot without mutating others', async () => {
+    writeMeatspaceGenome({ uploaded: true, savedMarkers: { rs1: { rsid: 'rs1', status: 'typical' } } });
+    const snap = await createSnapshot('valid-snap');
+    writeFileSync(join(snapshotsDir(), 'broken.json'), '{truncated');
+
+    await expect(stripGenomeFromSnapshots()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect((await getSnapshot(snap.id)).summary.genomeMarkers).toBe(1);
   });
 });
 
