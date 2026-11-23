@@ -67,6 +67,9 @@ export async function createModel(input) {
       filename: input.filename,
       path: `/data/images/${encodeURIComponent(input.filename)}`,
     },
+    // Extra views of the subject ({filename, role, label}); additive — an older
+    // record reads back undefined, which every consumer treats as none.
+    referenceImages: Array.isArray(input.referenceImages) ? input.referenceImages : [],
     prompt: input.prompt || '',
     providerId: input.providerId,
     model: input.model || null,
