@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { createHash } from 'crypto';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -165,21 +164,20 @@ describe('ensureAlignmentModel integrity contract', () => {
 
   it('downloads with the pinned URL and SHA-256 and writes a completion receipt', async () => {
     const payload = 'large-v3-turbo-weights';
-    const digest = createHash('sha256').update(payload).digest('hex');
     const download = vi.fn(async ({ destPath, url, expectedSha256 }) => {
       expect(url).toBe(ALIGN_MODEL_URL);
-      expect(expectedSha256).toBe(digest);
+      expect(expectedSha256).toBe(ALIGN_MODEL_SHA256);
       writeFileSync(destPath, payload);
     });
 
-    const target = await ensureAlignmentModel({ modelDir: dir, download, expectedSha256: digest });
+    const target = await ensureAlignmentModel({ modelDir: dir, download });
     expect(target).toBe(join(dir, ALIGN_MODEL_FILE));
     expect(download).toHaveBeenCalledOnce();
     expect(existsSync(voiceAssetReceiptPath(target))).toBe(true);
     expect(inspectVoiceAsset('whisper', target).state).toBe('verified');
 
     // A subsequent call reuses the verified asset without downloading again.
-    const second = await ensureAlignmentModel({ modelDir: dir, download, expectedSha256: digest });
+    const second = await ensureAlignmentModel({ modelDir: dir, download });
     expect(second).toBe(target);
     expect(download).toHaveBeenCalledOnce();
   });
