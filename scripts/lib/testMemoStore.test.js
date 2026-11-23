@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,15 +38,32 @@ describe('test memo store', () => {
     expect(readMemoRecord(dir, 'server', META.test)).toBeNull();
     // Without a digest for every module the record is written in the old shape: no narrowing.
     writeMemoRecord(dir, 'server', META.test, ['server/lib/b.js', 'server/lib/a.js']);
-    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: null });
+    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: null, served: null });
     const digests = { 'server/lib/a.js': '1'.repeat(16), 'server/lib/b.js': '2'.repeat(16) };
     writeMemoRecord(dir, 'server', META.test, ['server/lib/b.js', 'server/lib/a.js'], (rel) => digests[rel] ?? null);
-    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: ['1'.repeat(16), '2'.repeat(16)] });
+    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: ['1'.repeat(16), '2'.repeat(16)], served: null });
     writeMemoRecord(dir, 'server', META.test, ['server/lib/a.js', 'server/lib/c.js'], (rel) => digests[rel] ?? null);
     expect(readMemoRecord(dir, 'server', META.test).digests).toBeNull();
     mkdirSync(join(dir, 'records', 'client'), { recursive: true });
     expect(readMemoRecord(dir, 'client', META.test)).toBeNull();
     expect(readMemoEntry(null, KEY, META)).toBeNull();
+  });
+
+  // #17616: what a real-Chromium fixture served rides in the record, sorted and deduplicated.
+  it('round-trips a served-file record and refuses a malformed one', () => {
+    dir = mkdtempSync(join(tmpdir(), 'portos-memo-store-'));
+    const served = { roots: ['client'], files: ['client/src/b.jsx', 'client/src/a.jsx', 'client/src/a.jsx'] };
+    writeMemoRecord(dir, 'client', META.test, ['server/lib/a.js'], () => '1'.repeat(16), served);
+    expect(readMemoRecord(dir, 'client', META.test)).toEqual({
+      modules: ['server/lib/a.js'], digests: ['1'.repeat(16)], served: { roots: ['client'], files: ['client/src/a.jsx', 'client/src/b.jsx'] },
+    });
+    const path = join(dir, 'records', 'client', `${createHash('sha256').update(META.test).digest('hex')}.json`);
+    const stored = JSON.parse(readFileSync(path, 'utf8'));
+    for (const bad of [{ roots: [], files: [] }, { roots: ['client'] }, { roots: ['client'], files: ['../outside.js'] },
+      { roots: ['/abs'], files: [] }, { roots: ['client'], files: ['client/./a.js'] }, { roots: ['client'], files: ['C:/a.js'] }, 'client']) {
+      writeFileSync(path, JSON.stringify({ ...stored, served: bad }));
+      expect(readMemoRecord(dir, 'client', META.test).served, JSON.stringify(bad)).toBeNull();
+    }
   });
 
   it('merges shard lineages: keeps the newer record per test, copies live entries, and skips expired or foreign files', () => {

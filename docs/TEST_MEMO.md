@@ -116,6 +116,28 @@ A directory a test reads as a whole is an input as a whole.
   directory or by its proven containing tree. An unbounded rooting option
   refuses the browser test. A Node test that passes a directory along keeps
   the older reading.
+- **A served root narrows to what the fixture served** (#17616). Keyed
+  whole, `client/` is ~4,600 files, so any client edit re-ran every
+  real-Chromium suite. When the runner records (`--experimental.recordDependencies`)
+  it also sets `PORTOS_TEST_MEMO_SERVED_DIR`, and `startBrowserFixture` adds
+  a recorder plugin (`scripts/lib/browserServedFiles.js`) that notes every
+  file its Vite server loads, transforms or answers a request from. The
+  suite's memo record stores those files (`served: { roots, files }`,
+  repo-relative, installed packages and paths outside the repository
+  dropped). For a root the record names, the recorded key and
+  `recordedReach` then key only the served files, what served CSS
+  `@import`s, the shared inputs no request names
+  (`BROWSER_SERVED_SHARED_INPUTS`: `client/src/index.css`,
+  `client/src/themes/`), the root's own direct non-dot files (its
+  manifests and PostCSS config) and the manifests above it (`servedTree`).
+  A served module is not walked, as with the recorded key: the importer
+  that gains an edge is itself served. A Tailwind class an unrelated page
+  adds styles only elements that use it, and those live in served files.
+  The whole tree stays keyed, failing closed, when there is no record or
+  the record names another root, a served path leaves the repository, or
+  the test file serves or bundles through a call of its own
+  (`UNRECORDED_SERVER_CALL`: `createServer(`, `express.static(`, …), which
+  the recorder never sees. The floor key is unchanged.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is

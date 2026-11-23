@@ -12,7 +12,8 @@ import { join, posix } from 'path';
 import { escapeRegExp } from '../../server/lib/textUtils.js';
 import { MODULE_SOURCE_RE, createModuleGraph } from './moduleGraph.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
-import { clientRunnerTestPredicate, measureRepoImportReach, serverRunnerTestPredicate } from './importReach.js';
+import { clientBrowserSuiteReach, clientRunnerTestPredicate, measureRepoImportReach, serverRunnerTestPredicate } from './importReach.js';
+import { BROWSER_SERVED_SHARED_INPUTS } from './testMemo/constants.js';
 import {
   DOCKER_CONTAINMENT_LIVE_ENTRIES, LINUX_CONTAINMENT_ENTRIES, SUPERCOLLIDER_LIVE_ENTRIES, TEST_FILE_GLOBS,
   browserSuitesIn, isExecutable, isServerRunnerFile, isSharedClientDependency, isTestFile,
@@ -292,6 +293,18 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   const clientDependencySet = new Set(clientDependencies ?? []);
   const clientReach = measureReach('client', collectedChangedFiles.filter((path) => MODULE_SOURCE_RE.test(path)
     && !isTestFile(path) && (path.startsWith('client/') || clientDependencySet.has(path))), clientRunnerTestPredicate());
+  // Real-Chromium client suites cost tens of seconds each, so a handful of them
+  // fans the client runner out where the file count alone would not (#17616).
+  // Only a client file or a module can reach one; other diffs skip the cold edge walk.
+  let clientBrowserReach = null;
+  if (collectedChangedFiles.some((path) => path.startsWith('client/') || MODULE_SOURCE_RE.test(path))) {
+    try {
+      clientBrowserReach = clientBrowserSuiteReach({ graph, changedFiles: collectedChangedFiles,
+        sharedInputs: BROWSER_SERVED_SHARED_INPUTS.client, read: (path) => readFileSync(join(cwd, path), 'utf8') });
+    } catch (err) {
+      console.warn(`⚠️ Client browser-suite reach not measured: ${err.message}`);
+    }
+  }
 
   // Two-dot: a tree comparison, so the base need not be an ancestor of HEAD
   // and needs no merge base in the shallow clone. --no-renames lists a renamed
@@ -318,5 +331,6 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
-    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, clientReach, gatedChangedFiles, gatedDependencyChanges };
+    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, clientReach, clientBrowserReach,
+    gatedChangedFiles, gatedDependencyChanges };
 }

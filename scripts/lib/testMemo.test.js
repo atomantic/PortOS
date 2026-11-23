@@ -385,6 +385,77 @@ describe('floor key', () => {
         expect(relatedTests(info, ['server/lib/unrelated.js'])).toEqual([]);
       }
     });
+
+    // #17616: a record of what the fixture's Vite server served stands in for the whole root,
+    // so an edit to a page the fixture never rendered neither moves its key nor selects it.
+    describe('narrowed to what a recorded fixture served', () => {
+      const FIXTURE = 'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: (temp) => ({ configFile: false, root: client }) });';
+      const tree = {
+        ...SERVED,
+        'client/src/Panel.jsx': "import './Panel.css';\nimport { nav } from '../../server/lib/nav.js';\nexport const Panel = nav;\n",
+        'client/src/Panel.css': "@import './panelTokens.css';\n.panel { color: red; }\n",
+        'client/src/panelTokens.css': '.token { color: blue; }\n',
+        'client/src/index.css': '@import "tailwindcss";\n',
+        'client/src/themes/tokens.js': 'export const tokens = 1;\n',
+        'client/postcss.config.js': 'export default {};\n',
+        'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 1;\n',
+        'server/lib/nav.js': 'export const nav = 1;\n',
+        [test]: browserTest(FIXTURE),
+      };
+      const served = { roots: ['client'], files: ['client/src/Panel.jsx', 'client/src/Panel.css', 'server/lib/nav.js'] };
+      const digestsOf = (files, modules) => modules.map((rel) => createHash('sha256').update(files[rel]).digest('hex').slice(0, 16));
+      const analyzed = (files, record = served, body = FIXTURE) => {
+        const withBody = { ...files, [test]: browserTest(body) };
+        return computeTestMemoKeys([test], options(withBody, {
+          records: new Map([[test, [test]]]), digests: new Map([[test, digestsOf(withBody, [test])]]), served: new Map(record ? [[test, record]] : []),
+        }));
+      };
+      const recordedKey = (files, record, body) => analyzed(files, record, body).get(test).recorded;
+      const edit = (rel) => ({ ...tree, [rel]: `${tree[rel] ?? ''}/* edited */\n` });
+
+      it('keys the served graph and shared style inputs, and nothing else under the root', () => {
+        const baseline = recordedKey(tree);
+        expect(baseline.memoizable).toBe(true);
+        // An unrelated page, a new file and an unrelated server module leave the key alone.
+        for (const rel of ['client/src/pages/HtmlPages.jsx', 'client/src/New.jsx', 'server/lib/unrelated.js']) {
+          expect(recordedKey(edit(rel)).key, rel).toBe(baseline.key);
+        }
+        // The served component, its CSS and what that CSS imports, a module served from outside
+        // the root, the global stylesheet, theme tokens, the PostCSS config and the lockfile move it.
+        for (const rel of ['client/src/Panel.jsx', 'client/src/Panel.css', 'client/src/panelTokens.css', 'server/lib/nav.js', 'client/src/index.css',
+          'client/src/themes/tokens.js', 'client/postcss.config.js', 'client/package-lock.json']) {
+          expect(recordedKey(edit(rel)).key, rel).not.toBe(baseline.key);
+        }
+        // Never the whole-tree key of the same suite.
+        expect(baseline.key).not.toBe(recordedKey(tree, null).key);
+      });
+
+      it('selects the suite only for a served or shared input when a narrowing record exists', () => {
+        const keys = analyzed(tree);
+        expect(keys.get(test).narrowed).not.toBeNull();
+        for (const rel of ['client/src/Panel.jsx', 'client/src/panelTokens.css', 'server/lib/nav.js', 'client/src/index.css', 'client/src/themes/tokens.js', 'client/postcss.config.js']) {
+          expect(relatedTests(keys, [rel]), rel).toEqual([test]);
+        }
+        expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx'])).toEqual([]);
+      });
+
+      it('falls back to the whole root without a record, for a root it does not name, a path outside the repository, or a server of the test\'s own', () => {
+        const wholeTree = recordedKey(tree, null);
+        const fallbacks = {
+          'no served record': [null, FIXTURE],
+          'another root': [{ roots: ['server/lib/static'], files: served.files }, FIXTURE],
+          'a served path outside the repository': [{ roots: ['client'], files: [...served.files, '../elsewhere/x.js'] }, FIXTURE],
+          'a server the recorder never saw': [served, `${FIXTURE}\nconst other = await createServer({ configFile: false, root: client });`],
+        };
+        for (const [label, [record, body]] of Object.entries(fallbacks)) {
+          const keys = analyzed(tree, record, body);
+          expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx']), label).toEqual([test]);
+          const changed = recordedKey(edit('client/src/pages/HtmlPages.jsx'), record, body);
+          expect(changed.key, label).not.toBe(recordedKey(tree, record, body).key);
+        }
+        expect(wholeTree.memoizable).toBe(true);
+      });
+    });
   });
 
   it('keys the arguments that select which cases run', () => {

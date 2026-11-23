@@ -118,6 +118,59 @@ export const serverRunnerTestPredicate = () => runnerTestPredicate('server', (pa
 /** Test files the client Vitest runner collects (`client/src` only), as a repo-relative predicate. */
 export const clientRunnerTestPredicate = () => runnerTestPredicate('client', (path) => path.startsWith('client/'));
 
+/** A real-Chromium suite the client runner collects (`client/**\/*.browser.test.js`). */
+export const isClientBrowserSuite = (path) => /^client\/.+\.browser\.test\.[cm]?[jt]sx?$/.test(path);
+
+// A client fixture names what it renders as `/src/…` inside the virtual
+// fixture module and `optimizeDeps.entries`: strings no import edge follows.
+const RENDERED_ENTRY_RE = /['"`]\/?(src\/[^'"`\s?#]+\.(?:[cm]?[jt]sx?|css))/g;
+
+/** True when `path` is an input every client fixture's render shares (`BROWSER_SERVED_SHARED_INPUTS`, a direct file of `client/`). */
+const sharesEveryRender = (path, shared) => /^client\/[^./][^/]*$/.test(path)
+  || shared.some((input) => path === input || path.startsWith(`${input}/`));
+
+/**
+ * The client real-Chromium suites a change reaches (#17616), for shard
+ * sizing: each such suite costs a Chrome launch and a cold Vite graph, tens
+ * of seconds where a happy-dom suite costs under one. A suite is reached
+ * when a changed file is in its own static or dynamic import closure (the
+ * fixture harness), in the closure of what its fixture renders (the `/src/…`
+ * entries it names, followed over the same edges, CSS imports included), or
+ * is an input every render shares (`sharedInputs`: the global stylesheet,
+ * theme tokens, `client/`'s own configuration and manifests). An unreadable
+ * module may hide any edge, so every suite counts then.
+ *
+ * @returns {{ selected: number, suites: string[] }}
+ */
+export function clientBrowserSuiteReach({ graph, changedFiles, sharedInputs = [], read }) {
+  const suites = graph.files.filter(isClientBrowserSuite);
+  if (suites.length === 0 || changedFiles.length === 0) return { selected: 0, suites: [] };
+  if (changedFiles.some((path) => sharesEveryRender(path, sharedInputs))) return { selected: suites.length, suites };
+  const { edges, uninspected } = importEdges(graph);
+  if (uninspected.length > 0) return { selected: suites.length, suites };
+  const changed = new Set(changedFiles);
+  const closureHits = (entries) => {
+    const seen = new Set();
+    const stack = [...entries];
+    while (stack.length) {
+      const file = stack.pop();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      if (changed.has(file)) return true;
+      const out = edges.get(file);
+      if (out) stack.push(...out.static, ...out.dynamic);
+    }
+    return false;
+  };
+  const reached = suites.filter((suite) => {
+    let text = '';
+    try { text = read(suite) ?? ''; } catch { /* an unreadable suite renders nothing this walk can see */ }
+    const rendered = [...text.matchAll(RENDERED_ENTRY_RE)].map(([, rel]) => `client/${rel}`).filter((rel) => graph.known.has(rel));
+    return closureHits([suite, ...rendered]);
+  });
+  return { selected: reached.length, suites: reached };
+}
+
 /**
  * One-line summary for the CI plan: the widest changed source first, so a
  * selection of hundreds of suites names the module that pulled them in.

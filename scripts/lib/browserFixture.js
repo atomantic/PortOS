@@ -60,11 +60,22 @@
  * `{ launch }` stand-in — the CDP adapter attaching to an external browser
  * among them — keeps only `close()`, which never terminates what it attached
  * to.
+ *
+ * The test memo keys a real-Chromium suite by what Chrome could render, which
+ * Vitest's module recording never sees: the fixture's Vite server reads it.
+ * Without a record, every file of the root the suite hands to Vite is an
+ * input, so editing any unrelated page re-ran every client fixture (#17616).
+ * When the memo runner asks (`SERVED_FILES_ENV`), the fixture adds a recorder
+ * plugin that notes every file Vite loads or transforms and every request it
+ * answers from a file, and on close writes those absolute paths, its root and
+ * the running test file (`browserServedFiles.js`) for the memo runner to fold
+ * into the suite's memo record.
  */
 import { appendFileSync, closeSync, openSync, opendirSync, readSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runningTestFile, servedFilesRecording } from './browserServedFiles.js';
 import { browserCleanupDeadline as withDeadline, reapOwnedBrowser } from './ownedBrowserCleanup.js';
 import { sandboxedChromiumOptions } from './playwrightSandbox.js';
 import { _testChromeProcessFacts } from '../../server/services/htmlComposition/testBrowserCleanup.js';
@@ -202,11 +213,13 @@ const retainLine = (line) => {
  * @param {(page: object, origin: string) => Promise<void>} [options.warmup] - first navigation; the page is closed afterward
  * @param {object} [options.phaseMs] - per-phase budgets; defaults to BROWSER_FIXTURE_PHASE_MS
  * @param {() => () => string} [options.observeLaunch] - starts observing a launch attempt; defaults to _observeOwnedBrowserLaunch
+ * @param {object} [options.env] - where `SERVED_FILES_ENV` is read; defaults to process.env
+ * @param {string|null} [options.testFile] - the test file a served-file record names; defaults to the one Vitest is running
  * @returns {Promise<{ origin: string, browser: object, server: object, temp: string, close: () => Promise<void> }>}
  */
 export async function startBrowserFixture({
   name, createServer, viteConfig, chromium, launchOptions = {}, warmup, phaseMs = BROWSER_FIXTURE_PHASE_MS,
-  observeLaunch = _observeOwnedBrowserLaunch,
+  observeLaunch = _observeOwnedBrowserLaunch, env = process.env, testFile = runningTestFile(),
 }) {
   const sandboxedOptions = sandboxedChromiumOptions(launchOptions);
   const budget = phaseMs.vite + phaseMs.chromium + phaseMs.warmup + phaseMs.cleanup;
@@ -234,10 +247,15 @@ export async function startBrowserFixture({
     if (failed) discard({ closer, label });
     else closers.push({ closer, label });
   };
+  let recording = null;
   // Closers run concurrently, and the temp dir is removed whether or not one
-  // stalled.
+  // stalled. The served-file record is written first: by close every page the
+  // suite drove is done, and a fixture never closed records nothing, which
+  // keys its root whole.
   const closeOwned = async () => {
     const errors = [];
+    try { recording?.write(); } catch (error) { errors.push(`served-file record: ${error.message}`); }
+    recording = null;
     await Promise.all(closers.splice(0).reverse().map(owned => closeBounded(owned)
       .catch(error => errors.push(error.message))));
     await rm(temp, { recursive: true, force: true });
@@ -340,11 +358,16 @@ export async function startBrowserFixture({
       if (!config.optimizeDeps?.entries?.length) {
         throw new Error('viteConfig must set optimizeDeps.entries to the rendered source files, or Vite scans the whole app');
       }
+      recording = servedFilesRecording(config, env, testFile);
       // The fixture serves a static synthetic page. A file change elsewhere in
       // the shared client tree (other suites, an editor, a sibling agent) must
       // not push an HMR update or full reload that remounts the page mid-test
       // (#12230), so the watcher and HMR channel are off for every fixture.
-      const vite = await createServer({ ...config, server: { ...config.server, watch: null, hmr: false } });
+      const vite = await createServer({
+        ...config,
+        plugins: recording ? [...(config.plugins ?? []), recording.plugin] : config.plugins,
+        server: { ...config.server, watch: null, hmr: false },
+      });
       own(() => vite.close(), 'Vite server');
       // A server that arrives after the deadline was just closed by own();
       // listening would bind a port nothing closes.

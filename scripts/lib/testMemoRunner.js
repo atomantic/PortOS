@@ -25,7 +25,10 @@
  * the same after the run as before it. A passed file that gets no entry is
  * reported with the reason each key was refused (`recordTestMemo`), and a
  * run under a browser profile's name pattern is seeded so Vitest records it
- * at all (`seedVitestDependencies`).
+ * at all (`seedVitestDependencies`). A real-Chromium suite's record also
+ * names what its fixture's Vite server served (`readServedFiles` in
+ * `browserServedFiles.js`), which
+ * narrows the root it hands to Vite to those files (`servedTree`).
  *
  * Sharding: the runner partitions the memo-independent candidate inventory
  * (using Vitest's algorithm by default), then evaluates related reach and
@@ -96,22 +99,22 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
-  const analyze = (test, recorded, digests = null) => {
+  const analyze = (test, recorded, digests = null, served = null) => {
     if (!primary) {
       const analyzer = createTestMemoAnalyzer(options);
       primary = { analyzer, baseClosure: analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
-    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded, digests });
+    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded, digests, served });
   };
   // A second analyzer with empty caches re-reads every input after the run,
   // so an entry is written only for inputs that did not change meanwhile.
   let fresh = null;
-  const freshAnalyze = (test, recorded) => {
+  const freshAnalyze = (test, recorded, served = null) => {
     if (!fresh) {
       const again = createTestMemoAnalyzer(options);
       fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
-    return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded });
+    return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded, served });
   };
   // Digests for a new record come from the post-run analyzer, whose key matched the pre-run one.
   const moduleDigest = (rel) => fresh?.analyzer.moduleDigest(rel) ?? null;
@@ -126,7 +129,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
       if (unmemoizable.has(test)) continue;
       const record = memoDir ? readRecord(memoDir, scope, test) : null;
       // Digests only matter to related selection; other modes skip the narrowed walk.
-      verdicts.set(test, analyze(test, record?.modules ?? null, mode === 'related' ? record?.digests ?? null : null));
+      verdicts.set(test, analyze(test, record?.modules ?? null, mode === 'related' ? record?.digests ?? null : null, record?.served ?? null));
     }
   }
 
@@ -421,6 +424,9 @@ const CHANGED_DURING_RUN = 'an input changed while the run was in flight';
  * from the pre-run hashes (recorded): a file edited while Vitest ran is not
  * attributed to the verdict.
  *
+ * `served` (`readServedFiles`, `browserServedFiles.js`) narrows a real-Chromium suite's recorded key
+ * to what its fixture served, and is stored in its record.
+ *
  * `unrecorded` names every passed file that got no entry under either key,
  * with why each key was refused, so a suite that re-runs forever says so in
  * the log instead of only lowering a count. `declared` marks the files that
@@ -428,7 +434,7 @@ const CHANGED_DURING_RUN = 'an input changed while the run was in flight';
  *
  * @returns {{ written: number, unrecorded: Array<{ test: string, reason: string, declared: boolean }> }}
  */
-export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, dependencies, source, commit, writeEntry = writeMemoEntry, writeRecord = writeMemoRecord }) {
+export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, dependencies, served = new Map(), source, commit, writeEntry = writeMemoEntry, writeRecord = writeMemoRecord }) {
   let written = 0;
   const unrecorded = [];
   for (const test of passed) {
@@ -440,22 +446,23 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
     }
     const meta = { test, workspace: scope, source, commit };
     const modules = dependencies?.get(test) ?? null;
+    const servedFiles = served.get(test) ?? null;
     // Re-read inputs only if the floor or recorded key could be written.
     // Still compute the recorded candidate from Vitest's actual modules.
     let after;
-    const fresh = () => (after ??= plan.freshAnalyze(test, modules));
+    const fresh = () => (after ??= plan.freshAnalyze(test, modules, servedFiles));
     const refused = [];
     if (!info.floor.memoizable) refused.push(`floor key: ${info.floor.reason}`);
     else if (fresh().floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
     else { writeEntry(memoDir, info.floor.key, meta); written += 1; }
-    const recorded = modules ? plan.analyze(test, modules).recorded : null;
+    const recorded = modules ? plan.analyze(test, modules, null, servedFiles).recorded : null;
     if (!modules) refused.push(`recorded key: ${dependencies ? 'Vitest recorded no modules for this file' : 'no readable Vitest dependency file'}`);
     else if (!recorded?.memoizable) refused.push(`recorded key: ${recorded?.reason ?? 'not computed'}`);
     else if (fresh().recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
     else {
       // A case-filtered run loaded only what its cases reached: the list keys this
       // filter's entry, but digests would let it narrow selection for any other run.
-      writeRecord(memoDir, scope, test, modules, plan.caseFiltered ? () => null : plan.moduleDigest);
+      writeRecord(memoDir, scope, test, modules, plan.caseFiltered ? () => null : plan.moduleDigest, servedFiles);
       writeEntry(memoDir, recorded.key, meta);
       written += 1;
     }
