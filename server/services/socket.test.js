@@ -8,7 +8,8 @@ import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './s
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
-import { authEvents } from './auth.js';
+import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
+import { verifyPeerToken } from './authGate.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
@@ -58,6 +59,12 @@ vi.mock('./beeperSocketEvents.js', async () => {
 });
 vi.mock('./instanceEvents.js', async () => ({ instanceEvents: new (await import('node:events')).EventEmitter() }));
 import { instanceEvents } from './instanceEvents.js';
+vi.mock('./auth.js', async (importActual) => ({
+  ...(await importActual()),
+  isAuthEnabled: vi.fn(async () => false),
+  verifyRequestSession: vi.fn(async () => false),
+}));
+vi.mock('./authGate.js', async (importActual) => ({ ...(await importActual()), verifyPeerToken: vi.fn(async () => null) }));
 vi.mock('./tailcatPeer.js', () => ({ attachTailcatForwardsToPeers: vi.fn(async (peers) => peers) }));
 import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
@@ -1636,5 +1643,64 @@ describe('socket.js — initSocket', () => {
       expect(opts.initialCommand).toBe('claude');
       expect(opts.waitForPromptReady).toBe(true);
     });
+  });
+});
+
+describe('socket.js — inbound peer socket revocation (#17905)', () => {
+  const peerSocket = (id, peerId, instanceId) => {
+    const socket = makeSocket(id);
+    socket.data = { portosAuthMethod: 'peer', portosPeerId: peerId, portosPeerInstanceId: instanceId };
+    socket.disconnect = vi.fn();
+    const middlewares = [];
+    socket.use = (fn) => middlewares.push(fn);
+    socket.runEvent = async (event) => {
+      const next = vi.fn();
+      await middlewares[0]([event, {}], next);
+      return next;
+    };
+    return socket;
+  };
+  let io;
+  let sockets;
+
+  beforeEach(() => {
+    sockets = [];
+    io = { ...makeIo(), fetchSockets: async () => sockets };
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyPeerToken).mockResolvedValue(null);
+  });
+
+  it('disconnects only the revoked peer\'s inbound sockets', async () => {
+    const revoked = peerSocket('a', 'peer-a', 'inst-a');
+    const other = peerSocket('b', 'peer-b', 'inst-b');
+    sockets = [revoked, other];
+    instanceEvents.emit('peer:auth-revoked', { peerId: 'peer-a', instanceId: 'inst-a' });
+    await vi.waitFor(() => expect(revoked.disconnect).toHaveBeenCalledWith(true));
+    expect(other.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops a peer socket whose token no longer verifies instead of subscribing it', async () => {
+    const stale = peerSocket('stale', 'peer-a', 'inst-a');
+    io.connect(stale);
+    vi.mocked(verifyPeerToken).mockResolvedValue(null);
+    const next = await stale.runEvent('peer:sync:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(stale.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps serving a peer socket whose token still verifies', async () => {
+    const live = peerSocket('live', 'peer-a', 'inst-a');
+    io.connect(live);
+    vi.mocked(verifyPeerToken).mockResolvedValue({ id: 'peer-a' });
+    const next = await live.runEvent('peer:sync:subscribe');
+    expect(next).toHaveBeenCalled();
+    expect(live.disconnect).not.toHaveBeenCalled();
   });
 });

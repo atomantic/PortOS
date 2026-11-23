@@ -63,7 +63,7 @@ import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
-import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl, verifyPeerToken } from './authGate.js';
 import { runEventLogEvents } from './agent/agentRunEventLog.js';
 import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
@@ -196,8 +196,11 @@ function registerAuthHandlers(socket, _io) {
         }
         if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();
         const peerAuthMethod = socket.data?.portosAuthMethod;
-        if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {
-          return next();
+        if (PEER_RELAY_ALLOWED_EVENTS.has(event)) {
+          if (peerAuthMethod === 'basic') return next();
+          // A peer socket is only as good as its token now: a disabled,
+          // removed or re-keyed peer is dropped on its next event (#17905).
+          if (peerAuthMethod === 'peer' && await verifyPeerToken(socket.handshake?.headers)) return next();
         }
         socket.disconnect(true);
       } catch (err) {
@@ -750,6 +753,24 @@ function setupInstanceEventForwarding() {
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
+  // A disabled, removed or re-keyed peer must lose its inbound sockets at once,
+  // not only on its next event (it may be a passive subscriber).
+  instanceEvents.on('peer:auth-revoked', async ({ peerId, instanceId } = {}) => {
+    try {
+      const sockets = await getIo()?.fetchSockets() ?? [];
+      let dropped = 0;
+      for (const socket of sockets) {
+        const { portosAuthMethod, portosPeerId, portosPeerInstanceId } = socket.data ?? {};
+        if (portosAuthMethod !== 'peer') continue;
+        if (portosPeerId !== peerId && (!instanceId || portosPeerInstanceId !== instanceId)) continue;
+        socket.disconnect(true);
+        dropped++;
+      }
+      if (dropped > 0) console.log(`🔐 Peer auth revoked — disconnected ${dropped} inbound socket(s)`);
+    } catch (err) {
+      console.error(`❌ Peer auth revocation failed: ${err?.message ?? err}`);
+    }
+  });
   instanceEvents.on('peers:updated', (data) => {
     const sequence = ++peerUpdateSequence;
     const publishIfCurrent = (peers) => {

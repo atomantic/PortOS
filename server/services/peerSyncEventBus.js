@@ -156,7 +156,11 @@ function handshakeInstanceId(headers) {
 export function registerPeerSyncSubscriber(socket) {
   socket.emit('peer:sync:available', { v: PEER_SYNC_EVENT_VERSION });
   socket.on('peer:sync:subscribe', async () => {
-    const instanceId = handshakeInstanceId(socket.handshake?.headers);
+    // A peer-token socket carries the identity the token verified at connect;
+    // the raw header is only trusted when no verified identity exists.
+    const instanceId = socket.data?.portosAuthMethod === 'peer' && socket.data.portosPeerInstanceId
+      ? socket.data.portosPeerInstanceId
+      : handshakeInstanceId(socket.handshake?.headers);
     if (socket.data) socket.data.peerSyncInstanceId = instanceId;
     socket.join(PEER_SYNC_ROOM);
     // `deliver`: whether video-history frames will reach this subscriber now
