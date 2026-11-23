@@ -13,7 +13,7 @@ import {
   updatePipelineSeries,
 } from '../../../services/apiPipeline.js';
 import SeriesLlmPicker from '../SeriesLlmPicker';
-import VerifyScopeTooltip from './VerifyScopeTooltip.jsx';
+import InfoTooltip from '../../ui/InfoTooltip.jsx';
 import ArcContent from './ArcContent.jsx';
 import VerifyResults from './VerifyResults.jsx';
 import DeriveFromManuscriptPreview from './DeriveFromManuscriptPreview.jsx';
@@ -286,18 +286,25 @@ export default function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFl
             {generateBtnLabel}
           </button>
           {hasGeneratedArc ? (
-            <VerifyScopeTooltip scope={VERIFY_ARC_SCOPE} id="verify-arc-scope-tooltip">
+            <div className="inline-flex items-center gap-0.5">
               <button
                 type="button"
                 onClick={runVerify}
                 disabled={!!running}
-                aria-describedby="verify-arc-scope-tooltip"
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
               >
                 {running === 'verify' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
                 Verify arc
               </button>
-            </VerifyScopeTooltip>
+              <InfoTooltip label="What Verify arc checks" width={320} align="end" placement="below">
+                <p className="mb-1 italic text-gray-400">{VERIFY_ARC_SCOPE.depth}</p>
+                <ul className="list-disc space-y-0.5 pl-4 text-gray-400">
+                  {VERIFY_ARC_SCOPE.checks.map((c) => (
+                    <li key={c}>{c}</li>
+                  ))}
+                </ul>
+              </InfoTooltip>
+            </div>
           ) : null}
           <button
             type="button"
