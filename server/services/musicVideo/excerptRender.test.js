@@ -186,7 +186,7 @@ describe('excerpt render cancellation', () => {
     await vi.waitFor(() => expect(terminalFrames(second.jobId)).toHaveLength(1));
   });
 
-  it('retains zero-exit success after a cancellation request', async () => {
+  it('honors a cancellation that raced a clean ffmpeg exit: no completion, settles as canceled', async () => {
     const id = 'excerpt-cancel-success';
     prime(id);
     const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
@@ -194,8 +194,23 @@ describe('excerpt render cancellation', () => {
     expect(cancelExcerptRender(jobId)).toBe(true);
     lastProc().emit('close', 0, null);
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
-    expect(excerpt(id, excerptId).status).toBe('complete');
-    expect(terminalFrames(jobId)[0].type).toBe('complete');
+    expect(excerpt(id, excerptId).status).toBe('canceled');
+    expect(terminalFrames(jobId)).toEqual([{ type: 'canceled', error: 'Render cancelled' }]);
+    expect(cancelExcerptRender(jobId)).toBe(false);
+  });
+
+  it('accepts a cancel in the gap after ffmpeg exits and skips the film look pass', async () => {
+    const id = 'excerpt-cancel-gap';
+    prime(id);
+    h.store.get(id).filmLook = true;
+    const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
+    lastProc().emit('spawn');
+    // Same tick as the close: process is already cleared, no overlay in flight.
+    lastProc().emit('close', 0, null);
+    expect(cancelExcerptRender(jobId)).toBe(true);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(look.calls).toHaveLength(0);
+    expect(excerpt(id, excerptId).status).toBe('canceled');
   });
 
   it('retires a completed excerpt after settled overlay scratch cleanup fails', async () => {
@@ -222,8 +237,8 @@ describe('excerpt render cancellation', () => {
     const { jobId, excerptId } = await startExcerptRender(id, { startSec: 0, endSec: 2 });
     expect(h.procs).toHaveLength(0);
     expect(cancelExcerptRender(jobId)).toBe(true);
-    expect(cancelExcerptRender(jobId)).toBe(false);
     await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(cancelExcerptRender(jobId)).toBe(false);
     expect(excerpt(id, excerptId).status).toBe('canceled');
     expect(removeCompositionScratch).toHaveBeenCalledExactlyOnceWith(jobId);
     expect(h.procs).toHaveLength(0);

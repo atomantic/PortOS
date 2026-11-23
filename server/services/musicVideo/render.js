@@ -35,7 +35,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCancelPending, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
@@ -541,7 +541,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
     const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
     const plainEncode = await filterGraphViaFile(ffmpeg, args, graphPath);
-    const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration, audioRevision: audioRevisionOf(project) };
+    const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration, overlayAbort: new AbortController(), audioRevision: audioRevisionOf(project) };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
     handedOff = true; // the job lifecycle now owns the projectRenders entry
@@ -586,17 +586,20 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       permit.finish();
     };
 
+    // The job-lifetime abort signal covers every post-encode pass; a cancel that
+    // lands between passes is caught here before the next one starts.
     const runPostEncodePass = async (label, run) => {
-      job.overlayAbort = new AbortController();
       const { signal } = job.overlayAbort;
+      if (isMusicVideoRenderCancelPending(job)) {
+        await settleFailure(true, 'Render cancelled');
+        return false;
+      }
       try {
         await run(signal);
         return true;
       } catch (err) {
         await settleFailure(signal.aborted, signal.aborted ? 'Render cancelled' : `${label} failed: ${err.message}`);
         return false;
-      } finally {
-        job.overlayAbort = null;
       }
     };
 
@@ -609,6 +612,12 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // Seconds the cold open adds before the song, once it is cut in front.
     let leadSec = 0;
     const startEncode = (encode) => {
+      // A cancel can land in the window between job creation and the spawn.
+      if (isMusicVideoRenderCancelPending(job)) {
+        if (encode.file) unlink(encode.file).catch(() => {});
+        settleFailure(true, 'Render cancelled').catch((err) => console.error(`❌ Music-video render [${jobId.slice(0, 8)}] cancel settle failed: ${err.message}`));
+        return;
+      }
       const encodeTop = finishing ? 0.5 : 1;
       const encodeProgress = (fraction) => encodeTop * fraction;
       const dropGraphFile = () => (encode.file ? unlink(encode.file).catch(() => {}) : null);
@@ -664,6 +673,11 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
             return;
           }
+          // A cancel that raced a clean exit still wins over the post-encode passes.
+          if (isMusicVideoRenderCancelPending(job)) {
+            await settleFailure(true, 'Render cancelled');
+            return;
+          }
           // Grade the cold open and outro with the rest of the film.
           if (coldOpen && !await runPostEncodePass('Cold open', async (signal) => {
             const { prependColdOpen } = await import('./coldOpen.js');
@@ -686,8 +700,14 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           // project stuck 'rendering' and projectRenders un-cleared (every later
           // render 409s). Wrap it so any failure still emits a terminal frame and
           // releases the slot.
+          if (isMusicVideoRenderCancelPending(job)) {
+            await settleFailure(true, 'Render cancelled');
+            return;
+          }
           let result;
           try {
+            // Checked and set synchronously: past here a cancel is refused.
+            job.committing = true;
             job.status = 'complete';
             const section = (project.audioAnalysis?.sections || [])
               .filter(section => Number.isFinite(section.energy) && section.startSec >= 0 && section.endSec > section.startSec && section.startSec < totalDuration)
