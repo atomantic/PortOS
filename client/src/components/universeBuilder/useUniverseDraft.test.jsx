@@ -386,6 +386,16 @@ describe('useUniverseDraft', () => {
     expect(result.current.isDraftDirty()).toBe(false);
   });
 
+  it('Save on an existing universe asks the server to replace categories so removed buckets stay deleted', async () => {
+    const { result } = renderDraft();
+    await waitFor(() => expect(result.current.draft.id).toBe('u1'));
+
+    act(() => result.current.updateDraft({ premise: 'Changed premise' }));
+    await act(async () => { await result.current.handleSave(); });
+
+    expect(apiMocks.updateUniverse.mock.calls.at(-1)[1]).toMatchObject({ replaceCategories: true });
+  });
+
   it('marks the draft dirty when the factual toggle flips and ships it with Save', async () => {
     // The regression: omitting `factual` from universeDraftSnapshot leaves the
     // draft looking clean after the toggle, so Save is a no-op and the world

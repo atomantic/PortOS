@@ -393,7 +393,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       }
     }
     const result = selectedId
-      ? await updateUniverse(selectedId, payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; })
+      ? await updateUniverse(selectedId, { ...payload, replaceCategories: true }, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; })
       : await createUniverse(payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; });
     // Persisted writes still update the list/watermark, but only their original
     // visit may settle its draft or navigate after a create (including A→B→A).

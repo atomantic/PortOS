@@ -178,7 +178,7 @@ export default function useUniverseExpand({
         ...(expandedDraft.imageModelId ? { imageModelId: expandedDraft.imageModelId } : {}),
       };
       const saved = await (selectedId
-        ? updateUniverse(selectedId, payload, { silent: true })
+        ? updateUniverse(selectedId, { ...payload, replaceCategories: true }, { silent: true })
         : createUniverse(payload, { silent: true }))
         .catch((error) => { toast.error(`Auto-save after expand failed: ${error.message}`); return null; })
         .finally(() => setSaving(false));
@@ -232,7 +232,7 @@ export default function useUniverseExpand({
         locked: next.locked || {},
         llm: next.llm || {},
       };
-      const updated = await updateUniverse(selectedId, refinePayload, { silent: true })
+      const updated = await updateUniverse(selectedId, { ...refinePayload, replaceCategories: true }, { silent: true })
         .catch((error) => { toast.error(`Auto-save after refine failed: ${error.message}`); return null; });
       if (updated) {
         setWorlds((previous) => upsertByIdPrepend(previous, updated));
