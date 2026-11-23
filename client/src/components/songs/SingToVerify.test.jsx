@@ -10,7 +10,7 @@ const toggleAccept = vi.fn();
 const acceptAll = vi.fn();
 let hookState = { phase: 'idle', beat: null, rows: [], error: null };
 
-vi.mock('../../hooks/useSingToVerify.js', () => ({
+vi.mock('./useSingToVerify.js', () => ({
   __esModule: true,
   default: () => ({ ...hookState, start, stop, cancel, reset, toggleAccept, acceptAll }),
   VERIFY_IDLE: 'idle',

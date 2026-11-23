@@ -1,7 +1,7 @@
 import { ExternalLink, KeyRound, Copy } from 'lucide-react';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
-import useForgeScopeRefresh from '../../hooks/useForgeScopeRefresh';
+import useForgeScopeRefresh from './useForgeScopeRefresh';
 import { copyToClipboard } from '../../lib/clipboard';
 
 export const FORGE_SCOPE_MISSING_CODE = 'FORGE_TOKEN_SCOPE_MISSING';

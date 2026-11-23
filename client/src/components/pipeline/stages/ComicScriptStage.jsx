@@ -29,7 +29,7 @@ import { getSettings, patchSettingsSlice } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
-import useSlotInFlight from '../../../hooks/useSlotInFlight';
+import useSlotInFlight from './useSlotInFlight';
 import useListResource from '../../../hooks/useListResource';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';

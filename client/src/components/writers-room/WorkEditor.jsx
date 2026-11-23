@@ -62,9 +62,9 @@ import WritersRoomDock from './WritersRoomDock';
 import WorkEditorVersions from './WorkEditorVersions';
 import WorkEditorVoicePanel from './WorkEditorVoicePanel';
 import useImageGenQueue from './useImageGenQueue';
-import useLiveSuggest from '../../hooks/useLiveSuggest';
-import useSidebarResize from '../../hooks/useSidebarResize';
-import useTokenPopover from '../../hooks/useTokenPopover';
+import useLiveSuggest from './useLiveSuggest';
+import useSidebarResize from './useSidebarResize';
+import useTokenPopover from './useTokenPopover';
 import { modKey } from '../../utils/platform';
 
 const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };

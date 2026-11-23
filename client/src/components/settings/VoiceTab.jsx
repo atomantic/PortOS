@@ -74,7 +74,6 @@ export function VoiceTab() {
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
   const [configError, setConfigError] = useState(null);
-  const mountedRef = useMounted();
   // Raw text of the Traits input while it has uncommitted edits; null means "show
   // the saved list". Parsing per keystroke would drop typed commas and spaces.
   const [traitsText, setTraitsText] = useState(null);

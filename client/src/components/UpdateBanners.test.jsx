@@ -35,7 +35,7 @@ const toastFn = vi.fn();
 vi.mock('./ui/Toast', () => ({ default: Object.assign((...a) => toastFn(...a), { dismiss: vi.fn() }) }));
 
 import UpdateBanners from './UpdateBanners';
-import { __internal } from '../hooks/useUpdateChecker';
+import { __internal } from './useUpdateChecker';
 import { __resetSystemActivityForTests, SYSTEM_ACTIVITY_COALESCE_MS } from '../hooks/useSystemActivity';
 
 const idleActivity = { activity: { idle: true, activeCount: 0, queuedCount: 0, blockers: [] } };

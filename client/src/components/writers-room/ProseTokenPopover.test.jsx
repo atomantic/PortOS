@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import useTokenPopover from '../../hooks/useTokenPopover.js';
+import useTokenPopover from './useTokenPopover.js';
 import ProseReader from './ProseReader.jsx';
 import ProseTokenPopover from './ProseTokenPopover.jsx';
 

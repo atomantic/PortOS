@@ -8,7 +8,7 @@ const start = vi.fn();
 const stop = vi.fn();
 let hookState = { running: false, countingIn: false, noteColors: {}, activeIndex: null, lastSummary: null };
 
-vi.mock('../../hooks/useSongTraining.js', () => ({
+vi.mock('./useSongTraining.js', () => ({
   __esModule: true,
   default: () => ({ ...hookState, start, stop }),
 }));

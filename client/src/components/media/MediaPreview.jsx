@@ -3,7 +3,7 @@ import MediaLightbox from './MediaLightbox';
 import { getAdjacentMedia, getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import { mediaAnnotationKey, mediaRecordRef } from './mediaDetail';
-import useImageVariants from '../../hooks/useImageVariants';
+import useImageVariants from './useImageVariants';
 import { trimVideo, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
