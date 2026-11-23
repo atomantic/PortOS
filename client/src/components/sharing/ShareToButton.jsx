@@ -22,13 +22,15 @@
  *   compact?: boolean
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Share2, Check, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
+import useEscapeKey from '../../hooks/useEscapeKey.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import {
   listShareBuckets,
@@ -44,11 +46,11 @@ const MENU_WIDTH = 288; // w-72
 const fetchBuckets = () => listShareBuckets({ silent: true }).then((r) => r?.buckets || []);
 
 function renderRowIcon({ busy, subscribable, subscribed }) {
-  if (busy) return <Loader2 size={14} className="animate-spin text-port-accent" />;
-  if (!subscribable) return <Check size={14} className="text-gray-600" />;
+  if (busy) return <Loader2 size={14} className="animate-spin text-port-accent" aria-hidden="true" />;
+  if (!subscribable) return <Check size={14} className="text-gray-600" aria-hidden="true" />;
   return subscribed
-    ? <CheckCircle2 size={14} className="text-port-success" />
-    : <Circle size={14} className="text-gray-600" />;
+    ? <CheckCircle2 size={14} className="text-port-success" aria-hidden="true" />
+    : <Circle size={14} className="text-gray-600" aria-hidden="true" />;
 }
 
 export default function ShareToButton({ kind, ids, items, label = 'Share', compact = false, className = '' }) {
@@ -97,17 +99,15 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
 
   // Close on Escape and return focus to the trigger so keyboard users don't
   // have to Tab back through the popover content.
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  useEscapeKey(open, () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  });
+  // Focus enters the portaled dialog (it sits at the end of <body>, so without
+  // this Tab from the trigger walks the page behind it) and returns to the
+  // trigger on every close path. Gated on menuStyle so the first focusable is
+  // measured/visible rather than inside the hidden pre-position render.
+  useFocusTrap(open && Boolean(menuStyle), popoverRef);
 
   // Both refs: the menu lives outside the trigger's subtree once portaled, so a
   // trigger-only containment check would read clicks on the menu as outside.
@@ -162,6 +162,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
     );
     toast.success(`Shared to ${bucket.name} — ${totals.records} record${totals.records === 1 ? '' : 's'}, ${totals.assets} asset${totals.assets === 1 ? '' : 's'}`);
     setOpen(false);
+    triggerRef.current?.focus();
   };
 
   const nothingToShare = isSubscribable
@@ -176,17 +177,20 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
         onClick={() => setOpen((v) => !v)}
         disabled={nothingToShare}
         aria-expanded={open}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
+        aria-label={compact ? label : undefined}
         className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 ${compact ? 'p-1.5' : ''}`}
         title={nothingToShare ? 'Nothing selected to share' : 'Share to a bucket'}
       >
-        <Share2 size={12} />
+        <Share2 size={12} aria-hidden="true" />
         {!compact && <span>{label}</span>}
       </button>
 
       {open && createPortal(
         <div
           ref={popoverRef}
+          role="dialog"
+          aria-label={isSubscribable ? 'Subscribe to bucket' : 'Share to bucket'}
           style={{
             position: 'fixed',
             left: menuStyle?.left ?? `${VIEWPORT_PADDING}px`,
@@ -200,8 +204,8 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
             {isSubscribable ? 'Subscribe to bucket' : 'Share to bucket'}
           </div>
           {loading ? (
-            <div className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
-              <Loader2 size={12} className="animate-spin" /> Loading buckets…
+            <div role="status" className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Loading buckets…
             </div>
           ) : loadFailed ? (
             <ListLoadError what={loadFailed === bucketsList ? 'buckets' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
@@ -220,6 +224,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
                     <button
                       type="button"
                       onClick={click}
+                      aria-pressed={isSubscribable ? subscribed : undefined}
                       disabled={busy}
                       className="w-full text-left px-3 py-2 hover:bg-port-bg disabled:opacity-50 flex items-start gap-2"
                     >

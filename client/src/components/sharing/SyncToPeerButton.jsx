@@ -22,13 +22,15 @@
  *   compact?: boolean
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Cloud, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import useListResource from '../../hooks/useListResource.js';
 import useClickOutside from '../../hooks/useClickOutside.js';
+import useEscapeKey from '../../hooks/useEscapeKey.js';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosition.js';
 import { getInstances } from '../../services/apiSystem.js';
 import { listPeerSubscriptions, subscribeToPeer, unsubscribeFromPeer } from '../../services/apiPeerSync.js';
@@ -111,17 +113,15 @@ export default function SyncToPeerButton({
 
   // Close on Escape and return focus to the trigger so keyboard users don't
   // have to Tab back through the popover content.
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open]);
+  useEscapeKey(open, () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  });
+  // Focus enters the portaled dialog (it sits at the end of <body>, so without
+  // this Tab from the trigger walks the page behind it) and returns to the
+  // trigger on every close path. Gated on menuStyle so the first focusable is
+  // measured/visible rather than inside the hidden pre-position render.
+  useFocusTrap(open && Boolean(menuStyle), popoverRef);
 
   // Both refs: the menu lives in a portal outside wrapperRef, so a trigger-only
   // containment check would read clicks on the menu as outside.
@@ -173,17 +173,20 @@ export default function SyncToPeerButton({
         onClick={() => setOpen((v) => !v)}
         disabled={nothingToSync}
         aria-expanded={open}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
+        aria-label={compact ? label : undefined}
         className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs border border-port-border hover:border-port-accent/40 text-gray-300 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${compact ? 'min-h-[44px] min-w-[44px] justify-center p-1.5' : ''}`}
         title={nothingToSync ? 'Nothing to sync' : 'Sync to a peer instance'}
       >
-        <Cloud size={12} />
+        <Cloud size={12} aria-hidden="true" />
         {!compact && <span>{label}</span>}
       </button>
 
       {open && createPortal(
         <div
           ref={popoverRef}
+          role="dialog"
+          aria-label={'Subscribe to peer'}
           style={{
             position: 'fixed',
             left: menuStyle?.left ?? `${VIEWPORT_PADDING}px`,
@@ -197,8 +200,8 @@ export default function SyncToPeerButton({
             Subscribe to peer
           </div>
           {loading ? (
-            <div className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
-              <Loader2 size={12} className="animate-spin" /> Loading peers…
+            <div role="status" className="px-3 py-3 text-xs text-gray-500 flex items-center gap-2">
+              <Loader2 size={12} className="animate-spin" aria-hidden="true" /> Loading peers…
             </div>
           ) : loadFailed ? (
             <ListLoadError what={loadFailed === peersList ? 'peers' : 'subscriptions'} error={loadFailed.error} onRetry={retryLoad} className="m-2" />
@@ -240,16 +243,17 @@ export default function SyncToPeerButton({
                     <button
                       type="button"
                       onClick={() => handleToggle(p)}
+                      aria-pressed={subscribed}
                       disabled={rowDisabled}
                       title={titleHint}
                       className="w-full text-left px-3 py-2 hover:bg-port-bg disabled:opacity-50 disabled:cursor-not-allowed flex items-start gap-2"
                     >
                       <span className="mt-0.5 shrink-0">
                         {busy
-                          ? <Loader2 size={14} className="animate-spin text-port-accent" />
+                          ? <Loader2 size={14} className="animate-spin text-port-accent" aria-hidden="true" />
                           : subscribed
-                            ? <CheckCircle2 size={14} className="text-port-success" />
-                            : <Circle size={14} className="text-gray-600" />}
+                            ? <CheckCircle2 size={14} className="text-port-success" aria-hidden="true" />
+                            : <Circle size={14} className="text-gray-600" aria-hidden="true" />}
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-white truncate">{p.name || p.host || p.address || 'Unnamed peer'}</div>
