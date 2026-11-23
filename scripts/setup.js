@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { installWorkspace } from './ensure-deps.js';
+import { installWorkspace, writeDependencyHashes } from './ensure-deps.js';
 import { dependencyWorkspaces, hasLinkedDependencies } from './lib/workspaceDependencies.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -68,6 +68,14 @@ export function buildSetupSteps({ root, interactive }) {
         }
         for (const { dir, label } of workspaces) {
           if (!install(dir, label)) return 1;
+        }
+        // Same receipt ensure-deps.js trusts. Without it, the next start
+        // wipes the trees this step just installed.
+        try {
+          writeDependencyHashes(root);
+        } catch (err) {
+          log(`❌ Could not write dependency receipt: ${err.message ?? err}`);
+          return 1;
         }
         return 0;
       }
