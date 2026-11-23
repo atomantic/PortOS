@@ -127,7 +127,7 @@ export const setActiveDigitalTwinPersona = (personaId) => request('/digital-twin
 });
 
 // Digital Twin - Validation & Analysis
-export const getDigitalTwinCompleteness = () => request('/digital-twin/validate/completeness');
+export const getDigitalTwinCompleteness = (options = {}) => request('/digital-twin/validate/completeness', options);
 const detectDigitalTwinContradictions = (providerId, model, options = {}) => request('/digital-twin/validate/contradictions', {
   method: 'POST',
   body: JSON.stringify({ providerId, model }),
@@ -229,7 +229,7 @@ export const getBehavioralFeedbackStats = () => request('/digital-twin/feedback/
 
 // Digital Twin - Taste Questionnaire
 export const getTasteProfile = (options) => request('/digital-twin/taste', options);
-export const getTasteNextQuestion = (section) => request(`/digital-twin/taste/${section}/next`);
+export const getTasteNextQuestion = (section, options = {}) => request(`/digital-twin/taste/${section}/next`, options);
 export const submitTasteAnswer = (section, questionId, answer, meta = {}, options = {}) => request('/digital-twin/taste/answer', {
   method: 'POST',
   body: JSON.stringify({ section, questionId, answer, ...meta }),

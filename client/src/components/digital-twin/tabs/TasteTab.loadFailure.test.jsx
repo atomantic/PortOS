@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../../services/apiDigitalTwin.js', () => ({
@@ -79,5 +79,36 @@ describe('TasteTab failed reads stay distinct from empty ones (#12783)', () => {
     await user.click(await screen.findByRole('button', { name: /Movies/ }));
     expect(await screen.findByText(/No API-based provider configured/)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('TasteTab profile and next-question failures are errors, not empty or complete states', () => {
+  it('shows a retryable error instead of "0/N sections complete" when the profile read fails', async () => {
+    const user = userEvent.setup();
+    getTasteProfile.mockRejectedValueOnce(new Error('profile offline'));
+    render(<TasteTab />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load your taste profile — profile offline');
+    expect(screen.queryByText(/sections complete/)).not.toBeInTheDocument();
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/0\/1 sections complete/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a retryable error instead of the green "complete" banner when the next question read fails', async () => {
+    const user = userEvent.setup();
+    getTasteNextQuestion.mockRejectedValueOnce(new Error('question offline'));
+    render(<TasteTab />);
+
+    await user.click(await screen.findByRole('button', { name: /Movies/ }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load the next question — question offline');
+    expect(screen.queryByText(/All questions for this section are complete/)).not.toBeInTheDocument();
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(getTasteNextQuestion).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });

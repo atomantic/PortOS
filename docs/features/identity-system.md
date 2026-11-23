@@ -14,8 +14,8 @@ Four separate workstreams converge on the same vision: a personal digital twin t
 |-----------|--------------|----------|
 | **Genome** | Fully implemented: 23andMe upload, 117 curated SNP markers across 32 categories, ClinVar integration, epigenetic tracking | `server/services/genome.js`, `GenomeTab.jsx`, `data/meatspace/genome.json` |
 | **Chronotype** | Implemented: `deriveChronotype()` combines the 5 sleep/circadian markers (CLOCK rs1801260, DEC2 rs57875989, PER2 rs35333999, CRY1 rs2287161, MTNR1B rs10830963) with `daily_routines` enrichment and writes `chronotype.json` | `server/services/identity/chronotype.js`, `identity.test.js`, `data/digital-twin/chronotype.json` |
-| **Aesthetic Taste** | P2 complete: Taste questionnaire with 5 sections (movies, music, visual_art, architecture, food), conversational Q&A, AI summary generation. Enrichment categories also feed taste data from book/movie/music lists | `TasteTab.jsx`, `taste-questionnaire.js`, `data/digital-twin/taste-profile.json` |
-| **Goal Tracking** | Partially exists: `GOALS.md` for repository mission and `docs/GOALS_OPERATIONAL.md` for operational CoS goals, the user task queue for user tasks, `EXISTENTIAL.md` soul doc | `GOALS.md`, `docs/GOALS_OPERATIONAL.md`, `data/TASKS.md`, `data/digital-twin/EXISTENTIAL.md` |
+| **Aesthetic Taste** | P2 complete: Taste questionnaire with 7 sections (movies, music, visual_art, architecture, food, fashion, digital), conversational Q&A, AI summary generation. Enrichment categories also feed taste data from book/movie/music lists | `TasteTab.jsx`, `taste-questionnaire.js`, `data/digital-twin/taste-profile.json` |
+| **Goal Tracking** | Partially exists: `GOALS.md` for repository mission and `docs/GOALS_OPERATIONAL.md` for operational CoS goals, the user task queue for user tasks, `EXISTENTIAL.md` soul doc | `GOALS.md`, `docs/GOALS_OPERATIONAL.md`, PostgreSQL `cos_tasks` (`server/services/cos/cosTaskStore.js`), `data/digital-twin/EXISTENTIAL.md` |
 
 These should be unified under a single **Identity** architecture so the twin can reason across all dimensions (e.g., "your CLOCK gene says evening chronotype — schedule deep work after 8pm" or "given your longevity markers and age, here's how to prioritize your 10-year goals").
 
@@ -253,10 +253,11 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 
 ### Sub-routes for deep dives:
 - `/digital-twin/identity` -- Dashboard overview (above)
-- `/digital-twin/identity/chronotype` -- Full chronotype editor with schedule builder
-- `/digital-twin/identity/taste` -- Aesthetic questionnaire flow (section-by-section)
-- `/digital-twin/identity/goals` -- Goal CRUD with urgency visualization
+- `/digital-twin/taste` -- Aesthetic questionnaire flow (section-by-section); `/digital-twin/:tab` mounts this as the `taste` tab
+- `/digital-twin/goals` -- Goal tab in the Digital Twin page (goal CRUD lives under `/goals/:tab`)
 - `/meatspace/genome` -- Existing genome tab (unchanged)
+
+The planned `/digital-twin/identity/{chronotype,taste,goals}` sub-routes were never mounted; the chronotype editor is part of the `/digital-twin/identity` dashboard.
 
 ## Implementation Phases
 
@@ -271,7 +272,7 @@ The existing Digital Twin page at `/digital-twin/:tab` gets a new **Identity** t
 
 ### P2: Aesthetic Taste Questionnaire (complete)
 - Created `data/digital-twin/taste-profile.json` for structured taste preference storage
-- Created `server/services/taste-questionnaire.js` with 5 taste sections (movies, music, visual_art, architecture, food), each with core questions and branching follow-ups triggered by keyword detection
+- Created `server/services/taste-questionnaire.js` with 5 taste sections at the time (movies, music, visual_art, architecture, food; `fashion` and `digital` were added later, for 7 total), each with core questions and branching follow-ups triggered by keyword detection
 - Added 7 API routes under `/api/digital-twin/taste/*` (profile, sections, next question, answer, responses, summary, reset)
 - Built `TasteTab.jsx` conversational Q&A UI with section grid, question flow, review mode, and AI-powered summary generation
 - Responses persisted to taste-profile.json and appended to AESTHETICS.md for digital twin context
@@ -596,7 +597,7 @@ CoS injects identity context into agent briefings when relevant
 **Modified files:**
 - `client/src/components/digital-twin/constants.js` -- add Identity tab
 - `client/src/pages/DigitalTwin.jsx` -- add Identity tab rendering
-- `client/src/services/api.js` -- add identity API methods
+- `client/src/services/apiGoals.js` (chronotype/goals endpoints) and `client/src/services/apiDigitalTwin.js` (status, identity-image, taste endpoints) -- identity API methods (the planned `api.js` was never created)
 - `server/index.js` -- mount identity routes
 - `server/services/taste-questionnaire.js` -- add `generatePersonalizedTasteQuestion()` using identity context (P2.5)
 - `client/src/components/digital-twin/tabs/TasteTab.jsx` -- wire personalized question generation (P2.5)

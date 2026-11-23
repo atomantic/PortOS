@@ -25,7 +25,7 @@ import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 
-import { ENRICHMENT_CATEGORIES } from '../constants';
+import { ENRICHMENT_CATEGORIES, iconBadgeClasses } from '../constants';
 import ListEnrichment from '../ListEnrichment';
 import ScaleInput from '../ScaleInput';
 import { formatCount, formatDateNumeric } from '../../../utils/formatters';
@@ -314,8 +314,8 @@ export default function EnrichTab({ onRefresh }) {
             Back to categories
           </button>
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-lg bg-${categoryConfig?.color || 'blue'}-500/20`}>
-              <Icon className={`w-5 h-5 text-${categoryConfig?.color || 'blue'}-400`} />
+            <div className={`p-2.5 rounded-lg ${iconBadgeClasses(categoryConfig?.color || 'blue').bg}`}>
+              <Icon className={`w-5 h-5 ${iconBadgeClasses(categoryConfig?.color || 'blue').text}`} />
             </div>
             <h2 className="text-xl font-semibold text-white">{categoryConfig?.label}</h2>
           </div>
@@ -357,8 +357,8 @@ export default function EnrichTab({ onRefresh }) {
           </button>
 
           <div className="flex items-center gap-3 sm:gap-4">
-            <div className={`p-2.5 sm:p-3 rounded-lg bg-${categoryConfig?.color || 'blue'}-500/20 shrink-0`}>
-              <Icon className={`w-5 h-5 sm:w-6 sm:h-6 text-${categoryConfig?.color || 'blue'}-400`} />
+            <div className={`p-2.5 sm:p-3 rounded-lg ${iconBadgeClasses(categoryConfig?.color || 'blue').bg} shrink-0`}>
+              <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${iconBadgeClasses(categoryConfig?.color || 'blue').text}`} />
             </div>
             <div className="min-w-0">
               <h2 className="text-lg sm:text-xl font-bold text-white">{categoryConfig?.label}</h2>
@@ -522,8 +522,8 @@ export default function EnrichTab({ onRefresh }) {
               }`}
             >
               <div className="flex items-start justify-between mb-3">
-                <div className={`p-2 rounded-lg bg-${config.color}-500/20`}>
-                  <Icon className={`w-5 h-5 text-${config.color}-400`} />
+                <div className={`p-2 rounded-lg ${iconBadgeClasses(config.color).bg}`}>
+                  <Icon className={`w-5 h-5 ${iconBadgeClasses(config.color).text}`} />
                 </div>
                 {isComplete ? (
                   <Check className="w-5 h-5 text-port-success" />

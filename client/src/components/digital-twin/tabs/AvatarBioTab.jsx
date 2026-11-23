@@ -14,6 +14,7 @@ import {
 import { getAvatarBio, polishAvatarBio } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
 import { formatCount } from '../../../utils/formatters';
+import ListLoadError from '../../ui/ListLoadError';
 import BrailleSpinner from '../../BrailleSpinner';
 import useProviderModels from '../../../hooks/useProviderModels';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -61,6 +62,7 @@ export default function AvatarBioTab() {
 
   const [length, setLength] = useState('persona');
   const [bio, setBio] = useState(null);
+  const [bioError, setBioError] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const [polishing, setPolishing] = useState(false);
@@ -77,14 +79,18 @@ export default function AvatarBioTab() {
 
   const loadBio = useCallback(async (len, gen) => {
     setLoading(true);
+    setBioError(null);
     // The deterministic build owns its own error UI here; silence the helper toast.
-    const result = await getAvatarBio(len, { silent: true }).catch((err) => ({ error: err.message }));
+    const outcome = await getAvatarBio(len, { silent: true }).then(
+      (data) => ({ data }),
+      (err) => ({ err })
+    );
     if (!mountedRef.current || gen !== genRef.current) return; // superseded by a newer length
-    if (result?.error) {
-      toast.error(result.error);
+    if (outcome.err) {
       setBio(null);
+      setBioError(outcome.err);
     } else {
-      setBio(result);
+      setBio(outcome.data);
     }
     setLoading(false);
   }, []);
@@ -192,6 +198,10 @@ export default function AvatarBioTab() {
             </div>
           </div>
         </div>
+      )}
+
+      {bioError && !bio && (
+        <ListLoadError what="avatar bio draft" error={bioError} onRetry={() => loadBio(length, ++genRef.current)} />
       )}
 
       {/* Section cards */}

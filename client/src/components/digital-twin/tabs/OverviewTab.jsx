@@ -49,6 +49,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
   const [settingsForm, setSettingsForm] = useState(settings || {});
   const [saving, setSaving] = useState(false);
   const [completeness, setCompleteness] = useState(null);
+  const [completenessError, setCompletenessError] = useState(null);
   const [loadingCompleteness, setLoadingCompleteness] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [contradictions, setContradictions] = useState(null);
@@ -104,8 +105,13 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
   const loadCompleteness = async () => {
     setLoadingCompleteness(true);
-    const data = await getDigitalTwinCompleteness().catch(() => null);
-    setCompleteness(data);
+    setCompletenessError(null);
+    try {
+      setCompleteness(await getDigitalTwinCompleteness({ silent: true }));
+    } catch (err) {
+      setCompleteness(null);
+      setCompletenessError(err);
+    }
     setLoadingCompleteness(false);
   };
 
@@ -452,8 +458,10 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               </div>
             )}
           </div>
+        ) : completenessError ? (
+          <ListLoadError what="completeness analysis" error={completenessError} onRetry={loadCompleteness} />
         ) : (
-          <div className="text-gray-500">Unable to analyze completeness</div>
+          <div className="text-gray-500">No completeness data yet</div>
         )}
       </div>
 

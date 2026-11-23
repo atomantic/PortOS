@@ -234,6 +234,27 @@ export const MULTI_TURN_STATUS = {
   }
 };
 
+// Icon badge class strings. Tailwind v4 only emits classes it finds as literal
+// strings in source, so a runtime `bg-${color}-500/20` renders transparent. Every
+// color name used by a digital-twin badge must appear here verbatim.
+export const ICON_BADGE_CLASSES = {
+  amber: { bg: 'bg-amber-500/20', text: 'text-amber-400' },
+  blue: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
+  cyan: { bg: 'bg-cyan-500/20', text: 'text-cyan-400' },
+  emerald: { bg: 'bg-emerald-500/20', text: 'text-emerald-400' },
+  green: { bg: 'bg-green-500/20', text: 'text-green-400' },
+  indigo: { bg: 'bg-indigo-500/20', text: 'text-indigo-400' },
+  orange: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
+  pink: { bg: 'bg-pink-500/20', text: 'text-pink-400' },
+  purple: { bg: 'bg-purple-500/20', text: 'text-purple-400' },
+  red: { bg: 'bg-red-500/20', text: 'text-red-400' },
+  rose: { bg: 'bg-rose-500/20', text: 'text-rose-400' },
+  sky: { bg: 'bg-sky-500/20', text: 'text-sky-400' },
+  violet: { bg: 'bg-violet-500/20', text: 'text-violet-400' },
+};
+
+export const iconBadgeClasses = (color) => ICON_BADGE_CLASSES[color] ?? ICON_BADGE_CLASSES.blue;
+
 // Enrichment category configurations
 export const ENRICHMENT_CATEGORIES = {
   core_memories: {
