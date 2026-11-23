@@ -138,8 +138,7 @@ import { recoverInterruptedRepoClones, recoverStuckClassifications } from './bra
 import { recoverStuckAnalyses } from './writersRoom/analysisSnapshots.js';
 import { recoverStuckGeneratingStages, recoverStuckAutoRuns, recoverStuckAutopilots } from './pipeline/recovery.js';
 import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
-import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
-import { recoverStuckMusicVideoExcerpts } from './musicVideo/excerptRender.js';
+import { requireMusicVideoRecovery } from './bootHookRegistry.js';
 import { recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
 import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
@@ -509,8 +508,10 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   recoverStuckGeneratingStages().catch(err => logBootstrapFailure('❌ Pipeline text-stage recovery failed', err));
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
-  recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
-  recoverStuckMusicVideoExcerpts().catch(err => logBootstrapFailure('❌ Music Video excerpt recovery failed', err));
+  // Registered in registerBootHooks() above. The render pipeline is not a static boot import (#17692).
+  const musicVideoRecovery = requireMusicVideoRecovery();
+  musicVideoRecovery.recoverRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
+  musicVideoRecovery.recoverExcerpts().catch(err => logBootstrapFailure('❌ Music Video excerpt recovery failed', err));
   // A provider child cannot survive a server restart. Make interrupted
   // Three.js generations retryable; this is state recovery only, never a
   // cold-bootstrap provider call.

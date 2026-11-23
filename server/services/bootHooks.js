@@ -10,9 +10,9 @@
  * `bootstrapServices()` calls `registerBootHooks()` before it initializes any
  * consumer (the CoS daemon, the media queue, or the routes that serve git
  * cleanup). A suite that runs one of those consumers calls it too, or registers
- * doubles in the leaf directly. Loaders stay lazy so the boot closure is unchanged.
+ * doubles in the leaf directly. Loaders stay lazy so their targets stay off the static boot closure.
  */
-import { registerCosOrphanRecoveryHandlers, registerMediaRuntimeModules, registerMergedBranchCleanup } from './bootHookRegistry.js';
+import { registerCosOrphanRecoveryHandlers, registerMediaRuntimeModules, registerMergedBranchCleanup, registerMusicVideoRecovery } from './bootHookRegistry.js';
 
 const agentManagement = () => import('./agent/agentManagement.js');
 
@@ -28,5 +28,11 @@ export function registerBootHooks() {
     stitch: () => import('./videoGen/stitchJob.js'),
     vertical: () => import('./videoGen/verticalJob.js'),
     training: () => import('./loraTraining/index.js'),
+  });
+  // Render and excerpt recovery are boot-only. The modules stay off the static
+  // boot closure so a leaf split in that pipeline does not saturate the cap (#17692).
+  registerMusicVideoRecovery({
+    recoverRenders: () => import('./musicVideo/render.js').then(m => m.recoverStuckMusicVideoRenders()),
+    recoverExcerpts: () => import('./musicVideo/excerptRender.js').then(m => m.recoverStuckMusicVideoExcerpts()),
   });
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const calls = vi.hoisted(() => ({ cleanupOrphanedAgents: vi.fn(async () => 2), handleOrphanedTask: vi.fn(async () => ({})), cleanupMerged: vi.fn(async () => ({ cleaned: ['b'], skipped: [] })) }));
+const calls = vi.hoisted(() => ({
+  cleanupOrphanedAgents: vi.fn(async () => 2),
+  handleOrphanedTask: vi.fn(async () => ({})),
+  cleanupMerged: vi.fn(async () => ({ cleaned: ['b'], skipped: [] })),
+  recoverRenders: vi.fn(async () => undefined),
+  recoverExcerpts: vi.fn(async () => undefined),
+}));
 vi.mock('./agent/agentManagement.js', () => ({
   cleanupOrphanedAgents: (...args) => calls.cleanupOrphanedAgents(...args),
   handleOrphanedTask: (...args) => calls.handleOrphanedTask(...args),
@@ -11,13 +17,15 @@ vi.mock('./videoGen/upscaleJob.js', () => ({ runVideoUpscale: () => 'ltx' }));
 vi.mock('./videoGen/stitchJob.js', () => ({ runVideoStitch: () => 'stitch' }));
 vi.mock('./videoGen/verticalJob.js', () => ({ runVideoVertical: () => 'vertical' }));
 vi.mock('./loraTraining/index.js', () => ({ runTraining: () => 'training' }));
+vi.mock('./musicVideo/render.js', () => ({ recoverStuckMusicVideoRenders: () => calls.recoverRenders() }));
+vi.mock('./musicVideo/excerptRender.js', () => ({ recoverStuckMusicVideoExcerpts: () => calls.recoverExcerpts() }));
 
 // The entry point the queue's runtime table invokes for each registered name.
 const ENTRY = { topazUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical', training: 'runTraining' };
 
 import { registerBootHooks } from './bootHooks.js';
 import {
-  QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule, registerMediaRuntimeModules, requireCosOrphanRecoveryHandlers, requireMergedBranchCleanup,
+  QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule, registerMediaRuntimeModules, requireCosOrphanRecoveryHandlers, requireMergedBranchCleanup, requireMusicVideoRecovery,
 } from './bootHookRegistry.js';
 
 describe('boot hook registration (#17499)', () => {
@@ -25,6 +33,7 @@ describe('boot hook registration (#17499)', () => {
   it('fails visibly before boot and routes every consumer to its owning module after', async () => {
     expect(() => requireCosOrphanRecoveryHandlers()).toThrow(/not registered/);
     expect(() => requireMergedBranchCleanup()).toThrow(/not registered/);
+    expect(() => requireMusicVideoRecovery()).toThrow(/not registered/);
     await expect(loadMediaRuntimeModule('training')).rejects.toThrow(/not registered/);
 
     registerBootHooks();
@@ -37,6 +46,11 @@ describe('boot hook registration (#17499)', () => {
     await expect(requireMergedBranchCleanup()('/repo', 'sha', [{ branch: 'b' }], { appId: 'app-1' }))
       .resolves.toEqual({ cleaned: ['b'], skipped: [] });
     expect(calls.cleanupMerged).toHaveBeenCalledWith('/repo', 'sha', [{ branch: 'b' }], { appId: 'app-1' });
+
+    await expect(requireMusicVideoRecovery().recoverRenders()).resolves.toBeUndefined();
+    await expect(requireMusicVideoRecovery().recoverExcerpts()).resolves.toBeUndefined();
+    expect(calls.recoverRenders).toHaveBeenCalledOnce();
+    expect(calls.recoverExcerpts).toHaveBeenCalledOnce();
 
     const runtimes = await Promise.all(QUEUE_IMPORTING_RUNTIMES.map(async name => [name, (await loadMediaRuntimeModule(name))[ENTRY[name]]()]));
     expect(Object.fromEntries(runtimes)).toEqual({ topazUpscale: 'topaz', ltxUpscale: 'ltx', stitch: 'stitch', vertical: 'vertical', training: 'training' });
