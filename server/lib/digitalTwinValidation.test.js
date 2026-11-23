@@ -7,10 +7,43 @@ import {
   setActivePersonaInputSchema,
   personaTraitAdjustmentsSchema,
   personaSchema,
+  digitalTwinMetaSchema,
   digitalTwinSettingsSchema,
   testHistoryEntrySchema,
   valuesTestHistoryEntrySchema
 } from './digitalTwinValidation.js';
+
+describe('digitalTwinMetaSchema', () => {
+  it('accepts partial persisted metadata and preserves additive fields', () => {
+    const meta = {
+      documents: [{ id: 'example', filename: 'EXAMPLE.md', title: 'Example', category: 'core', version: null }],
+      enrichment: {
+        questionsAnswered: { favorite_books: 1 },
+        listItems: { favorite_books: [{ title: 'Example book', note: 'Worth revisiting' }] },
+        futureProgress: { skipped: [] }
+      },
+      confidence: { overall: 0.5, dimensions: { openness: 0.5 }, gaps: [] },
+      traits: {
+        bigFive: { O: 0.7 },
+        communicationProfile: { formality: 4 },
+        futureTraits: ['example']
+      },
+      futureMeta: { revision: 2 }
+    };
+
+    const parsed = digitalTwinMetaSchema.safeParse(meta);
+    expect(parsed).toMatchObject({ success: true, data: meta });
+  });
+
+  it.each([
+    { enrichment: { questionsAnswered: { favorite_books: -1 } } },
+    { enrichment: { listItems: { favorite_books: [{ title: '' }] } } },
+    { confidence: { overall: 0.5, dimensions: { openness: 2 }, gaps: [] } },
+    { traits: { communicationProfile: { formality: 0 } } }
+  ])('validates values in partial records and profiles (%j)', meta => {
+    expect(digitalTwinMetaSchema.safeParse(meta).success).toBe(false);
+  });
+});
 
 // Regression guard: the client API wrappers default `testIds` to `null` for a
 // "run all tests" request. A bare `.optional()` rejects null and would 400
