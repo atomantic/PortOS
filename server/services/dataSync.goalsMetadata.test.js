@@ -47,6 +47,15 @@ beforeEach(async () => {
 });
 
 describe('dataSync goals — metadata LWW on the document clock', () => {
+  it('applies a newer explicit null clear and never resurrects it from an older peer', async () => {
+    const cleared = { birthDate: '1990-01-01', lifeExpectancy: null, timeHorizons: null, goals: [], updatedAt: '2026-02-10T00:00:00.000Z' };
+    await dataSync.applyRemote('goals', cleared);
+    expect(await readLocal()).toMatchObject({ lifeExpectancy: null, timeHorizons: null, updatedAt: cleared.updatedAt });
+
+    await dataSync.applyRemote('goals', { ...OLD_META, goals: [], updatedAt: '2026-01-10T00:00:00.000Z' });
+    expect(await readLocal()).toMatchObject({ lifeExpectancy: null, timeHorizons: null });
+  });
+
   it('applies a newer metadata-only snapshot when both goal arrays are empty, carries its clock, and a replay is a no-op', async () => {
     const remote = { ...NEW_META, goals: [], updatedAt: '2026-02-10T00:00:00.000Z' };
 

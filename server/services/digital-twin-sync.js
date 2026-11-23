@@ -167,6 +167,12 @@ function chronotypeObservedHasSignal(rec) {
 function signalAwareLWW(local, remote, hasSignal, timestampField) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
   if (!isPlainObject(local)) return { merged: remote, changed: true };
+  // An explicit genetics erasure newer than the counterpart's derivation beats
+  // signal; absent the stamp the idle-peer protection below is unchanged.
+  const clearedBeats = (cleared, other) =>
+    Boolean(cleared.geneticsClearedAt) && compareNewerWins(cleared.geneticsClearedAt, other[timestampField]);
+  if (clearedBeats(remote, local)) return { merged: remote, changed: true };
+  if (clearedBeats(local, remote)) return { merged: local, changed: false };
   const localHasSignal = hasSignal(local);
   const remoteHasSignal = hasSignal(remote);
   const remoteWins = localHasSignal === remoteHasSignal

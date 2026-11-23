@@ -436,6 +436,8 @@ export async function deleteGenome() {
     await mutateGoals(goals => {
       goals.lifeExpectancy = null;
       goals.timeHorizons = null;
+      // Advance the document clock so the explicit clears win a peer's LWW merge.
+      goals.updatedAt = new Date().toISOString();
       return goals;
     }, { localOnly: true });
     await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
