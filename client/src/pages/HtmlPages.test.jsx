@@ -27,20 +27,35 @@ vi.mock('../components/htmlPages/HtmlPreviewFrame', () => ({
   default: ({ html, title }) => <div data-testid="frame" aria-label={title}>{html ? 'page' : 'empty'}</div>,
 }));
 
-// The real picker and its provider fetch are covered by their own suites; here a provider is one tap.
+// The real picker and its provider fetch are covered by their own suites; here it is two plain selects over what the page hands it.
 vi.mock('../hooks/useProviderModels', async () => {
   const { useState } = await import('react');
   return {
     default: () => {
-      const [selectedProviderId, setSelectedProviderId] = useState('');
+      const [selectedProviderId, setProviderId] = useState('');
       const [selectedModel, setSelectedModel] = useState('');
-      return { providers: [], loading: false, selectedProviderId, selectedModel, availableModels: [], setSelectedProviderId, setSelectedModel };
+      const setSelectedProviderId = (id) => { setProviderId(id); setSelectedModel(id ? 'example-model' : ''); };
+      const availableModels = selectedProviderId ? ['example-model'] : [];
+      return { providers: [{ id: 'example-cli', name: 'Example CLI' }], loading: false, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel };
     },
   };
 });
 vi.mock('../components/ProviderModelSelector', () => ({
-  default: ({ label, onProviderChange, onModelChange, onEffortChange }) => (
-    <button type="button" onClick={() => { onProviderChange('example-cli'); onModelChange('example-model'); onEffortChange('high'); }}>{`Pick ${label}`}</button>
+  default: ({ providers, selectedProviderId, selectedModel, availableModels, onProviderChange, onModelChange, onEffortChange, label, modelLabel }) => (
+    <div>
+      <label>{label}
+        <select value={selectedProviderId} onChange={(e) => onProviderChange(e.target.value)}>
+          <option value="">—</option>
+          {providers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </label>
+      <label>{modelLabel}
+        <select value={selectedModel} onChange={(e) => onModelChange(e.target.value)}>
+          {availableModels.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </label>
+      <button type="button" onClick={() => onEffortChange('high')}>{`High effort for ${label}`}</button>
+    </div>
   ),
 }));
 
@@ -92,15 +107,21 @@ describe('HtmlPages', () => {
     expect(screen.queryByText(/not running/)).not.toBeInTheDocument();
   });
 
-  it('sends the briefs exactly as typed, one run per chosen model, and only on submit', async () => {
+  it('runs installed models picked in the shared picker, sending the briefs exactly as typed and only on submit', async () => {
     startHtmlPageRuns.mockResolvedValue([run('n1', 'example-a:7b', { status: 'queued' }), run('n2', 'example-b:7b', { status: 'queued' })]);
     renderPage();
-    await screen.findByText('Run a comparison');
+    await screen.findByText('Models');
     expect(startHtmlPageRuns).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Pick a model to run/ })).toBeDisabled();
 
-    expect(screen.getByRole('button', { name: /Select models to run/ })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('example-a:7b'));
-    fireEvent.click(screen.getByLabelText('example-b:7b'));
+    // Installed models are offered per runtime beside the configured providers, with no separate checkbox list.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'installed:ollama' } });
+    expect(screen.getByLabelText('Model 1')).toHaveValue('example-a:7b');
+    fireEvent.click(screen.getByRole('button', { name: 'Add a model' }));
+    fireEvent.change(screen.getByLabelText('Provider 2'), { target: { value: 'installed:ollama' } });
+    fireEvent.change(screen.getByLabelText('Model 2'), { target: { value: 'example-b:7b' } });
+
     fireEvent.change(screen.getByLabelText('Page 1'), { target: { value: '  A lighthouse at dusk\nwith a sweeping beam  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Remove page 3' }));
     fireEvent.click(screen.getByRole('button', { name: 'Run 2 models × 2 pages' }));
@@ -114,23 +135,32 @@ describe('HtmlPages', () => {
     expect(await screen.findAllByText('Queued')).toHaveLength(2);
   });
 
-  it('runs a provider, model and effort picked in the form alongside local models', async () => {
+  it('runs a provider, model and effort alongside an installed model, and blocks the same pick twice', async () => {
     startHtmlPageRuns.mockImplementation(async (body) => body.routes.map((r, i) => run(`route-${i}`, r.model, { status: 'queued', backend: 'provider', route: { ...r, providerName: 'Example CLI' } })));
     renderPage();
-    await screen.findByText('Run a comparison');
-    fireEvent.click(screen.getByRole('button', { name: /Add a provider, model and effort/ }));
-    // A row with no provider picked yet is not a target.
-    expect(screen.getByRole('button', { name: /Select models to run/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Pick Provider 1' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Run 1 model × 3 pages' }));
+    await screen.findByText('Models');
+    fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'example-cli' } });
+    fireEvent.click(screen.getByRole('button', { name: 'High effort for Provider 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a model' }));
+    fireEvent.change(screen.getByLabelText('Provider 2'), { target: { value: 'installed:ollama' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add a model' }));
+    fireEvent.change(screen.getByLabelText('Provider 3'), { target: { value: 'installed:ollama' } });
+    expect(screen.getByText('Already picked above.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run 3 models × 3 pages' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove model 3' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run 2 models × 3 pages' }));
     await waitFor(() => expect(startHtmlPageRuns).toHaveBeenCalledTimes(1));
-    expect(startHtmlPageRuns.mock.calls[0][0]).toMatchObject({ models: [], routes: [{ providerId: 'example-cli', model: 'example-model', effort: 'high' }] });
+    expect(startHtmlPageRuns.mock.calls[0][0]).toMatchObject({
+      models: [{ backend: 'ollama', modelId: 'example-a:7b' }],
+      routes: [{ providerId: 'example-cli', model: 'example-model', effort: 'high' }],
+    });
     expect(await screen.findByText(/Example CLI · high/)).toBeInTheDocument();
   });
 
   it('shows the fixed PortOS text and the full prompt built from the brief being typed', async () => {
     renderPage();
-    await screen.findByText('Run a comparison');
+    await screen.findByText('Models');
     fireEvent.change(screen.getByLabelText('Page 1'), { target: { value: 'A lighthouse' } });
     fireEvent.click(screen.getByText('Show the full prompt for each page'));
     const full = 'Create one standalone HTML file.\n\nA lighthouse\n\nRules:\n- Everything inline.';
@@ -142,8 +172,8 @@ describe('HtmlPages', () => {
 
   it('blocks a blank or over-long brief instead of altering it, and shows the count', async () => {
     renderPage();
-    await screen.findByText('Run a comparison');
-    fireEvent.click(screen.getByLabelText('example-a:7b'));
+    await screen.findByText('Models');
+    fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'installed:ollama' } });
     const submit = screen.getByRole('button', { name: /Run 1 model/ });
     expect(submit).toBeEnabled();
 
@@ -159,7 +189,7 @@ describe('HtmlPages', () => {
 
   it('adds pages up to the cap and starts from the defaults again on reset', async () => {
     renderPage();
-    await screen.findByText('Run a comparison');
+    await screen.findByText('Models');
     fireEvent.click(screen.getByRole('button', { name: 'Add a page' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add a page' }));
     expect(screen.queryByRole('button', { name: 'Add a page' })).not.toBeInTheDocument();
