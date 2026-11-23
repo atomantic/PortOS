@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 const { request } = await import('../lib/testHelper.js');
 
+// Shrink the upload cap so an oversized clone body fits express.json's default limit.
+vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
 
 // Mock all voice service modules before importing the router so the route
@@ -178,6 +180,21 @@ describe('Voice Routes', () => {
         instructions: 'warm low alto', seed: 42,
       }));
       expect(res.body.profile.kind).toBe('designed');
+    });
+
+    it('rejects an oversized clone upload with 413 FILE_TOO_LARGE and a readable message', async () => {
+      const res = await request(buildApp()).post('/api/voice/profiles/clone').send({
+        universeId: 'uni-1',
+        characterId: 'char-1',
+        filename: 'reference.wav',
+        audioBase64: Buffer.alloc(64).toString('base64'),
+        transcript: 'sample transcript',
+        performerConsentConfirmed: true,
+      });
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('FILE_TOO_LARGE');
+      expect(res.body.error).toMatch(/exceeds maximum size limit of 8 bytes/);
+      expect(voiceProfiles.createClonedVoiceCandidate).not.toHaveBeenCalled();
     });
 
     it('creates a consented clone candidate profile with verified performer consent', async () => {
