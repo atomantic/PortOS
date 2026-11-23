@@ -1,5 +1,5 @@
 /**
- * HTML Pages bench API: installed models to pick from, queueing runs of the fixed creative brief, and reading or deleting stored runs.
+ * HTML Pages bench API: installed models to pick from, queueing runs of the fixed creative brief, and reading, resuming or deleting stored runs.
  */
 
 import { request } from './apiCore.js';
@@ -13,6 +13,10 @@ export const getHtmlPageRun = (id, options) => request(`/html-pages/runs/${encod
 
 export const startHtmlPageRuns = (payload, options) =>
   request('/html-pages/runs', { method: 'POST', body: JSON.stringify(payload), ...options });
+
+// Re-queues a failed run from its first unfinished page.
+export const resumeHtmlPageRun = (id, options) =>
+  request(`/html-pages/runs/${encodeURIComponent(id)}/resume`, { method: 'POST', ...options });
 
 export const deleteHtmlPageRun = (id, options) =>
   request(`/html-pages/runs/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });

@@ -490,8 +490,8 @@ async function main() {
     ? browserOwnerExcludes().map(path => `server/${path}`) : []);
   const dbExcludes = new Set(scope === 'server'
     ? resolveDbTestFiles(inputFiles) : []);
-  const profileFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
+  const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
+  const profileFiles = profile !== undefined ? browserTestProfileFiles(profile, inputFiles) : inputFiles;
   const repoFiles = profileFiles.filter(path => !browserExcludes.has(path) && !dbExcludes.has(path));
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(workspace, path));
@@ -507,7 +507,6 @@ async function main() {
   }
 
   if (mode === 'files' && selectedFiles.length === 0) {
-    const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
     const deferredOnly = profile === 'smoke' && inputFiles.length > 0
       && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
@@ -540,10 +539,10 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   const caseFilter = browserProfileArgs();
-  const acceptVerdictsFrom = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserProfileAcceptedVerdicts(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const acceptVerdictsFrom = profile !== undefined ? browserProfileAcceptedVerdicts(profile) : [];
   const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
-    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
+    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser'
+      ? { shardSlice: (files, shard) => browserShardSlice(files, shard, profile) } : {}),
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));

@@ -346,6 +346,11 @@ Every other key line (file bytes, records, packages, tools, Node, platform,
 arch and other env values) stays this run's own, and entries are still written
 under the run's own key only.
 
+Smoke uses its own stable two-shard assignment before the runner checks memo
+entries. The smoke jobs restore and merge both trusted full-run browser shard
+lineages, so a suite that moves can still reuse its former owner's verdict.
+Full-profile jobs keep their per-partition restore and save behavior.
+
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.

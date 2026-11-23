@@ -38,19 +38,27 @@ const BROWSER_SUITE_OWNERS = {
 };
 export const BROWSER_SUITES = Object.keys(BROWSER_SUITE_OWNERS);
 
+// Smoke omits rich authoring on shard 2 and some document-render cases.
+// Moving the serial GPU suite (82s on smoke run 45081031945) splits it from
+// the 106s animatic capture. Leave the full-profile owners intact.
+const SMOKE_SUITE_OWNERS = {
+  'server/lib/filmLookGpu.browser.test.js': 2,
+};
+
 /**
  * Assign from the complete registry so a scoped selection or a memo hit cannot
  * move a suite to another runner. A one-shard plan uses the whole selection.
  */
-export function browserShardSlice(files, { index, count }) {
+export function browserShardSlice(files, { index, count }, profile) {
   if (!Number.isInteger(index) || !Number.isInteger(count) || count < 1 || index < 1 || index > count) {
     throw new Error('Invalid browser shard');
   }
   const selected = new Set(files);
   const unknown = [...selected].filter(file => !BROWSER_SUITES.includes(file));
   if (unknown.length) throw new Error(`Unregistered browser shard inputs: ${unknown.join(', ')}`);
+  const overrides = profile === 'smoke' ? SMOKE_SUITE_OWNERS : {};
   return BROWSER_SUITES.filter((file, position) => {
-    const owner = count === 2 ? BROWSER_SUITE_OWNERS[file] : (position % count) + 1;
+    const owner = count === 2 ? (overrides[file] ?? BROWSER_SUITE_OWNERS[file]) : (position % count) + 1;
     return owner === index && selected.has(file);
   });
 }

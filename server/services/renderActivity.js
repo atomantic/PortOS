@@ -1,8 +1,8 @@
 /**
  * Renders this process is running outside the media job queue: music-video
  * final renders, draft excerpts and single-shot renders, video timeline
- * renders, publishing-kit builds and Code Animation production runs. Each runs
- * its own ffmpeg, browsers or Blender, so the system idle verdict
+ * renders, publishing-kit builds, Code Animation production runs and HTML Pages
+ * bench runs. Each runs its own ffmpeg, browsers, Blender or local model, so the system idle verdict
  * (lib/systemIdle.js), the update preflight and Live activity read them here;
  * without this, the unattended updater restarted the server through a final
  * render.

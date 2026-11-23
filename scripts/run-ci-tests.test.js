@@ -33,6 +33,7 @@ import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestS
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { getAlwaysRunTests } from './ci-test-plan.js';
 import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
+import { mergeTestMemoDirs } from './merge-test-memo.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
 // Actions annotation. Duration/summary tests retain real I/O.
@@ -427,14 +428,19 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     const animaticOwner = owner('services/musicVideo/animaticCapture.browser.test.js');
     expect(animaticOwner).toBe(owner('services/musicVideo/documentTemplateParity.browser.test.js'));
     expect(animaticOwner).not.toBe(owner('routes/musicVideoRichAuthoring.browser.test.js'));
-    for (const [index, files] of selections.smoke.entries()) for (const file of files) expect(owner(file)).toBe(index);
+    const gpu = 'lib/filmLookGpu.browser.test.js';
+    expect(owner(gpu)).toBe(0);
+    expect(selections.smoke[1]).toContain(gpu);
+    expect(selections.smoke[0]).toContain('services/musicVideo/animaticCapture.browser.test.js');
     // A scoped list must retain the canonical owners rather than re-numbering
     // its entries. Memo entries in only one shard must not move another file.
-    const subset = BROWSER_SUITES.filter(file => /documentRender|htmlComposition|RichAuthoring/.test(file));
-    for (const index of [1, 2]) {
-      const scoped = run(index, { files: subset });
-      expect(scoped.status, scoped.stderr).toBe(0);
-      expect(scoped.reported.selection.include).toEqual(selections.full[index - 1].filter(file => subset.includes(`server/${file}`)));
+    const subset = BROWSER_SUITES.filter(file => /documentRender|filmLookGpu|htmlComposition|RichAuthoring/.test(file));
+    for (const [profile, slices] of Object.entries(selections)) {
+      for (const index of [1, 2]) {
+        const scoped = run(index, { files: subset, profile });
+        expect(scoped.status, scoped.stderr).toBe(0);
+        expect(scoped.reported.selection.include).toEqual(slices[index - 1].filter(file => subset.includes(`server/${file}`)));
+      }
     }
     // Vitest records nothing for a name-filtered run unless each file has a record to merge
     // into (#16545): a recording run seeds one per file and project, and no other run does.
@@ -468,9 +474,28 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     expect(reused.status, reused.stderr).toBe(0);
     expect(reused.stdout).toContain(`skipped ${firstCount} of ${firstCount} selected files`);
     expect(reused.reported).toBeNull();
-    const fresh = run(2, { memo: join(fixture, 'empty-second-shard-memo') });
+    const secondMemo = join(fixture, 'second-shard-memo');
+    const fresh = run(2, { memo: secondMemo });
     expect(fresh.status, fresh.stderr).toBe(0);
     expect(fresh.reported.selection.include).toEqual(selections.full[1]);
+    const smoke = { profile: 'smoke', event: 'pull_request' };
+    const withoutFormerOwner = run(2, { ...smoke, memo: secondMemo });
+    expect(withoutFormerOwner.status, withoutFormerOwner.stderr).toBe(0);
+    expect(withoutFormerOwner.reported.selection.include).toEqual([gpu]);
+    expect(withoutFormerOwner.reported.args).not.toContain('--experimental.recordDependencies');
+
+    const mergedMemo = join(fixture, 'merged-memo');
+    expect(mergeTestMemoDirs(mergedMemo, [memo, secondMemo]).sources).toBe(2);
+    const withFormerOwner = run(2, { ...smoke, memo: mergedMemo });
+    expect(withFormerOwner.status, withFormerOwner.stderr).toBe(0);
+    const smokeCount = selections.smoke[1].length;
+    expect(withFormerOwner.stdout).toContain(`skipped ${smokeCount} of ${smokeCount} selected files`);
+    expect(withFormerOwner.reported).toBeNull();
+
+    writeFileSync(join(root, 'server', gpu), 'export const changed = true;\n');
+    const changedInputs = run(2, { ...smoke, memo: mergedMemo });
+    expect(changedInputs.status, changedInputs.stderr).toBe(0);
+    expect(changedInputs.reported.selection.include).toEqual([gpu]);
     const mixed = run(1, { files: [...BROWSER_SUITES, 'server/lib/example.test.js'] });
     expect(mixed.status).not.toBe(0);
     expect(mixed.stderr).toContain('Unregistered browser shard inputs');

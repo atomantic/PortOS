@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Check, GalleryVertical, LoaderCircle, Play, Plus, Trash2, X } from 'lucide-react';
+import { Check, GalleryVertical, LoaderCircle, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
@@ -9,7 +9,7 @@ import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
 import HtmlPreviewFrame from '../components/htmlPages/HtmlPreviewFrame';
 import toast from '../components/ui/Toast';
-import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, startHtmlPageRuns } from '../services/apiHtmlPages.js';
+import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
 import { formatDurationMs, timeAgo } from '../utils/formatters';
 
 const RUN_EVENTS = ['html-page-run:changed'];
@@ -185,8 +185,14 @@ function RunForm({ catalog, onStarted }) {
   );
 }
 
-function RunCard({ run, selected, compareFull, onToggle, onDelete }) {
+function RunCard({ run, selected, compareFull, onToggle, onDelete, onResume }) {
   const [confirming, setConfirming] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const resume = async () => {
+    setResuming(true);
+    await onResume(run.id);
+    setResuming(false);
+  };
   return (
     <li className={`flex flex-col gap-2 rounded-xl border bg-port-card p-3 ${selected ? 'border-port-accent' : 'border-port-border'}`}>
       <div className="flex items-start justify-between gap-2">
@@ -206,6 +212,11 @@ function RunCard({ run, selected, compareFull, onToggle, onDelete }) {
         <button type="button" onClick={() => onToggle(run.id)} disabled={!selected && compareFull} aria-pressed={selected} className={`min-h-[44px] rounded border px-3 text-xs ${selected ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-300 hover:border-port-accent'} disabled:opacity-40`}>
           {selected ? 'In comparison' : 'Compare'}
         </button>
+        {run.status === 'failed' && (
+          <button type="button" onClick={resume} disabled={resuming} aria-label={`Resume the ${run.modelId} run`} className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent px-3 text-xs text-white hover:bg-port-accent/10 disabled:opacity-40">
+            <RotateCcw size={13} aria-hidden="true" /> Resume
+          </button>
+        )}
         {confirming ? (
           <>
             <button type="button" onClick={() => onDelete(run.id)} className="min-h-[44px] rounded border border-port-error px-3 text-xs text-port-error">Delete run</button>
@@ -308,6 +319,12 @@ export default function HtmlPages() {
     if (compareIds.includes(id)) setCompare(compareIds.filter((x) => x !== id));
   };
 
+  // Keeps the pages the run already finished and asks only for the rest, with the prompts it recorded.
+  const resume = async (id) => {
+    const queued = await resumeHtmlPageRun(id, { silent: true }).catch((err) => { toast.error(err?.message || 'Could not resume that run'); return null; });
+    if (queued) updateData((prev) => (prev || []).map((r) => (r.id === id ? queued : r)));
+  };
+
   const started = (created) => {
     updateData((prev) => [...created, ...(prev || [])]);
     toast.success(`Queued ${created.length} run${created.length === 1 ? '' : 's'}`);
@@ -340,7 +357,7 @@ export default function HtmlPages() {
           {!error && runs && runs.length > 0 && (
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {runs.map((run) => (
-                <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} />
+                <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} onResume={resume} />
               ))}
             </ul>
           )}

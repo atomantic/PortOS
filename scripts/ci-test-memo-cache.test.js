@@ -56,19 +56,35 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(save).toContain("github.event_name != 'pull_request'");
   });
 
-  // Related selection needs the memo records from each distinct full-run shard.
-  it.each(['server', 'client'])('restores and merges each full-run %s shard lineage once', (family) => {
-    const count = FULL_SUITE_SHARDS[family];
-    // The expanded job inlines the merge-shards expression; scoped plans (any
-    // mode but 'full') evaluate it to the shard count, which is the
-    // configuration these assertions model.
-    const mergeExpression = `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
-    expect(jobs[family]).toContain(mergeExpression);
-    const job = jobs[family].replaceAll(`\${{ ${mergeExpression} }}`, String(count));
+  // Related selection and smoke browser ownership both need sibling records.
+  it.each([
+    ['server', FULL_SUITE_SHARDS.server],
+    ['client', FULL_SUITE_SHARDS.client],
+    ['browser', 2],
+  ])('restores and merges each full-run %s shard lineage once', (family, count) => {
+    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0'";
+    const mergeExpression = family === 'browser'
+      ? mergeBrowserShards
+      : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
+    const mergeInput = `\${{ ${mergeExpression} }}`;
+    const rawJob = jobs[family];
+    // Exercise the composite with every explicit sibling restore disabled.
+    const noMergeJob = rawJob.replaceAll('inputs.merge-shards', "'0'");
+    expect(step(noMergeJob, "Park the job's own restore")).toContain("if: fromJSON('0') >= 1");
+    expect(step(noMergeJob, 'Merge the full-run shard lineages')).toContain("if: fromJSON('0') >= 1");
+    const job = rawJob.replaceAll(mergeInput, String(count));
     const save = step(job, 'Save the test memo');
-    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: \\$\\{\\{ fromJSON\\(needs\\.impact\\.outputs\\.plan\\)\\.${family}_mode == 'full' && '0' \\|\\| '${count}' \\}\\}\\n`));
-    // Full sharded runs restore only their own lineage; scoped plans keep the merge.
-    expect(ciYml).not.toMatch(/merge-shards: [23]\n/);
+    if (family === 'browser') {
+      const invocation = step(rawJob, 'Restore the test memo');
+      expect(invocation).toContain('suite: browser\n');
+      expect(invocation).toContain(`merge-shards: \${{ ${mergeBrowserShards} }}\n`);
+      expect(save).toContain("steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    } else {
+      const invocation = step(rawJob, 'Restore the test memo');
+      expect(invocation).toContain(`suite: ${family}\n`);
+      expect(invocation).toContain(`merge-shards: ${mergeInput}\n`);
+      expect(ciYml).toContain(`merge-shards: ${mergeInput}\n`);
+    }
     const initial = step(job, 'Restore from the trusted memo cache');
     const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
     const fullKeys = Array.from({ length: count }, (_, index) => expand(restoreKey(initial), {
@@ -81,6 +97,7 @@ describe('trusted CI test-memo cache reuse', () => {
       const shard = index + 1;
       const restore = step(job, `Restore full-run shard ${shard} of the memo`);
       expect(restore).toContain(`id: restore-shard-${shard}`);
+      expect(step(noMergeJob, `Restore full-run shard ${shard} of the memo`)).toContain(`fromJSON('0') >= ${shard} &&`);
       const [, minimum, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
       expect(Number(minimum)).toBe(shard);
       const formatArgs = [context['runner.os'], context['runner.arch'], family, count];

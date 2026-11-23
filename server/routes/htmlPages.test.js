@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listSelectableModels: vi.fn(),
   readRun: vi.fn(),
   removeRun: vi.fn(),
+  resumeRun: vi.fn(),
   startRuns: vi.fn(),
 }));
 vi.mock('../services/htmlPages/index.js', () => mocks);
@@ -76,5 +77,22 @@ describe('reads and deletes', () => {
     const res = await request(app).delete('/api/html-pages/runs/run-1');
     expect(res.status).toBe(200);
     expect(mocks.removeRun).toHaveBeenCalledWith('run-1');
+  });
+});
+
+describe('POST /api/html-pages/runs/:id/resume', () => {
+  it('re-queues the run and answers 202 with its summary', async () => {
+    mocks.resumeRun.mockResolvedValue({ id: 'run-1', status: 'queued' });
+    const res = await request(app).post('/api/html-pages/runs/run-1/resume');
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ id: 'run-1', status: 'queued' });
+    expect(mocks.resumeRun).toHaveBeenCalledWith('run-1');
+  });
+
+  it('passes through the 409 for a run that cannot be resumed', async () => {
+    mocks.resumeRun.mockRejectedValue(new ServerError('Only a failed run can be resumed', { status: 409, code: 'HTML_PAGES_RUN_NOT_RESUMABLE' }));
+    const res = await request(app).post('/api/html-pages/runs/run-1/resume');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('HTML_PAGES_RUN_NOT_RESUMABLE');
   });
 });
