@@ -8,47 +8,46 @@
  * driver, portos_bake.py and the portos_model kit (py/, minus the starter), so
  * a model's `import portos_model` works wherever Blender runs.
  */
-import { readFile, readdir } from 'node:fs/promises';
-import { join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { requireTrustedLocalBlender, runBlenderDriverScript } from '../blenderWorkspace/worker.js';
 import { parseBlenderModelDriverLine } from './protocol.js';
 
 const DRIVER = 'portos_model_driver.py';
-const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
-const STAGED_SOURCE = /\.py$/;
 const GIB = 1024 ** 3;
 const BUILD_LIMITS = Object.freeze({ wallSeconds: 30 * 60, memoryBytes: 16 * GIB, diskBytes: 4 * GIB, maxFiles: 10_000 });
+
+// Literal URLs, not a directory walk: the test memo (scripts/lib/testMemo.js) can only key a read it can see.
+// bake.test.js fails when py/ holds a driver-side file this list does not stage.
+const STAGED_DRIVER_FILES = Object.freeze([
+  ['portos_model_driver.py', new URL('./py/portos_model_driver.py', import.meta.url)],
+  ['portos_bake.py', new URL('./py/portos_bake.py', import.meta.url)],
+  ['portos_model/bake.py', new URL('./py/portos_model/bake.py', import.meta.url)],
+  ['portos_model/package.py', new URL('./py/portos_model/package.py', import.meta.url)],
+  ['portos_model/parts.py', new URL('./py/portos_model/parts.py', import.meta.url)],
+  ['portos_model/wear.py', new URL('./py/portos_model/wear.py', import.meta.url)],
+]);
+export const BLENDER_MODEL_STAGED_PATHS = STAGED_DRIVER_FILES.map(([path]) => path);
 
 export const BLENDER_MODEL_NEEDS_TRUSTED_LOCAL = 'A Blender model build runs the model\'s own Python on this host and writes into its workspace, so it needs Blender in Trusted local mode. Switch the execution mode under Blender execution (Code Animation > Production) and run the execution check.';
 
 /** The checked Blender tool for a model build; 409 when it is not ready or not Trusted local. */
 export const requireBlenderModelTool = () => requireTrustedLocalBlender(BLENDER_MODEL_NEEDS_TRUSTED_LOCAL);
 
-// Every driver-side .py file, as `{ path, content }` with `/` separators; the starter is a template, not driver code.
-async function stagedDriverFiles(directory = PY_DIR) {
-  const files = [];
-  for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-    const absolute = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (absolute !== join(PY_DIR, 'starter') && entry.name !== '__pycache__') files.push(...await stagedDriverFiles(absolute));
-    } else if (entry.isFile() && STAGED_SOURCE.test(entry.name)) {
-      files.push({ path: relative(PY_DIR, absolute).split('\\').join('/'), content: await readFile(absolute) });
-    }
-  }
-  return files;
-}
-
 /**
  * Run one job: `{ mode: 'build', workspace, src, out, quality }`, or
- * `{ mode: 'review', blend, out, size, views, looks }` (see review.js).
+ * `{ mode: 'review', blend, out, size, views, looks }` (see review.js), or
+ * `{ mode: 'bake', blend, out, set, size, samples, device }` and
+ * `{ mode: 'bake-export', blend, glb, out, sets }` (see bake.js).
  * Resolves `{ ok, canceled, error, traceback }` (see runBlenderDriverScript).
  */
 export async function runBlenderModelDriver({ tool, job, signal, onEvent, onLog }) {
   return runBlenderDriverScript({
     tool,
     entrypoint: DRIVER,
-    files: [...await stagedDriverFiles(), { path: 'job.json', content: JSON.stringify(job) }],
+    files: [
+      ...await Promise.all(STAGED_DRIVER_FILES.map(async ([path, url]) => ({ path, content: await readFile(url) }))),
+      { path: 'job.json', content: JSON.stringify(job) },
+    ],
     limits: BUILD_LIMITS,
     signal,
     parseLine: parseBlenderModelDriverLine,
