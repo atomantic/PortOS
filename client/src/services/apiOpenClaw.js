@@ -2,7 +2,7 @@
  * File browser / picker backend.
  */
 
-import { API_BASE, request } from './apiCore.js';
+import { API_BASE, request, throwStreamApiError } from './apiCore.js';
 
 export const getOpenClawStatus = () => request('/openclaw/status', { silent: true });
 export const getOpenClawSessions = () => request('/openclaw/sessions', { silent: true });
@@ -31,17 +31,7 @@ export async function streamOpenClawMessage(sessionId, { message, context, attac
     throw new Error('Server unreachable — check your connection and try again');
   }
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    const detailMessage = Array.isArray(error?.context?.details)
-      ? error.context.details
-          .map((d) => d?.message)
-          .filter((m) => typeof m === 'string' && m.trim())
-          .slice(0, 3)
-          .join('; ')
-      : '';
-    throw new Error(detailMessage || error.error || `HTTP ${response.status}`);
-  }
+  if (!response.ok) await throwStreamApiError(response);
 
   if (!response.body) {
     throw new Error('Streaming is unavailable for this response');
