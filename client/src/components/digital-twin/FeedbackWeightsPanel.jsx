@@ -21,7 +21,7 @@ const clampWeight = (w) => Math.min(10, Math.max(1, Math.round(w)));
 export default function FeedbackWeightsPanel() {
   const [recalculating, setRecalculating] = useState(false);
   const [result, setResult] = useState(null); // { adjustments, message? } | null = not calculated yet
-  const [recent, setRecent] = useState(null); // null = not loaded (or load failed)
+  const [recent, setRecent] = useState(null); // null = loading, 'failed' = fetch error, array = loaded
   const [showRecent, setShowRecent] = useState(false);
   const [applying, setApplying] = useState(null);
 
@@ -30,7 +30,7 @@ export default function FeedbackWeightsPanel() {
   useEffect(() => {
     if (!showRecent) return undefined;
     let active = true;
-    const refresh = () => loadRecent().then(entries => { if (active && Array.isArray(entries)) setRecent(entries); });
+    const refresh = () => loadRecent().then(entries => { if (active) setRecent(Array.isArray(entries) ? entries : 'failed'); });
     refresh();
     socket.on('digital-twin:changed', refresh);
     return () => {
@@ -126,8 +126,9 @@ export default function FeedbackWeightsPanel() {
         {showRecent && (
           <div className="mt-2 space-y-1">
             {recent === null && <div className="text-xs text-gray-500">Loading…</div>}
-            {recent?.length === 0 && <div className="text-xs text-gray-500">No feedback yet.</div>}
-            {recent?.map(e => (
+            {recent === 'failed' && <div className="text-xs text-port-error">Could not load recent feedback.</div>}
+            {Array.isArray(recent) && recent.length === 0 && <div className="text-xs text-gray-500">No feedback yet.</div>}
+            {Array.isArray(recent) && recent.map(e => (
               <div key={e.id} className="flex items-center justify-between gap-3 text-xs p-2 rounded bg-port-bg">
                 <span className="text-gray-300 truncate">{e.context || e.contentType}</span>
                 <span className="text-gray-500 shrink-0">
