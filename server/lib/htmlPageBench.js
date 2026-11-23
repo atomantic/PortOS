@@ -1,7 +1,7 @@
 /**
  * Default page briefs, prompt and mechanical page checks for the HTML Pages bench: ask a local model for one to five creative standalone HTML pages and judge them side by side.
  *
- * The person writes each page's brief; PortOS only adds fixed standalone-file rules around it, shown beside it before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
+ * The person writes each page's brief (by default generic creative guidelines that leave the subject to the model); PortOS only adds fixed standalone-file rules around it, shown beside it before a run. Every model in a comparison gets the same briefs so galleries compare page for page. The checks only establish that a page is a complete, self-contained document; whether it looks good is left to the person looking at the frames.
  */
 
 /** The most pages one run may ask for; the default is what the form pre-selects. */
@@ -12,21 +12,12 @@ export const HTML_PAGES_DEFAULT = 3;
 export const HTML_BRIEF_MAX_CHARS = 2000;
 
 /**
- * The briefs the form starts with: page N of a default run is theme N, for every model. They are deliberately unlike each other (a simulation, a toy, a scene, an instrument, a diagram), so "zero repetitive designs" is a property of the brief. The person can edit, replace or clear them.
+ * The brief every page starts with: creative guidelines that leave WHAT to build to the model, so a run compares each model's own ideas rather than its take on a PortOS-chosen subject. The person can replace it with a specific brief per page.
  */
-export const HTML_PAGE_THEMES = Object.freeze([
-  'Rain on Glass: a window pane in a storm, with droplets that gather and run',
-  'Brass Orrery: a clockwork model of a small solar system that you can wind and slow',
-  'Ant Colony: a cutaway of a living nest with foragers, tunnels and chambers',
-  'Geoboard: a pegboard where the visitor stretches rubber bands into shapes',
-  'The Pentatonic Parlour: an instrument you can play with the mouse or keyboard',
-]);
+export const HTML_PAGE_DEFAULT_BRIEF = '- look stunning\n- original\n- go full creative mode';
 
-/** Creative direction the default briefs carry as ordinary text, so the person sees it in the box and can change or drop it. */
-const DEFAULT_DIRECTION = 'It must look stunning: go full creative mode with its own layout, palette, typography and motion, and make it interactive or animated.';
-
-/** The briefs the form is pre-filled with. */
-export const HTML_PAGE_DEFAULT_BRIEFS = Object.freeze(HTML_PAGE_THEMES.map((theme) => `${theme}. ${DEFAULT_DIRECTION}`));
+/** The briefs the form is pre-filled with: the default brief for every page slot. */
+export const HTML_PAGE_DEFAULT_BRIEFS = Object.freeze(Array.from({ length: HTML_PAGES_MAX }, () => HTML_PAGE_DEFAULT_BRIEF));
 
 /**
  * The fixed text PortOS puts around a page brief. Exported on its own so the form can show exactly what is added before and after what the person typed, built by the same code that sends it.

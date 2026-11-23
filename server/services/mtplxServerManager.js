@@ -806,6 +806,74 @@ async function relaunchWithTuning(normalized, knobs) {
 }
 
 /**
+ * Run `fn` while MTPLX serves the cached checkpoint `model`, then put back what was serving before.
+ *
+ * `mtplx serve` holds one checkpoint, so a caller that compares several cached packs (the HTML
+ * Pages bench) has to relaunch between them. When `model` is already serving, `fn` runs with no
+ * relaunch. Otherwise the daemon is stopped and started on `model`, and once `fn` settles the
+ * previous launch line goes back up, or MTPLX is stopped again when it was not running before.
+ * Refuses (throws) rather than stopping a server PortOS cannot prove it owns.
+ *
+ * `fn` receives the served model id as `/v1/models` reports it, which is what a request names.
+ *
+ * @param {string} model a cached MTPLX repo id
+ * @param {(servedModelId: string|null) => Promise<*>} fn
+ */
+export async function runOnMtplxCheckpoint(model, fn) {
+  const switched = await onDemand.runStart(() => switchToCheckpoint(model));
+  try {
+    return await fn(switched.servedModelId);
+  } finally {
+    if (switched.previous !== undefined) {
+      await onDemand.runStart(() => restoreAfterCheckpoint(switched)).catch((err) => {
+        console.error(`❌ MTPLX: could not put the previous checkpoint back after ${model}: ${err.message}`);
+      });
+    }
+  }
+}
+
+const servedModelIdAt = async (endpoint) => (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).models?.[0] ?? null;
+
+async function switchToCheckpoint(model) {
+  const status = await getMtplxServerStatus();
+  if (status.running && status.config?.model === model) {
+    return { servedModelId: await servedModelIdAt(endpointFor(status.config)), previous: undefined };
+  }
+  if (status.running && status.managed !== true) {
+    const why = status.managed === null
+      ? 'PortOS could not read PM2, so it cannot tell whether it owns the MTPLX server'
+      : 'MTPLX was started outside PortOS, so PortOS will not stop it to switch checkpoints';
+    throw new ServerError(why, { status: 409, code: 'MTPLX_SWITCH_REFUSED' });
+  }
+  // `null` previous = MTPLX was not running, so it is stopped again afterwards. Every launch persists
+  // its line as the saved launch, so the saved one is kept to write back: otherwise the next on-demand
+  // start would serve the bench pack instead of the operator's choice.
+  const previous = status.running ? status.config : null;
+  const savedLaunch = previous ? null : (await onDemand.savedLaunch().catch(() => null))?.raw ?? null;
+  const port = previous?.port ?? DEFAULT_PORT;
+  console.log(`🚄 MTPLX: switching to ${model}${previous?.model ? ` (from ${previous.model})` : ''}`);
+  if (previous) {
+    await stopMtplxServer();
+    await waitForPortRelease(port);
+  }
+  const started = await launchMtplxServer({ port, model }).catch((failure) => ({ failure }));
+  const ready = started.failure ? { ready: false, reason: started.failure.message }
+    : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint);
+  if (!ready.ready) {
+    if (!started.failure) await stopMtplxServer().catch(() => {});
+    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true });
+    throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
+  }
+  return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };
+}
+
+async function restoreAfterCheckpoint({ previous, savedLaunch, stopped = false }) {
+  if (!stopped) await stopMtplxServer();
+  if (previous) await restorePrevious(previous, null);
+  else if (savedLaunch) await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: savedLaunch });
+}
+
+/**
  * Why the tuned launch failed, in the caller's words.
  *
  * "MTPLX rejected that tuning" is only true when `mtplx serve` actually ran and

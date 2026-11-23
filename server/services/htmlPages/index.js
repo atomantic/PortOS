@@ -1,10 +1,13 @@
 /**
  * HTML Pages bench: run installed local models against the fixed creative HTML brief and keep each model's pages as a durable run for side-by-side comparison.
  *
+ * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a provider route (`route`: any configured provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
+ *
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
+import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
@@ -17,8 +20,8 @@ import { trackedRenderMap } from '../renderActivity.js';
 import { createRun, deleteRun as deleteStoredRun, getRun, listRuns as listStoredRuns, mutateRun } from './db.js';
 
 const ACTIVE = new Set(['queued', 'generating']);
-// Thinking models spend most of their budget reasoning before the page starts (a first version with 8,000 tokens left pages cut off mid-CSS), and a designed page itself runs several thousand tokens. A slow model needs minutes.
-const PAGE_MAX_TOKENS = 24_000;
+// Thinking models spend most of their budget reasoning before the page starts (8,000 left pages cut off mid-CSS; 24,000 still cut off a 35B thinking model mid-page), and a designed page itself runs several thousand tokens. At ~70 tok/s the cap takes about 12 minutes, inside the page timeout.
+const PAGE_MAX_TOKENS = 48_000;
 const PAGE_TIMEOUT_MS = 20 * 60 * 1000;
 // Within this share of the cap the model was cut off, not finished.
 const TRUNCATION_SHARE = 0.98;
@@ -30,6 +33,20 @@ const MAX_PAGE_HTML_CHARS = 120_000;
 const CLAIM_WAIT_MS = 10 * 60 * 1000;
 
 const runtimeLabel = (id) => LOCAL_RUNTIMES[id]?.label || id;
+// Run-source tag for provider routes; classified operational in lib/creativeLatitude.js, so the prompt goes out exactly as the form showed it.
+const RUN_SOURCE = 'html-pages-bench';
+// MTPLX serves one pack at a time under a short served id; a downloaded pack is named by its Hugging Face repo id.
+const isMtplxCheckpoint = (backend, modelId) => backend === 'mtplx' && String(modelId).includes('/');
+
+/** Downloaded MTPLX packs other than the one serving now: each can be run by switching MTPLX to it. Disk only; nothing is started. */
+async function mtplxCheckpointModels() {
+  const { getMtplxServerStatus } = await import('../mtplxServerManager.js');
+  const status = await getMtplxServerStatus().catch(() => null);
+  const serving = status?.running ? status.config?.model : null;
+  return (status?.cachedModels || [])
+    .filter((repo) => repo !== serving)
+    .map((repo) => ({ backend: 'mtplx', runtimeLabel: runtimeLabel('mtplx'), modelId: repo, offline: false, switchesCheckpoint: true }));
+}
 
 const queue = [];
 // Run id → { controller }, from queueing until the run settles. A run this process holds is live; one marked active without a slot was cut off by a restart.
@@ -44,11 +61,14 @@ export async function listSelectableModels() {
   const listErrors = [];
   for (const [runtime, result] of listed) {
     if (result.error) listErrors.push({ id: runtime, label: runtimeLabel(runtime), error: result.error, offline: Boolean(result.offline) });
+    // An offline MTPLX lists its downloaded packs, which mtplxCheckpointModels offers as runnable instead.
+    if (runtime === 'mtplx' && result.offline) continue;
     for (const model of result.models || []) {
       if (!model?.id || isEmbeddingModel(model.id)) continue;
       models.push({ backend: runtime, runtimeLabel: runtimeLabel(runtime), modelId: model.id, offline: Boolean(result.offline) });
     }
   }
+  if (ASSESSABLE_RUNTIMES.includes('mtplx')) models.push(...await mtplxCheckpointModels());
   return {
     models,
     listErrors,
@@ -80,10 +100,21 @@ export const readRun = async (id) => {
   return isCutOff(run) ? markInterrupted(id) : run;
 };
 
+/** A provider route resolved to what the run record names; 409 when the provider is gone or switched off. */
+async function resolveRoute({ providerId, model, effort }) {
+  const { getProviderById } = await import('../provider/providers.js');
+  const provider = await getProviderById(providerId).catch(() => null);
+  if (!provider || provider.enabled === false) {
+    throw new ServerError(`Provider ${providerId} is not available`, { status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
+  }
+  const resolvedModel = model || provider.defaultModel || null;
+  return { providerId, providerName: provider.name || providerId, model: resolvedModel, effort: effort || null };
+}
+
 /**
- * Queue one run per selected model. The selection is checked against what is installed right now, so a typo or a stopped runtime is a 409 up front rather than a failed run later.
+ * Queue one run per selected local model and per provider route. Local models are checked against what is installed right now and routes against the configured providers, so a typo or a stopped runtime is a 409 up front rather than a failed run later.
  */
-export async function startRuns({ models, pages }) {
+export async function startRuns({ models = [], routes = [], pages }) {
   const { models: installed } = await listSelectableModels();
   const missing = models.filter((m) => !installed.some((i) => i.backend === m.backend && i.modelId === m.modelId));
   if (missing.length) {
@@ -91,11 +122,16 @@ export async function startRuns({ models, pages }) {
       status: 409, code: 'HTML_PAGES_MODEL_UNAVAILABLE', context: { missing: missing.length },
     });
   }
+  const resolvedRoutes = await Promise.all(routes.map(resolveRoute));
   // The exact prompt each page sends is recorded on the run, so a later change to the fixed text never rewrites what an old run was asked.
   const prompts = pages.map(htmlPagePrompt);
   const runs = [];
-  for (const m of models) {
-    const run = await createRun({ backend: m.backend, modelId: m.modelId, pageCount: pages.length, themes: pages, prompts });
+  const targets = [
+    ...models.map((m) => ({ backend: m.backend, modelId: m.modelId, route: null })),
+    ...resolvedRoutes.map((route) => ({ backend: 'provider', modelId: route.model || route.providerName, route })),
+  ];
+  for (const target of targets) {
+    const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
     enqueue(run.id);
     runs.push(run);
   }
@@ -104,13 +140,16 @@ export async function startRuns({ models, pages }) {
   return runs;
 }
 
+/** A run worth retrying: failed or cut off (a queued/generating row nothing is working on, which resumeRun has already ruled out), or finished with a page that did not pass every check. */
+const isRetryable = (run) => run.status !== 'complete' || run.pages.some((page) => !page.html || page.passed !== page.total);
+
 const enqueue = (id) => {
   liveRuns.set(id, { controller: new AbortController() });
   queue.push(id);
 };
 
 /**
- * Re-queue a failed or cut-off run on the same model with the prompts it recorded, keeping the pages it finished before the first one that has no HTML. Only an explicit request reaches here.
+ * Re-queue a failed or cut-off run, or a finished one with a page that failed a check, on the same model with the prompts it recorded. It keeps the pages before the first one that did not pass every check and regenerates from there. Only an explicit request reaches here.
  */
 export async function resumeRun(id) {
   if (liveRuns.has(id)) throw new ServerError('That run is already queued or generating', { status: 409, code: 'HTML_PAGES_RUN_ACTIVE' });
@@ -119,8 +158,8 @@ export async function resumeRun(id) {
   let run;
   try {
     run = await mutateRun(id, (current) => {
-      if (current.status === 'complete') return null;
-      const firstMissing = current.pages.findIndex((page) => !page.html);
+      if (!isRetryable(current)) return null;
+      const firstMissing = current.pages.findIndex((page) => !page.html || page.passed !== page.total);
       const pages = firstMissing < 0 ? current.pages : current.pages.slice(0, firstMissing);
       return {
         ...current, status: 'queued', pages, progress: { done: pages.length, total: current.pageCount }, detail: null, error: null, finishedAt: null,
@@ -132,7 +171,7 @@ export async function resumeRun(id) {
   }
   if (run.status !== 'queued') {
     liveRuns.delete(id);
-    throw new ServerError('Only a failed run can be resumed', { status: 409, code: 'HTML_PAGES_RUN_NOT_RESUMABLE' });
+    throw new ServerError('Only a failed run, or one with a page that failed a check, can be retried', { status: 409, code: 'HTML_PAGES_RUN_NOT_RESUMABLE' });
   }
   queue.push(id);
   console.log(`🧩 HTML pages: resuming ${run.modelId} from page ${run.pages.length + 1} of ${run.pageCount}`);
@@ -175,32 +214,44 @@ async function processRun(id) {
     claim = await claimHeavyLocalJob({ kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS });
     if (!claim.ok) throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
-    console.log(`🧩 HTML pages: ${run.modelId} on ${runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
+    console.log(`🧩 HTML pages: ${run.modelId} on ${run.route?.providerName || runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
 
-    for (const [index, theme] of run.themes.entries()) {
-      // A resumed run keeps the pages it already finished.
-      if (index < run.pages.length) continue;
-      if (controller.signal.aborted) return;
-      const startedAt = Date.now();
-      const result = await generate({
-        backend: run.backend, modelId: run.modelId, prompt: run.prompts?.[index] ?? htmlPagePrompt(theme), maxTokens: PAGE_MAX_TOKENS,
-        temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
-      });
-      if (controller.signal.aborted) return;
-      // Cut to the document, never repaired: a truncated page must read as truncated.
-      const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
-      const page = {
-        theme,
-        html,
-        ...scoreHtmlPage(html),
-        error: result?.error || null,
-        // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
-        hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
-        elapsedMs: Math.max(0, Date.now() - startedAt),
-        tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
-      };
-      await mutateRun(id, (c) => ({ ...c, pages: [...c.pages, page], progress: { done: c.pages.length + 1, total: c.pageCount } }));
+    const generatePages = async (send) => {
+      for (const [index, theme] of run.themes.entries()) {
+        // A resumed run keeps the pages it already finished.
+        if (index < run.pages.length) continue;
+        if (controller.signal.aborted) return;
+        const startedAt = Date.now();
+        const result = await send(run.prompts?.[index] ?? htmlPagePrompt(theme));
+        if (controller.signal.aborted) return;
+        // Cut to the document, never repaired: a truncated page must read as truncated.
+        const html = extractHtmlDocument(String(result?.text || '')).slice(0, MAX_PAGE_HTML_CHARS);
+        const page = {
+          theme,
+          html,
+          ...scoreHtmlPage(html),
+          error: result?.error || null,
+          // The runtime reported using (nearly) the whole token budget: the page, or the reasoning before it, was cut off.
+          hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
+          elapsedMs: Math.max(0, Date.now() - startedAt),
+          tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
+        };
+        await mutateRun(id, (c) => ({ ...c, pages: [...c.pages, page], progress: { done: c.pages.length + 1, total: c.pageCount } }));
+      }
+    };
+    const local = (modelId) => (prompt) => generate({
+      backend: run.backend, modelId, prompt, maxTokens: PAGE_MAX_TOKENS,
+      temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
+    });
+    if (run.route) {
+      await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
+    } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
+      const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
+      await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)));
+    } else {
+      await generatePages(local(run.modelId));
     }
+    if (controller.signal.aborted) return;
 
     await mutateRun(id, (c) => {
       const detail = scoreHtmlPages(c.pages);
@@ -218,5 +269,32 @@ async function processRun(id) {
     await mutateRun(id, (c) => (c.deleted ? null : { ...c, status: 'failed', error: err.message, finishedAt: new Date().toISOString() })).catch(() => null);
   } finally {
     await claim?.release?.();
+  }
+}
+
+/**
+ * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
+ */
+async function generateViaProvider(route, prompt, signal) {
+  const [{ getProviderById }, { runPromptThroughProvider }, { stopRun }] = await Promise.all([
+    import('../provider/providers.js'), import('../promptRunner.js'), import('../runner.js'),
+  ]);
+  const provider = await getProviderById(route.providerId).catch(() => null);
+  if (!provider) return { text: '', error: `Provider ${route.providerName || route.providerId} is not available`, timings: null };
+  let runId = null;
+  const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
+  signal.addEventListener('abort', stop, { once: true });
+  try {
+    const result = await runPromptThroughProvider({
+      provider, model: route.model || undefined, effort: route.effort || undefined, prompt,
+      source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
+      onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
+    });
+    // A CLI transcript can echo the prompt, whose rules mention `<!doctype html>`; drop it so only the reply is read.
+    return { text: String(result?.text || '').split(prompt).join(''), error: null, timings: null };
+  } catch (err) {
+    return { text: '', error: err?.message || 'The provider run failed', timings: null };
+  } finally {
+    signal.removeEventListener('abort', stop);
   }
 }

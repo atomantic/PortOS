@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGE_THEMES, HTML_PAGES_MAX, extractHtmlDocument, htmlPagePrompt, htmlPagePromptParts, scoreHtmlPage, scoreHtmlPages,
+  HTML_PAGE_DEFAULT_BRIEF, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, extractHtmlDocument, htmlPagePrompt, htmlPagePromptParts, scoreHtmlPage, scoreHtmlPages,
 } from './htmlPageBench.js';
 
 const good = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
 
 describe('brief', () => {
-  it('ships a distinct default brief for every page the cap allows', () => {
-    expect(HTML_PAGE_DEFAULT_BRIEFS.length).toBeGreaterThanOrEqual(HTML_PAGES_MAX);
-    expect(new Set(HTML_PAGE_DEFAULT_BRIEFS).size).toBe(HTML_PAGE_DEFAULT_BRIEFS.length);
-    expect(HTML_PAGE_DEFAULT_BRIEFS[0]).toContain(HTML_PAGE_THEMES[0]);
+  it('starts every page slot on the generic guidelines, which leave the subject to the model', () => {
+    expect(HTML_PAGE_DEFAULT_BRIEFS).toHaveLength(HTML_PAGES_MAX);
+    expect(new Set(HTML_PAGE_DEFAULT_BRIEFS)).toEqual(new Set([HTML_PAGE_DEFAULT_BRIEF]));
+    expect(HTML_PAGE_DEFAULT_BRIEF).toBe('- look stunning\n- original\n- go full creative mode');
   });
 
   it('puts the brief into the prompt exactly as written, between the fixed parts the form shows', () => {

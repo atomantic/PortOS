@@ -134,6 +134,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/pages/CatalogIngest.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/CodeAnimation.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/FableLoom.jsx` | Shared structured options or saved provider reference |
+| `client/src/pages/HtmlPages.jsx` | Per-run provider reference (preset or composite id, model, effort) recorded on the run it starts; no selection is saved for the next visit |
 | `client/src/pages/Importer.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/Loops.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/PipelineEditorialChecks.jsx` | Shared structured options or saved provider reference |

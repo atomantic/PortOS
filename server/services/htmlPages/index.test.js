@@ -4,9 +4,9 @@ const store = new Map();
 vi.mock('./db.js', () => ({
   listRuns: vi.fn(async () => [...store.values()].filter((r) => !r.deleted)),
   getRun: vi.fn(async (id) => store.get(id) ?? null),
-  createRun: vi.fn(async ({ backend, modelId, pageCount, themes, prompts }) => {
+  createRun: vi.fn(async ({ backend, modelId, route = null, pageCount, themes, prompts }) => {
     const run = {
-      id: `run-${store.size + 1}`, backend, modelId, pageCount, themes, prompts, status: 'queued',
+      id: `run-${store.size + 1}`, backend, modelId, route, pageCount, themes, prompts, status: 'queued',
       progress: { done: 0, total: pageCount }, pages: [], detail: null, error: null, deleted: false,
     };
     store.set(run.id, run);
@@ -32,8 +32,20 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({ ok: true, release: vi.fn(async () => {}) })),
 }));
 
+vi.mock('../mtplxServerManager.js', () => ({
+  getMtplxServerStatus: vi.fn(async () => ({ running: true, config: { model: 'Example/Served-MTPLX' }, cachedModels: ['Example/Served-MTPLX', 'Example/Other-MTPLX'] })),
+  runOnMtplxCheckpoint: vi.fn(async (_model, fn) => fn('mtplx-example-other')),
+}));
+vi.mock('../provider/providers.js', () => ({
+  getProviderById: vi.fn(async (id) => (id === 'example-cli' ? { id, name: 'Example CLI', type: 'cli', enabled: true, defaultModel: 'example-default' } : null)),
+}));
+vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
+vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
+
 import { generate } from '../modelCapabilityTests.js';
 import { listActiveRenders } from '../renderActivity.js';
+import { runOnMtplxCheckpoint } from '../mtplxServerManager.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
 import { listRuns, listSelectableModels, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
@@ -53,9 +65,14 @@ beforeEach(() => {
 describe('listSelectableModels', () => {
   it('offers installed chat models, hides embeddings, and reports a runtime it could not read', async () => {
     const result = await listSelectableModels();
-    expect(result.models).toEqual([expect.objectContaining({ backend: 'ollama', modelId: 'example-coder:7b' })]);
+    expect(result.models).toEqual([
+      expect.objectContaining({ backend: 'ollama', modelId: 'example-coder:7b' }),
+      // A downloaded MTPLX pack that is not serving is offered too; the serving one is not listed twice.
+      expect.objectContaining({ backend: 'mtplx', modelId: 'Example/Other-MTPLX', switchesCheckpoint: true }),
+    ]);
     expect(result.listErrors.some((e) => e.id === 'lmstudio')).toBe(true);
-    expect(result.defaultPages.length).toBeGreaterThanOrEqual(result.pageCountMax);
+    expect(result.defaultPages).toHaveLength(result.pageCountMax);
+    expect(result.defaultPages[0]).toBe('- look stunning\n- original\n- go full creative mode');
     // The fixed text around a brief ships with the picker so the form can show the exact prompt.
     expect(result.promptParts.before + result.defaultPages[0] + result.promptParts.after).toContain(result.defaultPages[0]);
   });
@@ -98,7 +115,7 @@ describe('startRuns', () => {
   });
 
   it('flags a page the runtime cut off at the token limit, and does not call reasoning prose a page', async () => {
-    generate.mockResolvedValue({ text: 'Let me think about the <svg> and the <div> first. Then I will write the code.', timings: { completionTokens: 24_000 } });
+    generate.mockResolvedValue({ text: 'Let me think about the <svg> and the <div> first. Then I will write the code.', timings: { completionTokens: 48_000 } });
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: '', hitTokenLimit: true });
@@ -125,6 +142,34 @@ describe('startRuns', () => {
     const runs = await startRuns({ models: [model, { ...model, modelId: 'example-coder:7b' }], pages: PAGES.slice(0, 1) });
     await Promise.all(runs.map((r) => settled(r.id)));
     expect(peak).toBe(1);
+  });
+});
+
+describe('other targets', () => {
+  it('switches MTPLX to a downloaded pack for the run and names the served id in each request', async () => {
+    generate.mockResolvedValue({ text: goodPage });
+    const [queued] = await startRuns({ models: [{ backend: 'mtplx', modelId: 'Example/Other-MTPLX' }], pages: PAGES.slice(0, 1) });
+    const run = await settled(queued.id);
+    expect(run.status).toBe('complete');
+    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith('Example/Other-MTPLX', expect.any(Function));
+    expect(generate.mock.calls[0][0]).toMatchObject({ backend: 'mtplx', modelId: 'mtplx-example-other' });
+  });
+
+  it('runs a provider route with its model and effort, no fallback, and the prompt exactly as recorded', async () => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: `${prompt}\n${goodPage}` }));
+    const [queued] = await startRuns({ routes: [{ providerId: 'example-cli', model: null, effort: 'high' }], pages: PAGES.slice(0, 1) });
+    expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId: 'example-cli', providerName: 'Example CLI', model: 'example-default', effort: 'high' } });
+    const run = await settled(queued.id);
+    expect(run.pages[0].html).toBe(goodPage);
+    expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({
+      prompt: queued.prompts[0], model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
+    });
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a provider that is not configured before queueing anything', async () => {
+    await expect(startRuns({ routes: [{ providerId: 'gone' }], pages: PAGES })).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
+    expect(store.size).toBe(0);
   });
 });
 
@@ -204,7 +249,24 @@ describe('resumeRun', () => {
     expect(run.pages.every((p) => p.html === goodPage)).toBe(true);
   });
 
-  it('refuses a complete run and a run that is still live', async () => {
+  it('retries a finished run from its first page that failed a check, keeping the passing pages before it', async () => {
+    generate.mockResolvedValueOnce({ text: goodPage }).mockResolvedValueOnce({ text: goodPage.replace('</html>', '') });
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
+    expect((await settled(queued.id)).detail.verdict).toBe('partial');
+    await vi.waitFor(() => expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0));
+    generate.mockClear();
+    generate.mockResolvedValue({ text: goodPage });
+    await expect(resumeRun(queued.id)).resolves.toMatchObject({ status: 'queued', progress: { done: 1, total: 2 } });
+    const run = await vi.waitFor(async () => {
+      const current = await readRun(queued.id);
+      expect(current.detail?.verdict).toBe('passed');
+      return current;
+    });
+    expect(generate.mock.calls.map(([args]) => args.prompt)).toEqual([queued.prompts[1]]);
+    expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
+  });
+
+  it('refuses a run whose every page passed and a run that is still live', async () => {
     generate.mockResolvedValue({ text: goodPage });
     const [done] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     await expect(resumeRun(done.id)).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_RUN_ACTIVE' });
