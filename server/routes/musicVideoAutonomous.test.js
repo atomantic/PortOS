@@ -36,6 +36,7 @@ vi.mock('../services/auth.js', () => ({
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const service = await import('../services/musicVideo/autonomousService.js');
 const { stripMusicVideoLocalRenderPins } = await import('../lib/syncWire.js');
 
@@ -340,7 +341,7 @@ describe('the run stays on this install', () => {
     expect((await get(id)).status).toBe('awaiting-approval');
     const stored = await projects.getProject(id);
     expect(stripMusicVideoLocalRenderPins(stored)).not.toHaveProperty('autonomousRun');
-    const clone = await projects.cloneProject(id, {});
+    const clone = await filmActions.cloneProject(id, {});
     expect(clone.autonomousRun ?? null).toBeNull();
   });
 });

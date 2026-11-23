@@ -29,7 +29,9 @@ import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
-import { listProjects, listProjectNames, listProjectPage, listProjectCompletion, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listProjectPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
+import { updateProject as updateProjectEdit, previewProjectPacingRecut, recutProjectToPacing, markMediaPoolAssets } from '../services/musicVideo/projectBoardEdits.js';
+import { listProjectCompletion, cloneProject, refreshSongStyleFromSuno } from '../services/musicVideo/projectFilmActions.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
@@ -65,7 +67,8 @@ import devArtifactRoutes from './musicVideoDevArtifacts.js';
 import runRoutes from './musicVideoRuns.js';
 import deliveryRoutes from './musicVideoDelivery.js';
 import compositionRoutes from './musicVideoComposition.js';
-import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool, searchMediaLibraryForPool, addLibraryMediaToPool, deleteMusicVideoPoolAssets } from '../services/musicVideo/mediaPool.js';
+import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool, searchMediaLibraryForPool, addLibraryMediaToPool } from '../services/musicVideo/mediaPool.js';
+import { deleteMusicVideoPoolAssets } from '../services/musicVideo/mediaPoolDelete.js';
 import { getMusicVideoOutroStats } from '../services/musicVideo/statsOutro.js';
 import { isPaginationRequested, parsePagination } from '../lib/queryValidation.js';
 
@@ -219,13 +222,13 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   }
   // `?edit=1`: a tab that applies board edits answers `{ edit }` where the patch allows it.
   const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
-  res.json(await (answerEdit ? updateProject(req.params.id, data, { edit: true }) : updateProject(req.params.id, data)));
+  res.json(await (answerEdit ? updateProjectEdit(req.params.id, data) : updateProject(req.params.id, data)));
 }));
 
 // Names references saved before catalog naming existed; answers only the labels it filled.
 router.post('/:id/references/catalog-labels', asyncHandler(async (req, res) => {
   await requireProject(req.params.id);
-  res.json({ labels: (await labelProjectReferences(req.params.id, { backfill: true }))?.labels || {} });
+  res.json({ labels: (await labelProjectReferences(req.params.id, { backfill: true, getProject, mutateProjectRecord }))?.labels || {} });
 }));
 
 // Finished outside PortOS: the earlier steps count as done without forging approvals.
@@ -483,7 +486,8 @@ router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
     : markers;
   // `?edit=1`: the tab applies the edit result itself, so the reply carries it instead of the project.
   const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
-  const updated = await updateProject(project.id, { lyricCues, lyricMarkers }, { edit: answerEdit });
+  const patch = { lyricCues, lyricMarkers };
+  const updated = await (answerEdit ? updateProjectEdit(project.id, patch) : updateProject(project.id, patch));
   res.json(answerEdit ? { ...updated, imported: cues.length, format: detected } : { project: updated, imported: cues.length, format: detected });
 }));
 
@@ -853,7 +857,7 @@ router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark, ...options } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options, { edit: true }));
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options));
 }));
 
 // Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).

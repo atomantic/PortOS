@@ -7,10 +7,18 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { listRepositoryFiles } from './testMemoRunner.js';
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DIRECTORY_INPUT_LIMIT,
   TEST_MEMO_NEVER,
+  WORKSPACE_BASE_INPUTS,
+  WORKSPACE_SETUP_ENTRIES,
   computeTestMemoKeys,
+  createDiskFs,
+  createTestMemoAnalyzer,
   extractFileFacts,
   literalExports,
   relatedTests,
@@ -1881,4 +1889,42 @@ describe('lazy floor analysis', () => {
     // A test with no record still exposes a full floor verdict on demand.
     expect(analyzeWith(memoryFs(TREE)).floor.key).toBe(eager.floor.key);
   });
+});
+
+describe('blender starter reads stay inside py/starter (#17618)', () => {
+  const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const analyzerFor = () => createTestMemoAnalyzer({
+    fs: createDiskFs(repoRoot, nodeFs, nodePath),
+    workspaceRel: 'server',
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version,
+    toolVersion: () => null,
+    caseFilter: [],
+    acceptVerdictsFrom: [],
+    listFiles: () => listRepositoryFiles(repoRoot),
+  });
+
+  it('memoizes suites whose only starter refusal was the unbounded recursive read', () => {
+    const analyzer = analyzerFor();
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    for (const test of ['server/routes/musicVideoBlender.test.js', 'server/routes/codeAnimationFilms.test.js']) {
+      const info = analyzer.analyzeTest(test, { baseClosure, recorded: null });
+      expect(info.floor, info.floor.reason).toMatchObject({ memoizable: true });
+      expect([...info.inputs].some((rel) => rel.startsWith('server/services/film/py/starter/'))).toBe(true);
+      const recorded = analyzer.analyzeTest(test, {
+        baseClosure,
+        recorded: [test, 'server/services/film/sources.js'],
+      }).recorded;
+      expect(recorded, recorded.reason).toMatchObject({ memoizable: true });
+    }
+  }, 120_000);
+
+  it('no longer refuses backup.manifestScope for a starter path that can leave py/starter', () => {
+    const analyzer = analyzerFor();
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    const floor = analyzer.analyzeTest('server/services/backup.manifestScope.test.js', { baseClosure, recorded: null }).floor;
+    expect(floor.reasons.join('\n')).not.toMatch(/py\/starter/);
+  }, 60_000);
 });

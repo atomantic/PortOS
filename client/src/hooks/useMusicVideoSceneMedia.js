@@ -3,13 +3,9 @@
  * lifecycle, with prompt builders and visual-spec reference conditioning.
  */
 
-import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
-import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
-import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideo/musicVideoRenderTier.js';
+import { sceneRenderTierPlan } from '../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideo/musicVideoConditioning.js';
-import { shotWantsClipSound } from '../../../server/lib/musicVideo/musicVideoClipSound.js';
-import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideo/musicVideoEndFrame.js';
+import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoLinkedCastIds } from '../../../server/lib/musicVideo/musicVideoConditioning.js';
 import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideo/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
@@ -22,13 +18,9 @@ import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { shotRequestSpanSec, ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideo/musicVideoShotTiming.js';
-import { sourceClipNeedSec } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
-import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
-import {
-  falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot,
-} from '../lib/musicVideoShotTiming.js';
+import { buildSceneClipRequest } from '../lib/musicVideoSceneClipRequest.js';
+import { isPerformanceScene, performanceBlockedReason } from '../lib/musicVideoShotTiming.js';
 
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
@@ -39,17 +31,6 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_REFERENCE_IMAGES',
   'TOO_MANY_INPUT_IMAGES',
 ]);
-
-// A project-default reference render has no per-card length override.
-const ltxReferenceFrames = (scene, target) => ltxReferenceFramesFor(scene, target?.numFrames);
-
-// The provider a clip render runs on, as its placeholder take names it ("Rendering grok…").
-// A pool that may pick either this machine or a peer names neither.
-function videoRenderLabel(settings) {
-  if (settings?.renderPool?.mode === 'peers') return 'peer';
-  if (settings?.renderPool?.mode === 'both') return null;
-  return settings?.backend || 'local';
-}
 
 /** The project-wide palette and camera rules, shared with the server's composers. */
 export { visualDirection };
@@ -217,19 +198,6 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     castLoadedAt.current = 0;
     setCastRefresh((n) => n + 1);
   };
-  // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.
-  const castGuidesPending = (scene) => {
-    const ids = musicVideoSceneCastIds(project, scene);
-    const failed = ids.find((id) => castMedia[id] === null);
-    if (failed) {
-      const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === failed)?.name || failed;
-      toast.error(`Cast guides could not be loaded for ${name}. Retry before rendering.`);
-      return true;
-    }
-    if (ids.every((id) => castMedia[id] !== undefined)) return false;
-    toast.error('Cast guides are still loading. Try again in a moment.');
-    return true;
-  };
 
   const genScenes = frameLane.genScenes;
   const genVideoScenes = videoLane.genScenes;
@@ -263,16 +231,37 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * instead: the prompt is the instruction, and the frame leads the shot's references.
    * `imageTarget` names this render's image service. Omit it and the project pin applies.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, includeReferences = true, replaceSelection = false, thenClip = null, imageTarget = null } = {}) => {
+  // Start and end stills share the queue, inline-take, and capability-error path.
+  // `spec` is the only difference: take kind, selection field, and toast copy.
+  const FRAME_SLOT = {
+    start: {
+      kind: 'image',
+      failMessage: 'Frame generation failed',
+      capabilitySuffix: "Switch the image backend, or take references off the shot's References row.",
+      attachFail: 'Failed to attach frame',
+      selectionOf: (scene) => scene.referenceImageId || null,
+      patchOf: (updated) => ({ referenceImageId: updated.referenceImageId, takes: updated.takes }),
+    },
+    end: {
+      kind: 'endImage',
+      failMessage: 'End frame generation failed',
+      capabilitySuffix: 'Switch the image backend to one that takes a reference image.',
+      attachFail: 'Failed to attach end frame',
+      selectionOf: (scene) => scene.endImageId || null,
+      patchOf: (updated) => ({ endImageId: updated.endImageId ?? null, takes: updated.takes }),
+    },
+  };
+
+  const submitSceneFrame = (scene, slot, {
+    revisionId, onJob, referenceImageId = null, refine = null, includeReferences = true,
+    replaceSelection = false, thenClip = null, imageTarget = null, lane,
+  } = {}) => {
+    const spec = FRAME_SLOT[slot];
     const refining = Boolean(refine?.trim() && referenceImageId);
-    const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
-    if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    // A planned shot with no text still renders from its look, frame clause and actions.
-    if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
-    const renderKey = frameLane.startScene(scene.sceneId);
+    const renderKey = lane.startScene(scene.sceneId);
     return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
-      slot: 'start',
+      slot,
       ...(imageTarget?.mode ? { imageTarget } : {}),
       ...(refining ? { refine, referenceImageId, ...(includeReferences ? {} : { includeReferences: false }) } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
       ...(revisionId ? { revisionId } : {}),
@@ -282,38 +271,46 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
         if (stillRunning) {
-          // async lane: correlate the job so its terminal event clears the spinner
-          // (and the durable scene-image event lands the generated frame). trackJob
-          // reconciles a terminal event that raced ahead of this .then (fast fail).
+          // async lane: correlate the job so its terminal event clears the spinner.
+          // trackJob reconciles a terminal event that raced ahead of this .then.
           const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { frameLane.clearScene(scene.sceneId, renderKey); return { ok: false }; } // no id to track → don't strand the button
+          if (!jobId) { lane.clearScene(scene.sceneId, renderKey); return { ok: false }; }
           onJob?.(jobId);
-          frameLane.trackJob(jobId, scene.sceneId, renderKey);
+          lane.trackJob(jobId, scene.sceneId, renderKey);
           return { ok: true, jobId };
         }
         const filename = res?.filename;
         if (filename) {
           const castInputs = res.castInputs;
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'image', assetId: filename, source: 'generated', ...(castInputs ? { castInputs } : {}), ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
+            kind: spec.kind, assetId: filename, source: 'generated', ...(castInputs ? { castInputs } : {}),
+            ...(replaceSelection ? { replaceSelection: true, expectedSelection: spec.selectionOf(scene) } : {}),
           }, { silent: true })
-            .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
-              referenceImageId: updated.referenceImageId, takes: updated.takes,
-            }))
-            .catch((err) => toast.error(err?.message || 'Failed to attach frame'));
-          // Only queued renders chain into a clip (musicVideoSceneImageHook); this lane answered inline.
+            .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, spec.patchOf(updated)))
+            .catch((err) => toast.error(err?.message || spec.attachFail));
+          // Only queued renders chain into a clip; this lane answered inline.
           if (thenClip) toast.info('Still ready. Render its clip from the shot card.');
         }
-        frameLane.clearScene(scene.sceneId, renderKey);
+        lane.clearScene(scene.sceneId, renderKey);
         return { ok: true };
       })
       .catch((err) => {
         toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
-          ? `${err.message} Switch the image backend, or take references off the shot's References row.`
-          : err?.message || 'Frame generation failed');
-        frameLane.clearScene(scene.sceneId, renderKey);
+          ? `${err.message} ${spec.capabilitySuffix}`
+          : err?.message || spec.failMessage);
+        lane.clearScene(scene.sceneId, renderKey);
         return { ok: false };
       });
+  };
+
+  const generateFrame = (scene, options = {}) => {
+    const { referenceImageId = null, refine = null } = options;
+    const refining = Boolean(refine?.trim() && referenceImageId);
+    const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
+    if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
+    // A planned shot with no text still renders from its look, frame clause and actions.
+    if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
+    return submitSceneFrame(scene, 'start', { ...options, lane: frameLane });
   };
 
   /**
@@ -324,45 +321,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, includeReferences = true, replaceSelection = false, imageTarget = null } = {}) => {
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, ...rest } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
-    const endPrompt = scene.endFramePrompt?.trim();
-    if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
-    const projectId = project.id;
-    const renderKey = endFrameLane.startScene(scene.sceneId);
-    return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
-      slot: 'end',
-      ...(imageTarget?.mode ? { imageTarget } : {}),
-      ...(refining ? { refine, referenceImageId, ...(includeReferences ? {} : { includeReferences: false }) } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
-      ...(replaceSelection ? { select: true } : {}),
-    }, { silent: true })
-      .then((res) => {
-        if (res?.status === 'queued' || res?.status === 'running') {
-          const jobId = res?.jobId || res?.generationId;
-          if (!jobId) { endFrameLane.clearScene(scene.sceneId, renderKey); return { ok: false }; }
-          endFrameLane.trackJob(jobId, scene.sceneId, renderKey);
-          return { ok: true, jobId };
-        }
-        if (res?.filename) {
-          const castInputs = res.castInputs;
-          addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'endImage', assetId: res.filename, source: 'generated', ...(castInputs ? { castInputs } : {}), ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
-          }, { silent: true })
-            .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
-              endImageId: updated.endImageId ?? null, takes: updated.takes,
-            }))
-            .catch((err) => toast.error(err?.message || 'Failed to attach end frame'));
-        }
-        endFrameLane.clearScene(scene.sceneId, renderKey);
-        return { ok: true };
-      })
-      .catch((err) => {
-        toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
-          ? `${err.message} Switch the image backend to one that takes a reference image.`
-          : err?.message || 'End frame generation failed');
-        endFrameLane.clearScene(scene.sceneId, renderKey);
-        return { ok: false };
-      });
+    if (!scene.endFramePrompt?.trim() && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
+    return submitSceneFrame(scene, 'end', { ...rest, referenceImageId, refine, lane: endFrameLane });
   };
 
   // Correlate a kicked-off video job with its scene, or clear the spinner when
@@ -396,125 +358,12 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * doc comment. `revisionId` (optional) is the revision hook's kickoff tag (#9011).
    */
   const generateSceneVideo = (scene, { revisionId, onJob, target = null, card = null, tier = null } = {}) => {
-    if (!scene.referenceImageId) { toast.error('Generate a reference frame first'); return Promise.resolve({ ok: false }); }
-    const problem = shotActionContractProblem(scene.direction?.actionContract, scene);
-    if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    // `card` is the shot card's Render: the director's text and its input toggles
-    // ({ prompt, endFrame, songAudio, wholeLine }), composed as the card shows it (SceneRenderInputs).
-    // The server composes every addition from the director's text (musicVideoShotPrompt.js).
-    const prompt = card ? card.prompt : authoredShotPrompt(scene);
-    if (!prompt) { toast.error('Add a shot prompt first'); return Promise.resolve({ ok: false }); }
-    // `target` renders this one shot elsewhere (a scene card's Render on pick) without changing the saved setting.
-    // `tier` (#16136) renders a draft or a final: the tier's resolution on the shot's model, unless `target` names one.
-    const pinned = target ? { ...videoSettings.settings, ...target } : videoSettings.settings;
-    const settings = tier ? renderTierVideoSettings(pinned.backend, { scene, scenes: project?.scenes, videoSettings: videoSettings.settings, override: target, tier }) : pinned;
-    const { detectedAudioReactiveLora } = videoSettings;
-    const audioReactiveSelected = target ? settings.backend === 'local' && settings.generationMode === 'audioReactive' : videoSettings.audioReactiveSelected;
-    const videoBlockedReason = target && videoSettings.blockedReasonFor ? videoSettings.blockedReasonFor(settings) : videoSettings.videoBlockedReason;
-    if (videoBlockedReason) { toast.error(videoBlockedReason); return Promise.resolve({ ok: false }); }
-    // #8977: a performance shot lip-syncs to the master recording, which only a
-    // verified source-audio provider can do — never a cutaway lane with an
-    // invented voice. The server slices the song and re-checks the capability.
-    const performance = isPerformanceScene(scene);
-    const performanceBlocked = performance
-      ? (audioReactiveSelected ? performanceBlockedReason('local') : performanceBlockedReason(settings.backend))
-      : null;
-    if (performanceBlocked) { toast.error(performanceBlocked); return Promise.resolve({ ok: false }); }
-    // Hosted performance shots use their own server-prepared song window, not
-    // the Local cutaway's supplied-audio route.
-    const hostedPerformance = performance && settings.backend === 'fal';
-    // The shot card's checkbox (true/false) overrides the project's LTX 2.5 References mode. A project-default
-    // render without a card (bulk, revision) resolves the shot's clip references itself; the server then adds the
-    // reference-sheet prefix. A greybox shot, or a model that is not LTX 2.5, renders as usual.
-    const localCutaway = settings.backend === 'local' && !performance && !audioReactiveSelected;
-    const projectLtxReferences = settings.generationMode === LTX_REFERENCES_GENERATION_MODE && localCutaway
-      && isLtx25Model((videoSettings.models || []).find((m) => m.id === (settings.modelId || videoSettings.defaultModel)))
-      && !scene.setReference?.greyboxShotId;
-    const useLtxReferences = localCutaway && (typeof card?.ltxReferences === 'boolean' ? card.ltxReferences : projectLtxReferences);
-    const ltxReferenceFiles = !useLtxReferences ? null : card?.ltxReferences === true ? card.expectedClipReferenceFiles
-      : musicVideoClipConditioningReferences(project, scene, castMedia, { limit: LTX_REFERENCES_MAX_REFERENCES }).map((ref) => ref.imageId);
-    if (useLtxReferences && card?.ltxReferences !== true) {
-      if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
-      if (!ltxReferenceFiles.length) { toast.error('Choose at least one clip reference for LTX 2.5 References'); return Promise.resolve({ ok: false }); }
-    }
-    const coverSec = sourceClipNeedSec(scene, project?.scenes);
-    const ownSpan = typeof scene?.endSec === 'number' && typeof scene?.startSec === 'number' ? scene.endSec - scene.startSec : null;
-    const ltxScene = coverSec != null && ownSpan != null && coverSec > ownSpan + 1e-6 ? { startSec: 0, endSec: coverSec } : scene;
-    const referenceFrames = useLtxReferences ? ltxReferenceFrames(ltxScene, target) : null;
-    if (useLtxReferences && referenceFrames == null) {
-      toast.error('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.');
-      return Promise.resolve({ ok: false });
-    }
-    const songAudio = useLtxReferences || hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
-    const mode = useLtxReferences ? LTX_REFERENCES_IC_MODE : audioReactiveSelected || songAudio ? 'a2v' : 'image';
-    const falFields = settings.backend === 'fal'
-      ? falTakeRequestFields(falSceneTake({ scene, scenes: project?.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
-      : null;
-    // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
-    const higgsfieldFields = settings.backend === 'higgsfield' ? higgsfieldShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
-    const googleFields = settings.backend === 'google' ? googleShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
-    const runwayFields = settings.backend === 'runway'
-      ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project?.scenes, videoSettings: settings }))
-      : null;
-    // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
-    const disableAudio = !shotWantsClipSound(scene);
-    const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
-    return renderMusicVideoSceneClip(project.id, scene.sceneId, {
-      prompt,
-      ...(tier ? { tier } : {}),
-      ...(settings.backend ? { backend: settings.backend } : {}),
-      ...(settings.backend === 'grok'
-        // Request the 6/10s clip that COVERS this shot; the saved pin is only
-        // the fallback for a scene not yet timed on the song.
-        // A scene card's Length pick wins.
-        ? { grokDuration: grokSceneRequestDuration(scene, settings, target, project?.scenes) }
-        // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
-        // request is exactly the take the scene card prices (falSceneTake):
-        // a cutaway names its model, the length covering the shot (or the
-        // pinned length) and its resolution; a performance clip's length
-        // follows its song slice (server-side), so it sends only the lip-sync
-        // resolution.
-        : falFields || runwayFields || higgsfieldFields || googleFields
-          ? falFields || runwayFields || higgsfieldFields || googleFields
-          : settings.backend === 'gemini'
-            // Gemini's composer has no length or audio control.
-            ? {}
-            : settings.backend === 'local'
-            // A scene card's pick names its model and length; else the saved model at the model's default length.
-            ? { modelId: settings.modelId || undefined,
-              ...(useLtxReferences ? { numFrames: referenceFrames,
-                icReferenceImageFiles: ltxReferenceFiles } : target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
-            // A named model is local-only machinery at the server boundary and
-            // would force the resolver off a Grok install default. Keep the
-            // shared pin saved, but omit it until this peer chooses Local.
-            : { grokDuration: settings.grokDuration, disableAudio }),
-      mode,
-      sourceImageFile: scene.referenceImageId,
-      // A style-break end frame (#11173), when this fal or local model takes one
-      // (a local LTX clip then renders first+last frame, #11258).
-      ...(useLtxReferences || (card && (card.endFrame === false || songAudio)) ? {} : sceneEndFrameRequestFields(scene, {
-        backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId,
-        googleModelId: settings.googleModelId, higgsfieldModelId: settings.higgsfieldModelId, mode, // A card's local pick names its own model; else the active one.
-        localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
-      })),
-      ...(audioReactiveSelected ? {
-        audioStartSec: scene.startSec || 0,
-        loraFilenames: [detectedAudioReactiveLora.filename],
-        loraScales: [settings.audioReactiveScale],
-      } : {}),
-      musicVideo: JSON.stringify({
-        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
-        projectId: project.id, sceneId: scene.sceneId, ...(revisionId ? { revisionId } : {}),
-        compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
-        ...(hostedPerformance ? { songAudio: false } : {}),
-        ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
-        ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles }
-          : useLtxReferences ? { expectedClipReferenceFiles: ltxReferenceFiles } : {}),
-        ...(Array.isArray(card?.expectedClipReferenceLabels) ? { expectedClipReferenceLabels: card.expectedClipReferenceLabels } : {}),
-        ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
-        ...(card?.startFrameLayout ? { startFrameLayout: true } : {}),
-      }),
-    }, { silent: true })
+    // `card` is the shot card's Render text and toggles. `target` renders this
+    // shot elsewhere without changing the saved pin. `tier` is draft or final.
+    const built = buildSceneClipRequest({ scene, project, card, target, tier, revisionId, videoSettings, castMedia });
+    if (built.error) { toast.error(built.error); return Promise.resolve({ ok: false }); }
+    const renderKey = videoLane.startScene(scene.sceneId, { label: built.label });
+    return renderMusicVideoSceneClip(project.id, scene.sceneId, built.body, { silent: true })
       .then((res) => trackVideoJob(res, scene.sceneId, renderKey, onJob))
       .catch((err) => handleVideoError(err, scene.sceneId, renderKey, 'Scene video generation failed'));
   };

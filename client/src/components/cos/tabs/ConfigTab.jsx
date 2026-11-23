@@ -49,6 +49,17 @@ const DOMAIN_MODE_COLORS = {
 const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
   .map((value) => ({ value, label: value[0] + value.slice(1).toLowerCase() }));
 
+// Mirrors OUTWARD_SAFETY_KINDS. Field names stay flat so the pending-save
+// resync can compare primitives.
+const SAFETY_KIND_FIELDS = [
+  { id: 'content', field: 'safetyKindContent', label: 'Content', description: 'Generated posts, newsletters, and blogs.' },
+  { id: 'publish', field: 'safetyKindPublish', label: 'Publish', description: 'Deploys, releases, and outbound sends.' },
+  { id: 'federation', field: 'safetyKindFederation', label: 'Federation', description: 'Record sync to the user\'s other machines.' },
+  { id: 'external-pr', field: 'safetyKindExternalPr', label: 'External PR', description: 'Pull requests opened outside this install.' },
+];
+
+const selectedSafetyKinds = (form) => SAFETY_KIND_FIELDS.filter((item) => form[item.field]).map((item) => item.id);
+
 const getDefaultFormData = (config, avatarStyle) => ({
   healthCheckIntervalMs: config?.healthCheckIntervalMs ?? 900_000,
   maxConcurrentAgents: config?.maxConcurrentAgents ?? 3,
@@ -63,6 +74,15 @@ const getDefaultFormData = (config, avatarStyle) => ({
   appReviewCooldownMs: config?.appReviewCooldownMs ?? 1_800_000,
   avatarStyle: config?.avatarStyle || avatarStyle || 'svg',
   dynamicAvatar: config?.dynamicAvatar ?? true,
+  confidenceEnabled: config?.confidenceAutoApproval?.enabled ?? true,
+  confidenceHighThreshold: config?.confidenceAutoApproval?.highThreshold ?? 80,
+  confidenceLowThreshold: config?.confidenceAutoApproval?.lowThreshold ?? 50,
+  confidenceMinSamples: config?.confidenceAutoApproval?.minSamples ?? 5,
+  safetyEnabled: config?.safetyKindApproval?.enabled ?? true,
+  ...Object.fromEntries(SAFETY_KIND_FIELDS.map((item) => [
+    item.field,
+    (config?.safetyKindApproval?.alwaysApproveKinds ?? SAFETY_KIND_FIELDS.map((kind) => kind.id)).includes(item.id),
+  ])),
 });
 
 function SectionHeading({ icon: Icon, title, description }) {
@@ -263,6 +283,28 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     return saveConfigPatch(patch, { failureKeys: [field] });
   }, [saveConfigPatch]);
 
+  const patchConfidence = useCallback((field, apiKey, value) => {
+    pendingConfigFieldsRef.current.set(field, value);
+    setFormData((current) => ({ ...current, [field]: value }));
+    return saveConfigPatch({ confidenceAutoApproval: { [apiKey]: value } }, { failureKeys: [field] });
+  }, [saveConfigPatch]);
+
+  const patchSafetyEnabled = useCallback((value) => {
+    pendingConfigFieldsRef.current.set('safetyEnabled', value);
+    setFormData((current) => ({ ...current, safetyEnabled: value }));
+    return saveConfigPatch({ safetyKindApproval: { enabled: value } }, { failureKeys: ['safetyEnabled'] });
+  }, [saveConfigPatch]);
+
+  const patchSafetyKind = useCallback((field, checked) => {
+    pendingConfigFieldsRef.current.set(field, checked);
+    const nextForm = { ...formData, [field]: checked };
+    setFormData(nextForm);
+    return saveConfigPatch(
+      { safetyKindApproval: { alwaysApproveKinds: selectedSafetyKinds(nextForm) } },
+      { failureKeys: [field] },
+    );
+  }, [formData, saveConfigPatch]);
+
   useEffect(() => {
     const savedFormData = getDefaultFormData(config, avatarStyle);
     setFormData(Object.fromEntries(Object.entries(savedFormData).map(([field, savedValue]) => {
@@ -450,6 +492,29 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           onDomainChange={handleDomainChange}
           onBudgetChange={handleBudgetChange}
         />
+        <div className="space-y-3" aria-labelledby="approval-gates-heading">
+          <h5 id="approval-gates-heading" className="text-sm font-medium text-port-text">Approval gates</h5>
+          <p className="text-xs leading-relaxed text-port-text-muted">
+            Confidence decides whether familiar improvement work can start on its own. Outward safety kinds stay held for review even when confidence is high. Saved values are what the learning view and the approval decision read.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <ConfigRow label="Confidence auto-approval" description="Hold low-confidence improvement work for review." type="checkbox" inputValue={formData.confidenceEnabled} onChange={(value) => patchConfidence('confidenceEnabled', 'enabled', value)} />
+            <ConfigRow label="High confidence" description="At or above this score, enough history auto-approves." type="number" inputValue={formData.confidenceHighThreshold} min={0} max={100} step={1} onChange={(value) => patchConfidence('confidenceHighThreshold', 'highThreshold', value)} />
+            <ConfigRow label="Low confidence" description="Below this score, work waits for review." type="number" inputValue={formData.confidenceLowThreshold} min={0} max={100} step={1} onChange={(value) => patchConfidence('confidenceLowThreshold', 'lowThreshold', value)} />
+            <ConfigRow label="Minimum samples" description="History required before a high score can auto-approve." type="number" inputValue={formData.confidenceMinSamples} min={1} step={1} onChange={(value) => patchConfidence('confidenceMinSamples', 'minSamples', value)} />
+            <ConfigRow label="Outward safety approval" description="Force review for the kinds checked below." type="checkbox" inputValue={formData.safetyEnabled} onChange={patchSafetyEnabled} />
+            {SAFETY_KIND_FIELDS.map((item) => (
+              <ConfigRow
+                key={item.id}
+                label={item.label}
+                description={item.description}
+                type="checkbox"
+                inputValue={formData[item.field]}
+                onChange={(value) => patchSafetyKind(item.field, value)}
+              />
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="space-y-3" aria-labelledby="capacity-heading">

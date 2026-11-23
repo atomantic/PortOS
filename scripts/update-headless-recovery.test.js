@@ -1,6 +1,7 @@
 import { installUpdateTestSupervisor } from './lib/updateTestSupervisor.js';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, execFileSync } from 'child_process';
+import { createHash } from 'crypto';
 import { mkdirSync, writeFileSync, copyFileSync, readFileSync, existsSync, chmodSync, rmSync } from 'fs';
 import { join, dirname, delimiter } from 'path';
 import { createMaintenanceAdmission } from '../server/lib/maintenanceAdmission.js';
@@ -43,7 +44,8 @@ const STUB_SCRIPTS = [
  */
 async function makeSandbox({
   origin = true, failAfterDelete = true, npmShim = 'ok',
-  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false, unknownPrevious = false, withoutDeps = false, pm2StartFailure = false
+  forceClean = false, pm2OnPath = false, healthy = true, stallDelete = false, nodeVersion = null, originAhead = false, peerTarget = false, aheadRefusesInCheckout = false, unknownPrevious = false, withoutDeps = false, pm2StartFailure = false,
+  lockfileOnly = false, pendingLockfiles = null, restoreTrees = false
 } = {}) {
   const { scratch, repo } = await makeGitSandbox({ origin, prefix: 'portos-update-guard-' });
   const bin = join(scratch, 'bin');
@@ -130,12 +132,36 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   // update.sh only ever calls these as bare commands, so a PATH shim covers
   // every install and the slash-do refresh without touching the network.
   const npmCode = npmShim === 'fail' ? 1 : 0;
+  if (restoreTrees) {
+    writeFileSync(join(scratch, 'restore-install.mjs'), `
+      import { mkdirSync, writeFileSync } from 'node:fs';
+      import { basename, join } from 'node:path';
+      const dir = process.cwd();
+      const touch = (rel) => {
+        const path = join(dir, rel);
+        mkdirSync(join(path, '..'), { recursive: true });
+        writeFileSync(path, '{}');
+      };
+      const name = basename(dir);
+      if (name === 'client') touch('node_modules/vite/bin/vite.js');
+      else if (name === 'server') {
+        touch('node_modules/express/package.json');
+        touch('node_modules/pg/package.json');
+      } else touch('node_modules/pm2/package.json');
+    `);
+  }
+  const restorePosix = restoreTrees
+    ? `${JSON.stringify(process.execPath)} ${JSON.stringify(join(scratch, 'restore-install.mjs'))}\n`
+    : '';
+  const restoreWindows = restoreTrees
+    ? `"${process.execPath}" "${join(scratch, 'restore-install.mjs')}"\r\n`
+    : '';
   const shim = (name, posixBody, windowsBody) => {
     const path = join(bin, WINDOWS ? `${name}.cmd` : name);
     writeFileSync(path, WINDOWS ? `@echo off\r\n${windowsBody}\r\n` : `#!/bin/sh\n${posixBody}\n`);
     if (!WINDOWS) chmodSync(path, 0o755);
   };
-  for (const name of ['npm', 'npx']) shim(name, `exit ${npmCode}`, `exit /b ${npmCode}`);
+  for (const name of ['npm', 'npx']) shim(name, `${restorePosix}exit ${npmCode}`, `${restoreWindows}exit /b ${npmCode}`);
   // The success case is the only one that runs past trusted-rebuilds, so it
   // reaches update.sh's ffmpeg step — which on a machine without ffmpeg would
   // run a real `brew install`, or on Linux CI a passwordless `sudo apt-get
@@ -157,7 +183,11 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
   // pull to perform and a refusal can be shown to have left HEAD where it was.
   let aheadSha = null;
   if (originAhead) {
-    writeFileSync(join(repo, 'ahead.txt'), 'ahead\n');
+    if (lockfileOnly) {
+      writeFileSync(join(repo, 'client', 'package-lock.json'), '{"lockfileVersion":3,"name":"client-lock-only"}\n');
+    } else {
+      writeFileSync(join(repo, 'ahead.txt'), 'ahead\n');
+    }
     if (aheadRefusesInCheckout) {
       // Passes when the pre-pull archive evaluates it (ahead.txt is not
       // archived) and refuses once the pull has put ahead.txt in the checkout —
@@ -206,6 +236,25 @@ if (${pm2StartFailure} && args.startsWith('start') && !fs.existsSync(${JSON.stri
     flags.push(`--import=${pathToFileURL(preload).href}`);
   }
   if (withoutDeps) rmSync(join(repo, 'client', 'node_modules'), { recursive: true, force: true });
+  const place = (rel, content) => {
+    const path = join(repo, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  };
+  if (lockfileOnly) {
+    place('client/node_modules/stale-lockfile', 'stale');
+    place('server/node_modules/keep-server', 'keep');
+    place('node_modules/keep-root', 'keep');
+  }
+  if (pendingLockfiles) {
+    place('server/node_modules/stale-pending', 'stale');
+    place('client/node_modules/keep-client', 'keep');
+    place('node_modules/keep-root', 'keep');
+    place('data/dependency-reconcile-pending.json', JSON.stringify({
+      lockfiles: pendingLockfiles,
+      recordedAt: '2026-01-01T00:00:00.000Z'
+    }));
+  }
 
 
   return { scratch, repo, bin, calls, optionalCalls, forceClean, releaseFile, nodeOptions: flags.join(' '), headSha, aheadSha, peerTarget };
@@ -499,4 +548,87 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('shared updater headless-install guard',
     expect(results.preDelete.status).not.toBe(0);
     expect(pm2Calls(sandboxes.preDelete)).toEqual([]);
   });
+
+  function dependencyReceipt(dir) {
+    const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
+    const lockfile = join(dir, 'package-lock.json');
+    hash.update(existsSync(lockfile) ? readFileSync(lockfile) : '<no-lockfile>');
+    return `v2:${hash.digest('hex')}`;
+  }
+
+  // The sandbox's own ensure-deps, with npm replaced so a redundant install is visible.
+  function attachEnsureDeps(repo) {
+    mkdirSync(join(repo, 'server', 'lib'), { recursive: true });
+    copyFileSync(join(REPO_ROOT, 'scripts', 'ensure-deps.js'), join(repo, 'scripts', 'ensure-deps.js'));
+    copyFileSync(join(REPO_ROOT, 'scripts', 'lib', 'workspaceDependencies.js'), join(repo, 'scripts', 'lib', 'workspaceDependencies.js'));
+    writeFileSync(join(repo, 'scripts', 'trusted-rebuilds.js'), 'export const rebuildTrusted = () => true;\n');
+    writeFileSync(join(repo, 'server', 'lib', 'bufferedSpawn.js'), `
+      import { fileURLToPath } from 'node:url';
+      export const prepareCliSpawn = (command, args) => ({
+        command: process.execPath,
+        args: [fileURLToPath(new URL('../../fake-npm.js', import.meta.url)), ...args]
+      });
+    `);
+    writeFileSync(join(repo, 'fake-npm.js'), `
+      import { mkdirSync, writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+      const cwd = process.cwd();
+      const marker = join(cwd, 'node_modules', 'npm-ran');
+      mkdirSync(join(marker, '..'), { recursive: true });
+      writeFileSync(marker, '1');
+    `);
+  }
+
+  it('wipes node_modules for a lockfile-only update and leaves a receipt ensure-deps trusts', async () => {
+    const box = await makeSandbox({
+      failAfterDelete: false, origin: true, originAhead: true, lockfileOnly: true, restoreTrees: true
+    });
+    try {
+      const result = await runUpdate(box);
+      expect(result.status, result.stdout).toBe(0);
+      expect(result.stdout).toContain('🧹 client package-lock.json changed in this update — clean reinstall (wiping node_modules)');
+      expect(result.stdout).not.toContain('🧹 server ');
+      expect(result.stdout).not.toContain('🧹 root ');
+      expect(existsSync(join(box.repo, 'client', 'node_modules', 'stale-lockfile'))).toBe(false);
+      expect(existsSync(join(box.repo, 'server', 'node_modules', 'keep-server'))).toBe(true);
+      expect(existsSync(join(box.repo, 'node_modules', 'keep-root'))).toBe(true);
+      const hashes = JSON.parse(readFileSync(join(box.repo, 'data', 'deps-hashes.json'), 'utf8'));
+      expect(hashes.client).toBe(dependencyReceipt(join(box.repo, 'client')));
+      expect(hashes.root).toBe(dependencyReceipt(box.repo));
+      expect(hashes.server).toBe(dependencyReceipt(join(box.repo, 'server')));
+      attachEnsureDeps(box.repo);
+      const output = execFileSync(process.execPath, ['scripts/ensure-deps.js'], { cwd: box.repo, encoding: 'utf8' });
+      expect(output).not.toMatch(/reinstall|installing/i);
+      for (const rel of ['node_modules/npm-ran', 'client/node_modules/npm-ran', 'server/node_modules/npm-ran']) {
+        expect(existsSync(join(box.repo, rel))).toBe(false);
+      }
+    } finally {
+      await destroyGitSandbox(box.scratch);
+    }
+  }, 120000);
+
+  it('wipes the workspace named by a pending reconcile marker when the pull diff is empty', async () => {
+    const box = await makeSandbox({
+      failAfterDelete: false, restoreTrees: true, pendingLockfiles: ['server/package-lock.json']
+    });
+    try {
+      const result = await runUpdate(box);
+      expect(result.status, result.stdout).toBe(0);
+      expect(result.stdout).toContain('🧹 server package-lock.json changed in this update — clean reinstall (wiping node_modules)');
+      expect(result.stdout).not.toContain('🧹 client ');
+      expect(result.stdout).not.toContain('🧹 root ');
+      expect(existsSync(join(box.repo, 'server', 'node_modules', 'stale-pending'))).toBe(false);
+      expect(existsSync(join(box.repo, 'client', 'node_modules', 'keep-client'))).toBe(true);
+      expect(existsSync(join(box.repo, 'node_modules', 'keep-root'))).toBe(true);
+      expect(existsSync(join(box.repo, 'data', 'dependency-reconcile-pending.json'))).toBe(false);
+      const hashes = JSON.parse(readFileSync(join(box.repo, 'data', 'deps-hashes.json'), 'utf8'));
+      expect(hashes.server).toBe(dependencyReceipt(join(box.repo, 'server')));
+      attachEnsureDeps(box.repo);
+      const output = execFileSync(process.execPath, ['scripts/ensure-deps.js'], { cwd: box.repo, encoding: 'utf8' });
+      expect(output).not.toMatch(/reinstall|installing/i);
+      expect(existsSync(join(box.repo, 'server', 'node_modules', 'npm-ran'))).toBe(false);
+    } finally {
+      await destroyGitSandbox(box.scratch);
+    }
+  }, 120000);
 });

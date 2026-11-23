@@ -8,10 +8,10 @@ const catalogDB = vi.hoisted(() => ({
   musicVideoRefRoleForType: (type) => ({ character: 'cast', place: 'set', object: 'prop' })[type] || 'mentioned',
 }));
 vi.mock('../catalog/catalogDB.js', () => catalogDB);
-const getProject = vi.hoisted(() => vi.fn());
-vi.mock('./projects.js', () => ({ getProject }));
+const getProject = vi.fn();
 
-const { queueProjectCatalogLinkSync: syncProjectCatalogLinks } = await import('./catalogLinks.js');
+const { queueProjectCatalogLinkSync } = await import('./catalogLinks.js');
+const syncProjectCatalogLinks = (projectId) => queueProjectCatalogLinkSync(projectId, { getProject });
 
 const subject = (id, kind, ingredientId) => ({ id, kind, name: id, ...(ingredientId ? { ingredientId } : {}) });
 

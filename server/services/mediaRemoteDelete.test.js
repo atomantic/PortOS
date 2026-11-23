@@ -22,7 +22,7 @@ vi.mock('../lib/peerHttpClient.js', async (importOriginal) => ({
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {}, indexImage: async () => {} }));
 vi.mock('../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
-vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
+vi.mock('./musicVideo/mediaPoolDelete.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');

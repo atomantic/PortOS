@@ -116,6 +116,9 @@ describe('instance identity stays a leaf (#6836)', () => {
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
+// The project store and the modules above it that it must never load (#17577).
+const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
+const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
     'classifies observed facts without importing reconciliation or CoS orchestration'],
@@ -158,6 +161,17 @@ const SELECTION_CUTS = [
   ].map(entry => [entry, 'services/musicVideo/render.js', 'resolves the master through masterAudioPath.js and render activity through renderActivityState.js']),
   ['services/musicVideo/shotSegments.js', 'services/musicVideo/render.js',
     'plans through renderPlan.js, builds args with renderFfmpegArgs.js and reads render activity from renderActivityState.js'],
+  // #17577: the Music Video project store and the siblings it imports never import back up.
+  ['services/musicVideo/projects.js', MUSIC_VIDEO_STORE_UPWARD,
+    'is the low-level store; board edits and film workflows import it from projectBoardEdits.js and projectFilmActions.js'],
+  ['services/musicVideo/mediaPool.js', MUSIC_VIDEO_STORE,
+    'keeps cross-project deletion in mediaPoolDelete.js'],
+  ['services/musicVideo/catalogLinks.js', MUSIC_VIDEO_STORE,
+    'reads the project through the getProject the store hands in'],
+  ['services/musicVideo/referenceLabels.js', MUSIC_VIDEO_STORE,
+    'reads and writes the project through the accessors the store hands in'],
+  ['services/musicVideo/shotSegmentPaths.js', /^services\/musicVideo\/(?:shotSegments|projects)\.js$/,
+    'is the leaf the store removes a deleted project\'s segments through'],
   // #17619: getIo / command broadcast / film emit lived on the socket composition root.
   ['services/backup.js', 'services/socket.js',
     'reads the live io through the socketIo.js leaf'],
@@ -175,6 +189,13 @@ const SELECTION_CUTS = [
     'broadcasts command output through the socketIo.js leaf'],
   ['services/codeAnimation/films.js', 'services/socket.js',
     'emits film frames through codeAnimation/events.js'],
+  // #17576: a project read presents process pins without the stage orchestrators.
+  ['services/musicVideo/projectPresentation.js', 'services/musicVideo/castAndSetsService.js',
+    'presents Cast & Sets through the processPins.js leaf'],
+  ['services/musicVideo/projectPresentation.js', /^services\/musicVideo\/(?:autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'presents an autonomous run through the processPins.js leaf'],
+  ['services/musicVideo/processPins.js', /^services\/musicVideo\/(?:projects\.js|castAndSetsService\.js|autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'owns the process pins without the stage orchestrators or the project store'],
 ];
 
 // Runtimes that import the queue back load through bootHookRegistry.js (#17499).
@@ -211,6 +232,15 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     }
   });
 
+  // Positive control for the Music Video cuts: the workflows above the store still import what it no longer does.
+  it('sees the upward imports the Music Video workflow modules own', () => {
+    expect(importTargets('services/musicVideo/projectBoardEdits.js').filter(target => MUSIC_VIDEO_STORE_UPWARD.test(target)))
+      .toEqual(expect.arrayContaining(['services/storyboards/followShots.js', 'services/musicVideo/editResult.js', 'services/musicVideo/plateReview.js']));
+    expect(importTargets('services/musicVideo/projectFilmActions.js').filter(target => MUSIC_VIDEO_STORE_UPWARD.test(target)))
+      .toEqual(expect.arrayContaining(['services/musicVideo/blender/fork.js', 'services/film/fork.js', 'services/trackSunoImport.js']));
+    expect(importTargets('services/musicVideo/mediaPoolDelete.js')).toContainEqual(expect.stringMatching(MUSIC_VIDEO_STORE));
+  });
+
   it('the leaves the cut entries import stay import-free', () => {
     for (const leaf of [
       'services/readinessSignal.js',
@@ -226,6 +256,11 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
     expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
     expect(importTargets('services/socket.js')).toContain('services/socketIo.js');
+  });
+
+  it('still sees the processPins.js edge a project read keeps (#17576)', () => {
+    expect(importTargets('services/musicVideo/projectPresentation.js')).toContain('services/musicVideo/processPins.js');
+    expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
   // Positive control for the media scan: the boot owner still names every runtime.

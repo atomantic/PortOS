@@ -1,6 +1,7 @@
-// Where a project's shot segments live. A leaf so coldOpen.js can place its
-// audio there without importing shotSegments.js, which imports coldOpen.js,
-// and so render.js's boot recovery can sweep partials without it either.
+// Where a project's shot segments live, and their removal with the project. A
+// leaf so coldOpen.js can place its audio there, the project store can drop a
+// deleted project's cache and render.js's boot recovery can sweep partials
+// without importing shotSegments.js, which imports all of them.
 import { readdir, rm } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -14,6 +15,15 @@ const safeProjectId = (projectId) => {
 };
 
 export const shotSegmentDir = (projectId) => join(PATHS.data, SHOT_SEGMENT_DIR, safeProjectId(projectId));
+
+// Shots whose completed renders still await segment pruning, per project (shotSegments.js cleanupAfterShot).
+export const pendingShotCleanup = new Map();
+
+/** Remove a project's whole segment cache (the project was deleted). */
+export const removeProjectSegments = (projectId) => {
+  pendingShotCleanup.delete(projectId);
+  return rm(shotSegmentDir(projectId), { recursive: true, force: true });
+};
 
 /** Boot sweep: partial files from renders a restart interrupted. */
 export async function sweepPartialSegments() {

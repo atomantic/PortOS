@@ -1,7 +1,8 @@
 /** Explicit, fork-scoped song revision. Never advances on boot or selects audio automatically. */
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getProject, mutateProjectRecord, cloneProject } from './projects.js';
+import { getProject, mutateProjectRecord } from './projects.js';
+import { cloneProject } from './projectFilmActions.js';
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch, addScenes } from './projectsLogic.js';
 import { parseLyricCues } from './timedText.js';

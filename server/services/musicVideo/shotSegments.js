@@ -54,7 +54,7 @@ import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
 import { coldOpenAudioShots, ensureColdOpenAudio } from './coldOpen.js';
-import { SHOT_SEGMENT_DIR, shotSegmentDir } from './shotSegmentPaths.js';
+import { SHOT_SEGMENT_DIR, shotSegmentDir, pendingShotCleanup } from './shotSegmentPaths.js';
 import { requireProject } from './requireProject.js';
 import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
@@ -66,7 +66,6 @@ export { SHOT_SEGMENT_DIR, shotSegmentDir };
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
 const segmentOwnerWrites = createKeyCachedQueue();
-const pendingShotCleanup = new Map();
 const shotCleanupWrites = createKeyCachedQueue();
 const segmentOwnersFile = dir => join(dir, 'segments.json');
 
@@ -649,11 +648,6 @@ export async function cleanupShotSegments(projectId, { unusedLooks = false, rese
   return reserved ? cleanup() : withRenderCleanupReservation(projectId, cleanup);
 }
 
-/** Remove a project's whole segment cache (the project was deleted). */
-export const removeProjectSegments = (projectId) => {
-  pendingShotCleanup.delete(projectId);
-  return rm(shotSegmentDir(projectId), { recursive: true, force: true });
-};
 
 /**
  * The shot panel's view of the cache: per shot, whether every section it plays

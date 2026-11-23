@@ -22,16 +22,20 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectPage: vi.fn(),
-  listProjectCompletion: vi.fn(async () => []),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
-  cloneProject: vi.fn(async (id, options) => ({
-    id: 'mv-clone', name: options.name || 'A v2', version: 2, parentProjectId: id,
-  })),
   updateProject: vi.fn(async (id, p) => ({ id, ...p })),
   deleteProject: vi.fn(async () => ({ ok: true })),
   setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
   setProjectSections: vi.fn(async (id, sections) => ({ id, audioAnalysis: { sections } })),
+  mutateProjectRecord: vi.fn(),
+  // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
+  appendTakesAcrossScenes: vi.fn(),
+}));
+
+// Board edits answer with an edit result (projectBoardEdits.js); the store writes behind them are doubled above.
+vi.mock('../services/musicVideo/projectBoardEdits.js', () => ({
+  updateProject: vi.fn(async () => ({ edit: { updatedAt: 't1', sceneIds: [], scenes: [], project: {}, removed: [] } })),
   addProjectScene: vi.fn(async (_id, s) => ({ scene: { sceneId: 'mvs-1', order: 0, ...s }, edit: { updatedAt: 't1', sceneIds: ['mvs-1'], scenes: [], project: {}, removed: [] } })),
   updateScene: vi.fn(async (_id, sceneId, p) => ({ scene: { sceneId, ...p }, edit: { updatedAt: 't1', sceneIds: [sceneId], scenes: [{ sceneId, ...p }], project: {}, removed: [] } })),
   deleteScene: vi.fn(async (id) => ({ project: { id, scenes: [] }, edit: { updatedAt: 't1', sceneIds: [], scenes: [], project: {}, removed: [] } })),
@@ -42,12 +46,21 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   splitProjectScene: vi.fn(),
   mergeProjectNextScene: vi.fn(),
   mergeProjectPreviousScene: vi.fn(),
-  mutateProjectRecord: vi.fn(),
   // Scene takes (#8965) — exercised against the real store in musicVideoTakes.test.js.
   appendSceneTakes: vi.fn(),
-  appendTakesAcrossScenes: vi.fn(),
   selectSceneTake: vi.fn(),
   reviewSceneTake: vi.fn(),
+  markMediaPoolAssets: vi.fn(),
+  previewProjectPacingRecut: vi.fn(),
+  recutProjectToPacing: vi.fn(),
+}));
+
+vi.mock('../services/musicVideo/projectFilmActions.js', () => ({
+  listProjectCompletion: vi.fn(async () => []),
+  cloneProject: vi.fn(async (id, options) => ({
+    id: 'mv-clone', name: options.name || 'A v2', version: 2, parentProjectId: id,
+  })),
+  refreshSongStyleFromSuno: vi.fn(),
 }));
 
 // Keeps the real `buildManualAnalysisFromCached` (pure arithmetic, worth
@@ -114,7 +127,12 @@ vi.mock('../services/musicVideo/planner.js', () => ({
   })),
 }));
 
-import * as svc from '../services/musicVideo/projects.js';
+import * as store from '../services/musicVideo/projects.js';
+import * as boardEdits from '../services/musicVideo/projectBoardEdits.js';
+import * as filmActions from '../services/musicVideo/projectFilmActions.js';
+// One handle over the three doubled modules: each name lives in exactly one of them, except
+// updateProject, whose plain store form the project routes assert on (the edit form is boardEdits.updateProject).
+const svc = { ...boardEdits, ...filmActions, ...store };
 import { analyzeAudioFile, analyzeAudioFileManual } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
@@ -565,7 +583,7 @@ describe('musicVideo routes', () => {
   it('PATCH /:id/scenes/:sceneId sets a scene to a performance shot and rejects an unknown shot mode (#8977)', async () => {
     const ok = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'performance' });
     expect(ok.status).toBe(200);
-    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' }, { edit: true });
+    expect(svc.updateScene).toHaveBeenCalledWith('mv-1', 'mvs-1', { shotMode: 'performance' });
     const bad = await request(app).patch('/api/music-video/mv-1/scenes/mvs-1').send({ shotMode: 'karaoke' });
     expect(bad.status).toBe(400);
     expect(svc.updateScene).toHaveBeenCalledTimes(1);
@@ -626,7 +644,7 @@ describe('musicVideo routes', () => {
       expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
         lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
         lyricMarkers: [],
-      }, { edit: false });
+      });
     });
 
     it('appends plain lines after the existing cues, anchoring the sheet\'s markers after them', async () => {
@@ -643,7 +661,7 @@ describe('musicVideo routes', () => {
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 1 },
           { type: 'direction', label: 'Shouts', kind: 'shouted', line: 2 },
         ],
-      }, { edit: false });
+      });
     });
 
     it('422s when the text holds no lyric lines, and 404s for a missing project', async () => {
@@ -677,7 +695,7 @@ describe('musicVideo routes', () => {
           { type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 1 },
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
         ],
-      }, { edit: false });
+      });
     });
 
     it('if-empty never replaces lines the project already has, and skips a track with no lyrics', async () => {
