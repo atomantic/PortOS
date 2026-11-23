@@ -56,7 +56,11 @@ export const htmlPagePrompt = (brief, plan = null) => {
 };
 
 /** The plan out of a planning reply: a reasoning block a model wrote inline is dropped so only the plan is shown and sent on. Empty when the reply held no plan. */
-export const extractHtmlPagePlan = (text) => String(text || '').replace(/^\s*<think>[\s\S]*?<\/think>/i, '').trim();
+export const extractHtmlPagePlan = (text) => {
+  const reply = String(text || '').replace(/^\s*<think>[\s\S]*?<\/think>/i, '').trim();
+  // A reasoning block cut off before it closed holds no plan.
+  return /^<think>/i.test(reply) ? '' : reply;
+};
 
 // ---- scoring ----------------------------------------------------------------
 

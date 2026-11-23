@@ -30,6 +30,7 @@ describe('brief', () => {
   it('reads the plan from a reply without an inline reasoning block', () => {
     expect(extractHtmlPagePlan('<think>hmm</think>\n\n  The plan.  ')).toBe('The plan.');
     expect(extractHtmlPagePlan('   ')).toBe('');
+    expect(extractHtmlPagePlan('<think>cut off at the token limit')).toBe('');
   });
 });
 

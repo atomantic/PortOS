@@ -162,7 +162,7 @@ describe('startRuns', () => {
   });
 
   it('builds the page from the brief alone when the plan step fails, and records why', async () => {
-    generate.mockImplementation(async ({ prompt }) => (isPlanRequest(prompt) ? { text: '', error: 'plan timed out' } : { text: goodPage }));
+    generate.mockImplementation(async ({ prompt }) => (isPlanRequest(prompt) ? { text: 'A partial pl', error: 'plan timed out' } : { text: goodPage }));
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: goodPage, plan: null, planError: 'plan timed out', prompt: htmlPagePrompt(PAGES[0]) });

@@ -249,7 +249,8 @@ async function processRun(id) {
           const planStartedAt = Date.now();
           const planned = await send(planPrompt);
           if (controller.signal.aborted) return;
-          plan = extractHtmlPagePlan(planned?.text) || null;
+          // A reply that came back with an error may carry partial text; it is not a plan.
+          plan = planned?.error ? null : (extractHtmlPagePlan(planned?.text) || null);
           // A failed plan step degrades to the brief alone; the page records why, and its prompt shows what was really sent.
           planError = plan ? null : (planned?.error || 'The plan step returned no plan');
           planElapsedMs = Math.max(0, Date.now() - planStartedAt);
