@@ -55,6 +55,8 @@
     import RFB from '/remote-desktop/vendor/core/rfb.js';
 
     const token = '__REMOTE_DESKTOP_TOKEN__';
+    // The token is embedded above and used for the WS bridge; drop it from the address bar and history entry.
+    if (location.search) history.replaceState(null, '', location.pathname);
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
     const wsURL = `${scheme}://${location.host}/remote-desktop/ws?token=${encodeURIComponent(token)}`;
     const screen = document.querySelector('#screen');
