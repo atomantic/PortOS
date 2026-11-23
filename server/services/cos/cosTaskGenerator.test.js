@@ -1830,7 +1830,7 @@ describe('pr-reviewer security preflight wiring', () => {
     const body = IMP_SRC.slice(start, IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', start));
     const preflightAt = body.indexOf('runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule, {');
     const preconditionAt = body.indexOf('shouldSkipForPrecondition(metadata, app, taskType)');
-    const promptAt = body.indexOf('getStagePrompt(taskType, currentStageIndex)');
+    const promptAt = body.indexOf('getStagePrompt(taskType, metadata.pipeline?.currentStage ?? 0)');
 
     expect(preflightAt, 'pr-reviewer must use the direct security preflight').toBeGreaterThan(-1);
     expect(preconditionAt, 'the ordinary stage gate must remain in the generator').toBeGreaterThan(-1);

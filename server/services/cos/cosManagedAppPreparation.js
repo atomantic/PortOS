@@ -237,41 +237,43 @@ function applyOneProviderPin(metadata, pin) {
   else delete metadata.model;
 }
 
+/**
+ * Apply one pin tier. `allowEffort` tiers take their own `effort`; the
+ * `clear*OnProvider` flags drop the lower tiers' effort/executionOptions when
+ * this tier re-pins the provider (they are provider-scoped), before this tier's
+ * own values apply.
+ */
+function applyPinLayer(metadata, { pin, effort, executionOptions, allowEffort = false, clearEffortOnProvider = false, clearExecutionOptionsOnProvider = false }) {
+  applyOneProviderPin(metadata, pin);
+  if (pin?.providerId) {
+    if (clearEffortOnProvider) delete metadata.effort;
+    if (clearExecutionOptionsOnProvider) delete metadata.executionOptions;
+  }
+  if (executionOptions !== undefined) metadata.executionOptions = executionOptions;
+  if (allowEffort && effort) metadata.effort = effort;
+}
+
 function applyProviderModelPins(metadata, interval, appPin, hookOverride, requestOverride) {
   // Least specific first: the task's global Schedule pin. Then the app's own
   // per-app pin, which is the more specific choice — honored for EVERY task type
   // (#4783), not just the one whose buildTaskInput hook read it. Then a
-  // buildTaskInput hook's fully-resolved choice, which wins outright.
-  applyOneProviderPin(metadata, { providerId: interval.providerId || null, model: interval.model || null });
-  if (interval.effort) {
-    metadata.effort = interval.effort;
-  }
-  if (interval.executionOptions !== undefined) metadata.executionOptions = interval.executionOptions;
-  applyOneProviderPin(metadata, appPin);
-  if (appPin?.executionOptions !== undefined) metadata.executionOptions = appPin.executionOptions;
-  applyOneProviderPin(metadata, hookOverride);
-  if (hookOverride?.executionOptions !== undefined) metadata.executionOptions = hookOverride.executionOptions;
-  // A pipeline's current stage is more specific than the whole-task defaults.
-  // Stage 0 may already have advanced through a server-owned preflight.
+  // buildTaskInput hook's fully-resolved choice, which wins outright. A
+  // pipeline's current stage is more specific than the whole-task defaults
+  // (stage 0 may already have advanced through a server-owned preflight). Most
+  // specific: an explicit per-request pin (e.g. one "PR review" click from the
+  // Pull Requests tab), applied last so it wins over every configured pin. A
+  // public-review posture still gates the final provider to its own eligible set
+  // at spawn time (resolveAgentProviderAndModel); an unsupported pin blocks
+  // instead of granting permission to spend on another provider.
   const stage = metadata.pipeline?.stages?.[metadata.pipeline.currentStage ?? 0];
-  if (stage) {
-    applyOneProviderPin(metadata, stage);
-    if (stage.providerId) delete metadata.effort;
-    if (stage.providerId) delete metadata.executionOptions;
-    if (stage.executionOptions !== undefined) metadata.executionOptions = stage.executionOptions;
-    if (stage.effort) metadata.effort = stage.effort;
-  }
-  // Most specific: an explicit per-request pin (e.g. one "PR review" click from
-  // the Pull Requests tab), applied last so it wins over every configured pin
-  // above. A public-review posture still gates the final provider to its own
-  // eligible set at spawn time (resolveAgentProviderAndModel). An unsupported
-  // pin blocks instead of granting permission to spend on another provider.
-  applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
-  if (requestOverride?.provider) delete metadata.executionOptions;
-  if (requestOverride?.executionOptions !== undefined) metadata.executionOptions = requestOverride.executionOptions;
-  if (requestOverride?.effort) {
-    metadata.effort = requestOverride.effort;
-  }
+  const layers = [
+    { pin: { providerId: interval.providerId || null, model: interval.model || null }, effort: interval.effort, executionOptions: interval.executionOptions, allowEffort: true },
+    { pin: appPin, executionOptions: appPin?.executionOptions },
+    { pin: hookOverride, executionOptions: hookOverride?.executionOptions },
+    stage && { pin: stage, effort: stage.effort, executionOptions: stage.executionOptions, allowEffort: true, clearEffortOnProvider: true, clearExecutionOptionsOnProvider: true },
+    { pin: { providerId: requestOverride?.provider || null, model: requestOverride?.model || null }, effort: requestOverride?.effort, executionOptions: requestOverride?.executionOptions, allowEffort: true, clearExecutionOptionsOnProvider: true },
+  ];
+  for (const layer of layers) if (layer) applyPinLayer(metadata, layer);
 }
 
 // The one "nothing to build" result of prepareManagedAppImprovementTask — every
@@ -408,7 +410,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // while the completing task is still `in_progress` on disk — a hook that
   // counts in-flight tasks against a budget must not count the run that just
   // finished and already recorded itself (#3179).
-      const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
+  const inputHook = await resolveTaskInputHook(app, taskType, taskSchedule, { ignoreTaskId });
   if (inputHook.skip) return skipped('input-hook');
   const { hookPrompt, hookOverride, hookMetadata } = inputHook;
 
@@ -462,7 +464,6 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // A buildTaskInput hook that returned a fully-rendered prompt wins over the
   // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
   // entry). The token-replacement chain below is a no-op on it (no {tokens}).
-  const currentStageIndex = metadata.pipeline?.currentStage ?? 0;
   const forgeClaim = promptTaskType === 'claim-issue' || promptTaskType === 'claim-issue-gitlab';
   const scheduledClaimPolicy = metadata.prCompletion ?? resolveAppPrCompletion(app, metadata);
 
@@ -471,64 +472,14 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // so PortOS provisions its worktree/markers and injects its content instead
   // of making the agent repeat Phase 1's 500-issue scan.
   const isSwarm = Number.isInteger(metadata.swarmCount) && metadata.swarmCount >= SWARM_COUNT_MIN;
-  let scheduledPreflight = null;
-  if (forgeClaim && !isSwarm && !hookPrompt && !metadata.pipeline?.stages && !interval.prompt && perpetualGate.candidates?.length) {
-    const tracker = promptTaskType === 'claim-issue-gitlab' ? 'gitlab' : 'github';
-    const { prepareAppIssueClaim } = await import('../appIssues.js');
-    for (const candidate of perpetualGate.candidates) {
-      const targetRef = String(candidate.number);
-      try {
-        const preflight = await prepareAppIssueClaim(app, targetRef, tracker, { includePreflight: true });
-        const authorFilter = metadata.issueAuthorFilter || 'self';
-        // Only stamp @me + in-progress eagerly on trusted/self-authored issues;
-        // an unscreened third-party issue under `any` waits for the agent's
-        // cognitive security check before claiming markers on the forge.
-        const trustedAuthor = authorFilter !== 'any'
-          || Boolean(preflight.issueAuthor && preflight.forgeContext?.me && preflight.issueAuthor === preflight.forgeContext.me.toLowerCase());
-        scheduledPreflight = {
-          target: targetRef,
-          epic: preflight.epic === true,
-          serverCheckout: preflight.epic !== true && trustedAuthor,
-          issueContext: preflight.issueContext || null,
-          forgeContext: preflight.forgeContext || null,
-          commentsClear: preflight.commentsClear === true,
-          linkedWorkClear: preflight.linkedWorkClear === true,
-          linkedItems: preflight.linkedItems || null,
-        };
-        break;
-      } catch (err) {
-        if (err?.code === 'ISSUE_IN_FLIGHT' || err?.status === 409) continue;
-        break;
-      }
-    }
-  }
+  const scheduledPreflight = forgeClaim && !isSwarm && !hookPrompt && !metadata.pipeline?.stages && !interval.prompt && perpetualGate.candidates?.length
+    ? await preflightScheduledClaimCandidate({ app, promptTaskType, metadata, candidates: perpetualGate.candidates })
+    : null;
 
-  const promptResult = hookPrompt
-    ? hookPrompt
-    : (metadata.pipeline?.stages
-      ? await getStagePrompt(taskType, currentStageIndex)
-      : await getTaskPrompt(promptKeyForBody, forgeClaim ? {
-        claimFlow: true,
-        withSource: true,
-        claimIssueOptions: scheduledPreflight ? {
-          target: scheduledPreflight.target,
-          prCompletion: scheduledClaimPolicy,
-          preverified: true,
-          nonEpic: !scheduledPreflight.epic,
-          serverCheckout: scheduledPreflight.serverCheckout,
-          commentsClear: scheduledPreflight.commentsClear,
-          linkedWorkClear: scheduledPreflight.linkedWorkClear,
-          forgeContext: scheduledPreflight.forgeContext,
-          linkedItems: scheduledPreflight.linkedItems,
-        } : { prCompletion: scheduledClaimPolicy },
-      } : {}));
-  const promptComposed = typeof promptResult === 'object' && promptResult.composed;
-  if (scheduledPreflight && promptComposed) {
-    metadata.claimTarget = scheduledPreflight.target;
-    if (scheduledPreflight.serverCheckout) metadata.claimServerCheckout = true;
-  }
-  const promptTemplate = typeof promptResult === 'string' ? promptResult
-    : `${promptResult.composed ? '' : `## Claim target and completion policy\n\nTarget: ${scheduledPreflight?.target || 'selected from the configured tracker'}. Effective PR completion policy: ${scheduledClaimPolicy}. Follow the runtime safety and completion contracts for this run.\n\n`}${promptResult.prompt}`;
+  const { promptTemplate, promptComposed } = await resolveImprovementPromptTemplate({
+    taskType, promptTaskType, promptKeyForBody, interval, metadata, hookPrompt,
+    scheduledPreflight, scheduledClaimPolicy, forgeClaim, getTaskPrompt, getStagePrompt,
+  });
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
@@ -542,23 +493,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   if (isAuditTaskType(taskType)) {
     metadata.noChangeSuccess = !fileIssues;
   }
-  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues: fileIssues || isAuditTaskType(taskType) });
-  // Git-backed issue trackers have a readback verifier; preserve Jira/PLAN.md
-  // delivery without promising an unsupported machine-checkable gate.
-  if (isAuditTaskType(taskType) && !fileIssues && ['github', 'gitlab'].includes(trackerFiling.workTracker)) metadata.auditDispositionVersion = 1;
-  if (trackerFiling.workTracker && (fileIssues || !isAuditTaskType(taskType))) {
-    // Traceability + deliverable posture, derived from the SAME resolved tracker
-    // that selected the {trackerInstructions} block above so the flag can't drift
-    // from the instructions the agent actually got: the PLAN.md path commits
-    // checklist items (dirty tree), while github/gitlab/jira file issues/tickets
-    // and leave the tree CLEAN. Without this downstream bookkeeping mistakes a
-    // scheduled forge-tracker run for missing code work (#3102).
-    metadata.workTracker = trackerFiling.workTracker;
-    // Stamped unconditionally — a schedule/per-app `worktreeChangesExpected`
-    // override would let the flag disagree with the instructions the agent
-    // actually got, which is the exact drift this derivation exists to prevent.
-    metadata.worktreeChangesExpected = trackerFiling.worktreeChangesExpected;
-  }
+  const trackerFiling = await applyTrackerFilingMetadata({ app, taskType, metadata, fileIssues });
 
   // pr-watcher: poll the app's GitHub repo for PRs newly opened against the
   // default branch; injects {prData}/{repoFullName}/{defaultBranch}.
@@ -590,6 +525,147 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const prefetchedIssueBlock = scheduledPreflight && promptComposed
     ? appendPrefetchedIssueContext(promptTaskType, scheduledPreflight.target, scheduledPreflight.issueContext)
     : '';
+  const scoped = await buildScopedTaskDescription({
+    app, taskType, promptTaskType, metadata, interval, appOverride, preflightCardId,
+    promptTemplate, modeInstructions, scheduledPreflight, trackerFiling,
+    blocks: {
+      referenceData: referenceDataBlock,
+      prData: prDataBlock,
+      inFlightBranches: inFlightBranchesBlock,
+      zombieIssues: zombieIssuesBlock,
+      repoSyncReport: repoSyncReportBlock,
+      repoFullName: prRepoFullName,
+      defaultBranch: prDefaultBranch,
+      planConstraint: planConstraintBlock,
+      prefetchedIssue: prefetchedIssueBlock,
+    },
+  });
+  if (scoped.skip) return scoped.skip;
+  const { description } = scoped;
+
+  return finalizePreparedImprovementTask({
+    taskType, app, state, metadata, interval, appOverride, hookOverride, hookMetadata,
+    providerOverride, perpetualGate, description, fileIssues,
+  });
+}
+
+/**
+ * For non-swarm perpetual forge claims, reuse the candidate list the work
+ * detector already fetched: pre-pin and preflight the oldest eligible issue so
+ * PortOS provisions its worktree/markers and injects its content instead of
+ * making the agent repeat Phase 1's 500-issue scan. Returns `null` when no
+ * candidate could be preflighted.
+ */
+async function preflightScheduledClaimCandidate({ app, promptTaskType, metadata, candidates }) {
+  const tracker = promptTaskType === 'claim-issue-gitlab' ? 'gitlab' : 'github';
+  const { prepareAppIssueClaim } = await import('../appIssues.js');
+  for (const candidate of candidates) {
+    const targetRef = String(candidate.number);
+    try {
+      const preflight = await prepareAppIssueClaim(app, targetRef, tracker, { includePreflight: true });
+      const authorFilter = metadata.issueAuthorFilter || 'self';
+      // Only stamp @me + in-progress eagerly on trusted/self-authored issues;
+      // an unscreened third-party issue under `any` waits for the agent's
+      // cognitive security check before claiming markers on the forge.
+      const trustedAuthor = authorFilter !== 'any'
+        || Boolean(preflight.issueAuthor && preflight.forgeContext?.me && preflight.issueAuthor === preflight.forgeContext.me.toLowerCase());
+      return {
+        target: targetRef,
+        epic: preflight.epic === true,
+        serverCheckout: preflight.epic !== true && trustedAuthor,
+        issueContext: preflight.issueContext || null,
+        forgeContext: preflight.forgeContext || null,
+        commentsClear: preflight.commentsClear === true,
+        linkedWorkClear: preflight.linkedWorkClear === true,
+        linkedItems: preflight.linkedItems || null,
+      };
+    } catch (err) {
+      // An in-flight issue is someone else's; try the next candidate. Any other
+      // failure ends probing and leaves the agent to claim on its own.
+      if (err?.code === 'ISSUE_IN_FLIGHT' || err?.status === 409) continue;
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve the prompt template: a buildTaskInput hook's fully-rendered prompt
+ * wins (the hook owns its prompt; LI has no DEFAULT_TASK_PROMPTS entry), then
+ * the pipeline stage prompt, then the task's template. A composed claim prompt
+ * also stamps the preflighted claim target onto `metadata`.
+ */
+async function resolveImprovementPromptTemplate({
+  taskType, promptTaskType, promptKeyForBody, interval, metadata, hookPrompt,
+  scheduledPreflight, scheduledClaimPolicy, forgeClaim, getTaskPrompt, getStagePrompt,
+}) {
+  let promptResult;
+  if (hookPrompt) promptResult = hookPrompt;
+  else if (metadata.pipeline?.stages) promptResult = await getStagePrompt(taskType, metadata.pipeline?.currentStage ?? 0);
+  else {
+    promptResult = await getTaskPrompt(promptKeyForBody, forgeClaim ? {
+      claimFlow: true,
+      withSource: true,
+      claimIssueOptions: scheduledPreflight ? {
+        target: scheduledPreflight.target,
+        prCompletion: scheduledClaimPolicy,
+        preverified: true,
+        nonEpic: !scheduledPreflight.epic,
+        serverCheckout: scheduledPreflight.serverCheckout,
+        commentsClear: scheduledPreflight.commentsClear,
+        linkedWorkClear: scheduledPreflight.linkedWorkClear,
+        forgeContext: scheduledPreflight.forgeContext,
+        linkedItems: scheduledPreflight.linkedItems,
+      } : { prCompletion: scheduledClaimPolicy },
+    } : {});
+  }
+  const promptComposed = typeof promptResult === 'object' && promptResult.composed;
+  if (scheduledPreflight && promptComposed) {
+    metadata.claimTarget = scheduledPreflight.target;
+    if (scheduledPreflight.serverCheckout) metadata.claimServerCheckout = true;
+  }
+  const promptTemplate = typeof promptResult === 'string' ? promptResult
+    : `${promptResult.composed ? '' : `## Claim target and completion policy\n\nTarget: ${scheduledPreflight?.target || 'selected from the configured tracker'}. Effective PR completion policy: ${scheduledClaimPolicy}. Follow the runtime safety and completion contracts for this run.\n\n`}${promptResult.prompt}`;
+  return { promptTemplate, promptComposed };
+}
+
+/**
+ * Resolve the {trackerInstructions} block for tracker-filing types
+ * (reference-watch, or an audit type with fileIssues) and stamp the audit /
+ * traceability metadata derived from the SAME resolved tracker.
+ */
+async function applyTrackerFilingMetadata({ app, taskType, metadata, fileIssues }) {
+  const audit = isAuditTaskType(taskType);
+  if (audit) metadata.noChangeSuccess = !fileIssues;
+  const trackerFiling = await resolveTrackerFilingBlock(app, taskType, { fileIssues: fileIssues || audit });
+  // Git-backed issue trackers have a readback verifier; preserve Jira/PLAN.md
+  // delivery without promising an unsupported machine-checkable gate.
+  if (audit && !fileIssues && ['github', 'gitlab'].includes(trackerFiling.workTracker)) metadata.auditDispositionVersion = 1;
+  if (trackerFiling.workTracker && (fileIssues || !audit)) {
+    // Traceability + deliverable posture, derived from the SAME resolved tracker
+    // that selected the {trackerInstructions} block so the flag can't drift
+    // from the instructions the agent actually got: the PLAN.md path commits
+    // checklist items (dirty tree), while github/gitlab/jira file issues/tickets
+    // and leave the tree CLEAN. Without this downstream bookkeeping mistakes a
+    // scheduled forge-tracker run for missing code work (#3102).
+    metadata.workTracker = trackerFiling.workTracker;
+    // Stamped unconditionally — a schedule/per-app `worktreeChangesExpected`
+    // override would let the flag disagree with the instructions the agent
+    // actually got, which is the exact drift this derivation exists to prevent.
+    metadata.worktreeChangesExpected = trackerFiling.worktreeChangesExpected;
+  }
+  return trackerFiling;
+}
+
+/**
+ * Assemble the task description. Resolves to `{ description }`, or
+ * `{ skip }` (a `skipped('reviewer-identity')` result) when no reviewer
+ * identity can be resolved — recorded as a failed preflight outcome.
+ */
+async function buildScopedTaskDescription({
+  app, taskType, promptTaskType, metadata, interval, appOverride, preflightCardId,
+  promptTemplate, modeInstructions, scheduledPreflight, trackerFiling, blocks,
+}) {
   let baseDescription;
   try {
     baseDescription = await buildImprovementTaskDescription({
@@ -597,19 +673,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
       app, promptTaskType, metadata,
       reviewerTaskType: taskType, reviewerOverrideMetadata: appOverride?.taskMetadata,
       commentsClear: scheduledPreflight?.commentsClear === true,
-      blocks: {
-        referenceData: referenceDataBlock,
-        trackerInstructions: trackerFiling.trackerInstructions,
-        modeInstructions,
-        prData: prDataBlock,
-        inFlightBranches: inFlightBranchesBlock,
-        zombieIssues: zombieIssuesBlock,
-        repoSyncReport: repoSyncReportBlock,
-        repoFullName: prRepoFullName,
-        defaultBranch: prDefaultBranch,
-        planConstraint: planConstraintBlock,
-        prefetchedIssue: prefetchedIssueBlock,
-      }
+      blocks: { ...blocks, trackerInstructions: trackerFiling.trackerInstructions, modeInstructions },
     });
   } catch (err) {
     if (err.code !== 'REVIEWER_IDENTITY_NOT_FOUND') throw err;
@@ -619,17 +683,26 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
       taskType, appId: app.id, appName: app.name,
       outcome: 'failed', reason: err.code, note: err.message,
     });
-    return skipped('reviewer-identity', { reason: err.message, detail: err.context });
+    return { skip: skipped('reviewer-identity', { reason: err.message, detail: err.context }) };
   }
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
     app, taskMetadata: metadata, taskType: promptTaskType,
-    trustedPullRequestData: prDataBlock,
+    trustedPullRequestData: blocks.prData,
   });
-  const description = scopeDescriptionToPullRequest(
-    appendTaskDataInputs(baseDescription, taskDataInputs),
-    metadata
-  );
+  return { description: scopeDescriptionToPullRequest(appendTaskDataInputs(baseDescription, taskDataInputs), metadata) };
+}
 
+/**
+ * Everything after the last gate: delivery-posture overrides, provider pins,
+ * approval, the buildTaskInput hook's metadata bag, rotation-pointer advance,
+ * and task construction. Every `skipped(...)` exit in the caller sits above
+ * this, so none of the side effects here (`updateAppActivity`, hookMetadata
+ * stamping, the pending perpetual dispatch) fire on a skipped path.
+ */
+async function finalizePreparedImprovementTask({
+  taskType, app, state, metadata, interval, appOverride, hookOverride, hookMetadata,
+  providerOverride, perpetualGate, description, fileIssues,
+}) {
   // Tracker-only delivery wins over app defaults, including reference-watch
   // runs that do not use the audit catalog's fileIssues toggle.
   if (fileIssues || (metadata.workTracker && metadata.worktreeChangesExpected === false)) {

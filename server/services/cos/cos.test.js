@@ -1866,7 +1866,9 @@ describe('cos.js source — priority + capacity invariants', () => {
     // there are template-literal braces nested inside.
     const fnStart = IMP_SRC.indexOf('async function prepareManagedAppImprovementTask');
     expect(fnStart, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
-    const fnEnd = IMP_SRC.indexOf('\nasync function ', fnStart + 1);
+    // The post-gate tail lives in finalizePreparedImprovementTask, which
+    // follows the function in source order and ends at the task return.
+    const fnEnd = IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', fnStart);
     const fnBody = IMP_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
     // The updateAppActivity call must appear AFTER applyPlanIdMetadata —
