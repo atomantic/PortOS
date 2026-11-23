@@ -8,9 +8,9 @@ import toast from '../ui/Toast';
 import FullDiskAccessSteps from './FullDiskAccessSteps';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatDateTime } from '../../utils/formatters';
-import {
 import { pluralize } from '../../lib/textUtils';
 import { failureMessage } from './failureMessage';
+import {
   getContactsStatus,
   checkContactsSetup,
   syncContacts,
