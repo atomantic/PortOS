@@ -26,7 +26,7 @@ vi.mock('../instanceIdentity.js', () => ({
   getInstanceId: vi.fn().mockResolvedValue('instance-local'),
 }));
 vi.mock('../instanceFeatures.js', () => ({ isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true) }));
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async importOriginal => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 vi.mock('../eidoverseFoundationLedger.js', () => ({
   listPromotedFoundationCandidates: vi.fn().mockResolvedValue([]),
   listWithdrawnFoundationTombstones: vi.fn().mockResolvedValue([]),
@@ -169,6 +169,24 @@ describe('the offering this install advertises', () => {
 });
 
 describe('pulling a peer offering', () => {
+  it('rejects a chunked plain-HTTP offering that streams past the cap without buffering it', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let enqueued = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        enqueued += 1;
+        controller.enqueue(chunk);
+        if (enqueued > 64) controller.close();
+      },
+    });
+    // No content-length: only the streaming cap in readPeerBody can stop this.
+    vi.mocked(peerFetch).mockResolvedValue({ ok: true, headers: new Headers(), body });
+
+    expect(await syncEidoverseFoundationsFromPeer(PEER)).toEqual({ inherited: 0, skipped: 'too-large' });
+    expect(enqueued).toBeLessThan(40);
+    expect(recordEidoverseFoundationInheritance).not.toHaveBeenCalled();
+  });
+
   it('hands each candidate to the accept gate with the peer it came FROM and this install id', async () => {
     vi.mocked(peerFetch).mockResolvedValue(offering([candidate('tide-beacon')]));
 

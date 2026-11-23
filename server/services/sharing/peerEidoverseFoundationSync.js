@@ -35,8 +35,7 @@ import { createHash } from 'crypto';
 import { isPlainObject } from '../../lib/objects.js';
 import { isStr } from '../../lib/textUtils.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
+import { fetchPeerJsonEnvelope } from './peerEnvelopePull.js';
 import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { peerEidoverseFoundationsSchema } from '../../lib/peerSyncValidation.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
@@ -173,21 +172,12 @@ export async function syncEidoverseFoundationsFromPeer(peer) {
       return { inherited: 0, skipped: 'no-local-identity' };
     }
     const url = `${peerBaseUrl(peer)}/api/peer-sync/eidoverse-foundations`;
-    const res = await withAbortTimeout(OFFERING_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: OFFERING_MAX_BYTES }, peer))
-      .catch(() => null);
-    if (!res || !res.ok) return { inherited: 0, skipped: 'unreachable' };
-    const declaredLen = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLen) && declaredLen > OFFERING_MAX_BYTES) {
-      console.log(`⚠️ peerSync: eidoverse-foundations offering from ${peerLabel(peer)} too large (${declaredLen} > ${OFFERING_MAX_BYTES}) — skipping`);
-      return { inherited: 0, skipped: 'too-large' };
-    }
-    const parsed = peerEidoverseFoundationsSchema.safeParse(await res.json().catch(() => null));
-    if (!parsed.success) {
-      console.log(`⚠️ peerSync: eidoverse-foundations offering from ${peerLabel(peer)} failed validation — skipping`);
-      return { inherited: 0, skipped: 'invalid' };
-    }
-    const payload = parsed.data;
+    const envelope = await fetchPeerJsonEnvelope(peer, url, {
+      maxBytes: OFFERING_MAX_BYTES, timeoutMs: OFFERING_PULL_TIMEOUT_MS,
+      schema: peerEidoverseFoundationsSchema, label: 'eidoverse-foundations offering', peerName: peerLabel(peer),
+    });
+    if (!envelope.ok) return { inherited: 0, skipped: envelope.skipped };
+    const payload = envelope.data;
         // Schema gate — GENTLE skip, not a rejection: wait for the local PortOS to upgrade rather
         // than store a foundation shape it cannot interpret (the ledger has no re-fetch path to
         // correct a mis-applied envelope later).

@@ -22,9 +22,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
-import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
+import { fetchPeerJsonEnvelope } from './peerEnvelopePull.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { getPeers } from '../instances.js';
@@ -306,37 +304,12 @@ export async function syncMediaLibraryFromPeer(peer) {
     libraryTombstoneSweeps.set(peer.instanceId, cursorSweeps % FORCE_REVALIDATE_EVERY);
     const cursor = cursorSweeps % FORCE_REVALIDATE_EVERY === 0 ? undefined : libraryTombstoneCursor.get(peer.instanceId);
     const headers = { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1', ...(cursor ? { [PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]: cursor } : {}) };
-    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers }, peer))
-      .catch(() => null);
-    if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
-    // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`
-    // only streams-caps the HTTPS (host) shim; for a plain-HTTP (address) peer it
-    // delegates to native fetch, which ignores `maxBytes`, so `res.json()` would
-    // otherwise buffer an unbounded body. Express on the sender sets Content-Length
-    // for the JSON response, so the declared-length check is a fast path; a chunked
-    // body that declares none is capped while streaming by readPeerBody below.
-    const declaredLen = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLen) && declaredLen > MEDIA_LIBRARY_MANIFEST_MAX_BYTES) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES}) — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    let tooLarge = false;
-    const body = await readPeerBody(res, 'json', { maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES })
-      .catch((err) => {
-        tooLarge = err?.code === RESPONSE_TOO_LARGE;
-        return null;
-      });
-    if (tooLarge) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} streamed past ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES} bytes — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    const parsed = peerLibraryManifestSchema.safeParse(body);
-    if (!parsed.success) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
-      return { pulled: 0, skipped: 'invalid' };
-    }
-    const manifest = parsed.data;
+    const envelope = await fetchPeerJsonEnvelope(peer, url, {
+      maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, timeoutMs: ASSET_PULL_TIMEOUT_MS, headers,
+      schema: peerLibraryManifestSchema, label: 'media-library manifest', peerName: peer.name || peer.instanceId,
+    });
+    if (!envelope.ok) return { pulled: 0, skipped: envelope.skipped };
+    const manifest = envelope.data;
     // Schema gate — GENTLE skip (not reject): the sender's manifest envelope is
     // newer than this instance understands. Wait for the local PortOS to upgrade
     // rather than mis-pull against a contract we can't read. (Bytes are
