@@ -270,8 +270,11 @@ export function createRecordedStaticServer(express, { env = process.env, testFil
       server.off('error', reject);
       const close = server.close.bind(server);
       server.close = (...args) => {
-        flush();
-        return close(...args);
+        let flushError;
+        try { flush(); } catch (error) { flushError = error; }
+        const closed = close(...args);
+        if (flushError) throw flushError;
+        return closed;
       };
       server.once('close', () => {
         try { flush(); } catch (error) { console.error(`❌ served-file record write failed: ${error.message}`); }
