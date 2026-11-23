@@ -11,7 +11,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // below fails if one of them grows a private copy again.
 const CONSUMERS = [
   'SeriesReviewPanel.jsx',
-  'AutopilotPanel.jsx',
+  'AutopilotStatusBanner.jsx',
   'arcCanvas/VerifyResults.jsx',
   'arcCanvas/CompletenessResults.jsx',
 ];
