@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { commandExists } from '../lib/commandExists.js';
+import { eidoverseStartCommand } from '../lib/eidoverseStartCommand.js';
 
 const mock = vi.hoisted(() => ({
   existing: new Set(),
@@ -156,7 +157,7 @@ describe('Eidoverse managed-app installer', () => {
       type: 'bun',
       repoPath: selectedPaths.worlds,
       companionRepoPaths: [selectedPaths.video],
-      startCommands: ['bun --env-file=.env.portos server/server.ts'],
+      startCommands: [eidoverseStartCommand('bun')],
     }));
     expect(status).toMatchObject({
       installed: true,

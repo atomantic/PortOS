@@ -89,8 +89,13 @@ The managed app uses port `8940` and starts with the Bun executable found or
 installed during setup:
 
 ```text
-<bun> --env-file=.env.portos server/server.ts
+<bun> --preload <portos>/server/lib/eidoverseLoopbackPreload.js --env-file=.env.portos server/server.ts
 ```
+
+The preload binds the sequencer to `127.0.0.1` only. At boot, and before every
+start, restart or managed update, PortOS puts it into the stored start command
+and replaces a PM2 process that was launched without it. Other Bun flags on the
+command are kept.
 
 Once installed and enabled, PortOS starts the runtime automatically at server
 boot and when the feature is enabled. It waits for readiness, opens the host
@@ -101,9 +106,8 @@ not auto-start the runtime; manual app controls remain available. Start, stop,
 logs, updates, and launch links remain visible on the normal managed-app screen.
 Command-based Eidoverse launches use a 2 GB PM2 memory restart limit so the
 loaded world and asset runtime can exceed the generic app limit of 500 MB.
-Plain-HTTP managed apps
-keep an `http://` launch URL even when PortOS itself is open over HTTPS, so the
-Apps launch action works from a Tailscale MagicDNS session. Managed updates pull
+Launch links open `/eidoverse/solo` on the PortOS origin, because `:8940` is not
+reachable from other devices. Managed updates pull
 both the selected Worlds checkout and its companion video runtime before using
 Bun's frozen lockfile rather than npm.
 
@@ -420,12 +424,14 @@ world history. Destructive uninstall remains an explicit manual operation.
 ## Network boundary
 
 This integration is intended for the same private, single-user Tailscale trust
-boundary as PortOS. Eidoverse binds its server to the host network and permits
-an empty join token; do not expose this configuration to the public internet.
-An instance that needs a broader trust model should configure Eidoverse access
-control in that project before starting it.
+boundary as PortOS. The sequencer permits an empty join token, so reaching it is
+owner authority over the world; do not expose this configuration to the public
+internet. Upstream binds every interface and reads no bind-address variable, so
+PortOS starts it with a Bun preload that forces `127.0.0.1` for port `8940`
+(see [Runtime and data ownership](#runtime-and-data-ownership)). A sequencer
+started outside PortOS does not get that protection.
 
-Eidoverse itself remains a plain-HTTP service on `:8940`. The embedded page
+Eidoverse itself remains a plain-HTTP service on loopback `:8940`. The embedded page
 starts the on-demand PortOS host and loads the renderer at the **same origin**
 as the PortOS UI — `${location.origin}/eidoverse-host/?…` — so a single-port
 tailcat forward (`127.0.0.1:15555` → remote `:5555`) works. The main `:5555`
@@ -444,15 +450,13 @@ browser request gets `403` whether or not a password is set. With the instance
 password set, only an operator or agent session, or a live federated guest
 ticket, is admitted; anything else gets `401`. Peer credentials and Basic auth
 do not open the world. Open renderer sockets end when sessions are revoked or a
-guest visit ends. The check covers PortOS's own listeners only, not direct
-access to the sequencer's `:8940` port.
+guest visit ends. The check covers PortOS's own listeners; the sequencer's
+`:8940` port is reachable only from this machine.
 
 An optional legacy bridge on `:5563` still starts with the host (HTTPS when a
 machine certificate is present) for ExternalLink / direct access on the box.
-The iframe prefers the same-origin path; the single escape is a plain-HTTP page
-in front of an HTTPS-only host certificate that does not cover the hostname
-(loopback `:5553` / some Vite setups), where the iframe falls back to a direct
-`:uiPort` load — scene renders, handshake stays dormant.
+The iframe always uses the same-origin path, including on the plain-HTTP loopback
+mirror (`:5553`) and Vite.
 
 **World only / Open Eidoverse alone** opens `/eidoverse/solo` — a chromeless
 PortOS route that mounts the **same** `/eidoverse-host/` iframe fullscreen

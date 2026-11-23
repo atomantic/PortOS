@@ -7,7 +7,7 @@ import RiggingRuntimeCard from './RiggingRuntimeCard';
 import DockerContainmentCard from './DockerContainmentCard';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
-import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
+import { EIDOVERSE_SOLO_PATH } from '../../services/appUrls.js';
 import {
   installEidoverseFeature,
   updateEidoverseWorldsSource,
@@ -233,9 +233,7 @@ export function InstanceFeaturesTab() {
     const canUpdateSource = repoIsValid
       && (normalizeGitHubRepo(selectedRepoUrl) !== setup?.worldsRepoUrl || (eidoverseBranch !== null && eidoverseBranch.trim() !== (setup?.worldsBranch ?? '')))
       && setup?.registryAvailable !== false;
-    const launchUrl = setup?.appId && setup?.uiPort
-      ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
-      : null;
+    const launchUrl = setup?.appId ? EIDOVERSE_SOLO_PATH : null;
     return (
       <div
         key={feature.id}

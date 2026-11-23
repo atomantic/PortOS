@@ -61,18 +61,12 @@ const failedStart = (result) => Object.values(result?.results || {})
 // hit that same origin (the main server reverse-proxies them while the host
 // is active). The path mount answers `/embed-config` with this page's full
 // origin (including a non-5555 forward port), which arms the frame handshake.
-//
-// Escape hatch: an HTTP page in front of an HTTPS-only host certificate still
-// cannot load `https://…/eidoverse-host/` when the cert does not cover the
-// hostname in use (loopback mirror / some Vite setups). There we keep the
-// direct `:uiPort` load — scene renders, handshake stays dormant.
-export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
+// The sequencer's own port is loopback-only, so it is never a browser URL.
+export const hostUrlFor = (host, location = window.location, identity = null) => {
   if (location.protocol === 'https:' && host.protocol !== 'https') {
     throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
   }
-  const baseUrl = location.protocol === 'http:' && host.protocol === 'https'
-    ? `http://${location.hostname}:${setup.uiPort}/`
-    : `${location.protocol}//${location.host}/eidoverse-host/`;
+  const baseUrl = `${location.protocol}//${location.host}/eidoverse-host/`;
   if (!identity) return baseUrl;
 
   const url = new URL(baseUrl);
@@ -98,7 +92,6 @@ export default function Eidoverse() {
   const [error, setError] = useState('');
   const [hostUrl, setHostUrl] = useState('');
   const [hostInfo, setHostInfo] = useState(null);
-  const [setupState, setSetupState] = useState(null);
   const [appId, setAppId] = useState(null);
   const [worldState, setWorldState] = useState(null);
   const [worldName, setWorldName] = useState('');
@@ -178,7 +171,6 @@ export default function Eidoverse() {
     setHostUrl('');
     setHostInfo(null);
     setIframeReady(false);
-    setSetupState(null);
     setWorldState(null);
     setDrafts(draftsFromWorld(null));
     setProjectionStatus('idle');
@@ -208,10 +200,9 @@ export default function Eidoverse() {
       return {
         phase: 'ready',
         appId: setup.appId,
-        setup,
         host,
         world,
-        hostUrl: hostUrlFor(host, setup, window.location, worldIdentityFor(world)),
+        hostUrl: hostUrlFor(host, window.location, worldIdentityFor(world)),
       };
     };
 
@@ -219,7 +210,6 @@ export default function Eidoverse() {
       if (!isCurrent()) return;
       setPhase(result.phase);
       setAppId(result.appId);
-      setSetupState(result.setup || null);
       setHostInfo(result.host || null);
       setWorldState(result.world || null);
       setWorldName(result.world?.world || '');
@@ -321,12 +311,12 @@ export default function Eidoverse() {
     const replaceDraft = shouldReplaceDraft({ ...submittedDraft, forceReplace: true });
     applyWorldResponse(updated, { replaceDraft });
     setConfigStatus(replaceDraft ? 'saved' : '');
-    const nextHostUrl = hostInfo && setupState
-      ? hostUrlFor(hostInfo, setupState, window.location, worldIdentityFor(updated))
+    const nextHostUrl = hostInfo
+      ? hostUrlFor(hostInfo, window.location, worldIdentityFor(updated))
       : hostUrl;
     if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
     else void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, snapshotDraft, worldName]);
+  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, snapshotDraft, worldName]);
 
   const runConfigAction = useCallback(async (payload) => {
     const submittedDraft = snapshotDraft();

@@ -5,6 +5,7 @@ const mock = vi.hoisted(() => ({
   setup: { installed: true, appId: 'example-world', runtimeStatus: 'not_started' },
   cosEnabled: true,
   start: vi.fn(),
+  loopback: vi.fn(),
   ready: vi.fn(),
   presence: vi.fn(),
   design: vi.fn(),
@@ -19,8 +20,8 @@ vi.mock('./apps.js', () => ({
     pm2ProcessNames: ['eidoverse-worlds'], startCommands: ['bun --env-file=.env.portos server/server.ts'] }),
   notifyAppsChanged: vi.fn(),
 }));
-vi.mock('./eidoverse.js', () => ({ EIDOVERSE_PROCESS_NAME: 'eidoverse-worlds', EIDOVERSE_PORT: 8940, EIDOVERSE_MAX_MEMORY_RESTART: '2G' }));
-vi.mock('./pm2.js', () => ({ startWithCommand: mock.start }));
+vi.mock('./eidoverse.js', () => ({ EIDOVERSE_PROCESS_NAME: 'eidoverse-worlds' }));
+vi.mock('./eidoverseLaunch.js', () => ({ ensureEidoverseLoopback: mock.loopback, launchEidoverseProcess: mock.start }));
 vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: mock.ready }));
 vi.mock('./eidoverseWorld.js', () => ({
   ensureEidoverseWorldConfig: async () => ({ cos: { enabled: mock.cosEnabled } }),
@@ -47,8 +48,8 @@ describe('installed Eidoverse startup workflow', () => {
     const second = reconcileEidoverseRuntime();
     expect(second).toBe(first);
     await vi.waitFor(() => expect(mock.ready).toHaveBeenCalledOnce());
-    expect(mock.start).toHaveBeenCalledWith('eidoverse-worlds', '/example/worlds',
-      'bun --env-file=.env.portos server/server.ts', { pm2Home: '/example/pm2', port: 8940, maxMemoryRestart: '2G' });
+    expect(mock.start).toHaveBeenCalledWith(expect.objectContaining({ id: 'example-world', repoPath: '/example/worlds' }));
+    expect(mock.loopback.mock.invocationCallOrder[0]).toBeLessThan(mock.start.mock.invocationCallOrder[0]);
     expect(mock.presence).not.toHaveBeenCalled();
     release();
     await expect(first).resolves.toMatchObject({ running: true, started: true });
@@ -57,9 +58,10 @@ describe('installed Eidoverse startup workflow', () => {
     expect(mock.presence.mock.invocationCallOrder[0]).toBeLessThan(mock.design.mock.invocationCallOrder[0]);
   });
 
-  it('does nothing while the optional feature is disabled', async () => {
+  it('only secures an existing process while the optional feature is disabled', async () => {
     mock.enabled = false;
     await expect(reconcileEidoverseRuntime()).resolves.toMatchObject({ reason: 'feature-disabled' });
+    expect(mock.loopback).toHaveBeenCalledOnce();
     expect(mock.assertInstalled).not.toHaveBeenCalled();
     expect(mock.start).not.toHaveBeenCalled();
     expect(mock.ready).not.toHaveBeenCalled();
@@ -90,6 +92,13 @@ describe('installed Eidoverse startup workflow', () => {
     await expect(reconcileEidoverseRuntime()).rejects.toThrow('Readiness timed out');
     expect(mock.presence).not.toHaveBeenCalled();
     await expect(reconcileEidoverseRuntime()).resolves.toMatchObject({ running: true });
+  });
+
+  it('does not bring the world up while the sequencer could not be secured', async () => {
+    mock.loopback.mockRejectedValueOnce(new Error('PM2 unavailable'));
+    await expect(reconcileEidoverseRuntime()).rejects.toThrow('PM2 unavailable');
+    expect(mock.start).not.toHaveBeenCalled();
+    expect(mock.ready).not.toHaveBeenCalled();
   });
 
   it('does not start after the feature is disabled during the install probe', async () => {

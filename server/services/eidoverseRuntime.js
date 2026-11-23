@@ -6,6 +6,11 @@ const startup = createSingleFlight();
 
 export function reconcileEidoverseRuntime() {
   return startup.run('runtime', async () => {
+    // Before the feature check: a disabled feature can still have a sequencer an
+    // older PortOS left running on every interface.
+    const { ensureEidoverseLoopback, launchEidoverseProcess } = await import('./eidoverseLaunch.js');
+    await ensureEidoverseLoopback();
+
     const { isInstanceFeatureEnabled, assertConfiguredEidoverseInstalled } = await import('./instanceFeatures.js');
     if (!await isInstanceFeatureEnabled('eidoverse')) return { running: false, reason: 'feature-disabled' };
 
@@ -20,7 +25,7 @@ export function reconcileEidoverseRuntime() {
     let started = false;
     if (!['online', 'launching'].includes(setup.runtimeStatus)) {
       const { getAppById, notifyAppsChanged } = await import('./apps.js');
-      const { EIDOVERSE_PROCESS_NAME, EIDOVERSE_PORT, EIDOVERSE_MAX_MEMORY_RESTART } = await import('./eidoverse.js');
+      const { EIDOVERSE_PROCESS_NAME } = await import('./eidoverse.js');
       const app = await getAppById(setup.appId);
       if (app?.archived || !app?.repoPath || !app?.startCommands?.[0]
         || app.pm2ProcessNames?.length !== 1 || app.pm2ProcessNames[0] !== EIDOVERSE_PROCESS_NAME) {
@@ -30,10 +35,7 @@ export function reconcileEidoverseRuntime() {
       }
       // Recheck after async registry reads in case the operator disabled it.
       if (!await isInstanceFeatureEnabled('eidoverse')) return { running: false, reason: 'feature-disabled' };
-      const { startWithCommand } = await import('./pm2.js');
-      const result = await startWithCommand(EIDOVERSE_PROCESS_NAME, app.repoPath, app.startCommands[0], {
-        pm2Home: app.pm2Home, port: EIDOVERSE_PORT, maxMemoryRestart: EIDOVERSE_MAX_MEMORY_RESTART,
-      });
+      const result = await launchEidoverseProcess(app);
       if (result?.success !== true) {
         throw new ServerError('Eidoverse runtime could not start.', { status: 503, code: 'EIDOVERSE_START_FAILED' });
       }

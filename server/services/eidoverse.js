@@ -10,12 +10,12 @@ import { parseGitHubUrl } from '../lib/repoUrl.js';
 import { cloneRepo } from './repoCloner.js';
 import { createApp, getAllApps, notifyAppsChanged, updateApp } from './apps.js';
 import { getAppStatusStrict } from './pm2.js';
-import { EIDOVERSE_PORT } from '../lib/eidoversePort.js';
+import { EIDOVERSE_PORT, EIDOVERSE_PROCESS_NAME } from '../lib/eidoversePort.js';
+import { eidoverseStartCommand } from '../lib/eidoverseStartCommand.js';
 
 export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/atomantic/eidoverse-worlds';
 export const EIDOVERSE_VIDEO_REPO = 'https://github.com/anima-research/eidoverse-video';
-export { EIDOVERSE_PORT };
-export const EIDOVERSE_PROCESS_NAME = 'eidoverse-worlds';
+export { EIDOVERSE_PORT, EIDOVERSE_PROCESS_NAME };
 // The loaded world and asset runtime exceeds the generic command-app 500M cap.
 export const EIDOVERSE_MAX_MEMORY_RESTART = '2G';
 
@@ -79,8 +79,6 @@ export function getEidoversePaths(worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO)
   });
 }
 
-const quoteCommandToken = (token) => (/\s/.test(token) ? `"${token}"` : token);
-
 const managedAppFields = (paths, bunCommand) => ({
   name: 'Eidoverse Worlds',
   description: 'Private 3D world for a PortOS human and their agents. Installed separately under its own AGPL-3.0 license.',
@@ -89,7 +87,7 @@ const managedAppFields = (paths, bunCommand) => ({
   type: 'bun',
   uiPort: EIDOVERSE_PORT,
   apiPort: EIDOVERSE_PORT,
-  startCommands: [`${quoteCommandToken(bunCommand)} --env-file=.env.portos server/server.ts`],
+  startCommands: [eidoverseStartCommand(bunCommand)],
   pm2ProcessNames: [EIDOVERSE_PROCESS_NAME],
   envFile: '.env.portos',
   workTracker: 'auto',
@@ -109,7 +107,7 @@ const isManagedEidoverseApp = (app) => Boolean(app?.pm2ProcessNames?.includes(EI
 // A source switch keeps the existing checkout in place, so the configured
 // owner/repo path may no longer match the managed-app path. The process name is
 // the stable PortOS-owned identifier across that source change.
-const findManagedApp = (apps) => apps.find(isManagedEidoverseApp) || null;
+export const findManagedApp = (apps) => apps.find(isManagedEidoverseApp) || null;
 
 async function resolveEidoverseInstallPaths(worldsRepoUrl) {
   const configuredPaths = getEidoversePaths(worldsRepoUrl);
@@ -156,7 +154,7 @@ const bunRuntimeEnv = (bunExecutable) => {
   };
 };
 
-async function resolveBunRuntime() {
+export async function resolveBunRuntime() {
   const ambientEnv = withoutServerSecretsEnv(process.env);
   if (await commandExists('bun', ['--version'], { env: ambientEnv })) return { command: 'bun', env: ambientEnv };
 

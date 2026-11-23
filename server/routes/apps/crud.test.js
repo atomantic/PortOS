@@ -298,6 +298,18 @@ describe('Apps CRUD Routes', () => {
       expect(response.body[0].pm2Status).toBeUndefined();
     });
 
+    it('does not advertise the loopback-only Eidoverse port to peers', async () => {
+      appsService.getAllApps.mockResolvedValue([{
+        id: 'app-001', name: 'Example World', type: 'bun',
+        uiPort: 8940, apiPort: 8940, pm2ProcessNames: ['eidoverse-worlds'], processes: [],
+      }]);
+      pm2Service.listProcessesStrict.mockResolvedValue([{ name: 'eidoverse-worlds', status: 'online' }]);
+
+      const response = await request(app).get('/api/apps?view=probe');
+
+      expect(response.body[0]).toMatchObject({ id: 'app-001', overallStatus: 'online', uiPort: null });
+    });
+
     it('returns compact quality summaries without reading PM2 status', async () => {
       const registeredApp = { id: 'app-001', name: 'Test App', type: 'express' };
       appsService.getAllApps.mockResolvedValue([registeredApp]);
