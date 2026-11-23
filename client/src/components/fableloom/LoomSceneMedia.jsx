@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react';
-import { AlertCircle, ImagePlus, Loader2, Sparkles, Upload, Video } from 'lucide-react';
+import { AlertCircle, ImagePlus, Loader2, Sparkles, Upload, Video, XCircle } from 'lucide-react';
 import { FAL_H3_MAX_FREE_ALLOWANCE_NOTE } from '../../lib/falVideoHandoff.js';
 import MediaImage from '../MediaImage';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
@@ -45,6 +45,7 @@ export default function LoomSceneMedia({
   onGenerateVideo,
   onAutomateFalVideo,
   onAttachVideo,
+  onCancelFalVideo,
   compact = false,
   generationDisabled = false,
   generationDisabledReason = '',
@@ -201,6 +202,17 @@ export default function LoomSceneMedia({
             : <Sparkles size={compact ? 13 : 12} aria-hidden="true" />}
           <span className={labelClass}>{falActive ? 'Running fal.ai' : 'Automate fal.ai'}</span>
         </button>
+        {!compact && falActive && videoJob?.jobId && onCancelFalVideo && (
+          <button
+            type="button"
+            onClick={() => onCancelFalVideo(node, videoJob)}
+            title="Stop this fal.ai render and free the browser queue"
+            className={buttonClass}
+          >
+            <XCircle size={12} aria-hidden="true" />
+            <span className="truncate">Cancel fal.ai</span>
+          </button>
+        )}
         {!compact && (
           <button
             type="button"

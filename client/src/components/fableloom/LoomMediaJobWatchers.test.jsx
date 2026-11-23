@@ -130,6 +130,41 @@ describe('LoomMediaJobWatchers', () => {
     expect(props.onTerminal).toHaveBeenCalledExactlyOnceWith('node-1', 'video', 'fal-job-1', failed);
   });
 
+  it('settles a job the server no longer knows (404) as failed instead of staying wedged', async () => {
+    apiMocks.getLoomFalVideo.mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 404 }));
+    const props = propsFor();
+    render(<LoomMediaJobWatchers {...props} />);
+    await waitFor(() => expect(props.onTerminal).toHaveBeenCalledTimes(1));
+    expect(props.onTerminal).toHaveBeenCalledWith('node-1', 'video', 'fal-job-1', expect.objectContaining({
+      status: 'failed', statusMsg: 'fal.ai video interrupted',
+      error: expect.stringContaining('server restart or expiry'),
+    }));
+  });
+
+  it('treats a NOT_FOUND code like a 404 but keeps 5xx reads silent', async () => {
+    apiMocks.getLoomFalVideo.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 503 }));
+    const silent = propsFor();
+    const first = render(<LoomMediaJobWatchers {...silent} />);
+    await act(async () => {});
+    expect(silent.onTerminal).not.toHaveBeenCalled();
+    first.unmount();
+
+    apiMocks.getLoomFalVideo.mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'NOT_FOUND' }));
+    const lost = propsFor();
+    render(<LoomMediaJobWatchers {...lost} />);
+    await waitFor(() => expect(lost.onTerminal).toHaveBeenCalledTimes(1));
+  });
+
+  it('reports a canceled fal.ai snapshot as terminal once', async () => {
+    const props = propsFor();
+    render(<LoomMediaJobWatchers {...props} />);
+    await act(async () => {});
+    const canceled = snapshot({ status: 'canceled', progress: 0 });
+    await push(canceled);
+    await push(canceled);
+    expect(props.onTerminal).toHaveBeenCalledExactlyOnceWith('node-1', 'video', 'fal-job-1', canceled);
+  });
+
   it('recovers on reconnect and tab reshow after a failed snapshot without inventing failure', async () => {
     apiMocks.getLoomFalVideo.mockRejectedValueOnce(new Error('offline'));
     const props = propsFor();

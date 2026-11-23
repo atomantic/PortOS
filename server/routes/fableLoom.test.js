@@ -18,7 +18,9 @@ vi.mock('../services/fableLoom/index.js', () => ({
   feedbackSeriesPlan: vi.fn(),
   generateEpisodeOutline: vi.fn(),
   generateSeriesPlan: vi.fn(),
+  cancelFalVideoAutomation: vi.fn(),
   getFalVideoAutomation: vi.fn(),
+  listActiveFalVideoAutomations: vi.fn(),
   getFableLoomEditorialAutopilot: vi.fn(),
   getLatestFableLoomEditorialAutopilot: vi.fn(),
   getLoom: vi.fn(),
@@ -293,6 +295,22 @@ describe('FableLoom routes', () => {
     expect(fableLoom.getFalVideoAutomation).toHaveBeenCalledWith(
       'loom-1', 'ep-1', 'node-1', 'fal-job-1',
     );
+  });
+
+  it('lists active fal.ai jobs for an episode and cancels one by id', async () => {
+    const job = { id: 'fal-job-1', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'running' };
+    fableLoom.listActiveFalVideoAutomations.mockReturnValueOnce([job]);
+    const listed = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/fal-video');
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual([job]);
+    expect(fableLoom.listActiveFalVideoAutomations).toHaveBeenCalledWith('loom-1', 'ep-1');
+
+    fableLoom.cancelFalVideoAutomation.mockReturnValueOnce({ ...job, status: 'canceled' });
+    const canceled = await request(makeApp())
+      .post('/api/fableloom/loom-1/episodes/ep-1/nodes/node-1/fal-video/fal-job-1/cancel');
+    expect(canceled.status).toBe(200);
+    expect(canceled.body.status).toBe('canceled');
+    expect(fableLoom.cancelFalVideoAutomation).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', 'fal-job-1');
   });
 
   it('rejects an empty fal.ai scene prompt before browser automation starts', async () => {

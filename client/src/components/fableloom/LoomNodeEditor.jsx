@@ -75,7 +75,7 @@ const characterReferenceInfo = (character) => {
 
 export default function LoomNodeEditor({
   loom, episode, node, universe, onLoomUpdate, onClearSelection, onMakeStart,
-  mediaJobs = {}, onGenerateImage, onGenerateVideo, onAutomateFalVideo,
+  mediaJobs = {}, onGenerateImage, onGenerateVideo, onAutomateFalVideo, onCancelFalVideo,
   generationDisabled = false, generationDisabledReason = '',
 }) {
   const [form, setForm] = useState(null);
@@ -731,6 +731,7 @@ export default function LoomNodeEditor({
           onGenerateVideo={runGenerateVideo}
           onAutomateFalVideo={runAutomateFalVideo}
           onAttachVideo={attachGalleryVideo}
+          onCancelFalVideo={onCancelFalVideo}
           generationDisabled={aiBlocked || generationDisabled}
           generationDisabledReason={aiBlocked ? 'Wait for scene changes to save' : generationDisabledReason}
           falDisabled={aiBlocked || generationDisabled}
