@@ -333,10 +333,8 @@ function parseOAuthScopes(output) {
 }
 
 /**
- * Whether the forge token an agent would receive can merge changes to
- * `.github/workflows/**`. GitHub refuses those merges for an OAuth token
- * without the `workflow` scope, surfacing only as a generic "base branch
- * policy" error at merge time.
+ * Report the classic OAuth workflow scope on the token an agent receives.
+ * This is advisory: only GitHub can decide whether a specific merge is allowed.
  *
  * @returns {Promise<{ status: 'granted'|'missing'|'unknown', remedy?: string }>}
  */
@@ -357,7 +355,7 @@ export async function getWorkflowScopeStatus(dir, { timeoutMs = DEFAULT_SPAWN_CL
   // Unknown is a transient or unreadable answer: do not pin it for the process.
   if (result.status !== 'unknown') scopeStatusCache.set(digest, result);
   if (result.status === 'missing') {
-    console.log(`⚠️ Forge token for ${forge.host} lacks the workflow scope; PRs touching .github/workflows cannot be merged by agents. Fix: ${WORKFLOW_SCOPE_REMEDY}`);
+    console.log(`⚠️ Forge token for ${forge.host} does not report the workflow scope; GitHub may reject changes to .github/workflows. For supported CLI OAuth, the owner can authorize it with: ${WORKFLOW_SCOPE_REMEDY}`);
   }
   return result;
 }
