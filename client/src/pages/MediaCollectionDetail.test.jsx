@@ -331,7 +331,7 @@ describe('MediaCollectionDetail — regular collection view', () => {
     await user.click(screen.getByRole('button', { name: 'Set primary and consolidate' }));
 
     expect(mockSetMediaCollectionPrimary).toHaveBeenCalledWith(REAL_COLLECTION.id, 'inst-a', { silent: true });
-    expect(await screen.findByText(/1 releases queued at finish.*1 copies kept/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 release queued at finish.*1 copy kept/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Consolidate again' })).toBeEnabled();
   });
   it('does NOT render "Pull missing prompts" on a real collection', async () => {

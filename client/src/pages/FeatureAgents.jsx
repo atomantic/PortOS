@@ -87,7 +87,7 @@ export default function FeatureAgents() {
       <PageHeader
         icon={Wand2}
         title="Feature Agents"
-        subtitle={`${formatCount(agents.length)} agent${agents.length !== 1 ? 's' : ''} · ${formatCount(activeCount)} active · ${formatCount(totalRuns)} total runs`}
+        subtitle={`${formatCount(agents.length)} agent${agents.length !== 1 ? 's' : ''} · ${formatCount(activeCount)} active · ${formatCount(totalRuns)} total ${totalRuns === 1 ? 'run' : 'runs'}`}
         actions={
           <>
             <button

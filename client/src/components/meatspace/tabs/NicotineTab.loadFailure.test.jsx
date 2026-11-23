@@ -46,7 +46,7 @@ describe('NicotineTab history load', () => {
 
     getDailyNicotine.mockResolvedValue([{ date: '2026-03-01', nicotine: { items: [] } }]);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByText(/History \(1 days\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/History \(1 day\)/)).toBeTruthy());
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

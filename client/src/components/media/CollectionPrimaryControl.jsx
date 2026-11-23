@@ -118,11 +118,11 @@ export default function CollectionPrimaryControl({ collectionId, oneShot = false
       </p>}
       {run && <p className="text-xs text-gray-300" role="status">
         {run.running
-          ? `Consolidating ${formatCount(run.total)} media files…`
-          : `${formatCount(run.completed)} of ${formatCount(run.total)} files verified on the primary · ${formatCount(run.released)} copies released`}
-        {!run.running && run.pending > 0 && ` · ${formatCount(run.pending)} releases queued at finish`}
-        {!run.running && run.kept > 0 && ` · ${formatCount(run.kept)} copies kept`}
-        {!run.running && run.failed > 0 && ` · ${formatCount(run.failed)} files need attention`}
+          ? `Consolidating ${formatCount(run.total)} media ${run.total === 1 ? 'file' : 'files'}…`
+          : `${formatCount(run.completed)} of ${formatCount(run.total)} ${run.total === 1 ? 'file' : 'files'} verified on the primary · ${formatCount(run.released)} ${run.released === 1 ? 'copy' : 'copies'} released`}
+        {!run.running && run.pending > 0 && ` · ${formatCount(run.pending)} ${run.pending === 1 ? 'release' : 'releases'} queued at finish`}
+        {!run.running && run.kept > 0 && ` · ${formatCount(run.kept)} ${run.kept === 1 ? 'copy' : 'copies'} kept`}
+        {!run.running && run.failed > 0 && ` · ${formatCount(run.failed)} ${run.failed === 1 ? 'file needs' : 'files need'} attention`}
       </p>}
       {!run?.running && run?.details.length > 0 && (
         <details className="text-xs text-gray-400">
