@@ -61,7 +61,10 @@ import InboxTab from './InboxTab';
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="location-state">{JSON.stringify(location.state || {})}</output>;
+  return <>
+    <output data-testid="location-state">{JSON.stringify(location.state || {})}</output>
+    <output data-testid="location-path">{location.pathname}</output>
+  </>;
 }
 
 beforeEach(() => {
@@ -125,14 +128,14 @@ describe('Brain inbox capture', () => {
     });
     const classified = socket.on.mock.calls.find(([event]) => event === 'brain:classified')[1];
     await act(async () => { await classified({ status: 'filed', destination: 'ideas', title: 'Example idea' }); });
-    await screen.findByTitle('View in Memory');
+    await screen.findByTitle('View in Ideas');
     if (acknowledgementLast) {
       await act(async () => { acknowledge({ inboxLog: accepted }); });
     }
 
     await waitFor(() => expect(screen.queryByText('AI is classifying this thought...')).toBeNull());
     expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
-    expect(screen.getByTitle('View in Memory')).toBeInTheDocument();
+    expect(screen.getByTitle('View in Ideas')).toBeInTheDocument();
   });
 
   it('shows the filed result after manually routing a capture that needed review', async () => {
@@ -151,7 +154,7 @@ describe('Brain inbox capture', () => {
     resolveBrainReview.mockResolvedValue({ inboxLog: filed });
     fireEvent.click(route);
 
-    await screen.findByTitle('View in Memory');
+    await screen.findByTitle('View in Ideas');
     expect(screen.queryByTitle('Route to Ideas')).toBeNull();
     expect(screen.getAllByText(accepted.capturedText)).toHaveLength(1);
   });
@@ -223,6 +226,20 @@ describe('Brain inbox capture', () => {
         modelOverride: 'example-model',
       }),
     }));
+  });
+
+  it.each([
+    ['memories', 'View in Memory', '/brain/memory/memories/a%2Fb'],
+    ['people', 'View in Memory', '/brain/memory/people/a%2Fb'],
+    ['ideas', 'View in Ideas', '/brain/ideas/ideas/a%2Fb'],
+  ])('View on a filed %s entry opens the record route', async (destination, title, path) => {
+    getBrainInbox.mockResolvedValue({
+      entries: [{ id: 'e1', capturedText: 'Filed row', status: 'filed', capturedAt: '2026-01-01T00:00:00.000Z', filed: { destination, destinationId: 'a/b' } }],
+      counts: {},
+    });
+    render(<MemoryRouter><InboxTab /><LocationProbe /></MemoryRouter>);
+    fireEvent.click(await screen.findByTitle(title));
+    await waitFor(() => expect(screen.getByTestId('location-path').textContent).toBe(path));
   });
 
   describe('rejected capture recovery', () => {
@@ -317,7 +334,7 @@ describe('Brain inbox loaded history updates', () => {
     } else {
       resolveBrainReview.mockResolvedValue({ inboxLog: { ...older, status: 'filed', filed: { destination: 'ideas', destinationId: 'idea' } } });
       fireEvent.click(within(row).getByTitle('Route to Ideas'));
-      await screen.findByTitle('View in Memory');
+      await screen.findByTitle('View in Ideas');
       expect(screen.queryByTitle('Route to Ideas')).toBeNull();
     }
     expect(screen.getByText('Newer thought 49')).toBeInTheDocument();
