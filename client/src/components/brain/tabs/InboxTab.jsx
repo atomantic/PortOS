@@ -53,11 +53,18 @@ import { useRepoIntake } from '../../../hooks/useRepoIntake.js';
 // Where a filed entry's "View" button points. A bare-URL capture is filed to the
 // links collection (see captureUrlAsLink) and lives in the Links tab; every
 // other destination is a Memory record.
-const filedRecordHref = (filed) => filed.destination === 'links'
-  ? '/brain/links'
-  : `/brain/memory?type=${filed.destination}&id=${filed.destinationId}`;
+const filedRecordHref = (filed) => {
+  if (filed.destination === 'links') return '/brain/links';
+  const id = encodeURIComponent(filed.destinationId);
+  if (filed.destination === 'ideas') return `/brain/ideas/ideas/${id}`;
+  return `/brain/memory/${encodeURIComponent(filed.destination)}/${id}`;
+};
 
-const filedRecordTitle = (filed) => filed.destination === 'links' ? 'View in Links' : 'View in Memory';
+const filedRecordTitle = (filed) => {
+  if (filed.destination === 'links') return 'View in Links';
+  if (filed.destination === 'ideas') return 'View in Ideas';
+  return 'View in Memory';
+};
 
 export default function InboxTab({ onRefresh, settings }) {
   const navigate = useNavigate();
