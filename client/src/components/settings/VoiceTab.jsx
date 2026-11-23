@@ -105,7 +105,6 @@ export function VoiceTab() {
   const currentEngine = cfg?.tts?.engine;
   // Piper download callbacks resolve long after the click; they must see the
   // engine/mount state at resolve time, not the closure from the click.
-  const mountedRef = useMounted();
   const currentEngineRef = useRef(currentEngine);
   currentEngineRef.current = currentEngine;
 
