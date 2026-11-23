@@ -45,6 +45,7 @@ export default function VoiceToggleButton({ className = '' }) {
   return (
     <button
       type="button"
+      data-voice-toggle
       onClick={toggle}
       className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${
         engaged ? 'text-port-accent' : 'text-gray-500 hover:text-white'
