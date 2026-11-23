@@ -25,6 +25,7 @@ import { findTailscale, isSandboxedTailscale } from '../lib/tailscale.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { PORTS } from '../lib/ports.js';
 import { certPaths } from '../../lib/certPaths.js';
+import { readCertExpiresAt } from '../../lib/certMeta.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -131,6 +132,7 @@ export async function provisionTailscaleCert() {
     mode: 'tailscale',
     hostname,
     issuedAt: new Date().toISOString(),
+    expiresAt: readCertExpiresAt(CERT_PATH),
     certMtime: afterMtime
   });
 
