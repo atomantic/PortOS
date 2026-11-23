@@ -181,7 +181,7 @@ export default function ThreejsModels() {
               className="w-full resize-y rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-port-accent focus:outline-none"
             />
           </div>
-          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={creating} />
+          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={creating} primaryFilename={selectedImage?.filename || ''} />
           <ProviderModelSelector
             providers={providers}
             selectedProviderId={selectedProviderId}
