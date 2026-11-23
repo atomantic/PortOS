@@ -254,13 +254,13 @@ describe('maskValue', () => {
     expect(maskValue('address', '123 Main St, Portland, OR 97201')).toBe('•••, Portland, OR 97201');
     expect(maskValue('address', '123 Main St')).toBe('•••');
     // A leading non-street segment must not shift the street into view.
-    expect(maskValue('address', 'c/o Adam Eivy, 123 Main St, Portland, OR 97201')).toBe('•••, Portland, OR 97201');
+    expect(maskValue('address', 'c/o Alex Example, 123 Main St, Portland, OR 97201')).toBe('•••, Portland, OR 97201');
     // Two segments: only the last is visible (both would disclose the street).
     expect(maskValue('address', '123 Main St, Portland')).toBe('•••, Portland');
   });
 
   it('falls back to first-char masking for other types', () => {
-    expect(maskValue('legal_name', 'Adam Eivy')).toBe('A•••');
+    expect(maskValue('legal_name', 'Alex Example')).toBe('A•••');
     expect(maskValue('dob', '1980-01-02')).toBe('1•••');
     expect(maskValue('custom', 'whatever')).toBe('w•••');
   });
