@@ -160,7 +160,7 @@ export default function MediaModels() {
         toast.success('Model deleted — will re-download on next use');
         setData((d) => ({ ...d, models: d.models.filter((m) => m.id !== id) }));
       })
-      .catch((err) => toast.error(err.message || 'Delete failed'))
+      .catch((err) => toast.error(err.message || 'Couldn’t delete cached model'))
       .finally(() => setBusy(null));
   };
 
@@ -171,7 +171,7 @@ export default function MediaModels() {
         toast.success('LoRA deleted');
         setData((d) => ({ ...d, loras: d.loras.filter((l) => l.filename !== filename) }));
       })
-      .catch((err) => toast.error(err.message || 'Delete failed'))
+      .catch((err) => toast.error(err.message || 'Couldn’t delete LoRA'))
       .finally(() => setBusy(null));
   };
 
@@ -183,7 +183,7 @@ export default function MediaModels() {
         setData((d) => ({ ...d, models: d.models.filter((m) => m.id !== cacheId) }));
         await textEncoderDownloads.refresh();
       })
-      .catch((err) => toast.error(err.message || 'Delete failed'))
+      .catch((err) => toast.error(err.message || `Couldn’t delete ${encoder.label}`))
       .finally(() => setBusy(null));
   };
 
@@ -266,7 +266,7 @@ export default function MediaModels() {
         const merge = (list) => list.map((m) => (m.id === id ? { ...m, ...updated } : m));
         setRegistry((r) => ({ ...r, video: merge(r.video), image: merge(r.image) }));
       })
-      .catch((err) => toast.error(err.message || 'Update failed'))
+      .catch((err) => toast.error(err.message || 'Couldn’t update custom model'))
       .finally(() => setBusy(null));
   };
 
@@ -281,7 +281,7 @@ export default function MediaModels() {
           image: r.image.filter((m) => m.id !== id),
         }));
       })
-      .catch((err) => toast.error(err.message || 'Remove failed'))
+      .catch((err) => toast.error(err.message || 'Couldn’t remove custom model'))
       .finally(() => setBusy(null));
   };
 

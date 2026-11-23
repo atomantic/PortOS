@@ -137,7 +137,7 @@ describe('separate peer execution controls', () => {
     await screen.findByText('Catalog entry: example-model · lmstudio');
     expect(previewPeerExecution).toHaveBeenCalledWith({ peerId: peer.id, intent }, { silent: true });
     expect(dispatchPeerExecution).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit execution' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Catalog model installation' }));
     await screen.findByText('Execution status: draining');
     expect(storage.safeReadJsonStorage(`peer-execution:${setup.hostInstanceId}:${peer.id}:${setup.peerInstanceId}`).preflight).toEqual(preview);
     expect(dispatchPeerExecution).toHaveBeenCalledWith({ peerId: peer.id, preflight: preview }, { silent: true });
@@ -147,11 +147,11 @@ describe('separate peer execution controls', () => {
     previewPeerExecution.mockResolvedValue(envelope);
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }));
-    await screen.findByRole('button', { name: 'Submit execution' });
+    await screen.findByRole('button', { name: 'Run PortOS restart' });
     vi.spyOn(storage, 'safeWriteJsonStorage').mockImplementationOnce(key => {
       if (failure === 'mismatched') storage.safeWriteStorage(key, JSON.stringify({ requestId: envelope.payload.requestId, state: 'failed' }));
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Submit execution' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run PortOS restart' }));
     await screen.findByText(/Execution was not submitted because this browser could not save its recovery record/);
     expect(dispatchPeerExecution).not.toHaveBeenCalled();
     expect(screen.queryByText('Execution status: uncertain')).toBeNull();
@@ -166,7 +166,7 @@ describe('separate peer execution controls', () => {
     dispatchPeerExecution.mockRejectedValue(Object.assign(new Error('Dispatch did not complete'), { code, context: { requestId } }));
     await open();
     fireEvent.click(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Submit execution' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Run PortOS restart' }));
     await screen.findByText('Dispatch did not complete');
     expect(screen.getByText(`Execution status: ${state}`)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }).disabled).toBe(state === 'uncertain');
@@ -180,12 +180,12 @@ describe('separate peer execution controls', () => {
     getPeerExecutionStatus.mockResolvedValue({ requestId: envelope.payload.requestId, state: 'succeeded', revision: 3, code: null });
     const view = await open();
     fireEvent.click(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }));
-    await screen.findByRole('button', { name: 'Submit execution' });
+    await screen.findByRole('button', { name: 'Run PortOS restart' });
     expect(dispatchPeerExecution).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Submit execution' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run PortOS restart' }));
     await screen.findByText('Response timed out');
     expect(screen.getByText('Execution status: uncertain')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Submit execution' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Run PortOS restart' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Prepare PortOS restart execution' }).disabled).toBe(true);
     view.unmount();
     safeRemoveSession(`peer-execution:${setup.hostInstanceId}:${peer.id}:${setup.peerInstanceId}`);
