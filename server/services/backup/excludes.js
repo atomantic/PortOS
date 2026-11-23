@@ -119,6 +119,11 @@ export const DEFAULT_EXCLUDES = [
   // a TTL measured in hours. Nothing here is this install's data to keep, and a
   // restored inbox entry is either already expired or already rendered.
   { path: '/federated-media-inbox/', reason: 'Conditioning images an allowlisted peer uploaded for one federated render — TTL-swept, and another machine\'s data rather than this install\'s', overridable: false },
+  // Anchored, and not overridable: scratch for in-flight Beeper attachment downloads,
+  // written and unlinked outside the backup publication fence (beeperAttachments.js).
+  // Stays excluded even when the parent /beeper/attachments/ entry is re-enabled, so a
+  // snapshot can never seal a half-written .partial or race an unlink mid-rsync.
+  { path: '/beeper/attachments/.tmp/', reason: 'In-flight Beeper attachment download partials — written and removed outside backup publication; published mirrored files under /beeper/attachments/ remain controlled by the overridable parent entry', overridable: false },
   // Anchored, like every entry here. The Beeper attachment mirror (#37) is a
   // lazy CACHE of bytes Beeper Desktop can re-supply, re-fetched on first view
   // and rendered as a labelled reference when it cannot — so a snapshot that
