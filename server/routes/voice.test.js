@@ -72,6 +72,14 @@ vi.mock('../services/voice/facetimeBridge.js', () => ({
   hangup: vi.fn(),
 }));
 
+vi.mock('../services/voice/callSession.js', () => ({
+  startCall: vi.fn(),
+  endCall: vi.fn(),
+  isCallActive: vi.fn(),
+  getCallState: vi.fn(),
+}));
+
+const callSession = await import('../services/voice/callSession.js');
 const config = await import('../services/voice/config.js');
 const health = await import('../services/voice/health.js');
 const bootstrap = await import('../services/voice/bootstrap.js');
@@ -645,12 +653,45 @@ describe('Voice Routes', () => {
       expect(facetimeBridge.probe).not.toHaveBeenCalled();
     });
 
-    it.each(['probe', 'call', 'hangup'])('POST /api/voice/facetime/%s dispatches to the matching bridge command', async (command) => {
-      facetimeBridge[command].mockResolvedValue({ ok: true, command });
-      const res = await request(buildApp()).post(`/api/voice/facetime/${command}`).send({});
+    it('POST /api/voice/facetime/probe dispatches to the bridge', async () => {
+      facetimeBridge.probe.mockResolvedValue({ ok: true, command: 'probe' });
+      const res = await request(buildApp()).post('/api/voice/facetime/probe').send({});
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true, command });
-      expect(facetimeBridge[command]).toHaveBeenCalledTimes(1);
+      expect(res.body).toEqual({ ok: true, command: 'probe' });
+    });
+
+    it('POST /api/voice/facetime/call starts a session-backed call', async () => {
+      callSession.startCall.mockResolvedValue({ ok: true, state: { state: 'dialing' } });
+      const res = await request(buildApp()).post('/api/voice/facetime/call').send({});
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, command: 'call', state: { state: 'dialing' } });
+      expect(callSession.startCall).toHaveBeenCalledWith({ origin: 'user' });
+      expect(facetimeBridge.call).not.toHaveBeenCalled();
+    });
+
+    it.each(['no-call-host', 'call-in-progress'])('POST /api/voice/facetime/call returns 409 on refusal %s', async (reason) => {
+      callSession.startCall.mockResolvedValue({ ok: false, reason });
+      const res = await request(buildApp()).post('/api/voice/facetime/call').send({});
+      expect(res.status).toBe(409);
+      expect(res.body.reason).toBe(reason);
+    });
+
+    it('POST /api/voice/facetime/hangup ends an active session call', async () => {
+      callSession.isCallActive.mockReturnValue(true);
+      callSession.endCall.mockResolvedValue({});
+      callSession.getCallState.mockReturnValue({ state: 'idle' });
+      const res = await request(buildApp()).post('/api/voice/facetime/hangup').send({});
+      expect(res.status).toBe(200);
+      expect(callSession.endCall).toHaveBeenCalledWith('user-hangup');
+      expect(facetimeBridge.hangup).not.toHaveBeenCalled();
+    });
+
+    it('POST /api/voice/facetime/hangup falls back to the bridge when idle', async () => {
+      callSession.isCallActive.mockReturnValue(false);
+      facetimeBridge.hangup.mockResolvedValue({ ok: true, command: 'hangup' });
+      const res = await request(buildApp()).post('/api/voice/facetime/hangup').send({});
+      expect(res.body).toEqual({ ok: true, command: 'hangup' });
+      expect(callSession.endCall).not.toHaveBeenCalled();
     });
 
     it('POST /api/voice/facetime/probe propagates a bridge failure as an error response', async () => {
@@ -662,7 +703,7 @@ describe('Voice Routes', () => {
     it('rejects an unexpected body field with 400 without touching the bridge', async () => {
       const res = await request(buildApp()).post('/api/voice/facetime/call').send({ extra: 'nope' });
       expect(res.status).toBe(400);
-      expect(facetimeBridge.call).not.toHaveBeenCalled();
+      expect(callSession.startCall).not.toHaveBeenCalled();
     });
   });
 });
