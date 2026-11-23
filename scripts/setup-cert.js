@@ -22,6 +22,9 @@
  * `server/services/certRenewer.js` calls it daily and hot-swaps the running
  * HTTPS server's SecureContext without a restart.
  *
+ * Exports `runSetupCert({ dataDir, argv, deps })` plus the decision helpers so the
+ * regeneration/fallback matrix is testable; the CLI only runs when invoked directly.
+ *
  * Flags:
  *   --force          regenerate even if meta says nothing changed
  *   --self-signed    skip Tailscale attempt and go straight to self-signed
@@ -36,16 +39,40 @@ import { findTailscale, hasOnlySandboxedTailscale } from '../server/lib/tailscal
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { readCertExpiresAt } from '../lib/certMeta.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
-const { dir: CERT_DIR, cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(join(ROOT, 'data'));
 
-const FORCE = process.argv.includes('--force');
-const SELF_SIGNED_ONLY = process.argv.includes('--self-signed');
+const DEFAULT_DEPS = {
+  execFileSync,
+  networkInterfaces,
+  findTailscale,
+  hasOnlySandboxedTailscale,
+  now: () => Date.now(),
+  log: (msg) => console.log(msg)
+};
 
-function tailscaleStatus(bin) {
-  const out = execFileSync(bin, ['status', '--json'], { stdio: ['ignore', 'pipe', 'ignore'] });
+/**
+ * Bundle paths, flags and injectable side-effect seams. Tests stub `deps`
+ * (Tailscale/OpenSSL executors, interface list, clock) and point `dataDir` at a
+ * temp directory; the CLI uses the defaults.
+ */
+export function createContext({ dataDir = join(ROOT, 'data'), argv = process.argv, deps = {} } = {}) {
+  const { dir, cert, key, meta } = certPaths(dataDir);
+  return {
+    certDir: dir,
+    certPath: cert,
+    keyPath: key,
+    metaPath: meta,
+    force: argv.includes('--force'),
+    selfSignedOnly: argv.includes('--self-signed'),
+    deps: { ...DEFAULT_DEPS, ...deps }
+  };
+}
+
+function tailscaleStatus(ctx, bin) {
+  const out = ctx.deps.execFileSync(bin, ['status', '--json'], { stdio: ['ignore', 'pipe', 'ignore'] });
   return JSON.parse(out.toString());
 }
 
@@ -55,21 +82,21 @@ function tailscaleHostname(status) {
   return raw.replace(/\.$/, '');
 }
 
-function runTailscaleCert(bin, hostname) {
-  mkdirSync(CERT_DIR, { recursive: true });
-  execFileSync(bin, [
+function runTailscaleCert(ctx, bin, hostname) {
+  mkdirSync(ctx.certDir, { recursive: true });
+  ctx.deps.execFileSync(bin, [
     'cert',
-    `--cert-file=${CERT_PATH}`,
-    `--key-file=${KEY_PATH}`,
+    `--cert-file=${ctx.certPath}`,
+    `--key-file=${ctx.keyPath}`,
     hostname
   ], { stdio: 'inherit' });
 }
 
 // ---- Self-signed path ----------------------------------------------------
 
-function detectIPs() {
+function detectIPs(ctx) {
   const ips = new Set(['127.0.0.1']);
-  const nets = networkInterfaces();
+  const nets = ctx.deps.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const iface of nets[name] || []) {
       if (iface.family === 'IPv4' && !iface.internal) ips.add(iface.address);
@@ -87,8 +114,8 @@ function buildSANs(ips) {
   return lines.join('\n');
 }
 
-function generateSelfSigned(ips) {
-  mkdirSync(CERT_DIR, { recursive: true });
+function generateSelfSigned(ctx, ips) {
+  mkdirSync(ctx.certDir, { recursive: true });
 
   const cnf = `
 [req]
@@ -114,7 +141,7 @@ ${buildSANs(ips)}
 
   // Stage everything (including openssl.cnf) in a sibling temp dir so an
   // interrupted run never leaves a truncated key/cert at the live paths.
-  const stage = mkdtempSync(join(CERT_DIR, '.stage-'));
+  const stage = mkdtempSync(join(ctx.certDir, '.stage-'));
   try {
     const cnfPath = join(stage, 'openssl.cnf');
     const stagedKey = join(stage, 'key.pem');
@@ -122,7 +149,7 @@ ${buildSANs(ips)}
     const stagedMeta = join(stage, 'meta.json');
     writeFileSync(cnfPath, cnf);
 
-    execFileSync('openssl', [
+    ctx.deps.execFileSync('openssl', [
       'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
       '-keyout', stagedKey,
       '-out', stagedCert,
@@ -138,25 +165,25 @@ ${buildSANs(ips)}
     writeFileSync(stagedMeta, JSON.stringify({
       mode: 'self-signed',
       ips,
-      generatedAt: new Date().toISOString()
+      generatedAt: new Date(ctx.deps.now()).toISOString()
     }, null, 2));
 
     // Same-filesystem renames; meta last so it only ever describes a live pair.
-    renameSync(stagedKey, KEY_PATH);
-    renameSync(stagedCert, CERT_PATH);
-    renameSync(stagedMeta, META_PATH);
+    renameSync(stagedKey, ctx.keyPath);
+    renameSync(stagedCert, ctx.certPath);
+    renameSync(stagedMeta, ctx.metaPath);
   } finally {
     rmSync(stage, { recursive: true, force: true });
   }
-  console.log(`🔒 Generated self-signed cert for ${ips.join(', ')}`);
+  ctx.deps.log(`🔒 Generated self-signed cert for ${ips.join(', ')}`);
 }
 
 // ---- Regeneration logic --------------------------------------------------
 
-function readMeta() {
-  if (!existsSync(META_PATH)) return null;
+function readMeta(ctx) {
+  if (!existsSync(ctx.metaPath)) return null;
   try {
-    return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+    return JSON.parse(readFileSync(ctx.metaPath, 'utf-8'));
   } catch {
     // Partial/corrupt meta.json (e.g. interrupted write) — treat as absent so
     // the script falls through to its normal "no usable cert state" branches
@@ -165,35 +192,35 @@ function readMeta() {
   }
 }
 
-function certExpiresAt() {
-  const iso = readCertExpiresAt(CERT_PATH);
+function certExpiresAt(ctx) {
+  const iso = readCertExpiresAt(ctx.certPath);
   return iso ? new Date(iso) : null;
 }
 
-function daysUntil(date) {
-  return (date.getTime() - Date.now()) / 86400000;
+function daysUntil(ctx, date) {
+  return (date.getTime() - ctx.deps.now()) / 86400000;
 }
 
-function shouldRegenTailscale(hostname) {
-  if (FORCE) return true;
+export function shouldRegenTailscale(ctx, hostname) {
+  if (ctx.force) return true;
   // hasTailscaleCert covers BOTH file presence AND PEM parseability — so a
   // half-written cert from an interrupted prior run regenerates instead of
   // being preserved (the file would be present but createSecureContext would
   // throw at server boot).
-  if (!hasTailscaleCert(CERT_DIR)) return true;
-  const meta = readMeta();
+  if (!hasTailscaleCert(ctx.certDir)) return true;
+  const meta = readMeta(ctx);
   if (!meta || meta.mode !== 'tailscale' || meta.hostname !== hostname) return true;
-  const expiry = certExpiresAt();
+  const expiry = certExpiresAt(ctx);
   if (!expiry) return true;
   // Renew when <30 days remain (LE issues 90-day certs; tailscale cert no-ops
   // when >1/3 lifetime remains, so we lean on the CLI's own cache window)
-  return daysUntil(expiry) < 30;
+  return daysUntil(ctx, expiry) < 30;
 }
 
-function shouldRegenSelfSigned(ips) {
-  if (FORCE) return true;
-  if (!hasTailscaleCert(CERT_DIR)) return true;
-  const meta = readMeta();
+export function shouldRegenSelfSigned(ctx, ips) {
+  if (ctx.force) return true;
+  if (!hasTailscaleCert(ctx.certDir)) return true;
+  const meta = readMeta(ctx);
   if (!meta || meta.mode !== 'self-signed') return true;
   const prev = (meta.ips || []).slice().sort().join(',');
   const curr = ips.slice().sort().join(',');
@@ -202,12 +229,12 @@ function shouldRegenSelfSigned(ips) {
 
 // ---- Main ----------------------------------------------------------------
 
-function trySelfSigned() {
-  const ips = detectIPs();
-  if (shouldRegenSelfSigned(ips)) {
-    generateSelfSigned(ips);
+function trySelfSigned(ctx) {
+  const ips = detectIPs(ctx);
+  if (shouldRegenSelfSigned(ctx, ips)) {
+    generateSelfSigned(ctx, ips);
   } else {
-    console.log(`🔒 Self-signed cert still valid for ${ips.join(', ')} (use --force to regenerate)`);
+    ctx.deps.log(`🔒 Self-signed cert still valid for ${ips.join(', ')} (use --force to regenerate)`);
   }
 }
 
@@ -222,108 +249,122 @@ function trySelfSigned() {
 //   3. No cert files at all → server boots HTTP. Print HTTPS opt-in guidance.
 // Case 2 is what stops the "Tailscale was broken since last run, but cert
 // files are stale on disk and the server still serves TLS" surprise.
-function maybeFallbackSelfSigned() {
-  const meta = readMeta();
-  const hasCert = hasTailscaleCert(CERT_DIR);
+export function maybeFallbackSelfSigned(ctx) {
+  const { log } = ctx.deps;
+  const meta = readMeta(ctx);
+  const hasCert = hasTailscaleCert(ctx.certDir);
 
   // Files exist but are unparseable (interrupted provisioning). hasTailscaleCert
   // already returned false, so the server will boot HTTP — but the user has
   // cert files on disk wondering why HTTPS isn't active. Tell them explicitly.
-  if (!hasCert && existsSync(CERT_PATH) && existsSync(KEY_PATH)) {
-    console.log(`⚠️  data/certs/{cert,key}.pem present but unreadable — server will boot HTTP-only.`);
-    console.log(`   To recover: \`npm run setup:cert -- --self-signed\` to regenerate, or delete the files to revert.`);
+  if (!hasCert && existsSync(ctx.certPath) && existsSync(ctx.keyPath)) {
+    log(`⚠️  data/certs/{cert,key}.pem present but unreadable — server will boot HTTP-only.`);
+    log(`   To recover: \`npm run setup:cert -- --self-signed\` to regenerate, or delete the files to revert.`);
     return;
   }
 
   if (hasCert && meta?.mode === 'self-signed') {
-    trySelfSigned();
+    trySelfSigned(ctx);
     return;
   }
 
   if (hasCert) {
     const modeLabel = meta?.mode ? `existing ${meta.mode} cert` : 'existing cert';
-    console.log(`ℹ️  Keeping ${modeLabel} at data/certs/{cert,key}.pem — server will boot HTTPS on :5555.`);
+    log(`ℹ️  Keeping ${modeLabel} at data/certs/{cert,key}.pem — server will boot HTTPS on :5555.`);
     if (meta?.mode === 'tailscale') {
-      console.log(`   To refresh the LE cert, fix Tailscale and re-run \`npm run setup:cert\`.`);
+      log(`   To refresh the LE cert, fix Tailscale and re-run \`npm run setup:cert\`.`);
     }
-    console.log(`   To revert to HTTP-only, delete data/certs/{cert,key}.pem and restart.`);
+    log(`   To revert to HTTP-only, delete data/certs/{cert,key}.pem and restart.`);
     return;
   }
 
-  console.log(`ℹ️  Staying HTTP-only on :5555 (no Tailscale cert provisioned).`);
-  console.log(`   To enable HTTPS (required for in-browser mic), choose one:`);
-  console.log(`     • Install Tailscale + enable HTTPS in the tailnet admin, then \`npm run setup:cert\``);
-  console.log(`     • Generate a self-signed cert (browser warning): \`npm run setup:cert -- --self-signed\``);
+  log(`ℹ️  Staying HTTP-only on :5555 (no Tailscale cert provisioned).`);
+  log(`   To enable HTTPS (required for in-browser mic), choose one:`);
+  log(`     • Install Tailscale + enable HTTPS in the tailnet admin, then \`npm run setup:cert\``);
+  log(`     • Generate a self-signed cert (browser warning): \`npm run setup:cert -- --self-signed\``);
 }
 
-if (SELF_SIGNED_ONLY) {
-  trySelfSigned();
-  process.exit(0);
+/**
+ * Provision the cert for `dataDir`. Always resolves without calling
+ * process.exit; every "nothing more to do" path is an early return.
+ */
+export function runSetupCert(options = {}) {
+  const ctx = createContext(options);
+  const { log } = ctx.deps;
+
+  if (ctx.selfSignedOnly) {
+    trySelfSigned(ctx);
+    return;
+  }
+
+  if (ctx.deps.hasOnlySandboxedTailscale()) {
+    log(`⚠️  Only the sandboxed Tailscale.app CLI is installed.`);
+    log(`   It can't write the LE cert to data/certs/ ("operation not permitted").`);
+    log(`   Install the unsandboxed CLI:  brew install tailscale`);
+    log(`   Then re-run:                  npm run setup:cert`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  const bin = ctx.deps.findTailscale();
+  if (!bin) {
+    log(`ℹ️  Tailscale CLI not found.`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  let status;
+  try {
+    status = tailscaleStatus(ctx, bin);
+  } catch (err) {
+    log(`ℹ️  tailscale status failed (${err.message}).`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  const hostname = tailscaleHostname(status);
+  if (!hostname || status.BackendState !== 'Running') {
+    log(`ℹ️  Tailscale not running or no DNSName.`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  if (!shouldRegenTailscale(ctx, hostname)) {
+    const expiry = certExpiresAt(ctx);
+    const days = expiry ? Math.floor(daysUntil(ctx, expiry)) : '?';
+    log(`🔒 Tailscale cert for ${hostname} still valid (${days}d remaining)`);
+    return;
+  }
+
+  log(`🔒 Fetching Let's Encrypt cert for ${hostname} via Tailscale...`);
+  try {
+    runTailscaleCert(ctx, bin, hostname);
+  } catch (err) {
+    log(`⚠️  tailscale cert failed (${err.message}).`);
+    log(`   (Common cause: HTTPS Certificates not enabled in the tailnet admin console at login.tailscale.com/admin/dns)`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  if (!existsSync(ctx.certPath) || !existsSync(ctx.keyPath)) {
+    log(`⚠️  tailscale cert returned success but files missing.`);
+    maybeFallbackSelfSigned(ctx);
+    return;
+  }
+
+  const expiry = certExpiresAt(ctx);
+  const metaTmp = `${ctx.metaPath}.${process.pid}.tmp`;
+  writeFileSync(metaTmp, JSON.stringify({
+    mode: 'tailscale',
+    hostname,
+    issuedAt: new Date(ctx.deps.now()).toISOString(),
+    expiresAt: expiry?.toISOString() ?? null,
+    certMtime: statSync(ctx.certPath).mtimeMs
+  }, null, 2));
+  renameSync(metaTmp, ctx.metaPath);
+  log(`✅ Tailscale cert installed for ${hostname} (expires ${expiry?.toISOString() ?? 'unknown'})`);
 }
 
-if (hasOnlySandboxedTailscale()) {
-  console.log(`⚠️  Only the sandboxed Tailscale.app CLI is installed.`);
-  console.log(`   It can't write the LE cert to data/certs/ ("operation not permitted").`);
-  console.log(`   Install the unsandboxed CLI:  brew install tailscale`);
-  console.log(`   Then re-run:                  npm run setup:cert`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
+if (isDirectlyInvoked(import.meta.url)) {
+  runSetupCert();
 }
-
-const bin = findTailscale();
-if (!bin) {
-  console.log(`ℹ️  Tailscale CLI not found.`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
-}
-
-let status;
-try {
-  status = tailscaleStatus(bin);
-} catch (err) {
-  console.log(`ℹ️  tailscale status failed (${err.message}).`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
-}
-
-const hostname = tailscaleHostname(status);
-if (!hostname || status.BackendState !== 'Running') {
-  console.log(`ℹ️  Tailscale not running or no DNSName.`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
-}
-
-if (!shouldRegenTailscale(hostname)) {
-  const expiry = certExpiresAt();
-  const days = expiry ? Math.floor(daysUntil(expiry)) : '?';
-  console.log(`🔒 Tailscale cert for ${hostname} still valid (${days}d remaining)`);
-  process.exit(0);
-}
-
-console.log(`🔒 Fetching Let's Encrypt cert for ${hostname} via Tailscale...`);
-try {
-  runTailscaleCert(bin, hostname);
-} catch (err) {
-  console.log(`⚠️  tailscale cert failed (${err.message}).`);
-  console.log(`   (Common cause: HTTPS Certificates not enabled in the tailnet admin console at login.tailscale.com/admin/dns)`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
-}
-
-if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) {
-  console.log(`⚠️  tailscale cert returned success but files missing.`);
-  maybeFallbackSelfSigned();
-  process.exit(0);
-}
-
-const expiry = certExpiresAt();
-const metaTmp = `${META_PATH}.${process.pid}.tmp`;
-writeFileSync(metaTmp, JSON.stringify({
-  mode: 'tailscale',
-  hostname,
-  issuedAt: new Date().toISOString(),
-  expiresAt: expiry?.toISOString() ?? null,
-  certMtime: statSync(CERT_PATH).mtimeMs
-}, null, 2));
-renameSync(metaTmp, META_PATH);
-console.log(`✅ Tailscale cert installed for ${hostname} (expires ${expiry?.toISOString() ?? 'unknown'})`);
