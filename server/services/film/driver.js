@@ -13,30 +13,21 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathWithin } from '../../../lib/pathWithin.js';
-import { PATHS } from '../../lib/paths.js';
-import { codeAnimationWorkerFailure } from '../../lib/codeAnimationContainment.js';
-import { blenderRefusal, blenderRendersDir, blenderSongFile, blenderSrcDir, blenderWorkspaceDir } from './workspace.js';
+import { requireTrustedLocalBlender, runBlenderDriverScript } from '../blenderWorkspace/worker.js';
+import { blenderRendersDir, blenderSongFile, blenderSrcDir, blenderWorkspaceDir } from './workspace.js';
 import { BLENDER_NEEDS_TRUSTED_LOCAL } from './state.js';
 import { parseBlenderDriverLine } from './protocol.js';
 
 const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
 const DRIVER = 'portos_blender_driver.py';
 const KIT = 'portos_film';
-// Shared with every other PortOS-owned Blender run; each run owns one UUID folder in it.
-const WORKER_ROOT = 'code-animation-workspaces';
 const GIB = 1024 ** 3;
 const RENDER_LIMITS = Object.freeze({ wallSeconds: 6 * 60 * 60, memoryBytes: 32 * GIB, diskBytes: 16 * GIB, maxFiles: 200_000 });
 const DESCRIBE_LIMITS = Object.freeze({ wallSeconds: 5 * 60, memoryBytes: 8 * GIB, diskBytes: GIB, maxFiles: 10_000 });
 const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 
 /** The checked Blender tool for a film job; 409 when it is not ready or not Trusted local. */
-export async function requireBlenderFilmTool() {
-  const { getCodeAnimationExecution, resolveBlenderTool } = await import('../codeAnimation/execution.js');
-  if ((await getCodeAnimationExecution()).executionMode !== 'trusted-local') {
-    throw blenderRefusal(BLENDER_NEEDS_TRUSTED_LOCAL, 'MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL', 409);
-  }
-  return resolveBlenderTool();
-}
+export const requireBlenderFilmTool = () => requireTrustedLocalBlender(BLENDER_NEEDS_TRUSTED_LOCAL);
 
 /** A shipped driver or kit file by its `/`-separated path; a path that climbs out of py/ throws (`pathWithin`). */
 export const driverSourcePath = (path) => pathWithin(PY_DIR, ...path.split('/'));
@@ -70,31 +61,21 @@ export const blenderJobBase = (owner, { settings, options }) => ({
  */
 export async function runBlenderDriver({ tool, job, song, signal, onEvent = () => {}, onLog = () => {} }) {
   const describe = job.mode === 'describe';
-  let failure = null;
   let manifest = null;
   const seen = { start: null, done: null };
-  const run = await tool.worker({
-    tool: {
-      executable: tool.executable,
-      argv: (entry, workspace) => ['--background', '--factory-startup', '--disable-autoexec', '--python-exit-code', '1',
-        '--python', entry, '--', join(workspace, 'input', 'job.json')],
-    },
-    workspaceRoot: join(PATHS.data, WORKER_ROOT),
+  const result = await runBlenderDriverScript({
+    tool,
     entrypoint: DRIVER,
     files: [...await stagedDriverFiles(),
       { path: 'job.json', content: JSON.stringify(job) }, { path: 'song.json', content: JSON.stringify(song) }],
     limits: describe ? DESCRIBE_LIMITS : RENDER_LIMITS,
     signal,
-    onStdoutLine: (line) => {
-      const event = parseBlenderDriverLine(line);
-      // The error event carries its traceback JSON-escaped on one line; the caller writes it out as text.
-      if (event?.event !== 'error') onLog(line);
-      if (!event) return;
-      if (event.event === 'error') failure = event;
+    parseLine: parseBlenderDriverLine,
+    onEvent: (event) => {
       if (event.event === 'start' || event.event === 'done') seen[event.event] = event;
       onEvent(event);
     },
-    onStderrLine: onLog,
+    onLog,
     onOutput: describe ? async (directory, outputs) => {
       const written = outputs.find((file) => file.path === 'manifest.json');
       if (!written || written.bytes > MANIFEST_MAX_BYTES) return;
@@ -102,11 +83,5 @@ export async function runBlenderDriver({ tool, job, song, signal, onEvent = () =
       manifest = await readFile(join(directory, 'manifest.json'), 'utf8').then((text) => JSON.parse(text)).catch(() => null);
     } : undefined,
   });
-  if (run.status === 'completed') return { ok: true, canceled: false, error: null, traceback: null, manifest, events: seen };
-  const canceled = run.status === 'terminated' && run.reason === 'canceled';
-  return {
-    ok: false, canceled, manifest: null, events: seen,
-    error: canceled ? 'Canceled' : failure?.message || codeAnimationWorkerFailure(run),
-    traceback: failure?.traceback || null,
-  };
+  return { ...result, manifest: result.ok ? manifest : null, events: seen };
 }

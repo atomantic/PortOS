@@ -84,7 +84,7 @@ export const auditedTables = [
     'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
-    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'html_page_runs', 'image_to_3d_models', 'sprite_records', 'games', 'code_animation_jobs', 'mood_boards', 'fableloom_stories', 'storyboards', 'storyboard_recipes',
+    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'html_page_runs', 'image_to_3d_models', 'blender_models', 'sprite_records', 'games', 'code_animation_jobs', 'mood_boards', 'fableloom_stories', 'storyboards', 'storyboard_recipes',
     'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
     'tribe_identities',
     'music_video_projects', 'creative_commissions', 'code_animation_projects', 'code_animation_project_revisions',

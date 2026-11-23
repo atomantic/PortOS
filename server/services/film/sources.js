@@ -1,99 +1,30 @@
 /**
  * The authored film source under a Blender workspace's src/: list it, read and
  * write one text file, delete one file, and scaffold it from the shipped
- * starter. Binary assets (images, HDRIs, fonts, audio, models) are placed on
- * disk by the operator or an agent and are listed but never sent through the API.
- *
- * Only regular files whose path src/ may hold are seen; symlinks, dotfiles and
- * other types (Python's bytecode cache included) are skipped everywhere, so
- * the listing, the hashes and the routes agree on what the film is.
+ * starter. The tree rules (what src/ may hold, containment, size caps) are the
+ * shared ones in ../blenderWorkspace/sourceTree.js.
  */
-import { copyFile, lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, readdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathWithin } from '../../../lib/pathWithin.js';
-import { atomicWrite } from '../../lib/fileCore.js';
-import { MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES, blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
-import { assertInsideWithoutSymlinks, blenderRefusal, blenderSrcDir, blenderWorkspaceDir, resolveBlenderSourceFile } from './workspace.js';
+import { blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
+import { deleteSourceFile, presentSourceFiles, readSourceText, walkSourceTree, writeSourceText } from '../blenderWorkspace/sourceTree.js';
+import { assertInsideWithoutSymlinks, blenderRefusal, blenderSourceDirs, blenderSrcDir, blenderWorkspaceDir, resolveBlenderSourceFile } from './workspace.js';
 
 const STARTER_DIR = fileURLToPath(new URL('./py/starter/', import.meta.url));
-const MAX_DEPTH = 6;
-// Refuse oversized source trees whole: partial hashes or copies misrepresent the film.
-const MAX_FILES = 5000;
-
-async function walk(root, prefix, depth, found) {
-  if (depth > MAX_DEPTH) return;
-  const entries = await readdir(join(root, ...prefix.split('/').filter(Boolean)), { withFileTypes: true }).catch((error) => {
-    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
-    throw error;
-  });
-  for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
-    const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) {
-      if (/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(entry.name)) await walk(root, path, depth + 1, found);
-      continue;
-    }
-    const kind = entry.isFile() ? blenderSourceFileKind(path) : null;
-    if (!kind) continue;
-    const absolute = join(root, ...path.split('/'));
-    const info = await lstat(absolute).catch(() => null);
-    if (!info?.isFile()) continue;
-    if (found.length >= MAX_FILES) {
-      throw blenderRefusal(`The Blender workspace has more than ${MAX_FILES} supported source files`, 'MUSIC_VIDEO_BLENDER_SOURCE_LIMIT', 413);
-    }
-    found.push({ path, absolute, bytes: info.size, mtimeMs: info.mtimeMs, kind });
-  }
-}
 
 /** Every film source file, sorted by path: `{ path, absolute, bytes, mtimeMs, kind }`. */
-export async function walkBlenderSources(owner) {
-  const root = blenderSrcDir(owner);
-  const top = await lstat(root).catch(() => null);
-  // A linked src/ is not this workspace's source.
-  if (!top?.isDirectory() || top.isSymbolicLink()) return [];
-  const found = [];
-  await walk(root, '', 1, found);
-  return found;
-}
+export const walkBlenderSources = (owner) => walkSourceTree(blenderSrcDir(owner));
 
-export async function listBlenderFiles(owner) {
-  const files = await walkBlenderSources(owner);
-  return { files: files.map(({ path, bytes, mtimeMs, kind }) => ({ path, bytes, mtime: new Date(mtimeMs).toISOString(), text: kind === 'text' })) };
-}
+export const listBlenderFiles = async (owner) => presentSourceFiles(await walkBlenderSources(owner));
 
-const notText = () => blenderRefusal('Only text source files (.py, .js, .mjs, .json, .txt, .md) are read and written here; place other assets in the workspace folder', 'MUSIC_VIDEO_BLENDER_NOT_TEXT');
+export const readBlenderFile = (owner, path) => readSourceText(blenderSourceDirs(owner), path);
 
-export async function readBlenderFile(owner, path) {
-  const { absolute, kind } = await resolveBlenderSourceFile(owner, path);
-  if (kind !== 'text') throw notText();
-  const info = await lstat(absolute).catch(() => null);
-  if (!info?.isFile()) throw blenderRefusal('That file is not in the workspace', 'NOT_FOUND', 404);
-  if (info.size > MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES) throw blenderRefusal('That file is too large to open here (over 2 MiB)', 'MUSIC_VIDEO_BLENDER_FILE_TOO_LARGE', 413);
-  return { path, content: await readFile(absolute, 'utf8') };
-}
+export const writeBlenderFile = (owner, path, content) => writeSourceText(blenderSourceDirs(owner), path, content);
 
-export async function writeBlenderFile(owner, path, content) {
-  const { absolute, kind } = await resolveBlenderSourceFile(owner, path);
-  if (kind !== 'text') throw notText();
-  const bytes = Buffer.byteLength(content, 'utf8');
-  if (bytes > MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES) throw blenderRefusal('A source file can hold at most 2 MiB of text', 'MUSIC_VIDEO_BLENDER_FILE_TOO_LARGE', 413);
-  const existing = await lstat(absolute).catch(() => null);
-  if (existing && !existing.isFile()) throw blenderRefusal('A folder already has that name', 'MUSIC_VIDEO_BLENDER_PATH');
-  // The temp file is renamed over the target, so a link planted between the
-  // check above and this write is replaced, never followed.
-  await atomicWrite(absolute, content);
-  return { path, bytes };
-}
-
-export async function deleteBlenderFile(owner, path) {
-  const { absolute } = await resolveBlenderSourceFile(owner, path);
-  const info = await lstat(absolute).catch(() => null);
-  if (!info?.isFile()) throw blenderRefusal('That file is not in the workspace', 'NOT_FOUND', 404);
-  await rm(absolute);
-  return { path };
-}
+export const deleteBlenderFile = (owner, path) => deleteSourceFile(blenderSourceDirs(owner), path);
 
 /** A shipped starter file by its `/`-separated path; a path that climbs out of the starter throws (`pathWithin`). */
 export const starterSourcePath = (path) => pathWithin(STARTER_DIR, ...path.split('/'));

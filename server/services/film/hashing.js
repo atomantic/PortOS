@@ -12,37 +12,19 @@
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { basename, dirname, join, normalize, sep } from 'node:path';
-import { sha256File } from '../../lib/fileCore.js';
 import { blenderRenderFrame } from '../../lib/musicVideo/musicVideoBlender.js';
 import { staticImportSpecifiersFromSource } from '../../lib/staticImportGraph.js';
+import { hashSourceEntries } from '../blenderWorkspace/treeHash.js';
 import { walkBlenderSources } from './sources.js';
 import { blenderSrcDir } from './workspace.js';
 
 const sha = (value) => createHash('sha256').update(value).digest('hex');
 
-// absolute path → { bytes, mtimeMs, hash }: an unchanged file is hashed once per
-// process, so reading state does not re-read every asset.
-const contentHashes = new Map();
-const CONTENT_HASH_LIMIT = 20000;
-
-async function contentHash({ absolute, bytes, mtimeMs }) {
-  const known = contentHashes.get(absolute);
-  if (known && known.bytes === bytes && known.mtimeMs === mtimeMs) return known.hash;
-  const hash = await sha256File(absolute);
-  if (contentHashes.size >= CONTENT_HASH_LIMIT) contentHashes.clear();
-  contentHashes.set(absolute, { bytes, mtimeMs, hash });
-  return hash;
-}
-
 /**
  * The film source as it is now: `files` maps each source path to its content
  * hash (in path order) and `tree` is one hash over all of them.
  */
-export async function hashBlenderSources(owner) {
-  const files = new Map();
-  for (const entry of await walkBlenderSources(owner)) files.set(entry.path, await contentHash(entry));
-  return { files, tree: sha([...files].map(([path, hash]) => `${path}\0${hash}`).join('\n')) };
-}
+export const hashBlenderSources = async (owner) => hashSourceEntries(await walkBlenderSources(owner));
 
 /** The code module of a code shot, then each layer module, in declaration order. */
 export function filmCodeEntries(shot) {

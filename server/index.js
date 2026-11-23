@@ -201,6 +201,7 @@ const filmStylesRoutes = createLazyRouter(() => import('./routes/filmStyles.js')
 const codeAnimationRoutes = createLazyRouter(() => import('./routes/codeAnimation.js'));
 const codeAnimationExecutionRoutes = createLazyRouter(() => import('./routes/codeAnimationExecution.js'));
 const imageTo3dRoutes = createLazyRouter(() => import('./routes/imageTo3d.js'));
+const blenderModelsRoutes = createLazyRouter(() => import('./routes/blenderModels.js'));
 const riggingRoutes = createLazyRouter(() => import('./routes/rigging.js'));
 const writersRoomRoutes = createLazyRouter(() => import('./routes/writersRoom.js'));
 const universeBuilderRoutes = createLazyRouter(() => import('./routes/universeBuilder/index.js'));
@@ -501,6 +502,7 @@ app.use('/api/film-styles', filmStylesRoutes);
 app.use('/api/code-animation/execution', codeAnimationExecutionRoutes);
 app.use('/api/code-animation', codeAnimationRoutes);
 app.use('/api/image-to-3d', imageTo3dRoutes);
+app.use('/api/blender-models', blenderModelsRoutes);
 app.use('/api/rigging', riggingRoutes);
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/writers-room', writersRoomRoutes);

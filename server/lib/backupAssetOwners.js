@@ -237,6 +237,22 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/imageTo3d/models.js'],
   },
   {
+    // The Blender model driver writes builds/<buildId>/ in place while the row
+    // says the build is running, so only the commit that names the finished
+    // build takes the lease.
+    id: 'blender-model-builds',
+    status: 'admitted',
+    modules: ['services/blenderModels/build.js'],
+  },
+  {
+    // Publishing names a finished build whose bytes are already durable.
+    // Pruning and deletion drop builds from the row before removing their
+    // folders; a source write or scaffold changes src/, which no row names.
+    id: 'blender-model-publish-prune-and-source',
+    status: 'reference-only',
+    modules: ['services/blenderModels/models.js', 'services/blenderModels/build.js'],
+  },
+  {
     // A rig or retarget pair is published into its own `rig/<id>` or
     // `retarget/<id>` directory, never replaced, and verified; the row that first
     // names it commits under the lease. A half-moved pair is named by no row.

@@ -1425,6 +1425,19 @@ CREATE TABLE IF NOT EXISTS image_to_3d_models (
 
 CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE;
 
+CREATE TABLE IF NOT EXISTS blender_models (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    );
+
+CREATE INDEX IF NOT EXISTS idx_blender_models_live_updated ON blender_models (updated_at DESC) WHERE deleted = FALSE;
+
 CREATE TABLE IF NOT EXISTS html_page_runs (
       id TEXT PRIMARY KEY,
       backend VARCHAR(32) NOT NULL,
@@ -2799,6 +2812,10 @@ CREATE TRIGGER trg_html_page_runs_audit AFTER UPDATE OR DELETE ON html_page_runs
 DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
 
 CREATE TRIGGER trg_image_to_3d_models_audit AFTER UPDATE OR DELETE ON image_to_3d_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_blender_models_audit ON blender_models;
+
+CREATE TRIGGER trg_blender_models_audit AFTER UPDATE OR DELETE ON blender_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
 DROP TRIGGER IF EXISTS trg_sprite_records_audit ON sprite_records;
 
