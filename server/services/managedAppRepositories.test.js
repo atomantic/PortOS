@@ -386,6 +386,11 @@ describe('managed app repository topology', () => {
     await resolveRepositoryTopology(REPO);
     expect(lookups()).toBe(1);
 
+    const compares = () => mock.execGh.mock.calls.filter(([args]) => String(args[1]).includes('/compare/')).length;
+    expect(compares()).toBe(1);
+    await getManagedAppRepositorySources(app);
+    expect(compares()).toBe(1);
+
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(Date.now() + 11 * 60_000);
     mock.execGh.mockRejectedValue(Object.assign(new Error('HTTP 403'), { ghStderr: 'HTTP 403: API rate limit exceeded' }));
