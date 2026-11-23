@@ -42,8 +42,9 @@ export const publishAppQualitySnapshot = (id, options = {}) =>
 // for, and the plan the shipped defaults produce; `preview` re-plans an edited
 // form without writing; `apply` persists the plan as per-app task overrides.
 // All three are silent — the form renders its own errors and warnings inline.
-export const getAppQualitySchedule = (id, options = {}) =>
-  request(`/apps/${id}/quality-schedule`, { silent: true, ...options });
+// `defaults` skips hydration from the app's saved overrides ("Reset to defaults").
+export const getAppQualitySchedule = (id, { defaults = false, ...options } = {}) =>
+  request(`/apps/${id}/quality-schedule${defaults ? '?defaults=1' : ''}`, { silent: true, ...options });
 export const previewAppQualitySchedule = (id, body, options = {}) =>
   request(`/apps/${id}/quality-schedule/preview`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
 export const applyAppQualitySchedule = (id, body, options = {}) =>

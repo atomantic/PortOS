@@ -43,6 +43,9 @@ export default function AppQualityScheduleForm({ app }) {
   const [selected, setSelected] = useState(null);
   const [modes, setModes] = useState({});
   const [options, setOptions] = useState(null);
+  // Whether the app has a saved schedule the form was seeded from. Tracked here
+  // because previews (which carry the form's own state) never repeat the flag.
+  const [hasSaved, setHasSaved] = useState(false);
   // Bumping this re-runs the load effect, which is how the failure state retries.
   const [reloadToken, setReloadToken] = useState(0);
   // True while the form describes something the rendered plan does not yet.
@@ -56,6 +59,17 @@ export default function AppQualityScheduleForm({ app }) {
   // one would repaint the grid with a plan the form no longer describes.
   const revision = useRef(0);
 
+  // The response already carries the plan for the form it seeds, so the preview
+  // effect is told to skip its next run.
+  const seedForm = response => {
+    untouched.current = true;
+    setData(response);
+    setHasSaved(Boolean(response.hasExistingSchedule));
+    setSelected(response.plan.slots.map(slot => slot.taskType));
+    setModes(Object.fromEntries(response.plan.slots.map(slot => [slot.taskType, slot.fileIssues])));
+    setOptions(response.plan.options);
+  };
+
   useEffect(() => {
     let live = true;
     // Reset first: a different app must never render the previous app's plan,
@@ -66,6 +80,7 @@ export default function AppQualityScheduleForm({ app }) {
     setSelected(null);
     setOptions(null);
     setModes({});
+    setHasSaved(false);
     setError('');
     setPlanStale(false);
     untouched.current = true;
@@ -73,10 +88,7 @@ export default function AppQualityScheduleForm({ app }) {
     getAppQualitySchedule(app.id)
       .then(response => {
         if (!live) return;
-        setData(response);
-        setSelected(response.plan.slots.map(slot => slot.taskType));
-        setModes(Object.fromEntries(response.plan.slots.map(slot => [slot.taskType, slot.fileIssues])));
-        setOptions(response.plan.options);
+        seedForm(response);
       })
       .catch(err => live && setError(err.message || 'Could not load the quality schedule'));
     return () => { live = false; };
@@ -122,7 +134,19 @@ export default function AppQualityScheduleForm({ app }) {
     setBusy(false);
     if (result?.failure) return toast.error(result.failure.message || 'Could not save the quality schedule');
     setData(result);
+    setHasSaved(true);
     toast.success(`Scheduled ${result.plan.slots.length} quality checks across the week`);
+  };
+
+  const resetToDefaults = async () => {
+    setBusy(true);
+    revision.current += 1;
+    const result = await getAppQualitySchedule(app.id, { defaults: true }).catch(err => ({ failure: err }));
+    setBusy(false);
+    if (result?.failure) return toast.error(result.failure.message || 'Could not load the default schedule');
+    setError('');
+    setPlanStale(false);
+    seedForm(result);
   };
 
   if (error && !data) return <section aria-label="Weekly quality schedule">
@@ -293,6 +317,8 @@ export default function AppQualityScheduleForm({ app }) {
           className="px-3 py-2 rounded bg-port-accent text-port-bg text-sm font-medium disabled:opacity-50">
           {busy ? 'Applying…' : planStale ? 'Re-planning…' : `Apply schedule (${plan.slots.length} check${plan.slots.length === 1 ? '' : 's'}${plan.claim ? ' + claim job' : ''})`}
         </button>
+        {hasSaved && <button type="button" onClick={resetToDefaults} disabled={busy}
+          className="px-3 py-2 rounded border border-port-border text-sm disabled:opacity-50">Reset to defaults</button>}
         <Link to="/cos/schedule" className="text-xs text-port-accent hover:underline">Review on the Schedule page</Link>
       </div>
       <p className="text-xs text-gray-500">
