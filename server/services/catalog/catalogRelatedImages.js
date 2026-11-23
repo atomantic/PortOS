@@ -41,6 +41,9 @@ export async function listRelatedImages(ingredient, media, { limit, offset }) {
       FROM media_assets
       WHERE kind = 'image' AND COALESCE(data->>'hidden', 'false') <> 'true'
         AND NOT (ref = ANY($1::text[]))
+        -- GIN prefilter on the indexed provenance filenames; the classification
+        -- expressions above stay the source of truth for what each row means.
+        AND provenance_refs && $1::text[]
     ), linked AS MATERIALIZED (
       SELECT ref AS filename, created_at,
         jsonb_build_object('filename', ref, '_mode', data->>'mode', 'width', data->'width',

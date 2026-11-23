@@ -30,6 +30,30 @@ export const imageMediaKey = (filename) => mediaKeyFor('image', filename);
 /** media_key for a generated video. Its ref is the job ID, not the filename. */
 export const videoMediaKey = (id) => mediaKeyFor('video', id);
 
+const isRef = (value) => typeof value === 'string' && value.length > 0;
+const filenamesOf = (list) => (Array.isArray(list) ? list.map(entry => entry?.filename) : []);
+
+/**
+ * Distinct filenames an image's sidecar names as direct provenance: the six
+ * sources listRelatedImages classifies (cleanedFrom, upscaledFrom,
+ * initImageFilename, referenceImageFilenames[], visualConditioning.assets[]
+ * .filename, requestedInputImages[].filename). Backs the GIN-indexed
+ * `provenance_refs` column, which is only a PREFILTER: the query keeps its exact
+ * classification predicates, so this must cover a superset of what they match.
+ * The upgrade backfill in db/schema/media.js mirrors these sources in SQL.
+ */
+export function extractImageProvenanceRefs(data) {
+  if (!data || typeof data !== 'object') return [];
+  return [...new Set([
+    data.cleanedFrom,
+    data.upscaledFrom,
+    data.initImageFilename,
+    ...(Array.isArray(data.referenceImageFilenames) ? data.referenceImageFilenames : []),
+    ...filenamesOf(data.visualConditioning?.assets),
+    ...filenamesOf(data.requestedInputImages),
+  ].filter(isRef))];
+}
+
 /**
  * Build an index row for a generated image. `item` is a gallery entry as
  * produced by imageGen listGallery() — `{ filename, createdAt, ...sidecar }` —
@@ -46,6 +70,7 @@ export function imageToRow(item, { now } = {}) {
     kind: 'image',
     ref,
     data: item,
+    provenanceRefs: extractImageProvenanceRefs(item),
     createdAt: mirrorTimestamp(item.createdAt, fallback),
   };
 }
@@ -66,6 +91,7 @@ export function videoToRow(entry, { now } = {}) {
     kind: 'video',
     ref,
     data: entry,
+    provenanceRefs: [],
     createdAt: mirrorTimestamp(entry.createdAt, fallback),
   };
 }

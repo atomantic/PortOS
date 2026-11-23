@@ -26,6 +26,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { extractImageProvenanceRefs } from '../services/mediaAssetIndex/logic.js';
 
 // Universe canon writes use the same disposable PostgreSQL as catalog rows.
 vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
@@ -139,8 +140,8 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
       const filename = `${prefix}${suffix}.png`;
       const key = `image:${filename}`;
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, toPgJson({ mode, inputProvenance, referenceImageFilenames: [primary] }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, toPgJson({ mode, inputProvenance, referenceImageFilenames: [primary] }), [primary], '2026-01-01T00:00:00.000Z']);
     }
     const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
     expect(result.status).toBe(200);
@@ -180,9 +181,10 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
     for (const [suffix, data] of rows) {
       const filename = `${prefix}${suffix}.png`;
       const key = `image:${filename}`;
+      const record = { filename, createdAt: '2026-01-01T00:00:00.000Z', ...data };
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, JSON.stringify({ filename, createdAt: '2026-01-01T00:00:00.000Z', ...data }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, JSON.stringify(record), extractImageProvenanceRefs(record), '2026-01-01T00:00:00.000Z']);
     }
     const url = `/api/catalog/ingredients/${ing.id}/related-images`;
     const first = await request(makeApp()).get(`${url}?limit=2`);
@@ -223,8 +225,8 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
       const filename = `${prefix}${suffix}-render.png`;
       const key = `image:${filename}`;
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, JSON.stringify({ referenceImageFilenames: [`${prefix}${suffix}.png`] }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, JSON.stringify({ referenceImageFilenames: [`${prefix}${suffix}.png`] }), [`${prefix}${suffix}.png`], '2026-01-01T00:00:00.000Z']);
     }
     const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
     expect(result.status).toBe(200);
