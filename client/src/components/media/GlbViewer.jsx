@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
   Bounds,
@@ -7,11 +7,12 @@ import {
   useBounds,
   useGLTF,
 } from '@react-three/drei';
-import { Box3 } from 'three';
+import { Box3, Color } from 'three';
 import { AlertTriangle, Download, RefreshCw, Rotate3d, SlidersHorizontal } from 'lucide-react';
 import ErrorBoundary from '../ErrorBoundary';
 import { GltfPrimitive } from '../../hooks/useClonedGltf';
 import { glbErrorText, glbFailureHint } from '../../lib/glbFailure';
+import { createGlbPoser } from '../../lib/glbPose';
 
 const DEFAULT_BACKGROUND = '#050505';
 const ENVIRONMENT_HDRI = '/hdri/studio-small-08-1k.hdr';
@@ -104,12 +105,59 @@ function NodeIsolation({ scene, nodeName }) {
   return null;
 }
 
-function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode }) {
+const HIGHLIGHTS = [0xff8a1f, 0x19c3ff];
+
+/** Tint the meshes of the named nodes, each its own color; returns the function that puts their materials back. */
+export function highlightGlbNodes(scene, nodeNames) {
+  const tinted = [];
+  scene.traverse((mesh) => {
+    const index = mesh.isMesh ? nodeNames.indexOf(ownerNodeName(mesh)) : -1;
+    if (index < 0) return;
+    const color = new Color(HIGHLIGHTS[index % HIGHLIGHTS.length]);
+    const tint = (material) => {
+      const clone = material.clone();
+      clone.color?.lerp(color, 0.6);
+      clone.emissive?.copy(color);
+      if (clone.emissive) clone.emissiveIntensity = 0.35;
+      return clone;
+    };
+    const original = mesh.material;
+    mesh.material = Array.isArray(original) ? original.map(tint) : tint(original);
+    tinted.push({ mesh, original });
+  });
+  return () => {
+    for (const { mesh, original } of tinted) {
+      for (const material of [mesh.material].flat()) material.dispose();
+      mesh.material = original;
+    }
+  };
+}
+
+// Poses the scene by its own clips; unmounting puts the shared cached scene back.
+function ScenePose({ scene, animations, pose }) {
+  const poser = useRef(null);
+  useEffect(() => {
+    poser.current = createGlbPoser(scene, animations);
+    return () => {
+      poser.current.dispose();
+      poser.current = null;
+    };
+  }, [scene, animations]);
+  useEffect(() => { poser.current?.seek(pose); }, [pose, scene, animations]);
+  return null;
+}
+
+function NodeHighlight({ scene, nodeNames }) {
+  useEffect(() => highlightGlbNodes(scene, nodeNames), [scene, nodeNames]);
+  return null;
+}
+
+function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode, pose, highlightNodes }) {
   // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
   // re-fetch every time the viewer remounts for the same URL).
-  const { scene } = useGLTF(src);
+  const { scene, animations } = useGLTF(src);
   const renderedScene = useMemo(
     () => (forceOpaque ? cloneGlbSceneWithOpaqueMaterials(scene) : scene),
     [forceOpaque, scene],
@@ -136,6 +184,8 @@ function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode }) {
   return (
     <>
       <GltfPrimitive object={renderedScene} />
+      {pose && <ScenePose scene={renderedScene} animations={animations} pose={pose} />}
+      {highlightNodes?.length > 0 && <NodeHighlight scene={renderedScene} nodeNames={highlightNodes} />}
       {isolateNode !== undefined && <NodeIsolation scene={renderedScene} nodeName={isolateNode} />}
     </>
   );
@@ -234,6 +284,10 @@ export default function GlbViewer({
   // The glTF node to show alone and frame; null shows the whole model. Omit it
   // on a viewer that never isolates parts.
   isolateNode,
+  // `{ clipName: 0-1 }`: holds the model where those of its clips are, side by side. Memoize it.
+  pose,
+  // Names of glTF nodes to tint. Memoize it.
+  highlightNodes,
 }) {
   const backgroundInputId = useId();
   const controlsPanelId = useId();
@@ -341,7 +395,7 @@ export default function GlbViewer({
               </ErrorBoundary>
               <Suspense fallback={null}>
                 <Bounds fit clip observe margin={1.2}>
-                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} isolateNode={isolateNode} />
+                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} isolateNode={isolateNode} pose={pose} highlightNodes={highlightNodes} />
                 </Bounds>
               </Suspense>
               <OrbitControls makeDefault enablePan enableZoom enableRotate />

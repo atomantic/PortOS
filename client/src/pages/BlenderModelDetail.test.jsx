@@ -3,7 +3,7 @@
  * only the API module, the socket and the WebGL viewer are doubled.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
@@ -13,7 +13,8 @@ vi.mock('../services/socket', () => ({ default: {
   off: (event, fn) => socketHandlers.get(event)?.delete(fn),
 } }));
 vi.mock('../components/media/GlbViewer', () => ({
-  default: ({ src, downloadHref, isolateNode }) => <div data-testid="glb-viewer" data-download={downloadHref || ''} data-part={isolateNode || ''}>{src}</div>,
+  default: ({ src, downloadHref, isolateNode, pose, highlightNodes }) => <div data-testid="glb-viewer" data-download={downloadHref || ''} data-part={isolateNode || ''}
+    data-pose={pose ? JSON.stringify(pose) : ''} data-highlight={(highlightNodes || []).join(',')}>{src}</div>,
 }));
 vi.mock('../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../services/apiBlenderModels.js', () => ({
@@ -149,6 +150,65 @@ describe('BlenderModelDetail', () => {
     await user.click(screen.getByRole('tab', { name: 'Model' }));
     await user.click(await screen.findByRole('button', { name: 'Whole model' }));
     expect(screen.getByTestId('glb-viewer')).toHaveAttribute('data-part', '');
+  });
+
+  describe('with moving parts', () => {
+    const control = (id, label, extra = {}) => ({ id, label, type: 'hinge', partId: id, min: 0, max: 110, default: 0, default01: 0, dependsOn: [], ...extra });
+    const motion = (sweep = {}) => ({
+      controls: [control('lid', 'Lid'), control('clip', 'Clip', { type: 'slide', max: 0.1, dependsOn: [{ control: 'lid', atMost: 0.02 }] })],
+      actions: [], sweep: { poses: 88, overlaps: [], unmeasured: [], clean: true, ...sweep },
+    });
+    const serveMotion = (value, findings = []) => {
+      serve(modelState({ builds: [build(A)] }));
+      const report = reportOf(A, findings);
+      api.getBlenderModelBuildReport.mockResolvedValue({ ...report, checks: { ...report.checks, motion: value } });
+    };
+    const pose = () => JSON.parse(screen.getByTestId('glb-viewer').getAttribute('data-pose'));
+
+    it('drives the GLB by the sliders and holds a control back until its dependency is met', async () => {
+      const user = userEvent.setup();
+      serveMotion(motion());
+      renderAt();
+      const lid = await screen.findByRole('slider', { name: 'Lid' });
+      const clip = screen.getByRole('slider', { name: 'Clip' });
+      expect(screen.getByText('88 poses checked; no parts pass through each other.')).toBeInTheDocument();
+      fireEvent.change(clip, { target: { value: '0.5' } });
+      expect(pose()).toEqual({ 'control:lid': 0, 'control:clip': 0.5 });
+      // Opening the lid takes the clip back with it, and says why it cannot close.
+      fireEvent.change(lid, { target: { value: '0.5' } });
+      expect(pose()).toEqual({ 'control:lid': 0.5, 'control:clip': 0 });
+      expect(lid).toHaveAttribute('aria-valuetext', '55°');
+      expect(clip).toBeDisabled();
+      expect(clip).toHaveAccessibleDescription('Needs Lid at most 0.02');
+      await user.click(screen.getByRole('button', { name: 'Reset pose' }));
+      expect(pose()).toEqual({ 'control:lid': 0, 'control:clip': 0 });
+      expect(clip).toBeEnabled();
+    });
+
+    it('shows the pose of an overlap finding with its two parts highlighted', async () => {
+      const user = userEvent.setup();
+      serveMotion(motion({ clean: false, overlaps: [{ parts: ['base', 'shade'] }] }), [
+        { severity: 'error', code: 'sweep-overlap', message: 'base and shade pass through each other', subjects: ['base', 'shade'], pose: { lid: 0.15, clip: 0 } },
+        { severity: 'error', code: 'sweep-overlap', message: 'base and bulb pass through each other', subjects: ['base', 'bulb'], pose: { lid: 0.9, clip: 0 } },
+      ]);
+      renderAt(`/3d/blender/${ID}/model?part=shade`);
+      await user.click(await screen.findByRole('button', { name: 'Show pose of base and shade' }));
+      const viewer = screen.getByTestId('glb-viewer');
+      expect(viewer).toHaveAttribute('data-highlight', 'base,shade');
+      // A part shown alone would hide the other one.
+      expect(viewer).toHaveAttribute('data-part', '');
+      expect(pose()).toEqual({ 'control:lid': 0.15, 'control:clip': 0 });
+      expect(screen.getByRole('slider', { name: 'Lid' })).toHaveValue('0.15');
+      expect(screen.getByText('88 poses checked; 1 pair(s) of parts pass through each other.')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Reset pose' }));
+      expect(viewer).toHaveAttribute('data-highlight', '');
+    });
+
+    it('never calls a sweep that skipped poses clean', async () => {
+      serveMotion(motion({ clean: false, poses: 4, unmeasured: [{ what: 'lid', planned: 21, measured: 4 }] }));
+      renderAt();
+      expect(await screen.findByText('4 poses checked; some poses were not checked.')).toBeInTheDocument();
+    });
   });
 
   it('shows a failed build and its log while the published build stays on show', async () => {

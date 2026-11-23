@@ -8,7 +8,9 @@ Runs inside Blender (4.2 or newer), started by PortOS:
 It loads a model (`<src>/model.py`), calls `describe(ctx)` and `build(ctx)` in
 an empty factory scene, measures what was built, saves `model.blend`, exports
 `model.glb`, imports that GLB into a fresh empty scene and measures it again.
-The model contract is documented in docs/features/blender-models.md.
+When describe() declares controls it also rigs them, sweeps their range for
+parts passing through each other, and checks that the GLB poses the same
+(portos_model_motion.py). The model contract is documented in docs/features/blender-models.md.
 
 A job with `"mode": "review"` instead opens a build's saved `model.blend` and
 renders each view it lists, textured and clay, under flat light. The server
@@ -32,9 +34,17 @@ from types import SimpleNamespace
 import bpy
 from mathutils import Matrix, Vector
 
+# Its own modules are staged beside it, which is not a folder Blender imports from.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Model source stays clean: no __pycache__ beside the authored scripts.
+sys.dont_write_bytecode = True
+import portos_model_motion as motion  # noqa: E402
+
 PREFIX = "PORTOS_MODEL "
 # The most parts and meshes a build reports by name; the rest are still counted.
 MAX_LISTED = 2000
+# Per list describe() returns besides parts; the worker caps a line at 64 KiB.
+MAX_LIST_BYTES = 16 * 1024
 
 
 def emit(event, **fields):
@@ -85,6 +95,11 @@ def make_context(job):
     )
 
 
+def bounded(value):
+    """`value`, or a note the server reads as invalid when it would make the line too long."""
+    return value if len(json.dumps(value, default=str)) <= MAX_LIST_BYTES else "too large"
+
+
 def describe(model, ctx):
     description = model.describe(ctx)
     if not isinstance(description, dict):
@@ -99,9 +114,12 @@ def describe(model, ctx):
         title=description.get("title"),
         sizeMeters=description.get("sizeMeters"),
         triangleBudget=description.get("triangleBudget"),
-        controls=description.get("controls"),
+        controls=bounded(description.get("controls")),
+        actions=bounded(description.get("actions")),
+        allowContact=bounded(description.get("allowContact")),
         partsTruncated=len(parts) > MAX_LISTED,
     )
+    return description
 
 
 def mesh_facts(obj, depsgraph):
@@ -138,8 +156,12 @@ def used_images():
     return [image for image in bpy.data.images if image.users and image.type not in ("RENDER_RESULT", "COMPOSITING")]
 
 
-def measure(report_meshes):
-    """Measure every mesh object in the scene; `report_meshes` also emits one event per mesh."""
+def parents_by_name():
+    return {obj.name: obj.parent.name if obj.parent else None for obj in bpy.context.scene.objects}
+
+
+def measure(parents=None):
+    """Measure every mesh object in the scene; `parents` (as built, before rigging) also emits one event per mesh."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     scene_objects = list(bpy.context.scene.objects)
     meshes = [obj for obj in scene_objects if obj.type == "MESH"]
@@ -152,11 +174,11 @@ def measure(report_meshes):
         bounds = merge_bounds(bounds, low, high)
         slots = {slot.material.name for slot in obj.material_slots if slot.material}
         materials |= slots
-        if report_meshes and index < MAX_LISTED:
+        if parents is not None and index < MAX_LISTED:
             emit(
                 "mesh",
                 name=obj.name,
-                parent=obj.parent.name if obj.parent else None,
+                parent=parents.get(obj.name),
                 triangles=triangles,
                 min=low,
                 max=high,
@@ -177,13 +199,22 @@ def measure(report_meshes):
     }
 
 
-def export_glb(path):
+def export_glb(path, rigged):
+    # A control's action keys only its own bone, so any mix of them can play at once.
+    animation = {
+        "export_animation_mode": "ACTIONS",
+        "export_force_sampling": True,
+        "export_optimize_animation_size": True,
+        "export_optimize_animation_keep_anim_armature": False,
+        "export_rest_position_armature": True,
+    } if rigged else {}
     bpy.ops.export_scene.gltf(
         filepath=path,
         export_format="GLB",
         export_apply=True,
         export_yup=True,
         use_selection=False,
+        **animation,
     )
 
 
@@ -193,9 +224,15 @@ def build(job):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     ctx = make_context(job)
     model = load_model(job["src"])
-    describe(model, ctx)
+    description = describe(model, ctx)
     model.build(ctx)
-    scene = measure(True)
+    parents = parents_by_name()
+    rig = motion.rig_model(description, emit)
+    ends = []
+    if rig:
+        motion.sweep_model(model, ctx, rig, description, emit, job["sweepSeconds"])
+        ends = motion.expected_ends(rig)
+    scene = measure(parents)
     emit("scene", **scene)
 
     out = job["out"]
@@ -203,13 +240,15 @@ def build(job):
     blend = os.path.join(out, "model.blend")
     glb = os.path.join(out, "model.glb")
     bpy.ops.wm.save_as_mainfile(filepath=blend, check_existing=False, copy=True)
-    export_glb(glb)
+    export_glb(glb, rig is not None)
     emit("saved", blend=blend, glb=glb, glbBytes=os.path.getsize(glb) if os.path.isfile(glb) else None)
 
     # A fresh empty scene: what a consumer of the GLB gets back.
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=glb)
-    reimported = measure(False)
+    # Without the stand-in mesh the importer draws for bones, which the GLB does not hold.
+    bpy.ops.import_scene.gltf(filepath=glb, disable_bone_shape=True)
+    motion.verify_imported(ends, emit)
+    reimported = measure()
     reimported.pop("truncated", None)
     emit("reimport", **reimported)
     emit("done", sec=round(time.time() - started, 3))
@@ -329,8 +368,6 @@ def main():
     if not arguments:
         raise RuntimeError("Usage: blender --background --python portos_model_driver.py -- job.json")
     job = read_json(os.path.abspath(arguments[0]))
-    # Model source stays clean: no __pycache__ beside the authored scripts.
-    sys.dont_write_bytecode = True
     if job.get("mode") == "review":
         review(job)
     else:
