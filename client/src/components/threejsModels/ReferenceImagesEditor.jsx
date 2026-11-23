@@ -62,7 +62,7 @@ export default function ReferenceImagesEditor({ value, onChange, disabled = fals
                 aria-label={`Remove reference ${index + 1}`}
                 disabled={disabled}
                 onClick={() => onChange(value.filter((_, i) => i !== index))}
-                className="ml-auto shrink-0 text-gray-500 hover:text-port-error disabled:opacity-40"
+                className="ml-auto shrink-0 text-gray-500 hover:text-port-error disabled:opacity-40 pointer-coarse:min-h-11 pointer-coarse:min-w-11"
               >
                 <X className="h-4 w-4" />
               </button>
