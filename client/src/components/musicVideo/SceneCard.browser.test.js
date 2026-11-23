@@ -43,6 +43,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
                   visualIntent: 'Synthetic direction', framePrompt: longPrompt, endFramePrompt: longPrompt, takes: [] });
                 const card = h('main', { style: { width: width + 'px', maxWidth: '100%', padding: params.has('drawer') ? '0' : '8px', boxSizing: 'border-box' } },
                   h(SceneCard, { scene, index: 0, expanded: true, videoModels: models,
+                    onGenerateFrame: (_scene, payload) => (window.frameRenderRequests ||= []).push(payload),
                     onGenerateEndFrame: params.has('frames') ? () => {} : undefined,
                     onSetDone: (_id, checked) => setScene(current => ({ ...current, shotSheet: { ...current.shotSheet, checked } })),
                     onEditLocal: (_id, patch) => setScene(current => ({ ...current, ...patch })), onSave: () => {} }));
@@ -177,11 +178,24 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
       const still = page.getByRole('region', { name: 'Still' });
       const frameService = still.getByLabel('Render on');
       await frameService.selectOption('codex');
-      const frameModel = still.getByLabel('Model');
+      const frameModel = still.getByRole('textbox', { name: 'Model', exact: true });
       await frameModel.fill('example-model');
       expect(await frameModel.inputValue()).toBe('example-model');
       await frameService.selectOption('grok');
-      await still.getByLabel('Model').waitFor({ state: 'hidden' });
+      await frameModel.waitFor({ state: 'hidden' });
+      await still.getByRole('button', { name: 'Image model for this frame take', exact: true }).click();
+      const override = still.getByRole('group', { name: 'One-take image model' });
+      await override.getByLabel('Render on', { exact: true }).selectOption('codex');
+      await override.getByRole('textbox', { name: 'Model', exact: true }).fill('one-take-model');
+      const newTake = still.getByRole('button', { name: 'New frame take', exact: true });
+      await newTake.click();
+      await override.waitFor({ state: 'hidden' });
+      expect(await frameService.inputValue()).toBe('grok');
+      await newTake.click();
+      expect(await page.evaluate(() => window.frameRenderRequests)).toEqual([
+        { referenceImageId: null, imageTarget: { mode: 'codex', cloudModel: 'one-take-model' } },
+        { referenceImageId: null, imageTarget: { mode: 'grok' } },
+      ]);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Clip' }).click();
       expect(await page.getByRole('region', { name: 'Render' }).getByLabel('Render on').inputValue()).toBe('');
       expect(pageErrors).toEqual([]);
