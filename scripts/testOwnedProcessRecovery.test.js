@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
-import { processAncestors, readTestProcesses, testProcessRoot } from './lib/testOwnedProcesses.js';
+import { processAncestors, readTestProcesses, testProcessRoot, testProcessSettlement } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
 
 afterEach(() => vi.useRealTimers());
@@ -43,15 +43,26 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
-  it.skipIf(process.platform === 'win32')('retains only legacy browser ownership when the optional Darwin reader is unavailable', () => {
-    const exec = vi.fn((command) => {
-      if (command !== 'ps') throw Error('reader unavailable');
-      return `900001 1 ${process.getuid()} S Fri Oct 16 12:00:00 2026 chrome --user-data-dir=/tmp/example/pvt-browser/profile\n`
-        + `900002 1 ${process.getuid()} S Fri Oct 16 12:00:00 2026 node /tmp/example/pvt-script/file.js PORTOS_TEST_TEMP_ROOT=/tmp/example/pvt-env NODE_ENV=test\n`;
-    });
-    const records = readTestProcesses(null, { platform: 'darwin', exec });
-    expect(records.map(record => testProcessRoot(record, '/tmp/example', 'pvt-'))).toEqual(['/tmp/example/pvt-browser', null]);
-    expect(exec.mock.calls[1][1]).not.toContain('-E');
+  it('skips process inspection when every root is live, fresh or foreign', () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-clean-'));
+    const read = vi.fn(() => null);
+    const aged = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+    const sweep = () => sweepStaleRunRoots(host, { read, probe: ({ pid }) => pid === 900002 });
+    try {
+      for (const [name, pid] of [['pvt-live', 900002], ['pvt-fresh'], ['unrelated', 900001]]) {
+        mkdirSync(join(host, name));
+        if (pid) writeFileSync(join(host, name, '.owner.pid'), `${pid} 0\n`);
+      }
+      utimesSync(join(host, 'pvt-live'), aged, aged);
+      utimesSync(join(host, 'unrelated'), aged, aged);
+      writeFileSync(join(host, 'pvt-file'), '');
+      sweep();
+      expect(read).not.toHaveBeenCalled();
+      writeFileSync(join(host, 'pvt-fresh', '.owner.pid'), '900001 0\n');
+      sweep();
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(host, 'pvt-live'))).toBe(true);
+    } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
   it('accepts exact structured fields and path arguments, never assignment-like script or environment text', () => {
@@ -259,6 +270,30 @@ describe('test process ownership boundaries', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', () => {
+  // The caller blocks its event loop while settling, so Node cannot reap the
+  // child: only a zombie's birth identity can prove that the signal landed.
+  it('settles a killed direct child that its blocked parent has not reaped', async () => {
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const closed = new Promise(resolve => child.once('close', resolve));
+    try {
+      await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+      const [record] = readTestProcesses([child.pid]);
+      expect(record).toMatchObject({ pid: child.pid, terminal: false });
+      process.kill(child.pid, 'SIGKILL');
+      const deadline = Date.now() + 5000;
+      let current;
+      do {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        current = readTestProcesses([child.pid]);
+      } while (!current?.[0]?.terminal && Date.now() < deadline);
+      expect(current).toEqual([expect.objectContaining({ pid: child.pid, start: record.start, terminal: true })]);
+      expect(testProcessSettlement(record, current, () => true)).toBe('terminated');
+    } finally {
+      child.kill('SIGKILL');
+      await closed;
+    }
+  });
+
   it('retains files used by a live orphan whose ownership is unreadable in the first snapshot', async () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-unreadable-child-'));
     const root = join(host, 'pvt-owned');

@@ -14,7 +14,9 @@ def snapshot():
 
     def identity(pid):
         buf = ctypes.create_string_buffer(layout.size)
-        if libproc.proc_pidinfo(pid, 3, 0, buf, layout.size) != layout.size:
+        # arg=1 includes zombies. A signalled child stays one until its parent
+        # reaps it, and only its birth identity proves that the signal landed.
+        if libproc.proc_pidinfo(pid, 3, ctypes.c_uint64(1), buf, layout.size) != layout.size:
             return None
         values = layout.unpack(buf.raw)
         if values[3] != pid:
@@ -24,7 +26,8 @@ def snapshot():
         return {'pid': pid, 'ppid': values[4], 'start': f'{values[-2]}:{values[-1]}', 'terminal': values[1] == 5}
 
     requested = json.load(sys.stdin)
-    if requested is None:
+    inventory = requested is None
+    if inventory:
         size = libproc.proc_listpids(1, 0, None, 0)
         if size <= 0 or size > 16 * 1024 * 1024:
             raise ValueError('process inventory unavailable')
@@ -88,7 +91,9 @@ def snapshot():
             pass
         if identity(pid) == before:
             result.append(record)
-    if metadata_reads == 0:
+    # An inventory without any ownership metadata must not pass for one that
+    # found no owned process. Zombies carry none, so targeted reads are exempt.
+    if inventory and metadata_reads == 0:
         raise ValueError('structured metadata unavailable')
     return result
 

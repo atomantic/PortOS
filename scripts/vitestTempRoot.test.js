@@ -201,12 +201,16 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
     }
   }, 20000);
 
-  owned.it('stops a browser whose run root was already removed', async () => {
+  owned.it('stops a browser whose run root was already removed once another root is stale', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
     recordTempRootOwner(host);
     let pid;
     try {
-      ({ pid } = orphanBrowser(join(host, 'pvt-removed', 'profile')));
+      const orphan = orphanBrowser(join(host, 'pvt-removed', 'profile'));
+      pid = orphan.pid;
+      // The sweep reads the process table only when there is a root to reclaim.
+      mkdirSync(join(host, 'pvt-dead'));
+      writeFileSync(join(host, 'pvt-dead', '.owner.pid'), `${orphan.parentPid} 0\n`);
       sweepStaleRunRoots(host);
       expect(await gone(pid)).toBe(true);
     } finally {
