@@ -450,12 +450,14 @@ describe('floor key', () => {
           'another root': [{ roots: ['server/lib/static'], files: served.files }, FIXTURE],
           'a served path outside the repository': [{ roots: ['client'], files: [...served.files, '../elsewhere/x.js'] }, FIXTURE],
           'a server the recorder never saw': [served, `${FIXTURE}\nconst other = await createServer({ configFile: false, root: client });`],
+          'a served import.meta.glob': [{ ...served, files: [...served.files, 'client/src/routes.js'] }, FIXTURE],
         };
         for (const [label, [record, body]] of Object.entries(fallbacks)) {
-          const keys = analyzed(tree, record, body);
+          const keys = analyzed({ ...tree, 'client/src/routes.js': "export const pages = import.meta.glob('./pages/*.jsx');\n" }, record, body);
           expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx']), label).toEqual([test]);
-          const changed = recordedKey(edit('client/src/pages/HtmlPages.jsx'), record, body);
-          expect(changed.key, label).not.toBe(recordedKey(tree, record, body).key);
+          const globbed = { ...tree, 'client/src/routes.js': "export const pages = import.meta.glob('./pages/*.jsx');\n" };
+          const changed = recordedKey({ ...globbed, 'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 2;\n' }, record, body);
+          expect(changed.key, label).not.toBe(recordedKey(globbed, record, body).key);
         }
         expect(wholeTree.memoizable).toBe(true);
       });

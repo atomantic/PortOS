@@ -705,7 +705,8 @@ it('counts the real-Chromium client suites a change reaches and fans the client 
     write('client/package.json', '{"name":"client"}\n');
     write('client/postcss.config.js', 'export default {};\n');
     write('client/src/index.css', '@import "tailwindcss";\n');
-    write('client/src/themes/tokens.js', 'export const tokens = 1;\n');
+    write('client/src/themes/tokens.js', "import { palette } from '../palette.js';\nexport const tokens = palette;\n");
+    write('client/src/palette.js', 'export const palette = 1;\n');
     write('client/src/components/ui/Menu.jsx', "import './Menu.css';\nexport const Menu = () => null;\n");
     write('client/src/components/ui/Menu.css', '.menu {}\n');
     write('client/src/pages/Other.jsx', 'export const Other = () => null;\n');
@@ -718,7 +719,8 @@ it('counts the real-Chromium client suites a change reaches and fans the client 
     expect(reach(['client/src/components/ui/Menu.css'])).toBe(4);
     expect(reach(['client/src/pages/Other.jsx'])).toBe(1);
     expect(reach(['client/src/pages/HtmlPages.jsx'])).toBe(0);
-    for (const shared of ['client/src/index.css', 'client/src/themes/tokens.js', 'client/postcss.config.js', 'client/package.json', 'scripts/lib/browserFixture.js']) {
+    // A module a shared input imports is on every served key too.
+    for (const shared of ['client/src/index.css', 'client/src/themes/tokens.js', 'client/src/palette.js', 'client/postcss.config.js', 'client/package.json', 'scripts/lib/browserFixture.js']) {
       expect(reach([shared]), shared).toBe(5);
     }
     expect(inspect(['docs/notes.md']).inputs.clientBrowserReach).toBeNull();

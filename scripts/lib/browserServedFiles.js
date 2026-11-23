@@ -43,10 +43,14 @@ export const runningTestFile = () => {
 export function servedFilesRecorder({ root, publicDir, ignore = [] }) {
   const files = new Set();
   const within = (base, path) => path === base || path.startsWith(`${base}${sep}`);
+  // Vite ids use forward slashes on every platform; compare the ignored directories in that form.
+  const slashed = (path) => path.replaceAll('\\', '/');
+  const ignored = ignore.map(slashed);
   const note = (id) => {
     if (typeof id !== 'string' || id.includes('\0')) return;
     const path = id.replace(/[?#].*$/, '');
-    if (isAbsolute(path) && !ignore.some((dir) => within(dir, path))) files.add(path);
+    const form = slashed(path);
+    if (isAbsolute(path) && !ignored.some((dir) => form === dir || form.startsWith(`${dir}/`))) files.add(path);
   };
   const noteRequest = (url) => {
     let pathname;

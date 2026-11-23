@@ -265,7 +265,9 @@ function servedTree(a, dir, servedFiles) {
   const absent = new Set();
   const packages = new Map();
   const served = new Set(servedFiles);
-  const pending = [...served, ...(tree(a, dir, /^[^.]/) ?? [])];
+  const rootFiles = tree(a, dir, /^[^.]/);
+  if (rootFiles === null) return null;
+  const pending = [...served, ...rootFiles];
   for (const input of BROWSER_SERVED_SHARED_INPUTS[dir] ?? []) {
     const kind = a.fs.kind(input);
     if (kind === 'file') pending.push(input);
@@ -293,14 +295,20 @@ function servedTree(a, dir, servedFiles) {
   return { files, absent, packages };
 }
 
+const IMPORT_GLOB = /\bimport\.meta\.glob/;
+
 /**
  * The served files a record vouches for under `dir`, or null when `dir` must
- * be keyed whole: no record names it, or the test serves or bundles through
- * a call of its own (`UNRECORDED_SERVER_CALL`) the fixture's recorder never saw.
+ * be keyed whole: no record names it, the test serves or bundles through a
+ * call of its own (`UNRECORDED_SERVER_CALL`) the fixture's recorder never
+ * saw, or a served module expands `import.meta.glob`, whose matches a new
+ * file joins without changing any served byte.
  */
 function servedFilesFor(a, testRel, served, dir) {
   if (!served || !served.roots.includes(dir) || served.files.some(outsideRepository)) return null;
-  return UNRECORDED_SERVER_CALL.test(a.fs.read(testRel)?.toString('utf8') ?? '') ? null : served.files;
+  if (UNRECORDED_SERVER_CALL.test(a.fs.read(testRel)?.toString('utf8') ?? '')) return null;
+  const globs = served.files.some((rel) => JS_EXT.test(rel) && IMPORT_GLOB.test(a.fs.read(rel)?.toString('utf8') ?? ''));
+  return globs ? null : served.files;
 }
 
 /** Every file named `name` anywhere in the repository (one cached walk, same skips as `tree`). */

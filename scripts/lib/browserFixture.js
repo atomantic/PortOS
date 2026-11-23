@@ -365,7 +365,8 @@ export async function startBrowserFixture({
       // (#12230), so the watcher and HMR channel are off for every fixture.
       const vite = await createServer({
         ...config,
-        plugins: recording ? [...(config.plugins ?? []), recording.plugin] : config.plugins,
+        // Vite flattens nested plugin options, whatever shape the fixture's own takes.
+        plugins: recording ? [config.plugins, recording.plugin] : config.plugins,
         server: { ...config.server, watch: null, hmr: false },
       });
       own(() => vite.close(), 'Vite server');

@@ -409,7 +409,8 @@ describe('served-file recording', () => {
 
     const on = await start({ [SERVED_FILES_ENV]: dir });
     const plugins = on.createServer.mock.calls[0][0].plugins;
-    expect(plugins[0]).toBe('own');
+    // The fixture's own plugin option is nested as given, for Vite to flatten.
+    expect(plugins[0]).toEqual(['own']);
     plugins[1].load('/repo/client/src/A.jsx?import');
     plugins[1].transform('', '\0virtual:fixture');
     await on.fixture.close();

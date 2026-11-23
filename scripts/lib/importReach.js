@@ -129,6 +129,20 @@ const RENDERED_ENTRY_RE = /['"`]\/?(src\/[^'"`\s?#]+\.(?:[cm]?[jt]sx?|css))/g;
 const sharesEveryRender = (path, shared) => /^client\/[^./][^/]*$/.test(path)
   || shared.some((input) => path === input || path.startsWith(`${input}/`));
 
+/** Every file reachable from `entries` over `edges` (static and dynamic). */
+const closureOver = (edges, entries) => {
+  const seen = new Set();
+  const stack = [...entries];
+  while (stack.length) {
+    const file = stack.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const out = edges.get(file);
+    if (out) stack.push(...out.static, ...out.dynamic);
+  }
+  return seen;
+};
+
 /**
  * The client real-Chromium suites a change reaches (#17616), for shard
  * sizing: each such suite costs a Chrome launch and a cold Vite graph, tens
@@ -137,8 +151,9 @@ const sharesEveryRender = (path, shared) => /^client\/[^./][^/]*$/.test(path)
  * fixture harness), in the closure of what its fixture renders (the `/src/…`
  * entries it names, followed over the same edges, CSS imports included), or
  * is an input every render shares (`sharedInputs`: the global stylesheet,
- * theme tokens, `client/`'s own configuration and manifests). An unreadable
- * module may hide any edge, so every suite counts then.
+ * theme tokens, `client/`'s own configuration and manifests) or a module one
+ * of those imports. An unreadable module may hide any edge, so every suite
+ * counts then.
  *
  * @returns {{ selected: number, suites: string[] }}
  */
@@ -149,19 +164,9 @@ export function clientBrowserSuiteReach({ graph, changedFiles, sharedInputs = []
   const { edges, uninspected } = importEdges(graph);
   if (uninspected.length > 0) return { selected: suites.length, suites };
   const changed = new Set(changedFiles);
-  const closureHits = (entries) => {
-    const seen = new Set();
-    const stack = [...entries];
-    while (stack.length) {
-      const file = stack.pop();
-      if (seen.has(file)) continue;
-      seen.add(file);
-      if (changed.has(file)) return true;
-      const out = edges.get(file);
-      if (out) stack.push(...out.static, ...out.dynamic);
-    }
-    return false;
-  };
+  const shared = closureOver(edges, graph.files.filter((path) => sharesEveryRender(path, sharedInputs)));
+  if (changedFiles.some((path) => shared.has(path))) return { selected: suites.length, suites };
+  const closureHits = (entries) => [...closureOver(edges, entries)].some((file) => changed.has(file));
   const reached = suites.filter((suite) => {
     let text = '';
     try { text = read(suite) ?? ''; } catch { /* an unreadable suite renders nothing this walk can see */ }
