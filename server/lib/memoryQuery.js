@@ -29,6 +29,9 @@ export function projectIndexMeta(memory) {
     status: memory.status,
     sourceAppId: memory.sourceAppId,
     sourceAgentId: memory.sourceAgentId,
+    // List filters for automatic-memory dedup need the turn id without opening
+    // every memory file. Absent on indexes written before this field existed.
+    sourceTaskId: memory.sourceTaskId ?? null,
   };
 }
 
@@ -68,6 +71,12 @@ export function filterMemoryIndex(memories, options = {}) {
 
   if (options.sourceAgentId) {
     filtered = filtered.filter(m => m.sourceAgentId === options.sourceAgentId);
+  }
+
+  // Only when the caller passes the key. null matches rows with no task id
+  // (including index entries written before sourceTaskId was projected).
+  if (options.sourceTaskId !== undefined) {
+    filtered = filtered.filter(m => (m.sourceTaskId ?? null) === options.sourceTaskId);
   }
 
   return filtered;
