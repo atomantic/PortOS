@@ -70,12 +70,25 @@ import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
-import { broadcastToCommandSubscribers, commandSubscribers, getIo, setIo } from './socketIo.js';
+import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 export { broadcastToCommandSubscribers, getIo };
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
+// Peer sockets that sent `cos:subscribe`. Kept apart from the operator set so a
+// paired peer receives only the agent stream peerSocketRelay consumes.
+const peerCosSubscribers = new Set();
+const PEER_COS_EVENTS = new Set(['cos:agent:spawned', 'cos:agent:updated', 'cos:agent:output', 'cos:agent:completed']);
+
+// Peer-authenticated handshake, or (auth off, so no credential was checked) a
+// socket that names a peer instance. Either way it is never an operator.
+const isPeerSocket = (socket) => {
+  const method = socket.data?.portosAuthMethod;
+  if (method === 'peer' || method === 'basic') return true;
+  return method !== 'session' && Boolean(socket.handshake?.headers?.[PEER_INSTANCE_HEADER.toLowerCase()]);
+};
 // Store error subscribers for auto-fix notifications
 const errorSubscribers = new Set();
 // Store notification subscribers
@@ -93,7 +106,7 @@ const codeAnimationSubscribers = new Set();
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
 const mediaQueueSubscribers = new Set();
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, peerCosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
 
 export function emitCodeAnimationChanged(id, kind) {
   emitCodeAnimationChangedToBus(id, kind);
@@ -111,11 +124,11 @@ function broadcastToSet(set, event, data) {
 function registerSubscriber(socket, namespace, set) {
   socket.on(`${namespace}:subscribe`, (options) => {
     if (namespace === 'cos' && ['invalidate', 'full'].includes(options?.taskLists)) socket.cosTaskLists = options.taskLists;
-    set.add(socket);
+    (typeof set === 'function' ? set(socket) : set).add(socket);
     socket.emit(`${namespace}:subscribed`);
   });
   socket.on(`${namespace}:unsubscribe`, () => {
-    set.delete(socket);
+    (typeof set === 'function' ? set(socket) : set).delete(socket);
     socket.emit(`${namespace}:unsubscribed`);
   });
 }
@@ -211,7 +224,7 @@ function registerImporterHandlers(socket, _io) {
 }
 
 function registerSubscriptionHandlers(socket, _io) {
-  registerSubscriber(socket, 'cos', cosSubscribers);
+  registerSubscriber(socket, 'cos', (s) => (isPeerSocket(s) ? peerCosSubscribers : cosSubscribers));
   registerSubscriber(socket, 'errors', errorSubscribers);
   registerSubscriber(socket, 'notifications', notificationSubscribers);
   registerSubscriber(socket, 'agents', agentSubscribers);
@@ -377,7 +390,7 @@ function setupEventForwarding() {
   if (forwardingRegistered) return;
   forwardingRegistered = true;
   for (const { emitter, event, channel, payload } of SIMPLE_BRIDGES) {
-    emitter.on(event, (...args) => getIo()?.emit(channel, payload ? payload(...args) : args[0]));
+    emitter.on(event, (...args) => emitToOperators(channel, payload ? payload(...args) : args[0]));
   }
   runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
   setupCosEventForwarding();
@@ -449,6 +462,7 @@ export function initSocket(io) {
     // Each registrar hangs its own per-socket cleanup on 'disconnect' (13+
     // today), past Node's default cap of 10 — which warned on every connect.
     socket.setMaxListeners(50);
+    if (isPeerSocket(socket)) socket.join?.(PEER_SOCKET_ROOM);
     for (const registerHandlers of SOCKET_HANDLER_REGISTRARS) {
       registerHandlers(socket, io);
     }
@@ -483,6 +497,7 @@ export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, regi
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {
+  if (PEER_COS_EVENTS.has(event)) broadcastToSet(peerCosSubscribers, event, data);
   if (event !== 'cos:tasks:changed') {
     broadcastToSet(cosSubscribers, event, data);
     return;
@@ -696,15 +711,13 @@ function setupBrainEventForwarding() {
   brainEvents.on('meta:changed', () => changed('meta'));
 
   brainEvents.on('classified', (data) => {
-    if (getIo()) {
-      getIo().emit('brain:classified', data);
-    }
+    emitToOperators('brain:classified', data);
   });
   brainEvents.on('threads:upserted', (data) => {
-    if (getIo()) getIo().emit('brain:threads:changed', data);
+    emitToOperators('brain:threads:changed', data);
   });
   brainEvents.on('threads:deleted', (data) => {
-    if (getIo()) getIo().emit('brain:threads:changed', data);
+    emitToOperators('brain:threads:changed', data);
   });
 }
 
@@ -777,18 +790,18 @@ function setupReviewEventForwarding() {
     if (getIo()) getIo().emit('review:queue:changed');
   });
   reviewEvents.on('item:created', (data) => {
-    if (getIo()) getIo().emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:updated', (data) => {
-    if (getIo()) getIo().emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:deleted', (data) => {
-    if (getIo()) getIo().emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   // Bulk status changes ("Mark all read" / "Complete all") carry only ids, a
   // status and a timestamp — nothing to redact.
   reviewEvents.on('items:bulk-updated', (data) => {
-    if (getIo()) getIo().emit('review:items:bulk-updated', data);
+    emitToOperators('review:items:bulk-updated', data);
   });
 }
 
@@ -855,29 +868,29 @@ function broadcastToMediaQueue(event, data) { broadcastToSet(mediaQueueSubscribe
 // onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
 function setupMediaGenEventForwarding() {
   imageGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('image-gen:started', data);
+    emitToOperators('image-gen:started', data);
   });
   imageGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('image-gen:progress', data);
+    emitToOperators('image-gen:progress', data);
   });
   imageGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('image-gen:completed', data);
+    emitToOperators('image-gen:completed', data);
   });
   imageGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('image-gen:failed', data);
+    emitToOperators('image-gen:failed', data);
   });
 
   videoGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('video-gen:started', data);
+    emitToOperators('video-gen:started', data);
   });
   videoGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('video-gen:progress', data);
+    emitToOperators('video-gen:progress', data);
   });
   videoGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('video-gen:completed', data);
+    emitToOperators('video-gen:completed', data);
   });
   videoGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('video-gen:failed', data);
+    emitToOperators('video-gen:failed', data);
   });
 
   // Audio (first-pass music-bed, #1928/#1933) rides the same gen-event contract
@@ -886,16 +899,16 @@ function setupMediaGenEventForwarding() {
   // populating `project.musicBed` silently (or silently failing) with the user
   // left to poll the Render Queue to notice a crash/OOM/sidecar error.
   audioGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('audio-gen:started', data);
+    emitToOperators('audio-gen:started', data);
   });
   audioGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('audio-gen:progress', data);
+    emitToOperators('audio-gen:progress', data);
   });
   audioGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('audio-gen:completed', data);
+    emitToOperators('audio-gen:completed', data);
   });
   audioGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('audio-gen:failed', data);
+    emitToOperators('audio-gen:failed', data);
   });
 
   // Map a media-job kind to its gen-event namespace prefix. image/video/audio
@@ -953,7 +966,7 @@ function setupMediaGenEventForwarding() {
     if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    getIo().emit(`${prefix}:canceled`, { generationId: job.id });
+    emitToOperators(`${prefix}:canceled`, { generationId: job.id });
   });
 
   // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
@@ -970,7 +983,7 @@ function setupMediaGenEventForwarding() {
     if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    getIo().emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
+    emitToOperators(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }
 
