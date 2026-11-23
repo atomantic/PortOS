@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const api = vi.hoisted(() => ({ getFeeds: vi.fn(), getFeedItems: vi.fn() }));
-vi.mock('../../../services/apiMessages.js', () => ({ getFeeds: api.getFeeds, getFeedItems: api.getFeedItems }));
-vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
+const api = vi.hoisted(() => ({
+  getFeeds: vi.fn(), getFeedItems: vi.fn(), removeFeed: vi.fn(),
+  markFeedItemRead: vi.fn(), markAllFeedItemsRead: vi.fn(),
+}));
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
+vi.mock('../../../services/apiMessages.js', () => api);
+vi.mock('../../ui/Toast', () => ({ default: toast }));
 
 import FeedsTab from './FeedsTab';
 
@@ -40,5 +44,44 @@ describe('FeedsTab loading', () => {
     expect(screen.queryByText(/No items yet/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/No items yet/)).toBeInTheDocument();
+  });
+});
+
+describe('FeedsTab rejected mutations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getFeeds.mockResolvedValue([{ id: 'feed-1', title: 'Example Feed', unreadCount: 1 }]);
+    api.getFeedItems.mockResolvedValue([{ id: 'item-1', feedId: 'feed-1', title: 'Example Item', link: 'https://example.com/a', read: false }]);
+  });
+
+  it('keeps the feed and shows no success toast when removeFeed rejects', async () => {
+    api.removeFeed.mockRejectedValueOnce(new Error('nope'));
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove feed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(api.removeFeed).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByText('Example Item')).toBeInTheDocument();
+  });
+
+  it('keeps items unread and shows no success toast when markAllFeedItemsRead rejects', async () => {
+    api.markAllFeedItemsRead.mockRejectedValueOnce(new Error('nope'));
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByTitle('Mark all as read'));
+    await waitFor(() => expect(api.markAllFeedItemsRead).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByTitle('Mark all as read')).toBeInTheDocument();
+  });
+
+  it('keeps the item unread when markFeedItemRead rejects', async () => {
+    api.markFeedItemRead.mockRejectedValueOnce(new Error('nope'));
+    vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByText('Example Item'));
+    await waitFor(() => expect(api.markFeedItemRead).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.getByTitle('Mark all as read')).toBeInTheDocument();
   });
 });
