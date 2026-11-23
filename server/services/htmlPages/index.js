@@ -3,6 +3,8 @@
  *
  * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a provider route (`route`: any configured provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
  *
+ * Each page is also written as a file under `data/html-pages/<runId>/` (`pageFiles.js`) so it can be downloaded or opened by path; the record stays authoritative, and a page whose file is missing gets it written from the record when it is first asked for.
+ *
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
@@ -18,6 +20,7 @@ import { listRuntimeModels } from '../localModelAssessments.js';
 import { generate } from '../modelCapabilityTests.js';
 import { trackedRenderMap } from '../renderActivity.js';
 import { createRun, deleteRun as deleteStoredRun, getRun, listRuns as listStoredRuns, mutateRun } from './db.js';
+import { ensurePageFile, pageFileName, removeRunFiles, writePageFile } from './pageFiles.js';
 
 const ACTIVE = new Set(['queued', 'generating']);
 // Thinking models spend most of their budget reasoning before the page starts (8,000 left pages cut off mid-CSS; 24,000 still cut off a 35B thinking model mid-page), and a designed page itself runs several thousand tokens. At ~70 tok/s the cap takes about 12 minutes, inside the page timeout.
@@ -187,7 +190,17 @@ export async function removeRun(id) {
     liveRuns.delete(id);
   }
   liveRuns.get(id)?.controller.abort();
-  return deleteStoredRun(id);
+  const deleted = await deleteStoredRun(id);
+  await removeRunFiles(id).catch((err) => console.log(`🧩 HTML pages: run ${id} deleted, its page files were not (${err.message})`));
+  return deleted;
+}
+
+/** The file for one page of a stored run, written from the record if it is missing: its absolute path and download name. 404 for a run or page with no HTML. */
+export async function pageFile(id, index) {
+  const run = await readRun(id);
+  const path = await ensurePageFile(run, index);
+  if (!path) throw new ServerError('That page has no HTML', { status: 404, code: 'HTML_PAGES_PAGE_NOT_FOUND' });
+  return { path, fileName: pageFileName(index, run.pages[index].theme) };
 }
 
 async function drain() {
@@ -235,8 +248,13 @@ async function processRun(id) {
           hitTokenLimit: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens >= PAGE_MAX_TOKENS * TRUNCATION_SHARE : null,
           elapsedMs: Math.max(0, Date.now() - startedAt),
           tokensPerSecond: result?.timings?.tokensPerSecond ?? null,
+          // What the runtime reported generating, reasoning included; null when it reported no count (a provider route). Pages stored before this field have neither it nor finishedAt.
+          completionTokens: Number.isFinite(result?.timings?.completionTokens) ? result.timings.completionTokens : null,
+          finishedAt: new Date().toISOString(),
         };
         await mutateRun(id, (c) => ({ ...c, pages: [...c.pages, page], progress: { done: c.pages.length + 1, total: c.pageCount } }));
+        // The record is what counts; a file that could not be written is written from it when first asked for.
+        if (html) await writePageFile(id, index, theme, html).catch((err) => console.log(`🧩 HTML pages: page ${index + 1} of ${id} kept in the record only (file write failed: ${err.message})`));
       }
     };
     const local = (modelId) => (prompt) => generate({

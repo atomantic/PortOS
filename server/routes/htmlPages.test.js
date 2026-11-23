@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
@@ -6,6 +9,7 @@ import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 const mocks = vi.hoisted(() => ({
   listRuns: vi.fn(),
   listSelectableModels: vi.fn(),
+  pageFile: vi.fn(),
   readRun: vi.fn(),
   removeRun: vi.fn(),
   resumeRun: vi.fn(),
@@ -104,5 +108,46 @@ describe('POST /api/html-pages/runs/:id/resume', () => {
     const res = await request(app).post('/api/html-pages/runs/run-1/resume');
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('HTML_PAGES_RUN_NOT_RESUMABLE');
+  });
+});
+
+describe('page files', () => {
+  const RUN = 'htmlpages-0f8a1c2e-3b4d-4e5f-8a9b-0c1d2e3f4a5b';
+  const dirPromise = mkdtemp(join(tmpdir(), 'portos-html-pages-route-'));
+  afterAll(async () => rm(await dirPromise, { recursive: true, force: true }));
+
+  it('downloads a page as an attachment named after the page', async () => {
+    const path = join(await dirPromise, '1-night-almanac.html');
+    await writeFile(path, '<html>page</html>');
+    mocks.pageFile.mockResolvedValue({ path, fileName: '1-night-almanac.html' });
+    const res = await request(app).get(`/api/html-pages/runs/${RUN}/pages/0/file`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toMatch(/^attachment; filename="?1-night-almanac\.html"?$/);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.text).toBe('<html>page</html>');
+    expect(mocks.pageFile).toHaveBeenCalledWith(RUN, 0);
+  });
+
+  it('answers the page file path', async () => {
+    mocks.pageFile.mockResolvedValue({ path: '/example/data/html-pages/x/2-a.html', fileName: '2-a.html' });
+    const res = await request(app).get(`/api/html-pages/runs/${RUN}/pages/1/path`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ path: '/example/data/html-pages/x/2-a.html', fileName: '2-a.html' });
+  });
+
+  it.each([
+    ['a run id PortOS never minted', '/api/html-pages/runs/..%2F..%2Fetc/pages/0/file'],
+    ['a page past the cap', `/api/html-pages/runs/${RUN}/pages/5/path`],
+    ['a negative page', `/api/html-pages/runs/${RUN}/pages/-1/path`],
+  ])('refuses %s before reaching the disk', async (_label, url) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(mocks.pageFile).not.toHaveBeenCalled();
+  });
+
+  it('passes through the 404 for a page with no HTML', async () => {
+    mocks.pageFile.mockRejectedValue(new ServerError('That page has no HTML', { status: 404, code: 'HTML_PAGES_PAGE_NOT_FOUND' }));
+    const res = await request(app).get(`/api/html-pages/runs/${RUN}/pages/0/file`);
+    expect(res.status).toBe(404);
   });
 });

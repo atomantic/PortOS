@@ -56,6 +56,8 @@ export const PATHS = {
   // Its own root, not a corner of `images/` or `uploads/`: these are ANOTHER machine's bytes held briefly for one job, and under `images/` the gallery would enumerate them and sync would federate them onward
   // (a failure already hit with temp files in data/images). Excluded from backups for the same reason.
   federatedMediaInbox: join(INSTALL_ROOT, 'data/federated-media-inbox'),
+  // HTML Pages bench pages as files (`<runId>/<n>-<slug>.html`), so each can be downloaded or opened by path; html_page_runs in Postgres stays the record, and a missing file is rewritten from it. Machine-local like the runs.
+  htmlPages: join(INSTALL_ROOT, 'data/html-pages'),
   loras: join(INSTALL_ROOT, 'data/loras'),
   // Per-character LoRA training datasets (collectionStore layout: lora-datasets/<id>/index.json + images/*.png); machine-local like `loras/`, never federated.
   loraDatasets: join(INSTALL_ROOT, 'data/lora-datasets'),

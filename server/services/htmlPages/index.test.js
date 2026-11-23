@@ -28,6 +28,12 @@ vi.mock('../localModelAssessments.js', () => ({
     : { models: null, error: 'not reachable', offline: true })),
 }));
 vi.mock('../modelCapabilityTests.js', () => ({ generate: vi.fn() }));
+vi.mock('./pageFiles.js', () => ({
+  writePageFile: vi.fn(async (id, index) => `/files/${id}/${index + 1}.html`),
+  ensurePageFile: vi.fn(async (run, index) => (run.pages[index]?.html ? `/files/${run.id}/${index + 1}.html` : null)),
+  pageFileName: vi.fn((index) => `${index + 1}-page.html`),
+  removeRunFiles: vi.fn(async () => {}),
+}));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
   claimHeavyLocalJob: vi.fn(async () => ({ ok: true, release: vi.fn(async () => {}) })),
 }));
@@ -44,9 +50,10 @@ vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
 
 import { generate } from '../modelCapabilityTests.js';
 import { listActiveRenders } from '../renderActivity.js';
+import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
 import { runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { listRuns, listSelectableModels, readRun, removeRun, resumeRun, startRuns } from './index.js';
+import { listRuns, listSelectableModels, pageFile, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
 const model = { backend: 'ollama', modelId: 'example-coder:7b' };
@@ -87,7 +94,7 @@ describe('startRuns', () => {
   });
 
   it('sends each page its own brief verbatim inside the fixed rules, records the prompts, and stores a scored complete run', async () => {
-    generate.mockResolvedValue({ text: `Here you go:\n\`\`\`html\n${goodPage}\n\`\`\``, timings: { tokensPerSecond: 40 } });
+    generate.mockResolvedValue({ text: `Here you go:\n\`\`\`html\n${goodPage}\n\`\`\``, timings: { tokensPerSecond: 40, completionTokens: 5200 } });
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     expect(queued.themes).toEqual(PAGES);
     expect(queued.prompts[0]).toContain(PAGES[0]);
@@ -101,6 +108,20 @@ describe('startRuns', () => {
     expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
     expect(run.detail).toMatchObject({ verdict: 'passed', complete: 2, pageCount: 2 });
     expect(run.progress).toEqual({ done: 2, total: 2 });
+    // What the gallery shows per page: when it finished, how fast, and how much the model wrote.
+    expect(run.pages[0]).toMatchObject({ tokensPerSecond: 40, completionTokens: 5200, finishedAt: expect.any(String) });
+    expect(Number.isNaN(Date.parse(run.pages[0].finishedAt))).toBe(false);
+    // Each page is also a file, written as it is saved.
+    expect(writePageFile.mock.calls).toEqual([[queued.id, 0, PAGES[0], goodPage], [queued.id, 1, PAGES[1], goodPage]]);
+  });
+
+  it('keeps a page in the record when its file cannot be written', async () => {
+    generate.mockResolvedValue({ text: goodPage, timings: null });
+    writePageFile.mockRejectedValueOnce(new Error('disk full'));
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
+    const run = await settled(queued.id);
+    expect(run.status).toBe('complete');
+    expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
   });
 
   it('keeps a page the model truncated as returned and scores the run partial', async () => {
@@ -161,6 +182,8 @@ describe('other targets', () => {
     expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId: 'example-cli', providerName: 'Example CLI', model: 'example-default', effort: 'high' } });
     const run = await settled(queued.id);
     expect(run.pages[0].html).toBe(goodPage);
+    // A provider route reports no token count; null, never a made-up zero.
+    expect(run.pages[0]).toMatchObject({ completionTokens: null, tokensPerSecond: null });
     expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({
       prompt: queued.prompts[0], model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
     });
@@ -170,6 +193,26 @@ describe('other targets', () => {
   it('refuses a provider that is not configured before queueing anything', async () => {
     await expect(startRuns({ routes: [{ providerId: 'gone' }], pages: PAGES })).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
     expect(store.size).toBe(0);
+  });
+});
+
+describe('pageFile', () => {
+  it('answers a page file and its download name, written from the record if missing, and 404s a page with no HTML', async () => {
+    generate.mockResolvedValueOnce({ text: goodPage, timings: null }).mockResolvedValueOnce({ text: 'sorry, no page', timings: null });
+    const [queued] = await startRuns({ models: [model], pages: PAGES });
+    await settled(queued.id);
+    await expect(pageFile(queued.id, 0)).resolves.toEqual({ path: `/files/${queued.id}/1.html`, fileName: '1-page.html' });
+    expect(ensurePageFile).toHaveBeenCalledWith(expect.objectContaining({ id: queued.id }), 0);
+    await expect(pageFile(queued.id, 1)).rejects.toMatchObject({ status: 404, code: 'HTML_PAGES_PAGE_NOT_FOUND' });
+    await expect(pageFile('htmlpages-missing', 0)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('removes a deleted run\'s page files', async () => {
+    generate.mockResolvedValue({ text: goodPage, timings: null });
+    const [queued] = await startRuns({ models: [model], pages: [PAGES[0]] });
+    await settled(queued.id);
+    await removeRun(queued.id);
+    expect(removeRunFiles).toHaveBeenCalledWith(queued.id);
   });
 });
 
