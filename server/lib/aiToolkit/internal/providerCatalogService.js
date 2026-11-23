@@ -712,9 +712,17 @@ export function createProviderCatalogService({
         missingKey.status = 400;
         throw missingKey;
       }
+      // Header values must be Latin-1 without control characters; fetch throws
+      // a TypeError otherwise, which the catch below would flatten into "HTTP error".
+      if (/[\u0000-\u001f\u007f-\u009f\u0100-\uffff]/.test(apiKey)) {
+        const badKey = new Error('Google API key contains characters that cannot be sent in an HTTP header');
+        badKey.status = 400;
+        throw badKey;
+      }
+      // The key travels in a header, never the URL query, so proxy and access logs never see it.
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
-        { signal: AbortSignal.timeout(8000) }
+        'https://generativelanguage.googleapis.com/v1beta/models',
+        { headers: { 'x-goog-api-key': apiKey }, signal: AbortSignal.timeout(8000) }
       ).catch(() => null);
       if (!response?.ok) throw new Error(`HTTP ${response?.status || 'error'}`);
       const data = await response.json().catch(() => ({ models: [] }));
