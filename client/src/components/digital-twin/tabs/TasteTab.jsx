@@ -336,7 +336,8 @@ export default function TasteTab({ onRefresh }) {
       contentSnippet: summary?.slice(0, 2000),
       context: `Taste section: ${sectionId}`,
       providerId: selectedProvider?.providerId,
-      model: selectedProvider?.model
+      model: selectedProvider?.model,
+      documentsUsed: ['TASTE_PROFILE.md']
     }, { silent: true }).catch(() => {
       toast.error('Failed to save feedback');
       setSummaryFeedback(prev => { const next = { ...prev }; delete next[sectionId]; return next; });

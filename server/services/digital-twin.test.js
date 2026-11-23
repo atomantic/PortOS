@@ -102,7 +102,7 @@ import { digitalTwinEvents, loadMeta, updateSettings, getDocuments, getDocumentB
 import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants.js';
 import { saveMeta, updateMeta } from './digital-twin-meta.js';
 import { exportSoul } from './digital-twin-export.js';
-import { getSoulForPrompt } from './digital-twin-context.js';
+import { getSoulForPrompt, getDigitalTwinContextWithDocs } from './digital-twin-context.js';
 import { getSoulStatus } from './digital-twin-status.js';
 import { formatValuesHierarchy } from './digital-twin-values-testing.js';
 import { formatTranscript, clampTranscript } from './digital-twin-multi-turn-testing.js';
@@ -1434,6 +1434,22 @@ Forgets the budget and recommends lodging that exceeds it.
       const result = await getDigitalTwinForPrompt();
       expect(result).toContain('Soul content');
       expect(result).toContain('Values content');
+    });
+
+    it('reports only the document filenames actually included in the context', async () => {
+      const meta = makeMeta({
+        documents: [
+          makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 }),
+          makeDocMeta({ id: 'doc-2', filename: 'OFF.md', weight: 9, enabled: false })
+        ]
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => (
+        filePath.includes('meta.json') ? JSON.stringify(meta) : 'Soul content'));
+
+      const { content, documentsUsed } = await getDigitalTwinContextWithDocs();
+      expect(content).toContain('Soul content');
+      expect(documentsUsed).toEqual(['SOUL.md']);
     });
 
     it('should return empty string when autoInjectToCoS is false', async () => {
