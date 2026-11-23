@@ -371,7 +371,7 @@ describe('cosValidation task status/priority vocabulary (#7239)', () => {
 
 describe('sanitizeTaskMetadata table-driven gates', () => {
   it('keeps boolean reviewerApplies and enum prCompletion, drops mistyped values', () => {
-    expect(sanitizeTaskMetadata({ reviewerApplies: true, prCompletion: 'review-then-merge' })).toMatchObject({ reviewerApplies: true });
+    expect(sanitizeTaskMetadata({ reviewerApplies: true, prCompletion: 'review-then-merge' })).toEqual({ reviewerApplies: true, prCompletion: 'review-then-merge' });
     expect(sanitizeTaskMetadata({ reviewerApplies: 'yes', prCompletion: true })).toBeNull();
   });
 
