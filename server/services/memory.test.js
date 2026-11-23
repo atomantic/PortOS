@@ -86,10 +86,10 @@ import { cosEvents } from './cos/cosEvents.js';
 import {
   createMemory,
   getMemory,
-  countMemories,
-  getMemories,
   peekMemories,
   recordMemoryAccess,
+  countMemories,
+  getMemories,
   updateMemory,
   updateMemoryEmbedding,
   archiveMemory,

@@ -437,8 +437,9 @@ export async function getMemories(options = {}) {
   const { where, params } = buildMemoryFilterWhere(options);
   let paramIdx = params.length + 1;
 
-  // Callers that only need the page (mind wakes) pass includeCount: false so
-  // the list does not scan the table a second time for COUNT(*).
+  // Callers that only need the page (mind wakes, retrieval) pass includeCount:
+  // false so the list does not scan the table a second time for COUNT(*).
+  // `total: null` means "not counted", not "zero rows".
   const includeCount = options.includeCount !== false;
   let total = null;
   if (includeCount) {
@@ -725,16 +726,17 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
 
   const filterWhere = filterConditions.join(' AND ');
   const fetchLimit = limit * 2;
+  const searches = [];
 
-  // Get full-text search results (replaces BM25)
-  let ftsResults = [];
+  // Full-text and vector rankers do not depend on each other. When both
+  // inputs are present they run in one Promise.all so neither waits on the other.
   if (queryText) {
     // websearch syntax ANDs every term, so conversational text rarely matches.
     // 'any' ORs the same lexemes; ts_rank already favors covering more of them.
     const tsQuery = lexicalMatch === 'any'
       ? `replace(plainto_tsquery('english', $${paramIdx})::text, ' & ', ' | ')::tsquery`
       : `websearch_to_tsquery('english', $${paramIdx})`;
-    const ftsResult = await query(
+    searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score
        FROM memories
@@ -743,15 +745,12 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        ORDER BY fts_score DESC
        LIMIT $${paramIdx + 1}`,
       [...filterParams, queryText, fetchLimit]
-    );
-    ftsResults = ftsResult.rows;
+    ).then(result => ({ kind: 'fts', rows: result.rows })));
   }
 
-  // Get vector similarity results
-  let vectorResults = [];
   if (queryEmbedding) {
     const vecParamStart = filterParams.length + 1;
-    const vectorResult = await query(
+    searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               1 - (embedding <=> $${vecParamStart}) AS similarity
        FROM memories
@@ -760,9 +759,12 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        ORDER BY embedding <=> $${vecParamStart}
        LIMIT $${vecParamStart + 2}`,
       [...filterParams, arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit]
-    );
-    vectorResults = vectorResult.rows;
+    ).then(result => ({ kind: 'vector', rows: result.rows })));
   }
+
+  const settled = searches.length > 0 ? await Promise.all(searches) : [];
+  const ftsResults = settled.find(part => part.kind === 'fts')?.rows ?? [];
+  const vectorResults = settled.find(part => part.kind === 'vector')?.rows ?? [];
 
   // Apply Reciprocal Rank Fusion
   const rrfScores = new Map();
