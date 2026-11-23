@@ -48,6 +48,7 @@ vi.mock('../provider/providers.js', () => ({
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
 
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { generate } from '../modelCapabilityTests.js';
 import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
@@ -68,6 +69,8 @@ const settled = (id) => vi.waitFor(async () => {
 beforeEach(() => {
   store.clear();
   vi.clearAllMocks();
+  claimHeavyLocalJob.mockImplementation(async () => ({ ok: true, release: vi.fn(async () => {}) }));
+  runOnMtplxCheckpoint.mockImplementation(async (_model, fn) => fn('mtplx-example-other'));
 });
 
 describe('listSelectableModels', () => {
@@ -197,7 +200,7 @@ describe('other targets', () => {
     const [queued] = await startRuns({ models: [{ backend: 'mtplx', modelId: 'Example/Other-MTPLX' }], pages: PAGES.slice(0, 1) });
     const run = await settled(queued.id);
     expect(run.status).toBe('complete');
-    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith('Example/Other-MTPLX', expect.any(Function));
+    expect(runOnMtplxCheckpoint).toHaveBeenCalledWith('Example/Other-MTPLX', expect.any(Function), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(generate.mock.calls[0][0]).toMatchObject({ backend: 'mtplx', modelId: 'mtplx-example-other' });
   });
 
@@ -287,6 +290,49 @@ describe('interrupted and deleted runs', () => {
     await vi.waitFor(() => expect(store.get(queued.id).deleted).toBe(true));
     expect(store.get(queued.id).pages).toHaveLength(0);
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a deleted run that is waiting on the accelerator and lets the next queued run start', async () => {
+    let calls = 0;
+    claimHeavyLocalJob.mockImplementation(({ signal }) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve) => {
+          const finish = () => resolve({ ok: false, aborted: true, message: 'cancelled', release: vi.fn(async () => {}) });
+          if (signal?.aborted) finish();
+          else signal.addEventListener('abort', finish, { once: true });
+        });
+      }
+      return { ok: true, release: vi.fn(async () => {}) };
+    });
+    generate.mockResolvedValue({ text: goodPage });
+    const [waiting, next] = await startRuns({ models: [model, { backend: 'ollama', modelId: 'example-coder:7b' }], pages: [PAGES[0]] });
+    await vi.waitFor(() => expect(claimHeavyLocalJob).toHaveBeenCalled());
+    expect(claimHeavyLocalJob.mock.calls[0][0].signal).toBeInstanceOf(AbortSignal);
+    await removeRun(waiting.id);
+    const run = await settled(next.id);
+    expect(run.status).toBe('complete');
+    expect(store.get(waiting.id).deleted).toBe(true);
+    expect(store.get(waiting.id).status).not.toBe('failed');
+    await vi.waitFor(() => expect(listActiveRenders().filter((item) => item.kind === 'html-pages')).toHaveLength(0));
+  });
+
+  it('forwards the run abort signal into an MTPLX checkpoint switch so a delete unblocks the queue', async () => {
+    runOnMtplxCheckpoint.mockImplementation((_model, _fn, options) => new Promise((_resolve, reject) => {
+      const fail = () => reject(Object.assign(new Error('The MTPLX checkpoint switch was aborted'), { name: 'AbortError' }));
+      if (options?.signal?.aborted) fail();
+      else options?.signal?.addEventListener('abort', fail, { once: true });
+    }));
+    generate.mockResolvedValue({ text: goodPage });
+    const [switching, next] = await startRuns({
+      models: [{ backend: 'mtplx', modelId: 'Example/Other-MTPLX' }, model],
+      pages: [PAGES[0]],
+    });
+    await vi.waitFor(() => expect(runOnMtplxCheckpoint).toHaveBeenCalled());
+    expect(runOnMtplxCheckpoint.mock.calls[0][2]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    await removeRun(switching.id);
+    expect((await settled(next.id)).status).toBe('complete');
+    await vi.waitFor(() => expect(listActiveRenders().filter((item) => item.kind === 'html-pages')).toHaveLength(0));
   });
 
   it('shows a queued or generating run in Live activity until it settles, so the updater waits for it', async () => {
