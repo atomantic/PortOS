@@ -7,13 +7,13 @@
  */
 import { promptAddition } from '../../lib/modelInput.js';
 import { REFERENCE_SHEET_CONSTANTS } from '../universeCharacterSheet.js';
-import { buildProductSheetPrompt } from './catalogSheetPrompts.js';
+import { buildSixViewProductSheetPrompt } from './catalogSheetPrompts.js';
 
 const withWords = (blocks, words) => [...blocks.map((block) => block.text), ...(words.trim() ? [words] : [])].join('\n\n');
 
 /** The whole object from six directions at one scale, with its real size stated. */
 export function buildModelOverallSheetPrompt(object, { words = '', hasReferences = false } = {}) {
-  const sheet = buildProductSheetPrompt({}, object, { sixViews: true });
+  const sheet = buildSixViewProductSheetPrompt({}, object);
   const additions = [
     promptAddition('model-overall-sheet', 'Six-view product sheet', sheet.prompt),
     hasReferences ? promptAddition('model-source-images', 'Source images', 'The attached images show this exact object. Keep its shape, proportions, materials, colors and markings in every view; do not redesign it.') : null,

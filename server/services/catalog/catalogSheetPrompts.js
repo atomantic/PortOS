@@ -77,11 +77,13 @@ export function buildEnvironmentSheetPrompt(universe, place) {
   };
 }
 
-/**
- * Product sheet for an object: orthographic views on a plain backdrop, scale reference, macro detail.
- * `sixViews` draws all six directions, for a sheet a 3D model is built from.
- */
-export function buildProductSheetPrompt(universe, object, { sixViews = false } = {}) {
+/** Product sheet for an object: orthographic views on a plain backdrop, scale reference, macro detail. */
+export const buildProductSheetPrompt = (universe, object) => productSheet(universe, object, false);
+
+/** The product sheet drawn from all six directions, for building a 3D model from. */
+export const buildSixViewProductSheetPrompt = (universe, object) => productSheet(universe, object, true);
+
+function productSheet(universe, object, sixViews) {
   requireEntry(object, 'buildProductSheetPrompt');
   const styleBits = universeAestheticLine(universe || {});
   const name = trim(object.name) || 'Unnamed object';
