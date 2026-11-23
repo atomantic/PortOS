@@ -10,6 +10,11 @@ import { join } from 'path';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js';
 
+// Run records are real file writes: on a starved hosted runner one step outlives
+// waitFor's 1s default, and the abandoned calls then hold the endpoint gate for
+// every later test. Stay under the 30s test budget instead.
+const eventually = (assertion) => vi.waitFor(assertion, { timeout: 10_000 });
+
 // Every test owns a run-store root of its own (allocated in beforeEach, removed
 // in afterEach once its runs have settled), so a late write from one test can
 // never land in, or be deleted from under, another test's store.
@@ -130,8 +135,8 @@ const cancellationSettled = async () => {
 };
 afterEach(async () => {
   try {
-    await vi.waitFor(usageSettled);
-    await vi.waitFor(cancellationSettled);
+    await eventually(usageSettled);
+    await eventually(cancellationSettled);
   } finally {
     vi.unstubAllGlobals();
     setAIToolkitInstance(null);
@@ -261,7 +266,7 @@ describe('run record and usage for one call', () => {
     });
     expect(usage.recordSession).toHaveBeenCalledTimes(1);
     expect(usage.recordSession).toHaveBeenCalledWith('example-api', 'Example API', 'model-1');
-    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
     expect(usage.recordRunUsage).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'example-api', model: 'model-1', messages: 1, tokensIn: 34, tokensOut: 9, cacheReadTokens: 6, source: 'measured' }),
       expect.objectContaining({ reconciledRunId: run.id }),
@@ -284,7 +289,7 @@ describe('run record and usage for one call', () => {
     // Still stamped: a run with no counts must not go looking for CLI sessions.
     expect((await record()).metadata).toMatchObject({ selfContainedUsage: true });
     expect((await record()).metadata.reportedUsage).toBeUndefined();
-    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
     expect(usage.recordRunUsage.mock.calls[0][0]).toMatchObject({ providerId: 'example-api', source: 'estimate', messages: 1 });
     expect(usage.recordRunUsage.mock.calls[0][0].tokensOut).toBeGreaterThan(0);
   });
@@ -305,7 +310,7 @@ describe('run record and usage for one call', () => {
     respondWith(() => new Promise((resolve) => { release = () => resolve(completion('ok')); }));
 
     const pending = callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'goal-check-in' });
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    await eventually(() => expect(release).toBeTypeOf('function'));
 
     expect(await runnerService.getActiveRunCount()).toBe(1);
     expect(getDirectProviderCallCount()).toBe(0);
@@ -334,11 +339,11 @@ describe('bounded completion endpoint budget', () => {
     vi.stubGlobal('fetch', fetch);
     const count = LOCAL_LLM_MAX_CONCURRENCY + 2;
     const pending = Array.from({ length: count }, () => call());
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY));
-    await vi.waitFor(() => expect(usage.recordSession).toHaveBeenCalledTimes(count));
+    await eventually(() => expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY));
+    await eventually(() => expect(usage.recordSession).toHaveBeenCalledTimes(count));
     expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY);
     for (let i = 0; i < count; i += 1) {
-      await vi.waitFor(() => expect(releases[i]).toBeTypeOf('function'));
+      await eventually(() => expect(releases[i]).toBeTypeOf('function'));
       releases[i]();
     }
     expect(await Promise.all(pending)).toEqual(Array.from({ length: count }, () => expect.objectContaining({ text: 'ok' })));
@@ -353,7 +358,7 @@ describe('bounded completion endpoint budget', () => {
     const fetch = vi.fn(() => new Promise(resolve => releases.push(() => resolve(completion('ok')))));
     vi.stubGlobal('fetch', fetch);
     const pending = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY + 1 }, () => call(provider));
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(pending.length));
+    await eventually(() => expect(fetch).toHaveBeenCalledTimes(pending.length));
     releases.forEach(release => release());
     await Promise.all(pending);
   });
@@ -362,7 +367,7 @@ describe('bounded completion endpoint budget', () => {
     const releases = [];
     const holders = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY }, () => withLocalConcurrencyGate(local,
       () => new Promise(resolve => releases.push(resolve))));
-    await vi.waitFor(() => expect(releases).toHaveLength(holders.length));
+    await eventually(() => expect(releases).toHaveLength(holders.length));
     return async () => { releases.forEach(release => release()); await Promise.all(holders); };
   };
 
@@ -371,7 +376,7 @@ describe('bounded completion endpoint budget', () => {
     const fetch = respondWith(completion('ok'));
     const caller = new AbortController();
     const pending = call(local, { signal: caller.signal });
-    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
     if (mode === 'signal') caller.abort();
     else expect(await stopRun((await runIds())[0])).toBe(true);
     expect(await pending).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
@@ -388,7 +393,7 @@ describe('bounded completion endpoint budget', () => {
     const release = await occupyEndpoint();
     const fetch = respondWith(completion('ok'));
     const pending = call({ ...local, timeout: 20 });
-    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       await vi.advanceTimersByTimeAsync(40);
@@ -507,7 +512,7 @@ describe('cancellation', () => {
     const caller = new AbortController();
 
     const pending = callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'code-review', signal: caller.signal, allowModelRecovery: false });
-    await vi.waitFor(() => expect(request.signal()).toBeDefined());
+    await eventually(() => expect(request.signal()).toBeDefined());
     expect(request.signal().aborted).toBe(false);
     caller.abort();
     const result = await pending;
@@ -516,7 +521,7 @@ describe('cancellation', () => {
     expect(result).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
     const run = await record();
     expect(run.metadata).toMatchObject({ success: false, canceled: true, completionReason: 'canceled', errorCategory: ERROR_CATEGORIES.CANCELED });
-    await vi.waitFor(() => expect(spies.onRunCanceled).toHaveBeenCalledWith({ runId: run.id }));
+    await eventually(() => expect(spies.onRunCanceled).toHaveBeenCalledWith({ runId: run.id }));
     expect(spies.onRunFailed).not.toHaveBeenCalled();
     expect(await runnerService.getActiveRunCount()).toBe(0);
   });
@@ -525,7 +530,7 @@ describe('cancellation', () => {
     const request = hangUntilAborted();
 
     const pending = callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'goal-check-in', allowModelRecovery: false });
-    await vi.waitFor(() => expect(request.signal()).toBeDefined());
+    await eventually(() => expect(request.signal()).toBeDefined());
     const [runId] = await runIds();
     expect(await stopRun(runId)).toBe(true);
     const result = await pending;
@@ -541,7 +546,7 @@ describe('cancellation', () => {
     const request = hangUntilAborted();
 
     const pending = callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'goal-check-in', allowModelRecovery: false });
-    await vi.waitFor(() => expect(request.signal()).toBeDefined());
+    await eventually(() => expect(request.signal()).toBeDefined());
     const [runId] = await runIds();
     // Deletion shares the finalizer's per-run turn, as `services/bootstrap.js` wires it.
     const deleteRun = serializeRunDeletion(runnerService.deleteRun.bind(runnerService));
@@ -569,7 +574,7 @@ describe('cancellation', () => {
     const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const pending = callProviderAISimple({ ...provider, defaultModel: 'loaded-model' }, 'asked-model', 'a prompt', { source: 'goal-check-in' });
-    await vi.waitFor(() => expect(loadSignal).toBeDefined());
+    await eventually(() => expect(loadSignal).toBeDefined());
     const [runId] = await runIds();
     expect(await stopRun(runId)).toBe(true);
     const result = await pending;
@@ -700,7 +705,7 @@ describe('tracked ChatGPT subscription calls', () => {
       selfContainedUsage: true, nativeUsageUnpersisted: true, reportedUsage: { tokensIn: 8, tokensOut: 3, cacheReadTokens: 4 } });
     expect(usage.recordSession).toHaveBeenCalledTimes(1);
     expect(spies.onRunCompleted).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
     expect(usage.recordRunUsage.mock.calls[0][0]).toMatchObject({ tokensIn: 8, tokensOut: 3, cacheReadTokens: 4, nativeUsageUnpersisted: true, source: 'measured' });
   });
 
@@ -720,7 +725,7 @@ describe('tracked ChatGPT subscription calls', () => {
     ]));
     expect(usage.recordSession).toHaveBeenCalledTimes(2);
     expect(spies.onRunFailed).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
   });
 
   it.each(['Stop', 'caller abort', 'delete'])('interrupts the turn for %s and records cancellation without benching or fallback', async (action) => {
@@ -729,7 +734,7 @@ describe('tracked ChatGPT subscription calls', () => {
       signal.addEventListener('abort', () => reject(Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' })), { once: true });
     }));
     const pending = callProviderAISimple({ ...subscription, fallbackProvider: 'example-api' }, 'example-codex', 'Summarize.', { signal: caller.signal });
-    await vi.waitFor(() => expect(transport.runCodexTextTurn).toHaveBeenCalledTimes(1));
+    await eventually(() => expect(transport.runCodexTextTurn).toHaveBeenCalledTimes(1));
     const [id] = await runIds();
     if (action === 'caller abort') caller.abort();
     else if (action === 'delete') await serializeRunDeletion(runnerService.deleteRun.bind(runnerService))(id);
