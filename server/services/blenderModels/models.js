@@ -71,13 +71,21 @@ export async function getBlenderModelState(id) {
   };
 }
 
-export const listBlenderModels = () => store.listModels();
+/** Live models, plus whether this machine can build one. */
+export async function listBlenderModels() {
+  const [models, tool] = await Promise.all([store.listModels(), blenderToolState()]);
+  return { models, tool };
+}
 
-export const createBlenderModel = ({ name }) => store.createModel({ name });
+export const createBlenderModel = ({ name, description }) => store.createModel({ name, description });
 
-export async function renameBlenderModel(id, { name }) {
+/** Change the name and/or the one-line description; an absent key stays as it is. */
+export async function updateBlenderModel(id, patch) {
   await requireBlenderModel(id);
-  await store.mutateModel(id, (current) => (current.name === name ? null : { ...current, name }));
+  await store.mutateModel(id, (current) => {
+    const next = { ...current, name: patch.name ?? current.name, description: patch.description ?? current.description ?? '' };
+    return next.name === current.name && next.description === (current.description ?? '') ? null : next;
+  });
   return getBlenderModelState(id);
 }
 

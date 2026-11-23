@@ -1,10 +1,16 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown } from 'lucide-react';
+import { Boxes, CheckCircle2, AlertTriangle, Loader2, ImagePlus, Sparkles, Settings2, ChevronDown, Plus } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/apiImageTo3d.js';
+import { listBlenderModels } from '../services/apiBlenderModels.js';
+import { blenderModelStatusMeta } from '../lib/blenderModels.js';
+import NewBlenderModelForm from '../components/blenderModels/NewBlenderModelForm.jsx';
+import ListLoadError from '../components/ui/ListLoadError';
+import Pill from '../components/ui/Pill';
+import { useSocketResource } from '../hooks/useSocketResource';
 import { useModelLifecycle } from '../hooks/useModelLifecycle';
 import { useImageTo3dTargets } from '../hooks/useImageTo3dTargets';
 import useMounted from '../hooks/useMounted';
@@ -23,6 +29,8 @@ import { renderOptionsBody, SUBJECT_SCALE_DEFAULT } from '../lib/imageTo3dRender
 import { isTargetReady, unavailableReasonLabel } from '../lib/imageTo3dReasons';
 import { getNavPageForPath } from '../../../server/lib/navManifest.js';
 
+const BLENDER_EVENTS = ['blender-model:changed'];
+
 export default function Media3D() {
   const [searchParams, updateParams] = useUrlParams();
   // URL is the source of truth for what's open: the source image, the chosen
@@ -30,6 +38,11 @@ export default function Media3D() {
   const imageFromRoute = searchParams.get('image') || '';
   const targetFromRoute = searchParams.get('target') || '';
   const glbFromRoute = searchParams.get('glb') || '';
+
+  // Blender models share the library. `?new=blender` opens the create form.
+  const creatingBlender = searchParams.get('new') === 'blender';
+  const blender = useSocketResource(({ signal }) => listBlenderModels({ silent: true, signal }), { events: BLENDER_EVENTS });
+  const openBlenderForm = () => updateParams({ new: 'blender' });
 
   const { targets, loading, error, reload: reloadTargets } = useImageTo3dTargets();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -190,6 +203,18 @@ export default function Media3D() {
     return `${targets.filter(isTargetReady).length} of ${targets.length} ready on this host.`;
   })();
 
+  // Every tile of the library, newest first; a Blender model has no picture of its own.
+  const library = useMemo(() => [
+    ...records.map((record) => ({
+      key: record.id, to: `/3d/${record.id}`, name: record.name, updatedAt: record.updatedAt, status: imageTo3dStatusMeta(record.status),
+      image: record.sourceImage?.path || null, ready: record.status === 'ready',
+    })),
+    ...(blender.data?.models || []).map((model) => ({
+      key: model.id, to: `/3d/blender/${model.id}`, name: model.name, updatedAt: model.updatedAt, status: blenderModelStatusMeta(model.status),
+      image: null, ready: model.status === 'published', blender: true,
+    })),
+  ].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))), [records, blender.data]);
+
   const gatedHfModels = selectedTarget?.available ? selectedTarget.gatedRepos : null;
 
   return (
@@ -197,9 +222,17 @@ export default function Media3D() {
       <PageHeader
         icon={Boxes}
         title="3D"
-        subtitle="Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device."
+        subtitle="Turn a rendered image into a 3D mesh. Pick a source image and model, then render on-device. Or build one from Blender Python."
+        actions={(
+          <button type="button" onClick={openBlenderForm} disabled={creatingBlender}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-sm hover:border-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0">
+            <Plus className="h-4 w-4" aria-hidden="true" /> New Blender model
+          </button>
+        )}
       />
       <div className="flex-1 min-h-0 overflow-auto p-4">
+        {creatingBlender && <NewBlenderModelForm tool={blender.data?.tool} onCancel={() => updateParams({ new: '' })} />}
+
         {/* Generation workspace — source image + target selection → on-device render. */}
         <section className="mb-6 grid gap-4 rounded-xl border border-port-border bg-port-card p-4 sm:grid-cols-[200px_1fr]">
           <button
@@ -339,9 +372,10 @@ export default function Media3D() {
             open, so every card is a deep link. */}
         <section className="mb-6">
             <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
-            {recordsLoading ? (
+            {blender.error && <ListLoadError className="mb-2" what="your Blender models" error={blender.error} onRetry={blender.refetch} />}
+            {recordsLoading || (blender.loading && records.length === 0) ? (
               <p role="status" className="py-4 text-sm text-gray-400">Loading your 3D models…</p>
-            ) : recordsError ? (
+            ) : recordsError && library.length === 0 ? (
               <EmptyState
                 icon={AlertTriangle}
                 headingLevel={3}
@@ -350,7 +384,7 @@ export default function Media3D() {
                 actionLabel="Retry loading models"
                 onAction={loadRecords}
               />
-            ) : records.length === 0 ? (
+            ) : library.length === 0 && blender.error ? null : library.length === 0 ? (
               <div className="rounded-xl border border-port-border bg-port-card">
                 <EmptyState
                   icon={Boxes}
@@ -362,40 +396,42 @@ export default function Media3D() {
                 />
               </div>
             ) : (
+              <>
+              {recordsError && <ListLoadError className="mb-2" what="your image-to-3D models" onRetry={loadRecords} />}
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                {records.map((record) => {
-                  const status = imageTo3dStatusMeta(record.status);
-                  return (
-                    <Link
-                      key={record.id}
-                      to={`/3d/${record.id}`}
-                      className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
-                    >
-                      <div className="relative aspect-square bg-port-bg">
-                        {record.sourceImage?.path && (
-                          <MediaImage
-                            src={record.sourceImage.path}
-                            alt={record.name || 'Source image'}
-                            className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
-                          />
-                        )}
-                        {record.status === 'ready' && (
-                          <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
-                            <Boxes className="h-3.5 w-3.5" />
-                          </span>
-                        )}
+                {library.map((item) => (
+                  <Link
+                    key={item.key}
+                    to={item.to}
+                    className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
+                  >
+                    <div className="relative flex aspect-square items-center justify-center bg-port-bg">
+                      {item.image && (
+                        <MediaImage
+                          src={item.image}
+                          alt={item.name || 'Source image'}
+                          className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
+                        />
+                      )}
+                      {item.blender && <Boxes className="h-10 w-10 text-gray-600" aria-hidden="true" />}
+                      {item.blender && <Pill size="xs" tone="accent" className="absolute left-1.5 top-1.5">Blender</Pill>}
+                      {item.ready && (
+                        <span className="port-media-overlay-strong absolute right-1.5 top-1.5 rounded p-1 text-port-success">
+                          <Boxes className="h-3.5 w-3.5" />
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <p className="truncate text-xs font-medium text-white" title={item.name}>{item.name || 'Untitled'}</p>
+                      <div className="mt-0.5 flex items-center justify-between gap-1">
+                        <span className={`text-[11px] ${item.status.className}`}>{item.status.label}</span>
+                        <span className="text-[11px] text-gray-500">{timeAgo(item.updatedAt)}</span>
                       </div>
-                      <div className="p-2">
-                        <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
-                        <div className="mt-0.5 flex items-center justify-between gap-1">
-                          <span className={`text-[11px] ${status.className}`}>{status.label}</span>
-                          <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
-                        </div>
-                      </div>
-                    </Link>
-                  );
-                })}
+                    </div>
+                  </Link>
+                ))}
               </div>
+              </>
             )}
         </section>
 
