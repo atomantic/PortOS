@@ -89,6 +89,27 @@ describe('useUniverseAction', () => {
     expect(toastMock.dismiss).toHaveBeenCalledWith('tid-1');
   });
 
+  it('stale-write: selectedId changes mid-flight while mounted → onFreshResult skipped', async () => {
+    const setWorlds = vi.fn((fn) => fn([]));
+    const mountedRef = { current: true };
+    const { result, rerender } = renderHook(
+      ({ selectedId }) => useUniverseAction({ selectedId, mountedRef, setWorlds }),
+      { initialProps: { selectedId: 'u1' } },
+    );
+    const run = result.current;
+    const action = vi.fn(async (id) => {
+      rerender({ selectedId: 'u2' });
+      return { universe: { id, name: 'new' } };
+    });
+    const onFreshResult = vi.fn();
+    await run({ loadingMessage: 'go', action, onFreshResult });
+    expect(mountedRef.current).toBe(true);
+    expect(setWorlds).toHaveBeenCalled();
+    expect(onFreshResult).not.toHaveBeenCalled();
+    expect(toastMock.success).not.toHaveBeenCalled();
+    expect(toastMock.dismiss).toHaveBeenCalledWith('tid-1');
+  });
+
   it('action rejects → error toast with prefix, dismiss, ref + busy reset', async () => {
     const { run } = buildHook();
     const ref = { current: false };
