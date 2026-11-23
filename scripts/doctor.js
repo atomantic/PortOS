@@ -54,7 +54,9 @@ import { isStaleGitLock } from '../server/lib/gitStaleLock.js';
 import { scrubHomePath } from '../server/lib/homePath.js';
 import { SUPPORTED_NODE_RANGE, compareVersions, satisfiesMinNode } from './checkNodeVersion.js';
 import { MIN_NPM, parseNpmUserAgent, readBundledNpmVersion } from './checkNpmVersion.js';
+import databaseSettings from './lib/databaseSettings.cjs';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { parseEnvFile } from './lib/envFile.js';
 import { listPendingMigrations } from './run-migrations.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -292,9 +294,15 @@ async function withQuietConsole(fn) {
 let dbStatePromise = null;
 function loadDbState(root = ROOT) {
   dbStatePromise ??= withQuietConsole(async () => {
-    // db.js builds its pool from the environment at MODULE LOAD, so the port
-    // has to be pinned before the dynamic import below, not after it.
+    // db.js builds its pool from the environment at MODULE LOAD, so the
+    // connection settings have to be pinned before the dynamic import below,
+    // not after it. `??=` keeps any explicit shell override.
+    const settings = resolveDbSettings(root);
+    process.env.PGHOST ??= settings.host;
     process.env.PGPORT ??= String(resolvePgPort(root));
+    process.env.PGUSER ??= settings.user;
+    process.env.PGDATABASE ??= settings.database;
+    process.env.PGPASSWORD ??= settings.password;
     // A checkout with no `server/node_modules` cannot resolve `pg`. That is a
     // dependency fact the deps: probes already report, so translate it here
     // rather than surfacing a module-resolution stack trace as if the database
@@ -318,29 +326,34 @@ function loadDbState(root = ROOT) {
 }
 
 /**
+ * Database settings resolved exactly as every other entrypoint resolves them
+ * (`ecosystem.config.cjs`, `setup-db.js`, `db.sh`): the shell environment, then
+ * the install's `.env`, through the shared `databaseSettings.cjs`.
+ */
+function resolveDbSettings(root = ROOT) {
+  return databaseSettings.resolveDatabaseSettings({
+    env: process.env,
+    saved: parseEnvFile(join(root, '.env')),
+  });
+}
+
+/**
  * The port PortOS actually uses, resolved the way a real launch resolves it.
  *
- * `db.js` falls back to 5432 when `PGPORT` is unset, but nothing sets it
- * outside PM2: `ecosystem.config.cjs` reads `PGMODE` from `.env` and passes
- * `PGPORT: PORTS.POSTGRES` to the server app, and that DEFAULTS TO DOCKER
- * (5561). A doctor run is a bare `node`, not a PM2 app, so it would otherwise
- * probe 5432 and report a perfectly healthy Docker install as unreachable —
- * the exact false alarm this tool exists to prevent. Mirror the launch instead
- * of guessing, and let a real `PGPORT` in the environment still win.
+ * A doctor run is a bare `node`, not a PM2 app, so nothing has exported
+ * `PGPORT`; honoring `PGMODE`/`PGPORT`/`PGPORT_DOCKER` from `.env` mirrors what
+ * `ecosystem.config.cjs` passes the server (Docker 5561 by default). A valid
+ * `PGPORT` already in the environment is an explicit override and still wins.
  */
 export function resolvePgPort(root = ROOT) {
-  if (process.env.PGPORT) return parseInt(process.env.PGPORT, 10);
-  try {
-    return ecosystemPorts(root).POSTGRES;
-  } catch {
-    return 5432;
-  }
+  const explicit = databaseSettings.parsePort(process.env.PGPORT);
+  return explicit ?? resolveDbSettings(root).port;
 }
 
 /** `system :5432` / `docker :5561` — never a host, user, or password. */
 export function pgHostClass(root = ROOT) {
-  const port = resolvePgPort(root);
-  return `${port === 5561 ? 'docker' : 'system'} :${port}`;
+  const { mode } = resolveDbSettings(root);
+  return `${mode === 'native' ? 'system' : 'docker'} :${resolvePgPort(root)}`;
 }
 
 async function probePostgres(root) {
@@ -382,6 +395,21 @@ async function probeMigrations(root) {
 async function probeCommand(cmd, args, { presentDetail, missingDetail }) {
   const available = await commandExists(cmd, args, { timeoutMs: FAST_TIMEOUT_MS });
   return { available, detail: available ? presentDetail : missingDetail };
+}
+
+/**
+ * PortOS runs the repo-local pm2 through `process.execPath` (`package.json`,
+ * `pm2-start.js`, `dev-start.js`, `update.mjs`), so a healthy install needs no
+ * global `pm2` on PATH.
+ */
+async function probePm2(root) {
+  const pm2Bin = join(root, 'node_modules', 'pm2', 'bin', 'pm2');
+  if (!existsSync(pm2Bin)) return { available: false, detail: 'not installed in node_modules — run: npm run install:all' };
+  const available = await commandExists(process.execPath, [pm2Bin, '--version'], { timeoutMs: FAST_TIMEOUT_MS });
+  return {
+    available,
+    detail: available ? 'available — npm start manages apps through it' : 'not runnable — run: npm run install:all',
+  };
 }
 
 async function probeCert(root) {
@@ -467,10 +495,7 @@ export function defaultProbes({ root = ROOT } = {}) {
     {
       name: 'pm2',
       required: true,
-      run: () => probeCommand('pm2', ['--version'], {
-        presentDetail: 'available — npm start manages apps through it',
-        missingDetail: 'not runnable — run: npm run install:all',
-      }),
+      run: () => probePm2(root),
     },
     {
       name: 'ffmpeg',

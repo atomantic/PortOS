@@ -8,8 +8,10 @@
  * they are about to paste into a bug report is worse than no diagnostic, and
  * each of those is a behavior no caller-level test would catch.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { homedir } from 'os';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import { join } from 'path';
 import { createServer } from 'net';
 
 import {
@@ -286,31 +288,83 @@ describe('closeProbeResources', () => {
   });
 });
 
-describe('Postgres port resolution', () => {
-  const original = process.env.PGPORT;
+describe('Postgres settings resolution', () => {
+  const KEYS = ['PGPORT', 'PGPORT_DOCKER', 'PGMODE', 'PGHOST', 'PGUSER', 'PGDATABASE', 'PGPASSWORD', 'PORTOS_NATIVE_PGPORT'];
+  const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  const dirs = [];
+  const rootWithEnv = (envText) => {
+    const dir = mkdtempSync(join(tmpdir(), 'doctor-'));
+    dirs.push(dir);
+    writeFileSync(join(dir, '.env'), envText);
+    return dir;
+  };
+  beforeEach(() => {
+    for (const k of KEYS) delete process.env[k];
+  });
   afterEach(() => {
-    if (original === undefined) delete process.env.PGPORT;
-    else process.env.PGPORT = original;
+    for (const k of KEYS) {
+      if (original[k] === undefined) delete process.env[k];
+      else process.env[k] = original[k];
+    }
+    while (dirs.length) rmSync(dirs.pop(), { recursive: true, force: true });
   });
 
-  it('falls back to the launch-time port from ecosystem.config.cjs, not a bare 5432', () => {
-    // db.js defaults PGPORT to 5432, but nothing sets PGPORT outside PM2 and
-    // ecosystem.config.cjs DEFAULTS TO DOCKER (5561). Guessing 5432 here would
-    // report a perfectly healthy Docker install as unreachable — the exact
-    // false alarm this tool exists to prevent.
-    delete process.env.PGPORT;
-    expect(resolvePgPort()).toBe(ecosystemPorts().POSTGRES);
+  it('defaults to the Docker launch port, not a bare 5432', () => {
+    const root = rootWithEnv('');
+    expect(resolvePgPort(root)).toBe(5561);
+    expect(pgHostClass(root)).toBe('docker :5561');
+  });
+
+  it('honors PGPORT_DOCKER from .env in docker mode', () => {
+    const root = rootWithEnv('PGPORT_DOCKER=5999\n');
+    expect(resolvePgPort(root)).toBe(5999);
+    expect(pgHostClass(root)).toBe('docker :5999');
+  });
+
+  it('reports native mode as system with the .env PGPORT', () => {
+    const root = rootWithEnv('PGMODE=native\nPGPORT=5433\n');
+    expect(resolvePgPort(root)).toBe(5433);
+    expect(pgHostClass(root)).toBe('system :5433');
   });
 
   it('lets an explicit PGPORT in the environment win', () => {
     process.env.PGPORT = '15432';
-    expect(resolvePgPort()).toBe(15432);
+    expect(resolvePgPort(rootWithEnv('PGPORT_DOCKER=5999\n'))).toBe(15432);
   });
 
   it('names the host class only — never a host, user, or password', () => {
-    process.env.PGPORT = '5561';
-    expect(pgHostClass()).toBe('docker :5561');
-    process.env.PGPORT = '5432';
-    expect(pgHostClass()).toBe('system :5432');
+    const root = rootWithEnv('PGHOST=db.secret.example\nPGUSER=secretuser\nPGPASSWORD=secretpw\n');
+    const out = pgHostClass(root);
+    expect(out).toBe('docker :5561');
+    expect(out).not.toMatch(/secret/);
+  });
+});
+
+describe('pm2 probe', () => {
+  it('reports a missing repo-local pm2 without consulting PATH', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doctor-pm2-'));
+    try {
+      const probe = defaultProbes({ root }).find((p) => p.name === 'pm2');
+      const result = await probe.run();
+      expect(result.available).toBe(false);
+      expect(result.detail).toContain('node_modules');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the repo-local pm2 through the current node, with no global pm2 on PATH', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'doctor-pm2-'));
+    const oldPath = process.env.PATH;
+    try {
+      mkdirSync(join(root, 'node_modules', 'pm2', 'bin'), { recursive: true });
+      writeFileSync(join(root, 'node_modules', 'pm2', 'bin', 'pm2'), "console.log('5.0.0');\n");
+      process.env.PATH = '';
+      const probe = defaultProbes({ root }).find((p) => p.name === 'pm2');
+      expect((await probe.run()).available).toBe(true);
+    } finally {
+      process.env.PATH = oldPath;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
