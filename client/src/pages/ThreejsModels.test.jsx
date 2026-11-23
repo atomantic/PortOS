@@ -78,6 +78,7 @@ describe('ThreejsModels', () => {
       providerId: 'vision-api',
       model: 'vision-pro',
       family: 'general',
+      referenceImages: [],
     }, { silent: true }));
     expect(await screen.findByText('Model workspace opened')).toBeInTheDocument();
   });
