@@ -332,7 +332,11 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
   // Client tree guards join the local gate by their suffix, the same name the
   // planner selects them by, so there is no second list (guards under hooks/ included).
-  const clientGuards = trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path));
+  // Selected like CI (ciPlanRules): only when the plan is full or a client source changed.
+  const touchesClient = plan.full || changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path));
+  const clientGuards = touchesClient
+    ? trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path))
+    : [];
   return {
     ...plan,
     full: false,
@@ -346,7 +350,8 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
       files: [...new Set([...clientGuards, ...clientStructuralGuards])],
       sources: [],
     },
-    lint: { mode: 'full', files: [] },
+    // A scoped plan already lints only its changed files; only a full plan lints everything.
+    lint: plan.full ? { mode: 'full', files: [] } : plan.lint,
   };
 }
 

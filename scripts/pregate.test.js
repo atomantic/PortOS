@@ -190,7 +190,7 @@ describe('resolvePlanStages', () => {
       lint: { mode: 'full', files: [] },
       build: true, smoke: true, db: true, browser: { files: BROWSER_SUITES.slice(0, 1) },
     });
-    const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js']) });
+    const stages = resolvePlanStages(plan, { guardPlan: downgradeFullPlan(plan, tracked, ['server/lib/helper.js', 'client/src/App.jsx']) });
     // A full plan runs CI's shard split one shard per stage; related stays whole.
     const unit = (scope) => mode === 'full'
       ? Array.from({ length: FULL_SUITE_SHARDS[scope] }, (_, index) => `${scope} tests (shard ${index + 1}/${FULL_SUITE_SHARDS[scope]})`)
@@ -1127,6 +1127,44 @@ describe('downgradeFullPlan', () => {
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, changedFiles);
 
     expect(downgraded.server.files).toContain('server/lib/moduleSummaries.test.js');
+  });
+});
+
+describe('downgradeFullPlan scoped plans', () => {
+  const tracked = [
+    'client/src/test/guards/a11y.guard.test.js',
+    'client/src/test/guards/ui.guard.test.js',
+    'client/src/App.jsx',
+    'server/lib/foo.js',
+  ];
+  const scoped = (lint) => planWith({ full: false, lint });
+
+  it('keeps a scoped plan lint, skips client guards and no actionlint on a server-only diff', () => {
+    const lint = { mode: 'files', files: ['server/lib/foo.js'] };
+    const downgraded = downgradeFullPlan(scoped(lint), tracked, ['server/lib/foo.js']);
+    expect(downgraded.lint).toEqual(lint);
+    expect(downgraded.client).toEqual({ mode: 'skip', files: [], sources: [] });
+    expect(workflowLintSelected(downgraded)).toBe(false);
+  });
+
+  it('keeps a skipped lint on a docs-only diff', () => {
+    const downgraded = downgradeFullPlan(scoped({ mode: 'skip', files: [] }), tracked, ['docs/README.md']);
+    expect(downgraded.lint.mode).toBe('skip');
+    expect(downgraded.client.mode).toBe('skip');
+  });
+
+  it('adds the client guards when a client source changed', () => {
+    const downgraded = downgradeFullPlan(scoped({ mode: 'files', files: ['client/src/App.jsx'] }), tracked, ['client/src/App.jsx']);
+    expect(downgraded.client.files).toEqual(expect.arrayContaining([
+      'client/src/test/guards/a11y.guard.test.js', 'client/src/test/guards/ui.guard.test.js',
+    ]));
+  });
+
+  it('still lints everything and runs client guards for a full plan', () => {
+    const downgraded = downgradeFullPlan(planWith({ full: true }), tracked, []);
+    expect(downgraded.lint).toEqual({ mode: 'full', files: [] });
+    expect(downgraded.client.files.length).toBeGreaterThan(0);
+    expect(workflowLintSelected(downgraded)).toBe(true);
   });
 });
 
