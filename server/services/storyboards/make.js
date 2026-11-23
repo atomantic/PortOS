@@ -45,10 +45,10 @@ const deps = {
   linkedMedia: async (ids) => (await import('../catalogDB/media.js')).listMediaForIngredients(ids),
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
   resolveImage: (image) => resolveImageInputPath(image),
-  emit: (payload) => import('../socket.js')
+  emit: (payload) => import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
-  emitBatch: (payload) => import('../socket.js')
+  emitBatch: (payload) => import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make-batch', payload))
     .catch((err) => console.error(`❌ storyboard:make-batch emit failed: ${err.message}`)),
 };

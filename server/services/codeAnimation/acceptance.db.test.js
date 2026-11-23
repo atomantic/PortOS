@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', async original => {
     return actual.atomicWrite(path, ...args);
   } };
 });
-vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';

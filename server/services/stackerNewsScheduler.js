@@ -22,7 +22,7 @@ export async function reconcileStackerNewsSchedulers() {
       handler: async () => {
         const current = await getAccount(account.id);
         if (!current || !hasEffectiveMonitoring(current, await listTerritories(account.id))) return;
-        const { getIo } = await import('./socket.js');
+        const { getIo } = await import('./socketIo.js');
         try {
           await syncAccount(account.id);
         } finally {
