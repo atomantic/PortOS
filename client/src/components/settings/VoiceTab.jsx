@@ -23,6 +23,7 @@ const SERVICE_LABELS = {
   'web-speech': 'Web Speech API (STT)',
   piper: 'Piper (TTS)',
   llm: 'LLM provider',
+  facetime: 'FaceTime Audio',
 };
 
 const STT_ENGINES = [
