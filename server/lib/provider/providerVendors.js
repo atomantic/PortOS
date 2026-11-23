@@ -718,8 +718,11 @@ const OPENCHAMBER = {
 /**
  * `--model` value for an explicit Grok speed. Unset speed returns `model`
  * unchanged, so a flat fast id still launches until the user picks Standard
- * or Fast. Grok Build CLI 1.0.70 takes the tier as `name[fast=true|false]`,
- * not a `--fast` flag and not Codex `service_tier`.
+ * or Fast. Grok Build CLI 1.0.92 takes the tier as the catalog id itself
+ * (`<base>-build-fast` / `<base>`), not a `--fast` flag and not Codex
+ * `service_tier`. The 1.0.70 `name[fast=true|false]` setting is now an
+ * "unknown model id": the CLI drops `--effort` and the TUI falls back to the
+ * default model at its default (low) effort.
  */
 function grokExecutionModel(model, provider, baseArgs) {
   const tier = provider?.executionOptions?.serviceTier;
@@ -732,7 +735,7 @@ function grokExecutionModel(model, provider, baseArgs) {
   return pinned;
 }
 
-/** Effort ladders stay keyed on the catalog id, not the `[fast=]` argv value. */
+/** Effort ladders stay keyed on the base catalog id, not the `-build-fast` argv value. */
 function grokEffortModel(provider, model) {
   return provider?.executionOptionSupport?.modelBase || model;
 }
