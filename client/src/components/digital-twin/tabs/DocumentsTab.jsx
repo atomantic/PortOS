@@ -21,6 +21,7 @@ import {
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import CollapsibleListItem from '../../ui/CollapsibleListItem';
 import { FormField } from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
@@ -42,13 +43,32 @@ export default function DocumentsTab({ onRefresh }) {
   const [newDoc, setNewDoc] = useState({ filename: '', title: '', category: 'core', content: '' });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [removingId, setRemovingId] = useState(null);
+  // Selection target parked behind the discard confirm: { id } (id null = back to the list).
+  const [pendingSelect, setPendingSelect] = useState(null);
+  const [mutating, setMutating] = useState(false);
+  const [weightDraft, setWeightDraft] = useState(5);
   const dirty = !!selectedDoc && editContent !== selectedDoc.content;
 
   const selectDoc = (id) => setSearchParams(id ? { doc: id } : {}, { replace: !id });
 
+  // Unsaved edits are never dropped silently: park the navigation behind an inline confirm.
+  const requestSelect = (id) => {
+    if (dirty && id !== docId) setPendingSelect({ id });
+    else selectDoc(id);
+  };
+  const confirmDiscard = () => {
+    const target = pendingSelect?.id ?? null;
+    setPendingSelect(null);
+    selectDoc(target);
+  };
+
+  const selectedWeight = selectedDoc?.weight ?? 5;
+  useEffect(() => { setWeightDraft(selectedWeight); }, [selectedDoc?.id, selectedWeight]);
+
   // ?doc=<id> is the source of truth for the selection; the body is fetched once per id.
   useEffect(() => {
     setConfirmingDelete(false);
+    setPendingSelect(null);
     if (!docId) { setSelectedDoc(null); return undefined; }
     let active = true;
     getDigitalTwinDocument(docId, { silent: true })
@@ -87,18 +107,43 @@ export default function DocumentsTab({ onRefresh }) {
     onRefresh();
   };
 
-  const handleToggleEnabled = async (doc, enabled) => {
+  // request() owns the failure toast; swallow the rejection and always release the busy flag.
+  const runMutation = async (fn) => {
+    if (mutating) return;
+    setMutating(true);
+    await fn().catch(() => null);
+    setMutating(false);
+  };
+
+  const handleToggleEnabled = (doc, enabled) => runMutation(async () => {
     const saved = await updateSoulDocument(doc.id, { enabled });
     toast.success(enabled ? 'Document enabled' : 'Document disabled');
     applyUpdated(doc, saved?.id ? saved : { enabled });
     onRefresh();
-  };
+  });
 
-  const handleWeightChange = async (doc, weight) => {
-    const saved = await updateSoulDocument(doc.id, { weight });
+  const handleWeightChange = (doc, weight) => runMutation(async () => {
+    const saved = await updateSoulDocument(doc.id, { weight })
+      .catch((err) => { setWeightDraft(doc.weight ?? 5); throw err; });
     toast.success(`Weight set to ${weight}`);
     applyUpdated(doc, saved?.id ? saved : { weight });
     onRefresh();
+  });
+
+  // The slider only updates the local draft while dragging; one PUT fires on release/blur/key-up.
+  const commitWeight = () => {
+    if (selectedDoc && weightDraft !== selectedWeight) handleWeightChange(selectedDoc, weightDraft);
+  };
+  const weightInputProps = {
+    type: 'range',
+    min: '1',
+    max: '10',
+    value: weightDraft,
+    disabled: mutating,
+    onChange: (e) => setWeightDraft(parseInt(e.target.value, 10)),
+    onPointerUp: commitWeight,
+    onKeyUp: commitWeight,
+    onBlur: commitWeight,
   };
 
   const handleCreate = async () => {
@@ -123,14 +168,19 @@ export default function DocumentsTab({ onRefresh }) {
     onRefresh();
   };
 
-  const handleDelete = async (id) => {
-    await deleteSoulDocument(id);
+  const handleDelete = (id) => runMutation(async () => {
+    try {
+      await deleteSoulDocument(id);
+    } catch (err) {
+      setConfirmingDelete(false);
+      throw err;
+    }
     toast.success('Document deleted');
     setConfirmingDelete(false);
     setRemovingId(id);
     if (selectedDoc?.id === id) selectDoc(null);
     onRefresh();
-  };
+  });
 
   if (documentsState === 'loading') {
     return (
@@ -182,7 +232,7 @@ export default function DocumentsTab({ onRefresh }) {
                       onExited={() => { setDocuments((items) => items.filter((item) => item.id !== doc.id)); setRemovingId(null); }}
                     >
                     <button
-                      onClick={() => selectDoc(doc.id)}
+                      onClick={() => requestSelect(doc.id)}
                       className={`w-full px-3 py-3 min-h-[44px] text-left hover:bg-port-border transition-colors ${
                         selectedDoc?.id === doc.id ? 'bg-port-accent/10 border-l-2 border-port-accent' : ''
                       }`}
@@ -219,7 +269,7 @@ export default function DocumentsTab({ onRefresh }) {
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   {/* Back button for mobile */}
                   <button
-                    onClick={() => selectDoc(null)}
+                    onClick={() => requestSelect(null)}
                     className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 lg:hidden p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                     title="Back to list" aria-label="Back to list"
                   >
@@ -238,19 +288,16 @@ export default function DocumentsTab({ onRefresh }) {
                   <div className="hidden md:flex items-center gap-2 px-2 py-1 bg-port-bg rounded border border-port-border" title="Document weight (1-10): Higher weight = included first when truncating">
                     <Scale size={14} className="text-gray-500" />
                     <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      value={selectedDoc.weight || 5}
-                      onChange={(e) => handleWeightChange(selectedDoc, parseInt(e.target.value, 10))}
+                      {...weightInputProps}
                       aria-label="Document weight"
                       className="w-16 h-1 accent-port-accent"
                     />
-                    <span className="text-xs text-gray-400 w-4">{selectedDoc.weight || 5}</span>
+                    <span className="text-xs text-gray-400 w-4">{weightDraft}</span>
                   </div>
                   <button
                     onClick={() => handleToggleEnabled(selectedDoc, !selectedDoc.enabled)}
-                    className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors ${
+                    disabled={mutating}
+                    className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center transition-colors disabled:opacity-50 ${
                       selectedDoc.enabled ? 'text-port-success' : 'text-gray-500'
                     }`}
                     title={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'} aria-label={selectedDoc.enabled ? 'Disable for CoS injection' : 'Enable for CoS injection'}
@@ -300,16 +347,26 @@ export default function DocumentsTab({ onRefresh }) {
                 <label htmlFor="document-weight-mobile" className="text-xs text-gray-400">Weight:</label>
                 <input
                   id="document-weight-mobile"
-                  type="range"
-                  min="1"
-                  max="10"
-                  value={selectedDoc.weight || 5}
-                  onChange={(e) => handleWeightChange(selectedDoc, parseInt(e.target.value, 10))}
+                  {...weightInputProps}
                   className="flex-1 h-1 accent-port-accent"
                 />
-                <span className="text-xs text-gray-400 w-4">{selectedDoc.weight || 5}</span>
+                <span className="text-xs text-gray-400 w-4">{weightDraft}</span>
               </div>
             </div>
+
+            {pendingSelect && (
+              <InlineConfirmRow
+                variant="separator"
+                tone="warning"
+                question="You have unsaved changes. Discard edits?"
+                confirmText="Discard & switch"
+                cancelText="Keep editing"
+                onConfirm={confirmDiscard}
+                onCancel={() => setPendingSelect(null)}
+                autoFocus
+                aria-label="Discard unsaved document edits"
+              />
+            )}
 
             {/* Editor Content */}
             <div className="flex-1 overflow-auto">

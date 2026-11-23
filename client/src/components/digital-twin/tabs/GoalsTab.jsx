@@ -64,6 +64,10 @@ export default function GoalsTab({ onRefresh }) {
   const [birthDateInput, setBirthDateInput] = useState('');
   const [newMilestone, setNewMilestone] = useState({ title: '', targetDate: '' });
   const [derivingLongevity, setDerivingLongevity] = useState(false);
+  const [savingBirthDate, setSavingBirthDate] = useState(false);
+  const [creatingGoal, setCreatingGoal] = useState(false);
+  const [addingMilestoneFor, setAddingMilestoneFor] = useState(null);
+  const [mutatingGoalId, setMutatingGoalId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const loadData = useCallback(async () => {
@@ -81,12 +85,22 @@ export default function GoalsTab({ onRefresh }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // request() already toasted a failure; each guarded mutation clears its busy
+  // flag either way and only runs its success path (close form, clear draft) when
+  // the call resolved, so a failed save keeps the user's input.
   const handleSetBirthDate = async () => {
-    if (!birthDateInput) return;
-    await setBirthDate(birthDateInput);
-    setShowBirthDate(false);
-    await loadData();
-    onRefresh?.();
+    if (!birthDateInput || savingBirthDate) return;
+    setSavingBirthDate(true);
+    try {
+      await setBirthDate(birthDateInput);
+      setShowBirthDate(false);
+      await loadData();
+      onRefresh?.();
+    } catch {
+      // failure toast shown by the request helper
+    } finally {
+      setSavingBirthDate(false);
+    }
   };
 
   const handleDeriveLongevity = async () => {
@@ -102,40 +116,67 @@ export default function GoalsTab({ onRefresh }) {
   };
 
   const handleCreateGoal = async () => {
-    if (!newGoal.title.trim()) return;
-    await createGoal(newGoal);
-    setNewGoal({ title: '', description: '', horizon: '5-year', category: 'mastery' });
-    setShowNewGoal(false);
-    await loadData();
-    onRefresh?.();
+    if (!newGoal.title.trim() || creatingGoal) return;
+    setCreatingGoal(true);
+    try {
+      await createGoal(newGoal);
+      setNewGoal({ title: '', description: '', horizon: '5-year', category: 'mastery' });
+      setShowNewGoal(false);
+      await loadData();
+      onRefresh?.();
+    } catch {
+      // failure toast shown by the request helper
+    } finally {
+      setCreatingGoal(false);
+    }
   };
 
-  const handleUpdateGoalStatus = async (goalId, status) => {
+  // One in-flight mutation per goal: status, milestone-complete and delete share it.
+  const mutateGoal = async (goalId, fn) => {
+    if (mutatingGoalId) return;
+    setMutatingGoalId(goalId);
+    try {
+      await fn();
+    } catch {
+      // failure toast shown by the request helper
+    } finally {
+      setMutatingGoalId(null);
+    }
+  };
+
+  const handleUpdateGoalStatus = (goalId, status) => mutateGoal(goalId, async () => {
     await updateGoal(goalId, { status });
     await loadData();
-  };
+  });
 
-  const handleDeleteGoal = async (goalId) => {
+  const handleDeleteGoal = (goalId) => mutateGoal(goalId, async () => {
     await deleteGoal(goalId);
     setExpandedGoal(null);
     await loadData();
     onRefresh?.();
-  };
+  });
 
   const handleAddMilestone = async (goalId) => {
-    if (!newMilestone.title.trim()) return;
-    await addGoalMilestone(goalId, {
-      title: newMilestone.title,
-      ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
-    });
-    setNewMilestone({ title: '', targetDate: '' });
-    await loadData();
+    if (!newMilestone.title.trim() || addingMilestoneFor) return;
+    setAddingMilestoneFor(goalId);
+    try {
+      await addGoalMilestone(goalId, {
+        title: newMilestone.title,
+        ...(newMilestone.targetDate ? { targetDate: newMilestone.targetDate } : {})
+      });
+      setNewMilestone({ title: '', targetDate: '' });
+      await loadData();
+    } catch {
+      // failure toast shown by the request helper
+    } finally {
+      setAddingMilestoneFor(null);
+    }
   };
 
-  const handleCompleteMilestone = async (goalId, milestoneId) => {
+  const handleCompleteMilestone = (goalId, milestoneId) => mutateGoal(goalId, async () => {
     await completeGoalMilestone(goalId, milestoneId);
     await loadData();
-  };
+  });
 
   if (loading) {
     return (
@@ -196,7 +237,8 @@ export default function GoalsTab({ onRefresh }) {
             />
             <button
               onClick={handleSetBirthDate}
-              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
+              disabled={savingBirthDate}
+              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
             >
               Save
             </button>
@@ -341,7 +383,7 @@ export default function GoalsTab({ onRefresh }) {
             <div className="flex gap-2">
               <button
                 onClick={handleCreateGoal}
-                disabled={!newGoal.title.trim()}
+                disabled={!newGoal.title.trim() || creatingGoal}
                 className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
               >
                 Create
@@ -439,6 +481,7 @@ export default function GoalsTab({ onRefresh }) {
                               <div key={ms.id} className="flex items-center gap-2 text-sm">
                                 <button
                                   onClick={() => !ms.completedAt && handleCompleteMilestone(goal.id, ms.id)}
+                                  disabled={mutatingGoalId === goal.id}
                                   aria-label={ms.completedAt ? `${ms.title} — completed` : `Mark ${ms.title} complete`}
                                   className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
                                     ms.completedAt
@@ -483,7 +526,7 @@ export default function GoalsTab({ onRefresh }) {
                           />
                           <button
                             onClick={() => handleAddMilestone(goal.id)}
-                            disabled={!newMilestone.title.trim()}
+                            disabled={!newMilestone.title.trim() || addingMilestoneFor === goal.id}
                             className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             Add
@@ -495,14 +538,16 @@ export default function GoalsTab({ onRefresh }) {
                       <div className="flex gap-2 pt-1">
                         <button
                           onClick={() => handleUpdateGoalStatus(goal.id, 'completed')}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
+                          disabled={mutatingGoalId === goal.id}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
                         >
                           <Check className="w-3 h-3" />
                           Complete
                         </button>
                         <button
                           onClick={() => requestDelete(goal.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
+                          disabled={mutatingGoalId === goal.id}
+                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 disabled:opacity-50"
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete

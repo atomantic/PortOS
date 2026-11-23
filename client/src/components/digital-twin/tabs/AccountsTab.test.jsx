@@ -211,4 +211,21 @@ describe('AccountsTab', () => {
     expect(screen.getAllByRole('button', { name: /Add to org registry/ })).toHaveLength(1);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('keeps the form open with the draft intact when creating an account fails', async () => {
+    createSocialAccount.mockRejectedValueOnce(new Error('server down'));
+    const user = userEvent.setup();
+    render(<AccountsTab />);
+    await screen.findByText('Social Accounts');
+
+    await user.click(screen.getByRole('button', { name: /add account/i }));
+    await user.click(screen.getByRole('button', { name: 'GitHub' }));
+    await user.type(screen.getByPlaceholderText(/Your GitHub username/i), 'newuser');
+    const addButtons = screen.getAllByRole('button', { name: /^add account$/i });
+    await user.click(addButtons[addButtons.length - 1]);
+
+    await waitFor(() => expect(createSocialAccount).toHaveBeenCalledOnce());
+    expect(screen.getByPlaceholderText(/Your GitHub username/i)).toHaveValue('newuser');
+    expect(getSocialAccountStats).toHaveBeenCalledTimes(1);
+  });
 });

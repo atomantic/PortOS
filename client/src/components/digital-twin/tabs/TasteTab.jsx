@@ -34,6 +34,7 @@ import {
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -120,6 +121,9 @@ export default function TasteTab({ onRefresh }) {
 
   // Review mode
   const [reviewSection, setReviewSection] = useState(null);
+  // Section id awaiting reset confirmation; cleared whenever the review view changes.
+  const [confirmingReset, setConfirmingReset] = useState(null);
+  const [resetting, setResetting] = useState(false);
   const [reviewResponses, setReviewResponses] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
   const [reviewError, setReviewError] = useState(null);
@@ -258,6 +262,7 @@ export default function TasteTab({ onRefresh }) {
   const handleReviewSection = async (sectionId) => {
     reviewRequestRef.current += 1;
     const request = reviewRequestRef.current;
+    setConfirmingReset(null);
     setReviewSection(sectionId);
     setLoadingReview(true);
     setReviewError(null);
@@ -274,7 +279,11 @@ export default function TasteTab({ onRefresh }) {
   const handleResetSection = async (sectionId) => {
     // request() owns the failure toast; bail before the success toast so a
     // failed reset doesn't report "Section reset" on top of that error.
+    if (resetting) return;
+    setResetting(true);
     const ok = await resetTasteSection(sectionId).then(() => true).catch(() => false);
+    setResetting(false);
+    setConfirmingReset(null);
     if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
@@ -443,13 +452,24 @@ export default function TasteTab({ onRefresh }) {
                 {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
               </button>
               <button
-                onClick={() => handleResetSection(reviewSection)}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10"
+                onClick={() => setConfirmingReset(reviewSection)}
+                disabled={resetting}
+                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10 disabled:opacity-50"
               >
                 <RotateCcw size={16} />
                 Reset Section
               </button>
             </div>
+            {confirmingReset === reviewSection && (
+              <InlineConfirmRow
+                question="Reset all responses and summary for this section? This cannot be undone."
+                confirmText="Reset Section"
+                onConfirm={() => handleResetSection(reviewSection)}
+                onCancel={() => setConfirmingReset(null)}
+                autoFocus
+                aria-label="Confirm section reset"
+              />
+            )}
           </div>
         )}
       </div>

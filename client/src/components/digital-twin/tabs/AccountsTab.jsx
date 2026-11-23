@@ -173,9 +173,11 @@ export default function AccountsTab() {
 
     setSaving(true);
 
+    let ok = false;
     if (editingId) {
       const updated = await updateSocialAccount(editingId, form).catch(() => null);
       if (updated) {
+        ok = true;
         toast.success(`Updated ${form.platform} account`);
         setEditingId(null);
         setAccounts(prev => prev.map(a => (a.id === updated.id ? updated : a)));
@@ -183,12 +185,15 @@ export default function AccountsTab() {
     } else {
       const created = await createSocialAccount(form).catch(() => null);
       if (created) {
+        ok = true;
         toast.success(`Added ${form.platform} account`);
         setAccounts(prev => [...prev, created]);
       }
     }
 
     setSaving(false);
+    // A failed save keeps the form open so the user's draft survives a retry.
+    if (!ok) return;
     setShowForm(false);
     setForm(EMPTY_FORM);
     loadStats();
