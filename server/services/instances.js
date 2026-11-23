@@ -307,7 +307,7 @@ async function assertPeerHostNotLocal(peer) {
   if (peer.transport === 'tailcat' || !peer.host || net.isIP(peer.host)) return;
   const answers = await dns.lookup(peer.host, { all: true }).catch(() => []);
   if (answers.some(({ address }) => isBlockedIngestHost(address))) {
-    throw new Error(`peer host ${peer.host} resolves to a loopback or link-local address`);
+    throw new Error(`peer host resolves to a loopback or link-local address`);
   }
 }
 

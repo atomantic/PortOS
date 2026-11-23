@@ -1325,6 +1325,10 @@ describe('instances.js', () => {
         expect(result.status).toBe('offline');
         const logged = [log, warn, error].flatMap((spy) => spy.mock.calls).flat().join('\n');
         expect(logged).toContain('Probe failed for peer');
+        const rebind = makePeer({ name: 'Secret Machine', host: 'rebind-secret.example.com' });
+        dns.lookup.mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
+        await probePeer(rebind);
+        expect([log, warn, error].flatMap((spy) => spy.mock.calls).flat().join('\n')).not.toMatch(/rebind-secret/);
         expect(logged).not.toMatch(/Secret Machine|secret-host|192\.0\.2\.77|peer-secret-id|inst-secret-id/);
       } finally {
         log.mockRestore();
