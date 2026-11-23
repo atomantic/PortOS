@@ -70,3 +70,30 @@ describe('OverviewTab failed reads', () => {
     await waitFor(() => expect(screen.getByTestId('picker')).toHaveTextContent('example'));
   });
 });
+
+describe('OverviewTab CoS status Enable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getDigitalTwinTraits.mockResolvedValue({ traits: { openness: 0.5 } });
+    getDigitalTwinConfidence.mockResolvedValue({ confidence: { overall: 0.5 } });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+    getDigitalTwinCompleteness.mockResolvedValue(null);
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true }] });
+  });
+
+  it('opens the Settings panel, scrolls it into view and focuses its first checkbox', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      renderTab();
+      fireEvent.click(await screen.findByRole('button', { name: 'Enable' }));
+      const checkbox = await screen.findByLabelText('Auto-inject soul context into CoS agents');
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' }));
+      expect(scrollIntoView.mock.contexts[0]).toBe(checkbox.closest('div.border-t'));
+      expect(document.activeElement).toBe(checkbox);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});
