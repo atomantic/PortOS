@@ -52,6 +52,29 @@ const TOMBSTONE_KIND_PLURAL = {
   storyboard: 'storyboards',
 };
 
+// [singular, plural] per kind for the "Pruned N …" toast.
+const TOMBSTONE_KIND_COUNT_LABELS = {
+  universe: ['universe', 'universes'],
+  series: ['series', 'series'],
+  issue: ['issue', 'issues'],
+  mediaCollection: ['collection', 'collections'],
+  author: ['author', 'authors'],
+  artist: ['artist', 'artists'],
+  album: ['album', 'albums'],
+  track: ['track', 'tracks'],
+  creativeDirectorProject: ['creative director project', 'creative director projects'],
+  moodBoard: ['mood board', 'mood boards'],
+  fableLoom: ['loom', 'looms'],
+  writersRoomWork: ['writers room work', 'writers room works'],
+  writersRoomFolder: ['writers room folder', 'writers room folders'],
+  writersRoomExercise: ['writers room exercise', 'writers room exercises'],
+  musicVideoProject: ['music video', 'music videos'],
+  commissionFeedback: ['commission feedback', 'commission feedback'],
+  creativeCommission: ['commission', 'commissions'],
+  deck: ['deck', 'decks'],
+  storyboard: ['storyboard', 'storyboards'],
+};
+
 function kindList(kinds) {
   return [...new Set(kinds.map((k) => TOMBSTONE_KIND_PLURAL[k] ?? k))].join(', ');
 }
@@ -105,14 +128,22 @@ function TombstoneGcSection() {
   const [runSweep, sweeping] = useAsyncAction(async () => {
     const result = await sweepTombstonesNow({ graceMs: 0 }, { silent: true });
     if (!result) return null;
-    const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
-    const totalPruned = universes + series + issues + collections;
-    if (totalPruned > 0) {
-      const parts = [];
-      if (universes) parts.push(`${universes} universe${universes === 1 ? '' : 's'}`);
-      if (series) parts.push(`${series} series`);
-      if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
-      if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
+    const { refused: refusedKinds = [] } = result;
+    // prunedByKind covers every federated kind; the legacy keys are only a
+    // fallback for a server that predates it.
+    const prunedByKind = result.prunedByKind ?? {
+      universe: result.universes ?? 0,
+      series: result.series ?? 0,
+      issue: result.issues ?? 0,
+      mediaCollection: result.collections ?? 0,
+    };
+    const parts = Object.entries(prunedByKind)
+      .filter(([, count]) => count > 0)
+      .map(([kind, count]) => {
+        const [singular, plural] = TOMBSTONE_KIND_COUNT_LABELS[kind] ?? [kind, kind];
+        return `${count} ${count === 1 ? singular : plural}`;
+      });
+    if (parts.length > 0) {
       toast.success(`Pruned ${parts.join(' / ')}`);
     } else if (refusedKinds.length === 0) {
       toast('Nothing is ready to clean up.');
@@ -152,7 +183,7 @@ function TombstoneGcSection() {
           <h2 className="text-gray-400 uppercase tracking-wider text-[11px] font-medium">Deleted-record cleanup</h2>
         </div>
         <p className="mt-1 text-gray-500 text-xs">
-          Remove the leftover record of Universes, Pipeline series and issues, and Media Collections you already deleted. Automatic cleanup waits 24 hours. This runs it now.
+          Remove the leftover record of deleted federated records (Universes, Pipeline series and issues, Media Collections, Authors, Decks, and more). Automatic cleanup waits 24 hours. This runs it now.
         </p>
         {error && !status && (
           <p role="alert" className="mt-1 text-xs text-port-error">

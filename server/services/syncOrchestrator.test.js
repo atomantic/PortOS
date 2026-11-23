@@ -1855,6 +1855,19 @@ describe('syncOrchestrator', () => {
       expect(sweepTombstones).toHaveBeenCalledTimes(2);
     });
 
+    it('logs pruned counts for newer federated kinds, not just the original four (#17722)', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      sweepTombstones.mockResolvedValueOnce({
+        prunedByKind: { universe: 0, deck: 3, author: 1 },
+        orphanBaseHashes: 0, orphanSubscriptions: 0, refused: [],
+      });
+      initSyncOrchestrator();
+      getPeers.mockResolvedValue([]);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(logSpy).toHaveBeenCalledWith('🪦 Tombstone GC: pruned 3 decks, 1 author');
+      logSpy.mockRestore();
+    });
+
     it('resets the tombstone-sweep gate on failure so the very next tick retries', async () => {
       initSyncOrchestrator();
       getPeers.mockResolvedValue([]);
