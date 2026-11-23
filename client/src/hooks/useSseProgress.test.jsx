@@ -33,7 +33,7 @@ describe('useSseProgress', () => {
     expect(result.current.closed).toBe(false);
   });
 
-  it.each(['complete', 'canceled', 'cancelled', 'error'])(
+  it.each(['complete', 'canceled', 'cancelled', 'error', 'conflict'])(
     'closes the stream on a terminal %s frame',
     (type) => {
       const { result } = renderHook(() => useSseProgress('/x'));
@@ -115,6 +115,7 @@ describe('useSseProgress', () => {
     expect(isTerminalSseFrame({ type: 'canceled' })).toBe(true);
     expect(isTerminalSseFrame({ type: 'cancelled' })).toBe(true);
     expect(isTerminalSseFrame({ type: 'error' })).toBe(true);
+    expect(isTerminalSseFrame({ type: 'conflict' })).toBe(true);
     expect(isTerminalSseFrame({ type: 'progress' })).toBe(false);
     expect(isTerminalSseFrame(null)).toBe(false);
   });

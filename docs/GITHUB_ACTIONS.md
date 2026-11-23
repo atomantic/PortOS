@@ -64,8 +64,8 @@ A release therefore pays for one full run (on its PR), not three.
 
 PRs into `main` use `scripts/ci-test-plan.js` (its path rules, manifest verdicts,
 repository inputs and output in `scripts/lib/ciPlan*.js`) to classify the changed files
-before installing dependencies. Directory-scoped features add their server and
-client feature tests, and every behavioral source (nested or flat) uses the
+before installing dependencies. Directory-scoped features add their
+same-workspace feature tests, and every behavioral source (nested or flat) uses the
 runner's import-graph-aware `related` mode, fed the changed behavioral source
 paths plus the planner's explicit test files. The planner deliberately chooses full CI for shared
 composition roots, test configuration, dependency manifests, workflow changes,
@@ -1076,9 +1076,9 @@ successor run".
 - Jobs read decisions as `fromJSON(needs.impact.outputs.plan).<key>`
   (`githubPlanOutput()`); only `*_shards` and `db_image` are separate outputs.
 - A directory feature such as `server/services/sprites/` additively selects
-  tests carrying the same feature segment across server and client. The feature
-  name never identifies all consumers (a nested leaf can be imported by a
-  differently named test in another area), so it does not replace traversal.
+  same-workspace tests carrying that feature segment (#17895); cross-workspace
+  edges ride `pathContractTests` and `clientDependencies`. It never identifies
+  all consumers, so it does not replace traversal.
 - Every runner with a changed behavioral source — flat, shared, or nested
   feature — runs one `related` invocation driven by the exact changed source
   paths, combined with the explicit selectors (feature, basename contract,

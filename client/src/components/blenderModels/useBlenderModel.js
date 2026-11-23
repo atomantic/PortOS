@@ -2,6 +2,8 @@ import { useState } from 'react';
 import toast from '../ui/Toast';
 import { useModelLifecycle } from '../../hooks/useModelLifecycle';
 import {
+  addBlenderModelCamera, addBlenderModelDifference, cancelBlenderModelReview, getBlenderModelReviewLog, removeBlenderModelCamera,
+  removeBlenderModelDifference, renderBlenderModelReview, updateBlenderModelCamera, updateBlenderModelDifference,
   addBlenderModelCloseup, attachBlenderModelReferenceImage, createBlenderModelPartsBrief, removeBlenderModelCloseup,
   renderBlenderModelReference, reviewBlenderModelReference, updateBlenderModelReferenceSource,
   buildBlenderModel, cancelBlenderModelBuild, deleteBlenderModelFile, getBlenderModel, getBlenderModelBuildLog, listBlenderModelFiles,
@@ -9,11 +11,14 @@ import {
 } from '../../services/apiBlenderModels.js';
 import { blenderModelBuildBlocker } from '../../lib/blenderModels.js';
 
+const REVIEW_LOG = 'review:';
+
 /** What BlenderFilesTab and BlenderJobsTab read through FilmApiContext, answered by a model's routes. */
 export const BLENDER_MODEL_FILM_API = Object.freeze({
   listMusicVideoBlenderFiles: listBlenderModelFiles,
   getMusicVideoBlenderFile: readBlenderModelFile,
-  getMusicVideoBlenderLog: getBlenderModelBuildLog,
+  getMusicVideoBlenderLog: (id, logFile, options) => (logFile.startsWith(REVIEW_LOG)
+    ? getBlenderModelReviewLog(id, logFile.slice(REVIEW_LOG.length), options) : getBlenderModelBuildLog(id, logFile, options)),
 });
 
 const without = (map, key) => Object.fromEntries(Object.entries(map).filter(([entry]) => entry !== key));
@@ -60,8 +65,10 @@ export default function useBlenderModel(id) {
   };
 
   const cancelBuild = (buildId, key = `cancel:${buildId}`) => run(key, () => cancelBlenderModelBuild(id, buildId, { silent: true }), 'Could not cancel the build');
-  // A build's log is build.log in its folder, read by build id.
-  const jobs = (data?.jobs || []).map((job) => ({ ...job, logFile: job.buildId }));
+  const cancelReview = (buildId, key = `cancelReview:${buildId}`) => run(key, () => cancelBlenderModelReview(id, buildId, { silent: true }), 'Could not cancel the review renders');
+  const cancelOne = (job, key) => (job.kind === 'review' ? cancelReview : cancelBuild)(job.buildId, key);
+  // Logs are read by build id: build.log in its folder, or its review's log.
+  const jobs = (data?.jobs || []).map((job) => ({ ...job, logFile: job.kind === 'review' ? `${REVIEW_LOG}${job.buildId}` : job.buildId }));
 
   return {
     projectId: id, error, loading, refetch, updateData, pending, fileDrafts,
@@ -78,13 +85,11 @@ export default function useBlenderModel(id) {
     // The jobs tab names the job.
     cancelJob: (jobId) => {
       const job = jobs.find((entry) => entry.id === jobId);
-      return job ? cancelBuild(job.buildId, `cancel:${jobId}`) : Promise.resolve({ ok: false, answer: null });
+      return job ? cancelOne(job, `cancel:${jobId}`) : Promise.resolve({ ok: false, answer: null });
     },
-    // One build runs per model, so "all" is the one at work.
-    cancelAll: () => {
-      const job = jobs.find((entry) => entry.status === 'queued' || entry.status === 'running');
-      return job ? cancelBuild(job.buildId, 'cancel:all') : Promise.resolve({ ok: false, answer: null });
-    },
+    // At most one build and one review run per model.
+    cancelAll: () => Promise.all(jobs.filter((entry) => entry.status === 'queued' || entry.status === 'running')
+      .map((job, index) => cancelOne(job, index ? `cancel:${job.id}` : 'cancel:all'))),
     publish: (buildId) => run('publish', () => publishBlenderModelBuild(id, buildId, { silent: true }), 'Could not publish the build'),
     openBuild: (buildId) => run(`open:${buildId}`, () => openBlenderModelBuild(id, buildId, { silent: true }), 'Could not open Blender'),
     update: (patch) => run('update', () => updateBlenderModel(id, patch, { silent: true }), 'Could not save the model'),
@@ -94,6 +99,14 @@ export default function useBlenderModel(id) {
     renderReference: (referenceId, words) => run(`render:${referenceId}`, () => renderBlenderModelReference(id, referenceId, words, { silent: true }), 'Could not queue the render'),
     attachReference: (referenceId, filename) => run(`attach:${referenceId}`, () => attachBlenderModelReferenceImage(id, referenceId, filename, { silent: true }), 'Could not use that image'),
     reviewReference: (referenceId, imageId, body) => run(`review:${imageId}`, () => reviewBlenderModelReference(id, referenceId, imageId, body, { silent: true }), 'Could not save the review'),
+    renderReview: (buildId) => run('review', () => renderBlenderModelReview(id, buildId, { silent: true }), 'Could not start the review renders'),
+    cancelReview,
+    addCamera: (camera) => run('camera', () => addBlenderModelCamera(id, camera, { silent: true }), 'Could not save the camera'),
+    updateCamera: (cameraId, patch) => run('camera', () => updateBlenderModelCamera(id, cameraId, patch, { silent: true }), 'Could not save the camera'),
+    removeCamera: (cameraId) => run('camera', () => removeBlenderModelCamera(id, cameraId, { silent: true }), 'Could not remove the camera'),
+    addDifference: (difference) => run('difference', () => addBlenderModelDifference(id, difference, { silent: true }), 'Could not add the difference'),
+    updateDifference: (differenceId, patch) => run(`difference:${differenceId}`, () => updateBlenderModelDifference(id, differenceId, patch, { silent: true }), 'Could not save the difference'),
+    removeDifference: (differenceId) => run(`difference:${differenceId}`, () => removeBlenderModelDifference(id, differenceId, { silent: true }), 'Could not delete the difference'),
     createPartsBrief: () => run('partsBrief', () => createBlenderModelPartsBrief(id, { silent: true }), 'Could not create the parts brief'),
   };
 }
