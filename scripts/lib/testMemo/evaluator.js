@@ -460,6 +460,10 @@ export function widestPathExpression(tokens, match, index, guarded = false) {
     return { index: start, consumer: null, walk: false, bare: start === index, option: tokens[start - 2].v, member: true };
   }
   const parent = enclosingOpen(tokens, match, start);
+  if (start === index && isPunct(before, '{', ',') && parent !== null && tokens[parent].v === '{'
+    && ['cwd', 'root', 'dir', 'base'].includes(tokens[start]?.v) && isPunct(tokens[start + 1], ',', '}')) {
+    return { index: start, consumer: null, walk: false, bare: true, option: tokens[start].v, member: true };
+  }
   const { consumer, walk } = pathConsumer(tokens, match, parent);
   const keyed = isPunct(before, ':') && (tokens[start - 2]?.t === 'id' || tokens[start - 2]?.t === 's') && isPunct(tokens[start - 3], '{', ',');
   const shorthand = start === index && isPunct(before, '{', ',');

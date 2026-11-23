@@ -451,6 +451,19 @@ describe('floor key', () => {
         expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx'])).toEqual([]);
       });
 
+      // #17893: ES6 shorthand `{ root }` is the same tool-rooting option as `{ root: root }`.
+      it('narrows a shorthand { root } like root: root', () => {
+        const SHORT = "const root = fileURLToPath(new URL('../../client', import.meta.url));\n" + FIXTURE.replace('root: client', 'root');
+        expect(SHORT).toContain('configFile: false, root })');
+        const baseline = recordedKey(tree, served, SHORT);
+        expect(baseline.memoizable).toBe(true);
+        expect(recordedKey(edit('client/src/pages/HtmlPages.jsx'), served, SHORT).key).toBe(baseline.key);
+        expect(recordedKey(edit('client/src/Panel.jsx'), served, SHORT).key).not.toBe(baseline.key);
+        const keys = analyzed(tree, served, SHORT);
+        expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx'])).toEqual([]);
+        expect(relatedTests(keys, ['client/src/Panel.jsx'])).toEqual([test]);
+      });
+
       it('falls back to the whole root without a record, for a root it does not name, a path outside the repository, or a server of the test\'s own', () => {
         const wholeTree = recordedKey(tree, null);
         const fallbacks = {
