@@ -121,6 +121,83 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
   });
 });
 
+// Federation spawn guards. Each test drives the real guard (cosTaskClaim,
+// taskRetryHold are unmocked) and asserts no claim write happens, so bypassing a
+// guard turns the test red.
+describe('prepareAgentSpawn — federation spawn guards', () => {
+  const future = () => new Date(Date.now() + 60_000).toISOString();
+  const setup = (task, reads) => {
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local');
+    getTaskById.mockReset();
+    for (const r of reads) getTaskById.mockResolvedValueOnce(r);
+    getTaskById.mockResolvedValue(reads[reads.length - 1]);
+    updateTask.mockReset().mockResolvedValue({ metadata: {} });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = createAgentSpawnContext(task);
+    context.cleanupOnError = vi.fn(async () => {});
+    return context;
+  };
+  const base = { id: 'task-fed', taskType: 'user', status: 'pending' };
+
+  it('skips a task pinned to another instance before any task read', async () => {
+    const task = { ...base, metadata: { targetInstanceId: 'peer' } };
+    const context = setup(task, [task]);
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('skips a task under another instance\'s live lease before any task read', async () => {
+    const task = { ...base, metadata: { claimedBy: 'peer', leaseExpiresAt: future() } };
+    const context = setup(task, [task]);
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(getTaskById).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // The in-memory task is clean but the persisted record (both reads, so the
+  // changed-task hold doesn't fire first) carries the competing state.
+  it.each([
+    ['pinned to another instance', { targetInstanceId: 'peer' }, 'assigned to another instance'],
+    ['claimed by a peer during dispatch', { claimedBy: 'peer', leaseExpiresAt: future() }, 'claimed by another instance'],
+    ['held for its retry pointer', { retryPendingCleanup: 'agent-old' }, 'retry held pending cleanup'],
+  ])('yields without claiming when the fresh record is %s', async (_label, metadata, reason) => {
+    const persisted = { ...base, metadata };
+    const task = { ...base, metadata: {} };
+    const context = setup(task, [persisted, persisted]);
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(context.cleanupOnError).toHaveBeenCalledWith(reason);
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(context.claimAcquired).toBe(false);
+  });
+
+  it('claims with the fresh record as the expected state when no guard trips', async () => {
+    const persisted = { ...base, metadata: { note: 'x' } };
+    const task = { ...base, metadata: {} };
+    const context = setup(task, [persisted, persisted]);
+    expect(await prepareAgentSpawn(task, context)).toBe(context);
+    expect(updateTask).toHaveBeenCalledWith('task-fed', { metadata: expect.objectContaining({ claimedBy: 'local' }) }, 'user',
+      expect.objectContaining({ expectedStatus: 'pending', expectedTask: expect.objectContaining({ metadata: persisted.metadata }) }));
+    expect(context.claimAcquired).toBe(true);
+  });
+});
+
+describe('createAgentSpawnContext — cleanupOnError claim release', () => {
+  it('releases the acquired claim via buildRelease and skips the write when none was acquired', async () => {
+    releaseAppReviewMarker.mockResolvedValue();
+    updateTask.mockReset().mockResolvedValue({});
+    const context = createAgentSpawnContext({ id: 'task-rel', taskType: 'user', metadata: {} });
+    await context.cleanupOnError('boom');
+    expect(updateTask).not.toHaveBeenCalled();
+
+    context.claimAcquired = true;
+    await context.cleanupOnError('boom');
+    expect(updateTask).toHaveBeenCalledWith('task-rel',
+      { metadata: { claimedBy: undefined, claimedAt: undefined, leaseExpiresAt: undefined } }, 'user');
+  });
+});
+
 describe('createAgentSpawnContext — failed bookkeeping writes', () => {
   it('logs a rejected block write and still cleans up and emits agent:error', async () => {
     updateTask.mockReset().mockRejectedValue(new Error('store down'));

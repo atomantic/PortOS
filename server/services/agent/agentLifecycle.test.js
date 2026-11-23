@@ -524,7 +524,6 @@ function trackedCompletionPreamble() {
 // body and can't be reached without mocking its 40+ imports. Anchored on
 // `runAgentSpawn` (the guarded body extracted from spawnAgentForTask, #2548).
 
-const _RUN_SPAWN_START = AGENT_SPAWN_OWNER_SRC.indexOf('export async function prepareAgentSpawn');
 const RUN_SPAWN_BODY = AGENT_SPAWN_OWNER_SRC;
 
 describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', () => {
@@ -687,7 +686,8 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
 // Every spawned agent records the producing machine's federation identity, and
 // the cross-instance claim must be acquired (and re-checked against the fresh
 // record) BEFORE the agent is registered — otherwise two peers spawn for the
-// same task. These orderings live inside runAgentSpawn with no behavioral seam.
+// same task. The guard orderings are covered behaviorally in
+// agentSpawnPreparation.test.js; only the dispatch-side stamps are grepped here.
 describe('runAgentSpawn source — instance provenance + claim ordering (#1563)', () => {
   it('imports the identity resolver from the instance identity leaf', () => {
     expect(AGENT_SPAWN_PREPARATION_SRC).toMatch(
@@ -695,78 +695,8 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     );
   });
 
-  it('resolves instanceId via ensureInstanceId() before registering the agent', () => {
-    const resolveIdx = RUN_SPAWN_BODY.indexOf('await ensureInstanceId()');
-    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, buildAgentRegistration({');
-    expect(resolveIdx, '`await ensureInstanceId()` must exist inside runAgentSpawn').toBeGreaterThan(-1);
-    expect(registerIdx, '`registerAgent(...)` must exist inside runAgentSpawn').toBeGreaterThan(-1);
-    expect(resolveIdx, 'instanceId must be resolved BEFORE registerAgent is called').toBeLessThan(registerIdx);
-  });
-
-  it("refuses to spawn a task under another instance's live lease (claim guard)", () => {
-    const guardIdx = RUN_SPAWN_BODY.indexOf('isClaimableBy(task.metadata, instanceId)');
-    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, buildAgentRegistration({');
-    expect(guardIdx, 'must gate the spawn on isClaimableBy').toBeGreaterThan(-1);
-    expect(guardIdx, 'the claim guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
-  });
-
-  // #4520: a task pinned to a specific federated instance runs ONLY there. The
-  // pin is a standing decision, so it gates the spawn ahead of the opportunistic
-  // lease check — and is re-checked against the fresh record, because a
-  // reassignment can sync in between the dequeue and the claim.
-  it('refuses to spawn a task pinned to another instance, before the lease check', () => {
-    const targetIdx = RUN_SPAWN_BODY.indexOf('isTargetedElsewhere(task.metadata, instanceId)');
-    const leaseIdx = RUN_SPAWN_BODY.indexOf('isClaimableBy(task.metadata, instanceId)');
-    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, buildAgentRegistration({');
-    expect(targetIdx, 'must gate the spawn on isTargetedElsewhere').toBeGreaterThan(-1);
-    expect(targetIdx, 'the pin guard must run BEFORE the lease guard').toBeLessThan(leaseIdx);
-    expect(targetIdx, 'the pin guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
-  });
-
-  it('re-checks the pin against the freshest task, before claiming it', () => {
-    const rereadIdx = RUN_SPAWN_BODY.indexOf('await getTaskById(task.id)');
-    const recheckIdx = RUN_SPAWN_BODY.indexOf('isTargetedElsewhere(freshTask.metadata, instanceId)');
-    const acquireIdx = RUN_SPAWN_BODY.indexOf('metadata: buildClaim(instanceId)');
-    expect(recheckIdx, 'must re-check the pin against the fresh metadata').toBeGreaterThan(rereadIdx);
-    expect(recheckIdx, 'the fresh pin re-check must precede taking the claim').toBeLessThan(acquireIdx);
-  });
-
   it('stamps the federation claim into the in_progress task update', () => {
     expect(AGENT_SPAWN_DISPATCH_SRC).toMatch(/\.\.\.buildClaim\(instanceId\)/);
-  });
-
-  it('acquires the claim (updateTask with buildClaim) BEFORE registering the agent', () => {
-    const acquireIdx = RUN_SPAWN_BODY.indexOf('metadata: buildClaim(instanceId)');
-    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, buildAgentRegistration({');
-    expect(acquireIdx, 'must acquire the claim via updateTask(buildClaim) up front').toBeGreaterThan(-1);
-    expect(acquireIdx, 'claim must be acquired BEFORE registerAgent').toBeLessThan(registerIdx);
-  });
-
-  it('re-reads the freshest task and yields if claimed during dispatch', () => {
-    const rereadIdx = RUN_SPAWN_BODY.indexOf('await getTaskById(task.id)');
-    const recheckIdx = RUN_SPAWN_BODY.indexOf('!isClaimableBy(freshTask.metadata, instanceId)');
-    expect(rereadIdx, 'must re-read the freshest persisted task before claiming').toBeGreaterThan(-1);
-    expect(recheckIdx, 'must re-check claimability against the fresh metadata').toBeGreaterThan(rereadIdx);
-  });
-
-  // The hold keeps this instance's OWN lease (updateTask only releases it when a
-  // status other than in_progress is written), so the claim re-check above passes
-  // for a held task. A `task:ready` emitted before the failure — or a stale
-  // generator snapshot — would otherwise spawn the retry while the pointer naming
-  // its predecessor's branch is still being resolved (#3373).
-  it('refuses to spawn a task whose retry is held for its resume pointer', () => {
-    const rereadIdx = RUN_SPAWN_BODY.indexOf('await getTaskById(task.id)');
-    const holdIdx = RUN_SPAWN_BODY.indexOf('isRetryHeld(freshTask.metadata)');
-    const registerIdx = RUN_SPAWN_BODY.indexOf('registerAgent(agentId, task.id, buildAgentRegistration({');
-    expect(holdIdx, 'must check the retry hold on the fresh metadata').toBeGreaterThan(rereadIdx);
-    expect(holdIdx, 'the hold guard must run BEFORE registering the agent').toBeLessThan(registerIdx);
-  });
-
-  it('releases the claim on a failed-setup early exit (cleanupOnError)', () => {
-    const fnStart = AGENT_SPAWN_PREPARATION_SRC.indexOf('context.cleanupOnError = async');
-    const fnBody = AGENT_SPAWN_PREPARATION_SRC.slice(fnStart, fnStart + 1200);
-    expect(fnBody.indexOf('context.claimAcquired'), 'cleanup owner must gate on claimAcquired').toBeGreaterThan(-1);
-    expect(fnBody.indexOf('buildRelease()'), 'cleanup owner must release the claim via buildRelease').toBeGreaterThan(-1);
   });
 
   it('stamps instanceId into the registerAgent metadata', () => {
