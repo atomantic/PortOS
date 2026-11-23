@@ -102,7 +102,7 @@ This contract overrides narrower slice-selection or ranking advice in the missio
    Reachability check, before ranking: apply the section below to every candidate.
 ${category === 'security' ? `   Security assessment: require evidence of attacker control, a reachable sink and unauthorized impact, including configuration and existing controls. Distinguish accidental owner-input reliability harm, conditional exposure, unconfirmed candidates and justified dispositions. Do not count rejected or unconfirmed candidates as verified security defects. Preserve defenses against compromised dependencies, external content and browser-origin access to local services; trace and reuse existing screening only where the actual path invokes it. For PortOS, follow docs/SECURITY_RISK_ASSESSMENT.md, search prior dispositions and record conditions for reevaluation.` : ''}
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
-5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 no material defect found in the slice after real inspection; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
+5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 target met / high quality, no material defect found after real inspection; 85–89 healthy with minor polish; 70–84 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. The pragmatic target band is 85–95: do not chase 100/100 through speculative hardening, defensive layers or extra abstractions, and do not deduct points for absent hardening or ceremony without demonstrated harm. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
@@ -241,17 +241,26 @@ export const QUALITY_WINDOW_RUNS = 5;
 // hedged assessment moves the figure half as far as a confident one.
 const CONFIDENCE_WEIGHT = Object.freeze({ high: 1, medium: 0.5 });
 
+/** A score at or above this is healthy; below it the category has real debt. */
+export const QUALITY_HEALTHY_THRESHOLD = 85;
+/** The pragmatic target band: reaching it means done, chasing 100 invites over-engineering. */
+export const QUALITY_TARGET_BAND = Object.freeze({ min: 85, max: 95 });
+/** A run's weight halves every this many days, so remediated pre-fix runs stop pinning the score. */
+export const QUALITY_RECENCY_HALF_LIFE_DAYS = 14;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Whether one run's parsed report qualifies for the category window: fresh, broad signal scan, not hedged, scored. */
 function qualifiesForWindow(run, now) {
   return run.valid && isFreshAssessment(run.record.assessedAt, now) && run.report.coverage === 'broad'
     && run.report.confidence !== 'low' && qualityRunScore(run.report) !== null;
 }
 
-/** Confidence-weighted mean of the window's run scores, rounded; `null` for an empty window. */
-function windowScore(window) {
+/** Confidence- and recency-weighted mean of the window's run scores, rounded; `null` for an empty window. */
+function windowScore(window, now = Date.now()) {
   if (!window.length) return null;
   const weighted = window.reduce((acc, run) => {
-    const weight = CONFIDENCE_WEIGHT[run.report.confidence];
+    const ageDays = Math.max(0, (now - Date.parse(run.record.assessedAt)) / DAY_MS);
+    const weight = CONFIDENCE_WEIGHT[run.report.confidence] * Math.pow(0.5, ageDays / QUALITY_RECENCY_HALF_LIFE_DAYS);
     return { sum: acc.sum + weight * qualityRunScore(run.report), weight: acc.weight + weight };
   }, { sum: 0, weight: 0 });
   return Math.round(weighted.sum / weighted.weight);
@@ -260,7 +269,7 @@ function windowScore(window) {
 /**
  * Roll each category's recent measurements into the app's quality summary.
  *
- * A category's `score` is the confidence-weighted mean of its newest
+ * A category's `score` is the confidence- and recency-weighted mean (14-day half-life) of its newest
  * `QUALITY_WINDOW_RUNS` qualifying runs (fresh, broad coverage, medium/high
  * confidence, scored); `window` reports how many runs fed it and the worst
  * severity any of them found. One run's slice score is slice noise — a 20-point
@@ -321,7 +330,7 @@ export function summarizeAppQuality(records = [], now = Date.now(), { inapplicab
     const { version: _version, category: _category, score: _score, sliceScore: _sliceScore, slice, ...latestFields } = latest?.report || {};
     const runScore = valid ? qualityRunScore(latest.report) : null;
     return { id, label: definition.label, ...(valid ? latestFields : { coverage: 'unavailable' }),
-      score: window.length ? windowScore(window) : runScore, runScore, slice: valid ? slice ?? null : null,
+      score: window.length ? windowScore(window, now) : runScore, runScore, slice: valid ? slice ?? null : null,
       window: { runs: window.length, worstSeverity: window.length ? Math.max(...window.map(run => run.report.worstSeverity)) : null },
       assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale, contributes, applicable, inapplicableReason,
       ...(Object.hasOwn(CONSOLIDATED_AUDIT_DOMAINS, id) ? { members: domainMemberSeries(id, runs, now) } : {}) };
