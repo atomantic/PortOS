@@ -72,6 +72,10 @@ async function renewLocked(httpsServer) {
 
   const certMtime = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
   if (certMtime <= mtimeBefore) return;
+  if (!existsSync(KEY_PATH)) {
+    console.log(`⚠️ cert renewer: key file missing after renewal, skipping hot-swap`);
+    return;
+  }
 
   httpsServer.setSecureContext({
     cert: readFileSync(CERT_PATH),
@@ -88,15 +92,20 @@ async function renewLocked(httpsServer) {
   });
 }
 
+const NOOP = () => {};
+
+// Returns a teardown that stops the daily timer (a no-op when nothing was scheduled).
 export function initCertRenewer(httpsServer) {
-  if (!httpsServer || typeof httpsServer.setSecureContext !== 'function') return;
+  if (!httpsServer || typeof httpsServer.setSecureContext !== 'function') return NOOP;
   const meta = readCertMeta(META_PATH);
-  if (!meta || meta.mode !== 'tailscale') return;
+  if (!meta || meta.mode !== 'tailscale') return NOOP;
 
   renewOnce(httpsServer).catch(err => console.error(`❌ cert renewer initial run: ${err.message}`));
-  setInterval(() => {
+  const timer = setInterval(() => {
     renewOnce(httpsServer).catch(err => console.error(`❌ cert renewer: ${err.message}`));
-  }, RENEW_INTERVAL_MS).unref();
+  }, RENEW_INTERVAL_MS);
+  timer.unref();
 
   console.log(`🔒 cert renewer: scheduled daily renewal for ${meta.hostname}`);
+  return () => clearInterval(timer);
 }
