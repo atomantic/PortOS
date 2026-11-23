@@ -21,6 +21,25 @@ const exec = promisify(execFile);
 const jobs = new Map();
 const active = admittedRenderMap('music-video-dcp', { noun: 'cinema package export', link: id => `/music-video/${encodeURIComponent(id)}` });
 const failure = (message, code = 'DCP_UNAVAILABLE', status = 409) => new ServerError(message, { status, code });
+// Present only while a build is in flight: a dcp-* dir still carrying it after a
+// restart is an abandoned build. Removed before publication so a record-save
+// failure keeps the (valid) package that the error message points the user to.
+const DCP_BUILDING_MARKER = '.dcp-building';
+
+// Boot recovery: no DCP build survives a restart. Only marker-bearing dirs are
+// deleted; committed and publication-failed packages never carry the marker.
+export async function sweepAbandonedDcpBuilds() {
+  const entries = await readdir(PATHS.videos, { withFileTypes: true }).catch(err => {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('dcp-')) continue;
+    const dir = join(PATHS.videos, entry.name);
+    if (await stat(join(dir, DCP_BUILDING_MARKER)).then(() => true, () => false)) await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export const isDcpActive = id => active.has(id);
 export const activeDcp = id => {
   const jobId = active.get(id);
@@ -115,6 +134,7 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
       let committed = false;
       let publicationAttempted = false;
       try {
+        await writeFile(join(root, DCP_BUILDING_MARKER), '');
         const sourceCopy = join(root, `source${entry.filename.slice(entry.filename.lastIndexOf('.'))}`);
         broadcastSse(job, { type: 'progress', stage: 'Copying and checking the source' });
         const before = await dcpSourceDigest(sourcePath, job.abort.signal);
@@ -169,6 +189,7 @@ export async function startDcp(projectId, { grade, renderHistoryId, sourceSha256
           status: verify.ok && reportText && !outputOverflow ? 'verified' : 'verification-failed', hasWarnings: /^Warning:/m.test(verifierOutput), createdAt: new Date().toISOString() };
         if (job.abort.signal.aborted) throw new Error('Export cancelled');
         job.committing = true;
+        await rm(join(root, DCP_BUILDING_MARKER), { force: true });
         publicationAttempted = true;
         await withBackupAssetPublication(() => mutateProjectRecord(projectId, current => ({ project: { ...current, dcpExports: [...(current.dcpExports || []), artifact] } }))).catch(() => { active.markUnsettled(projectId); throw new Error(`Could not save the package record. The output was retained at ${root}; inspect it before removing it.`); });
         committed = true;
