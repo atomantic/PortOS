@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { imageToRow, videoToRow } from './logic.js';
+import { imageToRow, videoToRow, extractImageProvenanceRefs } from './logic.js';
 
 describe('imageToRow', () => {
   it('builds an image:<filename> row with the metadata stored verbatim', () => {
@@ -16,6 +16,7 @@ describe('imageToRow', () => {
       kind: 'image',
       ref: 'abc.png',
       data: item,
+      provenanceRefs: [],
       createdAt: '2026-01-02T03:04:05.000Z',
     });
   });
@@ -43,6 +44,7 @@ describe('videoToRow', () => {
       kind: 'video',
       ref: 'job-1',
       data: entry,
+      provenanceRefs: [],
       createdAt: '2026-01-02T03:04:05.000Z',
     });
   });
@@ -53,5 +55,28 @@ describe('videoToRow', () => {
     expect(videoToRow(null)).toBeNull();
     expect(videoToRow({ filename: 'x.mp4' })).toBeNull();
     expect(videoToRow({ id: '' })).toBeNull();
+  });
+});
+
+describe('extractImageProvenanceRefs', () => {
+  it('collects distinct filenames from all six provenance sources and ignores malformed values', () => {
+    expect(extractImageProvenanceRefs({
+      cleanedFrom: 'a.png', upscaledFrom: 'b.png', initImageFilename: 'c.png',
+      referenceImageFilenames: ['d.png', 'a.png', '', 7, null],
+      visualConditioning: { assets: [{ filename: 'e.png' }, { filename: '' }, null] },
+      requestedInputImages: [{ filename: 'f.png' }, { role: 'x' }],
+      omittedInputImages: [{ filename: 'ignored.png' }],
+    }).sort()).toEqual(['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png']);
+  });
+
+  it('returns [] for absent or malformed containers', () => {
+    expect(extractImageProvenanceRefs(null)).toEqual([]);
+    expect(extractImageProvenanceRefs({
+      referenceImageFilenames: { 'a.png': true }, visualConditioning: { assets: { filename: 'a.png' } }, requestedInputImages: 'a.png', cleanedFrom: 5,
+    })).toEqual([]);
+  });
+
+  it('is attached by imageToRow', () => {
+    expect(imageToRow({ filename: 'x.png', cleanedFrom: 'src.png' }).provenanceRefs).toEqual(['src.png']);
   });
 });

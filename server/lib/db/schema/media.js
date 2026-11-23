@@ -231,9 +231,35 @@ export const mediaDdl = [
       kind VARCHAR(16) NOT NULL,
       ref TEXT NOT NULL,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      provenance_refs TEXT[] NOT NULL DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       indexed_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+    // provenance_refs (#17754): distinct filenames an image's sidecar names as
+    // provenance, so listRelatedImages hits a GIN index instead of scanning the
+    // gallery. Upgrade path: add nullable, backfill (mirrors
+    // extractImageProvenanceRefs in mediaAssetIndex/logic.js), then lock down.
+    // The backfill is gated on IS NULL, so it is a no-op after the first boot.
+    `ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS provenance_refs TEXT[]`,
+    `UPDATE media_assets SET provenance_refs = COALESCE((
+       SELECT array_agg(DISTINCT v) FROM (
+         SELECT CASE WHEN jsonb_typeof(data->'cleanedFrom') = 'string' THEN data->>'cleanedFrom' END AS v
+         UNION ALL SELECT CASE WHEN jsonb_typeof(data->'upscaledFrom') = 'string' THEN data->>'upscaledFrom' END
+         UNION ALL SELECT CASE WHEN jsonb_typeof(data->'initImageFilename') = 'string' THEN data->>'initImageFilename' END
+         UNION ALL SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(data->'referenceImageFilenames') = 'array'
+           THEN data->'referenceImageFilenames' ELSE '[]'::jsonb END)
+         UNION ALL SELECT asset->>'filename' FROM jsonb_array_elements(CASE
+           WHEN jsonb_typeof(data #> '{visualConditioning,assets}') = 'array'
+           THEN data #> '{visualConditioning,assets}' ELSE '[]'::jsonb END) AS asset
+         UNION ALL SELECT asset->>'filename' FROM jsonb_array_elements(CASE
+           WHEN jsonb_typeof(data->'requestedInputImages') = 'array'
+           THEN data->'requestedInputImages' ELSE '[]'::jsonb END) AS asset
+       ) AS refs WHERE v IS NOT NULL AND v <> ''
+     ), '{}') WHERE provenance_refs IS NULL AND kind = 'image'`,
+    `UPDATE media_assets SET provenance_refs = '{}' WHERE provenance_refs IS NULL`,
+    `ALTER TABLE media_assets ALTER COLUMN provenance_refs SET DEFAULT '{}'`,
+    `ALTER TABLE media_assets ALTER COLUMN provenance_refs SET NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_media_assets_provenance_refs ON media_assets USING gin (provenance_refs) WHERE kind = 'image'`,
     // created_at DESC is the gallery/history sort order; kind narrows
     // images-vs-videos. A composite (kind, created_at DESC) serves both.
     `CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC)`,
