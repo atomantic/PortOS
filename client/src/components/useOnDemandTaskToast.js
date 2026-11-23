@@ -1,0 +1,246 @@
+/**
+ * Toasts when a user-triggered on-demand task run found no work (parked).
+ *
+ * Use when: Wire once high in the tree so an explicit "Run" that parks isn't a silent no-op.
+ */
+
+import { createElement, useEffect } from 'react';
+import MaintenanceRunStatus, { maintenanceRunProgress } from './cos/tabs/schedule/MaintenanceRunStatus';
+import toast from './ui/Toast';
+import socket from '../services/socket';
+import { useSocketSubscription } from '../hooks/useSocketSubscription';
+import { timeUntil } from '../utils/formatters';
+import { formatLiReason } from '../utils/layeredIntelligenceReasons';
+import { formatSkipCauses } from '../lib/perpetualSkipCauses';
+
+// Humanize a perpetual work-detector park reason for a user-facing toast. The
+// raw reason strings are the same ones surfaced in the CoS → Schedule tab; here
+// they get a plain-language gloss so an explicit "Run" that found nothing tells
+// the user WHAT it checked rather than an opaque token.
+const PARK_REASON_LABELS = {
+  'no-actionable-issues': 'no claimable issues',
+  'no-open-issues': 'no open issues',
+  'no-authored-issues': 'open issues exist, but none match the author filter — set it to "any"',
+  'owner-is-org': 'the "owner" filter matches an org, which can\'t author issues — set it to "self" or "any"',
+  'owner-is-group': 'the "owner" filter matches a group, which can\'t author issues — set it to "self" or "any"',
+  'no-in-flight-branches': 'no branches in flight',
+  'branches-held-by-live-owners': 'the only branches left belong to sessions still running — nothing to finish',
+  'merged-branches-held-back': 'every remaining branch is already merged and waiting on a protected worktree',
+  'no-zombie-issues': 'no stale issues to reconcile',
+  'no-actionable-plan-items': 'no unblocked PLAN items',
+  'claim-markers-held': 'local cleanup completed; issue reservation ownership remains unverified',
+  'branches-blocked': 'remaining branches or worktrees need attention',
+  'owner-state-unavailable': 'ownership state could not be read; reconciliation is paused to protect active work',
+  'no-progress': 'remaining items were attempted but did not advance',
+  'drain-cap': 'paused after reaching this run’s dispatch limit',
+  'no-detector': 'no work detector for this task'
+};
+
+// pr-reviewer's on-demand skip reasons (server: runPrReviewerSecurityPreflight in
+// cosTaskGenerator.js). An unlisted code falls back to the raw string rather than
+// the generic "nothing to do" — the reason IS the actionable detail here, since a
+// per-PR "Review this PR" trigger names a specific PR the maintainer wants reviewed.
+const PR_REVIEWER_REASON_LABELS = {
+  'parked': 'paused after repeated failures — it will retry on its normal cadence',
+  'no-external-open-prs': 'no open external pull requests to review',
+  'target-pull-request-not-reviewable': "that pull request isn't eligible right now (not open against the default branch, or authored by a trusted collaborator)",
+  'security-scan-report-pending': 'a security scan for this pull request is already in progress',
+  'security-guard-process-failed': 'Prompt Guard stopped before an agent started. Open Models → LLMs → Abuse Guard to check or repair setup, then retry Untrusted:Review. The failure record is in CoS → Tasks',
+  'security-guard-not-ready': "the local model-abuse classifier (Settings → Models → LLMs → Abuse Guard) isn't ready — finish or repair its setup, then try again",
+};
+
+// Maintenance also records ordinary queue waits in `reason`. Only these exact
+// server messages are routine; unfamiliar reasons must remain actionable.
+function maintenanceNeedsAttention(run) {
+  if (run.status === 'stopped') return run.reason !== 'stopped by the user';
+  if (run.status !== 'running') return false;
+  const active = run.active;
+  if (active?.status === 'blocked') return true;
+  if (!run.reason) return false;
+  if (active?.taskId && ['pending', 'in_progress'].includes(active.status)
+    && run.reason === `waiting for ${active.status.replace('_', ' ')} task ${active.taskId}`) return false;
+  if (active?.requestId && (run.reason === `waiting for request preparation ${active.requestId}`
+    || run.reason === `waiting for the CoS daemon to accept request ${active.requestId} (${active.taskType})`)) return false;
+  return true;
+}
+
+/**
+ * Global subscriber that toasts when a user-initiated on-demand task run
+ * produced no work. The server emits `cos:schedule:on-demand-empty` ONLY for
+ * explicit "Run" triggers (never background parks), so this fires exactly when
+ * the user is waiting for feedback and otherwise gets a silent no-op. Mount once
+ * high in the tree (Layout), alongside useErrorNotifications.
+ */
+export function useOnDemandTaskToast() {
+  useSocketSubscription('cos');
+
+  useEffect(() => {
+    const maintenanceStates = new Map();
+    const handleMaintenance = run => {
+      if (run.historyOnly) return;
+      const { current, total } = maintenanceRunProgress(run);
+      const label = `Maintenance · ${current}/${total} · ${run.status}`;
+      const signature = JSON.stringify([run.status, run.completed, run.active, run.reason]);
+      const previous = maintenanceStates.get(run.id);
+      if (previous?.signature === signature) return;
+      const attention = maintenanceNeedsAttention(run);
+      const attentionKey = attention ? JSON.stringify([run.status, run.active?.status === 'blocked', run.reason]) : null;
+      const state = { status: run.status, signature, attentionKey, submissionShown: previous?.submissionShown || false, toastId: previous?.toastId };
+      maintenanceStates.set(run.id, state);
+      // Bound settled history without forgetting a still-running submission or
+      // a dismissed hold: later progress must not resurrect either notice.
+      const settled = [...maintenanceStates].filter(([, entry]) => entry.status !== 'running' && !entry.attentionKey);
+      if (settled.length > 100) {
+        const [id, entry] = settled.find(([id]) => id !== run.id);
+        if (entry.toastId) toast.dismiss(entry.toastId);
+        maintenanceStates.delete(id);
+      }
+      if (attention && previous?.attentionKey === attentionKey) return;
+      if (run.status === 'running' && !attention) {
+        if (previous?.attentionKey) toast.dismiss(previous.toastId);
+        // This is a submission receipt, not the live run view. Replacing it on
+        // progress would restart Toast's timer or resurrect a dismissed notice.
+        if (state.submissionShown) return;
+        state.submissionShown = true;
+      }
+      const toastId = run.status === 'running' ? `maintenance-${run.id}` : `maintenance-${run.id}-${run.updatedAt}`;
+      if (previous?.toastId && previous.toastId !== toastId) toast.dismiss(previous.toastId);
+      state.toastId = toastId;
+      const onDismiss = () => toast.dismiss(toastId);
+      toast(() => createElement(MaintenanceRunStatus, { run, onDismiss }), {
+        id: toastId, label, duration: attention ? Infinity : run.status === 'running' ? 5000 : 8000,
+      });
+    };
+    socket.on('cos:maintenance:updated', handleMaintenance);
+
+    const handleEmpty = (data) => {
+      const task = data?.taskType || 'task';
+      const scope = data?.appName ? ` for ${data.appName}` : '';
+
+      // A perpetual task that did NOT park ⇒ the detector couldn't complete (a
+      // gh/glab probe failure). Never claim "nothing to do" — the check didn't
+      // finish. When the server classified the forge CLI as broken in a way that
+      // will NOT clear on its own (not installed / not authenticated / blocked
+      // outbound), say THAT and give the remedy — "try again shortly" is a dead
+      // end when every future tick fails identically.
+      if (data?.outcome === 'transient') {
+        const forge = data?.forge;
+        toast(forge?.remedy
+          ? `${task}${scope}: the ${forge.cli} check couldn't run — ${forge.remedy}`
+          : `${task}${scope}: couldn't complete the check just now (a transient forge/network issue) — try again shortly.`, {
+          duration: forge?.remedy ? 12000 : 7000,
+          icon: '⚠️'
+        });
+        return;
+      }
+
+      // A non-perpetual task produced no task ⇒ genuinely nothing to do right
+      // now (not a failure, not a park). Keep it calm and neutral — UNLESS the
+      // server surfaced an actionable reason (e.g. Layered Intelligence pinned to
+      // an api-only provider that can't drive the reasoning agent). Then say WHY
+      // and warn, so a misconfiguration isn't hidden behind "nothing to do".
+      if (data?.outcome === 'idle') {
+        if (data?.taskType === 'layered-intelligence' && data?.reason) {
+          toast(`${task}${scope}: ${formatLiReason({ action: 'skipped', reason: data.reason })}.`, {
+            duration: 8000,
+            icon: '⚠️'
+          });
+          return;
+        }
+        if (data?.taskType === 'pr-reviewer' && data?.reason) {
+          toast(`${task}${scope}: ${PR_REVIEWER_REASON_LABELS[data.reason] || data.reason}.`, {
+            duration: 8000,
+            icon: '⚠️'
+          });
+          return;
+        }
+        // error-log-triage's deterministic pass IS the run; the reason is its
+        // result line.
+        if (data?.taskType === 'error-log-triage' && data?.reason) {
+          toast(`${task}: ${data.reason}.`, { duration: 7000, icon: '🩺' });
+          return;
+        }
+        toast(`${task}${scope}: re-checked now — nothing to do right now.`, {
+          duration: 6000,
+          icon: '💤'
+        });
+        return;
+      }
+
+      const reasonLabel = PARK_REASON_LABELS[data?.parkReason] || data?.parkReason || 'nothing to do';
+
+      // Detector breakdown ({ open, inFlight, filtered }) explains WHY an
+      // apparently-full queue is empty — the common case being issues already
+      // shipped whose stale claim branches still count as in-flight. Only shown
+      // when the detector reported a denominator (open > 0).
+      const c = data?.counts;
+      let countSuffix = '';
+      // branch-reconcile's breakdown instead names merged branches whose worktree
+      // a protection guard still holds — the park is a wait, not an empty repo, so
+      // the count has to show or the toast reads as "nothing exists".
+      if (c && (c.heldBranches > 0 || c.heldDetached > 0 || c.heldClaims > 0)) {
+        const parts = [];
+        if (c.heldBranches) parts.push(`${c.heldBranches} branch(es) held`);
+        if (c.heldDetached) parts.push(`${c.heldDetached} detached worktree(s) held`);
+        if (c.heldClaims) parts.push(`${c.heldClaims} issue reservation(s) unverified`);
+        if (c.unchangedBranches) parts.push(`${c.unchangedBranches} branch(es) still blocked`);
+        const causes = formatSkipCauses(data?.skipCauses);
+        countSuffix = ` (${parts.join(', ')}${causes ? ` — ${causes}` : ''})`;
+      } else if (c?.unchangedBranches > 0) {
+        countSuffix = ` (${c.unchangedBranches} branch(es) still blocked)`;
+      } else if (c && typeof c.heldBackMerged === 'number' && c.heldBackMerged > 0) {
+        countSuffix = ` (${c.heldBackMerged} merged branch(es) held back)`;
+      } else if (c && typeof c.open === 'number' && c.open > 0) {
+        const parts = [];
+        if (c.inFlight) parts.push(`${c.inFlight} in-flight`);
+        // Per-cause attribution ("49 needs-input, 17 blocked") — the answer to
+        // "why is nothing claimable when 88 issues are open". Replaces the bare
+        // "N filtered" when present, since the causes ARE the filtered detail.
+        // `in-flight` is excluded: the counts breakdown already shows it, and
+        // the detector includes it in the map as informational only.
+        const causes = formatSkipCauses(data?.skipCauses, 3, 'in-flight');
+        if (causes) parts.push(causes);
+        else if (c.filtered) parts.push(`${c.filtered} filtered`);
+        const detail = parts.length ? ` — ${parts.join(', ')}` : '';
+        countSuffix = ` (0 of ${c.open} open${detail})`;
+      }
+
+      const recheckSuffix = data?.nextAutoRecheckAt
+        ? ` Next auto-recheck ${timeUntil(data.nextAutoRecheckAt, 'soon')}.`
+        : '';
+
+      // Re-checked live on this trigger — say so, since the confusing case is a
+      // "parked until <future>" line that reads like a cached refusal.
+      toast(`${task}${scope}: re-checked now — ${reasonLabel}${countSuffix}.${recheckSuffix}`, {
+        duration: 7000,
+        icon: '💤'
+      });
+    };
+
+    // A PROGRAMMATIC scheduled handler (universe bible descriptions/images)
+    // finishes its work inside the server — no agent task appears in the CoS
+    // queue for the user to watch — so its outcome is the only feedback the Run
+    // Now button can produce. `dispatched: false` is a decline, not a failure
+    // (nothing to do, or a setting that needs picking), so it stays calm and
+    // always names the handler's own reason rather than a generic gloss.
+    const handleHandled = (data) => {
+      const task = data?.taskType || 'task';
+      if (data?.dispatched) {
+        toast(data.summary || `${task}: done.`, { duration: 7000, icon: '✅' });
+        return;
+      }
+      toast(`${task}: ${data?.reason || 'nothing to do right now'}.`, { duration: 7000, icon: '💤' });
+    };
+
+    socket.on('cos:schedule:on-demand-empty', handleEmpty);
+    socket.on('cos:schedule:on-demand-handled', handleHandled);
+    return () => {
+      socket.off('cos:maintenance:updated', handleMaintenance);
+      socket.off('cos:schedule:on-demand-empty', handleEmpty);
+      socket.off('cos:schedule:on-demand-handled', handleHandled);
+      for (const state of maintenanceStates.values()) {
+        if (state.toastId) toast.dismiss(state.toastId);
+      }
+    };
+  }, []);
+}

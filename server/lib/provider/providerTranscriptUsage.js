@@ -28,6 +28,8 @@
  * written), and ignore unknown fields so a CLI update can't break them.
  */
 
+import { createReadStream } from 'fs';
+import { createInterface } from 'readline';
 import { GROK_LONG_CONTEXT_PROMPT_TOKENS } from '../modelPricing.js';
 
 /**
@@ -848,19 +850,60 @@ function looksCumulative(usages) {
  *   billed turn, fall back to chat_history" from "it did, and this window's
  *   share of it is legitimately zero".
  */
-export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = null } = {}) {
-  const totals = grokTotals();
-  const byModel = new Map();
-  const counted = [];
-  const longTurns = [];
-  const fastTurns = [];
-  let sessionId = null;
+export function parseGrokTurns(jsonlText, opts = {}) {
+  const { turns, sessionId } = extractGrokTurns(parseJsonLines(jsonlText));
+  return billGrokTurns(applyGrokDeltas(turns), sessionId, opts);
+}
 
-  // Every turn_completed in file order — the whole sequence is needed before
-  // any of it can be billed, because the cumulative test is a property of the
-  // sequence, not of one line.
+/**
+ * Stream a grok `updates.jsonl` and keep only its `turn_completed` lines,
+ * skipping the (vastly more numerous) streaming-delta lines before JSON.parse
+ * so neither the file text nor the parsed deltas are ever held in memory.
+ * Resolves to `{ turns, sessionId }` with each turn's `billed` share applied,
+ * or null when the file cannot be read.
+ */
+export async function readGrokTurnsFromFile(path) {
+  const lines = [];
+  const rl = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+  const failed = await (async () => {
+    for await (const line of rl) {
+      if (!line.includes('"turn_completed"')) continue;
+      lines.push(line);
+    }
+    return false;
+  })().catch(() => true);
+  if (failed) return null;
+  const kept = parseJsonLines(lines.join('\n'));
+  const { turns, sessionId } = extractGrokTurns(kept);
+  return { turns: applyGrokDeltas(turns), sessionId };
+}
+
+/** Streaming twin of `parseGrokTurns` for a file on disk; null when unreadable. */
+export async function parseGrokTurnsFromFile(path, opts = {}) {
+  const read = await readGrokTurnsFromFile(path);
+  return read ? billGrokTurns(read.turns, read.sessionId, opts) : null;
+}
+
+/**
+ * One pass over a session's turns: bucket by UTC day (`dayOf(ms)`, ≥ `floorMs`)
+ * and bill each day's turns, returning `[day, { byModel }]` pairs.
+ */
+export function billGrokTurnsByDay(turns, dayOfMs, floorMs = null) {
+  const groups = new Map();
+  for (const turn of turns) {
+    if (!Number.isFinite(turn.ms) || (floorMs != null && turn.ms < floorMs)) continue;
+    const day = dayOfMs(turn.ms);
+    if (!groups.has(day)) groups.set(day, []);
+    groups.get(day).push(turn);
+  }
+  return [...groups].map(([day, group]) => [day, billGrokTurns(group, null)]);
+}
+
+/** Pull the `turn_completed` events (file order) out of parsed jsonl lines. */
+function extractGrokTurns(lines) {
   const turns = [];
-  for (const line of parseJsonLines(jsonlText)) {
+  let sessionId = null;
+  for (const line of lines) {
     const update = line?.params?.update;
     if (!update || typeof update !== 'object') continue;
     if (typeof line.params?.sessionId === 'string') sessionId ??= line.params.sessionId;
@@ -875,19 +918,35 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
       usage
     });
   }
+  return { turns, sessionId };
+}
 
+/**
+ * Resolve each turn to its own share: a cumulative snapshot describes the
+ * session so far, so its share is the delta against the previous snapshot
+ * (turn 0 baselines at zero); a per-prompt block already IS its own share.
+ * The cumulative test is a property of the whole sequence, so it runs once.
+ */
+function applyGrokDeltas(turns) {
   const cumulative = looksCumulative(turns.map((turn) => turn.usage));
-
-  for (const [index, turn] of turns.entries()) {
-    // A cumulative snapshot describes the session so far, so this turn's own
-    // share is its delta against the previous snapshot (turn 0's baseline is a
-    // fresh session, i.e. zero). A per-prompt block already IS its own share.
+  return turns.map((turn, index) => {
     const previous = cumulative && index > 0 ? turns[index - 1].usage : null;
-    const usage = previous
-      ? Object.fromEntries(Object.keys(turn.usage)
-        .filter((field) => typeof turn.usage[field] === 'number')
-        .map((field) => [field, Math.max(0, turn.usage[field] - num(previous[field]))]))
-      : turn.usage;
+    if (!previous) return { ...turn, billed: turn.usage };
+    return { ...turn, billed: Object.fromEntries(Object.keys(turn.usage)
+      .filter((field) => typeof turn.usage[field] === 'number')
+      .map((field) => [field, Math.max(0, turn.usage[field] - num(previous[field]))])) };
+  });
+}
+
+export function billGrokTurns(turns, sessionId, { from = null, to = null, exclude = null } = {}) {
+  const totals = grokTotals();
+  const byModel = new Map();
+  const counted = [];
+  const longTurns = [];
+  const fastTurns = [];
+
+  for (const turn of turns) {
+    const usage = turn.billed;
 
     // A turn with no readable timestamp can't be placed in a run's window —
     // excluded whenever a bound is supplied, for the same reason the Claude

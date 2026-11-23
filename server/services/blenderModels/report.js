@@ -5,9 +5,14 @@
  *
  * Each finding is `{ severity, code, message, subjects?, values? }` with
  * severity `error`, `warning` or `note`; one finding per code, its `subjects`
- * naming the parts, meshes or axes it is about. A build with any error is kept
- * and marked; only a build without errors can be published.
+ * naming the parts, meshes or axes it is about (motion.js adds one
+ * `sweep-overlap` per pair of parts, with the `pose` that shows it). A build
+ * with any error is kept and marked; only a build without errors can be
+ * published.
  */
+import { motionChecks } from './motion.js';
+import { reviewFrameMeters } from './reviewCameras.js';
+
 export const BLENDER_MODEL_SEVERITIES = Object.freeze(['error', 'warning', 'note']);
 
 // Declared size vs built bounds, per axis, as a fraction of the declared size.
@@ -20,13 +25,17 @@ const SUBJECTS_LISTED = 50;
 const PART_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const AXES = ['x', 'y', 'z'];
 
+// Reported once per control, action or scope; read by motion.js.
+const MOTION_EVENTS = new Set(['control', 'control-skipped', 'action', 'sweep-scope', 'sweep-rest', 'sweep-overlap', 'reimport-control']);
+
 /** Collects the events of one driver run; `facts()` is what `buildBlenderModelReport` reads. */
 export function collectBlenderModelFacts() {
-  const facts = { start: null, parts: [], described: null, meshes: [], scene: null, saved: null, reimport: null, done: null };
+  const facts = { start: null, parts: [], described: null, meshes: [], scene: null, saved: null, reimport: null, done: null, sweep: null, motion: [] };
   return {
     add(event) {
       if (event.event === 'part') facts.parts.push({ id: event.id, label: event.label, parent: event.parent });
       else if (event.event === 'mesh') facts.meshes.push(event);
+      else if (MOTION_EVENTS.has(event.event)) facts.motion.push(event);
       else if (event.event in facts) facts[event.event] = event;
     },
     facts: () => facts,
@@ -56,7 +65,10 @@ function partChecks(facts, add) {
   if (undeclared.length) add('warning', 'mesh-undeclared', 'A mesh object is not a declared part', listed(undeclared));
   const reparented = declared.filter((part) => meshes.has(part.id) && (meshes.get(part.id).parent ?? null) !== (part.parent ?? null)).map((part) => part.id);
   if (reparented.length) add('warning', 'part-parent-mismatch', 'A part\'s Blender parent is not the parent it declares', listed(reparented));
-  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented };
+  // Where a saved camera aims when it names a part.
+  const centers = Object.fromEntries(ids.filter((id) => meshes.get(id)?.min && meshes.get(id)?.max)
+    .map((id) => [id, AXES.map((_, axis) => round((meshes.get(id).min[axis] + meshes.get(id).max[axis]) / 2))]));
+  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented, centers };
 }
 
 function boundsCheck(facts, add) {
@@ -71,6 +83,11 @@ function boundsCheck(facts, add) {
   if (over.length) add('error', 'bounds-oversized', `The model is more than ${BOUNDS_ERROR * 100}% larger than its declared size`, { subjects: over, values });
   if (under.length) add('error', 'bounds-undersized', `The model is more than ${BOUNDS_ERROR * 100}% smaller than its declared size`, { subjects: under, values });
   if (drift.length) add('warning', 'bounds-drift', `The model is ${BOUNDS_WARNING * 100}-${BOUNDS_ERROR * 100}% off its declared size`, { subjects: drift, values });
+  // Review cameras frame the declared box standing on Z = 0 around X = Y = 0, not the mesh.
+  const half = reviewFrameMeters(declared) / 2;
+  const center = { x: 0, y: 0, z: declared.z / 2 };
+  const outside = AXES.filter((axis, index) => facts.scene.min[index] < center[axis] - half || facts.scene.max[index] > center[axis] + half);
+  if (outside.length) add('warning', 'review-out-of-frame', 'Part of the model falls outside its review views; stand it on Z = 0, centered on X = Y = 0', { subjects: outside });
   return values;
 }
 
@@ -128,7 +145,6 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     if (!described.sizeMeters) add('error', 'describe-size-invalid', 'describe(ctx) must return sizeMeters {x, y, z}, each a positive number of meters');
     if (described.triangleBudget == null) add('error', 'describe-budget-invalid', 'describe(ctx) must return triangleBudget, a whole number of triangles');
     if (!facts.parts.length) add('error', 'parts-none', 'describe(ctx) declared no parts');
-    if (!described.controlsValid) add('warning', 'controls-invalid', 'controls must be a list of objects (at most 16 KiB); it was not stored');
   }
   const parts = partChecks(facts, add);
   if (facts.scene && facts.scene.meshes === 0) add('error', 'meshes-none', 'build(ctx) created no mesh objects');
@@ -136,6 +152,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
   const bounds = boundsCheck(facts, add);
   const triangles = triangleCheck(facts, add);
   const transforms = transformChecks(facts, add);
+  const motion = motionChecks(facts, add);
   if (facts.scene) {
     add('note', 'materials', `${facts.scene.materials ?? 0} material(s) and ${facts.scene.images ?? 0} image(s)`, {
       values: { materials: facts.scene.materials, images: facts.scene.images },
@@ -153,12 +170,12 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     blenderVersion: facts.start?.blender ?? null,
     describe: described ? {
       title: described.title, sizeMeters: described.sizeMeters, triangleBudget: described.triangleBudget,
-      parts: facts.parts, controls: described.controls,
+      parts: facts.parts, controls: described.controls ?? null, actions: described.actions ?? null,
     } : null,
     checks: {
       parts, bounds, triangles, transforms,
       materials: facts.scene?.materials ?? null, images: facts.scene?.images ?? null, actions: facts.scene?.actions ?? null,
-      glbBytes, reimport,
+      glbBytes, reimport, motion,
     },
     findings: findings.sort((a, b) => order(a) - order(b)),
     counts,

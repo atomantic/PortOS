@@ -21,3 +21,12 @@ ffmpeg -hide_banner -loglevel error \
   -fflags +bitexact -flags:v +bitexact -flags:a +bitexact \
   client/src/test/fixtures/lightbox-controls.webm
 ```
+
+# Model fixtures
+
+`box-with-lid.gltf.json` is the GLB the PortOS Blender model driver exported from
+`server/services/blenderModels/__fixtures__/box_with_lid.py` (Blender 5.3):
+four parts, two controls and one action. It is kept as text so a diff shows it:
+`gltf` is the GLB's JSON chunk and `views` the numbers of each buffer view.
+Build that script as a model's `src/model.py` and unpack the build's
+`model.glb` the same way to regenerate it.

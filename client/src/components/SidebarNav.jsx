@@ -8,7 +8,7 @@ import {
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import { useEscLayer } from './ui/Modal';
 import { TRUSTED_BUNDLE_STAMP, describeBuild } from '../lib/buildStamp.js';
-import { useNavWorkingSet, useResolvedNavWorkingSet } from '../hooks/useNavWorkingSet.js';
+import { useNavWorkingSet, useResolvedNavWorkingSet } from './useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
@@ -21,9 +21,9 @@ import {
 import { PORTS } from '../lib/ports.js';
 import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS, SECTION_FEATURE } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
-import { useSidebarMusicVideos } from '../hooks/useSidebarMusicVideos.js';
-import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
-import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
+import { useSidebarMusicVideos } from './useSidebarMusicVideos.js';
+import { useSidebarSeries } from './useSidebarSeries.js';
+import { useSidebarUniverses } from './useSidebarUniverses.js';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 import Logo from './Logo';
 import { NotificationBell } from './NotificationBell.jsx';

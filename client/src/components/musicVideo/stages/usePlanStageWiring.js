@@ -6,8 +6,8 @@ import {
   updateMusicVideoProject,
   updateMusicVideoScene,
 } from '../../../services/apiMusicVideo.js';
-import useMusicVideoKickoff from '../../../hooks/useMusicVideoKickoff.js';
-import useAutonomousMusicVideo from '../../../hooks/useAutonomousMusicVideo.js';
+import useMusicVideoKickoff from './useMusicVideoKickoff.js';
+import useAutonomousMusicVideo from './useAutonomousMusicVideo.js';
 import useDrawerTab from '../../../hooks/useDrawerTab.js';
 import { aiSkipLabel } from '../../../hooks/useMusicVideoTreatment.js';
 import { ownWrite } from '../../../services/socketWriteOrigin.js';

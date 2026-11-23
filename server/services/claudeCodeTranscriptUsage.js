@@ -5,6 +5,7 @@ import { join } from 'path';
 import { createInterface } from 'readline';
 import { createRevisionCache, fileRevision } from '../lib/fileRevisionCache.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { createNativeUsageStore } from './nativeUsageDayStore.js';
 
@@ -39,6 +40,7 @@ const FIELDS = ['messages', 'input', 'output', 'cacheRead', 'cacheWrite'];
 // An incremental refresh re-reads recent days only; a first run reads all.
 const REFRESH_LOOKBACK_DAYS = 3;
 const REFRESH_STALE_MS = 5 * 60_000;
+const STAT_CONCURRENCY = 32;
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -47,16 +49,13 @@ const zeroCounts = () => Object.fromEntries(FIELDS.map((f) => [f, 0]));
 
 async function listTranscripts(root, fromMs) {
   const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
-  const files = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
-    const path = join(entry.parentPath ?? entry.path, entry.name);
-    if (fromMs == null) { files.push(path); continue; }
-    // A file last written before `from` cannot hold a line in range.
-    const info = await stat(path).catch(() => null);
-    if (info && info.mtimeMs >= fromMs) files.push(path);
-  }
-  return files;
+  const paths = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
+  if (fromMs == null) return paths;
+  // A file last written before `from` cannot hold a line in range.
+  const infos = await mapWithConcurrency(paths, STAT_CONCURRENCY, (path) => stat(path).catch(() => null));
+  return paths.filter((_, i) => infos[i] && infos[i].mtimeMs >= fromMs);
 }
 
 // Per-file candidates (before cross-file de-duplication), valid while the file revision and `from` are unchanged.

@@ -10,7 +10,7 @@ import CatalogDirectionTextEditor from '../CatalogDirectionTextEditor.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import CameoRosterPanel from '../CameoRosterPanel.jsx';
 import { formatCount } from '../../../utils/formatters.js';
-import useMusicVideoCastingChanges from '../../../hooks/useMusicVideoCastingChanges.js';
+import useMusicVideoCastingChanges from './useMusicVideoCastingChanges.js';
 import { CAST_CHECKIN_ANCHOR, LOOK_GUIDES_ANCHOR } from '../../../lib/musicVideoStages.js';
 
 // Below the sticky project header when a checklist row scrolls here.

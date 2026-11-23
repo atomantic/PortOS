@@ -512,6 +512,8 @@ export const createCosJobSchema = z.object({
   // and the raw/custom path.
   cronSchedule: recurrenceRuleSchema.nullable().optional(),
   enabled: z.boolean().optional(),
+  // Weekday-only firing (Mon–Fri); creation and update both honor it.
+  weekdaysOnly: z.boolean().optional(),
   priority: z.string().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
   promptTemplate: z.string().optional(),
@@ -593,9 +595,7 @@ export const createCosJobSchema = z.object({
   }).optional(),
 });
 
-export const updateCosJobSchema = createCosJobSchema.partial().extend({
-  weekdaysOnly: z.boolean().optional(),
-});
+export const updateCosJobSchema = createCosJobSchema.partial();
 
 // Manual "Run now", with an optional one-off configuration. The values are
 // merged over the job's stored `formValues` for THAT RUN ONLY — nothing is
@@ -998,10 +998,10 @@ export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().d
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
   appId: nullishString,
-  provider: nonEmptyString.optional(),
+  provider: z.preprocess(emptyToUndefined, providerRefSchema.optional()),
   model: nonEmptyString.optional(),
-  effort: z.string().trim().nullable().optional(),
-  executionOptions: z.record(z.unknown()).optional(),
+  effort: effortUpdateSchema,
+  executionOptions: executionOptionsSchema.optional(),
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });

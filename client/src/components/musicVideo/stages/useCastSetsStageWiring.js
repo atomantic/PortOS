@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import toast from '../../ui/Toast';
 import { updateMusicVideoProject } from '../../../services/apiMusicVideo.js';
-import useMusicVideoCastAndSets from '../../../hooks/useMusicVideoCastAndSets.js';
-import useMusicVideoDevArtifacts from '../../../hooks/useMusicVideoDevArtifacts.js';
+import useMusicVideoCastAndSets from './useMusicVideoCastAndSets.js';
+import useMusicVideoDevArtifacts from './useMusicVideoDevArtifacts.js';
 
 // A saved art draft needs every field the server schema requires.
 const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,

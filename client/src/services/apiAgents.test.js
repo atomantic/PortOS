@@ -10,6 +10,7 @@ afterEach(() => vi.unstubAllGlobals());
 it.each([
   { mode: 'fix', claimBetweenAudits: true, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } },
   { mode: 'file-issues', claimBetweenAudits: false },
+  { mode: 'fix', claimBetweenAudits: true, executionOptions: { serviceTier: 'fast' } },
   { mode: 'fix', prCompletion: 'draft', claimBetweenAudits: false, taskTypes: ['security'], effort: 'medium' },
   { mode: 'fix', prCompletion: 'inherit', claimBetweenAudits: false, taskTypes: ['security'] },
 ])('sends maintenance choices to the server: %j', async choices => {

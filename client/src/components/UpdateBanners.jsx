@@ -2,7 +2,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import Banner from './ui/Banner';
 import { useSystemActivity } from '../hooks/useSystemActivity';
-import { useUpdateChecker } from '../hooks/useUpdateChecker';
+import { useUpdateChecker } from './useUpdateChecker';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 // A non-transient advisory must never occlude the current screen's primary

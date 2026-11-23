@@ -1,0 +1,337 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, renderHook, cleanup, screen } from '@testing-library/react';
+
+// Capture the socket handler the hook registers so tests can drive the
+// `cos:schedule:on-demand-empty` event, and record toast calls.
+const handlers = new Map();
+vi.mock('../services/socket', () => ({
+  default: {
+    on: (event, fn) => { handlers.set(event, fn); },
+    off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
+    emit: () => {},
+  },
+}));
+
+const toastSpy = vi.fn();
+const dismissSpy = vi.fn();
+vi.mock('./ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: (...a) => dismissSpy(...a) }) }));
+
+const { useOnDemandTaskToast } = await import('./useOnDemandTaskToast.js');
+const fire = (payload) => handlers.get('cos:schedule:on-demand-empty')?.(payload);
+
+describe('useOnDemandTaskToast — idle outcome', () => {
+  beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
+  afterEach(cleanup);
+
+  it('toasts a generic "nothing to do" for a plain idle result', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-watcher', appName: 'App One', outcome: 'idle' });
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
+  });
+
+  it('surfaces the actionable LI reason (api-only provider) instead of "nothing to do"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'layered-intelligence', appName: 'App One', outcome: 'idle', reason: 'provider-not-agent-capable' });
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/API-only model with no coding harness — pick a CLI\/TUI provider/i);
+    expect(msg).not.toMatch(/nothing to do/);
+    // Warned, not the calm 💤 idle tone.
+    expect(opts.icon).toBe('⚠️');
+  });
+
+  it('falls back to the generic idle toast for an LI idle result with no reason', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'layered-intelligence', appName: 'App One', outcome: 'idle', reason: null });
+    expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
+  });
+
+  it('surfaces the pr-reviewer skip reason (security guard not ready) instead of "nothing to do"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: 'security-guard-not-ready' });
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/model-abuse classifier.*isn't ready/i);
+    expect(msg).not.toMatch(/nothing to do/);
+    expect(opts.icon).toBe('⚠️');
+  });
+
+  it('falls back to the raw reason string for an unglossed pr-reviewer code', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: 'some-future-code' });
+    expect(toastSpy.mock.calls[0][0]).toMatch(/some-future-code/);
+  });
+
+  it('falls back to the generic idle toast for a pr-reviewer idle result with no reason', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: null });
+    expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
+  });
+});
+
+describe('useOnDemandTaskToast — transient outcome', () => {
+  beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
+  afterEach(cleanup);
+
+  it('keeps the generic "try again shortly" copy when the forge health is unknown', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'claim-issue', appName: 'App One', outcome: 'transient' });
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/transient forge\/network issue/);
+    expect(opts.icon).toBe('⚠️');
+  });
+
+  it('names the real fault + remedy when the forge CLI is broken in a way that will not self-clear', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'transient',
+      forge: {
+        cli: 'gh',
+        remedy: 'gh cannot open an outbound connection. If an outbound firewall (e.g. Little Snitch) is installed, allow the gh binary to reach api.github.com — a denied connect surfaces as "bad file descriptor".'
+      }
+    });
+    const [msg, opts] = toastSpy.mock.calls[0];
+    // Names the CLI that actually failed, so a glab fault never reads as a gh one.
+    expect(msg).toMatch(/the gh check couldn't run/);
+    expect(msg).toMatch(/allow the gh binary to reach api\.github\.com/);
+    // "try again shortly" is a dead end for a permanent fault — it must be gone.
+    expect(msg).not.toMatch(/try again shortly/);
+    expect(opts.duration).toBeGreaterThan(7000);
+  });
+});
+
+describe('useOnDemandTaskToast — parked outcome', () => {
+  beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
+  afterEach(cleanup);
+
+  it.each([undefined, null])('never promises an automatic retry from a park deadline alone (%s)', nextAutoRecheckAt => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'no-progress', counts: { unchangedBranches: 4 }, parkedUntil: '2999-01-01T00:00:00Z', nextAutoRecheckAt });
+    expect(toastSpy.mock.calls[0][0]).not.toMatch(/auto-recheck|already up to date/);
+    expect(toastSpy.mock.calls[0][0]).toMatch(/did not advance.*4 branch\(es\) still blocked/);
+  });
+
+  it('distinguishes unverified issue reservations from branches already cleaned locally', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'claim-markers-held',
+      counts: { heldBranches: 0, heldDetached: 0, heldClaims: 1 },
+      skipCauses: { 'claim-reservation-owner-unverified': 1 } });
+    const message = toastSpy.mock.calls[0][0];
+    expect(message).toMatch(/local cleanup completed.*1 issue reservation\(s\) unverified/);
+    expect(message).not.toMatch(/branch\(es\) held|nothing to do/);
+  });
+
+  it('shows typed branch holds and an automatic retry only when the server confirms eligibility', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'branch-reconcile', outcome: 'parked', parkReason: 'branches-blocked',
+      counts: { heldBranches: 2, heldDetached: 1, unchangedBranches: 4 }, skipCauses: { 'draft-review-required': 1, 'claim-owner-active': 1, 'worktree-locked': 1 },
+      nextAutoRecheckAt: '2999-01-01T00:00:00Z' });
+    const message = toastSpy.mock.calls[0][0];
+    expect(message).toMatch(/2 branch\(es\) held, 1 detached worktree\(s\) held, 4 branch\(es\) still blocked/);
+    expect(message).toMatch(/draft-review-required/);
+    expect(message).toMatch(/Next auto-recheck/);
+  });
+
+  it('renders a bare "no open issues" when the repo is genuinely empty', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-open-issues', counts: { open: 0, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no open issues/);
+    // open === 0 ⇒ no "(0 of N open)" breakdown.
+    expect(msg).not.toMatch(/0 of/);
+  });
+
+  // The live failure mode behind this channel: 88 open issues, zero claimable,
+  // and a toast that said only "no claimable issues (0 of 88 open — 10
+  // in-flight, 78 filtered)" — which reads as the task being broken. The
+  // per-cause attribution names WHY each filtered issue was skipped, so the
+  // user sees their queue is 49 `needs-input` decisions deep, not stuck.
+  it('names the per-cause skip attribution instead of a bare "N filtered"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-actionable-issues',
+      counts: { open: 88, inFlight: 10, filtered: 78 },
+      skipCauses: { 'needs-input': 49, blocked: 17, 'decomposed-epic': 12 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no claimable issues/);
+    expect(msg).toMatch(/0 of 88 open/);
+    expect(msg).toMatch(/49 needs-input, 17 blocked, 12 decomposed-epic/);
+    // The causes replace the bare "78 filtered" — they ARE the filtered detail.
+    expect(msg).not.toMatch(/78 filtered/);
+  });
+
+  it('does not double-report in-flight (the counts breakdown already carries it)', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-actionable-issues',
+      counts: { open: 20, inFlight: 10, filtered: 10 },
+      // The detector includes `in-flight` in the map as informational only —
+      // the toast must not render it twice ("10 in-flight, 10 in-flight").
+      skipCauses: { 'in-flight': 10, 'needs-input': 6, blocked: 4 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/10 in-flight/);
+    expect(msg).toMatch(/6 needs-input, 4 blocked/);
+    // Exactly one "in-flight" mention — the counts breakdown's.
+    expect(msg.match(/in-flight/g)).toHaveLength(1);
+  });
+
+  // branch-reconcile's park used to report 'no-in-flight-branches' while merged
+  // branches sat behind a protected worktree — "nothing to do" for a task the
+  // user could see had work queued, which reads as the task not running at all.
+  it('names the merged branches held back rather than claiming nothing is in flight', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'branch-reconcile', appName: 'App One', outcome: 'parked',
+      parkReason: 'merged-branches-held-back', counts: { heldBackMerged: 4 },
+      parkedUntil: new Date(Date.now() + 5 * 24 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/already merged and waiting on a protected worktree/);
+    expect(msg).toMatch(/4 merged branch\(es\) held back/);
+    expect(msg).not.toMatch(/no branches in flight/);
+  });
+
+  it('still reads as a genuinely empty repo when nothing is held back', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'branch-reconcile', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-in-flight-branches', counts: null,
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no branches in flight/);
+    expect(msg).not.toMatch(/held back/);
+  });
+
+  it('explains the author-filter trap (not "no open issues") when open issues exist but none match the filter', () => {
+    renderHook(() => useOnDemandTaskToast());
+    // The detector reports filtered: 0 on this path (the issues were excluded by
+    // the author filter, not the skip-list), so the toast reads a clean
+    // "0 of N open" with no redundant "N filtered".
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-authored-issues', counts: { open: 10, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    // The actionable reason + the real open count — NOT the misleading "no open issues".
+    expect(msg).toMatch(/none match the author filter/);
+    expect(msg).toMatch(/set it to "any"/);
+    expect(msg).toMatch(/0 of 10 open/);
+    expect(msg).not.toMatch(/filtered/);
+    expect(msg).not.toMatch(/re-checked now — no open issues/);
+  });
+
+  it('explains the owner-filter org trap distinctly (owner matches an org, cannot author issues)', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'owner-is-org', counts: { open: 10, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    // Steers the user to a working filter without implying a username mismatch.
+    expect(msg).toMatch(/matches an org/);
+    expect(msg).toMatch(/set it to "self" or "any"/);
+    expect(msg).toMatch(/0 of 10 open/);
+    expect(msg).not.toMatch(/re-checked now — no open issues/);
+  });
+
+  it('uses group-flavored copy for the GitLab owner-filter trap (a group is not an "org")', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue-gitlab', appName: 'App One', outcome: 'parked',
+      parkReason: 'owner-is-group', counts: { open: 10, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    // GitLab-appropriate wording — "group", never "org".
+    expect(msg).toMatch(/matches a group/);
+    expect(msg).not.toMatch(/matches an org/);
+    expect(msg).toMatch(/set it to "self" or "any"/);
+    expect(msg).toMatch(/0 of 10 open/);
+  });
+});
+
+describe('useOnDemandTaskToast — programmatic handler results', () => {
+  beforeEach(() => { handlers.clear(); toastSpy.mockClear(); });
+  afterEach(cleanup);
+
+  const fireHandled = (payload) => handlers.get('cos:schedule:on-demand-handled')?.(payload);
+
+  it('reports what the handler actually did — no agent task appears to watch', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fireHandled({
+      taskType: 'universe-bible-describe', dispatched: true,
+      summary: 'Described 3 of 3 bible entries (7 fields) in "Example Universe"',
+    });
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/Described 3 of 3 bible entries/);
+    expect(opts.icon).toBe('✅');
+  });
+
+  it('names the handler\'s own reason when it declines', () => {
+    // A decline is not a failure — nothing to do, or a setting that needs
+    // picking — so it stays calm but must not be a silent no-op.
+    renderHook(() => useOnDemandTaskToast());
+    fireHandled({
+      taskType: 'universe-bible-images', dispatched: false,
+      summary: null, reason: 'no bible entries are missing images',
+    });
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/no bible entries are missing images/);
+    expect(opts.icon).toBe('💤');
+  });
+});
+
+it('shows one submission notification with an agent link and expires terminal progress', () => {
+  toastSpy.mockClear();
+  const { unmount } = renderHook(() => useOnDemandTaskToast());
+  const update = handlers.get('cos:maintenance:updated');
+  const run = { id: 'maint-example', status: 'running', completed: {}, steps: [{ id: 'step-1' }], active: { agentId: 'agent-example', status: 'running' } };
+  update(run);
+  update(run);
+  expect(toastSpy).toHaveBeenCalledTimes(1);
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: 5000 });
+  expect(toastSpy.mock.calls[0][0]().props.run.active.agentId).toBe('agent-example');
+  // onDismiss dismisses the toast
+  expect(typeof toastSpy.mock.calls[0][0]().props.onDismiss).toBe('function');
+  dismissSpy.mockClear();
+  toastSpy.mock.calls[0][0]().props.onDismiss();
+  expect(dismissSpy).toHaveBeenCalledWith('maintenance-maint-example');
+
+  update({ ...run, status: 'completed', active: null, completed: { 'step-1': 'done' }, updatedAt: 'finished' });
+  expect(toastSpy.mock.calls[1][1]).toMatchObject({ duration: 8000, label: 'Maintenance · 1/1 · completed' });
+  unmount();
+  expect(handlers.has('cos:maintenance:updated')).toBe(false);
+});
+
+it('keeps a stopped run on completed-count even when the stale active step is retained', () => {
+  toastSpy.mockClear();
+  const { unmount } = renderHook(() => useOnDemandTaskToast());
+  const update = handlers.get('cos:maintenance:updated');
+  const steps = ['better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity', 'performance', 'better-cognitive-load', 'documentation']
+    .map((taskType, index) => ({ id: `maint-1-${index}`, taskRef: { taskType } }));
+  update({
+    id: 'maint-stopped', status: 'stopped', steps,
+    completed: { 'maint-1-0': 'done', 'maint-1-1': 'done' },
+    active: { stepId: 'maint-1-2', taskType: 'module-hygiene' },
+    updatedAt: 'stopped',
+  });
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ label: 'Maintenance · 2/7 · stopped' });
+  render(toastSpy.mock.calls[0][0]());
+  expect(screen.getByRole('status')).toHaveTextContent('stopped · 2/7 steps');
+  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '2');
+  unmount();
+});

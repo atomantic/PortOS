@@ -11,7 +11,7 @@
 import { Link } from 'react-router';
 import { Loader2, Sparkles, Users, AlertTriangle, Scale, Split, ArrowRight } from 'lucide-react';
 import { PANEL_PERSONA_IDS, PANEL_QUESTIONS, personaLabel } from '../../../../server/lib/editorial/panelDisagreement.js';
-import { useReaderPanel } from '../../hooks/useReaderPanel';
+import { useReaderPanel } from './useReaderPanel';
 import ListLoadError from '../ui/ListLoadError';
 
 const PERSONA_ORDER = PANEL_PERSONA_IDS;

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Download, Loader2, Maximize2, Minimize2, Pause, Play, ZoomIn, ZoomOut } from 'lucide-react';
-import useMidiNotes from '../../hooks/useMidiNotes';
-import useMidiPlayer from '../../hooks/useMidiPlayer';
+import useMidiNotes from './useMidiNotes';
+import useMidiPlayer from './useMidiPlayer';
 import { detectChordWindows } from '../../../../server/lib/midiChords.js';
 import { midiNoteName } from '../../lib/pianoKeyboard';
 import { layerColor, ROLL_BG } from '../../lib/canvasRoll.js';

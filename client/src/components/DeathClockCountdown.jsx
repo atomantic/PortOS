@@ -1,4 +1,4 @@
-import { useDeathClock } from '../hooks/useDeathClock';
+import { useDeathClock } from './useDeathClock';
 
 const UNITS = [
   { key: 'years',   label: 'y',  color: 'text-port-accent' },

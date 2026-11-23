@@ -35,8 +35,11 @@ export const createFakeModelBlender = () => {
   const control = {
     executionMode: 'trusted-local',
     ready: true,
-    // Every job.json the worker was handed, in order.
+    // Every build job.json the worker was handed, in order, and every review one.
     jobs: [],
+    reviews: [],
+    // A promise a review waits on before its last view.
+    reviewHold: null,
     // Rewrites the recorded events for one test.
     edit: null,
     // A promise the build waits on after `described` (to cancel mid-build).
@@ -45,8 +48,24 @@ export const createFakeModelBlender = () => {
     crash: null,
   };
 
+  const review = async (job, { onStdoutLine, signal }) => {
+    control.reviews.push(job);
+    onStdoutLine(line({ event: 'start', blender: '5.2.3', quality: null }));
+    for (const look of job.looks) {
+      for (const view of job.views) {
+        writeFileSync(join(job.out, `${view.id}-${look}.png`), `${look} ${view.id}`);
+        onStdoutLine(line({ event: 'view', id: view.id, look }));
+      }
+    }
+    if (control.reviewHold && !signal?.aborted) await Promise.race([control.reviewHold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+    if (signal?.aborted) return { status: 'terminated', reason: 'canceled', exitCode: null, signal: null };
+    onStdoutLine(line({ event: 'done', sec: 1 }));
+    return { status: 'completed', reason: null, exitCode: 0, signal: null };
+  };
+
   const worker = async ({ files, onStdoutLine = () => {}, signal }) => {
     const job = JSON.parse(String(files.find((file) => file.path === 'job.json').content));
+    if (job.mode === 'review') return review(job, { onStdoutLine, signal });
     control.jobs.push({ ...job, staged: files.map((file) => file.path).sort() });
     const events = (control.edit ? control.edit(recordedStarterEvents()) : recordedStarterEvents());
     for (const event of events) {

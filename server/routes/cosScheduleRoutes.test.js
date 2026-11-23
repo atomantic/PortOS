@@ -127,6 +127,11 @@ describe('CoS Schedule Routes', () => {
       expect(maintenance.updateMaintenanceStep).toHaveBeenCalledWith('maint-1', 'step-2', settings);
       expect((await request(app).patch(url).send({ ...settings, effort: 'invalid' })).status).toBe(400);
       expect((await request(app).patch(url).send({ ...settings, completed: {} })).status).toBe(400);
+      const withOptions = { ...settings, executionOptions: { serviceTier: 'fast' } };
+      maintenance.updateMaintenanceStep.mockResolvedValue({ id: 'maint-1' });
+      expect((await request(app).patch(url).send(withOptions)).status).toBe(200);
+      expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('maint-1', 'step-2', withOptions);
+      expect((await request(app).patch(url).send({ ...settings, executionOptions: { serviceTier: 'warp' } })).status).toBe(400);
       maintenance.updateMaintenanceStep.mockResolvedValue(null);
       expect((await request(app).patch(url).send(settings)).status).toBe(404);
     });
@@ -518,6 +523,31 @@ describe('CoS Schedule Routes', () => {
         expect(response.status).toBe(400);
       }
       expect(taskSchedule.triggerOnDemandTask).not.toHaveBeenCalled();
+    });
+
+    it('rejects unknown effort, invalid provider refs, and unrecognized executionOptions with 400', async () => {
+      app.use(errorMiddleware);
+      for (const body of [
+        { taskType: 'review', effort: 'turbo' },
+        { taskType: 'review', provider: 'not a ref!' },
+        { taskType: 'review', executionOptions: { bogusOption: true } },
+      ]) {
+        const response = await request(app).post('/api/cos/schedule/trigger').send(body);
+        expect(response.status).toBe(400);
+      }
+      expect(taskSchedule.triggerOnDemandTask).not.toHaveBeenCalled();
+    });
+
+    it('normalizes an empty effort to null and an empty provider to undefined', async () => {
+      taskSchedule.triggerOnDemandTask.mockResolvedValue({ id: 'req-3' });
+      const response = await request(app)
+        .post('/api/cos/schedule/trigger')
+        .send({ taskType: 'review', effort: '', provider: '' });
+      expect(response.status).toBe(200);
+      expect(taskSchedule.triggerOnDemandTask).toHaveBeenCalledWith('review', undefined, expect.objectContaining({
+        provider: undefined,
+        effort: null,
+      }));
     });
 
     it('should return 409 when triggerOnDemandTask returns an error', async () => {

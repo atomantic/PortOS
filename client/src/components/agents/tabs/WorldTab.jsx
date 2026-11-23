@@ -22,7 +22,7 @@ import { getAgentActivityTimeline } from '../../../services/apiAgents.js';
 import BrailleSpinner from '../../BrailleSpinner';
 import ListLoadError from '../../ui/ListLoadError';
 import { useSocketResource } from '../../../hooks/useSocketResource';
-import useMoltworldWs from '../../../hooks/useMoltworldWs';
+import useMoltworldWs from './useMoltworldWs';
 import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { timeAgo, formatCooldown, formatClockTime } from '../../../utils/formatters';
 

@@ -17,7 +17,7 @@ import { useMemo } from 'react';
 import { Mic, Square, Plus, Replace, X } from 'lucide-react';
 import MicProcessingHint from './MicProcessingHint.jsx';
 import ScoreSheet from './ScoreSheet.jsx';
-import useSingToScore, { SING_IDLE, SING_COUNT_IN, SING_RECORDING } from '../../hooks/useSingToScore.js';
+import useSingToScore, { SING_IDLE, SING_COUNT_IN, SING_RECORDING } from './useSingToScore.js';
 import { parseScore } from '../../lib/scoreNotation.js';
 
 export default function SingToScore({ value = '', tempo = null, musicKey = 'C', hasSelection = false, onInsert }) {
