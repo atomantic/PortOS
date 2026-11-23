@@ -126,6 +126,20 @@ describe('AgentDetail route lifecycle', () => {
     expect(toggleAgentPersonality).toHaveBeenCalledWith('agent-b', false);
   });
 
+  it('applies the toggle response locally without refetching the agent', async () => {
+    renderAgentDetail();
+    await act(async () => {
+      mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+      mockPlatformDeferreds['agent-a'].resolve([]);
+    });
+    toggleAgentPersonality.mockResolvedValueOnce({ id: 'agent-a', enabled: false });
+    await act(async () => { screen.getByRole('button', { name: 'Enabled' }).click(); });
+
+    expect(await screen.findByRole('button', { name: 'Disabled' })).toBeInTheDocument();
+    expect(getAgentPersonality).toHaveBeenCalledTimes(1);
+    expect(mockOverviewRender.mock.calls.at(-1)[0].agent.enabled).toBe(false);
+  });
+
   it('keeps the new agent load active when an old toggle completes', async () => {
     renderAgentDetail();
     await act(async () => {
