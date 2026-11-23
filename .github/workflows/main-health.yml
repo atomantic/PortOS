@@ -14,6 +14,12 @@
 # numeric run id and a hex SHA.
 name: Main health
 
+# Names the CI run this report covers. `workflow_run` workflows run on the default
+# branch's latest commit, not the triggering run's, so the run's head_sha cannot
+# bind a report to its CI run; server/services/mainHealthClosure.js reads this
+# title instead (#18093).
+run-name: Main health for CI run ${{ github.event.workflow_run.id }}
+
 on:
   workflow_run:
     workflows: [CI]
