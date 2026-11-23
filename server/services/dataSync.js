@@ -582,7 +582,7 @@ async function applyGoalsRemote(remoteData) {
 
     const winning = {};
     if (remoteWins) {
-      for (const field of GOALS_METADATA_FIELDS) winning[field] = remoteData[field] ?? local[field];
+      for (const field of GOALS_METADATA_FIELDS) winning[field] = Object.hasOwn(remoteData, field) && remoteData[field] !== undefined ? remoteData[field] : local[field];
       // Carry the winning clock itself — restamping on receipt would out-date the peer's
       // next edit, and leaving ours would let the same snapshot win again.
       if (parseTsMs(remoteData.updatedAt) !== null) winning.updatedAt = remoteData.updatedAt;

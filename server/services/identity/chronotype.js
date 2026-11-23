@@ -174,11 +174,15 @@ function writeChronotype({ withoutGenetics, initialize, overrides }) {
     const useSyncedMarkers = overrides && !genomeSummary?.uploaded;
     const geneticMarkers = useSyncedMarkers ? existing.geneticMarkers ?? {} : extractSleepMarkers(savedMarkers);
     const caffeineMarkers = useSyncedMarkers ? existing.caffeineMarkers ?? {} : extractCaffeineMarkers(savedMarkers);
-    return saveChronotype(geneticMarkers, caffeineMarkers, behavioralData);
+    // A behavioral edit on a cleared record keeps its erasure stamp; real markers drop it.
+    const geneticsClearedAt = withoutGenetics
+      ? new Date().toISOString()
+      : useSyncedMarkers ? existing.geneticsClearedAt : undefined;
+    return saveChronotype(geneticMarkers, caffeineMarkers, behavioralData, geneticsClearedAt);
   });
 }
 
-async function saveChronotype(geneticMarkers, caffeineMarkers, behavioralData) {
+async function saveChronotype(geneticMarkers, caffeineMarkers, behavioralData, geneticsClearedAt) {
   const { type, confidence, scores } = computeChronotype(geneticMarkers, behavioralData);
 
   const mtnr1bStatus = geneticMarkers.mtnr1b?.status ?? null;
@@ -194,6 +198,7 @@ async function saveChronotype(geneticMarkers, caffeineMarkers, behavioralData) {
     recommendations,
     derivedAt: new Date().toISOString()
   };
+  if (geneticsClearedAt) chronotype.geneticsClearedAt = geneticsClearedAt;
 
   await saveJSON(CHRONOTYPE_FILE, chronotype);
   console.log(`🧬 Chronotype derived: ${Object.keys(geneticMarkers).length} markers`);
