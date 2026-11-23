@@ -1,35 +1,14 @@
 import { improvementSources as IMP_SRC } from '../../test/cosImprovementSources.js';
 /**
- * Tests for cos.js — focused on the two hot-spot internals that gate every
- * agent spawn but have no full-function test sibling:
+ * Tests for cos.js internals around agent spawning: the real capacity tracker
+ * (`createDequeueCapacity`, global / per-project / per-local-endpoint caps), the
+ * local-endpoint slot resolvers, orphan recovery, perpetual refill, and a set of
+ * source-level wiring guards for evaluateTasks.
  *
- * 1. `evaluateTasks` priority ordering — Priority 0 (on-demand) > Priority 1
- *    (user) > Priority 2 (auto-approved system) > Priority 3.6 (feature agents) >
- *    Priority 4 (idle review).
- *    Within a priority bucket tasks are taken in the order they appear in
- *    TASKS.md (the parser sorts nothing for the pending slice — file order is
- *    the tie-breaker).
- *
- * 2. `dequeueNextTask` capacity guards — global `maxConcurrentAgents` cap
- *    and per-project `maxConcurrentAgentsPerProject` cap. The function must
- *    short-circuit when no slots are available and must skip tasks whose
- *    project bucket is already saturated even if the global slot count
- *    permits one more spawn.
- *
- * `evaluateTasks` and `dequeueNextTask` are 250+ LOC each and pull in 40+
- * imported helpers (loadState, getAllTasks, addTask, getActiveApps,
- * taskSchedule, etc.). Mocking the full graph would be a brittle
- * test of mocks rather than logic, so we exercise the *real* capacity/gate
- * exports the scheduler uses — `createDequeueCapacity`,
- * `isIdleTierEligible` from cosDequeue.js (issue #2530) — through a thin drain
- * harness. Only the tier-ordering loop glue is local; every capacity and
- * eligibility decision routes through the same helpers `dequeueNextTask` calls,
- * so a guard-logic regression fails here instead of only in production.
- *
- * A source-level regression check at the bottom asserts the priority order
- * and the capacity-guard early return are still in place in `cos.js`, so a
- * future refactor that reorders priorities or removes the
- * `availableSlots <= 0` short-circuit flips a clear red flag.
+ * `dequeueNextTask` / `forceSpawnTask` behavior (tier precedence, pause bypass,
+ * saturated-pool short-circuit, Run-now refusals) is driven through the real
+ * functions in cos.dequeueNextTask.test.js. The `admit` helper below only feeds
+ * tasks to the real tracker; it carries no scheduler logic of its own.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -41,7 +20,7 @@ import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
 import { retryHoldMetadata, RETRY_HOLD_GRACE_MS } from '../../lib/taskRetryHold.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
-import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
+import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
 import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import {
@@ -60,14 +39,12 @@ import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../lib/persistent/persistentM
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
-const SPAWN_WINDOW_SRC = readFileSync(join(__dirname, '../../lib/cos/cosSpawnWindow.js'), 'utf-8');
 // The task-generation engine (evaluateTasks + the improvement/idle generators
 // + applyPlanIdMetadata) was extracted to cosTaskGenerator.js (issue-741). The
 // spawn-side scheduler (dequeueNextTask, tryImmediateSpawn, the tasks:changed
 // listener) stays in cos.js. Source-level guards below read each invariant from
 // whichever module now owns it.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
-const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
 // The pure capacity tracker + idle tier-eligibility predicate that
 // dequeueNextTask (and these tests) call live in cosDequeue.js (issue #2530).
@@ -88,60 +65,20 @@ function makeCapacityTracker(state, agentsByProject = {}) {
 }
 
 /**
- * Thin drain harness modelling the priority-bucket loop in `dequeueNextTask`.
- * The four buckets are drained in this exact order:
- *
- *   0. onDemand    — explicit user requests (highest, bypasses pause)
- *   1. user        — user-authored pending tasks
- *   2. autoSystem  — auto-approved system / improvement tasks
- *   3. idle        — generated idle-review task (only when eligible)
- *
- * Only the ordering/glue is local: every capacity decision routes through the
- * real `capacity.canSpawn`/`trackSpawn`, and the idle fence uses the real
- * `isIdleTierEligible` predicate the scheduler calls. Within a bucket,
- * iteration order is the source array order (file order for parsed TASKS.md;
- * arrival order for the on-demand queue) — the loop does NOT re-sort by
- * priorityValue.
- *
- * `isIdleTierEligible` requires `spawned === 0`, so ANY earlier spawn
- * (autoSystem) suppresses idle on the same cycle. Tests run with auto-run in
- * `execute` and idle review enabled so the tier predicate reduces to the
- * pending-user + spawned gates.
+ * Offer `tasks` to the REAL capacity tracker in order and return the ones it
+ * admitted. No tier logic lives here — tier precedence and pause handling are
+ * driven through the real `dequeueNextTask` in cos.dequeueNextTask.test.js.
+ * `committed` selects `canSpawnCommitted`, the variant the on-demand and idle
+ * tiers use to opt out of the local-endpoint cap.
  */
-function priorityDequeue(buckets, capacity, { paused = false } = {}) {
+function admit(capacity, tasks, { committed = false } = {}) {
   const admitted = [];
-  const hasPendingUserTasks = (buckets.user || []).length > 0;
-
-  const drain = (bucketName) => {
-    // Priorities 0 and 3 opt OUT of the local-endpoint cap, exactly as
-    // production does: a denial there DISCARDS an already-committed task (a
-    // cleared on-demand request, a bound app-review marker) instead of
-    // deferring it, so they emit and let the spawner chokepoint hold.
-    const committed = ['onDemand', 'idle'].includes(bucketName);
-    for (const task of buckets[bucketName] || []) {
-      if (capacity.spawned >= capacity.availableSlots) return;
-      // The user tier withholds a row that says it is not auto-approved (#7300),
-      // through the same predicate both production engines call.
-      if (bucketName === 'user' && !isUserTaskRunnableUnattended(task)) continue;
-      if (!(committed ? capacity.canSpawnCommitted(task) : capacity.canSpawn(task))) continue;
-      capacity.trackSpawn(task);
-      admitted.push({ ...task, _bucket: bucketName });
-    }
-  };
-
-  // Priority 0 (on-demand) drains even when paused.
-  drain('onDemand');
-  // Global pause stops every autonomous/scheduled/user tier below.
-  if (paused) return admitted;
-
-  drain('user');
-  drain('autoSystem');
-
-  if (isIdleTierEligible({
-    spawned: capacity.spawned, hasPendingUserTasks,
-    idleReviewEnabled: true, autonomyMode: 'execute'
-  })) drain('idle');
-
+  for (const candidate of tasks) {
+    if (capacity.spawned >= capacity.availableSlots) break;
+    if (!(committed ? capacity.canSpawnCommitted(candidate) : capacity.canSpawn(candidate))) continue;
+    capacity.trackSpawn(candidate);
+    admitted.push(candidate);
+  }
   return admitted;
 }
 
@@ -172,144 +109,6 @@ registerCosOrphanRecoveryHandlers({
   handleOrphanedTask: async (...args) => (await loadAgentManagement()).handleOrphanedTask(...args),
 });
 
-// ─── evaluateTasks: priority ordering ──────────────────────────────────────
-
-describe('evaluateTasks — priority ordering', () => {
-  it('drains buckets in order: onDemand > user > autoSystem > idle', () => {
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [task('task-onDemand-1')],
-      user: [task('task-user-1')],
-      autoSystem: [task('sys-auto-1')],
-      // Idle should be SKIPPED here because user bucket is non-empty
-      // (matches production line 795 `hasPendingUserTasks` gate).
-      idle: [task('sys-idle-1')],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-
-    // Order is: onDemand, user, autoSystem (idle blocked by user-pending gate)
-    expect(spawned.map(t => t.id)).toEqual([
-      'task-onDemand-1',
-      'task-user-1',
-      'sys-auto-1',
-    ]);
-    expect(spawned.map(t => t._bucket)).toEqual(['onDemand', 'user', 'autoSystem']);
-  });
-
-  it('when globally paused, only the on-demand bucket drains (manual Run bypasses pause)', () => {
-    // A global pause stops scheduled/autonomous/user spawning, but an explicit
-    // user "Run" pushes an on-demand request that must still fire. Mirrors the
-    // production gate: Priority 0 (on-demand) is processed, then `if (paused) return;`.
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [task('task-onDemand-1')],
-      user: [task('task-user-1')],
-      autoSystem: [task('sys-auto-1')],
-      idle: [task('sys-idle-1')],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity, { paused: true });
-
-    // Only the on-demand request spawns; everything else stays paused.
-    expect(spawned.map(t => t.id)).toEqual(['task-onDemand-1']);
-    expect(spawned.map(t => t._bucket)).toEqual(['onDemand']);
-  });
-
-  it('idle fires only when nothing else has spawned (spawned === 0 gate, cos.js:2480)', () => {
-    // When autoSystem is empty AND no user-pending, idle
-    // gets to run. This is the only path through which the idle bucket
-    // actually drains in production.
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [],
-      user: [],
-      autoSystem: [],
-      idle: [task('sys-idle-1')],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-    expect(spawned.map(t => t._bucket)).toEqual(['idle']);
-  });
-
-  it('idle suppressed when only autoSystem spawned (no user tasks)', () => {
-    // Pin the asymmetry: even a SINGLE autoSystem spawn is enough to suppress
-    // idle on the same cycle. This is the production behavior at cos.js:862
-    // (`tasksToSpawn.length === 0`) and cos.js:2480 (`spawned === 0`).
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [],
-      user: [],
-      autoSystem: [task('sys-auto-1')],
-      idle: [task('sys-idle-1')],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-    expect(spawned.map(t => t._bucket)).toEqual(['autoSystem']);
-  });
-
-  it('within a single bucket, file/arrival order wins (no in-bucket priority re-sort)', () => {
-    // The dequeue loop does NOT sort by priorityValue at this layer. The
-    // parsed-tasks slice preserves file order, so a HIGH task placed AFTER
-    // a LOW task in TASKS.md is taken AFTER the LOW task. This is the
-    // documented contract: callers using `addTask({ position: 'top' })` are
-    // expected to control ordering at write time.
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [],
-      user: [
-        task('task-low-first', 'LOW'),
-        task('task-high-second', 'HIGH'),
-        task('task-critical-third', 'CRITICAL'),
-      ],
-      autoSystem: [],
-      idle: [],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-    expect(spawned.map(t => t.id)).toEqual([
-      'task-low-first',
-      'task-high-second',
-      'task-critical-third',
-    ]);
-  });
-
-  it('stops issuing spawns once availableSlots is exhausted (cross-bucket)', () => {
-    // Only 2 free slots — onDemand fills slot 1, user fills slot 2, the rest
-    // of the queues are left untouched.
-    const state = makeState({ maxConcurrentAgents: 2 });
-    const capacity = makeCapacityTracker(state);
-
-    const buckets = {
-      onDemand: [task('task-onDemand-1')],
-      user: [task('task-user-1'), task('task-user-2')],
-      autoSystem: [task('sys-auto-1')],
-      idle: [],
-    };
-
-    const spawned = priorityDequeue(buckets, capacity);
-    expect(spawned).toHaveLength(2);
-    expect(spawned.map(t => t.id)).toEqual(['task-onDemand-1', 'task-user-1']);
-  });
-
-  it('returns no spawns when buckets are empty (idle queue)', () => {
-    const state = makeState({ maxConcurrentAgents: 5 });
-    const capacity = makeCapacityTracker(state);
-    const buckets = { onDemand: [], user: [], autoSystem: [], idle: [] };
-    expect(priorityDequeue(buckets, capacity)).toEqual([]);
-  });
-});
-
 // ─── dequeueNextTask: capacity guards ──────────────────────────────────────
 
 describe('dequeueNextTask — capacity guards', () => {
@@ -328,7 +127,7 @@ describe('dequeueNextTask — capacity guards', () => {
       autoSystem: [],
       idle: [],
     };
-    const spawned = priorityDequeue(buckets, capacity);
+    const spawned = admit(capacity, Object.values(buckets).flat());
     expect(spawned).toEqual([]);
   });
 
@@ -345,7 +144,7 @@ describe('dequeueNextTask — capacity guards', () => {
     expect(capacity.availableSlots).toBeLessThan(0);
 
     const buckets = { onDemand: [], user: [task('task-user-1')], autoSystem: [], idle: [] };
-    expect(priorityDequeue(buckets, capacity)).toEqual([]);
+    expect(admit(capacity, Object.values(buckets).flat())).toEqual([]);
   });
 
   it('respects per-project cap: project saturated → task skipped, other-project task still fills', () => {
@@ -371,7 +170,7 @@ describe('dequeueNextTask — capacity guards', () => {
       idle: [],
     };
 
-    const spawned = priorityDequeue(buckets, capacity);
+    const spawned = admit(capacity, Object.values(buckets).flat());
     expect(spawned.map(t => t.id)).toEqual(['task-beta-1']);
   });
 
@@ -396,7 +195,7 @@ describe('dequeueNextTask — capacity guards', () => {
       idle: [],
     };
 
-    const spawned = priorityDequeue(buckets, capacity);
+    const spawned = admit(capacity, Object.values(buckets).flat());
     expect(spawned.map(t => t.id)).toEqual(['task-alpha-1', 'task-alpha-2']);
     expect(capacity.spawnProjectCounts.alpha).toBe(2);
   });
@@ -423,7 +222,7 @@ describe('dequeueNextTask — capacity guards', () => {
       idle: [],
     };
 
-    expect(priorityDequeue(buckets, capacity)).toHaveLength(3);
+    expect(admit(capacity, Object.values(buckets).flat())).toHaveLength(3);
   });
 
   it('null app metadata buckets into the `_self` project key (PortOS work)', () => {
@@ -446,7 +245,7 @@ describe('dequeueNextTask — capacity guards', () => {
       idle: [],
     };
 
-    const spawned = priorityDequeue(buckets, capacity);
+    const spawned = admit(capacity, Object.values(buckets).flat());
     expect(spawned.map(t => t.id)).toEqual(['task-self-1']);
     expect(capacity.spawnProjectCounts._self).toBe(1);
   });
@@ -509,8 +308,6 @@ function makeLocalSlotCapacity(state, { activeProvider = CLOUD_PROVIDER, limit =
   return { capacity, holds, slots };
 }
 
-const userBuckets = (tasks) => ({ onDemand: [], user: tasks, autoSystem: [], idle: [] });
-
 describe('dequeueNextTask — task ownership beyond registered agents (#11847)', () => {
   it('never admits an in-flight spawn, and still counts it against the global slots', () => {
     // 4-slot cap: 1 running agent + 2 spawns in flight (no agent record yet)
@@ -525,14 +322,14 @@ describe('dequeueNextTask — task ownership beyond registered agents (#11847)',
       autoSystem: [],
       idle: [],
     };
-    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['queued-c']);
+    expect(admit(capacity, Object.values(buckets).flat()).map(t => t.id)).toEqual(['queued-c']);
   });
 
   it('admits nothing when running agents plus in-flight spawns fill maxConcurrentAgents', () => {
     const state = makeState({ maxConcurrentAgents: 2, runningAgents: [makeRunningAgent()] });
     const capacity = createDequeueCapacity(state, { inFlightTaskIds: ['spawning-a'] });
     expect(capacity.availableSlots).toBe(0);
-    expect(priorityDequeue({ onDemand: [], user: [task('queued-b')], autoSystem: [], idle: [] }, capacity)).toEqual([]);
+    expect(admit(capacity, [task('queued-b')])).toEqual([]);
   });
 
   it('does not double-count an in-flight spawn whose agent is already running', () => {
@@ -553,7 +350,7 @@ describe('dequeueNextTask — task ownership beyond registered agents (#11847)',
       autoSystem: [task('dup-1'), task('user-2'), task('sys-3')],
       idle: [],
     };
-    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['dup-1', 'user-2', 'sys-3']);
+    expect(admit(capacity, Object.values(buckets).flat()).map(t => t.id)).toEqual(['dup-1', 'user-2', 'sys-3']);
     expect(capacity.spawnedTaskIds).toEqual(['dup-1', 'user-2', 'sys-3']);
     expect(capacity.spawned).toBe(3);
   });
@@ -566,10 +363,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const { capacity, holds } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-local-1', 'lmstudio-tui'),
       taskOnProvider('task-local-2', 'lmstudio-tui'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-local-1']);
     expect(holds).toEqual([{ taskId: 'task-local-2', endpoint: LOCAL_ENDPOINT, running: 1 }]);
@@ -588,12 +385,7 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     });
     const { capacity, holds } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue({
-      onDemand: [taskOnProvider('task-run-now', 'lmstudio-tui')],
-      user: [],
-      autoSystem: [],
-      idle: [],
-    }, capacity);
+    const spawned = admit(capacity, [taskOnProvider('task-run-now', 'lmstudio-tui')], { committed: true });
 
     expect(spawned.map(t => t.id)).toEqual(['task-run-now']);
     expect(holds).toEqual([]);
@@ -609,17 +401,12 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     });
     const { capacity } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue({
-      onDemand: [],
-      user: [],
-      autoSystem: [],
-      idle: [taskOnProvider('idle-task', 'lmstudio-tui')],
-    }, capacity);
+    const spawned = admit(capacity, [taskOnProvider('idle-task', 'lmstudio-tui')], { committed: true });
 
     expect(spawned.map(t => t.id)).toEqual(['idle-task']);
   });
 
-  it.each(['user', 'autoSystem'])('keeps gating the deferrable %s tier at the same endpoint', (bucket) => {
+  it('keeps gating the deferrable user and auto-approved tiers at the same endpoint', () => {
     // The opt-out is scoped to the tiers whose denial is destructive. A task
     // from a persisted queue stays queued, which is a real defer — the next
     // cycle re-picks it once the endpoint frees up.
@@ -629,10 +416,7 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     });
     const { capacity } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue({
-      onDemand: [], user: [], autoSystem: [], idle: [],
-      [bucket]: [taskOnProvider('deferrable-task', 'lmstudio-tui')],
-    }, capacity);
+    const spawned = admit(capacity, [taskOnProvider('deferrable-task', 'lmstudio-tui')]);
 
     expect(spawned).toEqual([]);
   });
@@ -646,7 +430,7 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     });
     const { capacity, holds } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue(userBuckets([taskOnProvider('task-local-1', 'lmstudio-tui')]), capacity);
+    const spawned = admit(capacity, [taskOnProvider('task-local-1', 'lmstudio-tui')]);
 
     expect(spawned).toEqual([]);
     expect(holds).toEqual([{ taskId: 'task-local-1', endpoint: LOCAL_ENDPOINT, running: 1 }]);
@@ -662,11 +446,11 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     });
     const { capacity, holds } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-cloud', 'anthropic'),
       taskOnProvider('task-bare-cli', 'claude-cli'),
       taskOnProvider('task-cloud-2', 'anthropic'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-cloud', 'task-bare-cli', 'task-cloud-2']);
     expect(holds).toEqual([]);
@@ -678,10 +462,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const { capacity } = makeLocalSlotCapacity(state);
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-lmstudio', 'lmstudio-tui'),
       taskOnProvider('task-ollama', 'ollama-local'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-lmstudio', 'task-ollama']);
   });
@@ -690,11 +474,11 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const { capacity, holds } = makeLocalSlotCapacity(state, { limit: 2 });
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-local-1', 'lmstudio-tui'),
       taskOnProvider('task-local-2', 'lmstudio-tui'),
       taskOnProvider('task-local-3', 'lmstudio-tui'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-local-1', 'task-local-2']);
     expect(holds.map(h => h.taskId)).toEqual(['task-local-3']);
@@ -706,10 +490,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const { capacity } = makeLocalSlotCapacity(state, { activeProvider: LOCAL_TUI_PROVIDER });
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-unpinned-1'),
       taskOnProvider('task-unpinned-2'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-unpinned-1']);
   });
@@ -720,10 +504,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const { capacity, holds } = makeLocalSlotCapacity(state, { activeProvider: LOCAL_TUI_PROVIDER });
 
-    const spawned = priorityDequeue(userBuckets([
+    const spawned = admit(capacity, [
       taskOnProvider('task-local-1', 'lmstudio-tui'),
       taskOnProvider('task-ghost', 'deleted-provider'),
-    ]), capacity);
+    ]);
 
     expect(spawned.map(t => t.id)).toEqual(['task-local-1']);
     expect(holds).toEqual([{ taskId: 'task-ghost', endpoint: LOCAL_ENDPOINT, running: 1 }]);
@@ -736,10 +520,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
     const state = makeState({ maxConcurrentAgents: 5 });
     const capacity = createDequeueCapacity(state, {});
     expect(capacity.localEndpointLimit).toBe(Infinity);
-    expect(priorityDequeue(userBuckets([
+    expect(admit(capacity, [
       taskOnProvider('task-a', 'lmstudio-tui'),
       taskOnProvider('task-b', 'lmstudio-tui'),
-    ]), capacity)).toHaveLength(2);
+    ])).toHaveLength(2);
   });
 
   it('floors a 0/NaN limit at 1 rather than wedging the queue forever', () => {
@@ -750,10 +534,10 @@ describe('dequeueNextTask — per-local-endpoint agent cap (#4834)', () => {
       resolveLocalEndpoint: slots.resolveLocalEndpoint,
     });
     expect(capacity.localEndpointLimit).toBe(1);
-    expect(priorityDequeue(userBuckets([
+    expect(admit(capacity, [
       taskOnProvider('task-a', 'lmstudio-tui'),
       taskOnProvider('task-b', 'lmstudio-tui'),
-    ]), capacity).map(t => t.id)).toEqual(['task-a']);
+    ]).map(t => t.id)).toEqual(['task-a']);
   });
 });
 
@@ -891,7 +675,7 @@ describe('resolveLocalEndpoint — unavailable providers are not gated (#4834)',
       resolveLocalEndpoint: slots.resolveLocalEndpoint,
     });
 
-    const spawned = priorityDequeue(userBuckets([taskOnProvider('task-local-1', 'lmstudio-tui')]), capacity);
+    const spawned = admit(capacity, [taskOnProvider('task-local-1', 'lmstudio-tui')]);
     expect(spawned.map(t => t.id)).toEqual(['task-local-1']);
   });
 
@@ -1331,21 +1115,6 @@ function extractFnBody(src, fnStart) {
 }
 
 describe('cos.js source — priority + capacity invariants', () => {
-  it('dequeueNextTask early-returns when availableSlots <= 0', () => {
-    const fnStart = COS_SRC.indexOf('async function dequeueNextTask');
-    expect(fnStart, 'dequeueNextTask must exist').toBeGreaterThan(-1);
-    const fnBody = extractFnBody(COS_SRC, fnStart);
-
-    // `if (availableSlots <= 0) return;` (line 2332) is the cheap guard
-    // that prevents spawning when the global cap is at or beyond capacity.
-    // Regex tolerates optional braces, optional semicolon, and optional
-    // single-line block (`{ return; }`) so a formatting refactor doesn't
-    // trip this behavioral check.
-    expect(fnBody).toMatch(
-      /if\s*\(\s*availableSlots\s*<=\s*0\s*\)\s*(?:\{\s*)?return\s*;?\s*(?:\})?/
-    );
-  });
-
   it('evaluateTasks short-circuits when availableSlots <= 0', () => {
     const fnStart = GEN_SRC.indexOf('export async function evaluateTasks');
     expect(fnStart, 'evaluateTasks must exist').toBeGreaterThan(-1);
@@ -1391,7 +1160,7 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     // `undefined` is not a hold — a row that never carried the field still runs,
     // so the guard narrows nothing that was already running.
-    expect(priorityDequeue(buckets, capacity).map(t => t.id)).toEqual(['task-real', 'task-fieldless']);
+    expect(admit(capacity, buckets.user.filter(isUserTaskRunnableUnattended)).map(t => t.id)).toEqual(['task-real', 'task-fieldless']);
 
     // Both engines used to run their own copy of this tier, verified only by
     // grepping each body for the guard in source order — one is a fix, two is
@@ -1409,32 +1178,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     ]) {
       expect(body, `${label} user tier must delegate to the shared admitPendingUserTasks pass`).toContain('admitPendingUserTasks(');
     }
-  });
-
-  it('dequeueNextTask orchestrates the spawnDequeuePriority* tiers in priority order', () => {
-    // dequeueNextTask (cos.js) decomposes each priority tier into a named
-    // `spawnDequeuePriorityN(ctx)` helper (issue #2530), mirroring evaluateTasks.
-    // This pins that the orchestrator actually INVOKES each tier helper, in order
-    // — an actual reorder of the dequeue logic is the only thing that fails it.
-    //
-    //   Priority 0 (onDemand)    — spawnDequeuePriority0OnDemand(ctx)
-    //   Priority 1 (user)        — spawnDequeuePriority1UserTasks(ctx)
-    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })
-    //   Priority 3.6 (features)  — spawnDequeuePriority36FeatureAgents(ctx, { ... })
-    //   Priority 4 (idle)        — spawnDequeuePriority4IdleReview(ctx, { ... })
-    const fnBody = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
-
-    const onDemandIdx = fnBody.indexOf('spawnDequeuePriority0OnDemand(ctx)');
-    const userIdx     = fnBody.indexOf('spawnDequeuePriority1UserTasks(ctx)');
-    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx, { taskSchedule })');
-    const featureIdx  = fnBody.indexOf('spawnDequeuePriority36FeatureAgents(ctx, {');
-    const idleIdx     = fnBody.indexOf('spawnDequeuePriority4IdleReview(ctx, {');
-
-    expect(onDemandIdx, 'spawnDequeuePriority0OnDemand must be invoked').toBeGreaterThan(-1);
-    expect(userIdx, 'spawnDequeuePriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
-    expect(autoSysIdx, 'spawnDequeuePriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
-    expect(featureIdx, 'spawnDequeuePriority36FeatureAgents must run after auto-approved').toBeGreaterThan(autoSysIdx);
-    expect(idleIdx, 'spawnDequeuePriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
   });
 
   it('evaluateTasks orchestrates the spawnPriority* tiers in priority order', () => {
@@ -1460,23 +1203,14 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(idleIdx, 'spawnPriority4IdleReview must run after feature agents').toBeGreaterThan(featureIdx);
   });
 
-  it('on-demand (Priority 0) bypasses the global pause in BOTH engines', () => {
+  it('evaluateTasks gates the lower tiers on !paused after Priority 0', () => {
     // A global pause stops scheduled/autonomous/user spawning, but an explicit
     // user "Run" queues an on-demand request that must still fire. So in each
     // engine the pause gate must sit AFTER Priority 0, not at the top — moving it
     // back to the top is the regression this pins.
-    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
-    const evalFn    = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
+    const evalFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
 
-    // dequeueNextTask: the `if (paused) return` gate appears AFTER the on-demand
-    // tier (`spawnDequeuePriority0OnDemand`), and `paused` is NOT returned-on
-    // before it.
-    const dqOnDemandIdx = dequeueFn.indexOf('spawnDequeuePriority0OnDemand(ctx)');
-    const dqPauseGateIdx = dequeueFn.search(/if\s*\(\s*paused\s*\)\s*return/);
-    expect(dqOnDemandIdx, 'dequeueNextTask must invoke spawnDequeuePriority0OnDemand').toBeGreaterThan(-1);
-    expect(dqPauseGateIdx, 'dequeueNextTask must keep an `if (paused) return` gate').toBeGreaterThan(-1);
-    expect(dqPauseGateIdx, 'pause gate must come AFTER the on-demand tier').toBeGreaterThan(dqOnDemandIdx);
-
+    // dequeueNextTask's side is pinned behaviorally in cos.dequeueNextTask.test.js.
     // evaluateTasks: Priority 0 runs unconditionally; Priorities 1+ are wrapped in
     // an `if (!paused)` block that begins after spawnPriority0OnDemand.
     //
@@ -1584,29 +1318,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(DISPATCH_SRC).toMatch(/providerEndpoint:\s*providerBaseUrl\(provider\)/);
   });
 
-  it('forceSpawnTask refuses synchronously when the local endpoint is full (#4834)', () => {
-    // "Run now" returns before the spawn happens, so without its own check it
-    // would answer { success: true } and toast "Spawning" for a task the
-    // chokepoint immediately holds — the same lie the provider-resolution
-    // pre-check directly above it exists to prevent. It must run AFTER
-    // resolution so it reads the post-fallback provider.
-    const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
-    expect(forceFn).toMatch(/localEndpointCapacityError\(resolution\.provider/);
-    expect(forceFn.indexOf('resolveAgentProviderAndModel'))
-      .toBeLessThan(forceFn.indexOf('localEndpointCapacityError'));
-    expect(forceFn.indexOf('localEndpointCapacityError'))
-      .toBeLessThan(forceFn.indexOf("cosEvents.emit('task:ready'"));
-  });
-
-  it('forceSpawnTask passes its task id so its own zombie agent is excluded (#4834)', () => {
-    // Counting the task's own stale record would make Run-now recovery
-    // unreachable at a limit of 1. The exclusion
-    // itself is driven directly in the `readEndpointCapacity` block above; what
-    // that can't see is whether this caller opts into it.
-    const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
-    expect(forceFn).toMatch(/localEndpointCapacityError\([^)]*taskId\)/);
-  });
-
   it('the LIVE gate wires in the real availability + fallback resolvers (#4834)', () => {
     // The branch logic itself is driven directly above (`resolveLocalEndpoint —
     // follows the fallback swap`) through injected doubles. What no unit test
@@ -1711,41 +1422,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     // cos===execute), which encapsulates the auto-run domain gate.
     expect(SCHED_SRC, 'improvement-check timer must gate queueing via canQueueImprovementTasks')
       .toMatch(/if\s*\(\s*canQueueImprovementTasks\(\s*state\s*\)\s*\)/);
-  });
-
-  it('the on-demand marker discipline lives in the shared drain, not in either engine', () => {
-    // Per-app cooldown dedupe (one markAppReviewCooldown per cycle however many
-    // requests name the app) and the #978 deferred bind (bindAppReviewAgent only
-    // once a task exists) used to be duplicated in both Priority-0 engines and
-    // guarded by grepping each body. Both are pinned behaviorally in
-    // onDemandDrain.test.js now; what matters here is that neither engine has
-    // grown its own copy back.
-    for (const [engine, src] of [
-      ['spawnPriority0OnDemand', GEN_SRC],
-      ['spawnDequeuePriority0OnDemand', COS_SRC],
-    ]) {
-      const fnBody = extractFnBody(src, src.indexOf(`async function ${engine}`));
-      expect(fnBody, `${engine} must delegate to the shared drain`).toContain('drainOnDemandRequests(');
-      for (const marker of ['reviewStartedApps', 'markAppReviewCooldown', 'bindAppReviewAgent']) {
-        expect(fnBody, `${engine} must not re-implement ${marker} — it belongs to onDemandDrain.js`)
-          .not.toContain(marker);
-      }
-    }
-  });
-
-  it('has NO handler-backed dispatch — every task type routes through the agent path', () => {
-    // #2322 follow-up: layered-intelligence migrated OFF the handler-backed path
-    // onto a normal agent task with programmatic-I/O hooks (taskTypeHooks.js). The
-    // queue path no longer special-cases any type: there is no in-process handler
-    // dispatch that bypasses the agent-spawn path, so a scheduled reasoning task is
-    // a visible, TUI-capable agent like everything else.
-    expect(IMP_SRC).not.toMatch(/dispatchHandlerBackedTask/);
-    expect(IMP_SRC).not.toMatch(/runHandlerBackedTaskForApp/);
-    expect(IMP_SRC).not.toMatch(/layeredIntelligenceHandler\.js/);
-
-    // The generator runs a task type's optional buildTaskInput hook before dispatch
-    // (the pre-agent programmatic slot LI's gather layer fills).
-    expect(IMP_SRC).toMatch(/getTaskInputHook/);
   });
 
   it('queueEligibleImprovementTasks routes through prepareManagedAppImprovementTask', () => {
@@ -1966,41 +1642,6 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(handler).toMatch(/data\.action\s*===\s*'requeued'/);
   });
 
-  // #5644 — every dequeue/immediate-spawn here is scheduled from a timer or
-  // setImmediate, i.e. outside the request lifecycle, where a rejection has
-  // nowhere to bubble: it escapes as an unhandled rejection, which
-  // setupProcessErrorHandlers classifies `critical` and broadcasts to every
-  // connected browser as `system:critical-error` — and the open agent slot the
-  // cycle was meant to fill stays empty until an unrelated event fires another
-  // one. There is no runtime seam that would catch a future contributor
-  // re-adding a bare `setImmediate(() => dequeueNextTask())`, so scan the source.
-  it('never floats a dequeueNextTask / tryImmediateSpawn schedule without a .catch', () => {
-    expect(
-      COS_SRC,
-      'schedule the dequeue through scheduleDequeue() so the rejection is caught'
-    ).not.toMatch(/set(?:Immediate|Timeout)\(\(\) => dequeueNextTask\(/);
-
-    const lineStartOf = (idx) => COS_SRC.lastIndexOf('\n', idx) + 1;
-    const unguarded = [];
-    for (const name of ['dequeueNextTask', 'tryImmediateSpawn']) {
-      const re = new RegExp(`${name}\\(`, 'g');
-      let match;
-      while ((match = re.exec(COS_SRC)) !== null) {
-        const line = COS_SRC.slice(lineStartOf(match.index), COS_SRC.indexOf('\n', match.index));
-        if (/^\s*(?:\/\/|\*)/.test(line)) continue; // prose mention in a comment
-        const before = COS_SRC.slice(Math.max(0, match.index - 40), match.index);
-        if (/function\s+$/.test(before)) continue;     // the declaration itself
-        if (/await\s+$/.test(before)) continue;        // awaited by an async caller
-        // Otherwise the promise floats, so a `.catch(` must follow inside the
-        // same statement (before the terminating `;`).
-        const tail = COS_SRC.slice(match.index, match.index + 400);
-        if (/^[^;]*\.catch\(/s.test(tail)) continue;
-        unguarded.push(line.trim());
-      }
-    }
-    expect(unguarded, 'floated scheduler promises must be .catch-guarded').toEqual([]);
-  });
-
   // A finished investigation is what releases the failure-blocked task(s) it was
   // diagnosing. Without this branch the fix lands and the work it unblocked never
   // runs — the task sits `blocked` until a human notices or the 14-day reaper
@@ -2144,116 +1785,6 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
       await resetOrphanedTasks({ bootRecovery: true });
       expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe('forceSpawnTask — pre-validate provider before task:ready', () => {
-  // The play button on a pending task calls forceSpawnTask, which emits
-  // `task:ready`; the actual spawn happens asynchronously in a listener. If
-  // provider/model resolution fails there (e.g. the task is pinned to an
-  // `api`-type provider with no file-writing harness), the spawn bails
-  // silently and the task stays `pending` — but the HTTP call had already
-  // returned `{ success: true }` and the UI toasted "Spawning". Pin that
-  // forceSpawnTask resolves the provider FIRST and returns the resolution
-  // error (so the route surfaces a truthful 400) instead of emitting
-  // `task:ready` on a doomed spawn.
-  const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
-
-  it('calls resolveAgentProviderAndModel and returns its error', () => {
-    expect(forceFn, 'forceSpawnTask must pre-resolve the provider/model')
-      .toMatch(/resolveAgentProviderAndModel\(\s*task\s*\)/);
-    expect(forceFn, 'forceSpawnTask must return the resolution error on failure')
-      .toMatch(/if\s*\(\s*!\s*resolution\.ok\s*\)\s*\{\s*return\s*\{\s*error:\s*resolution\.error\s*\}/);
-  });
-
-  it('bails on a failed resolution BEFORE emitting task:ready', () => {
-    const resolveIdx = forceFn.indexOf('resolveAgentProviderAndModel');
-    const readyIdx = forceFn.indexOf("cosEvents.emit('task:ready'");
-    expect(resolveIdx, 'resolution must happen in forceSpawnTask').toBeGreaterThan(-1);
-    expect(readyIdx, 'forceSpawnTask must still emit task:ready on success').toBeGreaterThan(-1);
-    expect(resolveIdx, 'provider resolution must precede the task:ready emit')
-      .toBeLessThan(readyIdx);
-  });
-
-  // Same failure mode, two more sources of a doomed spawn. A stopped daemon was
-  // never checked at all (only `paused` was), and in runner mode the spawn path
-  // now HOLDS the task while the cos-runner app is down instead of failing it —
-  // right for the autonomous queue, wrong for an explicit "Run now", which would
-  // get `{ success: true }` and a "Spawning" toast for a task that quietly stays
-  // pending. Both must answer with an actionable error instead.
-  it('refuses to force-spawn while the daemon is stopped', () => {
-    const stoppedIdx = forceFn.indexOf('!isDaemonRunning()');
-    expect(stoppedIdx, 'forceSpawnTask must check that the daemon is running').toBeGreaterThan(-1);
-    expect(stoppedIdx, 'the stopped check must precede the task:ready emit')
-      .toBeLessThan(forceFn.indexOf("cosEvents.emit('task:ready'"));
-  });
-
-  it('refuses to force-spawn while the runner is holding', () => {
-    const holdIdx = forceFn.indexOf('isRunnerHolding');
-    expect(holdIdx, 'forceSpawnTask must consult the runner hold').toBeGreaterThan(-1);
-    expect(holdIdx, 'the runner check must precede the task:ready emit')
-      .toBeLessThan(forceFn.indexOf("cosEvents.emit('task:ready'"));
-  });
-
-  // spawnAgentForTask registers its agent as `running` BEFORE flipping the task
-  // off `pending`, so the `status !== 'pending'` check above still passes for the
-  // seconds between those two writes. Without a live-agent check, a "Run now"
-  // landing there answers `{ success: true }` and toasts "Spawning" for a second
-  // dispatch that withSpawnDedupGuard then silently drops.
-  it('refuses a task a running agent already holds', () => {
-    const holderIdx = forceFn.indexOf('spawningAgentForTask(taskId, runningAgents)');
-    expect(holderIdx, 'forceSpawnTask must reject a task a running agent holds')
-      .toBeGreaterThan(-1);
-    expect(forceFn, 'the refusal must name the agent that holds it')
-      .toContain('is already running this task');
-    expect(holderIdx, 'the live-agent check must precede the task:ready emit')
-      .toBeLessThan(forceFn.indexOf("cosEvents.emit('task:ready'"));
-  });
-
-  // ...but only while that agent is plausibly still mid-spawn. Past the window a
-  // stale holder is settled through the zombie sweep instead — behaviour pinned
-  // in cos.forceSpawnOwner.test.js (#14039).
-  it('bounds the spawn-window refusal with the shared settlement', () => {
-    // The bound lives in lib/cos/cosSpawnWindow.js, shared with the status counters
-    // and the task lists — so the pending LIST that renders the "Run now" button
-    // and the refusal behind it agree about which holders are stale.
-    expect(forceFn, 'the holder refusal must go through the age-bounded settlement')
-      .toMatch(/spawningAgentForTask\(taskId, runningAgents\)/);
-    expect(COS_SRC, 'the bound must come from the shared settlement, not a local copy')
-      .toMatch(/spawningAgentForTask[\s\S]*?from '\.\.\/\.\.\/lib\/cos\/cosSpawnWindow\.js'/);
-    expect(COS_SRC, 'no second grace window may be declared here')
-      .not.toMatch(/const SPAWN_CLAIM_GRACE_MS = /);
-    expect(SPAWN_WINDOW_SRC, 'the grace window must be defined')
-      .toMatch(/export const SPAWN_CLAIM_GRACE_MS = /);
-  });
-});
-
-describe('the runner-down hold — spawn-side gates', () => {
-  // Dispatch holds a task while the cos-runner app is down (the `task:ready`
-  // listener in subAgentSpawner.js, covered behaviorally in
-  // subAgentSpawner.runnerHold.test.js). The dequeue must ALSO bail before its
-  // priority tiers run: they drain on-demand requests, advance review cooldowns,
-  // bind the synthetic app-review marker, and spend `capacity` — side effects a
-  // downstream hold cannot take back.
-  const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
-
-  it('bails on the runner hold before doing any tier work', () => {
-    const holdIdx = dequeueFn.indexOf('isRunnerHolding');
-    expect(holdIdx, 'dequeueNextTask must consult the runner hold').toBeGreaterThan(-1);
-    expect(holdIdx, 'the hold must be checked before capacity is computed')
-      .toBeLessThan(dequeueFn.indexOf('createDequeueCapacity'));
-  });
-
-  it('gates the immediate user-task spawn on the same predicate', () => {
-    const immediateFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function tryImmediateSpawn'));
-    expect(immediateFn).toMatch(/isRunnerHolding/);
-  });
-
-  // Direct mode has no runner to be down; probing there would hold every spawn
-  // on an install that never runs the cos-runner app.
-  it('is a no-op in direct mode', () => {
-    const holdFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function isRunnerHolding'));
-    expect(holdFn).toMatch(/if\s*\(!useRunner\)\s*return false/);
   });
 });
 
@@ -2522,62 +2053,10 @@ describe('persistent mind — default-off CoS state integration (#5064)', () => 
   });
 });
 
-describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)', () => {
-  // Evaluation is event-driven (cosState.js records that the periodic
-  // evaluateTasks timer was removed), so the drain inside evaluateTasks fires
-  // roughly once per restart. The cadence-bearing drain is a CoS interval job.
-  const sweepBlock = COS_SRC.slice(
-    COS_SRC.indexOf("id: 'cos-pending-merge-sweep'"),
-    COS_SRC.indexOf("id: 'cos-pending-merge-sweep'") + 1400
-  );
-
-  it('registers a cos-pending-merge-sweep interval job alongside the other CoS timers', () => {
-    expect(COS_SRC).toMatch(/id:\s*'cos-pending-merge-sweep'/);
-    expect(sweepBlock).toMatch(/type:\s*'interval'/);
-    expect(sweepBlock).toMatch(/sweepPendingMergePrs\(\)/);
-  });
-
-  it('drives the interval off PENDING_MERGE_SWEEP_INTERVAL_MS, not a local literal', () => {
-    expect(sweepBlock).toMatch(/intervalMs:\s*PENDING_MERGE_SWEEP_INTERVAL_MS/);
-    expect(COS_SRC).toMatch(/\{\s*PENDING_MERGE_SWEEP_INTERVAL_MS\b[^}]*\}\s*=\s*await import\('\.\.\/prWatcher\.js'\)/);
-  });
-
-  it('gates the sweep and the handoff follow-up poll on !paused AND cos auto-run === execute', () => {
-    expect(sweepBlock).toMatch(/if \(await pendingMergeSweepBlocked\(\)\) return;/);
-    expect(COS_SRC).toMatch(/setHandoffFollowUpGate\(pendingMergeSweepBlocked\)/);
-    const gateFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function pendingMergeSweepBlocked'));
-    expect(gateFn).toMatch(/!isDaemonRunning\(\)/);
-    expect(gateFn).toMatch(/s\.paused\)/);
-    expect(gateFn).toMatch(/getDomainMode\(s\.config,\s*'cos'\)\s*!==\s*'execute'/);
-  });
-
-  it('keeps the opportunistic drain in evaluateTasks so the call site cannot be deleted silently', () => {
-    const evalFn = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
-    expect(evalFn).toMatch(/sweepPendingMergePrs\(\)/);
-    expect(evalFn).toMatch(/!paused && getDomainMode\(state\.config, 'cos'\) === 'execute'/);
-  });
-
-  it('does NOT re-couple the drain to the pr-watcher task type', () => {
-    const start = PRESTEP_SRC.indexOf('async function resolvePrWatcherBlock');
-    expect(start, 'resolvePrWatcherBlock must still be findable — a renamed/moved subject would silently pass').toBeGreaterThan(-1);
-    const watcherFn = extractFnBody(PRESTEP_SRC, start);
-    expect(watcherFn).not.toMatch(/sweepPendingMergePrs\(/);
-  });
-
+describe('pending-merge sweep cadence (#3630)', () => {
   it('maps MAX_PENDING_MERGE_TICKS back to wall-clock hours', () => {
     const hours = (PENDING_MERGE_SWEEP_INTERVAL_MS * MAX_PENDING_MERGE_TICKS) / (60 * 60 * 1000);
     expect(PENDING_MERGE_SWEEP_INTERVAL_MS).toBe(30 * 60 * 1000);
     expect(hours).toBe(6);
-  });
-});
-
-describe('CoS maintenance timers — advisory learning removal (#16406)', () => {
-  // The learning store is only ever reset by an explicit user action; none of the
-  // removed timers (performance summary, insights, rehabilitation) may come back.
-  it.each(['cos-performance-summary', 'cos-learning-insights', 'cos-rehabilitation-check'])('does not register or cancel %s', (id) => {
-    expect(COS_SRC).not.toContain(id);
-  });
-  it('no longer reads or auto-resets learning data', () => {
-    expect(COS_SRC).not.toMatch(/checkAndRehabilitateSkippedTasks|resetTaskTypeLearning|getLearningInsights/);
   });
 });
