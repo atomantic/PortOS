@@ -22,7 +22,10 @@ vi.mock('../services/apiHtmlPages.js', () => ({
   startHtmlPageRuns: vi.fn(),
   deleteHtmlPageRun: vi.fn(),
   resumeHtmlPageRun: vi.fn(),
+  getHtmlPageFilePath: vi.fn(),
+  htmlPageFileUrl: (id, index) => `/api/html-pages/runs/${id}/pages/${index}/file`,
 }));
+vi.mock('../lib/clipboard.js', () => ({ copyToClipboard: vi.fn(async () => true) }));
 vi.mock('../components/htmlPages/HtmlPreviewFrame', () => ({
   default: ({ html, title }) => <div data-testid="frame" aria-label={title}>{html ? 'page' : 'empty'}</div>,
 }));
@@ -60,7 +63,8 @@ vi.mock('../components/ProviderModelSelector', () => ({
 }));
 
 import HtmlPages from './HtmlPages';
-import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
+import { deleteHtmlPageRun, getHtmlPageFilePath, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
+import { copyToClipboard } from '../lib/clipboard.js';
 
 const CATALOG = {
   models: [
@@ -222,9 +226,58 @@ describe('HtmlPages', () => {
     const comparison = await screen.findByRole('region', { name: 'Comparison' });
     await waitFor(() => expect(within(comparison).getAllByTestId('frame')).toHaveLength(4));
     expect(within(comparison).getByLabelText('example-a:7b — Brass Orrery')).toBeInTheDocument();
+    expect(within(comparison).getByRole('link', { name: 'Download example-a:7b — Brass Orrery' })).toHaveAttribute('href', '/api/html-pages/runs/r1/pages/1/file');
     // Why a page scored low is shown under its frame, including a cut-off generation.
     expect(within(comparison).getAllByText('Failed: Complete HTML document').length).toBeGreaterThan(0);
     expect(within(comparison).getAllByText(/Stopped at the token limit/).length).toBeGreaterThan(0);
+  });
+
+  it('shows every stored page in a gallery, newest first, with its model, time, tok/s and tokens, and filters by model', async () => {
+    // Cards load their run's HTML once they scroll into view; this observer reports every card visible at once.
+    const observed = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(cb) { this.cb = cb; }
+      observe() { observed.push(this); this.cb([{ isIntersecting: true }]); }
+      disconnect() {}
+    });
+    const page = (theme, extra) => ({ theme, passed: 6, total: 6, elapsedMs: 90_000, bytes: 30_000, checks: [], ...extra });
+    listHtmlPageRuns.mockResolvedValue([
+      run('new', 'example-a:7b', { finishedAt: '2026-11-22T12:00:00Z', pages: [
+        page('One', { tokensPerSecond: 12.4, completionTokens: 13339, finishedAt: '2026-11-22T11:40:00Z' }),
+        page('Two', { tokensPerSecond: 11.9, completionTokens: 9050, finishedAt: '2026-11-22T11:59:00Z' }),
+      ] }),
+      // Stored before pages recorded their own token count and finish time: dated by its run, counts shown as missing.
+      run('old', 'example-b:7b', { finishedAt: '2026-11-20T09:00:00Z', pages: [page('Old', { tokensPerSecond: 40 }), page('Empty', { bytes: 0 })] }),
+    ]);
+    getHtmlPageRun.mockImplementation(async (id) => ({ ...run(id, 'example-b:7b'), pages: [{ html: '<html>a</html>' }, { html: '<html>b</html>' }] }));
+    renderPage('/media/pages?view=gallery');
+
+    const cards = await screen.findAllByRole('listitem');
+    expect(cards).toHaveLength(3);
+    expect(cards.map((c) => within(c).getByText(/example-/).textContent)).toEqual(['example-a:7b', 'example-a:7b', 'example-b:7b']);
+    expect(within(cards[0]).getByText('9,050')).toBeInTheDocument();
+    expect(within(cards[0]).getByText('11.9')).toBeInTheDocument();
+    expect(within(cards[1]).getByText('13,339')).toBeInTheDocument();
+    expect(within(cards[2]).getAllByText('—')).toHaveLength(1);
+    await waitFor(() => expect(screen.getAllByTestId('frame')).toHaveLength(3));
+    // One read per run, shared by its cards.
+    expect(getHtmlPageRun.mock.calls.map(([id]) => id).sort()).toEqual(['new', 'old']);
+
+    // Every page downloads as its file and can hand over where that file is.
+    expect(within(cards[0]).getByRole('link', { name: 'Download example-a:7b — page 2' })).toHaveAttribute('href', '/api/html-pages/runs/new/pages/1/file');
+    getHtmlPageFilePath.mockResolvedValue({ path: '/example/data/html-pages/new/2-two.html', fileName: '2-two.html' });
+    fireEvent.click(within(cards[0]).getByRole('button', { name: 'Copy the file path of example-a:7b — page 2' }));
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith('/example/data/html-pages/new/2-two.html', 'File path copied'));
+    expect(getHtmlPageFilePath).toHaveBeenCalledWith('new', 1, { silent: true });
+
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'ollama::example-b:7b' } });
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Compare: the example-b:7b run' }));
+    expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('compare')).toBe('old');
+    expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('view')).toBe('gallery');
+    const comparison = await screen.findByRole('region', { name: 'Comparison' });
+    expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
+    vi.unstubAllGlobals();
   });
 
   it('restores a comparison from a deep link', async () => {

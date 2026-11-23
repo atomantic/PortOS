@@ -32,3 +32,9 @@ export const htmlPagesRunSchema = z.object({
   pages: z.array(z.string().max(HTML_BRIEF_MAX_CHARS).refine((brief) => brief.trim().length > 0, 'a page brief cannot be blank')).min(1).max(HTML_PAGES_MAX),
 }).refine((body) => body.models.length + body.routes.length >= 1, { message: 'pick at least one model', path: ['models'] })
   .refine((body) => body.models.length + body.routes.length <= HTML_PAGES_MAX_MODELS, { message: `at most ${HTML_PAGES_MAX_MODELS} models per run`, path: ['models'] });
+
+// One stored page by run id and zero-based page number, for its file download and path.
+export const htmlPagesPageParamsSchema = z.object({
+  id: z.string().regex(/^htmlpages-[0-9a-f-]{36}$/, 'not an HTML pages run id'),
+  index: z.coerce.number().int().min(0).max(HTML_PAGES_MAX - 1),
+});

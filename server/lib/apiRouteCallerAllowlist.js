@@ -255,6 +255,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/cos/learning/recommendations',
     '/api/decks/:id/generate-prompts/progress',
     '/api/eidoverse/world/foundations/:id',
+    '/api/html-pages/runs/:id/pages/:index/file',
     '/api/image-gen/setup/check',
     '/api/image-gen/setup/create-venv',
     '/api/image-gen/setup/python',
