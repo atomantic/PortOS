@@ -72,11 +72,16 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
   const hydratedFor = useRef(null);
   useEffect(() => {
     if (!open || jobId || hydratedFor.current === loom.id) return;
+    let active = true;
+    let settled = false;
     hydratedFor.current = loom.id;
     api.getLatestLoomExport(loom.id, { silent: true }).then(result => {
-      if (mounted.current && result?.job) setJobId(previous => previous ?? result.job.jobId);
-    }).catch(() => { hydratedFor.current = null; });
-  }, [open, jobId, loom.id, mounted]);
+      settled = true;
+      if (active && result?.job) setJobId(previous => previous ?? result.job.jobId);
+    }).catch(() => { settled = true; if (active) hydratedFor.current = null; });
+    // A superseded request retries on the next open instead of latching the loom as hydrated.
+    return () => { active = false; if (!settled) hydratedFor.current = null; };
+  }, [open, jobId, loom.id]);
 
   const change = patch => setOptions(previous => ({ ...previous, ...patch }));
   const start = async () => {
