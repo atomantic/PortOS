@@ -30,13 +30,50 @@ import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
 
+const splitList = (text) => text.split(',').map(t => t.trim()).filter(Boolean);
+
+// The shape the Personality form saves. Topics and quirks come from the text
+// inputs because those hold uncommitted typing until blur.
+const buildPersonalityPayload = (formData, topicsText, quirksText) => ({
+  name: formData.name,
+  description: formData.description,
+  userId: formData.userId,
+  personality: { ...formData.personality, topics: splitList(topicsText), quirks: splitList(quirksText) },
+  avatar: formData.avatar
+});
+
+const buildAiConfig = (config) => {
+  if (!config) return undefined;
+  const cleaned = {};
+  if (config.providerId) cleaned.providerId = config.providerId;
+  if (config.model) cleaned.model = config.model;
+  const fnKeys = ['content', 'engagement', 'challenge'];
+  for (const key of fnKeys) {
+    if (config[key]?.providerId) {
+      cleaned[key] = { providerId: config[key].providerId };
+      if (config[key].model) cleaned[key].model = config[key].model;
+    }
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+};
+
+// undefined (no override) and {} must compare equal for dirty tracking.
+const aiConfigKey = (config) => JSON.stringify(buildAiConfig(config) ?? null);
+
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
 
-  // Personality form state
+  // Personality form and AI provider drafts are independent: saving one must
+  // never reset the other. Each has a saved snapshot so dirtiness is derived,
+  // and drafts hydrate only when the agent identity changes.
   const [formData, setFormData] = useState(null);
   const [topicsText, setTopicsText] = useState('');
   const [quirksText, setQuirksText] = useState('');
+  const [savedPersonalityKey, setSavedPersonalityKey] = useState(null);
+  const [savingPersonality, setSavingPersonality] = useState(false);
+  const [aiConfig, setAiConfig] = useState({});
+  const [savedAiConfigKey, setSavedAiConfigKey] = useState(null);
+  const [savingAiConfig, setSavingAiConfig] = useState(false);
 
   // Providers state (for AI config section)
   const [providers, setProviders] = useState([]);
@@ -68,28 +105,27 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
 
-  // Initialize form from agent
+  // Hydrate drafts only when a different agent loads. A refetch of the same
+  // agent (after a save or enabled toggle) must not wipe unsaved edits, so the
+  // dependency is agent?.id and not agent.
   useEffect(() => {
     if (!agent) return;
-    setFormData({
+    const next = {
       name: agent.name,
       description: agent.description || '',
       userId: agent.userId,
       personality: { ...DEFAULT_PERSONALITY, ...agent.personality },
-      avatar: { ...DEFAULT_AVATAR, ...agent.avatar },
-      enabled: agent.enabled,
-      aiConfig: agent.aiConfig || {}
-    });
-  }, [agent]);
-
-  // Sync text fields — only when personality arrays change, not on every formData update
-  const topicsKey = JSON.stringify(formData?.personality?.topics);
-  const quirksKey = JSON.stringify(formData?.personality?.quirks);
-  useEffect(() => {
-    if (!formData) return;
-    setTopicsText(formData.personality.topics.join(', '));
-    setQuirksText(formData.personality.quirks.join(', '));
-  }, [topicsKey, quirksKey]);
+      avatar: { ...DEFAULT_AVATAR, ...agent.avatar }
+    };
+    const topics = next.personality.topics.join(', ');
+    const quirks = next.personality.quirks.join(', ');
+    setFormData(next);
+    setTopicsText(topics);
+    setQuirksText(quirks);
+    setSavedPersonalityKey(JSON.stringify(buildPersonalityPayload(next, topics, quirks)));
+    setAiConfig(agent.aiConfig || {});
+    setSavedAiConfigKey(aiConfigKey(agent.aiConfig));
+  }, [agent?.id]);
 
   const fetchAccounts = useCallback(async () => {
     setAccountsLoading(true);
@@ -176,36 +212,42 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     return filterSelectableModels(p?.models);
   };
 
-  const buildAiConfig = (config) => {
-    if (!config) return undefined;
-    const cleaned = {};
-    if (config.providerId) cleaned.providerId = config.providerId;
-    if (config.model) cleaned.model = config.model;
-    const fnKeys = ['content', 'engagement', 'challenge'];
-    for (const key of fnKeys) {
-      if (config[key]?.providerId) {
-        cleaned[key] = { providerId: config[key].providerId };
-        if (config[key].model) cleaned[key].model = config[key].model;
-      }
-    }
-    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
-  };
+  const personalityPayload = formData ? buildPersonalityPayload(formData, topicsText, quirksText) : null;
+  const personalityDirty = personalityPayload !== null && JSON.stringify(personalityPayload) !== savedPersonalityKey;
+  const aiConfigDirty = aiConfigKey(aiConfig) !== savedAiConfigKey;
+  const hasUnsavedChanges = personalityDirty || aiConfigDirty || savingPersonality || savingAiConfig;
 
+  // The request helper toasts failures; the catch keeps the draft and re-enables Save.
   const handleSave = async (e) => {
     e.preventDefault();
-    const aiConfig = buildAiConfig(formData.aiConfig);
-    const submitData = {
-      ...formData,
-      personality: {
-        ...formData.personality,
-        topics: topicsText.split(',').map(t => t.trim()).filter(Boolean),
-        quirks: quirksText.split(',').map(t => t.trim()).filter(Boolean)
-      },
-      aiConfig
-    };
-    await updateAgentPersonality(agentId, submitData);
-    toast.success('Agent updated');
-    onAgentUpdate?.();
+    if (savingPersonality) return;
+    setSavingPersonality(true);
+    try {
+      await updateAgentPersonality(agentId, personalityPayload);
+      setSavedPersonalityKey(JSON.stringify(personalityPayload));
+      toast.success('Agent updated');
+      onAgentUpdate?.();
+    } catch {
+      // Draft stays intact for retry.
+    } finally {
+      setSavingPersonality(false);
+    }
+  };
+
+  const handleSaveAiConfig = async () => {
+    if (savingAiConfig) return;
+    const cleaned = buildAiConfig(aiConfig);
+    setSavingAiConfig(true);
+    try {
+      await updateAgentPersonality(agentId, { aiConfig: cleaned });
+      setSavedAiConfigKey(aiConfigKey(aiConfig));
+      toast.success(cleaned ? 'AI providers saved' : 'Reset to system defaults');
+      onAgentUpdate?.();
+    } catch {
+      // Draft stays intact for retry.
+    } finally {
+      setSavingAiConfig(false);
+    }
   };
 
   const updatePersonality = (field, value) => {
@@ -416,7 +458,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     type="text"
                     value={topicsText}
                     onChange={(e) => setTopicsText(e.target.value)}
-                    onBlur={() => updatePersonality('topics', topicsText.split(',').map(t => t.trim()).filter(Boolean))}
+                    onBlur={() => updatePersonality('topics', splitList(topicsText))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., technology, AI"
                   />
@@ -426,7 +468,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     type="text"
                     value={quirksText}
                     onChange={(e) => setQuirksText(e.target.value)}
-                    onBlur={() => updatePersonality('quirks', quirksText.split(',').map(t => t.trim()).filter(Boolean))}
+                    onBlur={() => updatePersonality('quirks', splitList(quirksText))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., uses metaphors"
                   />
@@ -445,9 +487,10 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
               <button
                 type="submit"
-                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80"
+                disabled={!personalityDirty || savingPersonality}
+                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
               >
-                Save Changes
+                {savingPersonality ? 'Saving...' : 'Save Changes'}
               </button>
             </form>
           </div>
@@ -504,7 +547,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     <>
                       <button
                         onClick={handleExplore}
-                        disabled={exploring || !quickAccountId}
+                        disabled={exploring || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <Zap size={14} />
@@ -512,7 +555,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleBuild}
-                        disabled={!quickAccountId}
+                        disabled={!quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <MessageSquare size={14} />
@@ -530,7 +573,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleEngage}
-                        disabled={engaging || !quickAccountId}
+                        disabled={engaging || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <MessageSquare size={14} />
@@ -538,7 +581,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleCheckPosts}
-                        disabled={checking || !quickAccountId}
+                        disabled={checking || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <Eye size={14} />
@@ -547,6 +590,11 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     </>
                   )}
                 </div>
+                {hasUnsavedChanges && (
+                  <p role="status" className="mt-2 text-xs text-port-warning">
+                    Save your Personality and AI Provider changes before running actions. They use the saved settings.
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -569,7 +617,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                 { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting', selectionPolicy: providerModeSelectionPolicy('direct-api') },
                 { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges', selectionPolicy: providerModeSelectionPolicy('direct-api') }
               ].map(({ key, label, desc, selectionPolicy }) => {
-                const fnConfig = formData.aiConfig?.[key] || {};
+                const fnConfig = aiConfig?.[key] || {};
                 const fnModels = getModelsForProvider(fnConfig.providerId);
                 return (
                   <div key={key} className="space-y-1">
@@ -586,19 +634,13 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       selectedProviderId={fnConfig.providerId || ''}
                       selectedModel={fnConfig.model || ''}
                       availableModels={fnModels}
-                      onProviderChange={(providerId) => setFormData(prev => ({
+                      onProviderChange={(providerId) => setAiConfig(prev => ({
                         ...prev,
-                        aiConfig: {
-                          ...prev.aiConfig,
-                          [key]: { ...prev.aiConfig?.[key], providerId: providerId || undefined, model: undefined }
-                        }
+                        [key]: { ...prev?.[key], providerId: providerId || undefined, model: undefined }
                       }))}
-                      onModelChange={(model) => setFormData(prev => ({
+                      onModelChange={(model) => setAiConfig(prev => ({
                         ...prev,
-                        aiConfig: {
-                          ...prev.aiConfig,
-                          [key]: { ...prev.aiConfig?.[key], model: model || undefined }
-                        }
+                        [key]: { ...prev?.[key], model: model || undefined }
                       }))}
                       modelDisabled={!fnConfig.providerId}
                       emptyProviderOption="System Default"
@@ -611,15 +653,11 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             </div>
             <button
               type="button"
-              onClick={async () => {
-                const aiConfig = buildAiConfig(formData.aiConfig);
-                await updateAgentPersonality(agentId, { aiConfig });
-                toast.success(aiConfig ? 'AI providers saved' : 'Reset to system defaults');
-                onAgentUpdate?.();
-              }}
-              className="mt-3 px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm"
+              onClick={handleSaveAiConfig}
+              disabled={!aiConfigDirty || savingAiConfig}
+              className="mt-3 px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm disabled:opacity-50"
             >
-              Save AI Config
+              {savingAiConfig ? 'Saving...' : 'Save AI Config'}
             </button>
           </div>
 

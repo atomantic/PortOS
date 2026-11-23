@@ -138,8 +138,9 @@ function AgentDetailContent() {
   }, [tab, agentId, navigate]);
 
   const handleToggle = async () => {
-    await toggleAgentPersonality(agent.id, !agent.enabled);
-    fetchAgent();
+    const updated = await toggleAgentPersonality(agent.id, !agent.enabled);
+    // Merge locally instead of refetching so the Overview tab's unsaved drafts survive.
+    setAgent(prev => (prev && prev.id === agent.id ? { ...prev, enabled: updated?.enabled ?? !agent.enabled } : prev));
   };
 
   if (loading) {
