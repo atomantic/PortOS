@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { isRemoteRequest } from '../lib/requestOrigin.js';
 import { verifyRequestSession } from '../services/auth.js';
 import { isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { z } from 'zod';
@@ -261,7 +262,8 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
     port: data.port,
     instanceId: data.instanceId,
     name: data.name,
-    host: data.host
+    host: data.host,
+    viaRemoteIngress: isRemoteRequest(req)
   });
 
   const self = await getSelf();

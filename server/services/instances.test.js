@@ -1793,9 +1793,10 @@ describe('instances.js', () => {
         await settlement;
       }
       expect(settled).toBe(true);
-      expect(result.peer.lastProbe.ok).toBe(true);
-      expect(connectToPeer).toHaveBeenCalledWith(result.peer);
-      if (waking) expect(result.peer.directions).toContain('outbound');
+      const probed = waking ? peer : result.peer;
+      expect(probed.lastProbe.ok).toBe(true);
+      expect(connectToPeer).toHaveBeenCalledWith(probed);
+      if (waking) expect(peer.directions).toContain('outbound');
     });
 
     it('emits peer:online once per process when an announce marks a known peer online (#11750)', async () => {
@@ -1852,12 +1853,58 @@ describe('instances.js', () => {
       });
 
       expect(result.created).toBe(false);
-      expect(result.peer.host).toBe(before.host);
-      expect(result.peer.port).toBe(before.port);
-      expect(result.peer.name).toBe(before.name);
-      expect(result.peer.status).toBe(before.status);
-      expect(result.peer.directions).toEqual(before.directions);
-      expect(peerBaseUrl(result.peer)).toBe(peerBaseUrl(before));
+      // Forged callers learn nothing beyond the public instanceId they already sent.
+      expect(result.peer).toEqual({ instanceId: 'peer-a' });
+      expect(peerBaseUrl(peer)).toBe(peerBaseUrl(before));
+      expect(peer.host).toBe(before.host);
+      expect(peer.port).toBe(before.port);
+      expect(peer.name).toBe(before.name);
+      expect(peer.status).toBe(before.status);
+    });
+
+    it('returns only the instanceId for an already-paired peer', async () => {
+      const peer = { id: 'peer-local', instanceId: 'peer-a', address: '192.0.2.10', port: 5555,
+        syncSecret: 'synthetic-pair-secret-32-characters-long', lastHealth: { ok: true }, lastApps: [{ id: 'x' }] };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      const result = await announce({ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 });
+      expect(result).toEqual({ created: false, peer: { instanceId: 'peer-a' } });
+      await settleAnnouncements();
+    });
+
+    it('refuses a remote-ingress announce with an unknown instanceId: no peer created, no probe', async () => {
+      expectedProbes = 0;
+      expectedUpdates = 0;
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      await expect(handleAnnounce({ address: '127.0.0.1', port: 5553, instanceId: 'new-id', host: null, viaRemoteIngress: true }))
+        .rejects.toMatchObject({ status: 400 });
+      expect(atomicWrite).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('refuses to create a peer at a loopback address even without remote ingress', async () => {
+      expectedProbes = 0;
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      await expect(handleAnnounce({ address: '127.0.0.1', port: 5553, instanceId: 'new-id' }))
+        .rejects.toMatchObject({ status: 400 });
+    });
+
+    it('does not let a port-15555 announce match, mutate or return a tailcat peer', async () => {
+      expectedProbes = 0;
+      const tc = { id: 'tc', address: '127.0.0.1', port: 15555, transport: 'tailcat', instanceId: 'real-id', directions: ['outbound'] };
+      const before = structuredClone(tc);
+      readJSONFile.mockResolvedValue({ self: null, peers: [tc] });
+      await expect(handleAnnounce({ address: '127.0.0.1', port: 15555, instanceId: 'attacker-id', viaRemoteIngress: true }))
+        .rejects.toMatchObject({ status: 400 });
+      expect(tc).toEqual(before);
+    });
+
+    it('still lets an existing tailcat peer announce by instanceId over remote ingress', async () => {
+      const tc = { id: 'tc', address: '127.0.0.1', port: 15555, transport: 'tailcat', instanceId: 'real-id', directions: ['outbound'] };
+      readJSONFile.mockResolvedValue({ self: null, peers: [tc] });
+      const result = await announce({ address: '127.0.0.1', port: 5555, instanceId: 'real-id', viaRemoteIngress: true });
+      expect(result.created).toBe(false);
+      expect(result.peer.instanceId).toBe('real-id');
+      expect(result.peer.port).toBe(15555);
     });
 
     it('preserves the managed tailcat endpoint when the remote announces its own host and port', async () => {
@@ -2216,10 +2263,7 @@ describe('instances.js', () => {
       });
 
       expect(result.created).toBe(false);
-      expect(result.peer.host).toBeNull();
-      expect(result.peer.port).toBe(5555);
-      expect(result.peer.name).toBe('Stored Box Name');
-      expect(result.peer.nextProbeAt).toBeNull();
+      expect(result.peer).toEqual({ instanceId: 'remote-paired' });
 
       await vi.waitFor(() => expect(onlineEmits().length).toBe(1));
       expect(onlineEmits()[0][1]).toMatchObject({
@@ -2264,10 +2308,7 @@ describe('instances.js', () => {
       });
 
       expect(result.created).toBe(false);
-      expect(result.peer.address).toBe('192.0.2.10');
-      expect(result.peer.port).toBe(5555);
-      expect(result.peer.host).toBeNull();
-      expect(result.peer.name).toBe('Stored Box Name');
+      expect(result.peer).toEqual({ instanceId: 'remote-paired' });
 
       await settleAnnouncements();
       for (const url of fetchedUrls) {
