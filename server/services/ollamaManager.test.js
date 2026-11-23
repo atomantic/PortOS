@@ -133,6 +133,38 @@ describe('ollamaManager residency status', () => {
   })
 })
 
+describe('ollamaManager.isOllamaProvider locality', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('rejects remote Ollama providers so no local daemon is launched for them', async () => {
+    const { isOllamaProvider, ensureProviderReady } = await loadManager()
+    for (const endpoint of ['http://peer-host.example.ts.net:11434/v1', 'http://192.0.2.10:11434/v1']) {
+      const provider = { id: 'ollama-peer', name: 'Ollama (Peer)', type: 'api', endpoint }
+      expect(isOllamaProvider(provider)).toBe(false)
+      await expect(ensureProviderReady(provider)).resolves.toEqual({ success: true, skipped: true })
+    }
+  })
+
+  it('accepts loopback API providers and endpoint-less ollamaBacked CLI providers', async () => {
+    const { isOllamaProvider } = await loadManager()
+    expect(isOllamaProvider({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' })).toBe(true)
+    expect(isOllamaProvider({ id: 'x', name: 'Ollama local', type: 'api', endpoint: 'http://127.0.0.1:11434/v1' })).toBe(true)
+    expect(isOllamaProvider({ id: 'claude-ollama', type: 'cli', ollamaBacked: true })).toBe(true)
+  })
+
+  it('rejects unrelated providers', async () => {
+    const { isOllamaProvider } = await loadManager()
+    expect(isOllamaProvider({ id: 'openai', type: 'api', endpoint: 'https://api.openai.com/v1' })).toBe(false)
+    expect(isOllamaProvider(null)).toBe(false)
+  })
+
+  it('accepts a local provider on the configured custom Ollama port', async () => {
+    vi.stubEnv('OLLAMA_URL', 'http://127.0.0.1:12345')
+    const { isOllamaProvider } = await loadManager()
+    expect(isOllamaProvider({ id: 'custom', type: 'api', endpoint: 'http://127.0.0.1:12345/v1' })).toBe(true)
+  })
+})
+
 describe('ollamaManager startup failures', () => {
   afterEach(() => vi.unstubAllGlobals())
 
