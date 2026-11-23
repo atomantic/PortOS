@@ -46,7 +46,9 @@ async function mtplxCheckpointModels() {
   const { getMtplxServerStatus } = await import('../mtplxServerManager.js');
   const status = await getMtplxServerStatus().catch(() => null);
   const serving = status?.running ? status.config?.model : null;
-  return (status?.cachedModels || [])
+  const cachedRepos = status?.cachedModelRows?.filter((row) => row.valid !== false).map((row) => row.repo)
+    ?? status?.cachedModels ?? [];
+  return cachedRepos
     .filter((repo) => repo !== serving)
     .map((repo) => ({ backend: 'mtplx', runtimeLabel: runtimeLabel('mtplx'), modelId: repo, offline: false, switchesCheckpoint: true }));
 }
