@@ -413,6 +413,12 @@ export async function setTailcatPeerPort(id, port) {
   return updated;
 }
 
+// Tells socket.js to drop inbound Socket.IO sessions the peer authenticated at
+// connect time; a rotated secret or re-enabled peer reconnects with fresh auth.
+function emitPeerAuthRevoked(peer) {
+  instanceEvents.emit('peer:auth-revoked', { peerId: peer.id, instanceId: peer.instanceId });
+}
+
 export async function removePeer(id, { stopTransport = true } = {}) {
   disconnectFromPeer(id);
   // Retire the transport outside the data lock: its lifecycle may itself need
@@ -429,6 +435,7 @@ export async function removePeer(id, { stopTransport = true } = {}) {
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
+  if (removed) emitPeerAuthRevoked(removed);
   // Retire that instance's federated usage digest. Without this the row stays in
   // the fleet report forever: our own snapshot forwards every digest we hold, so
   // a surviving peer would hand it straight back on the next cycle. Dynamic
@@ -448,6 +455,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // probe cycle — otherwise an online relayed peer keeps the stale credential
   // until a natural reconnect. Tracked like hostChanged, consumed below.
   let authChanged = false;
+  let secretChanged = false;
   // Track false→true transitions for the per-record-subscribable categories
   // so we can backfill-subscribe existing local records after the data write
   // settles. Set inside withData (where we have the merged before/after
@@ -473,6 +481,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // new headers (#8356).
         peer.peerAuthAccepted = false;
         authChanged = true;
+        secretChanged = true;
       }
       // Entering the pair secret is the local inbound-admission action.
       if (peer.syncSecret && !peer.directions?.includes('inbound')) {
@@ -597,6 +606,9 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // reconnect using the new URL on the next probe cycle. Invalid/no-op host
   // writes no longer disrupt an already-healthy connection.
   if (updates.enabled === false || hostChanged || authChanged) disconnectFromPeer(id);
+  // The relay above only closes our outbound socket; sockets the peer opened to
+  // this server stay admitted by their handshake-time token unless revoked (#17905).
+  if (result && (updates.enabled === false || secretChanged)) emitPeerAuthRevoked(result);
   // A credential edit is almost always the fix for a 401, but the peer may be
   // deep in exponential probe backoff (up to 1h) from those failures — so the
   // regular poll loop would skip it for hours. Retry immediately: probePeer
@@ -760,7 +772,10 @@ export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
-  if (changed && peer) disconnectFromPeer(peer.id);
+  if (changed && peer) {
+    disconnectFromPeer(peer.id);
+    emitPeerAuthRevoked(peer);
+  }
   return peer;
 }
 

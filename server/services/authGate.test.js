@@ -1279,6 +1279,23 @@ describe('paired peer credential (#8356)', () => {
     expect((await handshake({ ...headers, 'x-portos-peer-auth': 'f'.repeat(64) }))?.data).toEqual({ code: 'AUTH_REQUIRED' });
   });
 
+  it('binds the verified peer identity to the socket and refuses a rotated secret (#17905)', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'example-password' });
+    const peer = pairedPeer();
+    writePeers([peer]);
+    const { socketAuthGate, verifyPeerToken } = await import('./authGate.js');
+    const headers = Object.fromEntries(Object.entries(await peerHeaders()).map(([k, v]) => [k.toLowerCase(), v]));
+    const socket = { handshake: { headers }, data: {} };
+    await new Promise((resolve) => socketAuthGate(socket, resolve));
+    expect(socket.data).toMatchObject({ portosAuthMethod: 'peer', portosPeerId: peer.id, portosPeerInstanceId: peer.instanceId });
+    expect(await verifyPeerToken(headers)).toBeTruthy();
+    writePeers([{ ...peer, syncSecret: 'r'.repeat(40) }]);
+    expect(await verifyPeerToken(headers)).toBeNull();
+    writePeers([{ ...peer, enabled: false }]);
+    expect(await verifyPeerToken(headers)).toBeNull();
+  });
+
   it('wakes probe on inbound peer-authenticated request at most once per 30 s per peer (#12621)', async () => {
     const instances = await import('./instances.js');
     instances.__resetPeerWakesForTests();

@@ -58,7 +58,7 @@ const pairedPeerFor = async (instanceId) => {
     && isPairedPeer(p)) ?? null;
 };
 
-const verifyPeerToken = async (headers) => {
+export const verifyPeerToken = async (headers) => {
   const token = headers?.[PEER_AUTH_HEADER.toLowerCase()];
   const instanceId = headers?.[PEER_INSTANCE_HEADER.toLowerCase()];
   if (typeof token !== 'string' || !token) return null;
@@ -340,9 +340,15 @@ export const socketHasHostControl = (socket) => hasHostControl({ enabled: false 
 // peer relay connection. `socket.data` always exists on a real Socket.IO
 // socket; guarded here only so the plain `{ handshake }` fixtures this
 // module's own tests pass in don't throw.
-const markAuthMethod = (socket, method) => {
+const markAuthMethod = (socket, method, peer = null) => {
   if (!socket.data) socket.data = {};
   socket.data.portosAuthMethod = method;
+  // Lets socket.js drop exactly this peer's sockets when it is disabled,
+  // removed or re-keyed, and binds the sync-room identity to the verified peer.
+  if (peer) {
+    socket.data.portosPeerId = peer.id;
+    socket.data.portosPeerInstanceId = peer.instanceId;
+  }
 };
 
 // engine.io `allowRequest` for the Socket.IO server: refuses the transport
@@ -376,8 +382,9 @@ export const socketAuthGate = async (socket, next) => {
   // grants operator authority — socket.js re-checks every inbound event and
   // allows a peer-authenticated socket only the minimal read-only
   // subscription events it needs (PEER_RELAY_ALLOWED_EVENTS).
-  if (await verifyPeerToken(fakeReq.headers)) {
-    markAuthMethod(socket, 'peer');
+  const peer = await verifyPeerToken(fakeReq.headers);
+  if (peer) {
+    markAuthMethod(socket, 'peer', peer);
     return next();
   }
   const basicPassword = extractBasicPassword(fakeReq);
