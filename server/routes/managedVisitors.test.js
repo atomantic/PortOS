@@ -115,16 +115,30 @@ it('refuses Tailcat-proxied remote callers and DNS-rebound Hosts but keeps local
   const io = new Server(server);
   const ingress = server.listeners('request')[0];
   const path = '/api/managed-visitors/v1/capabilities';
-  for (const enabled of [false, true]) {
-    shared.enabled = enabled;
-    const remote = await request(ingress).get(path).set('Authorization', authHeader()).set('X-Forwarded-For', '127.0.0.1').set('X-PortOS-Local', 'true');
-    expect(remote.status).toBe(403);
-    const rebound = await request(app).get(path).set('Authorization', authHeader()).set('Host', 'rebind.example.invalid').set('Origin', 'http://rebind.example.invalid');
-    expect(rebound.status).toBe(403);
-    expect((await request(app).get(path).set('Authorization', authHeader())).status).toBe(200);
-    expect((await request(app).get(path).set('Authorization', authHeader()).set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1')).status).toBe(200);
+  const previous = shared.enabled;
+  try {
+    for (const enabled of [false, true]) {
+      shared.enabled = enabled;
+      // A remote caller forging every locality signal still arrives marked by the ingress.
+      const remote = await request(ingress).get(path).set('Authorization', authHeader()).set('X-Forwarded-For', '127.0.0.1')
+        .set('X-PortOS-Local', 'true').set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1');
+      expect(remote.status).toBe(403);
+      expect((await request(app).get(path).set('Authorization', authHeader()).set('Origin', 'https://unrelated.invalid')).status).toBe(403);
+      expect((await request(app).get(path).set('Authorization', authHeader())).status).toBe(200);
+      expect((await request(app).get(path).set('Authorization', authHeader()).set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1')).status).toBe(200);
+    }
+  } finally {
+    shared.enabled = previous;
+    io.close();
   }
-  io.close();
+});
+it('refuses a DNS-rebound Host on a loopback socket even without an Origin header', async () => {
+  const { authenticateManagedVisitorRequest } = await vi.importActual('../services/managedVisitors.js');
+  const headers = { authorization: authHeader(), 'sec-fetch-site': 'same-origin' };
+  const local = { socket: { remoteAddress: '127.0.0.1' }, headers: { ...headers, host: 'localhost:5555' } };
+  expect((await authenticateManagedVisitorRequest(local, shared.broker)).appId).toBe(appId);
+  const rebound = { socket: { remoteAddress: '127.0.0.1' }, headers: { ...headers, host: 'rebind.example.invalid' } };
+  await expect(authenticateManagedVisitorRequest(rebound, shared.broker)).rejects.toThrow(/local/);
 });
 it('revokes malformed/private host outputs instead of forwarding or retrying uncertain operations', async () => {
   const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);
