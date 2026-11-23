@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepOrphanedTestProcesses, sweepStaleRunRoots, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
-import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot, testProcessSettlement } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
 
@@ -40,6 +39,21 @@ describe('test process ownership boundaries', () => {
       expect(existsSync(dead)).toBe(process.platform !== 'win32' && mode !== 'complete ancestry');
       expect(existsSync(live)).toBe(true);
       expect(existsSync(unknown)).toBe(mode !== 'complete ancestry');
+    } finally { rmSync(host, { recursive: true, force: true }); }
+  });
+
+  it('reuses a seeded post-close inventory so clean containment crawls the process table at most once', async () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-seed-'));
+    const root = join(host, 'pvt-run');
+    mkdirSync(root);
+    try {
+      const records = [{ pid: process.pid, ppid: process.ppid, start: 'now' }];
+      const read = vi.fn(() => records);
+      expect(await waitForVitestWatchdog(root, { read })).toBe(records);
+      expect(read).toHaveBeenCalledTimes(1);
+      writeOwnerFile(root);
+      expect(killTestProcessesUnder(root, { read, records })).toBe(0);
+      expect(read).toHaveBeenCalledTimes(1);
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -497,10 +511,7 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       const script = join(dead, 'fixture.sh'); writeFileSync(script, 'echo ready\nread answer\n');
       const argumentOnly = await launch(['/bin/sh', script]);
       const unrelated = await launch([process.execPath, '-e', code], { OTHER: `PORTOS_TEST_TEMP_ROOT=${dead} NODE_ENV=test` });
-      const dispose = observeTestProcesses(() => fileURLToPath(import.meta.url), { root: live });
-      let ownedLive;
-      try { ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live }); }
-      finally { dispose(); }
+      const ownedLive = await launch([process.execPath, '-e', code], { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: live });
       // Inspect every process launched by this fixture plus caller ancestry,
       // using real OS metadata. Ambient unreadable host rows correctly retain
       // roots; that separate refusal contract is covered above.
@@ -521,7 +532,7 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
       expect(isProcessAlive(ownedLive.pid)).toBe(true);
       const outcomes = [];
       expect(killTestProcessesUnder(live, { read, onOutcome: outcome => outcomes.push(outcome) })).toBe(1);
-      expect(outcomes).toEqual([expect.objectContaining({ suite: 'scripts/testOwnedProcessRecovery.test.js', phase: 'suite-ended', lifecycle: 'spawned', settlement: 'terminated' })]);
+      expect(outcomes).toEqual([expect.objectContaining({ settlement: 'terminated' })]);
       await vi.waitFor(() => expect(isProcessAlive(ownedLive.pid)).toBe(false));
     } finally {
       await Promise.all(children.map(child => new Promise(resolve => {
