@@ -16,6 +16,7 @@ import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import * as catalogDB from './catalogDB.js';
+import { getCatalogFacetsSql } from '../catalogDB/facets.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -189,6 +190,20 @@ describe.skipIf(!runDb)('catalogDB facets + album filters (#1762)', () => {
     expect(after.items[0].thumbnailKey).toBe(`sheet-${nonce}.png`);
     await catalogDB.detachMedia(ing.id, `sheet-${nonce}.png`, 'reference');
     expect((await catalogDB.listIngredients({ ids: [ing.id], limit: 5 })).items[0].thumbnailKey).toBeNull();
+  });
+
+  it('getCatalogFacets plan has no correlated SubPlan and scans the refs table once (#17753)', async () => {
+    // EXPLAIN the exact SQL getCatalogFacets sends.
+    const { rows } = await query(`EXPLAIN (ANALYZE, FORMAT JSON) ${getCatalogFacetsSql()}`);
+    const scans = [];
+    const walk = (node) => {
+      if (node['Subplan Name']?.startsWith('SubPlan')) scans.push({ subplan: true });
+      if (node['Relation Name'] === 'catalog_ingredient_refs') scans.push({ loops: node['Actual Loops'] });
+      (node.Plans || []).forEach(walk);
+    };
+    walk(rows[0]['QUERY PLAN'][0].Plan);
+    expect(scans.filter((n) => n.subplan)).toEqual([]);
+    expect(scans.filter((n) => !n.subplan)).toEqual([{ loops: 1 }]);
   });
 
   it('getCatalogFacets aggregates type/universe/series/tag facets + bucket counts', async () => {

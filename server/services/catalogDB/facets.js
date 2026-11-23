@@ -8,7 +8,7 @@
  */
 
 import { query } from '../../lib/db.js';
-import { rowToRef, rowToSource, rowToIngredient, liveHomingTargetSql, HOMING_REF_KINDS_SQL, groupRowsByIngredient } from './shared.js';
+import { rowToRef, rowToSource, rowToIngredient, HOMING_REF_KINDS_SQL, groupRowsByIngredient } from './shared.js';
 import { listIngredientsForRef, listRefsForIngredients } from './refs.js';
 import { listMediaForIngredients } from './media.js';
 
@@ -200,63 +200,77 @@ export async function getCatalogStats() {
 // and ORPHANED (has a universe/series ref but none resolve to a live target →
 // "Orphaned" album). Only live universes/series appear in the facet arrays; the
 // joins on `deleted = false` enforce the same live predicate the resolver uses.
+// Single statement: see getCatalogFacets.
+const FACETS_SQL = `
+    WITH live_ingredients AS MATERIALIZED (
+           SELECT id, type, tags FROM catalog_ingredients
+            WHERE deleted = false AND id = catalog_canonical_ingredient_id(id)),
+         canonical_refs AS MATERIALIZED (
+           SELECT r.cid, r.ref_kind, r.ref_id
+             FROM (SELECT catalog_canonical_ingredient_id(ingredient_id) AS cid, ref_kind, ref_id
+                     FROM catalog_identity_read_refs WHERE deleted = false) r
+             JOIN live_ingredients li ON li.id = r.cid),
+         live_universes AS (SELECT id, name FROM universes WHERE deleted = false),
+         live_series AS (SELECT id, name, universe_id FROM pipeline_series WHERE deleted = false),
+         live_cd AS (SELECT id FROM creative_director_projects WHERE deleted = false),
+         uni_members AS (
+           SELECT r.ref_id AS uid, r.cid FROM canonical_refs r WHERE r.ref_kind = 'universe'
+           UNION
+           SELECT s.universe_id, r.cid FROM canonical_refs r
+             JOIN live_series s ON s.id = r.ref_id WHERE r.ref_kind = 'series'),
+         uni_counts AS (
+           SELECT u.id AS ref_id, u.name, COUNT(*)::int AS count
+             FROM uni_members m JOIN live_universes u ON u.id = m.uid GROUP BY u.id, u.name),
+         ser_counts AS (
+           SELECT s.id AS ref_id, s.name, s.universe_id, COUNT(DISTINCT r.cid)::int AS count
+             FROM canonical_refs r JOIN live_series s ON s.id = r.ref_id
+            WHERE r.ref_kind = 'series' GROUP BY s.id, s.name, s.universe_id),
+         type_counts AS (SELECT type, COUNT(*)::int AS count FROM live_ingredients GROUP BY type),
+         tag_counts AS (
+           SELECT tag, COUNT(*)::int AS count FROM (SELECT unnest(tags) AS tag FROM live_ingredients) t GROUP BY tag),
+         per_ingredient AS (
+           SELECT li.id,
+                  COUNT(r.ref_id) AS ref_count,
+                  COUNT(r.ref_id) FILTER (WHERE lu.id IS NOT NULL OR ls.id IS NOT NULL OR lc.id IS NOT NULL) AS live_count
+             FROM live_ingredients li
+             LEFT JOIN canonical_refs r ON r.cid = li.id AND r.ref_kind IN (${HOMING_REF_KINDS_SQL})
+             LEFT JOIN live_universes lu ON r.ref_kind = 'universe' AND lu.id = r.ref_id
+             LEFT JOIN live_series ls ON r.ref_kind = 'series' AND ls.id = r.ref_id
+             LEFT JOIN live_cd lc ON r.ref_kind = 'creative-director' AND lc.id = r.ref_id
+            GROUP BY li.id)
+    SELECT
+      (SELECT COALESCE(json_agg(t ORDER BY t.count DESC, t.type), '[]'::json) FROM type_counts t) AS types,
+      (SELECT COALESCE(json_agg(u ORDER BY u.count DESC, u.name), '[]'::json) FROM uni_counts u) AS universes,
+      (SELECT COALESCE(json_agg(s ORDER BY s.count DESC, s.name), '[]'::json) FROM ser_counts s) AS series,
+      (SELECT COALESCE(json_agg(g ORDER BY g.count DESC, g.tag), '[]'::json) FROM tag_counts g) AS tags,
+      (SELECT COUNT(*) FILTER (WHERE ref_count = 0)::int FROM per_ingredient) AS unlinked,
+      (SELECT COUNT(*) FILTER (WHERE ref_count > 0 AND live_count = 0)::int FROM per_ingredient) AS orphaned`;
+
+export function getCatalogFacetsSql() {
+  return FACETS_SQL;
+}
+
 export async function getCatalogFacets() {
-  const [typeRows, uniRows, serRows, tagRows, bucketRows] = await Promise.all([
-    query(`SELECT type, COUNT(*)::int AS count
-             FROM catalog_ingredients WHERE deleted = false AND id = catalog_canonical_ingredient_id(id)
-            GROUP BY type ORDER BY count DESC, type`),
-    // Universe membership rolls up its series' members (decision #1), so the
-    // album header count matches what the universe album/filter actually lists:
-    // distinct ingredients linked to the universe OR to a live series under it.
-    query(`SELECT u.id AS ref_id, u.name, COUNT(DISTINCT catalog_canonical_ingredient_id(r.ingredient_id))::int AS count
-             FROM universes u
-             JOIN catalog_identity_read_refs r ON r.deleted = false AND (
-                  (r.ref_kind = 'universe' AND r.ref_id = u.id)
-                  OR (r.ref_kind = 'series' AND r.ref_id IN (
-                        SELECT s.id FROM pipeline_series s WHERE s.universe_id = u.id AND s.deleted = false)))
-             JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(r.ingredient_id) AND i.deleted = false AND i.id = catalog_canonical_ingredient_id(i.id)
-            WHERE u.deleted = false
-            GROUP BY u.id, u.name ORDER BY count DESC, u.name`),
-    query(`SELECT s.id AS ref_id, s.name, s.universe_id, COUNT(DISTINCT catalog_canonical_ingredient_id(r.ingredient_id))::int AS count
-             FROM catalog_identity_read_refs r
-             JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(r.ingredient_id) AND i.deleted = false AND i.id = catalog_canonical_ingredient_id(i.id)
-             JOIN pipeline_series s ON s.id = r.ref_id AND s.deleted = false
-            WHERE r.deleted = false AND r.ref_kind = 'series'
-            GROUP BY s.id, s.name, s.universe_id ORDER BY count DESC, s.name`),
-    query(`SELECT tag, COUNT(*)::int AS count
-             FROM (SELECT unnest(tags) AS tag FROM catalog_ingredients WHERE deleted = false AND id = catalog_canonical_ingredient_id(id)) t
-            GROUP BY tag ORDER BY count DESC, tag`),
-    // Per-ingredient bucket classification. ref_count = live homing ref ROWS
-    // (universe/series/creative-director); live_count = those whose target still
-    // resolves. unlinked = ref_count 0; orphaned = ref_count > 0 but live_count 0;
-    // linked = live_count > 0. Same homing-ref set + live predicate as the
-    // listIngredients orphaned/unlinked filters, so the bucket counts and the
-    // album listings can't drift.
-    query(`SELECT
-              COUNT(*) FILTER (WHERE ref_count = 0)::int AS unlinked,
-              COUNT(*) FILTER (WHERE ref_count > 0 AND live_count = 0)::int AS orphaned,
-              COUNT(*) FILTER (WHERE live_count > 0)::int AS linked
-            FROM (
-              SELECT i.id,
-                COUNT(r.ref_id) AS ref_count,
-                COUNT(r.ref_id) FILTER (WHERE ${liveHomingTargetSql('r')}) AS live_count
-              FROM catalog_ingredients i
-              LEFT JOIN catalog_identity_read_refs r
-                ON catalog_canonical_ingredient_id(r.ingredient_id) = i.id AND r.deleted = false AND r.ref_kind IN (${HOMING_REF_KINDS_SQL})
-              WHERE i.deleted = false AND i.id = catalog_canonical_ingredient_id(i.id)
-              GROUP BY i.id
-            ) sub`),
-  ]);
-  const types = typeRows.rows.map((r) => ({ type: r.type, count: r.count }));
-  const total = types.reduce((sum, t) => sum + t.count, 0);
-  const buckets = bucketRows.rows[0] || {};
+  // ONE statement over two materialized bases, so catalog_ingredients and the
+  // identity ref view are each scanned once (#17753). Membership and liveness
+  // are hash joins, not correlated EXISTS/IN subplans (the #12989 pattern):
+  //  - universe membership rolls up its series' members (decision #1): direct
+  //    universe refs UNION refs to a live series under the universe, so the
+  //    album header count matches what the universe album/filter actually lists.
+  //  - bucket: ref_count = homing ref ROWS (universe/series/creative-director);
+  //    live_count = those whose target still resolves. unlinked = ref_count 0;
+  //    orphaned = ref_count > 0 but live_count 0; linked = live_count > 0.
+  //    Same homing-ref set + live predicate as the listIngredients filters.
+  const { rows } = await query(FACETS_SQL);
+  const row = rows[0];
+  const types = row.types.map((r) => ({ type: r.type, count: r.count }));
   return {
     types,
-    universes: uniRows.rows.map((r) => ({ refId: r.ref_id, name: r.name, count: r.count })),
-    series: serRows.rows.map((r) => ({ refId: r.ref_id, name: r.name, universeId: r.universe_id, count: r.count })),
-    tags: tagRows.rows.map((r) => ({ tag: r.tag, count: r.count })),
-    unlinkedCount: buckets.unlinked ?? 0,
-    orphanedCount: buckets.orphaned ?? 0,
-    total,
+    universes: row.universes.map((r) => ({ refId: r.ref_id, name: r.name, count: r.count })),
+    series: row.series.map((r) => ({ refId: r.ref_id, name: r.name, universeId: r.universe_id, count: r.count })),
+    tags: row.tags.map((r) => ({ tag: r.tag, count: r.count })),
+    unlinkedCount: row.unlinked ?? 0,
+    orphanedCount: row.orphaned ?? 0,
+    total: types.reduce((sum, t) => sum + t.count, 0),
   };
 }
