@@ -337,6 +337,19 @@ describe('runVerificationPass', () => {
     expect(res.advanced).toHaveLength(1);
     expect(transitionCase).toHaveBeenCalledWith('c1', 'verification_pending', expect.anything());
   });
+  it('hands the confirmation link over as sealed verification_url, keeping only messageId/score in plain verification (#17758)', async () => {
+    getBroker.mockResolvedValue({ id: 'spokeo', urls: { home: 'https://www.spokeo.com' }, optout: { url: 'https://www.spokeo.com/optout' } });
+    listBrokerCases
+      .mockResolvedValueOnce([{ id: 'c1', brokerId: 'spokeo', state: 'submitted', evidence: {} }])
+      .mockResolvedValueOnce([]);
+    transitionCase.mockClear();
+    const messagesProvider = vi.fn(async () => ({ messages: [{ id: 'm1', subject: 'Confirm your opt-out', body: 'Click https://www.spokeo.com/confirm?t=tok to complete removal.' }] }));
+    await runVerificationPass({ messagesProvider });
+    const { evidence } = transitionCase.mock.calls[0][2];
+    expect(evidence.verification).toEqual({ messageId: 'm1', score: expect.any(Number) });
+    expect(evidence.verification).not.toHaveProperty('url');
+    expect(evidence.verification_url).toBe('https://www.spokeo.com/confirm?t=tok');
+  });
   it('confirms removal only when a read-only re-scan returns not_found', async () => {
     const broker = { id: 'spokeo', urls: { search: 'https://www.spokeo.com/{firstName}-{lastName}/{state}' } };
     getBroker.mockResolvedValue(broker);

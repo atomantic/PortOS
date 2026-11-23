@@ -30,6 +30,9 @@ const {
   resetEnsureSeededForTests,
   clearCaseIdentityEvidence,
   transitionCase,
+  clearSubjectIdentityEvidence,
+  revealCaseEvidence,
+  __resetCaseEvidenceSealForTests,
 } = await import('./privacyBrokers.js');
 
 beforeEach(() => queryMock.mockReset());
@@ -312,5 +315,79 @@ describe('case erasure removes the linked opt-out draft (#17233)', () => {
       : { rows: [caseRow('optout_in_progress', {})] }));
     await transitionCase('case-1', 'optout_in_progress');
     expect(eraseMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('broker confirmation link is sealed identity evidence (#17758)', () => {
+  const URL_ = 'https://broker.example.com/confirm?token=abc&email=a%40example.com';
+  const row = (state, evidence) => ({ id: 'case-1', subject_id: SELF, broker_id: 'spokeo', state, found: true, evidence, disclosed_fields: [] });
+  const writtenEvidence = (client) => {
+    const call = client.query.mock.calls.find(([sql]) => /^UPDATE privacy_broker_cases SET/.test(sql));
+    const raw = call[1].find((p) => typeof p === 'string' && p.includes('{'));
+    return JSON.parse(raw);
+  };
+  const transitionWith = async (stored, evidence) => {
+    const client = { query: vi.fn(async (sql) => (/SELECT id, state, evidence/.test(sql)
+      ? { rows: [{ id: 'case-1', state: 'submitted', evidence: stored }] }
+      : { rows: [row('verification_pending', {})] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    await transitionCase('case-1', 'verification_pending', { evidence });
+    return writtenEvidence(client);
+  };
+
+  it('seals verification_url and merges it with the existing envelope instead of dropping matched/search/listing fields', async () => {
+    const first = await transitionWith({}, { matched_name: 'Jane Example', search_url: 'https://b.example.com/s', listing_urls: ['https://b.example.com/l/1'] });
+    const second = await transitionWith(first, { verification: { messageId: 'm1', score: 3 }, verification_url: URL_ });
+    expect(second.verification).toEqual({ messageId: 'm1', score: 3 });
+    expect(JSON.stringify(second)).not.toContain('token=abc');
+    expect(second.sealed_identity.listing_count).toBe(1);
+
+    // Reveal opens the merged envelope: the link sits beside the older fields.
+    queryMock.mockResolvedValue({ rows: [{ id: 'case-1', evidence: second }] });
+    const revealed = await revealCaseEvidence('case-1');
+    expect(revealed.evidence).toEqual({
+      matched_name: 'Jane Example', search_url: 'https://b.example.com/s', listing_urls: ['https://b.example.com/l/1'], verification_url: URL_,
+    });
+  });
+
+  it('seals a legacy plaintext evidence.verification.url written inline', async () => {
+    const stored = await transitionWith({}, { verification: { messageId: 'm1', score: 3, url: URL_ } });
+    expect(stored.verification).toEqual({ messageId: 'm1', score: 3 });
+    expect(JSON.stringify(stored)).not.toContain('token=abc');
+  });
+
+  it('the case projection never returns the plaintext link even from an unconverted legacy row', async () => {
+    queryMock.mockReset();
+    queryMock.mockResolvedValueOnce({ rows: [row('verification_pending', { verification: { messageId: 'm1', score: 3, url: URL_ } })] });
+    const c = await clearCaseIdentityEvidence('case-1');
+    expect(JSON.stringify(c)).not.toContain('token=abc');
+  });
+
+  it('legacy migration selects rows holding a plaintext verification url and seals them', async () => {
+    __resetCaseEvidenceSealForTests();
+    const legacy = { verification: { messageId: 'm1', score: 3, url: URL_ } };
+    const client = { query: vi.fn(async (sql) => (/^SELECT id, evidence/.test(sql) ? { rows: [{ id: 'case-1', evidence: legacy }] } : { rows: [] })) };
+    withTransactionMock.mockImplementation(async (fn) => fn(client));
+    queryMock.mockReset();
+    queryMock.mockResolvedValue({ rows: [{ id: 'case-1', evidence: {} }] });
+    await revealCaseEvidence('case-1');
+    const [selectSql] = client.query.mock.calls[0];
+    expect(selectSql).toMatch(/evidence->'verification' \? 'url'/);
+    const stored = writtenEvidence(client);
+    expect(stored.verification).toEqual({ messageId: 'm1', score: 3 });
+    expect(stored.sealed_identity).toBeTruthy();
+    expect(JSON.stringify(stored)).not.toContain('token=abc');
+  });
+
+  it('explicit erase and subject erase strip both the envelope and any legacy verification.url', async () => {
+    queryMock.mockReset();
+    queryMock.mockResolvedValue({ rows: [row('found', {})], rowCount: 1 });
+    await clearCaseIdentityEvidence('case-1');
+    await clearSubjectIdentityEvidence('subject-2');
+    for (const [sql, params] of queryMock.mock.calls.filter(([s]) => /^\s*UPDATE/.test(s))) {
+      expect(sql).toContain("#- '{verification,url}'");
+      expect(params[0]).toEqual(expect.arrayContaining(['sealed_identity', 'verification_url']));
+    }
+    expect(queryMock.mock.calls.find(([s]) => /WHERE subject_id/.test(s))[0]).toMatch(/evidence->'verification' \? 'url'/);
   });
 });
