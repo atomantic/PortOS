@@ -85,7 +85,7 @@ describe('useNotifications response contract', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Notifications (0 required actions)' }));
 
-    expect(screen.getByRole('button', { name: 'View notification: Example notification' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Unread: Example notification/ })).toBeInTheDocument();
   });
 });
 

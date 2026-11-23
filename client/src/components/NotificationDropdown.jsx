@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Film, Sparkles, AlarmClock, Share2, GitPullRequest } from 'lucide-react';
@@ -89,6 +89,11 @@ const PRIORITY_COLORS = {
   critical: 'border-red-500/50'
 };
 
+const PRIORITY_LABELS = {
+  high: { text: "High priority", cls: "bg-orange-500/20 text-orange-300" },
+  critical: { text: "Critical", cls: "bg-red-500/20 text-red-300" }
+};
+
 export default function NotificationDropdown({
   notifications,
   unreadCount,
@@ -112,6 +117,8 @@ export default function NotificationDropdown({
   const containerRef = useRef(null);
   const closeRef = useRef(null);
   const navigate = useNavigate();
+  const titleId = useId();
+  const panelId = useId();
 
   // The panel is portaled to <body> and placed in viewport coordinates. That is
   // what keeps it on-screen from this trigger: the bell sits mid-screen in the
@@ -182,6 +189,8 @@ export default function NotificationDropdown({
         title="Notifications"
         aria-label={`Notifications (${actionCountLabel})`}
         aria-expanded={isOpen}
+        aria-haspopup="dialog"
+        aria-controls={isOpen ? panelId : undefined}
       >
         <Bell size={18} className={requiredCount > 0 ? 'text-yellow-400' : 'text-gray-500'} aria-hidden="true" />
         {(requiredCount > 0 || (partialCount && !onlyUnverifiedChecks)) && (
@@ -194,8 +203,10 @@ export default function NotificationDropdown({
       {isOpen && createPortal(
         <div
           ref={popoverRef}
-          role="region"
-          aria-label="Notifications"
+          id={panelId}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
           className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] overflow-hidden"
           style={{
             left: panelStyle?.left ?? `${VIEWPORT_PADDING}px`,
@@ -206,7 +217,7 @@ export default function NotificationDropdown({
         >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-            <span className="font-medium text-white">Notifications</span>
+            <h2 id={titleId} className="font-medium text-white">Notifications</h2>
             <div className="flex items-center gap-2">
               {unreadCount > 0 && (
                 <button
@@ -247,7 +258,7 @@ export default function NotificationDropdown({
           {/* Notification list */}
           <div className="max-h-[60dvh] overflow-y-auto sm:max-h-96">
             <ActionQueuePreview compact queue={actionQueue} onSelect={() => setIsOpen(false)} />
-            <h3 className="px-4 py-2 text-sm text-port-text-muted">Notification history</h3>
+            <h2 className="px-4 py-2 text-sm text-port-text-muted">Notification history</h2>
             {notifications.length === 0 ? (
               <div className="px-4 py-8 text-center text-gray-500">
                 No notifications
@@ -272,14 +283,19 @@ export default function NotificationDropdown({
                         type="button"
                         onClick={() => handleNotificationClick(notification)}
                         className="flex min-w-0 flex-1 items-start gap-3 rounded text-left focus:outline-hidden focus:ring-2 focus:ring-port-accent"
-                        aria-label={`View notification: ${notification.title}`}
                       >
                         <span className={`p-1.5 rounded ${config.bgColor}`} aria-hidden="true">
                           <Icon className={`w-4 h-4 ${config.color}`} />
                         </span>
                         <span className="flex-1 min-w-0">
                           <span className={`block text-sm font-medium break-words ${!notification.read ? 'text-white' : 'text-gray-300'}`}>
+                            {!notification.read && <span className="sr-only">Unread: </span>}
                             {notification.title}
+                            {PRIORITY_LABELS[notification.priority] && (
+                              <span className={`ml-2 align-middle rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${PRIORITY_LABELS[notification.priority].cls}`}>
+                                {PRIORITY_LABELS[notification.priority].text}
+                              </span>
+                            )}
                           </span>
                           {notification.description && (
                             <span className="block text-xs text-gray-500 mt-0.5 line-clamp-2">

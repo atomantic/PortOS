@@ -5,6 +5,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 import NotificationDropdown from './NotificationDropdown';
+import { useEscLayer } from './ui/Modal';
 vi.mock('../hooks/useActionQueue', () => ({
   useActionQueue: () => ({ data: { items: [], partial: false }, loading: false, error: null, refetch: vi.fn() }),
 }));
@@ -48,10 +49,10 @@ const renderDropdown = ({ notifications = makeNotifications(3), observeLocation 
 
 const openPanel = () => {
   fireEvent.click(screen.getByRole('button', { name: /^Notifications/ }));
-  return screen.getByRole('region', { name: 'Notifications' });
+  return screen.getByRole("dialog", { name: "Notifications" });
 };
 
-const queryPanel = () => screen.queryByRole('region', { name: 'Notifications' });
+const queryPanel = () => screen.queryByRole("dialog", { name: "Notifications" });
 
 describe('NotificationDropdown', () => {
   describe('links', () => {
@@ -125,9 +126,45 @@ describe('NotificationDropdown', () => {
 
       expect(screen.getByRole('list', { name: 'Notifications list' })).toBeTruthy();
       expect(screen.queryByRole('menuitem')).toBeNull();
-      expect(screen.getByRole('button', { name: 'View notification: Notification 0' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /^Unread: Notification 0/ })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Mark notification as read: Notification 0' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Remove notification: Notification 0' })).toBeTruthy();
+    });
+
+
+    it('exposes dialog semantics, a heading label, and trigger wiring', () => {
+      renderDropdown();
+      const trigger = screen.getByRole('button', { name: /^Notifications/ });
+      expect(trigger.getAttribute('aria-haspopup')).toBe('dialog');
+      const panel = openPanel();
+      expect(panel.getAttribute('aria-modal')).toBe('true');
+      expect(trigger.getAttribute('aria-controls')).toBe(panel.id);
+      const levels = screen.getAllByRole('heading').map((h) => [h.tagName, h.textContent]);
+      expect(levels).toContainEqual(['H2', 'Notifications']);
+      expect(levels).toContainEqual(['H2', 'Notification history']);
+    });
+
+    it('announces unread state, description, time and non-color priority', () => {
+      renderDropdown({ notifications: [{ ...makeNotifications(1)[0], priority: 'critical' }] });
+      openPanel();
+      const btn = screen.getByRole('button', { name: /^Unread: Notification 0/ });
+      expect(btn.textContent).toContain('Critical');
+      expect(btn.textContent).toContain('Description 0');
+      expect(btn.getAttribute('aria-label')).toBeNull();
+    });
+
+    it('lets an overlay above close first on Escape', () => {
+      const onOverlayEsc = vi.fn();
+      function Overlay() {
+        useEscLayer(true, onOverlayEsc);
+        return null;
+      }
+      renderDropdown();
+      openPanel();
+      render(<Overlay />);
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onOverlayEsc).toHaveBeenCalledTimes(1);
+      expect(queryPanel()).not.toBeNull();
     });
 
     it('keeps interactive controls as siblings rather than nesting buttons', () => {
