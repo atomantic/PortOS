@@ -310,31 +310,6 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
 
 });
 
-describe('status write failures are logged, not swallowed (#8430)', () => {
-  it('logs a failed status→complete write and still finishes the job', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const pid = 'write-1';
-    prime(pid);
-    mutateProjectRecord.mockImplementation(async (id, transform) => {
-      const outcome = await transform({ ...(await getProject(id)), status: 'rendering' });
-      if (outcome.project.status === 'complete') throw new Error('disk full');
-      return outcome;
-    });
-    const { jobId } = await renderMusicVideo(pid);
-    const proc = lastProc();
-    proc.emit('spawn');
-    proc.emit('close', 0, null);
-    await tick();
-
-    expect(getRenderJobStatus(jobId).status).toBe('complete');
-    expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
-      && line.includes(pid) && line.includes('status→complete'))).toBe(true);
-    expect(cancelRender(jobId)).toBe(false);
-    errorSpy.mockRestore();
-  });
-});
-
-
 // Recovery re-checks each record under the store's write lock (#9010): back
 // both the list and the transform with one in-memory store.
 const seedStore = (records) => {
@@ -890,5 +865,74 @@ describe('unsettled finalization recovery', () => {
     lastProc().emit('close', 1, null);
     await tick();
     expect(maintenance.status().blockers).toEqual([expect.objectContaining(retainedBlockers[0])]);
+  });
+});
+
+// A failed settlement write leaves the project unsettled on purpose (the admission
+// blocker stays until recovery), so these run after the ordinary fixtures drained.
+describe('a final render whose project settlement fails is never reported complete (#8430, #17923)', () => {
+  const retainUnsettled = () => {
+    const blockers = maintenance.status().blockers;
+    expect(blockers).toContainEqual(expect.objectContaining({ kind: 'music-video', unsettled: true }));
+    retainedBlockers = blockers.map(({ kind, resource, unsettled }) => ({ kind, resource, ...(unsettled ? { unsettled } : {}) }));
+  };
+  it('logs a failed status→complete write and still finishes the job', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pid = 'write-1';
+    prime(pid);
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      const outcome = await transform({ ...(await getProject(id)), status: 'rendering' });
+      if (outcome.project.status === 'complete') throw new Error('disk full');
+      return outcome;
+    });
+    const { jobId } = await renderMusicVideo(pid);
+    const proc = lastProc();
+    proc.emit('spawn');
+    proc.emit('close', 0, null);
+    await tick();
+
+    // The video exists but the row never settled: never a false 'complete' (#17923).
+    expect(getRenderJobStatus(jobId).status).toBe('error');
+    expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
+      && line.includes(pid) && line.includes('status→complete'))).toBe(true);
+    const sent = broadcastSse.mock.calls.map(([, event]) => event);
+    expect(sent).toContainEqual(expect.objectContaining({ type: 'error', error: expect.stringContaining('saving the project record failed') }));
+    expect(sent.some((event) => event.type === 'complete')).toBe(false);
+    expect(unlink).not.toHaveBeenCalled();
+    expect(cancelRender(jobId)).toBe(false);
+    errorSpy.mockRestore();
+    retainUnsettled();
+  });
+
+  it('a composed render whose settlement write fails also reports an error and keeps the file (#17923)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pid = 'write-composed';
+    getTrack.mockResolvedValue({ audioFilename: 'song.wav' });
+    getProject.mockResolvedValue({
+      id: pid, name: 'P', trackId: 't1', status: 'ready',
+      scenes: [{ sceneId: 's1', order: 0, videoHistoryId: 'h1' }],
+      composition: { version: 1, style: { color: '#ffffff', font: 'sans' }, posterSec: null, mode: 'composed' },
+    });
+    loadHistory.mockResolvedValue([{ id: 'h1', filename: 'a.mp4', width: 768, height: 512, fps: 24, numFrames: 48 }]);
+    mutateProjectRecord.mockImplementation(async (id, transform) => {
+      const outcome = await transform({ ...(await getProject(id)), status: 'rendering', renderingOn: 'inst-self' });
+      if (outcome.project.status === 'complete') throw new Error('disk full');
+      return outcome;
+    });
+    const events = [];
+    const onRender = (event) => events.push(event);
+    musicVideoEvents.on('render', onRender);
+    const { jobId } = await renderMusicVideo(pid);
+    await tick();
+    seg.render.resolve(0);
+    await expect.poll(() => getRenderJobStatus(jobId).status).toBe('error');
+    musicVideoEvents.off?.('render', onRender);
+    const sent = broadcastSse.mock.calls.map(([, event]) => event);
+    expect(sent).toContainEqual(expect.objectContaining({ type: 'error', error: expect.stringContaining('saving the project record failed') }));
+    expect(sent.some((event) => event.type === 'complete')).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({ projectId: pid, jobId, status: 'failed' }));
+    expect(unlink).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    retainUnsettled();
   });
 });
