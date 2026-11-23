@@ -153,6 +153,29 @@ describe('fillTemplate + renderOptOutEmail', () => {
     expect(out.body).toContain('Email: jane@example.com');
     expect(out.body).not.toMatch(/^Subject:/m);
   });
+
+  const tpl = async () => 'Subject: Opt-out for {{fullName}}\n\n{{disclosedSummary}}\n{{listingSection}}\nRegards,\n{{fullName}}\n';
+  const base = {
+    broker: { name: 'B' },
+    payload: { full_name: 'Jane Q Doe', email: 'jane@example.com' },
+    listingUrls: ['https://b.example/p/jane-doe'],
+    templateLoader: tpl,
+  };
+
+  it('omits listing URLs when listing_url is not disclosed', async () => {
+    const out = await renderOptOutEmail({ ...base, disclosedFields: ['full_name', 'email'] });
+    expect(out.body).not.toContain('b.example');
+  });
+  it('renders listing URLs exactly once when listing_url is disclosed', async () => {
+    const out = await renderOptOutEmail({ ...base, disclosedFields: ['full_name', 'listing_url'] });
+    expect(out.body.split('https://b.example/p/jane-doe')).toHaveLength(2);
+  });
+  it('withholds the legal name from subject and signature when full_name is not disclosed', async () => {
+    const out = await renderOptOutEmail({ ...base, disclosedFields: ['email'] });
+    expect(out.subject).toBe('Opt-out for the requesting individual');
+    expect(out.body).not.toContain('Jane');
+    expect(out.body).toContain('the requesting individual');
+  });
 });
 
 describe('brokerDomains + scoreVerificationEmail (anti-phishing)', () => {
