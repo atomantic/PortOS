@@ -460,7 +460,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   const coverage = { complete: false, filesDiscovered: 0, filesInspected: 0, filesCached: 0, filesPending: 0, entriesVisited: 0,
     decodedBytes: 0, recordsRead: 0, logicalSessions: 0, resolvedSessions: 0, unresolvedSessions: 0, duplicateCopies: 0, issues: {} };
   const state = {
-    limits, coverage, routine, started, floor, retainedRecords: 0, revalidatedBytes: 0, unverifiedCoarseSources: false,
+    limits, coverage, routine, started, floor: modifiedSince, retainedRecords: 0, revalidatedBytes: 0, unverifiedCoarseSources: false,
     signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     stopped: null,
     stopReason: () => signal?.aborted ? 'cancelled' : controller.signal.aborted || performance.now() - started >= limits.milliseconds ? 'time_limit' : null,
