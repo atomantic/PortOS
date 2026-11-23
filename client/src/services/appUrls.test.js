@@ -63,4 +63,9 @@ describe('getLaunchUrls — TLS and plain-HTTP on the same port', () => {
     expect(urls.dev).toBe(`http://${window.location.hostname}:5174`);
     expect(urls.http).toBeNull();
   });
+
+  it('opens the loopback-only Eidoverse sequencer through the PortOS origin', () => {
+    const urls = getLaunchUrls({ id: 'example-world', type: 'bun', uiPort: 8940, pm2ProcessNames: ['eidoverse-worlds'] });
+    expect(urls).toEqual({ https: null, http: `${window.location.origin}/eidoverse/solo`, dev: null });
+  });
 });

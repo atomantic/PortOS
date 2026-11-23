@@ -27,7 +27,8 @@ import { parseEcosystemFromPath } from '../../services/streamingDetect.js';
 import { usesPm2, isDesktopType } from '../../services/appProcessTypes.js';
 import { detectAppIcon, isUsableSvg, resolveContainedIcon } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
-import { EIDOVERSE_PROCESS_NAME, EIDOVERSE_MAX_MEMORY_RESTART } from '../../services/eidoverse.js';
+import { EIDOVERSE_PROCESS_NAME } from '../../lib/eidoversePort.js';
+import { launchEidoverseProcess, restartEidoverseProcess } from '../../services/eidoverseLaunch.js';
 import { logsQuerySchema, pm2ProcessNameSchema } from '../../lib/sharedSchemas.js';
 
 // PM2 failures are caught into per-process `{ success: false, error }` results so
@@ -128,7 +129,8 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
   const ecosystemChecks = await Promise.all(
     ['ecosystem.config.cjs', 'ecosystem.config.js'].map(f => pathExists(`${app.repoPath}/${f}`))
   );
-  const hasEcosystem = !desktop && ecosystemChecks.some(Boolean);
+  // The Eidoverse sequencer only ever starts through its loopback command.
+  const hasEcosystem = !desktop && !processNames.includes(EIDOVERSE_PROCESS_NAME) && ecosystemChecks.some(Boolean);
 
   let results = {};
 
@@ -159,11 +161,10 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
         results[name] = await launchDesktopProcess(app, name, command);
         continue;
       }
-      const result = await pm2Service.startWithCommand(name, app.repoPath, command, {
-        pm2Home: app.pm2Home,
-        port: singleProcessPort,
-        ...(name === EIDOVERSE_PROCESS_NAME ? { maxMemoryRestart: EIDOVERSE_MAX_MEMORY_RESTART } : {}),
-      })
+      const launch = name === EIDOVERSE_PROCESS_NAME
+        ? launchEidoverseProcess(app)
+        : pm2Service.startWithCommand(name, app.repoPath, command, { pm2Home: app.pm2Home, port: singleProcessPort });
+      const result = await launch
         .catch(err => ({ success: false, error: err.message }));
       results[name] = result;
     }
@@ -227,7 +228,10 @@ router.post('/:id/restart', loadApp, asyncHandler(async (req, res) => {
   const results = {};
 
   for (const name of app.pm2ProcessNames || []) {
-    const result = await pm2Service.restartApp(name, app.pm2Home)
+    const restart = name === EIDOVERSE_PROCESS_NAME
+      ? restartEidoverseProcess(app)
+      : pm2Service.restartApp(name, app.pm2Home);
+    const result = await restart
       .catch(err => ({ success: false, error: err.message }));
     results[name] = result;
   }

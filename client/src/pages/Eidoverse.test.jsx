@@ -415,36 +415,29 @@ describe('Eidoverse hosted page', () => {
   it('uses the same-origin /eidoverse-host path for an HTTPS MagicDNS page', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
-      setup,
       { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
     )).toBe('https://host-alpha.example-tailnet.ts.net/eidoverse-host/');
     expect(() => hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
-      setup,
       { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
     )).toThrow(/shared certificate/);
   });
 
-  // Same-origin path keeps a single-port tailcat forward working (UI host+port
-  // only). The one escape is an HTTP page in front of an HTTPS-only host
-  // certificate that does not cover the hostname — loopback mirror / some Vite
-  // setups — where we still fall back to the direct :uiPort load.
-  it('routes through /eidoverse-host on the UI origin, with a direct-uiPort escape for HTTP+HTTPS-cert', () => {
+  // Same-origin path keeps a single-port tailcat forward working, and the
+  // sequencer's own port is loopback-only, so it is never a browser URL.
+  it('routes through /eidoverse-host on the UI origin for every page and host scheme', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
-      setup,
       { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net:5555' },
     )).toBe('http://host-alpha.example-tailnet.ts.net:5555/eidoverse-host/');
     expect(hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
-      setup,
       { protocol: 'http:', hostname: '127.0.0.1', host: '127.0.0.1:15555' },
     )).toBe('http://127.0.0.1:15555/eidoverse-host/');
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
-      setup,
       { protocol: 'http:', hostname: 'localhost', host: 'localhost:5553' },
-    )).toBe(`http://localhost:${setup.uiPort}/`);
+    )).toBe('http://localhost:5553/eidoverse-host/');
   });
 
   it('opens World only as an in-app chromeless route that reuses the same host iframe', async () => {
