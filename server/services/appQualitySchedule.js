@@ -301,6 +301,11 @@ export async function inapplicableAuditReason(appId, taskType) {
  * @param {{ ignoreTaskTypes?: string[] }} [options]
  * @returns {Promise<object[]>} One entry per occupying cron: `{ taskType, cron, origin, days, hours }`
  */
+// Continuous watchers and any cron firing at least this many hours a day
+// would otherwise mark every cell busy and leave the planner with 0 slots.
+export const NON_EXCLUSIVE_SCHEDULE_TASK_TYPES = new Set(['pr-watcher', 'pr-reviewer', 'issue-watcher']);
+export const MAX_BLOCKING_HOURS_PER_DAY = 12;
+
 export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {}) {
   const ignore = new Set(ignoreTaskTypes);
   const [schedule, overrides] = await Promise.all([loadSchedule(), getAppTaskTypeOverrides(app.id)]);
@@ -308,8 +313,9 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
 
   const add = (taskType, cron, origin) => {
     if (!isCronExpression(cron)) return;
+    if (NON_EXCLUSIVE_SCHEDULE_TASK_TYPES.has(taskType)) return;
     const occupancy = cronWeekdayHours(cron);
-    if (occupancy) sources.push({ taskType, cron, origin, ...occupancy });
+    if (occupancy && occupancy.hours.length < MAX_BLOCKING_HOURS_PER_DAY) sources.push({ taskType, cron, origin, ...occupancy });
   };
 
   for (const [taskType, config] of Object.entries(schedule.tasks || {})) {
@@ -405,17 +411,28 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
 
   const taskTypes = requested ?? checks.filter(check => check.applicable).map(check => check.taskType);
 
-  const plan = planQualitySchedule({
-    taskTypes,
-    fileIssuesByType: options.fileIssuesByType || {},
-    busy: buildBusySlots(sources, settings),
-    options: settings,
-  });
+  const fileIssuesByType = options.fileIssuesByType || {};
+  let plan = planQualitySchedule({ taskTypes, fileIssuesByType, busy: buildBusySlots(sources, settings), options: settings });
+  // Padding can swallow every hour even when the raw crons leave gaps; an
+  // unpadded plan beats an empty one, with the trade-off stated.
+  if (!plan.slots.length && taskTypes.length && sources.length) {
+    const unpadded = planQualitySchedule({
+      taskTypes,
+      fileIssuesByType,
+      busy: buildBusySlots(sources, { padBeforeHours: 0, padAfterHours: 0 }),
+      options: settings,
+    });
+    if (unpadded.slots.length) {
+      plan = { ...unpadded, warnings: ['Padding around existing scheduled tasks left no free hours, so the plan ignores the padding and may sit directly beside them.', ...unpadded.warnings] };
+    }
+  }
   return {
     appId: app.id,
     appName: app.name,
     hasExistingSchedule: saved.hasExistingSchedule,
     plan,
+    selectedTaskTypes: taskTypes,
+    selectedFileIssuesByType: fileIssuesByType,
     checks,
     capabilities,
     scanned,
