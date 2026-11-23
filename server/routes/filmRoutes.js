@@ -5,7 +5,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { normalizeBlenderRecord } from '../lib/musicVideo/musicVideoBlender.js';
 import {
   musicVideoBlenderCutSchema, musicVideoBlenderFileQuerySchema, musicVideoBlenderFileWriteSchema, musicVideoBlenderMediaQuerySchema,
-  musicVideoBlenderNoteSchema, musicVideoBlenderRenderSchema, musicVideoBlenderSettingsSchema, musicVideoBlenderSyncSchema,
+  musicVideoBlenderMotionReferencesSchema, musicVideoBlenderMotionStripSchema, musicVideoBlenderNoteSchema, musicVideoBlenderRenderSchema, musicVideoBlenderSettingsSchema, musicVideoBlenderSyncSchema,
   musicVideoBlenderWorkspaceSchema,
 } from '../lib/musicVideo/musicVideoBlenderValidation.js';
 
@@ -120,6 +120,20 @@ router.put('/:id/blender/shots/:shotId/note', asyncHandler(async (req, res) => {
   const { saveBlenderShotNote } = await import('../services/film/record.js');
   await saveBlenderShotNote(await ownerOf(req), req.params.shotId, input);
   res.json(await stateOf(await ownerOf(req)));
+}));
+
+router.put('/:id/blender/shots/:shotId/motion-references', asyncHandler(async (req, res) => {
+  const { references } = validateRequest(musicVideoBlenderMotionReferencesSchema, req.body ?? {});
+  const { saveBlenderMotionReferences } = await import('../services/film/motionReferences.js');
+  await saveBlenderMotionReferences(await ownerOf(req), req.params.shotId, references);
+  res.json(await stateOf(await ownerOf(req)));
+}));
+
+// Tiles the reference on a contact sheet's grid → { file, path, every, columns, tiles, sheet, available }.
+router.post('/:id/blender/shots/:shotId/motion-references/:refId/strip', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoBlenderMotionStripSchema, req.body ?? {});
+  const { makeBlenderMotionStrip } = await import('../services/film/motionReferences.js');
+  res.json(await makeBlenderMotionStrip(await ownerOf(req), req.params.shotId, req.params.refId, input));
 }));
 
 router.post('/:id/blender/shots/:shotId/open', asyncHandler(async (req, res) => {

@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { Box, Camera, Clapperboard, Film, LayoutGrid, Square } from 'lucide-react';
 import BlenderShotPlayer from './BlenderShotPlayer.jsx';
 import BlenderShotNote from './BlenderShotNote.jsx';
+import BlenderMotionReferences from './BlenderMotionReferences.jsx';
 import BlenderStatusChip from './BlenderStatusChip.jsx';
 import {
   blenderSheetPreviewKey, blenderShotPlayable, blenderShotRenderStatus, blenderShotTiming, blenderStaleReason, blenderStillPreviewKey, isBlenderJobActive,
@@ -29,7 +30,7 @@ const renderLabel = (noun, view) => {
  * The actions sit above the player so both stay in view on a laptop.
  * `blocker` is why a render cannot start (`{ message, tab }`, null when it can).
  */
-function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPreview, onOpenTab }) {
+function BlenderShotDetail({ blender, shot, audioUrl, blocker, playheadSec = null, onTime, onOpenPreview, onOpenTab }) {
   const { musicVideoBlenderMediaUrl } = useFilmApi();
   const { state, pending, projectId } = blender;
   const [quality, setQuality] = useState(null);
@@ -170,6 +171,7 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
           </ul>
         </section>
       )}
+      <BlenderMotionReferences blender={blender} shot={shot} sheet={renders.sheets?.[0] || null} still={renders.stills?.[0] || null} playheadSec={playheadSec} />
       <section aria-label="Contact sheets" className="min-w-0 space-y-1.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h5 className="text-xs text-port-text-muted">Contact sheets</h5>

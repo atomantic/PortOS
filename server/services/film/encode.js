@@ -178,6 +178,39 @@ async function stageLeadFrames({ framesDir, startFrame, frameCount, quality, sta
   });
 }
 
+// Contact sheet and motion-reference strip share the tile cell so their columns line up.
+const SHEET_TILE_WIDTH = 320;
+const sheetTile = (columns, rows) => `tile=${columns}x${rows}:margin=4:padding=4:color=black`;
+
+/**
+ * ffmpeg arguments that tile `count` frames of a reference video, one every `stepSec` of its own
+ * time from `startSec`, into the same grid (`columns` wide, `rows` tall, same cell width) a contact
+ * sheet of `width`x`height` frames uses. Cells past `count` stay black. Pure.
+ */
+export function blenderMotionStripArgs({ video, startSec, stepSec, count, columns, rows, width, height, output }) {
+  const cellHeight = Math.max(2, Math.round((SHEET_TILE_WIDTH * height) / width / 2) * 2);
+  const fit = `scale=${SHEET_TILE_WIDTH}:${cellHeight}:force_original_aspect_ratio=decrease:flags=lanczos`;
+  const pad = `pad=${SHEET_TILE_WIDTH}:${cellHeight}:(ow-iw)/2:(oh-ih)/2:color=black`;
+  return [
+    '-hide_banner', '-loglevel', 'error',
+    // Frames land on 0, step, 2*step...; stopping half a step after the last one keeps exactly `count` of them.
+    '-ss', String(startSec), '-t', String((count - 0.5) * stepSec), '-i', video,
+    '-vf', `fps=fps=1/${stepSec}:round=near,${fit},${pad},${sheetTile(columns, rows)}`,
+    '-frames:v', '1', '-q:v', '3', '-y', output,
+  ];
+}
+
+/** Tile a reference video's frames into a JPEG strip at `output`, replacing it only once ffmpeg succeeded. */
+export async function encodeBlenderMotionStrip({ output, signal, ...grid }) {
+  const ffmpeg = await requireFfmpeg();
+  const partial = `${output}.part.jpg`;
+  await runBlenderFfmpeg(ffmpeg, blenderMotionStripArgs({ ...grid, output: partial }), { signal, what: 'Tiling the motion reference strip' }).catch(async (error) => {
+    await rm(partial, { force: true });
+    throw error;
+  });
+  await rename(partial, output);
+}
+
 /** Tile `frames` into a JPEG contact sheet at `output` (`columns` wide). */
 export async function encodeBlenderSheet({ frames, columns, listFile, output, signal }) {
   const ffmpeg = await requireFfmpeg();
@@ -188,7 +221,7 @@ export async function encodeBlenderSheet({ frames, columns, listFile, output, si
   const args = [
     '-hide_banner', '-loglevel', 'error',
     '-f', 'concat', '-safe', '0', '-i', listFile,
-    '-vf', `scale=320:-2:flags=lanczos,tile=${columns}x${rows}:margin=4:padding=4:color=black`,
+    '-vf', `scale=${SHEET_TILE_WIDTH}:-2:flags=lanczos,${sheetTile(columns, rows)}`,
     '-frames:v', '1', '-q:v', '3', '-y', partial,
   ];
   await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Tiling the contact sheet' }).catch(async (error) => {

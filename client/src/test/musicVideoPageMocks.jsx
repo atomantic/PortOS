@@ -220,6 +220,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   // Blender film: read only for a project in that render style; a test that opens one supplies the state.
   getMusicVideoBlender: vi.fn(() => new Promise(() => {})),
   saveMusicVideoBlenderSettings: vi.fn(),
+  saveMusicVideoBlenderMotionReferences: vi.fn(),
+  makeMusicVideoBlenderMotionStrip: vi.fn(),
   createMusicVideoBlenderWorkspace: vi.fn(),
   listMusicVideoBlenderFiles: vi.fn(async () => ({ files: [] })),
   getMusicVideoBlenderFile: vi.fn(),

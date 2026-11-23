@@ -128,6 +128,12 @@ Rules that keep a film renderable:
      Always review motion from contact sheets rendered through PortOS (stills alone cannot establish motion, and a
      separate local runner does not pass PortOS's exact shot timing). A current preview is tiled as it stands; a code
      shot with no current preview draws its own frames, and a code layer is painted onto the tiles. Neither needs Blender.
+   - Motion references (timing only): read `motionReferences` in the state. Each `{ id, filename, inSec, outSec, speed,
+     note, missing, strip }` has a `strip.path` image tiled on the contact sheet's grid (same columns, same time step
+     scaled by `speed`); open it beside the sheet and compare timing column by column (which foot moves first, how long
+     it is airborne). `POST .../blender/shots/<shotId>/motion-references/<refId>/strip` with `{ "sheet": <sheet.file> }`
+     lines one up with a specific sheet. Never use a reference as the look, and attach one only when the director asked
+     (`PUT .../shots/<shotId>/motion-references`); they never mark a render out of date.
 3. **Previews**: `{ "quality": "preview" }` renders every shot that has no current preview, so send it again after
    each edit: it takes the shots that went stale and any not rendered yet, and skips the rest (`skipped`).
    `"onlyStale": true` narrows it to renders that exist and went stale; `"force": true` re-renders current ones.

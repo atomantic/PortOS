@@ -17,6 +17,14 @@ export const MUSIC_VIDEO_BLENDER_SHEET_LIMITS = Object.freeze({
   columns: { min: 2, max: 12, default: 6 },
   maxTiles: 96,
 });
+// Motion references: short Media History clips a shot is reviewed against, for timing only.
+export const MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS = Object.freeze({
+  perShot: 3,
+  speed: { min: 0.25, max: 4, default: 1 },
+  noteMax: 500,
+  secMax: 36000,
+});
+export const MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 export const MUSIC_VIDEO_BLENDER_NOTE_STATUSES = Object.freeze(['todo', 'wip', 'review', 'approved']);
 export const MUSIC_VIDEO_BLENDER_MAX_SHOTS = 400;
 
@@ -145,9 +153,59 @@ export function blenderEffectiveOptions(declared, saved) {
     .map((option) => [option.key, Object.hasOwn(valid, option.key) ? valid[option.key] : option.default]));
 }
 
+const roundSec = (value) => Math.round(value * 1000) / 1000;
+
+/**
+ * One stored motion reference as `{ id, filename, inSec, outSec, speed, note }`, or null when it
+ * cannot be read (no id or video, an empty or reversed window). Out-of-range speed is clamped.
+ */
+export function normalizeBlenderMotionReference(input) {
+  const raw = plainObject(input);
+  const limits = MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS;
+  if (typeof raw.id !== 'string' || !MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_ID.test(raw.id)) return null;
+  if (typeof raw.filename !== 'string' || !raw.filename) return null;
+  const inSec = Number.isFinite(raw.inSec) ? raw.inSec : 0;
+  if (inSec < 0 || !Number.isFinite(raw.outSec) || raw.outSec <= inSec || raw.outSec > limits.secMax) return null;
+  const speed = Number.isFinite(raw.speed) ? Math.min(limits.speed.max, Math.max(limits.speed.min, raw.speed)) : limits.speed.default;
+  return {
+    id: raw.id, filename: raw.filename, inSec: roundSec(inSec), outSec: roundSec(raw.outSec), speed,
+    note: typeof raw.note === 'string' ? raw.note.slice(0, limits.noteMax) : '',
+  };
+}
+
+/** The stored `{ [shotId]: [reference] }` with every unreadable shot, reference or surplus one left out. */
+export function normalizeBlenderMotionReferences(input) {
+  const result = {};
+  for (const [shotId, list] of Object.entries(plainObject(input))) {
+    if (!MUSIC_VIDEO_BLENDER_SHOT_ID.test(shotId) || !Array.isArray(list)) continue;
+    const seen = new Set();
+    const refs = list.map(normalizeBlenderMotionReference)
+      .filter((ref) => ref && !seen.has(ref.id) && seen.add(ref.id))
+      .slice(0, MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS.perShot);
+    if (refs.length) result[shotId] = refs;
+  }
+  return result;
+}
+
+/**
+ * Where a reference is read for each tile of a contact sheet: tile `k` of a sheet that starts at
+ * absolute frame `firstFrame` and steps `every` frames shows song time `(firstFrame + k * every) / fps`,
+ * so the reference tile at the same column shows its own time `inSec + (that - shot.start) * speed`.
+ * A tile past the reference's out point (or before its in point) is null: the strip leaves it blank.
+ */
+export function blenderMotionReferenceTimes({ shot, ref, fps, every, firstFrame, tiles }) {
+  return Array.from({ length: tiles }, (_, index) => {
+    // A shot boundary off the frame grid rounds its first frame down by under half a frame: that is still its start.
+    const raw = (firstFrame + index * every) / fps - shot.start;
+    const local = raw < 0 && raw >= -0.5 / fps ? 0 : raw;
+    const at = ref.inSec + local * ref.speed;
+    return local >= 0 && at < ref.outSec ? roundSec(at) : null;
+  });
+}
+
 /**
  * A project's install-local `blender` field with every part present:
- * `{ settings, sceneMap, notes, syncedAt, manifestHash, final }`. `final` is
+ * `{ settings, sceneMap, notes, motionReferences, syncedAt, manifestHash, final }`. `final` is
  * `{ jobId, signature }`: which final render was last joined from the shots,
  * and from which shot renders (so a shot rendered since shows it out of date).
  */
@@ -158,6 +216,7 @@ export function normalizeBlenderRecord(value) {
     settings: normalizeBlenderSettings(raw.settings),
     sceneMap: plainObject(raw.sceneMap),
     notes: plainObject(raw.notes),
+    motionReferences: normalizeBlenderMotionReferences(raw.motionReferences),
     syncedAt: typeof raw.syncedAt === 'string' ? raw.syncedAt : null,
     manifestHash: typeof raw.manifestHash === 'string' ? raw.manifestHash : null,
     final: typeof final.jobId === 'string' && typeof final.signature === 'string' ? { jobId: final.jobId, signature: final.signature } : null,
