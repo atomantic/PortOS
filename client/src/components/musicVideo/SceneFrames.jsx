@@ -9,7 +9,7 @@ import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, Pe
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import BlurCommitTextarea from '../ui/BlurCommitTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
-import SceneFrameRenderTarget, { frameRenderTargetOverrides, lastFrameRenderTarget } from './SceneFrameRenderTarget.jsx';
+import SceneFrameRenderTarget, { frameRenderProjectLabel, frameRenderTargetOverrides, lastFrameRenderTarget } from './SceneFrameRenderTarget.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
@@ -144,6 +144,10 @@ export default function SceneFrames({
   useEffect(() => { onImageTargetChange?.(imageTarget); }, [imageTarget, onImageTargetChange]);
   const withTarget = (extra) => (imageTarget ? { ...extra, imageTarget } : extra);
 
+  // Keep this override out of the device's remembered picker and SceneCard's Retry/Clip actions.
+  const [takeModel, setTakeModel] = useState(null);
+  const framesDefaultLabel = frameRenderProjectLabel(framePick ? { imageMode: framePick, imageModelId: frameOptions.modelId } : project);
+
   const column = (which) => {
     const start = which === 'start';
     const label = start ? (endFrames ? 'Start' : 'Still') : 'End';
@@ -154,9 +158,14 @@ export default function SceneFrames({
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
     const sharedTake = !!sourceWindow;
+    const blocked = sharedTake || greyboxBlocked || generating || needsPrompt;
+    const oneTake = takeModel?.which === which ? takeModel : null;
+    const renderTarget = frameRenderTargetOverrides(oneTake?.pick, oneTake?.options) || imageTarget;
     const render = () => {
-      if (sharedTake) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null }));
+      if (blocked) return;
+      const payload = { referenceImageId: ref ? frames[ref] : null, ...(renderTarget ? { imageTarget: renderTarget } : {}) };
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, payload);
+      if (oneTake) setTakeModel(null);
     };
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
@@ -191,14 +200,21 @@ export default function SceneFrames({
           onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
           placeholder={start ? (fromSheet ? 'Anything the shot details don\'t cover' : 'What the frame shows (empty: uses the clip prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
         {/* What the frame sends: its prompt plus every addition, as chips. */}
-        {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} enabled={shown} />}
+        {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} enabled={shown} imageTarget={renderTarget} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={render} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
+          <button type="button" onClick={render} disabled={blocked} className={PRIMARY_BUTTON}
             title={sharedTake ? `Plays ${sourceWindow.source?.label || 'the source shot'}'s frame` : needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
+          {!sharedTake && imageId && (
+            <button type="button" className={SECONDARY_BUTTON} disabled={!!generating} aria-expanded={!!oneTake}
+              aria-controls={id(`${which}-take-model`)} aria-label={`Image model for this ${start ? (endFrames ? 'start frame' : 'frame') : 'end frame'} take`}
+              onClick={() => setTakeModel(oneTake ? null : { which, pick: '', options: {} })}>
+              Image model for this take
+            </button>
+          )}
           {olderLook && (
             <button type="button" onClick={rerender} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
               aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
@@ -235,6 +251,15 @@ export default function SceneFrames({
             </button>
           )}
         </div>
+        {oneTake && !sharedTake && imageId && (
+          <div role="group" aria-label="One-take image model" className="min-w-0 space-y-1 rounded border border-port-border p-2" id={id(`${which}-take-model`)}>
+            <SceneFrameRenderTarget id={id(`${which}-take-render`)} value={oneTake.pick} options={oneTake.options} project={project}
+              remember={false} defaultOption={`Current frame setting · ${framesDefaultLabel}`} disabled={!!generating}
+              onChange={(pick) => setTakeModel((current) => ({ ...current, pick }))}
+              onOptionsChange={(options) => setTakeModel((current) => ({ ...current, options }))} />
+            <p className="text-xs text-port-text-muted">Only the next new {start ? 'frame' : 'end frame'} take uses this choice.</p>
+          </div>
+        )}
         {olderLook && (
           <p className="text-xs text-port-text-muted">{olderCharacter
             ? `${olderCharacter.reasons.join(' · ')}. Re-render to use the current reference, or keep it with Still matches on the take.`

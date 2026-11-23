@@ -55,18 +55,20 @@ export function lastFrameRenderTarget() {
  * project pin uses.
  */
 export default function SceneFrameRenderTarget({
-  id, value, onChange, options = {}, onOptionsChange, project = null, disabled = false, editing = false,
+  id, value, onChange, options = {}, onOptionsChange, project = null, disabled = false, editing = false, remember = true, defaultOption = null,
 }) {
   const setModel = (modelId) => {
     const next = { modelId: modelId || null };
     onOptionsChange?.(next);
-    rememberFrameRenderTarget(value, next);
+    if (remember) rememberFrameRenderTarget(value, next);
   };
+  const targets = frameRenderTargetOptions(project);
+  if (defaultOption) targets[0] = { value: '', label: defaultOption };
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <RenderOnSelect id={id} value={value} disabled={disabled} options={frameRenderTargetOptions(project)}
-        title="Where this shot's frames render. Only this shot; the project image service stays as it is."
-        onChange={(next) => { onChange(next); onOptionsChange?.({}); rememberFrameRenderTarget(next, {}); }} />
+      <RenderOnSelect id={id} value={value} disabled={disabled} options={targets}
+        title={remember ? "Where this shot's frames render. Only this shot; the project image service stays as it is." : "Where only this take renders. This does not change your image settings."}
+        onChange={(next) => { onChange(next); onOptionsChange?.({}); if (remember) rememberFrameRenderTarget(next, {}); }} />
       <ImageModelField id={`${id}-model`} mode={value} value={options.modelId || null} disabled={disabled}
         editing={editing} commit="change" inline className={`${COMPACT_SELECT} flex-1`} onChange={setModel} />
     </div>
