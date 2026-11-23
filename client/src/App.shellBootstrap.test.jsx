@@ -96,7 +96,7 @@ it('keeps cold shell requests bounded and isolates bell and rail updates from th
   });
   const sidebar = within(document.getElementById('app-sidebar'));
   fireEvent.click(sidebar.getByRole('button', { name: /Notifications/ }));
-  expect(screen.getByRole('button', { name: 'View notification: Example notification' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /^Unread: Example notification/ })).toBeInTheDocument();
 
   await act(async () => fireEvent.mouseEnter(sidebar.getByRole('button', { name: 'Apps', exact: true }).parentElement));
   const flyout = within(screen.getByRole('navigation', { name: 'Apps pages' }));
