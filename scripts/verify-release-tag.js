@@ -2,11 +2,11 @@
 
 // Guards the release tag against drifting off the tree CI verified.
 //
-// `softprops/action-gh-release` creates a missing tag at the repository's
-// default branch unless it is told otherwise, and ignores its target entirely
-// when the tag already exists. release.yml therefore pins `target_commitish` to
-// the triggering SHA for the missing-tag case, and runs this script for the
-// other one: when `v<version>` already exists, it is peeled (annotated tags
+// `gh release create` creates a missing tag at the repository's default branch
+// unless it is told otherwise (`--target`), and ignores its target entirely when
+// the tag already exists. release.yml therefore passes `--target` the triggering
+// SHA for the missing-tag case, and runs this script for the other one: when
+// `v<version>` already exists, it is peeled (annotated tags
 // included) to its commit and that commit's TREE must equal the tree being
 // released. A same-tree commit with a different SHA (a main merge parent) is
 // fine; anything else — different tree, unexpected object type, or any lookup

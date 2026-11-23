@@ -224,9 +224,12 @@ export function vitestShardSlice(files, { repoRoot, scope, index, count, path = 
   return hashed.slice(start, end).map(({ rel }) => rel);
 }
 
-// Hosted durations from #17618. Two server shards pin only these files so the
-// rest keep today's SHA-1 owner (memo cache keys stay put). Shard 1 also runs
-// the 7s Smoke-boot step, so its pinned seconds sit just under shard 2.
+// Hosted durations from #17618 and #17778. Two server shards pin only these
+// files so the rest keep today's SHA-1 owner (memo cache keys stay put). Shard 1
+// also runs the 7s Smoke-boot step. Cold-memo hosted runs (#17778) put shard 1
+// at ~885s of parallel CPU vs ~522s on shard 2 while the pins sat on shard 1, so
+// the heavy memoizable suites >10s and two parallel fixtures moved to shard 2 to
+// bring both shards to ~700s. Shard 1 keeps the lighter pins (its Smoke-boot step).
 // Structural guards: 9.1s / 9.6s / 10.0s. Serial capture: 33.1s and 7.0s.
 // Parallel unmemoizable suites fill the remainder (33.2, 27, 25.1, 20.2, 19.5,
 // 15, 14, 13.8, 12.3, 11.4, 11.4, 11.1).
@@ -236,8 +239,6 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
   'scripts/pregate.test.js': 1,
   'scripts/setup-image-video.test.js': 1,
   'scripts/lib/testMemo.test.js': 1,
-  'scripts/vitestTempRoot.test.js': 1,
-  'scripts/generate_ltx2.test.js': 1,
   'scripts/vitestSiblingSweep.test.js': 1,
   'scripts/update-headless-recovery.test.js': 1,
   'server/services/updateExecutor.deferred.test.js': 1,
@@ -248,6 +249,16 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
   'server/services/repoRepairCompletion.test.js': 2,
   'scripts/runCiTestsClientFixture.test.js': 2,
   'scripts/lib/testMemoRunner.test.js': 2,
+  'scripts/vitestTempRoot.test.js': 2,
+  'scripts/generate_ltx2.test.js': 2,
+  'server/services/musicVideo/castAndSetsService.test.js': 2,
+  'server/services/musicVideo/audioAnalysis.test.js': 2,
+  'server/lib/databaseMaintenanceWorker.test.js': 2,
+  'server/services/claimBranchCleanup.integration.test.js': 2,
+  'server/routes/musicVideoBlender.test.js': 2,
+  'server/services/eidoverseWorld.runtime.test.js': 2,
+  'scripts/setup-voice.ps1.test.js': 2,
+  'server/routes/musicVideoDcp.test.js': 2,
 };
 
 /**

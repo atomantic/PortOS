@@ -72,7 +72,13 @@ describe('release.yml publication contract', () => {
   const release = workflowJobs(yaml).release;
 
   it('creates a new tag at the triggering SHA, never the default branch', () => {
-    expect(release).toMatch(/uses: softprops\/action-gh-release@[0-9a-f]{40}[\s\S]*?target_commitish: \$\{\{ github\.sha \}\}/);
+    expect(release).toMatch(/TARGET_SHA: \$\{\{ github\.sha \}\}[\s\S]*?gh release create "\$RELEASE_TAG"[\s\S]*?--target "\$TARGET_SHA"/);
+  });
+
+  it('publishes with the preinstalled gh CLI and no third-party release action', () => {
+    expect(yaml).not.toMatch(/softprops\/action-gh-release/);
+    expect(release).toMatch(/gh release create "\$RELEASE_TAG"[\s\S]*?--title "\$RELEASE_TITLE"[\s\S]*?--notes-file "\$BODY_FILE"/);
+    expect(release).not.toMatch(/--draft|--prerelease|--verify-tag/);
   });
 
   it('publishes the single RELEASE.md and never archives or renames notes', () => {
@@ -83,11 +89,11 @@ describe('release.yml publication contract', () => {
   it('checks an existing tag before the release can be created', () => {
     const check = release.indexOf('node scripts/verify-release-tag.js');
     expect(check).toBeGreaterThan(-1);
-    expect(check).toBeLessThan(release.indexOf('softprops/action-gh-release'));
+    expect(check).toBeLessThan(release.indexOf('gh release create'));
   });
 
   it('re-checks the tag after publication and keeps the existing permissions', () => {
-    expect(release.lastIndexOf('node scripts/verify-release-tag.js')).toBeGreaterThan(release.indexOf('softprops/action-gh-release'));
+    expect(release.lastIndexOf('node scripts/verify-release-tag.js')).toBeGreaterThan(release.indexOf('gh release create'));
     expect(yaml.match(/^permissions:\n {2}contents: write\n/m)).not.toBeNull();
     expect(yaml).not.toMatch(/--force|git push[^\n]*\btag\b|git tag /);
   });

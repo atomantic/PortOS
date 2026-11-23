@@ -184,20 +184,25 @@ jobs:
           echo "body_path=$BODY_FILE" >> "$GITHUB_OUTPUT"
           echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
 
+      # The preinstalled gh CLI replaces a third-party release action: it is the
+      # only publication path in this privileged contents:write job. --target
+      # creates a missing tag at the exact commit CI verified; without it GitHub
+      # resolves a new tag against main's tip, which can have moved. A tag that
+      # already exists is never retargeted by this step (the check above guards it).
       - name: Create Release
         if: steps.release-check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
-        with:
-          tag_name: v${{ steps.package-version.outputs.version }}
-          name: ${{ steps.changelog.outputs.release_title }}
-          body_path: ${{ steps.changelog.outputs.body_path }}
-          # Create a missing tag at the exact commit CI verified. Without this
-          # GitHub resolves a new tag against main's tip, which can have moved.
-          target_commitish: ${{ github.sha }}
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v${{ steps.package-version.outputs.version }}
+          RELEASE_TITLE: ${{ steps.changelog.outputs.release_title }}
+          BODY_FILE: ${{ steps.changelog.outputs.body_path }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$TARGET_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes-file "$BODY_FILE"
 
       - name: Confirm published tag is on the verified tree
         if: steps.release-check.outputs.exists == 'false'
