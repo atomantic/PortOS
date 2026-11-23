@@ -205,7 +205,11 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
     (current) => {
       const lines = Array.isArray(current?.lines) ? current.lines : [];
       const line = lines[lineIdx];
-      if (!line) return {};
+      if (!line) {
+        throw new ServerError(`lineIdx ${lineIdx} out of range (have ${lines.length})`, {
+          status: 404, code: 'PIPELINE_AUDIO_LINE_NOT_FOUND',
+        });
+      }
       const next = { ...line };
       if ('text' in body) next.text = body.text;
       if ('voiceIdOverride' in body) next.voiceIdOverride = body.voiceIdOverride;
@@ -654,7 +658,11 @@ router.post('/issues/:id/stages/audio/cues/:cueIdx/render', asyncHandler((req, r
     (current) => {
       const curCues = Array.isArray(current?.cues) ? current.cues : [];
       const target = curCues[cueIdx];
-      if (!target) return {};
+      if (!target) {
+        throw new ServerError(`cueIdx ${cueIdx} no longer exists — cues changed while rendering`, {
+          status: 409, code: 'PIPELINE_AUDIO_CUE_STALE_TARGET',
+        });
+      }
       const nextCues = [...curCues];
       nextCues[cueIdx] = {
         ...target,
