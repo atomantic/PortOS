@@ -95,7 +95,7 @@ export function wakePeerProbe(peer) {
   });
 
   probePeer(peer).catch((err) => {
-    console.log(`⚠️ Wake probe failed for ${peer.name || peer.id}: ${err.message}`);
+    console.log(`⚠️ Wake probe failed for ${peerLogLabel()}: ${err.message}`);
   });
 
   return true;
@@ -376,7 +376,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       directions: ['outbound']
     };
     data.peers.push(entry);
-    console.log(`🌐 Peer added: ${entry.name} (${entry.id})`);
+    console.log(`🌐 ${peerLogLabel()} added`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
@@ -400,7 +400,7 @@ export async function setTailcatPeerPort(id, port) {
     const peer = data.peers.find(p => p.id === id && p.transport === 'tailcat');
     if (!peer || peer.port === port) return peer || null;
     peer.port = port;
-    console.log(`🐈 Tailcat peer ${peer.name} repointed to 127.0.0.1:${port}`);
+    console.log(`🐈 Tailcat ${peerLogLabel()} repointed to loopback forward`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return peer;
   });
@@ -421,7 +421,7 @@ export async function removePeer(id, { stopTransport = true } = {}) {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;
     const [entry] = data.peers.splice(idx, 1);
-    console.log(`🌐 Peer removed: ${entry.name}`);
+    console.log(`🌐 ${peerLogLabel()} removed`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
@@ -536,7 +536,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         if (!sameAuth(peer.auth, normalizedAuth)) {
           peer.auth = normalizedAuth; // null clears, object sets
           authChanged = true;
-          console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peer.name}`);
+          console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peerLogLabel()}`);
         }
         // When sameAuth was true (credential unchanged), authChanged is still
         // false. If the peer is stuck in authRequired+backoff the user is
@@ -558,7 +558,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
       if (canonicalStringify(previous ?? null) !== canonicalStringify(next)) {
         peer.mediaProvider = next;
         if (!next.enabled) delete peer.mediaProviderStatus;
-        console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peer.name}`);
+        console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peerLogLabel()}`);
       }
     }
     if (peer.transport !== 'tailcat' && updates.host !== undefined) {
@@ -570,7 +570,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // re-adopts the DNS name and the user can't revert to IP).
         peer.hostManual = true;
         hostChanged = true;
-        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peer.name}`);
+        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peerLogLabel()}`);
       }
     }
     // Per-(peer, category) schema-version gaps, populated by syncOrchestrator
@@ -916,7 +916,7 @@ export async function probePeer(peer) {
     at: probedAt,
   });
   if (status !== 'online') {
-    console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(probeFailure, peer, tunnelError)} ${formatProbeDiagnosticLog(lastProbe)}`);
+    console.log(`⚠️ Probe failed for ${peerLogLabel()}: ${classifyProbeError(probeFailure, peer, tunnelError)} ${formatProbeDiagnosticLog(lastProbe)}`);
   }
 
   const stored = await withData(async (data) => {
@@ -954,7 +954,7 @@ export async function probePeer(peer) {
     // Backoff tracking for failed probes
     if (status === 'online') {
       if (entry.consecutiveFailures > 0) {
-        console.log(`🌐 Peer ${entry.name} recovered after ${entry.consecutiveFailures} consecutive failures`);
+        console.log(`🌐 ${peerLogLabel()} recovered after ${entry.consecutiveFailures} consecutive failures`);
       }
       entry.consecutiveFailures = 0;
       entry.nextProbeAt = null;
@@ -963,7 +963,7 @@ export async function probePeer(peer) {
       const tier = Math.min(entry.consecutiveFailures - 1, BACKOFF_TIERS_MS.length - 1);
       const backoffMs = BACKOFF_TIERS_MS[tier];
       entry.nextProbeAt = new Date(Date.now() + backoffMs).toISOString();
-      console.log(`⏳ Peer ${entry.name} backoff tier ${tier} (${backoffMs / 1000}s), failures: ${entry.consecutiveFailures}`);
+      console.log(`⏳ ${peerLogLabel()} backoff tier ${tier} (${backoffMs / 1000}s), failures: ${entry.consecutiveFailures}`);
     }
 
     return entry;
@@ -1122,12 +1122,12 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // existing.host check alone can't distinguish from "never set".
       if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
-        console.log(`🌐 Peer host learned via announce: ${existing.name}`);
+        console.log(`🌐 Peer host learned via announce: ${peerLogLabel()}`);
       }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
-      console.log(`🌐 Peer announced (existing): ${existing.name}`);
+      console.log(`🌐 Peer announced (existing): ${peerLogLabel()}`);
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
@@ -1160,7 +1160,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       directions: ['inbound']
     };
     data.peers.push(peer);
-    console.log(`🌐 Peer announced (new): ${peer.name} (${peer.id})`);
+    console.log(`🌐 Peer announced (new): ${peerLogLabel()}`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return { created: true, peer };
   });
@@ -1174,11 +1174,11 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   // Immediately probe newly announced peers to populate health data
   if (result.created) {
     probePeer(result.peer).catch(err => {
-      console.log(`⚠️ Initial probe failed for announced peer ${result.peer.name}: ${err.message}`);
+      console.log(`⚠️ Initial probe failed for announced ${peerLogLabel()}: ${err.message}`);
     });
   } else if (peerToWake) {
     probePeer(peerToWake).catch(err => {
-      console.log(`⚠️ Wake probe failed for ${peerToWake.name || peerToWake.id}: ${err.message}`);
+      console.log(`⚠️ Wake probe failed for ${peerLogLabel()}: ${err.message}`);
     });
   }
 
@@ -1213,13 +1213,13 @@ async function announceSelf(peer) {
       signal
     }, peer);
     if (res.ok) {
-      console.log(`🌐 Announced self to ${url}`);
+      console.log(`🌐 Announced self to ${peerLogLabel()}`);
       await markDirection(peer.id, 'outbound');
     } else {
-      console.log(`🌐 Announce to ${url} failed: HTTP ${res.status}`);
+      console.log(`🌐 Announce to ${peerLogLabel()} failed: HTTP ${res.status}`);
     }
   }).catch((err) => {
-    console.log(`🌐 Announce to ${url} unreachable: ${err.message}`);
+    console.log(`🌐 Announce to ${peerLogLabel()} unreachable: ${err.message}`);
   });
 }
 
@@ -1391,7 +1391,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
   }
   if (changed) {
     const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
-    console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${peer.fullSync ? 'full-mirror' : (enabledList || 'none')}`);
+    console.log(`🔁 Reciprocal sync applied for ${peerLogLabel()}: ${peer.fullSync ? 'full-mirror' : (enabledList || 'none')}`);
   }
   return { changed, peer };
 }
@@ -1427,7 +1427,7 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
     }, peer);
     if (res.ok) {
       const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
-      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
+      console.log(`🔁 Requested reciprocal sync from ${peerLogLabel()}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
       return { ok: true };
     }
     // 404 = peer predates this endpoint; not an error worth surfacing loudly.
