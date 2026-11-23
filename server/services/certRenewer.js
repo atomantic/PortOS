@@ -14,17 +14,33 @@
 import { execFile } from '../lib/childProcess.js';
 import { existsSync, readFileSync, statSync } from 'fs';
 import { promisify } from 'util';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { findTailscale } from '../lib/tailscale.js';
 import { certPaths } from '../../lib/certPaths.js';
-import { readCertMeta } from '../../lib/certMeta.js';
+import { readCertMeta, readCertExpiresAt } from '../../lib/certMeta.js';
 
 const execFileAsync = promisify(execFile);
 
 const { cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(PATHS.data);
 const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
+const CERT_CLI_TIMEOUT_MS = 60_000;
+let inFlight = false;
+
 async function renewOnce(httpsServer) {
+  if (inFlight) {
+    console.log(`ℹ️ cert renewer: previous renewal still running, skipping`);
+    return;
+  }
+  inFlight = true;
+  try {
+    await renewLocked(httpsServer);
+  } finally {
+    inFlight = false;
+  }
+}
+
+async function renewLocked(httpsServer) {
   const meta = readCertMeta(META_PATH);
   if (!meta || meta.mode !== 'tailscale' || !meta.hostname) return;
 
@@ -36,25 +52,40 @@ async function renewOnce(httpsServer) {
 
   const mtimeBefore = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
 
-  const { stderr } = await execFileAsync(bin, [
-    'cert',
-    `--cert-file=${CERT_PATH}`,
-    `--key-file=${KEY_PATH}`,
-    meta.hostname
-  ]).catch(err => ({ stderr: err.message }));
+  let stderr = '';
+  try {
+    ({ stderr = '' } = await execFileAsync(bin, [
+      'cert',
+      `--cert-file=${CERT_PATH}`,
+      `--key-file=${KEY_PATH}`,
+      meta.hostname
+    ], { timeout: CERT_CLI_TIMEOUT_MS }));
+  } catch (err) {
+    // A failed or timed-out CLI may have left a half-written pair; never hot-swap it.
+    console.log(`⚠️ cert renewer: tailscale cert failed: ${err.message.trim().split('\n')[0]}`);
+    return;
+  }
 
   if (stderr && !/Wrote (public|private)/.test(stderr)) {
     console.log(`⚠️ cert renewer: tailscale cert stderr: ${stderr.trim().split('\n')[0]}`);
   }
 
-  const mtimeAfter = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
-  if (mtimeAfter > mtimeBefore) {
-    httpsServer.setSecureContext({
-      cert: readFileSync(CERT_PATH),
-      key: readFileSync(KEY_PATH)
-    });
-    console.log(`🔒 cert renewer: hot-swapped renewed cert for ${meta.hostname}`);
-  }
+  const certMtime = existsSync(CERT_PATH) ? statSync(CERT_PATH).mtimeMs : 0;
+  if (certMtime <= mtimeBefore) return;
+
+  httpsServer.setSecureContext({
+    cert: readFileSync(CERT_PATH),
+    key: readFileSync(KEY_PATH)
+  });
+  console.log(`🔒 cert renewer: hot-swapped renewed cert for ${meta.hostname}`);
+
+  await atomicWrite(META_PATH, {
+    mode: 'tailscale',
+    hostname: meta.hostname,
+    issuedAt: new Date().toISOString(),
+    expiresAt: readCertExpiresAt(CERT_PATH),
+    certMtime
+  });
 }
 
 export function initCertRenewer(httpsServer) {

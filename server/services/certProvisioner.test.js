@@ -134,6 +134,7 @@ describe('provisionTailscaleCert success', () => {
     const meta = JSON.parse(readFileSync(META, 'utf8'));
     expect(meta).toMatchObject({ mode: 'tailscale', hostname: 'host.example.ts.net', certMtime: 2_000_000_000 });
     expect(Number.isNaN(Date.parse(meta.issuedAt))).toBe(false);
+    expect(meta).toHaveProperty('expiresAt', null); // fixture cert is not a parseable PEM
   });
 
   it('wroteNew is false when the CLI leaves cert.pem untouched', async () => {
