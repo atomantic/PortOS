@@ -56,6 +56,8 @@ import { commandExists } from '../lib/commandExists.js'
 import { whichFirst } from '../lib/processEnv.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
+import { importModelFromHfSafetensors } from './ollamaSafetensorsImport.js'
+import { importModelFromGguf as importOllamaGguf, resolveLocalModel as resolveOllamaLocalModel } from './ollamaDiskImport.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { localModelInventoryRow } from '../lib/modelInventory.js'
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js'
@@ -1334,7 +1336,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
   if (backend === 'ollama') {
     const importSpec = getOllamaImportSpec(modelId)
     const result = importSpec
-      ? await ollamaManager.importModelFromHfSafetensors(importSpec, onProgress)
+      ? await importModelFromHfSafetensors(importSpec, onProgress)
       : await ollamaManager.pullModel(modelId, onProgress, { signal })
     if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
@@ -1554,7 +1556,7 @@ async function tryLocalImport(to, model, targetId, resolved, mode, onProgress) {
   const verb = mode === 'link' ? 'Linking' : 'Copying'
   onProgress({ event: 'start', message: `${verb} ${name} onto ${to} (no download)…` })
   const r = to === 'ollama'
-    ? await ollamaManager.importModelFromGguf({ name, ggufPath: resolved.ggufPath, mode })
+    ? await importOllamaGguf({ name, ggufPath: resolved.ggufPath, mode })
     : await lmStudioManager.importModelFromGguf({ lmstudioId: name, ggufPath: resolved.ggufPath, projectorPath: resolved.projectorPath, mode })
   if (!r.success) {
     onProgress({ event: 'start', message: `Local import of ${model.id} failed (${r.error}); re-pulling…` })
@@ -1615,7 +1617,7 @@ export async function migrateBackend(to, { mode = 'link', onProgress = () => {} 
   const results = []
   for (const model of sourceModels) {
     const { targetId, exact } = mapModelToBackend(from, model.id, to)
-    const resolved = await manager(from).resolveLocalModel(model.id).catch(() => null)
+    const resolved = await (from === 'ollama' ? resolveOllamaLocalModel : lmStudioManager.resolveLocalModel)(model.id).catch(() => null)
 
     // 1) Fast path — link/copy the GGUF locally (no download) when we can.
     const imported = await tryLocalImport(to, model, targetId, resolved, mode, onProgress)
