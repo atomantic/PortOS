@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../../services/apiAccounts.js', () => ({
@@ -174,7 +174,7 @@ describe('unsaved edit protection', () => {
     updateAgentPersonality.mockResolvedValue({});
     renderTab();
     const engage = await screen.findByRole('button', { name: 'Engage Now' });
-    expect(engage).toBeEnabled();
+    await waitFor(() => expect(engage).toBeEnabled());
     expect(screen.queryByText(/Save your Personality and AI Provider changes/)).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Draft' } });
