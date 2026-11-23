@@ -60,9 +60,9 @@ describe('trusted CI test-memo cache reuse', () => {
   it.each([
     ['server', FULL_SUITE_SHARDS.server],
     ['client', FULL_SUITE_SHARDS.client],
-    ['browser', 2],
+    ['browser', 4],
   ])('restores and merges each full-run %s shard lineage once', (family, count) => {
-    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0'";
+    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0'";
     const mergeExpression = family === 'browser'
       ? mergeBrowserShards
       : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;

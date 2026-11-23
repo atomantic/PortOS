@@ -26,7 +26,7 @@ import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
-import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { BROWSER_SUITES, browserShardSlice } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
@@ -1402,5 +1402,25 @@ describe('shouldWarmTestChrome (#17750)', () => {
   });
   it('never warms outside CI', () => {
     expect(shouldWarmTestChrome({ scope: 'client', run: [browser], env: {} })).toBe(false);
+  });
+});
+
+describe('browser shard ownership', () => {
+  it.each([1, 2, 3, 4])('covers every registered suite exactly once across %i shards', (count) => {
+    for (const profile of ['full', 'smoke']) {
+      const slices = Array.from({ length: count }, (_, i) => browserShardSlice(BROWSER_SUITES, { index: i + 1, count }, profile));
+      expect(slices.flat().toSorted()).toEqual([...BROWSER_SUITES].toSorted());
+    }
+  });
+
+  it('keeps the four heaviest serial capture suites on separate four-shard runners', () => {
+    const heavy = [
+      'server/services/musicVideo/documentRender.browser.test.js',
+      'server/services/htmlComposition/index.test.js',
+      'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/lib/filmLookGpu.browser.test.js',
+    ];
+    const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
+    expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
   });
 });
