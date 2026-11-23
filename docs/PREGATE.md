@@ -116,8 +116,9 @@ change the POSIX signal behavior.
 Test process containment keeps signal delivery separate from verified
 termination. After worker-pool closure, the runner gives its Vitest watchdog
 a brief window to exit on IPC disconnect. Owned children that require
-containment get a bounded report in `.cache/test-process-diagnostics/`. The CI
-launcher also retains `processes.json` in its attempt diagnostics. Reports contain
+containment are logged to stderr; the CI launcher passes
+`PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH` to retain a bounded `processes.json` in
+its attempt diagnostics. Reports contain
 fixed process-kind/settlement categories, never raw process arguments,
 environments, PIDs or private paths. Clean teardown takes a single post-close
 process-table inventory (the run owner's exit hook skips it once the root is
