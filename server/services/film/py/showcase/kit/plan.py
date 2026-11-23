@@ -29,6 +29,9 @@ HERO_VIEW = FIXED_VIEWS["three-quarter"]
 DEFAULT_TIMINGS = {"turn": 8.0, "assembly": 6.0, "control": 2.5, "closeup": 3.0, "reference": 4.0}
 ASSEMBLY_SPREAD = 1.5
 DEFAULT_LENS = 50.0
+# Poses measured per control (its swing out; the way back repeats them) and at least per action, to frame the controls shot.
+POSED_STEPS = 24
+POSED_STEPS_PER_SECOND = 12
 
 BACKGROUNDS = {"studio": (0.18, 0.19, 0.21), "dark": (0.012, 0.013, 0.016), "light": (0.8, 0.8, 0.82)}
 ACCENTS = {"amber": (1.0, 0.55, 0.08), "teal": (0.05, 0.75, 0.7), "magenta": (0.9, 0.12, 0.55), "blue": (0.1, 0.35, 1.0), "white": (1.0, 1.0, 1.0)}
@@ -86,6 +89,12 @@ def diagonal(data):
 
 def model_center(data):
     return (0.0, 0.0, size_of(data)[2] / 2.0)
+
+
+def rest_bounds(data):
+    """`(low, high)` corners of the model as published, standing at every control's default."""
+    x, y, z = size_of(data)
+    return ((-x / 2.0, -y / 2.0, 0.0), (x / 2.0, y / 2.0, z))
 
 
 def _timing(data, key):
@@ -186,9 +195,9 @@ def basis(azimuth, elevation):
     }
 
 
-def fit_distance(data, lens, aspect):
-    """How far a camera must stand to fit the model's bounding sphere with a little room."""
-    radius = diagonal(data) / 2.0
+def fit_distance(data, lens, aspect, radius=None):
+    """How far a camera must stand to fit a sphere (the model's bounding sphere by default) with a little room."""
+    radius = diagonal(data) / 2.0 if radius is None else radius
     half = math.atan(SENSOR_MM / 2.0 / lens * min(aspect, 1.0 / aspect))
     return radius / math.sin(half) * 1.15
 
@@ -198,7 +207,7 @@ def camera(data, azimuth, elevation, distance, lens, target=None):
     axes = basis(azimuth, elevation)
     location = tuple(target[axis] + axes["back"][axis] * distance for axis in range(3))
     return {"location": location, "right": axes["right"], "up": axes["up"], "back": axes["back"], "lens": lens, "target": target,
-            "clipStart": max(distance / 1000.0, 1e-5), "clipEnd": distance + diagonal(data) * 12.0}
+            "clipStart": max(distance / 1000.0, 1e-5), "clipEnd": distance + max(distance, diagonal(data) * 12.0)}
 
 
 def turntable_pose(data, options, shot, t, aspect):
@@ -248,10 +257,37 @@ def _unmet_free(data, control_id, values):
         _unmet_free(data, dep["control"], values)
 
 
+def posed_bounds(data, options, shot, corners):
+    """`(low, high)` around everything the controls shot shows: the rest bounds and every sampled pose of `shot`.
+
+    `corners(pose)` gives world points around the model in a pose from `controls_pose`
+    (`stage.corners` in Blender). Where the parts go is known only there: showcase.json
+    has each part's rest center, not its hinges or an action's keys.
+    """
+    low, high = (list(corner) for corner in rest_bounds(data))
+    parts = segments(data)
+    total = sum(seconds for _, _, seconds in parts) or 1.0
+    walked = 0.0
+    for kind, _, seconds in parts:
+        steps = POSED_STEPS if kind == "control" else max(POSED_STEPS, math.ceil(seconds * POSED_STEPS_PER_SECOND))
+        reach = seconds / 2.0 if kind == "control" else seconds
+        for step in range(steps + 1):
+            # Just inside the segment, or its ends would be posed as the neighbor's.
+            into = timing.clamp(reach * step / steps, seconds * 1e-6, seconds * (1.0 - 1e-6))
+            t = shot["start"] + (walked + into) / total * (shot["end"] - shot["start"])
+            for point in corners(controls_pose(data, options, shot, t, 1.0)):
+                for axis in range(3):
+                    low[axis] = min(low[axis], point[axis])
+                    high[axis] = max(high[axis], point[axis])
+        walked += seconds
+    return (tuple(low), tuple(high))
+
+
 def controls_pose(data, options, shot, t, aspect):
     """Each control goes 0 to 1 and back in turn, then each choreographed action plays through.
 
     Returns `{controls: {id: 0..1}, action: None | {id, seconds}, camera}`; a control not being shown holds its default.
+    The camera frames `data["posedBounds"]` (what `posed_bounds` measured), so one framing holds every pose of the shot.
     """
     controls = {control["id"]: float(control.get("default01", 0.0)) for control in controls_of(data)}
     naturals = segments(data)
@@ -271,8 +307,11 @@ def controls_pose(data, options, shot, t, aspect):
             break
         walked += seconds
     sweep = timing.ease(progress(shot, t), "smooth")
+    low, high = data.get("posedBounds") or rest_bounds(data)
+    middle = tuple((low[axis] + high[axis]) / 2.0 for axis in range(3))
+    distance = fit_distance(data, DEFAULT_LENS, aspect, math.dist(low, high) / 2.0) * 0.95
     return {"controls": controls, "action": action,
-            "camera": camera(data, HERO_VIEW[0] - 10.0 + 24.0 * sweep, 20.0, fit_distance(data, DEFAULT_LENS, aspect) * 0.95, DEFAULT_LENS)}
+            "camera": camera(data, HERO_VIEW[0] - 10.0 + 24.0 * sweep, 20.0, distance, DEFAULT_LENS, middle)}
 
 
 def closeup_pose(data, options, shot, t, aspect, saved):
