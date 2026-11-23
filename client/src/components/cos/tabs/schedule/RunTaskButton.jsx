@@ -13,22 +13,38 @@ const MENU_WIDTH = 256; // w-64
 // so the run carries app context; otherwise fires a plain global run. Shared by
 // the schedule card and the drawer's global-config controls so both stay in sync.
 //
-// `disabledReason` is the one gate: a non-empty string disables the button and
+// `disabledReason` is the caller's gate: a non-empty string disables the button and
 // becomes its tooltip (improvement switched off, a pin still being saved, …).
 // A named boolean per reason would mean every new reason edits this component,
 // and — as the pin-saving gate showed — reaching only whichever call site the
 // author had in mind.
-export default function RunTaskButton({ taskType, apps, onTrigger, installWide = false, programmatic = false, disabledReason = '' }) {
+export default function RunTaskButton({
+  taskType, apps, appsStatus = 'ready', onTrigger, installWide = false, programmatic = false,
+  appBound = false, disabledReason = '',
+}) {
   const [open, setOpen] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [lastRequest, setLastRequest] = useState('');
   const ref = useRef(null);
   const triggerSeqRef = useRef(0);
   const triggerInFlightRef = useRef(false);
-  const activeApps = (apps?.filter(app => !app.archived) || [])
+  const activeApps = (apps?.filter(app => !app.archived && app.id) || [])
     .slice()
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
-  const disabled = !!disabledReason || triggering;
+  // Ordinary schedule tasks use app templates; an empty picker is not
+  // authorization to dispatch without a target. An app card is already bound.
+  const canPickApp = !appBound && !installWide && !programmatic;
+  const needsAppList = canPickApp && appsStatus === 'loading';
+  const appListUnavailable = canPickApp && appsStatus === 'error';
+  const noActiveApps = canPickApp && activeApps.length === 0;
+  const appTargetBlock = needsAppList ? 'Loading apps…'
+    : appListUnavailable ? 'Apps unavailable'
+      : noActiveApps ? 'No active apps' : '';
+  const appTargetHint = appListUnavailable ? 'Could not load apps. Refresh the schedule to retry.'
+    : noActiveApps && !needsAppList ? 'Add or unarchive an app before running this task.'
+      : appTargetBlock;
+  const hasAppPicker = canPickApp && !appTargetBlock && activeApps.length > 0;
+  const disabled = !!(disabledReason || appTargetBlock) || triggering;
 
   // The app list is portaled to <body> and placed in viewport coordinates. This
   // button sits mid-row on a task card, so the old `absolute bottom-full left-0`
@@ -72,7 +88,8 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
   }, [taskType]);
 
   const triggerTask = (app = null) => {
-    if (disabledReason || triggerInFlightRef.current) return;
+    if (disabled || triggerInFlightRef.current) return;
+    if (hasAppPicker && !activeApps.some(candidate => candidate.id === app?.id)) return;
     triggerInFlightRef.current = true;
     const requestSeq = ++triggerSeqRef.current;
     setTriggering(true);
@@ -119,11 +136,11 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
   // A PROGRAMMATIC task (universe bible descriptions/images) acts on PortOS's
   // own records, never a managed app's checkout — the server rejects a request
   // that names one — so it gets the plain button, not the app picker.
-  if (activeApps.length === 0 || installWide || programmatic) {
+  if (!hasAppPicker) {
     return (
       <span className="inline-flex min-w-0 flex-col items-start">
         <span
-          title={triggering ? 'Sending run request' : disabledReason || (installWide
+          title={triggering ? 'Sending run request' : appTargetHint || disabledReason || (installWide
             ? 'Run this task across every managed app in one sweep'
             : 'Run this task immediately (bypasses schedule)')}
           className="inline-block"
@@ -133,11 +150,11 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
             onClick={() => !disabled && triggerTask()}
             disabled={disabled}
             aria-disabled={disabled || undefined}
-            aria-busy={triggering || undefined}
+            aria-busy={triggering || needsAppList || undefined}
             className={triggerButtonClass(disabled)}
           >
-            {triggering ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-            {triggering ? 'Sending…' : installWide ? 'Run on All Apps' : 'Run Now'}
+            {triggering || needsAppList ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+            {triggering ? 'Sending…' : appTargetBlock || (installWide ? 'Run on All Apps' : 'Run Now')}
           </button>
         </span>
         {requestStatus}

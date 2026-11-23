@@ -9,6 +9,7 @@ import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
+import GitHubIssueClaim from './GitHubIssueClaim';
 import GitHubPullRequestActions from './GitHubPullRequestActions';
 import { AGENT_REFUSED_LABELS, AGENT_RULE_KINDS, DECISION_ACTIONS, DECISION_VIEW, REASON_LABELS, REASON_WHY, TONE_EDGE, TRUST_VIEW, notificationAudienceLabel, subjectStatusChip } from './githubTriageLabels';
 import { timeAgo } from '../../utils/formatters';
@@ -249,6 +250,7 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
               <Rocket size={13} aria-hidden="true" /> Review deployment
             </button>
           )}
+          {notification.claimIssue && <GitHubIssueClaim notification={notification} busy={busy} runMutation={runMutation} />}
           {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={applyUpdate}
             busy={busy} runMutation={runMutation} />}
           {agent && !picking && (!notification.pullRequest || (agent.lane === GENERIC_LANE && canResolve)) && (

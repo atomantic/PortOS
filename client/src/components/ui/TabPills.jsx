@@ -85,6 +85,10 @@ export default function TabPills({
     .filter((index) => index !== null);
 
   const activeIndex = visibleTabs.findIndex((t) => t.id === activeTab);
+  // Unmatched or disabled activeTab must still leave exactly one tab in the Tab order.
+  const rovingIndex = activeIndex >= 0 && !visibleTabs[activeIndex]?.disabled
+    ? activeIndex
+    : (enabledTabIndexes[0] ?? -1);
 
   // Icons ARE the row in compact mode, so one iconless tab disqualifies the
   // whole bar rather than rendering a gap the user can't aim at.
@@ -254,7 +258,7 @@ export default function TabPills({
                   aria-controls={!isFilter && active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                   id={!isFilter && controlsIdPrefix ? `tab-${t.id}` : undefined}
                   ref={!isFilter ? (node) => { tabRefs.current[index] = node; } : undefined}
-                  tabIndex={!isFilter ? (active ? 0 : -1) : undefined}
+                  tabIndex={!isFilter ? (index === rovingIndex ? 0 : -1) : undefined}
                   disabled={t.disabled}
                   onClick={() => onChange(t.id)}
                   onKeyDown={!isFilter ? (event) => handleTabKeyDown(event, index) : undefined}
@@ -309,11 +313,11 @@ export default function TabPills({
                 aria-controls={active && controlsIdPrefix ? `${controlsIdPrefix}-${t.id}` : undefined}
                 id={controlsIdPrefix ? `tab-${t.id}` : undefined}
                 ref={(node) => { tabRefs.current[index] = node; }}
-                tabIndex={active ? 0 : -1}
+                tabIndex={index === rovingIndex ? 0 : -1}
                 disabled={t.disabled}
                 onClick={() => onChange(t.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, index)}
-                className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${iconRow ? 'max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] pointer-fine:sm:min-h-[40px] border-b-2 -mb-px ${
+                className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${iconRow ? 'max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] pointer-fine:sm:min-h-[40px] border-b-2 -mb-px focus-visible:outline-offset-[-2px] ${
                   active
                     ? 'text-port-accent border-port-accent bg-port-accent/5'
                     : 'text-gray-400 border-transparent hover:text-white hover:bg-port-card'

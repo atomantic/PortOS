@@ -13,7 +13,7 @@ import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder, probeVideoGeometry } from '../../lib/ffmpeg.js';
+import { findFfmpeg, hasAudioStream, installEncodedVideo, runFfmpegProcess, safeUnder, probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { nameShots } from './productionReview.js';
 import { shotSegmentDir } from './shotSegmentPaths.js';
@@ -219,7 +219,8 @@ export async function prependColdOpen({ project, coldOpen, path, ffmpeg, jobId, 
     });
     signal?.throwIfAborted();
     if (!join2.ok) throw new ServerError(`Joining the cold open failed: ${join2.reason}`, { status: 500, code: 'PRE_MUSIC_JOIN' });
-    await rename(joined, path);
+    const installed = await installEncodedVideo(joined, path, 'cold open');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'PRE_MUSIC_INSTALL' });
     console.log(`🎞️ Music-video cold open [${jobId.slice(0, 8)}]: ${leadSec}s before the song`);
     return leadSec;
   } finally {

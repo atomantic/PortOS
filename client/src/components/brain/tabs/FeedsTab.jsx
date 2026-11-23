@@ -92,7 +92,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleRemoveFeed = async (id) => {
-    await removeFeed(id).catch(() => null);
+    const ok = await removeFeed(id).then(() => true, () => false);
+    if (!ok) return;
     toast.success('Feed removed');
     setConfirmingDeleteId(null);
     setFeeds(prev => prev.filter(f => f.id !== id));
@@ -122,7 +123,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkRead = async (itemId) => {
-    await markFeedItemRead(itemId).catch(() => null);
+    const ok = await markFeedItemRead(itemId).then(() => true, () => false);
+    if (!ok) return;
     // Track which feed to update before modifying items state
     setItems(prev => {
       const item = prev.find(i => i.id === itemId);
@@ -136,7 +138,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkAllRead = async () => {
-    await markAllFeedItemsRead(selectedFeedId).catch(() => null);
+    const ok = await markAllFeedItemsRead(selectedFeedId).then(() => true, () => false);
+    if (!ok) return;
     setItems(prev => prev.map(i => {
       if (!selectedFeedId || i.feedId === selectedFeedId) return { ...i, read: true };
       return i;

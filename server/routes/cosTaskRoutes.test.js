@@ -945,3 +945,33 @@ describe('host-control gate on CoS task queueing (#8716)', () => {
     expect(forceSpawnTask).toHaveBeenCalledWith('task-1', { resetSpawnBudget: true });
   });
 });
+
+describe('POST /api/cos/tasks/slashdo — push forwards caller guidance (#17930)', () => {
+  // The Git tab's "Open PR with agent" payload (GitActionsBar.jsx).
+  const overrideContext = 'Create or update a pull request against the default branch. Do not discard work or push directly to the protected default branch.';
+
+  it('persists prCompletion and overrideContext on the created push task', async () => {
+    getAppById.mockResolvedValue({ id: 'example-app', name: 'ExampleApp', repoPath: '/example/app' });
+
+    const res = await request(buildApp())
+      .post('/api/cos/tasks/slashdo')
+      .send({ command: 'push', app: 'example-app', prCompletion: 'review-then-merge', overrideContext });
+
+    expect(res.status).toBe(200);
+    const [taskData] = addTask.mock.calls.at(-1);
+    expect(taskData.slashdoCommand).toBe('push');
+    expect(taskData.prCompletion).toBe('review-then-merge');
+    expect(taskData.prompt).toBe(overrideContext);
+    expect(taskData.metadata.prompt).toBe(overrideContext);
+  });
+
+  it('adds neither field when the caller sends neither', async () => {
+    getAppById.mockResolvedValue({ id: 'example-app', name: 'ExampleApp', repoPath: '/example/app' });
+
+    await request(buildApp()).post('/api/cos/tasks/slashdo').send({ command: 'push', app: 'example-app' });
+
+    const [taskData] = addTask.mock.calls.at(-1);
+    expect(taskData.prompt).toBeUndefined();
+    expect(taskData).not.toHaveProperty('metadata');
+  });
+});

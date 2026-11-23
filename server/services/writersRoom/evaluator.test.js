@@ -15,7 +15,35 @@ vi.mock('./characters.js', () => ({ listCharacters: vi.fn(), mergeExtractedChara
 vi.mock('./places.js', () => ({ listPlaces: vi.fn(), mergeExtractedPlaces: vi.fn() }));
 vi.mock('./objects.js', () => ({ listObjects: vi.fn(), mergeExtractedObjects: vi.fn() }));
 
-const { KIND_META, SHAPERS } = await import('./evaluator.js');
+// In-memory analysis store with an async gap between load and save, so an unserialized
+// read-modify-write cycle would lose one of two concurrent attaches.
+const store = new Map();
+vi.mock('./analysisSnapshots.js', async (importActual) => ({
+  ...(await importActual()),
+  loadAnalysis: async (w, id) => {
+    const v = store.get(`${w}:${id}`);
+    await new Promise((r) => setTimeout(r, 5));
+    return v ? structuredClone(v) : null;
+  },
+  saveAnalysis: async (w, snap) => {
+    await new Promise((r) => setTimeout(r, 5));
+    store.set(`${w}:${snap.id}`, structuredClone(snap));
+  },
+}));
+
+const { KIND_META, SHAPERS, attachSceneImage } = await import('./evaluator.js');
+
+describe('attachSceneImage', () => {
+  it('keeps both links when two scenes attach concurrently', async () => {
+    store.set('wr-work-1:script', { id: 'script', sceneImages: {} });
+    await Promise.all([
+      attachSceneImage('wr-work-1', 'script', { sceneId: 's1', filename: 'a.png' }),
+      attachSceneImage('wr-work-1', 'script', { sceneId: 's2', filename: 'b.png' }),
+    ]);
+    const saved = store.get('wr-work-1:script');
+    expect(Object.keys(saved.sceneImages).sort()).toEqual(['s1', 's2']);
+  });
+});
 
 describe('KIND_META', () => {
   it('registers the cuts + revise Polish pass kinds with stage + returnsJson', () => {

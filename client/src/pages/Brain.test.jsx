@@ -123,3 +123,21 @@ it('renders Inbox while summary and settings are pending, then updates metadata'
   expect(screen.queryByText('Loading Brain summary')).toBeNull();
   expect(screen.getByTestId('inbox-tab')).toBeInTheDocument();
 });
+
+it('normalizes an unknown tab URL to Inbox with a focusable selected tab', async () => {
+  await renderSettledAt('unknown-tab');
+  const inbox = screen.getByRole('tab', { name: 'Inbox' });
+  expect(inbox).toHaveAttribute('aria-selected', 'true');
+  expect(inbox).toHaveAttribute('tabindex', '0');
+  expect(await screen.findByTestId('inbox-tab')).toBeInTheDocument();
+});
+
+it('shows an unavailable status on load failure and recovers via Retry', async () => {
+  api.getBrainSummary.mockRejectedValue(new Error('boom'));
+  renderPageAt('inbox');
+  expect(await screen.findByText('Brain summary unavailable')).toBeInTheDocument();
+  api.getBrainSummary.mockResolvedValue({ counts: { links: 3 }, needsReview: 0 });
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText('3 links')).toBeInTheDocument();
+  expect(screen.queryByText('Brain summary unavailable')).toBeNull();
+});

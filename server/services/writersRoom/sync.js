@@ -226,17 +226,16 @@ export async function buildWorkBodyManifest(work) {
  * in the generic asset pipeline). Echoes only the sanitized fields so junk can't
  * round-trip.
  *
- * An ABSENT local body is always pulled — it can't overwrite anything, it fills
- * a fresh insert, and it lets a previously-failed pull retry on the next push.
- * A PRESENT-but-different local body is pulled ONLY when `includeMismatched`
- * (the work-record merge actually accepted the remote, i.e. remote won/inserted).
- * That gate is the data-safety boundary: when a STALE work push arrives after a
- * local edit (local `updatedAt` wins the LWW merge so the metadata is kept), the
- * sender's body hashes are the loser's — pulling them would clobber the newer
- * local prose while leaving the newer local metadata in place. So a present
- * body is only ever replaced when the receiver also took the remote's record.
+ * `expectedHashes` (draftId -> contentHash) is the receiver's own persisted,
+ * post-merge manifest. An entry is pulled only when the sender's hash equals
+ * the persisted hash AND the local body is absent or differs. That keys the
+ * decision on durable state rather than the one-shot "did this push win the
+ * merge" flag, so a retry push (identical updatedAt, merge not applied) after a
+ * transient pull failure still converges, while a stale losing push (hash !=
+ * persisted) never pulls and can't clobber newer local prose. Without
+ * `expectedHashes` only absent bodies are pulled (nothing to overwrite).
  */
-export async function diffWorkBodyManifest(manifest, { includeMismatched = false } = {}) {
+export async function diffWorkBodyManifest(manifest, { expectedHashes = null } = {}) {
   if (!Array.isArray(manifest)) return [];
   const missing = [];
   for (const entry of manifest) {
@@ -248,10 +247,10 @@ export async function diffWorkBodyManifest(manifest, { includeMismatched = false
     const sanitized = { kind: WRITERS_ROOM_DRAFT_ASSET_KIND, workId, draftId, sha256 };
     const fullPath = wrDraftPath(workId, draftId);
     if (!existsSync(fullPath)) {
-      missing.push(sanitized);
+      if (!expectedHashes || expectedHashes.get(draftId) === sha256) missing.push(sanitized);
       continue;
     }
-    if (!includeMismatched) continue; // local body present + remote didn't win → keep local
+    if (!expectedHashes || expectedHashes.get(draftId) !== sha256) continue; // stale/unknown → keep local
     const localHash = await sha256File(fullPath).catch(() => null);
     if (localHash !== sha256) missing.push(sanitized);
   }

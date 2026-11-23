@@ -24,12 +24,19 @@ export default function IconPicker({ value, onChange }) {
   };
 
   return (
-    <div className="relative" onKeyDown={handleKeyDown}>
+    <div
+      className="relative"
+      onKeyDown={handleKeyDown}
+      onBlur={(event) => {
+        // Tab-out dismisses the overlay without pulling focus back.
+        if (isOpen && !event.currentTarget.contains(event.relatedTarget)) setIsOpen(false);
+      }}
+    >
       <span className="block text-sm text-gray-400 mb-1">Icon</span>
       <button
         type="button"
         ref={triggerRef}
-        aria-label="Icon picker"
+        aria-label={`Icon: ${value || 'package'}`}
         aria-expanded={isOpen}
         aria-controls={isOpen ? choicesId : undefined}
         onClick={() => isOpen ? close() : setIsOpen(true)}
@@ -39,7 +46,7 @@ export default function IconPicker({ value, onChange }) {
           <AppIcon icon={value || 'package'} size={20} />
         </div>
         <span className="text-sm text-gray-300">{value || 'package'}</span>
-        <span className="ml-auto text-gray-500">▼</span>
+        <span className="ml-auto text-gray-500" aria-hidden="true">▼</span>
       </button>
 
       {isOpen && (
@@ -59,12 +66,13 @@ export default function IconPicker({ value, onChange }) {
                     onChange(name);
                     close();
                   }}
-                  className={`p-2 rounded-lg flex flex-col items-center gap-1 transition-colors ${
+                  className={`p-2 rounded-lg border border-transparent flex flex-col items-center gap-1 transition-colors ${
                     value === name
-                      ? 'bg-port-accent/20 text-port-accent'
+                      ? 'bg-port-accent/20 text-port-accent border border-port-accent'
                       : 'hover:bg-port-border text-gray-400 hover:text-white'
                   }`}
                   title={name}
+                  aria-pressed={value === name}
                 >
                   <AppIcon icon={name} size={20} />
                   <span className="text-[10px] truncate w-full text-center">{name}</span>

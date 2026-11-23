@@ -96,6 +96,7 @@ vi.mock('../services/cos/cosReports.js', () => ({
 vi.mock('../services/agent/agentOrchestrator.js', () => ({
   pauseAgent: vi.fn(),
   resumeAgent: vi.fn(),
+  relaunchAgent: vi.fn(),
   killAgent: vi.fn(),
   getAgentProcessStats: vi.fn()
 }));
@@ -775,6 +776,54 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(agentOrchestrator.resumeAgent).not.toHaveBeenCalled();
+    });
+
+    it('forwards executionOptions instead of stripping them (#17931)', async () => {
+      agentOrchestrator.resumeAgent.mockResolvedValue({ success: true, agentId: 'agent-001', taskId: 'task-abc', mode: 'requeued' });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/resume')
+        .send({ provider: 'codex', executionOptions: { serviceTier: 'fast' } });
+
+      expect(response.status).toBe(200);
+      expect(agentOrchestrator.resumeAgent).toHaveBeenCalledWith(
+        'agent-001',
+        expect.objectContaining({ executionOptions: { serviceTier: 'fast' } }),
+      );
+    });
+
+    it('rejects unsupported executionOptions', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/resume')
+        .send({ executionOptions: { serviceTier: 'warp' } });
+
+      expect(response.status).toBe(400);
+      expect(agentOrchestrator.resumeAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/cos/agents/:id/relaunch', () => {
+    it('forwards executionOptions instead of stripping them (#17931)', async () => {
+      agentOrchestrator.relaunchAgent.mockResolvedValue({ success: true, agentId: 'agent-001' });
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/relaunch')
+        .send({ provider: 'codex', executionOptions: { serviceTier: 'fast' } });
+
+      expect(response.status).toBe(200);
+      expect(agentOrchestrator.relaunchAgent).toHaveBeenCalledWith(
+        'agent-001',
+        expect.objectContaining({ executionOptions: { serviceTier: 'fast' } }),
+      );
+    });
+
+    it('rejects unsupported executionOptions', async () => {
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/relaunch')
+        .send({ executionOptions: { serviceTier: 'warp' } });
+
+      expect(response.status).toBe(400);
+      expect(agentOrchestrator.relaunchAgent).not.toHaveBeenCalled();
     });
   });
 

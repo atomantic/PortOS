@@ -87,7 +87,10 @@ describe('genome deletion erases derived identity', () => {
     expect(Object.keys(longevity.longevityMarkers)).toHaveLength(0);
     expect(Object.keys(longevity.cardiovascularMarkers)).toHaveLength(0);
     expect((await readJSON(LONGEVITY_FILE)).lifeExpectancy).toEqual(longevity.lifeExpectancy);
-    expect(await readJSON(GOALS_FILE)).toEqual({ ...originalGoals, lifeExpectancy: null, timeHorizons: null });
+    const goalsAfter = await readJSON(GOALS_FILE);
+    // The document clock advances so the clears win a peer's metadata LWW merge.
+    expect(Date.parse(goalsAfter.updatedAt)).toBeGreaterThan(Date.parse(originalGoals.updatedAt));
+    expect(goalsAfter).toEqual({ ...originalGoals, lifeExpectancy: null, timeHorizons: null, updatedAt: goalsAfter.updatedAt });
     // A repeated deletion must also succeed when the raw files are already gone.
     await expect(deleteGenome()).resolves.toEqual({ success: true });
     expect((await getChronotype()).behavioralData).toEqual(behavioralData);

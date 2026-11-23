@@ -3,7 +3,7 @@ import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, compareByStatus, compareBySuggestedOrder, suggestedOrderSteps, taskLabels } from './scheduleConstants';
 
-export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange, sort, onSortChange }) {
+export default function AppTaskTypeSection({ tasks, apps, appsStatus, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange, sort, onSortChange }) {
   const [search, setSearch] = useState('');
   const taskEntries = Object.entries(tasks || {});
   // Ranked over every task, not just the visible ones, so filtering to one
@@ -108,6 +108,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
               taskType={taskType}
               config={config}
               apps={apps}
+              appsStatus={appsStatus}
               providers={providers}
               providersLoaded={providersLoaded}
               activeProviderId={activeProviderId}

@@ -16,6 +16,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 const { seen } = vi.hoisted(() => ({ seen: { opened: [], contract: null, ffmpeg: [], encodeFail: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
+  installEncodedVideo: async (tmp, target) => { const { rename: move } = await import('node:fs/promises'); await move(tmp, target); return { ok: true, outPath: target }; },
   findFfmpeg: async () => 'ffmpeg',
   probeVideoGeometry: async () => ({ width: 1920, height: 1080, fps: 24, numFrames: 480, durationSec: 20 }),
   runFfmpegProcess: async ({ args }) => {

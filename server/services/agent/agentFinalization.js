@@ -1495,7 +1495,15 @@ export async function recordCompletionArtifacts(ctx, forgeOutcome, settlement) {
     const resolvedApp = await getAppDataForTask(task).catch(() => null);
     if (resolvedApp) {
       await import('../appIssues.js')
-        .then(({ releaseAppIssueClaim }) => releaseAppIssueClaim(resolvedApp, serverClaimTarget))
+        .then(async ({ releaseAppIssueClaim }) => {
+          const inboxIssue = task.metadata.githubIssueClaim;
+          if (!inboxIssue) return releaseAppIssueClaim(resolvedApp, serverClaimTarget);
+          const { resolveNotificationAgentEnv } = await import('../githubNotificationAgentAuth.js');
+          const inboxEnv = await resolveNotificationAgentEnv(task);
+          return releaseAppIssueClaim(resolvedApp, serverClaimTarget, {
+            inboxIssue, inboxLogin: task.metadata.githubAccount?.login, inboxEnv,
+          });
+        })
         .catch(err => {
           emitLog('warn', `⚠️ Could not release unused claim markers for issue #${serverClaimTarget}: ${err.message}`, { agentId, taskId: task.id });
         });

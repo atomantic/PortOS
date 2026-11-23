@@ -17,7 +17,6 @@
  */
 
 import { createHash } from 'crypto';
-import { hostname } from 'os';
 import { createZip } from '../lib/zipWriter.js';
 import { getCurrentVersion } from './updateChecker.js';
 import { exportDigitalTwin } from './digital-twin-export.js';
@@ -34,7 +33,6 @@ import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMin
 import { getGoalsTree } from './identity/goals.js';
 import { getLatestMetricValues } from './appleHealthQuery.js';
 
-const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.-]/g, '_') || 'unknown';
 
 // Brain entity stores that belong in a personal legacy bundle. We deliberately
 // skip operational stores (`admin`, `buckets`, `inbox`) — they're workflow
@@ -158,6 +156,25 @@ export async function gatherLegacyData() {
   };
 }
 
+// identity.json is a portable archive, so raw SNP data never leaves the machine:
+// the genome keeps only aggregate counts (no rsids/genotypes/notes, no upload
+// filename that often embeds a legal name), and the marker maps are dropped.
+const CHRONOTYPE_MARKER_KEYS = ['geneticMarkers', 'caffeineMarkers'];
+const LONGEVITY_MARKER_KEYS = ['longevityMarkers', 'cardiovascularMarkers'];
+
+function omitKeys(obj, keys) {
+  if (!obj || typeof obj !== 'object') return obj || null;
+  const out = { ...obj };
+  for (const k of keys) delete out[k];
+  return out;
+}
+
+function genomeAggregates(g) {
+  if (!g) return null;
+  const { uploaded, uploadedAt, snpCount, build, markerCount, statusCounts, lastScanAt } = g;
+  return { uploaded, uploadedAt, snpCount, build, markerCount, statusCounts, lastScanAt };
+}
+
 // === Section descriptors ===
 // Each section is self-describing: how to detect presence, count records, and
 // render Markdown + machine-readable JSON. The route's section-filter and the
@@ -177,10 +194,10 @@ const SECTIONS = [
       out.push({ name: 'identity/profile.md', data: buildIdentityProfileMd(d) });
       out.push({ name: 'data/identity.json', data: jsonFile({
         traits: d.traits || null,
-        chronotype: d.chronotype || null,
-        longevity: d.longevity || null,
+        chronotype: omitKeys(d.chronotype, CHRONOTYPE_MARKER_KEYS),
+        longevity: omitKeys(d.longevity, LONGEVITY_MARKER_KEYS),
         taste: d.taste || null,
-        genome: d.genome || null,
+        genome: genomeAggregates(d.genome),
       }) });
       return out;
     },
@@ -532,7 +549,6 @@ export function buildManifest(files, { sections, portosVersion, generatedAt, pdf
     kind: 'portos-legacy-export',
     generatedAt,
     portosVersion,
-    host: MACHINE_HOST,
     sections,
     files: fileHashes,
     fileCount: files.length,

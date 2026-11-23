@@ -59,6 +59,10 @@ export const resolveGitHubNotificationWithAgent = (accountId, threadId, run = nu
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/agent`, {
     method: 'POST', body: JSON.stringify(run || {}), ...options,
   });
+export const claimGitHubNotificationIssue = (accountId, threadId, pin, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/claim-issue`, {
+    method: 'POST', body: JSON.stringify(pin || {}), ...options,
+  });
 export const getGitHubDeploymentReview = (accountId, threadId, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/deployment`, options);
 export const actOnGitHubNotificationPullRequest = (accountId, threadId, action, options = {}) =>

@@ -8,9 +8,9 @@
  * and copies the audio untouched, in place, like the film look finish.
  */
 
-import { rename, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
-import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, probeVideoGeometry, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, installEncodedVideo, probeVideoGeometry, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { steppedHoldPlan } from '../../lib/musicVideo/musicVideoProductionMedium.js';
 
 /**
@@ -63,7 +63,8 @@ export async function applyFrameHold({ path, sections, performanceSceneIds = [],
       signal?.throwIfAborted();
       throw new ServerError(`Frame hold failed: ${run.reason}`, { status: 500, code: 'FRAME_HOLD_ENCODE' });
     }
-    await rename(stepped, path);
+    const installed = await installEncodedVideo(stepped, path, 'frame hold');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'FRAME_HOLD_INSTALL' });
     console.log(`🪜 Frame hold: ${parts.filter((part) => part.held).length} stepped spans over ${totalFrames} frames at ${fps} fps${exemptSceneIds.length ? `, ${exemptSceneIds.length} performance shot(s) left unstepped` : ''}`);
     return { held: true, exemptSceneIds };
   } finally {

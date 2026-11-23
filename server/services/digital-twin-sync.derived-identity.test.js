@@ -125,4 +125,33 @@ describe('derived Digital Twin peer sync', () => {
       .rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect(await readFile(CHRONOTYPE_FILE, 'utf8')).toBe('{');
   });
+
+  it('propagates a newer genetics erasure to a peer and never resurrects peer markers (both directions)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(earlier);
+    getGenomeSummary.mockResolvedValue(genome);
+    await deriveChronotype();
+    await deriveLongevity('2000-01-01');
+    const peer = { chronotype: await readJSON(CHRONOTYPE_FILE), longevity: await readJSON(LONGEVITY_FILE) };
+    expect(Object.keys(peer.longevity.longevityMarkers).length).toBeGreaterThan(0);
+
+    vi.setSystemTime(later);
+    await deriveChronotype({ withoutGenetics: true });
+    await deriveLongevity(undefined, { withoutGenetics: true });
+    const cleared = { chronotype: await readJSON(CHRONOTYPE_FILE), longevity: await readJSON(LONGEVITY_FILE) };
+    expect(cleared.chronotype.geneticsClearedAt).toBe(later);
+    expect(cleared.longevity.geneticsClearedAt).toBe(later);
+
+    // Deleting machine pulls the stale peer: local erasure survives.
+    await applyDigitalTwinRemote(peer);
+    expect(await readJSON(CHRONOTYPE_FILE)).toEqual(cleared.chronotype);
+    expect(await readJSON(LONGEVITY_FILE)).toEqual(cleared.longevity);
+
+    // Peer pulls the erased snapshot: erasure wins over its populated record.
+    await writeFile(CHRONOTYPE_FILE, JSON.stringify(peer.chronotype));
+    await writeFile(LONGEVITY_FILE, JSON.stringify(peer.longevity));
+    await applyDigitalTwinRemote(cleared);
+    expect(await readJSON(CHRONOTYPE_FILE)).toEqual(cleared.chronotype);
+    expect(await readJSON(LONGEVITY_FILE)).toEqual(cleared.longevity);
+  });
 });

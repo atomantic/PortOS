@@ -11,10 +11,9 @@ import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { forceSpawnTask } from '../services/cos/cos.js';
 import { getAgents } from '../services/cos/cosAgentLifecycle.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
-import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cos/cosTaskClaimWork.js';
+import { buildIssueReplanTask, buildJiraTicketTask } from '../services/cos/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
-import { prepareAppIssueClaim } from '../services/appIssues.js';
-import { titleMarksEpic } from '../lib/dispatchLabels.js';
+import { buildManualClaimTask } from '../services/cos/manualClaimTask.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { resolveAppPrCompletion } from '../lib/prDisposition.js';
@@ -376,11 +375,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       taskMetadata: { ...replan.taskMetadata, replanTarget: replan.target },
     };
   } else if (command === 'next') {
-    // A manual forge claim is verified by prepareAppIssueClaim below before the
-    // task is queued, so the prompt can skip repeating that work. A non-epic
-    // title is assumed optimistically; a label-only epic rebuilds the full prompt.
-    const forgeTarget = /^#?\d+$/.test(String(target ?? '').trim());
-    const claimOptions = {
+    shape = await buildManualClaimTask(appObj, workflow, {
       target,
       issueContext,
       ...(overrideContext !== undefined ? { overrideContext } : {}),
@@ -391,63 +386,8 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       optionalReviewers,
       reviewerMaxRounds,
       reviewerModels,
-      reviewerEfforts
-    };
-    let claim = await buildClaimWorkTask(appObj, {
-      ...claimOptions,
-      ...(forgeTarget ? { preverified: true, nonEpic: !titleMarksEpic(issueContext?.title) } : {})
+      reviewerEfforts,
     });
-    if (claim.target && ['github', 'gitlab'].includes(claim.tracker)) {
-      const preflight = await prepareAppIssueClaim(appObj, claim.target, claim.tracker, { includePreflight: true });
-      const epic = preflight?.epic === true;
-      const needsRebuild = Boolean(
-        (epic && !titleMarksEpic(issueContext?.title))
-        || preflight?.commentsClear
-        || preflight?.linkedWorkClear
-        || preflight?.forgeContext
-        || preflight?.linkedItems?.length
-        || (!issueContext && preflight?.issueContext)
-      );
-      if (needsRebuild) {
-        claim = await buildClaimWorkTask(appObj, {
-          ...claimOptions,
-          issueContext: issueContext || preflight?.issueContext,
-          preverified: true,
-          nonEpic: !epic,
-          commentsClear: preflight?.commentsClear === true,
-          linkedWorkClear: preflight?.linkedWorkClear === true,
-          forgeContext: preflight?.forgeContext || null,
-          linkedItems: preflight?.linkedItems || null,
-        });
-      }
-    }
-    const scope = claim.target
-      ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
-      : `claim next ${workTrackerLabel(claim.tracker)} item`;
-    shape = {
-      description: `${workflow.label} for ${appObj.name} — ${scope} and ship it`,
-      // The claim body is the agent's PROMPT, not a human note (#4153) — see
-      // server/lib/cos/cosTaskPrompt.js for the field split.
-      prompt: claim.prompt,
-      // claim.taskMetadata overrides the catalog posture only where it carries a
-      // key. All current claim flows (plan-task / claim-issue / claim-issue-gitlab
-      // / claim-issue-jira) self-manage their worktree + MR/PR, so false/false
-      // remains the CoS provisioning posture. `claimFlow` is a separate
-      // lifecycle marker so the prompt builder cannot mistake false/false for a
-      // commit-only handoff. The spread stays for a future delegated type that
-      // needs CoS-managed isolation. `worktreeChangesExpected` is one such key: the
-      // claim flow derives it from the app's RESOLVED work tracker (a file
-      // tracker commits its checklist, a forge tracker doesn't), which is more
-      // specific than the catalog's commit-shaped default, so the spread wins.
-      taskMetadata: {
-        useWorktree,
-        openPR,
-        worktreeChangesExpected,
-        ...(claim.target ? { claimTarget: claim.target } : {}),
-        ...claim.taskMetadata,
-        claimFlow: true
-      },
-    };
   } else {
     // `/do:depfree`'s removal bar rides along as the command's own flag: the
     // bundled body parses `--heavy` / `--extreme` itself, and the default bar
@@ -459,7 +399,14 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     shape = {
       description: `${workflow.label} for ${appObj.name} — ${workflow.description}${depfreeArgs.slashdoArgs ? ` (${depfreeMode} mode)` : ''}`,
       slashdoCommand: command,
-      taskMetadata: { useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs },
+      // Caller guidance (e.g. the Git tab's "Open PR with agent") rides as the
+      // task prompt; prompt assembly renders it beside the slashdo invocation.
+      // `prCompletion` is persisted so the PR-completion policy isn't dropped.
+      ...(typeof overrideContext === 'string' && overrideContext.trim() ? { prompt: overrideContext } : {}),
+      taskMetadata: {
+        useWorktree, openPR, worktreeChangesExpected, ...depfreeArgs,
+        ...(prCompletion !== undefined ? { prCompletion } : {})
+      },
     };
   }
 

@@ -75,6 +75,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Rebuildable cache: the per-account message cache and sync cursor are re-fetched from the provider; an unreadable cache reads as empty."
   },
   {
+    "key": "musicVideo/shotSegments.js :: join ( dir , LOOKS_FILE )",
+    "reason": "Rebuildable cache: looks.json only lists film looks rendered into the shot-segment cache; an unreadable list reads as empty and the next render re-adds the current look, so a failed read loses no authored data."
+  },
+  {
     "key": "ollamaSafetensorsImport.js :: markerPath ( tempRoot )",
     "reason": "Rebuildable canary: the staging marker lives in an OS temp import directory. An unreadable marker rewritten with only the new phase loses its model id, which the sweep treats like a marker-less directory: age-gated cleanup of re-downloadable weights, never a user record."
   },

@@ -35,6 +35,7 @@ export default function TaskConfigDrawer({
   providersLoaded,
   activeProviderId,
   apps,
+  appsStatus,
   onUpdateOverride,
   onBulkToggleOverride,
   allTaskTypes,
@@ -113,6 +114,7 @@ export default function TaskConfigDrawer({
               providersLoaded={providersLoaded}
               activeProviderId={activeProviderId}
               apps={apps}
+              appsStatus={appsStatus}
               updating={updating}
               setUpdating={setUpdating}
               allTaskTypes={allTaskTypes}

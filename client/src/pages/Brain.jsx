@@ -1,11 +1,12 @@
-import { useCallback, lazy, Suspense } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useCallback, useState, lazy, Suspense } from 'react';
+import { useNavigate } from 'react-router';
 import { getBrainSummary, getBrainSettings } from '../services/apiBrain.js';
 import {Brain as BrainIcon} from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { useSocketResource } from '../hooks/useSocketResource';
+import { useValidTab } from '../hooks/useValidTab';
 import { sameJsonShape } from '../lib/sameJsonShape';
 
 import { TABS, FULL_BLEED_TAB_IDS } from '../components/brain/constants';
@@ -33,9 +34,8 @@ const ThreadsTab = lazy(() => import('../components/brain/tabs/ThreadsTab'));
 const BRAIN_EVENTS = ['brain:changed'];
 
 export default function Brain() {
-  const { tab } = useParams();
   const navigate = useNavigate();
-  const activeTab = tab || 'inbox';
+  const activeTab = useValidTab(TABS, 'inbox');
   // Full-bleed tabs own their internal scroll and fill height, so the shared
   // wrapper must NOT add padding or a second scrollbar (issue #1177). The set
   // is derived from the TABS registry so it can't drift from the tab list.
@@ -50,12 +50,19 @@ export default function Brain() {
     return { summary, settings };
   }, []);
 
-  const { data, loading, refetch } = useSocketResource(fetchData, {
+  const { data, loading, error, refetch } = useSocketResource(fetchData, {
     events: BRAIN_EVENTS,
     compare: sameJsonShape,
   });
   const summary = data?.summary ?? null;
   const settings = data?.settings ?? null;
+
+  const [retrying, setRetrying] = useState(false);
+  const retry = async () => {
+    setRetrying(true);
+    await refetch();
+    setRetrying(false);
+  };
 
   const handleTabChange = (tabId) => {
     navigate(`/brain/${tabId}`);
@@ -86,7 +93,7 @@ export default function Brain() {
       case 'feeds':
         return <FeedsTab onRefresh={refetch} />;
       case 'trust':
-        return <TrustTab onRefresh={refetch} />;
+        return <TrustTab />;
       case 'import':
         return <ImportTab />;
       case 'spotify':
@@ -123,7 +130,19 @@ export default function Brain() {
         icon={BrainIcon}
         title="Brain"
         subtitle="Second brain for capturing and organizing thoughts"
-        actions={loading && !summary ? (
+        actions={error != null ? (
+          <div role="status" className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+            <span className="text-port-error">Brain summary unavailable</span>
+            <button
+              type="button"
+              onClick={retry}
+              disabled={retrying}
+              className="min-h-[44px] pointer-fine:sm:min-h-0 px-3 py-1 bg-port-accent/10 text-port-accent rounded-lg hover:bg-port-accent/20 disabled:opacity-50"
+            >
+              {retrying ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        ) : loading && !summary ? (
           <span role="status" className="text-xs text-gray-500">Loading Brain summary</span>
         ) : summary && (
           // Quick stats — wrap on small screens; only "needs review" stays loud
