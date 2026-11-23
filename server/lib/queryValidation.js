@@ -49,6 +49,9 @@ export const confirmQuerySchema = z.object({ confirm: scalar });
 /** `?force=true` override on a protected-delete guard. */
 export const forceQuerySchema = z.object({ force: scalar });
 
+/** `?defaults=1` skips hydrating the quality-schedule form from saved overrides. */
+export const defaultsQuerySchema = z.object({ defaults: scalar });
+
 /** `?runtime=` naming a local runtime to install or inspect. */
 export const runtimeQuerySchema = z.object({ runtime: scalar });
 

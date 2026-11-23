@@ -20,7 +20,7 @@
  */
 
 import { Router } from 'express';
-import { workItemsQuerySchema } from '../../lib/queryValidation.js';
+import { defaultsQuerySchema, workItemsQuerySchema } from '../../lib/queryValidation.js';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
@@ -236,7 +236,7 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
 router.get('/:id/quality-schedule', loadApp, asyncHandler(async (req, res) => {
   // Seed from the saved overrides so reopening the form shows what Apply wrote;
   // `?defaults=1` is the form's explicit "Reset to defaults".
-  res.json(await buildQualitySchedulePlan(req.loadedApp, {}, { hydrate: req.query.defaults !== '1' }));
+  res.json(await buildQualitySchedulePlan(req.loadedApp, {}, { hydrate: validateRequest(defaultsQuerySchema, req.query).defaults !== '1' }));
 }));
 
 // POST /api/apps/:id/quality-schedule/preview - The same plan for a form the

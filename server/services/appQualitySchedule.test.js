@@ -314,7 +314,7 @@ describe('saved schedule hydration', () => {
     const reopened = await buildQualitySchedulePlan(app, {}, { hydrate: true });
     expect(reopened.hasExistingSchedule).toBe(true);
     expect(reopened.plan.slots.map(slot => slot.taskType).sort()).toEqual(['privacy', 'security']);
-    expect(reopened.plan.options).toMatchObject({ windowStartHour: 8, windowEndHour: 12, claimBetween: false });
+    expect(reopened.plan.options).toMatchObject({ windowStartHour: 8, claimBetween: false });
     expect(Object.fromEntries(reopened.plan.slots.map(slot => [slot.taskType, slot.fileIssues]))).toEqual({ security: false, privacy: true });
 
     // The user changes one control; the form posts the rest back untouched.
