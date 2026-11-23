@@ -129,7 +129,11 @@ function makeSocket(id = 'sock-1') {
     on(event, fn) { handlers[event] = fn; },
     emit(event, ...args) { emitted.push([event, ...args]); },
     removeAllListeners: vi.fn(),
-    setMaxListeners: vi.fn()
+    setMaxListeners: vi.fn(),
+    join(room) { this.rooms.push(room); },
+    rooms: [],
+    data: {},
+    handshake: { headers: {} }
   };
 }
 
@@ -137,9 +141,12 @@ function makeSocket(id = 'sock-1') {
 function makeIo() {
   let connectionHandler = null;
   const emitted = [];
+  const excepted = [];
   return {
     connectionHandler: () => connectionHandler,
     emit(event, ...args) { emitted.push([event, ...args]); },
+    except(room) { return { emit: (event, ...args) => { emitted.push([event, ...args]); excepted.push([event, room]); } }; },
+    excepted,
     emitted,
     on(event, fn) {
       if (event === 'connection') connectionHandler = fn;
@@ -188,6 +195,30 @@ describe('socket.js — initSocket', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('isolates peer sockets from operator cos events and global operator broadcasts', () => {
+    const operator = makeSocket('operator');
+    const peer = makeSocket('peer');
+    peer.data.portosAuthMethod = 'peer';
+    createdSockets.push(operator, peer);
+    io.connect(operator);
+    io.connect(peer);
+    operator.handlers['cos:subscribe']();
+    peer.handlers['cos:subscribe']();
+    expect(peer.rooms).toContain('peer-sockets');
+    expect(operator.rooms).not.toContain('peer-sockets');
+    io.emitted.length = 0;
+    const emitCos = (name, payload) =>
+      queueListeners.cos.filter(([event]) => event === name).forEach(([, handler]) => handler(payload));
+    emitCos('memory:created', { id: 'example-memory' });
+    emitCos('agent:output', { agentId: 'example-agent', line: 'x' });
+    expect(operator.emitted.map(([n]) => n)).toEqual(expect.arrayContaining(['cos:memory:created', 'cos:agent:output']));
+    expect(peer.emitted.map(([n]) => n).filter((n) => n.startsWith('cos:') && !n.endsWith(':subscribed')))
+      .toEqual(['cos:agent:output']);
+    queueListeners.brain.filter(([event]) => event === 'classified').forEach(([, handler]) => handler({ entryId: 'example' }));
+    expect(io.emitted).toContainEqual(['brain:classified', { entryId: 'example' }]);
+    expect(io.excepted).toContainEqual(['brain:classified', 'peer-sockets']);
   });
 
   it('invalidates active memories after approval/rejection only for CoS subscribers', () => {
