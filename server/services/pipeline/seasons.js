@@ -85,9 +85,19 @@ export async function updateSeason(seriesId, seasonId, patch = {}) {
       }
     }
     priorNumber = cur.number;
+    // A partial `cover`/`backCover` patch (script-only edit) must not wipe the
+    // rendered slots; explicit null still clears the whole sub-object.
+    const mergedPatch = { ...patch };
+    for (const key of ['cover', 'backCover']) {
+      const incoming = patch[key];
+      if (incoming && typeof incoming === 'object' && !Array.isArray(incoming)
+        && cur[key] && typeof cur[key] === 'object') {
+        mergedPatch[key] = { ...cur[key], ...incoming };
+      }
+    }
     const next = sanitizeSeason({
       ...cur,
-      ...patch,
+      ...mergedPatch,
       id: cur.id,
       createdAt: cur.createdAt,
       updatedAt: new Date().toISOString(),
