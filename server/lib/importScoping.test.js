@@ -528,15 +528,14 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  // Measured at 1,433 after boot recovery of the music-video render pipeline
-  // moved behind registerBootHooks() (#17692). The cap keeps 40 modules of
+  // Measured at 1,417 after deferring the sync orchestrator and the safetensors
+  // importer (#18091). The cap stays at 1,448, which leaves 31 modules of
   // headroom so a few independent PRs can each add a boot-reachable leaf and
   // still merge. A boot-reachable addition that would cross this cap has to
   // defer or offset that import in the same change; do not raise the cap to
   // absorb it.
-  it('loads at most 1,473 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1473);
-    expect(closure.files.size).toBeLessThanOrEqual(1473 - 25);
+  it('loads at most 1,448 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1448);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);
