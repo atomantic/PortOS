@@ -150,6 +150,9 @@ async function rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwne
   return computeThreadTrust({
     actorLogin: login, actorType, ownLogins, repoOwned, actorHasWriteAccess, actorIsOrgMember,
     accountTrust: account.trust, trustInstanceUsers: account.trustInstanceUsers === true,
+    // Coerced on read: an account stored before bot trust existed trusts bots under "trust everyone".
+    trustInstanceBots: account.trustInstanceBots !== false,
+    trustedBots: Array.isArray(account.trustedBots) ? account.trustedBots : [],
   });
 }
 

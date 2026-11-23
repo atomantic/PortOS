@@ -13,6 +13,13 @@ import { retriageOpenThreads } from '../services/githubNotificationTriage.js';
 
 const router = express.Router();
 
+// Threads triaged under the old trust settings are decided again on the next check.
+const botList = (account) => (Array.isArray(account.trustedBots) ? account.trustedBots : []).join(',');
+const accountTrustChanged = (before, after) => before.trust !== after.trust
+  || (before.trustInstanceUsers === true) !== (after.trustInstanceUsers === true)
+  || (before.trustInstanceBots !== false) !== (after.trustInstanceBots !== false)
+  || botList(before) !== botList(after);
+
 /**
  * GET /api/github/repos — cached repo list
  */
@@ -119,8 +126,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(githubAccountUpdateSchema, req.body);
   const before = await githubAccounts.getAccount(req.params.id);
   const updated = await githubAccounts.updateAccount(req.params.id, body);
-  // Threads triaged under the old trust settings are decided again on the next check.
-  if (before.trust !== updated.trust || (before.trustInstanceUsers === true) !== (updated.trustInstanceUsers === true)) {
+  if (accountTrustChanged(before, updated)) {
     await retriageOpenThreads(updated.id);
   }
   res.json(updated);

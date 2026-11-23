@@ -445,9 +445,31 @@ describe('GitHub accounts tab', () => {
     fireEvent.click(screen.getByLabelText('Trust everyone on this instance'));
     fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
 
-    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'public', allowedProviders: null, allowAgents: false, trustInstanceUsers: true });
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith({ host: 'ghe.example.com', login: 'alice', label: '', trust: 'public', allowedProviders: null, allowAgents: false, trustInstanceUsers: true, trustInstanceBots: true, trustedBots: [] });
     const signIn = await screen.findByRole('link', { name: 'Sign in on ghe.example.com' });
     expect(decodeURIComponent(signIn.getAttribute('href'))).toBe('/shell?cmd=gh auth login --hostname ghe.example.com --web --clipboard');
+  });
+
+  it('trusts instance bots by default and switches to an explicit bot list when turned off', async () => {
+    mock.createGitHubAccount.mockImplementation(async (body) => ({ ...body, id: 'acct-3', label: 'ghe.example.com', mode: 'observe', enabled: true, allowedProviders: null }));
+    renderAccounts();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+    fireEvent.change(screen.getByLabelText('Host'), { target: { value: 'ghe.example.com' } });
+    // Private by default, so the provider list loads; settle it before interacting.
+    await act(async () => {});
+    fireEvent.click(screen.getByLabelText('Trust everyone on this instance'));
+    expect(screen.getByLabelText('Trust every bot on this instance too').checked).toBe(true);
+    expect(screen.queryByLabelText('Trusted bots')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Trust every bot on this instance too'));
+    fireEvent.change(screen.getByLabelText('Trusted bots'), { target: { value: 'Example-App[bot]\nother-app[bot], ' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add account' }).at(-1));
+
+    expect(mock.createGitHubAccount).toHaveBeenCalledWith(expect.objectContaining({
+      trustInstanceUsers: true, trustInstanceBots: false, trustedBots: ['Example-App[bot]', 'other-app[bot]'],
+    }));
+    await act(async () => {});
   });
 
   it('removes an account only after an inline confirmation', async () => {
