@@ -9,6 +9,10 @@ export const listThreejsModels = (options) => request('/threejs-models', options
 
 export const listThreejsModelFamilies = (options) => request('/threejs-models/families', options);
 
+// { sheet: string|null } — the product sheet of the Casting object owning this gallery image.
+export const getThreejsProductSheet = (filename, options) =>
+  request(`/threejs-models/product-sheet?filename=${encodeURIComponent(filename)}`, options);
+
 export const getThreejsModel = (id, options) =>
   request(`/threejs-models/${encodeURIComponent(id)}`, options);
 

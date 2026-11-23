@@ -18,6 +18,7 @@ import {
   deleteModel,
   getModelSource,
 } from '../services/threejsModels/index.js';
+import { findProductSheetForImage } from '../services/threejsModels/productSheet.js';
 
 const router = Router();
 
@@ -92,6 +93,15 @@ router.post('/', asyncHandler(async (req, res) => {
 router.get('/families', (_req, res) => {
   res.json(THREEJS_MODEL_FAMILY_OPTIONS);
 });
+
+const productSheetQuerySchema = z.object({ filename: galleryFilenameSchema });
+
+// Literal path ahead of `/:id`. Read-only: `sheet` is null for an image that is
+// not a Casting object's or whose object has no product sheet.
+router.get('/product-sheet', asyncHandler(async (req, res) => {
+  const { filename } = validateRequest(productSheetQuerySchema, req.query);
+  res.json({ sheet: await findProductSheetForImage(filename) });
+}));
 
 router.get('/:id/source', asyncHandler(async (req, res) => {
   const result = await getModelSource(req.params.id);

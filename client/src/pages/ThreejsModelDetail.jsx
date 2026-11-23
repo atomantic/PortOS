@@ -666,7 +666,7 @@ export default function ThreejsModelDetail() {
           layout="stacked"
         />
         <div>
-          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={generating} />
+          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={generating} primaryFilename={record.sourceImage?.filename || ''} />
           <SubjectFamilySelect
             id="threejs-family"
             families={families}

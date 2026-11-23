@@ -1,16 +1,34 @@
 // Extra gallery views (back, close-ups, …) sent beside the primary image.
 // The server owns the limit and the role list; `onChange` receives the whole
 // [{filename, role, label}] array so callers can send it verbatim.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ImagePlus, X } from 'lucide-react';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import MediaImage from '../MediaImage';
+import { getThreejsProductSheet } from '../../services/apiThreejsModels.js';
 
 export const REFERENCE_ROLES = ['front', 'side', 'back', 'top', 'turnaround-sheet', 'close-up'];
 export const MAX_REFERENCE_IMAGES = 5;
 
-export default function ReferenceImagesEditor({ value, onChange, disabled = false }) {
+// `primaryFilename` is the model's primary gallery image; when it belongs to a
+// Casting object with a product sheet, a one-tap button offers that sheet.
+export default function ReferenceImagesEditor({ value, onChange, disabled = false, primaryFilename = '' }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [productSheet, setProductSheet] = useState(null);
+
+  useEffect(() => {
+    setProductSheet(null);
+    if (!primaryFilename) return undefined;
+    let cancelled = false;
+    // Optional affordance: a failed lookup just means no button.
+    getThreejsProductSheet(primaryFilename, { silent: true })
+      .then((result) => { if (!cancelled) setProductSheet(result?.sheet || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [primaryFilename]);
+
+  const sheetAdded = productSheet && value.some((ref) => ref.filename === productSheet);
+  const atCap = value.length >= MAX_REFERENCE_IMAGES;
   const patch = (index, change) => onChange(value.map((ref, i) => (i === index ? { ...ref, ...change } : ref)));
 
   return (
@@ -28,6 +46,16 @@ export default function ReferenceImagesEditor({ value, onChange, disabled = fals
           <ImagePlus className="h-3.5 w-3.5" /> Add view
         </button>
       </div>
+      {productSheet && !sheetAdded && (
+        <button
+          type="button"
+          disabled={disabled || atCap}
+          onClick={() => onChange([...value, { filename: productSheet, role: 'turnaround-sheet', label: '' }])}
+          className="mb-2 inline-flex items-center gap-1 text-xs text-port-accent hover:underline disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-11"
+        >
+          <ImagePlus className="h-3.5 w-3.5" /> Add product sheet
+        </button>
+      )}
       {value.length > 0 && (
         <ul className="space-y-2">
           {value.map((ref, index) => (

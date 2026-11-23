@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModels from './ThreejsModels';
 
 vi.mock('../services/apiThreejsModels.js', () => ({
+  getThreejsProductSheet: vi.fn(async () => ({ sheet: null })),
   createThreejsModel: vi.fn(),
   listThreejsModelFamilies: vi.fn(),
   listThreejsModels: vi.fn(),
