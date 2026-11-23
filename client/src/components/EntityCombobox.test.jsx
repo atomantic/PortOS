@@ -171,8 +171,11 @@ describe('EntityCombobox', () => {
       />
     );
     await user.click(screen.getByRole('combobox'));
-    const list = screen.getByRole('listbox');
-    expect(within(list).getByText(/No matches/i)).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    const status = screen.getByRole('status');
+    expect(within(status).getByText(/No matches/i)).toBeInTheDocument();
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByRole('combobox')).not.toHaveAttribute('aria-controls');
   });
 
   it('renders the custom empty hint when there are no items', async () => {
@@ -191,5 +194,61 @@ describe('EntityCombobox', () => {
     );
     await user.click(screen.getByRole('combobox'));
     expect(screen.getByText(/Pick a universe above to list its series/i)).toBeInTheDocument();
+  });
+
+  it('closes on Tab out, omits aria-controls when closed, and owns named options directly', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <EntityCombobox
+          items={items}
+          selectedId={null}
+          value=""
+          onChange={() => {}}
+          onPick={() => {}}
+          onCreate={() => {}}
+          inputId="test-tab"
+          noun="universe"
+        />
+        <button type="button">next</button>
+      </>
+    );
+    const input = screen.getByRole('combobox');
+    expect(input).not.toHaveAttribute('aria-controls');
+    await user.click(input);
+    const list = screen.getByRole('listbox', { name: 'universe options' });
+    expect(input).toHaveAttribute('aria-controls', list.id);
+    for (const child of list.children) expect(child).toHaveAttribute('role', 'option');
+    const options = within(list).getAllByRole('option');
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(options[1]).toHaveAttribute('aria-selected', 'false');
+    await user.tab();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await user.tab({ shift: true });
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+    await user.tab({ shift: true });
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('marks the create row selected only when active', async () => {
+    const user = userEvent.setup();
+    render(
+      <EntityCombobox
+        items={items}
+        selectedId={null}
+        value="Brand New"
+        onChange={() => {}}
+        onPick={() => {}}
+        onCreate={() => {}}
+        inputId="test-create"
+        noun="universe"
+      />
+    );
+    await user.click(screen.getByRole('combobox'));
+    const create = screen.getByRole('option', { name: /Create/ });
+    expect(create).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{ArrowDown}{ArrowUp}');
+    await user.keyboard('{ArrowDown}');
+    expect(create).toHaveAttribute('aria-selected', 'true');
   });
 });

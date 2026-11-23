@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AddToThreadButton from './AddToThreadButton';
 import { listThreads, attachToThread } from '../../services/apiBrainThreads.js';
 import toast from '../ui/Toast';
@@ -79,7 +79,7 @@ describe('AddToThreadButton', () => {
     await waitFor(() => expect(input).toHaveFocus());
 
     const close = screen.getByRole('button', { name: 'Close' });
-    close.focus();
+    act(() => close.focus());
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
     expect(input).toHaveFocus();
 
