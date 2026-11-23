@@ -25,7 +25,7 @@ import {
   LENGTH_PROFILE_NAMES,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
-import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, SEASON_STATUSES } from '../../lib/storyArc.js';
+import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, ARC_ROLES, SEASON_STATUSES } from '../../lib/storyArc.js';
 import {
   CHARACTER_ARC_LIMITS, CHARACTER_ARC_STATUSES, TRANSITION_KINDS,
 } from '../../lib/seriesCharacterArc.js';
@@ -348,6 +348,11 @@ const issueCreateSchema = z.object({
   pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
   minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
   ephemeral: z.boolean().optional(),
+  // Arc pointers — same bounds as issuePatchSchema so the Arc Canvas can
+  // create an issue directly inside a season (Zod would otherwise strip them).
+  seasonId: z.string().trim().min(1).max(issuesSvc.SEASON_ID_MAX).nullable().optional(),
+  arcPosition: z.number().int().min(0).max(issuesSvc.ARC_POSITION_MAX).nullable().optional(),
+  arcRole: z.enum(ARC_ROLES).nullable().optional(),
 });
 
 // =====================
@@ -537,9 +542,20 @@ router.get('/series/:id/issues', asyncHandler(async (req, res) => {
 }));
 
 router.post('/series/:id/issues', asyncHandler(async (req, res) => {
-  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(issueCreateSchema, req.body ?? {});
-  const created = await issuesSvc.createIssue({ ...body, seriesId: req.params.id });
+  if (body.seasonId) {
+    const target = (Array.isArray(series.seasons) ? series.seasons : []).find((s) => s.id === body.seasonId);
+    if (!target) {
+      throw new ServerError(`Season not found: ${body.seasonId}`, { status: 400, code: 'PIPELINE_SEASON_NOT_FOUND' });
+    }
+    if (target.locked === true) {
+      throw new ServerError(`Season "${target.title || target.number}" is locked — unlock it before adding issues`, {
+        status: 409, code: issuesSvc.ERR_SEASON_LOCKED,
+      });
+    }
+  }
+  const created = await issuesSvc.createIssue({ ...body, seriesId: req.params.id }, { preloadedSeries: series });
   res.status(201).json(created);
 }));
 

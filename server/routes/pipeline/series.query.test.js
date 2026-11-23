@@ -4,9 +4,16 @@ import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 
 const listSeries = vi.fn();
+const getSeries = vi.fn();
 vi.mock('../../services/pipeline/series.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listSeries: (...a) => listSeries(...a),
+  getSeries: (...a) => getSeries(...a),
+}));
+const createIssue = vi.fn();
+vi.mock('../../services/pipeline/issues.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  createIssue: (...a) => createIssue(...a),
 }));
 
 const seriesRoutes = (await import('./series.js')).default;
@@ -37,5 +44,38 @@ describe('GET /api/pipeline/series list paging (#16428)', () => {
     const res = await request(app).get('/api/pipeline/series?limit=1&limit=2');
     expect(res.status).toBe(400);
     expect(listSeries).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/pipeline/series/:id/issues arc pointers (#17719)', () => {
+  const series = { id: 's1', seasons: [{ id: 'sea-1', number: 1 }, { id: 'sea-lock', number: 2, locked: true }] };
+  beforeEach(() => {
+    getSeries.mockReset().mockResolvedValue(series);
+    createIssue.mockReset().mockImplementation(async (input) => ({ id: 'iss-1', ...input }));
+  });
+
+  it('forwards seasonId/arcPosition/arcRole to createIssue with the preloaded series', async () => {
+    const res = await request(app).post('/api/pipeline/series/s1/issues')
+      .send({ title: 'Ep', seasonId: 'sea-1', arcPosition: null, arcRole: 'pilot' });
+    expect(res.status).toBe(201);
+    expect(res.body.seasonId).toBe('sea-1');
+    expect(createIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ seriesId: 's1', seasonId: 'sea-1', arcPosition: null, arcRole: 'pilot' }),
+      { preloadedSeries: series },
+    );
+  });
+
+  it('rejects a seasonId that is not on the series with 400', async () => {
+    const res = await request(app).post('/api/pipeline/series/s1/issues').send({ title: 'Ep', seasonId: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PIPELINE_SEASON_NOT_FOUND');
+    expect(createIssue).not.toHaveBeenCalled();
+  });
+
+  it('rejects a locked season with 409', async () => {
+    const res = await request(app).post('/api/pipeline/series/s1/issues').send({ title: 'Ep', seasonId: 'sea-lock' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PIPELINE_ISSUE_SEASON_LOCKED');
+    expect(createIssue).not.toHaveBeenCalled();
   });
 });
