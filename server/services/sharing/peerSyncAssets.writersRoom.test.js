@@ -18,7 +18,7 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await im
 const { __resetBaseHashCacheForTests, conflictJournalStore } = await import('../../lib/conflictJournal.js');
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { createWork, saveDraftBody, snapshotDraft, getDraftBody, getWork, contentHash } = await import('../writersRoom/local.js');
-const { diffWorkBodyManifest, mergeWorksFromSync } = await import('../writersRoom/sync.js');
+const { diffWorkBodyManifest, mergeWorksFromSync, getWorkForSync } = await import('../writersRoom/sync.js');
 const { listConflicts, resolveConflict } = await import('../conflictJournalResolver.js');
 const { pullMissingWorkBodies } = await import('./peerSyncAssets.js');
 
@@ -48,7 +48,7 @@ async function receivePeerEdit(local, draftId, { manifestProse = oldProse, fileP
   const { applied } = await mergeWorksFromSync([winner], { source: { via: 'peer-sync', peerId: peer.instanceId } });
   expect(applied).toBe(true);
   const entry = { workId: local.id, draftId, sha256: contentHash(fileProse) };
-  const missing = await diffWorkBodyManifest([entry], { includeMismatched: applied });
+  const missing = await diffWorkBodyManifest([entry], { expectedHashes: new Map([[draftId, contentHash(fileProse)]]) });
   expect(missing).toHaveLength(1);
   return { missing, updatedAt };
 }
@@ -117,6 +117,31 @@ describe('Writers Room draft pulls', () => {
       expect(Date.parse(restored.updatedAt)).toBeGreaterThan(Date.parse(updatedAt));
     });
   }
+
+  owned.it('retry push after a failed pull still converges; a stale push never pulls', async () => {
+    const work = await createWork({ title: 'Local story', kind: 'short-story' });
+    const draftId = work.activeDraftVersionId;
+    const { manifest } = await saveDraftBody(work.id, localProse);
+    const { missing } = await receivePeerEdit(manifest, draftId);
+    // Push #1: background pull fails transiently; the body stays old.
+    vi.mocked(peerFetch).mockRejectedValueOnce(new Error('transient'));
+    await pullMissingWorkBodies(peer.instanceId, missing).catch(() => {});
+    expect(await getDraftBody(work.id, draftId)).toBe(localProse);
+
+    // Push #2: identical updatedAt, so the merge is NOT applied. The gate keys on
+    // the persisted manifest hash (what reconcileWriterRoomBodies passes).
+    const persisted = await getWorkForSync(work.id);
+    const expectedHashes = new Map(persisted.drafts.map((d) => [d.id, d.contentHash]));
+    const retry = await diffWorkBodyManifest([{ workId: work.id, draftId, sha256: contentHash(oldProse) }], { expectedHashes });
+    expect(retry).toHaveLength(1);
+    vi.mocked(peerFetch).mockResolvedValueOnce(draftResponse(oldProse));
+    await pullMissingWorkBodies(peer.instanceId, retry);
+    expect(await getDraftBody(work.id, draftId)).toBe(oldProse);
+
+    // A stale losing push (hash != persisted) is refused.
+    const stale = await diffWorkBodyManifest([{ workId: work.id, draftId, sha256: contentHash('stale') }], { expectedHashes });
+    expect(stale).toEqual([]);
+  });
 
   owned.it('skips a pull when a save changes the hash during its download', async () => {
     const work = await createWork({ title: 'Local story', kind: 'short-story' });
