@@ -387,6 +387,15 @@ describe('FableLoomHostedJoin', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows the replacement reason instead of staying on Connecting when another device joins', () => {
+    renderConnectedJoin();
+    act(() => { socketHandler('hosted:session:replaced')({ reason: 'Another audience device joined this session.' }); });
+    act(() => socketHandler('disconnect')());
+
+    expect(screen.getByText(/Another audience device joined this session/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Connecting/i)).not.toBeInTheDocument();
+  });
+
   it('falls back to the server message and re-enables input after a failed turn returns to idle', () => {
     renderConnectedJoin();
 
