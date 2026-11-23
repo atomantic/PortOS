@@ -392,6 +392,16 @@ The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
 
+The planner sizes the client matrix before any memo is restored, so it
+counts real-Chromium suites itself (#17616): a client plan fans out across
+`FULL_SUITE_SHARDS.client` once it selects `CLIENT_BROWSER_FANOUT_SUITES` (4)
+of them, explicitly or, for `related`, by reach (`clientBrowserSuiteReach()`
+in `scripts/lib/importReach.js`: the suite's own import closure, the closure
+of the `/src/…` entries its fixture renders, or a shared input such as
+`client/src/index.css`, `client/src/themes/` or a direct file of `client/`).
+Each costs a Chrome launch and a cold Vite graph, so 32 of them on one runner
+took 282–402 s against 55–91 s across four shards.
+
 ## Related selection
 
 A `related` plan selects, besides the planner's explicit files, every test a

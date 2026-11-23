@@ -695,13 +695,7 @@ when its measured import reach (`serverReach.selected` / `clientReach.selected`,
 the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
 runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
 (a shared module such as `client/src/services/apiCore.js`, #17456).
-A client plan also fans out once it selects `CLIENT_BROWSER_FANOUT_SUITES` (4)
-real-Chromium suites, explicitly or (for `related`) by reach
-(`clientBrowserSuiteReach()` in `scripts/lib/importReach.js`: the suite's own import closure, the
-closure of the `/src/…` entries its fixture renders, or a shared input such as
-`client/src/index.css`, `client/src/themes/` or a direct file of `client/`). Each costs
-a Chrome launch and a cold Vite graph, so 32 of them on one runner took 282–402 s
-against 55–91 s across four shards (#17616).
+4 Chrome client suites do too ([why](./TEST_MEMO.md#shards)).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.
