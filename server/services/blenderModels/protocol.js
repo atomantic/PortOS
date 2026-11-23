@@ -9,7 +9,7 @@
  */
 export const BLENDER_MODEL_DRIVER_PREFIX = 'PORTOS_MODEL ';
 
-const EVENTS = new Set(['start', 'part', 'described', 'mesh', 'scene', 'saved', 'reimport', 'done', 'error']);
+const EVENTS = new Set(['start', 'part', 'described', 'mesh', 'scene', 'saved', 'reimport', 'view', 'done', 'error']);
 const CONTROLS_MAX_BYTES = 16 * 1024;
 
 const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : null);
@@ -66,6 +66,8 @@ export function parseBlenderModelDriverLine(line) {
         event: 'reimport', objects: count(raw.objects), meshes: count(raw.meshes), triangles: count(raw.triangles),
         materials: count(raw.materials), images: count(raw.images), actions: count(raw.actions), ...bounds(raw),
       };
+    case 'view':
+      return { event: 'view', id: text(raw.id, 64), look: text(raw.look, 16) };
     case 'done':
       return { event: 'done', sec: seconds(raw.sec) };
     default:

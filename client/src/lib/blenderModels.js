@@ -6,7 +6,7 @@
 import { formatCount } from '../utils/formatters.js';
 
 export const BLENDER_MODEL_SKILL_NAME = 'portos-blender-model';
-export const BLENDER_MODEL_TABS = ['model', 'references', 'files', 'builds', 'settings'];
+export const BLENDER_MODEL_TABS = ['model', 'references', 'compare', 'files', 'builds', 'settings'];
 export const BLENDER_EXECUTION_PATH = '/code-animation/production#blender-execution';
 
 export const BLENDER_MODEL_STATUS = Object.freeze({
@@ -59,6 +59,51 @@ function referenceLines(state) {
   ];
 }
 
+/** The directions every review renders, in sheet order. */
+export const BLENDER_MODEL_FIXED_VIEWS = [
+  ['front', 'Front'], ['right', 'Right (+X side)'], ['back', 'Back'], ['left', 'Left (-X side)'], ['top', 'Top'], ['bottom', 'Bottom'], ['three-quarter', 'Three-quarter'],
+].map(([id, label]) => ({ id, label }));
+
+/** A reference slot's name on screen. */
+export const referenceLabel = (slot) => (slot.role === 'overall' ? 'Overall sheet' : slot.mechanism);
+
+/** The filename of a reference's approved image, or null. */
+export const approvedReferenceFilename = (slot) => slot?.images?.find((image) => image.id === slot.approvedImageId)?.filename ?? null;
+
+/** What a camera choice (a fixed view id or a saved camera id) shows: its render's view id, and the saved camera if it is one. */
+export function comparedCamera(state, requested) {
+  const saved = (state.cameras || []).find((camera) => camera.id === requested) ?? null;
+  if (saved) return { id: saved.id, camera: saved, viewId: saved.orbit ? saved.id : saved.view };
+  const fixed = BLENDER_MODEL_FIXED_VIEWS.find((view) => view.id === requested) ?? BLENDER_MODEL_FIXED_VIEWS[0];
+  return { id: fixed.id, camera: null, viewId: fixed.id };
+}
+
+/** A new orbit's starting distance in meters: the declared box fits a 50 mm lens. */
+export const defaultOrbitDistance = (size) => (size ? Number((Math.hypot(size.x, size.y, size.z) * 1.6).toPrecision(3)) : 1);
+
+const framing = (camera) => (camera.orbit
+  ? `orbit azimuth ${camera.orbit.azimuth}, elevation ${camera.orbit.elevation}, ${camera.orbit.distance} m, ${camera.orbit.lens} mm${camera.orbit.partId ? `, aimed at ${camera.orbit.partId}` : ''}`
+  : `the ${camera.view} view`);
+
+/** The brief's second pass: where to look, and every difference still open. */
+function compareLines(state) {
+  const cameras = state.cameras || [];
+  const open = (state.differences || []).filter((difference) => difference.status === 'open');
+  const accepted = (state.differences || []).filter((difference) => difference.status === 'accepted');
+  const slots = new Map((state.references || []).map((slot) => [slot.id, slot]));
+  const fileOf = (referenceId) => slots.get(referenceId)?.file;
+  const review = state.reviews?.[0];
+  const about = (difference) => [difference.partId ? `part ${difference.partId}` : null, fileOf(difference.referenceId) ? `src/${fileOf(difference.referenceId)}` : null].filter(Boolean).join(', ');
+  return [
+    ...(review ? [`Review renders of build ${review.buildId}${review.outOfDate ? ' (out of date: a newer build exists)' : ''}: renders/reviews/${review.buildId}/<view>-textured.png and -clay.png, sheet-*.jpg`] : []),
+    ...(cameras.length ? ['Compare cameras (reference panel -> view):', ...cameras.map((camera) => (
+      `  ${camera.label}: ${fileOf(camera.referenceId) ? `src/${fileOf(camera.referenceId)}` : camera.referenceId} -> ${framing(camera)}${camera.orbit ? ` (${camera.id}-textured.png)` : ''}`))] : []),
+    ...(open.length ? ['Second pass, open differences from the references. Fix each, rebuild, look at it, then close it:', ...open.map((difference) => (
+      `  ${difference.id}: ${difference.text}${about(difference) ? ` (${about(difference)})` : ''}`))] : []),
+    ...(accepted.length ? ['Accepted departures, leave these as they are:', ...accepted.map((difference) => `  ${difference.text}: ${difference.reason}`)] : []),
+  ];
+}
+
 const findingLine = (finding) => `  ${finding.severity}: ${finding.code}${finding.subjects?.length ? ` (${finding.subjects.join(', ')})` : ''}: ${finding.message}`;
 
 /**
@@ -95,9 +140,10 @@ export function blenderModelAgentBrief(state, { report = null } = {}) {
     ...(size ? [`Declared now: ${size}; ${formatCount(state.describe.triangleBudget)} triangles; parts: ${(state.describe.parts || []).map((part) => part.id).join(', ') || 'none'}.`] : []),
     `Now: ${now.join(' ')}`,
     ...(findings.length ? [`Findings of build ${report.buildId}:`, ...findings.map(findingLine)] : []),
+    ...compareLines(state),
     `Blender here: ${state.tool?.ready ? `ready${state.tool.version ? ` (${state.tool.version})` : ''}` : `not ready: ${state.tool?.reason || 'unknown reason'}`}.`,
     '',
-    'Loop: edit src/ -> build (draft) -> read report.json and build.log -> fix errors, then warnings -> build again -> publish when asked.',
+    'Loop: edit src/ -> build (draft) -> read report.json and build.log -> fix errors, then warnings -> look at the review renders beside the references and record what is missing -> build again -> publish when asked.',
     '',
     `Routes (base ${base}; from a terminal session use node scripts/portos-api.js):`,
     '  GET    (base)                                the record, workspace, tool readiness and jobs',
@@ -110,6 +156,9 @@ export function blenderModelAgentBrief(state, { report = null } = {}) {
     '  PATCH  /reference-source                     {"size","images","ingredientId"} what the sheets start from',
     '  POST   /references                           {"mechanism"} add a close-up plate;  POST /parts-brief  create src/PARTS.md',
     '  POST   /references/<refId>/images/<imageId>/review  {"decision": "approve"|"redo", "note"?} review an image you looked at',
+    '  POST   /builds/<buildId>/review             render the review again (it also runs after each build);  GET /builds/<buildId>/review/<name>  one image',
+    '  POST   /cameras                              {"label","referenceId","crop"?,"view" | "orbit"};  PATCH, DELETE /cameras/<cameraId>',
+    '  POST   /differences                          {"text","partId"?,"referenceId"?};  PATCH /differences/<id>  {"status": "fixed"|"accepted"|"open", "reason"?}',
     '  POST   /publish                              {"buildId"} publish a completed build without errors',
     'Every change is announced as blender-model:changed { id } over Socket.IO. Builds need Blender in Trusted local mode; never change the mode yourself.',
   ].join('\n');
