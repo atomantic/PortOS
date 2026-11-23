@@ -119,8 +119,19 @@ async function prune() {
   const retained = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !uuid.test(entry.name) || active.has(entry.name)) continue;
-    const job = await readJob(entry.name);
-    if (!job) throw error('EXPORT_STATE_INVALID', 'An incomplete export directory needs recovery.', 503);
+    // The cache is ephemeral: an unreadable entry (no job.json, corrupt JSON, other schema
+    // version) is dropped here so it cannot block every future export. A leased download
+    // is kept; readJob stays strict for direct lookups.
+    const job = await readJob(entry.name).catch(err => {
+      if (err?.code === 'EXPORT_STATE_INVALID') return null;
+      throw err;
+    });
+    if (!job) {
+      if (downloads.has(entry.name)) continue;
+      console.warn(`⚠️ Pruning invalid FableLoom export cache directory ${entry.name}`);
+      await rmGuarded(jobDirectory(entry.name), { recursive: true, force: true });
+      continue;
+    }
     if (Date.now() - job.createdAt >= FABLELOOM_EXPORT_LIMITS.maxAgeMs && !downloads.has(entry.name)) {
       await rmGuarded(jobDirectory(entry.name), { recursive: true, force: true });
     } else retained.push(job);
