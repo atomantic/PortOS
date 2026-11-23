@@ -65,8 +65,8 @@ export default function AppQualityScheduleForm({ app }) {
     untouched.current = true;
     setData(response);
     setHasSaved(Boolean(response.hasExistingSchedule));
-    setSelected(response.plan.slots.map(slot => slot.taskType));
-    setModes(Object.fromEntries(response.plan.slots.map(slot => [slot.taskType, slot.fileIssues])));
+    setSelected(response.selectedTaskTypes ?? response.plan.slots.map(slot => slot.taskType));
+    setModes(response.selectedFileIssuesByType ?? Object.fromEntries(response.plan.slots.map(slot => [slot.taskType, slot.fileIssues])));
     setOptions(response.plan.options);
   };
 

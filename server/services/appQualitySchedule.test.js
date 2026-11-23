@@ -250,6 +250,40 @@ describe('collectBusyOccupancies', () => {
   });
 });
 
+describe('continuous watchers and fallback', () => {
+  it('does not let watchers or >=12 hour/day crons block placement', async () => {
+    loadSchedule.mockResolvedValue({
+      tasks: {
+        'pr-watcher': { type: 'cron', enabled: true, cronExpression: '*/15 * * * *' },
+        'pr-reviewer': { type: 'cron', enabled: true, cronExpression: '0 * * * *' },
+        'custom-frequent': { type: 'cron', enabled: true, cronExpression: '0 */2 * * *' },
+        'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' },
+      },
+    });
+    getAppTaskTypeOverrides.mockResolvedValue({
+      'pr-watcher': { enabled: true }, 'pr-reviewer': { enabled: true }, 'custom-frequent': { enabled: true }, 'do-release': { enabled: true },
+    });
+    const sources = await collectBusyOccupancies({ id: 'a' });
+    expect(sources.map(source => source.taskType)).toEqual(['do-release']);
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE));
+    expect(built.plan.slots.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to unpadded busy slots with a warning when padding leaves no hours', async () => {
+    loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '0 0,4,8,12,16,20 * * *' } } });
+    getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true } });
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE));
+    expect(built.plan.slots.length).toBeGreaterThan(0);
+    expect(built.plan.warnings.join(' ')).toMatch(/padding/i);
+  });
+
+  it('returns the intended selection even when the plan is empty', async () => {
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE), { taskTypes: ['security'], fileIssuesByType: { security: true } });
+    expect(built.selectedTaskTypes).toEqual(['security']);
+    expect(built.selectedFileIssuesByType).toEqual({ security: true });
+  });
+});
+
 describe('buildQualitySchedulePlan', () => {
   it('plans only the applicable checks and works around the app release window', async () => {
     loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
