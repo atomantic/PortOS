@@ -452,7 +452,7 @@ export async function runVerificationPass({
           evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, score: hit.s.score }, ...(hit.s.verificationUrl ? { verification_url: hit.s.verificationUrl } : {}) },
           now,
         });
-        advanced.push({ caseId: c.id, brokerId: c.brokerId, verificationUrl: hit.s.verificationUrl });
+        advanced.push({ caseId: c.id, brokerId: c.brokerId });
       }
     }
   }
