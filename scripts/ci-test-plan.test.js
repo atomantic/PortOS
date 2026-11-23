@@ -1731,7 +1731,7 @@ describe('CI test impact planner', () => {
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: [1, 2, 3, 4],
-      browser: [1, 2],
+      browser: [1, 2, 3, 4],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });

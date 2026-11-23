@@ -530,7 +530,7 @@ jobs:
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0' }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0' }}
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the

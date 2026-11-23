@@ -439,7 +439,9 @@ const finishPlan = (plan, options = {}) => {
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
-    browser: plan.browserFiles.length > 1 ? [1, 2] : [1],
+    // Four shards put the serial-capture backlog on separate runners; see
+    // scripts/lib/browserSuites.js for the balanced owner tables.
+    browser: plan.browserFiles.length >= 4 ? [1, 2, 3, 4] : plan.browserFiles.length > 1 ? [1, 2] : [1],
     // The native contract set stays on one runner and never follows the
     // application import graph, even when the primary jobs run full suites.
     windows: [1],
