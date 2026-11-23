@@ -656,7 +656,10 @@ export function mergeMeta(local, remote) {
   }
 
   if (isPlainObject(remote.settings)) {
-    const settings = { ...remote.settings, ...(isPlainObject(local.settings) ? local.settings : {}) };
+    // includePrivacyContext is machine-local (it gates vault injection into this
+    // machine's prompts), so a peer's value is never adopted.
+    const { includePrivacyContext: _remoteOnly, ...remoteSettings } = remote.settings;
+    const settings = { ...remoteSettings, ...(isPlainObject(local.settings) ? local.settings : {}) };
     if (JSON.stringify(settings) !== JSON.stringify(local.settings || {})) {
       merged.settings = settings; changed = true;
     }
@@ -871,7 +874,13 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(AUTOBIO_STORIES_FILE, null, { strict: true }),
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
+  // includePrivacyContext is machine-local: never on the wire or in checksums.
+  let wireMeta = meta;
+  if (isPlainObject(meta?.settings) && 'includePrivacyContext' in meta.settings) {
+    const { includePrivacyContext: _local, ...settings } = meta.settings;
+    wireMeta = { ...meta, settings };
+  }
+  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta: wireMeta, documents, autobiography: { stories }, socialAccounts };
   // A field already present on one peer may be appended by the other on merge.
   return { data, checksum: canonicalSnapshotChecksum(data) };
 }
