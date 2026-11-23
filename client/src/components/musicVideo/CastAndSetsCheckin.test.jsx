@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CastSetsStage from './stages/CastSetsStage.jsx';
-import useMusicVideoCastAndSets from '../../hooks/useMusicVideoCastAndSets';
+import useMusicVideoCastAndSets from './stages/useMusicVideoCastAndSets';
 import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 
 const { listeners, api, getMediaJob, greyboxData } = vi.hoisted(() => ({

@@ -1,6 +1,6 @@
 import { useCallback, useRef } from 'react';
-import useHoverTooltip from '../../hooks/useHoverTooltip';
-import useFirstTouchHint from '../../hooks/useFirstTouchHint';
+import useHoverTooltip from './useHoverTooltip';
+import useFirstTouchHint from './useFirstTouchHint';
 import { isTapGesture } from '../../lib/graphPicking';
 
 // Only a gesture on the WebGL canvas itself picks or clears a node. The

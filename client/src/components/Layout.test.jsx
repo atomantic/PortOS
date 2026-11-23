@@ -19,15 +19,15 @@ import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
 // --- Notification / status hooks: no-op, except useNotifications which feeds the
 //     dropdown with a nonzero unread count. ---
-vi.mock('../hooks/useErrorNotifications', () => ({ useErrorNotifications: () => {} }));
-vi.mock('../hooks/useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
-vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
-vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
+vi.mock('./useErrorNotifications', () => ({ useErrorNotifications: () => {} }));
+vi.mock('./useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
+vi.mock('./useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
+vi.mock('./useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
 vi.mock('./UpdateBanners', () => ({ default: () => null }));
 vi.mock('./SetupBanner', () => ({ default: () => null }));
 vi.mock('./MaintenanceBanner.jsx', () => ({ default: () => null }));
 vi.mock('./PasswordRiskWarning.jsx', () => ({ default: () => null }));
-vi.mock('../hooks/useNotifications', () => ({
+vi.mock('./useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
     unreadCount: 6,

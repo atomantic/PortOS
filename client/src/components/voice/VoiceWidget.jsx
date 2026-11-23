@@ -14,7 +14,7 @@ import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voice
 import { warmNano } from '../../services/browserLlm';
 import { getPaletteManifest } from '../../services/apiPalette';
 import toast from '../ui/Toast';
-import { useVoiceUiSync, pushUiIndexAfterAction } from '../../hooks/useVoiceUiSync';
+import { useVoiceUiSync, pushUiIndexAfterAction } from './useVoiceUiSync';
 import { doClick, doFill, doSelect, doSetCheckbox } from '../../services/uiInteract';
 import {
   VISIBILITY_EVENT,

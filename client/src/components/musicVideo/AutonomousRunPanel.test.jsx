@@ -57,7 +57,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
 
 import AutonomousRunPanel from './AutonomousRunPanel.jsx';
 import AutonomousStartDrawer from './AutonomousStartDrawer.jsx';
-import useAutonomousMusicVideo from '../../hooks/useAutonomousMusicVideo.js';
+import useAutonomousMusicVideo from './stages/useAutonomousMusicVideo.js';
 import * as api from '../../services/apiMusicVideo.js';
 import { getVideoGenModelContext } from '../../services/apiImageVideo.js';
 

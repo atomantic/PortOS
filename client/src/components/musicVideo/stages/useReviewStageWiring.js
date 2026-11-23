@@ -1,5 +1,5 @@
-import useMusicVideoExcerpts from '../../../hooks/useMusicVideoExcerpts.js';
-import useMusicVideoAutoReview from '../../../hooks/useMusicVideoAutoReview.js';
+import useMusicVideoExcerpts from './useMusicVideoExcerpts.js';
+import useMusicVideoAutoReview from './useMusicVideoAutoReview.js';
 import { useMusicVideoReviewDraft } from '../../../hooks/useMusicVideoReviewDraft.js';
 import { useVideoFileSrc } from '../../../hooks/useVideoFileSrc.js';
 import { latestMusicVideoReviewDraft } from '../../../../../server/lib/musicVideo/musicVideoReviewDraft.js';

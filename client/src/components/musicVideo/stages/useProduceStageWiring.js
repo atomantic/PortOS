@@ -16,9 +16,9 @@ import {
 } from '../../../services/apiMusicVideo.js';
 import { ownWrite } from '../../../services/socketWriteOrigin.js';
 import useMusicVideoSceneMedia from '../../../hooks/useMusicVideoSceneMedia.js';
-import useMusicVideoTakes from '../../../hooks/useMusicVideoTakes.js';
-import useMusicVideoRevisions from '../../../hooks/useMusicVideoRevisions.js';
-import useMusicVideoProduction from '../../../hooks/useMusicVideoProduction.js';
+import useMusicVideoTakes from './useMusicVideoTakes.js';
+import useMusicVideoRevisions from './useMusicVideoRevisions.js';
+import useMusicVideoProduction from './useMusicVideoProduction.js';
 import { compositionDraft } from '../compositionDraft.js';
 import { isLtx2FamilyRuntime } from '../../../lib/runnerFamilies';
 import { mergeCameoScenes } from '../../../lib/musicVideoCameos.js';

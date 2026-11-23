@@ -4,7 +4,7 @@ import CastSetsStage from './CastSetsStage.jsx';
 import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
 
 vi.mock('../../../hooks/useCatalogCastSetsCheckin.js', () => ({ default: vi.fn() }));
-vi.mock('../../../hooks/useMusicVideoCastingChanges.js', () => ({ default: () => ({ changes: null, loadError: null, retry: () => {} }) }));
+vi.mock('./useMusicVideoCastingChanges.js', () => ({ default: () => ({ changes: null, loadError: null, retry: () => {} }) }));
 vi.mock('../CatalogLookReferences.jsx', () => ({ default: ({ children }) => <div>{children}</div> }));
 vi.mock('../LookReferencesPanel.jsx', () => ({ default: () => null }));
 vi.mock('../VisualSpecPanel.jsx', () => ({ default: () => null }));
