@@ -25,11 +25,6 @@ vi.mock('../services/taskSchedule.js', () => ({
   INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
-vi.mock('../lib/cos/cosValidation.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  sanitizeTaskMetadata: vi.fn((meta) => meta),
-}));
-
 import * as taskSchedule from '../services/taskSchedule.js';
 
 describe('CoS Schedule Routes', () => {

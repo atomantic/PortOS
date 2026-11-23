@@ -29,8 +29,6 @@ vi.mock('./notifications.js', () => ({
 const runModelAbuseScanMock = vi.fn();
 vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  MODEL_ABUSE_GUARD_ID: 'llama-prompt-guard-2-86m',
-  MODEL_ABUSE_GUARD_MAX_INPUT_CHARS: 2_000_000,
   runModelAbuseScan: (...args) => runModelAbuseScanMock(...args),
 }));
 
