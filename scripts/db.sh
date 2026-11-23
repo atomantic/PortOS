@@ -197,7 +197,8 @@ native_running() {
 # Auto-detect Homebrew PostgreSQL 17 on macOS and add to PATH
 # Check both arm64 (/opt/homebrew) and Intel (/usr/local) prefixes
 if [ "$(uname)" = "Darwin" ]; then
-  for _prefix in /opt/homebrew/opt/postgresql@17 /usr/local/opt/postgresql@17; do
+  # PORTOS_BREW_PG_PREFIXES lets tests keep a real Homebrew Postgres off PATH.
+  for _prefix in ${PORTOS_BREW_PG_PREFIXES:-/opt/homebrew/opt/postgresql@17 /usr/local/opt/postgresql@17}; do
     if [ -x "$_prefix/bin/psql" ]; then
       export PATH="$_prefix/bin:$PATH"
       break
@@ -340,6 +341,28 @@ start_docker() {
   exit 1
 }
 
+# Run a command as root: directly when already root, else via non-interactive sudo.
+linux_privileged() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo -n "$@"
+  fi
+}
+
+# Poll up to 15s for the native endpoint to accept connections.
+wait_native_ready() {
+  local i
+  for i in $(seq 1 15); do
+    if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
+      log "Native PostgreSQL ready on port $PGPORT"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 start_native() {
   info "Starting native PostgreSQL..."
 
@@ -369,6 +392,19 @@ start_native() {
     fi
   fi
 
+  # Linux servers: systemd unit first, then pg_ctl against an explicit PGDATA
+  if [ "$(uname)" = "Linux" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+      info "Starting PostgreSQL via systemctl..."
+      linux_privileged systemctl start postgresql 2>/dev/null || true
+      wait_native_ready && return
+    fi
+    if [ -n "${PGDATA:-}" ] && [ -d "$PGDATA" ] && command -v pg_ctl >/dev/null 2>&1; then
+      pg_ctl -D "$PGDATA" -l "$PGDATA/server.log" start 2>/dev/null || true
+      wait_native_ready && return
+    fi
+  fi
+
   # Try pg_ctl with Homebrew data directory
   if command -v pg_ctl >/dev/null 2>&1; then
     local datadir=""
@@ -380,17 +416,15 @@ start_native() {
     fi
     if [ -n "$datadir" ] && [ -d "$datadir" ]; then
       pg_ctl -D "$datadir" -l "$datadir/server.log" start 2>/dev/null || true
-      for i in $(seq 1 15); do
-        if pg_bound pg_isready -h "$PGHOST" -p "$PGPORT" >/dev/null 2>&1; then
-          log "Native PostgreSQL ready on port $PGPORT"
-          return
-        fi
-        sleep 1
-      done
+      wait_native_ready && return
     fi
   fi
 
-  err "Could not start PostgreSQL. Try: brew services start postgresql@17"
+  if [ "$(uname)" = "Darwin" ]; then
+    err "Could not start PostgreSQL. Try: brew services start postgresql@17"
+  else
+    err "Could not start PostgreSQL. Try: sudo systemctl start postgresql (or set PGDATA and use pg_ctl)"
+  fi
   exit 1
 }
 
@@ -427,18 +461,28 @@ native_accepting() {
 stop_native() {
   info "Stopping native PostgreSQL..."
   local stop_failed=false
-  # Stop via Homebrew services (macOS)
   if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
     brew services stop postgresql@17 || stop_failed=true
-  elif command -v pg_ctl >/dev/null 2>&1; then
-    # Fallback: pg_ctl
-    local datadir=""
-    if [ "$(uname)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
-      datadir="$(brew --prefix)/var/postgresql@17"
+    # A server started via pg_ctl (including start_native's fallback) is not a
+    # brew service, so the stop above leaves it running.
+    if native_accepting && command -v pg_ctl >/dev/null 2>&1; then
+      local datadir
+      for datadir in "$(brew --prefix)/var/postgresql@17" "$(brew --prefix)/var/postgres"; do
+        if [ -d "$datadir" ]; then
+          pg_ctl -D "$datadir" stop -m fast && stop_failed=false && break
+          stop_failed=true
+        fi
+      done
     fi
-    if [ -n "$datadir" ] && [ -d "$datadir" ]; then
-      pg_ctl -D "$datadir" stop -m fast || stop_failed=true
+  elif [ "$(uname)" = "Linux" ] && native_accepting; then
+    if command -v systemctl >/dev/null 2>&1; then
+      linux_privileged systemctl stop postgresql || stop_failed=true
     fi
+    if native_accepting && [ -n "${PGDATA:-}" ] && [ -d "$PGDATA" ] && command -v pg_ctl >/dev/null 2>&1; then
+      pg_ctl -D "$PGDATA" stop -m fast && stop_failed=false || stop_failed=true
+    fi
+  elif command -v pg_ctl >/dev/null 2>&1 && [ -n "${PGDATA:-}" ] && [ -d "$PGDATA" ]; then
+    pg_ctl -D "$PGDATA" stop -m fast || stop_failed=true
   fi
   # Claim Stopped only once the endpoint stops answering. A failing stop command
   # against an endpoint that is already down stays an idempotent success.
@@ -590,6 +634,19 @@ provision_role() {
       pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
 }
 
+# Exact-name existence probes (no substring/word matching: hyphenated sibling
+# names such as portos-staging must not match portos). Names reach psql through
+# \getenv and are quoted as literals (:'x'), never interpolated into SQL.
+role_exists() {
+  printf '%s\n%s\n' '\getenv role PORTOS_BOOTSTRAP_ROLE' "SELECT 1 FROM pg_roles WHERE rolname = :'role';" |
+    PORTOS_BOOTSTRAP_ROLE="$PGUSER" pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$1" -d postgres -tA -X -q 2>/dev/null | grep -qx 1
+}
+
+database_exists() {
+  printf '%s\n%s\n' '\getenv db PORTOS_BOOTSTRAP_DB' "SELECT 1 FROM pg_database WHERE datname = :'db';" |
+    PORTOS_BOOTSTRAP_DB="$PGDATABASE" pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$1" -d postgres -tA -X -q 2>/dev/null | grep -qx 1
+}
+
 # Homebrew's pgvector bottle only ships builds for the newest PostgreSQL
 # majors. A `brew upgrade` can move it past postgresql@17 and unlink the old
 # vector library, leaving the running server failing every vector query with
@@ -598,24 +655,31 @@ provision_role() {
 # `make install` writes real files into the keg's shared lib/extension dirs,
 # which later pgvector upgrades (symlink-only) leave alone.
 ensure_pgvector_for_pg17() {
-  local pg_config pkglibdir version build_dir
+  local pg_config pkglibdir version
   pg_config="$(brew --prefix postgresql@17)/bin/pg_config"
   pkglibdir="$("$pg_config" --pkglibdir)"
   if [ -e "$pkglibdir/vector.dylib" ] || [ -e "$pkglibdir/vector.so" ]; then
     log "pgvector library present for PostgreSQL 17"
     return 0
   fi
-  version="$(brew list --versions pgvector | awk '{print $2}' | sed 's/_.*//')"
-  warn "Homebrew's pgvector ${version:-build} has no PostgreSQL 17 library in $pkglibdir; building it from source"
-  build_dir="$(mktemp -d)"
-  if ! git clone --quiet --depth 1 ${version:+--branch "v$version"} https://github.com/pgvector/pgvector.git "$build_dir/pgvector" ||
-     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" >/dev/null ||
-     ! make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" install >/dev/null; then
-    rm -rf "$build_dir"
-    err "Could not build pgvector for PostgreSQL 17 (needs git and the Xcode command line tools)"
+  version="$(brew list --versions pgvector | awk '{print $NF}' | sed 's/_.*//')"
+  if [ -z "$version" ]; then
+    err "Cannot determine the installed Homebrew pgvector version; run: brew reinstall pgvector"
     exit 1
   fi
-  rm -rf "$build_dir"
+  warn "Homebrew's pgvector $version has no PostgreSQL 17 library in $pkglibdir; building it from source"
+  # Subshell so the EXIT trap removes the build dir on any exit path without
+  # clobbering the caller's traps.
+  (
+    build_dir="$(mktemp -d)"
+    trap 'rm -rf "$build_dir"' EXIT
+    git clone --quiet --depth 1 --branch "v$version" https://github.com/pgvector/pgvector.git "$build_dir/pgvector" &&
+      make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" >/dev/null &&
+      make -C "$build_dir/pgvector" PG_CONFIG="$pg_config" install >/dev/null
+  ) || {
+    err "Could not build pgvector for PostgreSQL 17 (needs git and the Xcode command line tools)"
+    exit 1
+  }
   log "pgvector ${version} built and installed for PostgreSQL 17"
 }
 
@@ -742,7 +806,7 @@ cmd_setup_native() {
   # Connect as the current system user (default Homebrew superuser) to create the role
   local sys_user
   sys_user="$(whoami)"
-  if ! pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" 2>/dev/null | grep -q 1; then
+  if ! role_exists "$sys_user"; then
     info "Creating database user: $PGUSER"
     provision_role "$sys_user" 'CREATE ROLE :"role" WITH LOGIN PASSWORD :'"'"'pw'"'"' CREATEDB SUPERUSER;'
     log "User $PGUSER created"
@@ -753,9 +817,11 @@ cmd_setup_native() {
   fi
 
   # Step 4: Create portos database if it doesn't exist
-  if ! pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -lqt 2>/dev/null | cut -d\| -f1 | grep -qw "$PGDATABASE"; then
+  if ! database_exists "$sys_user"; then
     info "Creating database: $PGDATABASE"
-    pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -c "CREATE DATABASE $PGDATABASE OWNER $PGUSER;"
+    printf '%s\n%s\n%s\n' '\getenv db PORTOS_BOOTSTRAP_DB' '\getenv role PORTOS_BOOTSTRAP_ROLE' 'CREATE DATABASE :"db" OWNER :"role";' |
+      PORTOS_BOOTSTRAP_DB="$PGDATABASE" PORTOS_BOOTSTRAP_ROLE="$PGUSER" \
+        pg_bound psql -h "$PGHOST" -p "$PGPORT" -U "$sys_user" -d postgres -v ON_ERROR_STOP=1 -X -q
     log "Database $PGDATABASE created"
   else
     log "Database $PGDATABASE already exists"

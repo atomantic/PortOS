@@ -40,14 +40,14 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh start/stop backend 
     const binDir = join(root, 'bin');
     mkdirSync(binDir);
     symlinkSync(process.execPath, join(binDir, 'node'));
-    for (const name of ['docker', 'psql']) writeStub(binDir, name, LOGGING_STUB(name));
+    for (const name of ['docker', 'psql', 'systemctl', 'sudo', 'pg_ctl']) writeStub(binDir, name, LOGGING_STUB(name));
     // Defaults to "accepting connections"; STUB_ISREADY_RC=2 simulates a down endpoint.
     writeStub(binDir, 'pg_isready', `#!/bin/sh
 echo "pg_isready $*" >> "$STUB_LOG"
 exit "\${STUB_ISREADY_RC:-0}"
 `);
     // Not Darwin, so db.sh skips prepending a real Homebrew Postgres to PATH.
-    writeStub(binDir, 'uname', '#!/bin/sh\necho Linux\n');
+    writeStub(binDir, 'uname', '#!/bin/sh\necho "${STUB_UNAME:-Linux}"\n');
     stubLog = join(root, 'stub.log');
     envFile = join(root, '.env');
     writeFileSync(envFile, 'PGMODE=docker\n');
@@ -70,6 +70,7 @@ exit "\${STUB_ISREADY_RC:-0}"
       PGPORT: '5561',
       PGHOST: 'localhost',
       PGPASSWORD: 'test-only',
+      PORTOS_BREW_PG_PREFIXES: join(root, 'no-brew-prefix'),
       ...overrides,
     },
   });
@@ -132,5 +133,69 @@ exit "\${STUB_ISREADY_RC:-0}"
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Stopped');
+  });
+  // Stateful isready: accepting until the named stop command has been logged.
+  const readyUntilStopped = (binDir, stopPattern) => writeStub(binDir, 'pg_isready', `#!/bin/sh
+echo "pg_isready $*" >> "$STUB_LOG"
+if grep -q '${stopPattern}' "$STUB_LOG"; then exit 2; fi
+exit 0
+`);
+
+  it('macOS stop falls back to pg_ctl when brew services leaves the endpoint up', () => {
+    const binDir = join(root, 'bin');
+    const datadir = join(root, 'brewprefix', 'var', 'postgresql@17');
+    mkdirSync(datadir, { recursive: true });
+    writeStub(binDir, 'brew', `#!/bin/sh
+echo "brew $*" >> "$STUB_LOG"
+[ "$1" = "--prefix" ] && echo "${join(root, 'brewprefix')}"
+exit 0
+`);
+    readyUntilStopped(binDir, 'pg_ctl -D .* stop -m fast');
+
+    const result = run('stop', { ...NATIVE_CHILD, STUB_UNAME: 'Darwin' });
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const log = readFileSync(stubLog, 'utf8');
+    expect(log).toContain('brew services stop postgresql@17');
+    expect(log).toContain(`pg_ctl -D ${datadir} stop -m fast`);
+  });
+
+  it('Linux stop dispatches systemctl while the endpoint is accepting', () => {
+    readyUntilStopped(join(root, 'bin'), 'systemctl stop postgresql');
+
+    const result = run('stop', NATIVE_CHILD);
+
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(stubLog, 'utf8')).toMatch(/systemctl stop postgresql/);
+  });
+
+  it('Linux start dispatches systemctl and prints no brew hint when it fails', () => {
+    writeStub(join(root, 'bin'), 'pg_isready', '#!/bin/sh\nexit 2\n');
+
+    const result = run('start', { ...NATIVE_CHILD, PGDATA: join(root, 'missing') });
+
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(stubLog, 'utf8')).toMatch(/systemctl start postgresql/);
+    expect(result.stdout + result.stderr).toContain('systemctl start postgresql');
+    expect(result.stdout + result.stderr).not.toContain('brew services');
+  });
+
+  it('setup-native matches database names exactly so portos-staging does not hide portos', () => {
+    // Stub psql answers existence probes by exact match against a sibling-only set.
+    writeStub(join(root, 'bin'), 'psql', `#!/bin/sh
+input="$(cat)"
+echo "psql $*" >> "$STUB_LOG"
+printf '%s\\n' "$input" >> "$STUB_LOG"
+case "$input" in
+  *pg_database*) [ "$PORTOS_BOOTSTRAP_DB" = "portos-staging" ] && echo 1 ;;
+  *pg_roles*) echo 1 ;;
+esac
+exit 0
+`);
+    const result = run('setup-native', { ...NATIVE_CHILD, PGDATABASE: 'portos', PGUSER: 'portos' });
+
+    const log = readFileSync(stubLog, 'utf8');
+    expect(result.stdout).toContain('Creating database: portos');
+    expect(log).toContain('CREATE DATABASE :"db" OWNER :"role";');
   });
 });
