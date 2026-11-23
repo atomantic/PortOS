@@ -200,17 +200,17 @@ export default function GoalsTab({ onRefresh }) {
     <div className="space-y-6">
       {/* Life Expectancy Card */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2">
             <Activity className="w-5 h-5 text-port-accent" />
             <h3 className="font-medium text-white">Life Expectancy</h3>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {hasBirthDate && (
               <button
                 onClick={handleDeriveLongevity}
                 disabled={derivingLongevity}
-                className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+                className="text-xs px-3 py-1 min-h-[40px] pointer-coarse:min-h-11 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
               >
                 {derivingLongevity ? 'Deriving...' : 'Re-derive'}
               </button>
@@ -218,7 +218,7 @@ export default function GoalsTab({ onRefresh }) {
             {hasBirthDate && (
               <button
                 onClick={() => setShowBirthDate(!showBirthDate)}
-                className="text-xs px-2 py-1 rounded bg-port-border text-gray-300 hover:bg-gray-600"
+                className="text-xs px-3 py-1 min-h-[40px] pointer-coarse:min-h-11 rounded bg-port-border text-gray-300 hover:bg-gray-600"
               >
                 Update Birth Date
               </button>
@@ -227,7 +227,7 @@ export default function GoalsTab({ onRefresh }) {
         </div>
 
         {(showBirthDate || !hasBirthDate) && (
-          <div className="flex gap-2 mb-3">
+          <div className="flex flex-wrap gap-2 mb-3">
             <input
               type="date"
               value={birthDateInput}
@@ -238,7 +238,7 @@ export default function GoalsTab({ onRefresh }) {
             <button
               onClick={handleSetBirthDate}
               disabled={savingBirthDate}
-              className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
+              className="px-3 py-1.5 min-h-[40px] pointer-coarse:min-h-11 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
             >
               Save
             </button>
@@ -303,7 +303,7 @@ export default function GoalsTab({ onRefresh }) {
         )}
 
         {hasLongevity && (
-          <div className="mt-3 flex gap-4 text-xs text-gray-500">
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
             <span>
               Longevity markers: {Object.keys(longevity.longevityMarkers || {}).length}/{5}
             </span>
@@ -319,7 +319,7 @@ export default function GoalsTab({ onRefresh }) {
 
       {/* Goals Section */}
       <div className="bg-port-card border border-port-border rounded-lg p-4">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-2">
             <Target className="w-5 h-5 text-port-accent" />
             <h3 className="font-medium text-white">
@@ -328,7 +328,7 @@ export default function GoalsTab({ onRefresh }) {
           </div>
           <button
             onClick={() => setShowNewGoal(!showNewGoal)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] pointer-coarse:min-h-11 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80"
           >
             <Plus className="w-4 h-4" />
             Add Goal
@@ -356,8 +356,8 @@ export default function GoalsTab({ onRefresh }) {
                 className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500 resize-none"
               />
             </FormField>
-            <div className="flex gap-3">
-              <FormField className="flex-1" label="Horizon" labelClassName="block text-xs text-gray-500 mb-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <FormField className="min-w-0" label="Horizon" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.horizon}
                   onChange={e => setNewGoal({ ...newGoal, horizon: e.target.value })}
@@ -368,7 +368,7 @@ export default function GoalsTab({ onRefresh }) {
                   ))}
                 </select>
               </FormField>
-              <FormField className="flex-1" label="Category" labelClassName="block text-xs text-gray-500 mb-1">
+              <FormField className="min-w-0" label="Category" labelClassName="block text-xs text-gray-500 mb-1">
                 <select
                   value={newGoal.category}
                   onChange={e => setNewGoal({ ...newGoal, category: e.target.value })}
@@ -384,13 +384,13 @@ export default function GoalsTab({ onRefresh }) {
               <button
                 onClick={handleCreateGoal}
                 disabled={!newGoal.title.trim() || creatingGoal}
-                className="px-4 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
+                className="px-4 py-1.5 min-h-[40px] pointer-coarse:min-h-11 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
               >
                 Create
               </button>
               <button
                 onClick={() => setShowNewGoal(false)}
-                className="px-4 py-1.5 text-sm rounded bg-port-border text-gray-300 hover:bg-gray-600"
+                className="px-4 py-1.5 min-h-[40px] pointer-coarse:min-h-11 text-sm rounded bg-port-border text-gray-300 hover:bg-gray-600"
               >
                 Cancel
               </button>
@@ -483,15 +483,19 @@ export default function GoalsTab({ onRefresh }) {
                                   onClick={() => !ms.completedAt && handleCompleteMilestone(goal.id, ms.id)}
                                   disabled={mutatingGoalId === goal.id}
                                   aria-label={ms.completedAt ? `${ms.title} — completed` : `Mark ${ms.title} complete`}
-                                  className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
-                                    ms.completedAt
-                                      ? 'bg-port-success/20 border-port-success text-port-success'
-                                      : 'border-gray-600 hover:border-port-accent'
-                                  }`}
+                                  className="group min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0"
                                 >
-                                  {ms.completedAt && <Check className="w-3 h-3" />}
+                                  <span
+                                    className={`w-4 h-4 rounded border flex items-center justify-center ${
+                                      ms.completedAt
+                                        ? 'bg-port-success/20 border-port-success text-port-success'
+                                        : 'border-gray-600 group-hover:border-port-accent'
+                                    }`}
+                                  >
+                                    {ms.completedAt && <Check className="w-3 h-3" />}
+                                  </span>
                                 </button>
-                                <span className={ms.completedAt ? 'text-gray-500 line-through' : 'text-gray-300'}>
+                                <span className={`min-w-0 break-words ${ms.completedAt ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
                                   {ms.title}
                                 </span>
                                 {ms.targetDate && (
@@ -507,14 +511,14 @@ export default function GoalsTab({ onRefresh }) {
                         )}
 
                         {/* Add milestone */}
-                        <div className="flex gap-2 mt-2">
+                        <div className="flex flex-col sm:flex-row gap-2 mt-2">
                           <input
                             type="text"
                             value={newMilestone.title}
                             onChange={e => setNewMilestone({ ...newMilestone, title: e.target.value })}
                             placeholder="Add milestone..."
                             aria-label={`New milestone title for ${goal.title}`}
-                            className="flex-1 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white placeholder-gray-600"
+                            className="min-w-0 flex-1 bg-port-card border border-port-border rounded px-2 py-1 min-h-[40px] pointer-coarse:min-h-11 text-xs text-white placeholder-gray-600"
                             onKeyDown={e => e.key === 'Enter' && handleAddMilestone(goal.id)}
                           />
                           <input
@@ -522,12 +526,12 @@ export default function GoalsTab({ onRefresh }) {
                             value={newMilestone.targetDate}
                             onChange={e => setNewMilestone({ ...newMilestone, targetDate: e.target.value })}
                             aria-label={`New milestone target date for ${goal.title}`}
-                            className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white w-32"
+                            className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[40px] pointer-coarse:min-h-11 text-xs text-white w-full sm:w-36"
                           />
                           <button
                             onClick={() => handleAddMilestone(goal.id)}
                             disabled={!newMilestone.title.trim() || addingMilestoneFor === goal.id}
-                            className="px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+                            className="px-3 py-1 min-h-[40px] pointer-coarse:min-h-11 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             Add
                           </button>
@@ -535,11 +539,11 @@ export default function GoalsTab({ onRefresh }) {
                       </div>
 
                       {/* Actions */}
-                      <div className="flex gap-2 pt-1">
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <button
                           onClick={() => handleUpdateGoalStatus(goal.id, 'completed')}
                           disabled={mutatingGoalId === goal.id}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
+                          className="flex items-center gap-1 px-3 py-1 min-h-[40px] pointer-coarse:min-h-11 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
                         >
                           <Check className="w-3 h-3" />
                           Complete
@@ -547,7 +551,7 @@ export default function GoalsTab({ onRefresh }) {
                         <button
                           onClick={() => requestDelete(goal.id)}
                           disabled={mutatingGoalId === goal.id}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 disabled:opacity-50"
+                          className="flex items-center gap-1 px-3 py-1 min-h-[40px] pointer-coarse:min-h-11 text-xs rounded bg-port-error/20 text-port-error hover:bg-port-error/30 disabled:opacity-50"
                         >
                           <Trash2 className="w-3 h-3" />
                           Delete

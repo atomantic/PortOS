@@ -633,11 +633,11 @@ export default function TestTab({ onRefresh }) {
                             {/* Behavioral Feedback */}
                             <div className="mt-3 pt-3 border-t border-port-border">
                               <p className="text-xs text-gray-500 mb-2">Does this response sound like you?</p>
-                              <div className="flex items-center gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <button
                                   onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'sounds_like_me')}
                                   disabled={!!currentFeedback}
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'sounds_like_me'
                                       ? 'bg-port-success/20 text-port-success border border-port-success/30'
                                       : 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30'
@@ -649,7 +649,7 @@ export default function TestTab({ onRefresh }) {
                                 <button
                                   onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'not_quite')}
                                   disabled={!!currentFeedback}
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'not_quite'
                                       ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
                                       : 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30'
@@ -661,7 +661,7 @@ export default function TestTab({ onRefresh }) {
                                 <button
                                   onClick={() => submitFeedback(r.providerId, r.model, expandedTest, test.testName, testResult.response, 'doesnt_sound_like_me')}
                                   disabled={!!currentFeedback}
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                                  className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                                     currentFeedback === 'doesnt_sound_like_me'
                                       ? 'bg-port-error/20 text-port-error border border-port-error/30'
                                       : 'text-gray-400 border border-port-border hover:text-port-error hover:border-port-error/30 disabled:opacity-30'

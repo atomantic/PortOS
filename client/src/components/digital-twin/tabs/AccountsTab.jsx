@@ -500,7 +500,7 @@ export default function AccountsTab() {
                         href={account.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs text-port-accent hover:underline mt-0.5 inline-flex items-center gap-1"
+                        className="text-xs text-port-accent hover:underline mt-0.5 inline-flex items-center gap-1 break-all"
                       >
                         {account.url.replace(/^https?:\/\//, '')}
                         <ExternalLink className="w-3 h-3" />
@@ -542,8 +542,8 @@ export default function AccountsTab() {
                     <button
                       onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
-                      className="p-1.5 text-gray-400 hover:text-red-400 rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                      title="Remove"
+                      className="p-1.5 text-gray-400 hover:text-red-400 rounded transition-colors min-h-[40px] min-w-[40px] pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center"
+                      title="Remove" aria-label="Remove"
                     >
                       {deleting === account.id ? (
                         <BrailleSpinner />

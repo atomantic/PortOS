@@ -646,9 +646,9 @@ export default function PersonalityTab() {
                   />
                   <button
                     onClick={() => setExpandedRunId(expandedRunId === run.runId ? null : run.runId)}
-                    className="flex-1 flex items-center gap-2 text-left min-h-[40px]"
+                    className="flex-1 min-w-0 flex items-center gap-2 text-left min-h-[40px]"
                   >
-                    {expandedRunId === run.runId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    {expandedRunId === run.runId ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
                     <div className="min-w-0">
                       <div className="text-sm text-white truncate">{run.model || run.providerId}</div>
                       <div className="text-xs text-gray-500">{timeAgo(run.timestamp)}</div>

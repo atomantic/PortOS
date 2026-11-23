@@ -620,14 +620,14 @@ export default function EnrichTab({ onRefresh }) {
                     onChange={(e) => updateWritingSample(index, e.target.value)}
                     placeholder={`Paste writing sample ${index + 1} here (emails, messages, docs)...`}
                     rows={4}
-                    className="w-full px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:outline-hidden focus:border-port-accent"
+                    className="w-full pl-4 pr-12 py-3 bg-port-bg border border-port-border rounded-lg text-white resize-none focus:outline-hidden focus:border-port-accent"
                   />
                   {writingSamples.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeWritingSample(index)}
                       aria-label={`Remove writing sample ${index + 1}`}
-                      className="absolute top-2 right-2 text-gray-500 hover:text-red-400"
+                      className="absolute top-0 right-0 min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-2 text-gray-500 hover:text-red-400"
                     >
                       ×
                     </button>
