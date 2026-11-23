@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { Activity, ArrowLeft, Box, Boxes, ClipboardCopy, Columns2, FileCode, Hammer, Images, SlidersHorizontal, Square } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Boxes, ClipboardCopy, Clapperboard, Columns2, FileCode, Hammer, Images, SlidersHorizontal, Square } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -19,6 +20,8 @@ import { useValidTab } from '../hooks/useValidTab';
 import useUrlParams from '../hooks/useUrlParams';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { getBlenderModelBuildReport } from '../services/apiBlenderModels.js';
+import { createShowcaseFilm } from '../services/apiCodeAnimationFilm.js';
+import toast from '../components/ui/Toast';
 import { BLENDER_MODEL_TABS, blenderModelAgentBrief, blenderModelBuilds, blenderModelStatusMeta, shownBlenderModelBuild } from '../lib/blenderModels.js';
 import { copyToClipboard } from '../lib/clipboard.js';
 
@@ -48,6 +51,7 @@ function BlenderModelPage({ id }) {
   const navigate = useNavigate();
   const tab = useValidTab(BLENDER_MODEL_TABS, 'model');
   const [params, updateParams] = useUrlParams();
+  const [makingFilm, setMakingFilm] = useState(false);
   const model = useBlenderModel(id);
   const { state, pending, buildBlocker } = model;
   const requestedBuild = params.get('build');
@@ -60,6 +64,17 @@ function BlenderModelPage({ id }) {
     const search = new URLSearchParams(params);
     for (const [key, value] of Object.entries(patch)) search.set(key, value);
     navigate({ pathname: `/3d/blender/${encodeURIComponent(id)}/${next}`, search: search.toString() });
+  };
+
+  // Starts no job: it makes an editable film from the published build and opens it.
+  const makeShowcaseFilm = async () => {
+    setMakingFilm(true);
+    const film = await createShowcaseFilm(id).catch((err) => {
+      if (err?.code !== 'HOST_CONTROL_FORBIDDEN') toast.error(err?.message || 'Could not make the showcase film');
+      return null;
+    });
+    setMakingFilm(false);
+    if (film) navigate(`/code-animation/production/films/${encodeURIComponent(film.id)}`);
   };
 
   if (!state) {
@@ -82,6 +97,11 @@ function BlenderModelPage({ id }) {
       <button type="button" className={buttonCls} onClick={() => copyToClipboard(blenderModelAgentBrief(state, { report: report.data }), 'Agent brief copied')}>
         <ClipboardCopy size={14} aria-hidden="true" /> Copy agent brief
       </button>
+      {state.publishedBuildId && (
+        <button type="button" className={buttonCls} disabled={makingFilm} onClick={makeShowcaseFilm}>
+          <Clapperboard size={14} aria-hidden="true" /> {makingFilm ? 'Making film…' : 'Make showcase film'}
+        </button>
+      )}
       {building && runningBuild ? (
         <button type="button" className={buttonCls} disabled={!!pending[`cancel:${runningBuild.id}`]} onClick={() => model.cancelBuild(runningBuild.id)}>
           <Square size={14} aria-hidden="true" /> {pending[`cancel:${runningBuild.id}`] ? 'Canceling…' : 'Cancel build'}

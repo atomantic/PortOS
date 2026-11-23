@@ -19,6 +19,7 @@ from mathutils import Vector
 
 _SLUG = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 _loaded = set()
+_NOT_EXPORTED = "glTF_not_exported"
 
 
 def reset():
@@ -65,7 +66,9 @@ def load(ctx, slug, height=None):
     objects_before = set(bpy.data.objects)
     actions_before = set(bpy.data.actions)
     bpy.ops.import_scene.gltf(filepath=path)
-    imported = [obj for obj in bpy.data.objects if obj not in objects_before]
+    # The importer parks a rigged file's bone-shape helper (an Icosphere) in a hidden collection; it is not part of the model.
+    imported = [obj for obj in bpy.data.objects
+                if obj not in objects_before and not any(coll.name == _NOT_EXPORTED for coll in obj.users_collection)]
     new_actions = {action.name: action for action in bpy.data.actions if action not in actions_before}
 
     root = bpy.data.objects.new(slug, None)

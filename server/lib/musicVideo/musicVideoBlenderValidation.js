@@ -52,7 +52,7 @@ const modelSlug = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/, 'slug must be l
 
 // Add a library model to the film; `slug` omitted lets the server name and de-duplicate it.
 export const musicVideoBlenderModelAddSchema = z.object({
-  kind: z.enum(['image-to-3d', 'threejs']),
+  kind: z.enum(['image-to-3d', 'threejs', 'blender-model']),
   id: z.string().min(1).max(120),
   variant: z.enum(['mesh', 'rigged', 'animated']).optional(),
   slug: modelSlug.optional(),
