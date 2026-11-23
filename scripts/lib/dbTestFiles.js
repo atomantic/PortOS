@@ -81,6 +81,7 @@ export const DB_TEST_INCLUDE = [
   'scripts/run-db-migrations.test.js',
   'scripts/migrateMemoryToPg.db.test.js',
   'lib/db/schema/audit.db.test.js',
+  'lib/db/schema/memorySourceAgentIndex.db.test.js',
   'lib/db/schema/syncFeed.db.test.js',
   'services/cos/cosTaskRepository.db.test.js',
   'services/releaseSynchronizationStore.db.test.js',
