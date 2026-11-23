@@ -7,8 +7,8 @@ import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { EIDOVERSE_PORT } from './eidoverse.js';
 import {
-  handleEidoverseHttp,
-  proxyUpgradeToEidoverse,
+  handleGatedEidoverseHttp,
+  handleGatedEidoverseUpgrade,
   createEidoverseExpressMiddleware,
   mountEidoverseWebSocket,
   EIDOVERSE_HOST_PATH_PREFIX,
@@ -66,18 +66,21 @@ export function createEidoverseHost({
 
   const handleHttp = (req, res) => {
     // Bridge mode: parent origin is the PortOS page (API port), not :5563.
-    handleEidoverseHttp({
+    handleGatedEidoverseHttp({
       req,
       res,
       protocol: protocol(),
       embedMode: 'bridge',
       targetHost,
       targetPort,
+    }).catch((error) => {
+      console.error(`❌ Eidoverse bridge request failed: ${error.message}`);
+      res.destroy();
     });
   };
 
   const handleUpgrade = (req, clientSocket, head) => {
-    proxyUpgradeToEidoverse({
+    handleGatedEidoverseUpgrade({
       req,
       clientSocket,
       head,
@@ -85,6 +88,9 @@ export function createEidoverseHost({
       targetPort,
       protocol: protocol(),
       trackSocket,
+    }).catch((error) => {
+      console.error(`❌ Eidoverse bridge upgrade failed: ${error.message}`);
+      clientSocket.destroy();
     });
   };
 

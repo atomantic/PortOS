@@ -28,6 +28,13 @@ including when the destination uses the optional instance password. An existing
 Eidoverse browser login cannot replace the guest identity. **Leave world** returns
 to the previous page. Admission links expire after 30 minutes.
 
+Opening the guest page also sets a scoped, HttpOnly `portos_eidoverse_guest`
+cookie holding the same ticket, because the renderer's asset and WebSocket
+requests cannot carry the ticket header. On a password-protected destination it
+admits that browser to the Eidoverse proxy only and opens no `/api` or `/data`
+route. It stops working, and its open sockets close, when the visit expires or
+ends or its originating peer is disabled.
+
 Both ends need updated PortOS, Eidoverse enabled and running, and a renderer that
 advertises `guestEntry: 1`; the host needs its resident CoS presence enabled to
 admit visitors. Older runtimes remain unavailable for travel until updated.

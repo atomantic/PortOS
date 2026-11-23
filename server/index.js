@@ -36,6 +36,7 @@ import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
+import { closeEidoverseProxySockets } from './services/eidoverseProxy.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { syncLocalProviderModels } from './services/localLlm.js';
 import { errorMiddleware } from './lib/errorHandler.js';
@@ -259,6 +260,7 @@ authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortO
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
+authEvents.on('sessions:revoked-all', closeEidoverseProxySockets);
 
 // Close unclaimed upgrade sockets after a bounded timeout (replaces engine.io's
 // destroyUpgrade timer so reverse proxies with slow upstreams aren't cut short).

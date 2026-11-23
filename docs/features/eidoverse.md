@@ -437,6 +437,16 @@ unchanged. The host starts only when the page is opened, waits for the managed
 app to answer before mounting the iframe, and returns an explicit unavailable
 state when the runtime does not become ready.
 
+Every PortOS entry point to the sequencer (the `/eidoverse-host` mount, the root
+allowlist, both WebSocket upgrade listeners and the `:5563` bridge) passes one
+admission check before anything is proxied. A cross-origin or DNS-rebound
+browser request gets `403` whether or not a password is set. With the instance
+password set, only an operator or agent session, or a live federated guest
+ticket, is admitted; anything else gets `401`. Peer credentials and Basic auth
+do not open the world. Open renderer sockets end when sessions are revoked or a
+guest visit ends. The check covers PortOS's own listeners only, not direct
+access to the sequencer's `:8940` port.
+
 An optional legacy bridge on `:5563` still starts with the host (HTTPS when a
 machine certificate is present) for ExternalLink / direct access on the box.
 The iframe prefers the same-origin path; the single escape is a plain-HTTP page
