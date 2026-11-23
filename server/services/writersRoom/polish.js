@@ -23,7 +23,9 @@ import { createSseRunner } from '../../lib/sseUtils.js';
 import { computeSlopPenalty } from '../../lib/editorial/slopScore.js';
 import { planCutsForSection, applyCutsToText, SAFE_CUT_TYPES } from '../../lib/editorial/cutApplier.js';
 import { runProsePass } from './evaluator.js';
-import { getWorkWithBody, saveDraftBody, countWords, renderWorkVoiceGuide } from './local.js';
+import {
+  getWorkWithBody, saveDraftBody, countWords, renderWorkVoiceGuide, contentHash, ERR_DRAFT_CONFLICT,
+} from './local.js';
 import { nowIso, badRequest, notFound, assertValidWorkId, wrWorkDir } from './_shared.js';
 
 // ---------- tunables ----------
@@ -157,10 +159,13 @@ const snapshotsDir = (workId) => {
 };
 const snapshotPath = (workId, id) => join(snapshotsDir(workId), `${id}.json`);
 
-function buildSnapshot({ workId, cycle, phase, label, body, evaluate = null, qualityScore = null }) {
+function buildSnapshot({
+  workId, draftVersionId = null, cycle, phase, label, body, evaluate = null, qualityScore = null,
+}) {
   return {
     id: `wr-snap-${randomUUID()}`,
     workId,
+    draftVersionId: draftVersionId || null,
     cycle,
     phase: phase || null,
     label: label || null,
@@ -183,6 +188,7 @@ async function saveSnapshot(workId, snap) {
 const summarizeSnapshot = (s) => ({
   id: s.id,
   workId: s.workId,
+  draftVersionId: s.draftVersionId ?? null,
   cycle: s.cycle,
   phase: s.phase,
   label: s.label,
@@ -285,20 +291,58 @@ export function startPolish(workId, opts = {}) {
     broadcast({ type: 'start', runId, cycles: cfg.cycles, at: nowIso() });
 
     const loaded = await getWorkWithBody(workId);
+    const targetDraftId = loaded.manifest.activeDraftVersionId;
+    if (!targetDraftId) {
+      throw badRequest('Work has no active draft');
+    }
     let body = loaded.body || '';
     const ctx = () => workContext(loaded.manifest, body);
     // The work's voice exemplars (#2179) — rendered once and folded into every
     // cycle's revision brief so the rewrite is anchored to the chosen voice.
     const voiceGuide = renderWorkVoiceGuide(loaded.manifest);
 
+    // Pin every write to the draft active at startPolish and require the stored
+    // content hash to match what this cycle expects. If the author edited the
+    // draft concurrently, abort cleanly instead of clobbering their prose.
+    const savePinnedDraft = async (nextBody, expectedBody, cycle, phase) => {
+      try {
+        await saveDraftBody(workId, nextBody, {
+          draftId: targetDraftId,
+          expectedContentHash: contentHash(expectedBody),
+        });
+        return true;
+      } catch (err) {
+        if (err?.code === ERR_DRAFT_CONFLICT) {
+          const message = err.message || 'Draft was modified concurrently — polish stopped to preserve manual edits';
+          console.log(`🛑 wr polish: aborted cycle ${cycle} (${phase}) — draft ${targetDraftId.slice(0, 14)}… changed concurrently`);
+          broadcast({
+            type: 'conflict',
+            runId,
+            code: ERR_DRAFT_CONFLICT,
+            draftVersionId: targetDraftId,
+            cycle,
+            phase,
+            message,
+            abortedAt: nowIso(),
+          });
+          return false;
+        }
+        throw err;
+      }
+    };
+
     // Baseline evaluation + snapshot.
     broadcast({ type: 'phase', cycle: 0, phase: 'evaluate', label: 'Baseline evaluation' });
     let evalResult = (await runProsePass('evaluate', { work: ctx(), draftBody: body })).result;
     let currentScore = computeQualityScore(evalResult, body);
     const baseline = await saveSnapshot(workId, buildSnapshot({
-      workId, cycle: 0, phase: 'baseline', label: 'Baseline', body, evaluate: evalResult, qualityScore: currentScore,
+      workId, draftVersionId: targetDraftId, cycle: 0, phase: 'baseline', label: 'Baseline',
+      body, evaluate: evalResult, qualityScore: currentScore,
     }));
-    broadcast({ type: 'baseline', runId, score: currentScore, snapshotId: baseline.id, wordCount: countWords(body) });
+    broadcast({
+      type: 'baseline', runId, draftVersionId: targetDraftId,
+      score: currentScore, snapshotId: baseline.id, wordCount: countWords(body),
+    });
 
     const reports = [];
     for (let c = 1; c <= cfg.cycles; c += 1) {
@@ -311,7 +355,8 @@ export function startPolish(workId, opts = {}) {
       // Immutable pre-cycle snapshot — the revert target for both the gate and
       // the manual UI control.
       const preSnap = await saveSnapshot(workId, buildSnapshot({
-        workId, cycle: c, phase: 'pre', label: `Cycle ${c} · before`, body: preBody, evaluate: preEval, qualityScore: preScore,
+        workId, draftVersionId: targetDraftId, cycle: c, phase: 'pre', label: `Cycle ${c} · before`,
+        body: preBody, evaluate: preEval, qualityScore: preScore,
       }));
 
       // 1. Adversarial cut pass.
@@ -341,7 +386,7 @@ export function startPolish(workId, opts = {}) {
       if (isCanceled()) { emitCanceled(); return; }
 
       // Persist tentatively so a re-evaluate reads the same on-disk body.
-      await saveDraftBody(workId, revisedBody);
+      if (!(await savePinnedDraft(revisedBody, preBody, c, 'revise'))) return;
 
       // 4. Re-evaluate + keep/revert gate.
       broadcast({ type: 'phase', cycle: c, phase: 'reevaluate', label: 'Re-evaluation' });
@@ -350,7 +395,7 @@ export function startPolish(workId, opts = {}) {
       const decision = decideKeepRevert(preScore, postScore);
 
       if (decision === 'revert') {
-        await saveDraftBody(workId, preBody);
+        if (!(await savePinnedDraft(preBody, revisedBody, c, 'revert'))) return;
         body = preBody;
         evalResult = preEval;
         currentScore = preScore;
