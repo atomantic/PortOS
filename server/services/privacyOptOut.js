@@ -449,7 +449,7 @@ export async function runVerificationPass({
       if (hit) {
         await transitionCase(c.id, 'verification_pending', {
           channel: c.channel || undefined,
-          evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, url: hit.s.verificationUrl, score: hit.s.score } },
+          evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, score: hit.s.score }, ...(hit.s.verificationUrl ? { verification_url: hit.s.verificationUrl } : {}) },
           now,
         });
         advanced.push({ caseId: c.id, brokerId: c.brokerId, verificationUrl: hit.s.verificationUrl });
