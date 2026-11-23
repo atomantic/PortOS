@@ -470,9 +470,10 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   });
   // Half of the original 3,023-module boot closure is 1,511. socket.js publishes
   // the import-free socketIo.js handle (#17619), so the composition root carries
-  // that one extra module.
-  it('loads at most 1,512 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1512);
+  // that one extra module; lib/usageReport.js (#17583) is the pure report
+  // builder split out of services/usage.js and adds the second.
+  it('loads at most 1,513 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1513);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);
