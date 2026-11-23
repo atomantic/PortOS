@@ -519,10 +519,45 @@ export async function upsertMirroredMessage(client, conversationId, message, att
       `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
          byte_length, file_name, width, height)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       -- A different mxc_id is a replaced attachment: take upstream metadata and
+       -- reset fetch state (the old file is left for sweepAttachmentOrphans).
+       -- Otherwise upstream often omits fileSize, so never let NULL/stale
+       -- metadata overwrite the measured or HEAD-probed byte_length.
        ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
          mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
-         mime_type = EXCLUDED.mime_type, byte_length = EXCLUDED.byte_length,
-         file_name = EXCLUDED.file_name, width = EXCLUDED.width, height = EXCLUDED.height,
+         mime_type = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.mime_type
+           ELSE COALESCE(NULLIF(EXCLUDED.mime_type, ''), beeper_attachments.mime_type) END,
+         byte_length = CASE
+           WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+             THEN EXCLUDED.byte_length
+           WHEN beeper_attachments.local_path IS NOT NULL AND beeper_attachments.byte_length IS NOT NULL
+             THEN beeper_attachments.byte_length
+           ELSE COALESCE(EXCLUDED.byte_length, beeper_attachments.byte_length) END,
+         file_name = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.file_name
+           ELSE COALESCE(NULLIF(EXCLUDED.file_name, ''), beeper_attachments.file_name) END,
+         width = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.width ELSE COALESCE(EXCLUDED.width, beeper_attachments.width) END,
+         height = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.height ELSE COALESCE(EXCLUDED.height, beeper_attachments.height) END,
+         local_path = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.local_path END,
+         fetched_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.fetched_at END,
+         unavailable_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.unavailable_at END,
+         fetch_error = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.fetch_error END,
          updated_at = NOW()`,
       [
         conversationId, message.id, attachment.idx, attachment.mxcId, attachment.mimeType,
