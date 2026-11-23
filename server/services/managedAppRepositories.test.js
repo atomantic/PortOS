@@ -35,6 +35,7 @@ vi.mock('./gitPinnedSubmodules.js', () => ({ inspectPinnedSubmoduleDrift: mock.i
 import {
   getManagedAppRepositorySources,
   resolveManagedAppIssueTarget,
+  resetRepositoryMetadataCache,
   resolveRepositoryTopology,
   syncManagedAppFork,
 } from './managedAppRepositories.js';
@@ -56,6 +57,7 @@ const forkOrigin = {
 describe('managed app repository topology', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRepositoryMetadataCache();
     mock.inspectPinnedSubmoduleDrift.mockResolvedValue({ repairablePaths: [], onlyRepairable: false });
     mock.pathExists.mockResolvedValue(true);
     mock.runningNames.mockImplementation(async (names) => names);
@@ -371,6 +373,37 @@ describe('managed app repository topology', () => {
     await expect(syncManagedAppFork(app)).rejects.toMatchObject({
       status: 502,
       code: 'UPSTREAM_UNAVAILABLE',
+    });
+  });
+
+  it('reuses the last known upstream when a later GitHub lookup is throttled', async () => {
+    const first = await getManagedAppRepositorySources(app);
+    expect(first.sources[0].upstream).toMatchObject({ fullName: 'example-org/example-app' });
+    const lookups = () => mock.execGh.mock.calls.filter(([args]) => args[1] === 'repos/example-owner/example-app').length;
+    expect(lookups()).toBe(1);
+
+    // Inside the fresh window the answer is reused without asking GitHub again.
+    await resolveRepositoryTopology(REPO);
+    expect(lookups()).toBe(1);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    mock.execGh.mockRejectedValue(Object.assign(new Error('HTTP 403'), { ghStderr: 'HTTP 403: API rate limit exceeded' }));
+    const topology = await resolveRepositoryTopology(REPO).finally(() => vi.useRealTimers());
+    expect(lookups()).toBe(2);
+    expect(topology).toMatchObject({ available: true, isFork: true, error: null, upstream: { fullName: 'example-org/example-app' } });
+  });
+
+  it('reports an unanswered upstream lookup apart from a successful origin fetch', async () => {
+    mock.execGh.mockRejectedValue(Object.assign(new Error('HTTP 403'), { ghStderr: 'HTTP 403: API rate limit exceeded for user' }));
+
+    const { sources: [primary] } = await getManagedAppRepositorySources(app);
+
+    expect(primary).toMatchObject({
+      remoteFresh: true,
+      remoteError: null,
+      upstream: null,
+      upstreamError: expect.stringContaining('rate limit'),
     });
   });
 });
