@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router';
 
@@ -111,5 +111,86 @@ describe('DocumentsTab inline editing and deep link', () => {
     deleteSoulDocument.mockResolvedValueOnce();
     await user.click(screen.getByRole('button', { name: 'Delete', exact: true }));
     await waitFor(() => expect(deleteSoulDocument).toHaveBeenCalledWith('doc-1'));
+  });
+});
+
+describe('DocumentsTab unsaved edits and weight slider', () => {
+  const OTHER = { ...DOC, id: 'doc-2', title: 'Other Doc', content: 'other' };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getDigitalTwinDocuments.mockResolvedValue([DOC, OTHER]);
+    getDigitalTwinDocument.mockImplementation((id) => Promise.resolve(id === 'doc-2' ? OTHER : DOC));
+  });
+
+  it('asks before discarding dirty edits when another document is selected', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /Core Values/ }));
+    await user.type(await screen.findByLabelText('Soul document'), ' edited');
+
+    await user.click(screen.getByRole('button', { name: /Other Doc/ }));
+    expect(screen.getByText('You have unsaved changes. Discard edits?')).toBeInTheDocument();
+    expect(screen.getByTestId('where')).toHaveTextContent('doc=doc-1');
+    expect(screen.getByLabelText('Soul document')).toHaveValue('original edited');
+
+    await user.click(screen.getByRole('button', { name: 'Keep editing' }));
+    expect(screen.getByTestId('where')).toHaveTextContent('doc=doc-1');
+    expect(screen.getByLabelText('Soul document')).toHaveValue('original edited');
+
+    await user.click(screen.getByRole('button', { name: /Other Doc/ }));
+    await user.click(screen.getByRole('button', { name: 'Discard & switch' }));
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('doc=doc-2'));
+    await waitFor(() => expect(screen.getByLabelText('Soul document')).toHaveValue('other'));
+  });
+
+  it('clears the discard prompt once the edit is saved', async () => {
+    updateSoulDocument.mockResolvedValue({ ...DOC, content: 'original edited' });
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /Core Values/ }));
+    await user.type(await screen.findByLabelText('Soul document'), ' edited');
+    await user.click(screen.getByRole('button', { name: /Other Doc/ }));
+    expect(screen.getByText('You have unsaved changes. Discard edits?')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByText('You have unsaved changes. Discard edits?')).toBeNull());
+  });
+
+  it('switches immediately when the editor is clean', async () => {
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /Core Values/ }));
+    await screen.findByLabelText('Soul document');
+    await user.click(screen.getByRole('button', { name: /Other Doc/ }));
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('doc=doc-2'));
+    expect(screen.queryByText(/unsaved changes/)).toBeNull();
+  });
+
+  it('commits the weight once on release instead of on every drag tick', async () => {
+    updateSoulDocument.mockResolvedValue({ ...DOC, weight: 8 });
+    renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: /Core Values/ }));
+    const slider = await screen.findByLabelText('Document weight');
+
+    fireEvent.change(slider, { target: { value: '6' } });
+    fireEvent.change(slider, { target: { value: '7' } });
+    fireEvent.change(slider, { target: { value: '8' } });
+    expect(updateSoulDocument).not.toHaveBeenCalled();
+
+    fireEvent.pointerUp(slider);
+    await waitFor(() => expect(updateSoulDocument).toHaveBeenCalledTimes(1));
+    expect(updateSoulDocument).toHaveBeenCalledWith('doc-1', { weight: 8 });
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not leak an unhandled rejection when a toggle fails', async () => {
+    updateSoulDocument.mockRejectedValueOnce(new Error('nope'));
+    const user = userEvent.setup();
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: /Core Values/ }));
+    const toggle = await screen.findByRole('button', { name: 'Disable for CoS injection' });
+    await user.click(toggle);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable for CoS injection' })).toBeEnabled());
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

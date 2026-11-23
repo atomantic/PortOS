@@ -23,6 +23,8 @@ import {
   updateModelPersonalitySettings,
 } from '../../../services/apiModelPersonality.js';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterGenerationModels } from '../../../utils/providers.js';
@@ -188,6 +190,8 @@ function RunDetail({ run }) {
 export default function PersonalityTab() {
   const providersResource = useProviderList();
   const providers = useMemo(() => providersResource.items.filter((p) => p.enabled), [providersResource.items]);
+  const [deletingId, setDeletingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const loading = historyLoading || providersResource.state === 'loading';
@@ -289,9 +293,12 @@ export default function PersonalityTab() {
   };
 
   const deleteRun = async (runId) => {
+    if (deletingId) return;
+    setDeletingId(runId);
     const ok = await deleteModelPersonalityResult(runId)
       .then(() => true)
       .catch(() => false);
+    setDeletingId(null);
     if (!ok) return;
     setHistory((prev) => prev.filter((r) => r.runId !== runId));
     setResults((prev) => prev.filter((r) => r.runId !== runId));
@@ -610,13 +617,23 @@ export default function PersonalityTab() {
                     </span>
                   )}
                   <button
-                    onClick={() => deleteRun(run.runId)}
+                    onClick={() => requestDelete(run.runId)}
+                    disabled={deletingId === run.runId}
                     aria-label={`Delete ${seriesLabel(run)}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error disabled:opacity-50"
                   >
-                    <Trash2 size={16} />
+                    {deletingId === run.runId ? <BrailleSpinner /> : <Trash2 size={16} />}
                   </button>
                 </div>
+                {isConfirming(run.runId) && (
+                  <InlineConfirmRow
+                    className="mx-3 mb-3"
+                    question="Delete this personality run? This cannot be undone."
+                    confirmText="Delete Run"
+                    onConfirm={() => confirmDelete(() => deleteRun(run.runId))}
+                    onCancel={cancelDelete}
+                  />
+                )}
                 {expandedRunId === run.runId && (
                   <div className="p-3 pt-0 border-t border-port-border">
                     <RunDetail run={run} />
