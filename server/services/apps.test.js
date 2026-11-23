@@ -20,7 +20,7 @@ vi.mock('../lib/ports.js', () => ({
   PORTS: { API: 5555, API_LOCAL: 5553, UI: 5554, AUTOFIXER_UI: 5560 },
 }));
 
-vi.mock('./taskSchedule.js', () => ({
+vi.mock('./taskScheduleStore.js', () => ({
   resetExecutionHistory: vi.fn().mockResolvedValue({ error: 'No execution history found' }),
 }));
 
@@ -29,7 +29,7 @@ vi.mock('./taskScheduleRegistry.js', () => ({
 }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { resetExecutionHistory } from './taskSchedule.js';
+import { resetExecutionHistory } from './taskScheduleStore.js';
 import { bulkUpdateAppTaskTypeOverride, createApp, deleteApp, getAllApps, getReservedPorts, invalidateCache, PORTOS_APP_ID, updateApp, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {

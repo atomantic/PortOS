@@ -193,6 +193,9 @@ import { initImageOriginStamping } from './imageGen/imageRecords.js';
  * `runBootSequence` below.
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
+  // First: the CoS daemon, media queue and git cleanup route all call through
+  // these. Loaded lazily so the registrar's loaders stay off the boot closure.
+  (await import('./bootHooks.js')).registerBootHooks();
   bindMaintenanceIo(io);
   bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim

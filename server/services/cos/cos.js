@@ -136,6 +136,7 @@ import {
 } from '../persistent/persistentMindSupervisor.js';
 import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '../preflightTaskCard.js';
 import { cleanupZombieAgents } from './cosAgentLifecycle.js';
+import { requireCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
 // `../persistent/persistentMindAdapter.js` is imported lazily where the daemon registers the
 // adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
@@ -332,7 +333,7 @@ async function runStart() {
 
 async function bootDaemon(state) {
   // First clean up orphaned agents (agents marked running but no live process)
-  const { cleanupOrphanedAgents } = await import('../agent/agentManagement.js');
+  const { cleanupOrphanedAgents } = requireCosOrphanRecoveryHandlers();
   const cleanedAgents = await cleanupOrphanedAgents();
   if (cleanedAgents > 0) {
     emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
@@ -831,7 +832,7 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
 
   // Route orphaned tasks through handleOrphanedTask for consistent retry counting,
   // cooldown enforcement, and max-spawn limits (prevents runaway respawning)
-  const { handleOrphanedTask } = await import('../agent/agentManagement.js');
+  const { handleOrphanedTask } = requireCosOrphanRecoveryHandlers();
 
   // A programmatic-phase card (services/preflightTaskCard.js) is `in_progress`
   // with no agent BY DESIGN — it describes deterministic pre-agent work, has no

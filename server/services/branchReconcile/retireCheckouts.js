@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { claimCheckoutOwnerReason } from '../../lib/claimContinuation.js';
 import { execGit } from '../../lib/execGit.js';
+import { checkoutIdleMs } from './checkoutIdle.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { getOriginInfo } from '../../lib/gitRemote.js';
 import { probeProcessCwdInside } from '../../lib/processCwdProbe.js';
@@ -416,16 +417,6 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     // An undefined answer would be asked for again forever; it is a failed read.
     facts[step.need] = (await readers[step.need](facts, path)) ?? null;
   }
-}
-
-/** Time since the checkout last changed: its directory, index or HEAD log. Null when unreadable. */
-export async function checkoutIdleMs(worktreePath) {
-  const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], worktreePath).catch(() => null))?.stdout?.trim();
-  if (!gitDir) return null;
-  const stamps = await Promise.all([worktreePath, join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD')]
-    .map(path => stat(path).then(st => st.mtimeMs, error => (error.code === 'ENOENT' ? 0 : null))));
-  if (stamps.some(stamp => stamp === null)) return null;
-  return Math.max(0, Date.now() - Math.max(...stamps));
 }
 
 /**

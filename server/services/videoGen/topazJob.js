@@ -59,7 +59,6 @@ const activityStream = jobId => new Transform({ transform(chunk, _encoding, done
   videoGenEvents.emit('activity', { generationId: jobId });
   done(null, chunk);
 } });
-export const cleanupPreparedTopaz = cleanupTopazStaging;
 export function assertNoPendingTopaz(historyId) {
   const pending = listJobs({ kind: 'video-upscale' }).find(job => job.params?.mode === 'topaz' && job.params?.historyId === historyId
     && (['queued', 'running'].includes(job.status) || job.result?.topazUncertain === true));

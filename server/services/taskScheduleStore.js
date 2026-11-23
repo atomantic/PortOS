@@ -360,6 +360,34 @@ export async function updateSchedule(mutate) {
 }
 
 /**
+ * Reset execution history for a task type
+ */
+export async function resetExecutionHistory(taskType, appId = null) {
+  const result = await updateSchedule(async (schedule) => {
+    const key = `task:${taskType}`;
+
+    if (!schedule.executions[key]) {
+      return { result: { error: 'No execution history found' }, changed: false };
+    }
+
+    if (appId) {
+      if (schedule.executions[key].perApp?.[appId]) {
+        delete schedule.executions[key].perApp[appId];
+      }
+    } else {
+      delete schedule.executions[key];
+    }
+
+    return { result: { success: true, taskType, appId }, changed: true };
+  });
+
+  if (result.error) return result;
+  emitLog('info', `Reset execution history for ${taskType}`, { appId }, '📅 TaskSchedule');
+
+  return result;
+}
+
+/**
  * The park record lives ALONGSIDE the execution record (global or per-app), so a
  * perpetual task's "parked until" survives restarts the same way `lastRun` does.
  * Returns the execution sub-record that holds the park fields, creating the

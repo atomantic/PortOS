@@ -23,6 +23,7 @@ import {
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads,
 } from './persistence.js';
 import { ensureSseEntry, makeGenDispatcher } from './sse.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 import {
   videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema,
   mergeVideoExecutionDiagnostics,
@@ -53,7 +54,8 @@ const chunkScaledWatchdog = ({ chunks }) => WATCHDOG_VIDEO_MS * Math.max(1, Numb
 // The single declaration of how each kind runs: its lazily-loaded module (by
 // `params.mode`, falling back to `default`), the event bus its progress rides,
 // its idle-watchdog window, entry point and progress verb. Module loads stay
-// thunks so no static import edge is added (server/AGENTS.md, "Import scoping").
+// thunks so no static import edge is added (server/AGENTS.md, "Import scoping");
+// runtimes that import the queue back load through bootHookRegistry.js.
 const MEDIA_JOB_RUNTIME = Object.freeze({
   video: {
     events: videoGenEvents,
@@ -77,7 +79,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Upscaling',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { topaz: () => import('../videoGen/topazJob.js'), default: () => import('../videoGen/upscaleJob.js') },
+    modules: { topaz: () => loadMediaRuntimeModule('topazUpscale'), default: () => loadMediaRuntimeModule('ltxUpscale') },
     invoke: (mod, request) => mod.runVideoUpscale(request),
   },
   // Hand stitching (#13000): ffmpeg only, so it never touches the GPU lane's
@@ -86,7 +88,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Stitching',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { default: () => import('../videoGen/stitchJob.js') },
+    modules: { default: () => loadMediaRuntimeModule('stitch') },
     invoke: (mod, request) => mod.runVideoStitch(request),
   },
   // "Make it vertical": ffmpeg only, local-only, same lane rules as the stitch.
@@ -94,7 +96,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Reframing',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { default: () => import('../videoGen/verticalJob.js') },
+    modules: { default: () => loadMediaRuntimeModule('vertical') },
     invoke: (mod, request) => mod.runVideoVertical(request),
   },
   'video-sharing': {
@@ -133,7 +135,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: trainingEvents,
     verb: 'Training',
     watchdogMs: flatWatchdog(WATCHDOG_TRAINING_MS),
-    modules: { default: () => import('../loraTraining/index.js') },
+    modules: { default: () => loadMediaRuntimeModule('training') },
     invoke: (mod, request) => mod.runTraining(request),
   },
   audio: {
