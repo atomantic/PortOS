@@ -103,3 +103,14 @@ describe('YoutubeIngestSettings ingest history pagination (#8267)', () => {
     expect(api.getYoutubeIngests).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('YoutubeIngestSettings load failure (#17971)', () => {
+  it('renders ListLoadError with Retry instead of vanishing, and recovers on retry', async () => {
+    api.getYoutubeIngestSettings.mockRejectedValueOnce(new Error('nope')).mockResolvedValueOnce(SETTINGS);
+    api.getYoutubeIngests.mockResolvedValue({ ingests: [] });
+    render(<YoutubeIngestSettings />);
+    expect(await screen.findByText(/Could not load YouTube ingest settings — nope/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('YouTube Ingest')).toBeInTheDocument();
+  });
+});

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const api = vi.hoisted(() => ({
@@ -148,5 +148,36 @@ describe('SpotifyTab failure rendering', () => {
 
     await screen.findByText('Spotify rejected the saved authorization — reconnect Spotify.');
     expect(toast.error).toHaveBeenCalledWith('Spotify rejected the saved authorization — reconnect Spotify.');
+  });
+});
+
+describe('SpotifyTab load errors and disconnect (#17971)', () => {
+  it('shows ListLoadError with Retry when the playlist read fails', async () => {
+    api.getSpotifyStatus.mockResolvedValue({ state: {}, auth: { hasTokens: true, hasCredentials: true } });
+    api.getSpotifyPlaylists.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce({ snapshot: null });
+    render(<MemoryRouter><SpotifyTab /></MemoryRouter>);
+    expect(await screen.findByText(/Could not load Spotify playlists — boom/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/grant playlist access to build/)).toBeTruthy();
+    expect(screen.queryByText(/Could not load Spotify playlists/)).toBeNull();
+  });
+
+  it('requires confirmation before clearing Spotify auth', async () => {
+    api.getSpotifyStatus.mockResolvedValue({ state: {}, auth: { hasTokens: true, hasCredentials: true } });
+    api.clearSpotifyAuth.mockResolvedValue({ cleared: true });
+    render(<MemoryRouter><SpotifyTab /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: /Disconnect/ }));
+    expect(api.clearSpotifyAuth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(api.clearSpotifyAuth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Disconnect/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Disconnect' })); });
+    expect(api.clearSpotifyAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows inline prerequisite copy for disabled Connect and Sync now', async () => {
+    render(<MemoryRouter><SpotifyTab /></MemoryRouter>);
+    expect(await screen.findByText(/Save your client ID and secret above to enable Connect Spotify/)).toBeTruthy();
+    expect(screen.getByText(/Connect Spotify \(step 2\) to enable Sync now/)).toBeTruthy();
   });
 });

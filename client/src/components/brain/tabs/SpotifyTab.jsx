@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import SettingsLoadError from '../../ui/SettingsLoadError';
+import ListLoadError from '../../ui/ListLoadError';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import UnreadableSyncStateNotice from '../../ui/UnreadableSyncStateNotice';
 import { useSearchParams } from 'react-router';
 import { Save, Loader2, Music, Link2, LogOut, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Search } from 'lucide-react';
@@ -35,6 +37,8 @@ export function SpotifyTab() {
   const [syncing, setSyncing] = useState(false);
   const [playlists, setPlaylists] = useState(null);
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
+  const [playlistsError, setPlaylistsError] = useState(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [playlistsSyncing, setPlaylistsSyncing] = useState(false);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const auth = status?.auth;
@@ -43,9 +47,10 @@ export function SpotifyTab() {
 
   const loadPlaylists = () => {
     setPlaylistsLoading(true);
+    setPlaylistsError(null);
     return getSpotifyPlaylists({ silent: true })
       .then((result) => setPlaylists(result?.snapshot || null))
-      .catch(() => null)
+      .catch((err) => setPlaylistsError(err || new Error('Request failed')))
       .finally(() => setPlaylistsLoading(false));
   };
 
@@ -101,6 +106,7 @@ export function SpotifyTab() {
   };
 
   const handleDisconnect = async () => {
+    setConfirmDisconnect(false);
     const result = await clearSpotifyAuth({ silent: true }).catch(() => null);
     if (result?.cleared) {
       toast.success('Spotify disconnected');
@@ -233,22 +239,30 @@ export function SpotifyTab() {
               type="button"
               onClick={handleConnect}
               disabled={connecting || !auth?.hasCredentials}
-              title={!auth?.hasCredentials ? 'Save credentials first' : undefined}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               {connecting ? <Loader2 size={14} className="animate-spin" /> : <Link2 size={14} />}
               {auth?.hasTokens ? 'Reconnect' : 'Connect Spotify'}
             </button>
-            {auth?.hasTokens && (
+            {auth?.hasTokens && !confirmDisconnect && (
               <button
                 type="button"
-                onClick={handleDisconnect}
+                onClick={() => setConfirmDisconnect(true)}
                 className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-error text-gray-200 rounded-lg text-sm transition-colors"
               >
                 <LogOut size={14} /> Disconnect
               </button>
             )}
           </div>
+          {!auth?.hasCredentials && <p className="text-xs text-gray-500">Save your client ID and secret above to enable Connect Spotify.</p>}
+          {confirmDisconnect && (
+            <InlineConfirmRow
+              question="Disconnect Spotify? Stored tokens are cleared and you will need to reconnect to sync."
+              confirmText="Disconnect"
+              onConfirm={handleDisconnect}
+              onCancel={() => setConfirmDisconnect(false)}
+            />
+          )}
         </div>
 
         {/* Step 3 — schedule */}
@@ -297,13 +311,13 @@ export function SpotifyTab() {
               type="button"
               onClick={handleSyncNow}
               disabled={syncing || !auth?.hasTokens}
-              title={!auth?.hasTokens ? 'Connect Spotify first' : undefined}
               className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-bg border border-port-border hover:border-port-accent text-gray-200 rounded-lg text-sm transition-colors disabled:opacity-40"
             >
               {syncing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
               Sync now
             </button>
           </div>
+          {!auth?.hasTokens && <p className="text-xs text-gray-500">Connect Spotify (step 2) to enable Sync now.</p>}
         </div>
       </div>
 
@@ -402,6 +416,8 @@ export function SpotifyTab() {
               <p className="mt-4 text-xs text-port-warning">Some playlists could not be refreshed; retained references are marked by the last successful sync.</p>
             )}
           </>
+        ) : playlistsError ? (
+          <ListLoadError what="Spotify playlists" error={playlistsError} onRetry={loadPlaylists} retrying={playlistsLoading} />
         ) : (
           <div className="rounded border border-dashed border-port-border p-6 text-center text-sm text-gray-500">
             {auth?.hasTokens && hasPlaylistScope
