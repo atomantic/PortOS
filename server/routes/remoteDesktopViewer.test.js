@@ -28,6 +28,8 @@ describe('GET /remote-desktop', () => {
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.text).toContain(TOKEN);
     expect(res.text).not.toContain('__REMOTE_DESKTOP_TOKEN__');
+    expect(res.text).toContain("history.replaceState(null, '', location.pathname)");
+    expect(res.text.indexOf('history.replaceState')).toBeLessThan(res.text.indexOf('type="module"'));
     expect(broker.hasSession).toHaveBeenCalledWith(TOKEN);
   });
 
