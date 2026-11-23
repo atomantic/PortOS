@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { get as httpGet } from 'node:http';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createServer as createViteServer } from 'vite';
 import { _observeOwnedBrowserLaunch, startBrowserFixture } from './browserFixture.js';
+import { SERVED_FILES_ENV, SERVED_FILES_VERSION, servedFilesRecorder } from '../../../scripts/lib/browserServedFiles.js';
 
 const PHASE_MS = { vite: 50, chromium: 50, warmup: 50, cleanup: 50 };
 const SCOPED = { optimizeDeps: { entries: ['src/Example.jsx'] } };
@@ -349,6 +352,70 @@ describe('startBrowserFixture', () => {
     expect(server.close).toHaveBeenCalledTimes(1);
     expect(existsSync(fixture.temp)).toBe(false);
     signal.mockRestore();
+  });
+});
+
+// #17616: the test memo narrows a fixture's root to what its Vite server served.
+describe('served-file recording', () => {
+  const temps = [];
+  afterEach(() => { for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+  const tempDir = (prefix) => { const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix))); temps.push(dir); return dir; };
+  const write = (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); };
+
+  it('notes every module a real Vite server transforms, /@fs/ files and public assets, and nothing it never served', async () => {
+    const root = tempDir('served-root-');
+    const outside = tempDir('served-outside-');
+    write(join(root, 'src/App.jsx'), "import './App.css';\nexport const App = 1;\n");
+    write(join(root, 'src/App.css'), '.app { color: red; }\n');
+    write(join(root, 'src/Unrelated.jsx'), 'export const Unrelated = 1;\n');
+    write(join(root, 'public/logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    write(join(outside, 'shared.js'), 'export const shared = 1;\n');
+    const recorder = servedFilesRecorder({ root, publicDir: join(root, 'public') });
+    const vite = await createViteServer({ configFile: false, root, logLevel: 'silent', cacheDir: join(root, '.vite-cache'),
+      optimizeDeps: { noDiscovery: true }, plugins: [recorder.plugin],
+      server: { host: '127.0.0.1', port: 0, watch: null, hmr: false, fs: { strict: false } } });
+    try {
+      await vite.listen();
+      const origin = vite.resolvedUrls.local[0];
+      for (const path of ['src/App.jsx', 'src/App.css', 'logo.svg', `@fs${outside}/shared.js`, 'no-such-route']) {
+        await new Promise((done, fail) => httpGet(`${origin}${path}`, (res) => { res.resume(); res.on('end', done); }).on('error', fail));
+      }
+    } finally {
+      await vite.close();
+    }
+    expect([...recorder.files]).toEqual(expect.arrayContaining([
+      join(root, 'src/App.jsx'), join(root, 'src/App.css'), join(root, 'public/logo.svg'), join(outside, 'shared.js'),
+    ]));
+    expect([...recorder.files]).not.toContain(join(root, 'src/Unrelated.jsx'));
+    expect([...recorder.files].every((path) => !path.includes('?') && !path.includes('\0'))).toBe(true);
+  });
+
+  it('adds the recorder and writes one record on close only when the memo runner names a directory', async () => {
+    const dir = tempDir('served-records-');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const start = (env, testFile = '/repo/client/src/A.browser.test.js') => {
+      const { createServer } = fakeVite();
+      const chromium = { launch: vi.fn().mockResolvedValue(fakeBrowser()) };
+      return startBrowserFixture({ name: 'example', createServer, chromium, phaseMs: PHASE_MS, env, testFile,
+        viteConfig: () => ({ ...SCOPED, root: '/repo/client', plugins: ['own'] }) }).then((fixture) => ({ fixture, createServer }));
+    };
+    const off = await start({});
+    expect(off.createServer.mock.calls[0][0].plugins).toEqual(['own']);
+    await off.fixture.close();
+    const noTest = await start({ [SERVED_FILES_ENV]: dir }, null);
+    expect(noTest.createServer.mock.calls[0][0].plugins).toEqual(['own']);
+    await noTest.fixture.close();
+    expect(readdirSync(dir)).toEqual([]);
+
+    const on = await start({ [SERVED_FILES_ENV]: dir });
+    const plugins = on.createServer.mock.calls[0][0].plugins;
+    // The fixture's own plugin option is nested as given, for Vite to flatten.
+    expect(plugins[0]).toEqual(['own']);
+    plugins[1].load('/repo/client/src/A.jsx?import');
+    plugins[1].transform('', '\0virtual:fixture');
+    await on.fixture.close();
+    const [record] = readdirSync(dir).map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')));
+    expect(record).toEqual({ version: SERVED_FILES_VERSION, test: '/repo/client/src/A.browser.test.js', root: '/repo/client', files: ['/repo/client/src/A.jsx'] });
   });
 });
 

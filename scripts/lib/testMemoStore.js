@@ -5,7 +5,7 @@
  * `PORTOS_TEST_MEMO_DIR` says otherwise):
  *
  *   entries/<key[0..2]>/<key>.json   { test, workspace, verifiedAt, source, commit }
- *   records/<workspace>/<sha256(test)>.json   { version: 2, test, modules: [repo-relative...], digests: [...], recordedAt }
+ *   records/<workspace>/<sha256(test)>.json   { version: 2, test, modules: [repo-relative...], digests: [...], served?: { roots, files }, recordedAt }
  *
  * An entry says "a trusted run verified this key green". A record says which
  * modules the test loaded in its last green run, so the next key can be
@@ -13,7 +13,10 @@
  * record also stores each module's truncated content digest, aligned with
  * `modules`; only such a record narrows related selection (`recordedReach`),
  * because the digests show which loaded modules changed since the run. A
- * record without them still feeds the recorded key.
+ * record without them still feeds the recorded key. `served` (#17616) names
+ * what a real-browser suite's fixture served from each root it handed to
+ * Vite (`startBrowserFixture`); a record without it, or with one this reader
+ * rejects, keys those roots whole. Older readers ignore the field.
  *
  * A store may be several directories (`resolveMemoDir` with
  * `PORTOS_TEST_MEMO_READ_DIRS`): a pull-request job reads the parked shard
@@ -106,11 +109,22 @@ const stamp = (value, field) => {
 const validRecord = (record, test) => Boolean(record) && record.test === test
   && Array.isArray(record.modules) && record.modules.every((m) => typeof m === 'string');
 
+/** A repository-relative posix path: no root, drive, backslash, or `.`/`..` segment. */
+const repoRelative = (rel) => typeof rel === 'string' && rel !== '' && !rel.includes('\\') && !/^[A-Za-z]:/.test(rel)
+  && rel.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+
+/** A record's `served` field when well formed (non-empty roots, repo-relative paths), else null. */
+const validServed = (served) => (served && Array.isArray(served.roots) && served.roots.length > 0 && Array.isArray(served.files)
+  && served.roots.every(repoRelative) && served.files.every(repoRelative)
+  ? { roots: served.roots, files: served.files } : null);
+
 /**
- * `{ modules, digests }` for the modules `test` loaded in its last recorded
- * green run, or null. `digests` is null unless the record is version 2 with
- * one well-formed digest per module. Across several directories the record
- * with the newest `recordedAt` wins; a tie goes to the earlier directory.
+ * `{ modules, digests, served }` for the modules `test` loaded in its last
+ * recorded green run, or null. `digests` is null unless the record is
+ * version 2 with one well-formed digest per module; `served` is null unless
+ * the record carries a well-formed one. Across several directories the
+ * record with the newest `recordedAt` wins; a tie goes to the earlier
+ * directory.
  */
 export function readMemoRecord(dir, workspace, test) {
   let record = null;
@@ -126,19 +140,24 @@ export function readMemoRecord(dir, workspace, test) {
   if (!record) return null;
   const digests = record.version === MEMO_RECORD_VERSION && Array.isArray(record.digests) && record.digests.length === record.modules.length
     && record.digests.every((digest) => typeof digest === 'string' && DIGEST_PATTERN.test(digest)) ? record.digests : null;
-  return { modules: record.modules, digests };
+  return { modules: record.modules, digests, served: validServed(record.served) };
 }
 
-/** `digestOf(rel)` gives each module's digest; a module without one leaves the record digest-free (no narrowing). */
-export function writeMemoRecord(dir, workspace, test, modules, digestOf = () => null) {
+/**
+ * `digestOf(rel)` gives each module's digest; a module without one leaves the
+ * record digest-free (no narrowing). `served` (`{ roots, files }`) is stored
+ * sorted when given. Writes go to the store's first directory.
+ */
+export function writeMemoRecord(dir, workspace, test, modules, digestOf = () => null, served = null) {
   const [root] = dirsOf(dir);
   if (!root) return;
   const sorted = [...modules].sort();
   const digests = sorted.map((rel) => digestOf(rel));
   const complete = digests.every((digest) => typeof digest === 'string');
+  const servedField = served ? { served: { roots: [...new Set(served.roots)].sort(), files: [...new Set(served.files)].sort() } } : {};
   writeJsonAtomic(recordPath(root, workspace, test), complete
-    ? { version: MEMO_RECORD_VERSION, test, modules: sorted, digests, recordedAt: new Date().toISOString() }
-    : { test, modules: sorted, recordedAt: new Date().toISOString() });
+    ? { version: MEMO_RECORD_VERSION, test, modules: sorted, digests, ...servedField, recordedAt: new Date().toISOString() }
+    : { test, modules: sorted, ...servedField, recordedAt: new Date().toISOString() });
 }
 
 const listDir = (path) => {
