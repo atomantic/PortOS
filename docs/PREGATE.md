@@ -125,7 +125,8 @@ matched by a hash of the PID and birth identity. Children that bypass the
 observer (including grandchildren whose parent already exited) remain
 explicitly unattributed. Unknown/unconfirmed settlement retains the run root
 and fails the run; a successful signal alone does not authorize removal.
-Interrupted-run sweeps retain roots while their deferred escalation is pending.
+Interrupted-run sweeps read the process table only when a root has a dead or
+long-unknown owner, and retain roots while their deferred escalation is pending.
 On POSIX, incomplete process inventories also retain stale roots; a dead runner
 does not prove its children exited. Pending identity checks apply to pool-close
 cleanup as well as later sweeps.

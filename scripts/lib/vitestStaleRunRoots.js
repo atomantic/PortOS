@@ -148,14 +148,16 @@ function readOwner(path) {
   }
 }
 
-function rootIsOrphaned(root, probe, now) {
+/** Why a run root is reclaimable: 'dead-owner', 'aged' (owner unknown), 'missing', or null when it must be kept. */
+function orphanReason(root, probe, now) {
   try {
     const stat = lstatSync(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
     const owner = readOwner(root);
     const alive = owner ? probe(owner) : null;
-    return alive === false || (alive === null && now - stat.mtimeMs > STALE_ROOT_AGE_MS);
-  } catch (error) { return error.code === 'ENOENT'; }
+    if (alive === false) return 'dead-owner';
+    return alive === null && now - stat.mtimeMs > STALE_ROOT_AGE_MS ? 'aged' : null;
+  } catch (error) { return error.code === 'ENOENT' ? 'missing' : null; }
 }
 
 // Only fixed categories leave the private process snapshot; never argv or env.
@@ -176,12 +178,10 @@ function processKind({ args = [] }) {
 }
 
 function ownedSnapshot(parent, prefix, read, onInspection = () => {}) {
-  let inspection = { reason: 'reader-unavailable', attempts: [] };
-  const records = read(undefined, { onInspection: value => { inspection = value; } });
-  if (!Array.isArray(records)) { onInspection(false, inspection); return null; }
-  const ancestors = processAncestors(records);
-  if (!ancestors) { onInspection(false, { ...inspection, reason: 'ancestry-unavailable' }); return null; }
-  onInspection(true, { ...inspection, reason: 'available' });
+  const records = read();
+  const ancestors = Array.isArray(records) ? processAncestors(records) : null;
+  onInspection(Boolean(ancestors));
+  if (!ancestors) return null;
   const owned = records.flatMap(record => {
     if (record.terminal || !Number.isSafeInteger(record.pid) || record.pid <= 1 || typeof record.start !== 'string' || !record.start) return [];
     const root = testProcessRoot(record, parent, prefix);
@@ -304,8 +304,8 @@ export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Dat
   let signaled = 0;
   for (const record of snapshot.owned) {
     const valid = () => stillOwned(record, snapshot, tmpRoot, prefix, read)
-      && rootIsOrphaned(record.root, probe, Date.now());
-    if (!rootIsOrphaned(record.root, probe, now) || !valid()) { preserved.add(record.root); continue; }
+      && orphanReason(record.root, probe, Date.now()) !== null;
+    if (orphanReason(record.root, probe, now) === null || !valid()) { preserved.add(record.root); continue; }
     // Escalation is deferred; retain this root until a later snapshot proves
     // its children gone. Signal scheduling is not verified termination.
     preserved.add(record.root);
@@ -327,33 +327,35 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   if (typeof prefix !== 'string' || !/^[a-zA-Z0-9-]+-$/.test(prefix)) {
     throw new Error('Owned temp prefix must be a nonempty name ending in a hyphen');
   }
-  // No snapshot at all (reader down, or ancestry rejected) cannot prove a
-  // dead owner's children exited, so POSIX keeps those roots. A live unreadable
-  // row may be an unobserved orphan using any root. Ancestors, terminal rows and
-  // missing PIDs can be excluded independently; other rows need ownership data.
-  // Preserved children and unsettled pending identities stay either way.
-  const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate, probePid });
-  if (!records && process.platform !== 'win32') return;
+  // Crawling every host process is the expensive step, so a host with nothing to
+  // reclaim skips it. An orphan whose root is already gone waits for the next
+  // sweep that has a stale root; its own runner's exit hook normally stops it.
   let names;
   try {
     names = readdirSync(tmpRoot);
   } catch {
     return; // unreadable tmp dir — skip rather than fail config load
   }
-  for (const name of names) {
-    if (!name.startsWith(prefix)) continue;
-    const path = join(tmpRoot, name);
+  const isStale = reason => reason === 'dead-owner' || reason === 'aged';
+  const stale = names.filter(name => name.startsWith(prefix)).map(name => join(tmpRoot, name))
+    .filter(path => isStale(orphanReason(path, probe, now)));
+  if (!stale.length) return;
+  // No snapshot at all (reader down, or ancestry rejected) cannot prove a
+  // dead owner's children exited, so POSIX keeps those roots. A live unreadable
+  // row may be an unobserved orphan using any root. Ancestors, terminal rows and
+  // missing PIDs can be excluded independently; other rows need ownership data.
+  // Preserved children and unsettled pending identities stay either way.
+  const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate, probePid });
+  // Windows has no reader: there a dead owner alone permits removal.
+  const ownerDeathSuffices = process.platform === 'win32' && !records;
+  if (!inspected && !ownerDeathSuffices) return;
+  for (const path of stale) {
     if (preserved.has(path) || !pendingSettled(path, records, probePid)) continue;
+    // Ownership may have been re-stamped while the process table was read.
+    const reason = orphanReason(path, probe, now);
+    if (!isStale(reason) || (!inspected && reason !== 'dead-owner')) continue;
     try {
-      const stat = lstatSync(path);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-      const owner = readOwner(path);
-      const alive = owner ? probe(owner) : null;
-      if (alive === true) continue;
-      if ((alive === false && (inspected || (process.platform === 'win32' && !records)))
-        || (inspected && now - stat.mtimeMs > STALE_ROOT_AGE_MS)) {
-        rmSync(path, { recursive: true, force: true });
-      }
+      rmSync(path, { recursive: true, force: true });
     } catch {
       // Already gone, or a permissions/race hiccup — best-effort sweep only.
     }
