@@ -39,7 +39,10 @@ vi.mock('./digital-twin-helpers.js', async () => {
 });
 vi.mock('./provider/providers.js', () => ({ getProviderById: async () => ({ id: 'p', enabled: true }) }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async (name) => name }));
-vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => 'identity' }));
+vi.mock('./digital-twin-context.js', () => ({
+  getDigitalTwinForPrompt: async () => 'identity',
+  getDigitalTwinContextWithDocs: async () => ({ content: 'identity', documentsUsed: [] })
+}));
 
 const { createDocument, updateDocument, deleteDocument } = await import('./digital-twin-documents.js');
 const { createPersona, deletePersona } = await import('./digital-twin-personas.js');
