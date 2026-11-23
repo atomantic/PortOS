@@ -5,67 +5,20 @@
  * killed run never reaches its runner close hook, so its root is
  * left behind; the next config load calls `sweepStaleRunRoots()` to reclaim
  * it for the caller's exact prefix (default `pvt-`). A dead owner permits
- * reclamation after complete process inspection and pending-identity settlement.
+ * reclamation after complete process inspection shows no live owned process.
  * A live owner keeps its root however old it is; an unknown owner additionally
  * requires the conservative 6h age threshold.
  */
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
 import { processAncestors, probeTestPid, readTestProcesses, testProcessRoot, testProcessSettlement } from './testOwnedProcesses.js';
-import { processAttribution, processIdentity } from './testProcessAttribution.js';
+const processIdentity = ({ pid, start }) => createHash('sha256').update(`${pid}:${start}`).digest('hex');
 import { killWithEscalation } from '../../server/lib/killWithEscalation.js';
 
 export const OWNER_FILE = '.owner.pid';
-export const PENDING_FILE = '.process-settlement-pending';
-
-// Private control metadata, like .owner.pid; never included in diagnostic reports.
-const pendingLimit = 4096;
-const failedPendingWrites = new Map();
-function readPending(root) {
-  try {
-    const path = join(root, PENDING_FILE);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.size > 1024 * 1024) return { incomplete: true, processes: [] };
-    const text = readFileSync(path, 'utf8');
-    if (!text.endsWith('\n')) return { incomplete: true, processes: [] };
-    const rows = text.trimEnd().split('\n');
-    if (rows.length > pendingLimit) return { incomplete: true, processes: [] };
-    const processes = rows.map(line => JSON.parse(line));
-    if (processes.some(item => item?.v !== 1 || !Number.isSafeInteger(item.pid) || item.pid <= 1
-      || typeof item.start !== 'string' || !item.start || item.start.length > 256)) return { incomplete: true, processes: [] };
-    return { incomplete: false, processes: processes.map(({ pid, start }) => ({ pid, start })) };
-  } catch (error) { return { incomplete: error.code !== 'ENOENT', processes: [] }; }
-}
-
-function markPending(root, record) {
-  const pending = readPending(root);
-  if (pending.incomplete || pending.processes.some(item => item.pid === record.pid && item.start === record.start)) return;
-  // One short append preserves other simultaneous sweepers' evidence. A partial
-  // write or a capped record stays unresolved rather than being overwritten.
-  try { appendFileSync(join(root, PENDING_FILE), `${JSON.stringify({ v: 1, pid: record.pid, start: record.start })}\n`); }
-  catch {
-    const failed = failedPendingWrites.get(root) ?? new Map();
-    failed.set(processIdentity(record), { pid: record.pid, start: record.start });
-    failedPendingWrites.set(root, failed);
-  }
-}
-
-function pendingSettled(root, records, probePid) {
-  const pending = readPending(root);
-  const processes = [...pending.processes, ...(failedPendingWrites.get(root)?.values() ?? [])];
-  const settled = !pending.incomplete && processes.every(record => testProcessSettlement(record, records, probePid) === 'terminated');
-  if (settled) failedPendingWrites.delete(root);
-  return settled;
-}
-
-
-export function verifyPendingTestProcesses(root, { read = readTestProcesses, probePid = probeTestPid } = {}) {
-  const pending = readPending(root);
-  const processes = [...pending.processes, ...(failedPendingWrites.get(root)?.values() ?? [])];
-  return pendingSettled(root, processes.length ? read(processes.map(item => item.pid)) : [], probePid);
-}
 
 export const STALE_ROOT_AGE_MS = 6 * 60 * 60 * 1000;
 // Legacy stamps derive start from wall time minus uptime; keep their
@@ -217,7 +170,9 @@ export async function waitForVitestWatchdog(root, {
   const snapshot = ownedSnapshot(dirname(root), basename(root), read);
   const watchdogs = snapshot?.owned.filter(record =>
     record.root === root && record.kind === 'vitest-watchdog' && record.ppid === process.pid);
-  if (!watchdogs?.length) return;
+  // No watchdog to wait for: hand back this post-close inventory so the
+  // containment pass can reuse it instead of crawling the process table again.
+  if (!watchdogs?.length) return snapshot?.records;
   const pids = watchdogs.map(record => record.pid);
   const deadline = now() + graceMs;
   while (now() < deadline) {
@@ -233,7 +188,15 @@ export async function waitForVitestWatchdog(root, {
 export function killTestProcessesUnder(root, { read = readTestProcesses, probe = isOwnerAlive,
   kill = (pid, signal) => process.kill(pid, signal), onKilled = () => {}, onOutcome = () => {}, onInspection = () => {},
   probePid = probeTestPid, now = () => performance.now(), wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
-  settlementMs = 2000 } = {}) {
+  settlementMs = 2000, records: seed } = {}) {
+  // A caller that just inventoried the process table may seed the first full
+  // read; every later (pid-scoped) read stays live.
+  let seeded = seed;
+  const inventory = read;
+  read = pids => {
+    if (seeded && !pids) { const records = seeded; seeded = null; return records; }
+    return inventory(pids);
+  };
   let rootExists = true;
   try { const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) return 0; } catch (error) {
     if (error.code !== 'ENOENT') return 0;
@@ -256,14 +219,11 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     if (record.root !== root) continue;
     const verified = stillOwned(record, snapshot, parent, prefix, read);
     if (!verified && testProcessSettlement(record, read([record.pid]), probePid) === 'terminated') continue;
-    // Read the bounded attribution before signaling; it cannot be reconstructed
-    // after the suite worker or run root disappears.
-    const attribution = processAttribution(root, record.identity);
     let signal = 'not-attempted';
     if (verified) {
       try { kill(record.pid, 'SIGKILL'); signal = 'delivered'; } catch { signal = 'failed'; }
     }
-    pending.push({ record, attribution, signal, settlement: 'unknown' });
+    pending.push({ record, signal, settlement: 'unknown' });
   }
   const deadline = now() + settlementMs;
   while (pending.some(item => item.settlement !== 'terminated')) {
@@ -283,11 +243,10 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     wait(Math.min(25, deadline - now()));
   }
   let killed = 0;
-  for (const { record, attribution, signal, settlement } of pending) {
-    const outcome = { kind: record.kind, parent: record.parent, ...attribution, signal,
+  for (const { record, signal, settlement } of pending) {
+    const outcome = { kind: record.kind, parent: record.parent, signal,
       settlement: settlement === 'running' ? 'unconfirmed' : settlement };
     onOutcome(outcome);
-    if (settlement !== 'terminated') markPending(root, record);
     if (settlement === 'terminated') {
       killed++;
       onKilled({ kind: record.kind, parent: record.parent });
@@ -309,7 +268,6 @@ export function sweepOrphanedTestProcesses(tmpRoot, { prefix = 'pvt-', now = Dat
     // Escalation is deferred; retain this root until a later snapshot proves
     // its children gone. Signal scheduling is not verified termination.
     preserved.add(record.root);
-    markPending(record.root, record);
     try { terminate(record, { valid }); signaled++; } catch { /* settlement unknown */ }
   }
   if (signaled) console.warn(`🧹 Requested termination of ${signaled} interrupted-run test processes; settlement pending`);
@@ -344,13 +302,13 @@ export function sweepStaleRunRoots(tmpRoot, { prefix = 'pvt-', now = Date.now(),
   // dead owner's children exited, so POSIX keeps those roots. A live unreadable
   // row may be an unobserved orphan using any root. Ancestors, terminal rows and
   // missing PIDs can be excluded independently; other rows need ownership data.
-  // Preserved children and unsettled pending identities stay either way.
+  // Roots with a live owned process stay either way.
   const { inspected, preserved, records } = sweepOrphanedTestProcesses(tmpRoot, { prefix, now, probe, read, terminate, probePid });
   // Windows has no reader: there a dead owner alone permits removal.
   const ownerDeathSuffices = process.platform === 'win32' && !records;
   if (!inspected && !ownerDeathSuffices) return;
   for (const path of stale) {
-    if (preserved.has(path) || !pendingSettled(path, records, probePid)) continue;
+    if (preserved.has(path)) continue;
     // Ownership may have been re-stamped while the process table was read.
     const reason = orphanReason(path, probe, now);
     if (!isStale(reason) || (!inspected && reason !== 'dead-owner')) continue;

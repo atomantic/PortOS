@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import useTheme from '../hooks/useTheme';
+import useTheme from './useTheme';
 import { DEFAULT_THEME_ID, THEMES, THEME_LIST } from '../themes/portosThemes';
 
 const FALLBACK_CONTEXT = {

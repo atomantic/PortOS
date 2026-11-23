@@ -9,7 +9,8 @@ import { unlink, readdir } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile, readJSONFileStrict, tryReadFile, unreadableStoreError } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
@@ -74,6 +75,46 @@ async function saveIndex(index) {
 }
 
 /**
+ * Count saved markers across both legacy snapshot shapes (`savedMarkers` map,
+ * `markers` array) and the aggregate snapshot summary (`markerCount`).
+ */
+function countGenomeMarkers(genome) {
+  if (!isPlainObject(genome)) return 0;
+  if (isPlainObject(genome.savedMarkers)) return Object.keys(genome.savedMarkers).length;
+  if (Array.isArray(genome.markers)) return genome.markers.length;
+  if (typeof genome.markerCount === 'number' && Number.isFinite(genome.markerCount)) {
+    return genome.markerCount;
+  }
+  return 0;
+}
+
+/**
+ * Project live genome metadata into aggregate summary counts only so newly
+ * created snapshots never retain raw `savedMarkers`, genotypes, notes, or upload `filename`.
+ */
+function summarizeGenomeForSnapshot(genome) {
+  if (!isPlainObject(genome)) return null;
+  const markerList = isPlainObject(genome.savedMarkers)
+    ? Object.values(genome.savedMarkers)
+    : (Array.isArray(genome.markers) ? genome.markers : []);
+  const statusCounts = { beneficial: 0, typical: 0, concern: 0, major_concern: 0, not_found: 0 };
+  for (const marker of markerList) {
+    if (marker && statusCounts[marker.status] !== undefined) {
+      statusCounts[marker.status]++;
+    }
+  }
+  return {
+    uploaded: Boolean(genome.uploaded),
+    uploadedAt: genome.uploadedAt ?? null,
+    snpCount: typeof genome.snpCount === 'number' ? genome.snpCount : 0,
+    build: genome.build ?? null,
+    markerCount: countGenomeMarkers(genome),
+    statusCounts,
+    lastScanAt: genome.lastScanAt ?? null
+  };
+}
+
+/**
  * Collect all digital twin data files into a single snapshot payload
  */
 async function collectTwinData() {
@@ -92,6 +133,11 @@ async function collectTwinData() {
   await Promise.all(jsonTargets.map(async ({ key, path }) => {
     const parsed = await readJSONFile(path, null);
     if (parsed == null) return;
+    if (key === 'genome.json') {
+      const summary = summarizeGenomeForSnapshot(parsed);
+      if (summary) files[key] = summary;
+      return;
+    }
     files[key] = parsed;
   }));
 
@@ -136,10 +182,7 @@ function buildSummary(data) {
     markdownFiles: Object.keys(mdDocs).length,
     goalsCount: Array.isArray(goals?.goals) ? goals.goals.length : 0,
     storiesCount: Array.isArray(stories) ? stories.length : 0,
-    // Live genome metadata keeps markers in savedMarkers (an object); the array form is from older snapshot shapes.
-    genomeMarkers: genome?.savedMarkers
-      ? Object.keys(genome.savedMarkers).length
-      : (Array.isArray(genome?.markers) ? genome.markers.length : 0),
+    genomeMarkers: countGenomeMarkers(genome),
     hasIdentity: !!identity,
     testHistoryCount: Array.isArray(meta.testHistory) ? meta.testHistory.length : 0,
     traits: meta.traits || null,
@@ -151,22 +194,23 @@ function buildSummary(data) {
  * Create a new time capsule snapshot
  */
 export async function createSnapshot(label, description = '') {
-  const data = await collectTwinData();
-  const dataString = JSON.stringify(data);
-  const dataHash = createHash('sha256').update(dataString).digest('hex').slice(0, 16);
-
-  const snapshot = {
-    id: uuidv4(),
-    label,
-    description,
-    createdAt: new Date().toISOString(),
-    dataHash,
-    sizeBytes: Buffer.byteLength(dataString, 'utf-8'),
-    summary: buildSummary(data)
-  };
-
-  // Admit before the shared write tail: a cut drains the complete file/index pair.
+  // Admit before the shared write tail: a cut drains the complete file/index pair,
+  // and collecting inside the queue prevents racing a concurrent stripGenomeFromSnapshots().
   return withBackupAssetPublication(() => queueIndexWrite(async () => {
+    const data = await collectTwinData();
+    const dataString = JSON.stringify(data);
+    const dataHash = createHash('sha256').update(dataString).digest('hex').slice(0, 16);
+
+    const snapshot = {
+      id: uuidv4(),
+      label,
+      description,
+      createdAt: new Date().toISOString(),
+      dataHash,
+      sizeBytes: Buffer.byteLength(dataString, 'utf-8'),
+      summary: buildSummary(data)
+    };
+
     // Load (and maybe rebuild) the index BEFORE writing this snapshot file so
     // a recovery scan cannot pick up the file we are about to add, then
     // unshift a duplicate of it.
@@ -177,6 +221,160 @@ export async function createSnapshot(label, description = '') {
     await saveIndex(index);
     console.log(`📸 Time capsule created: "${label}" (${snapshot.id.slice(0, 8)})`);
     return snapshot;
+  }));
+}
+
+function clearObjectFields(target, fields) {
+  if (!isPlainObject(target)) return false;
+  let changed = false;
+  for (const field of fields) {
+    if (!Object.hasOwn(target, field)) continue;
+    const current = target[field];
+    if (!isPlainObject(current) || Object.keys(current).length > 0) {
+      target[field] = {};
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function clearNullFields(target, fields) {
+  if (!isPlainObject(target)) return false;
+  let changed = false;
+  for (const field of fields) {
+    if (Object.hasOwn(target, field) && target[field] !== null) {
+      target[field] = null;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function stripGenomeFromSnapshot(snapshot) {
+  let changed = false;
+  const data = isPlainObject(snapshot.data) ? structuredClone(snapshot.data) : null;
+
+  if (data) {
+    if (Object.hasOwn(data, 'genome.json')) {
+      delete data['genome.json'];
+      changed = true;
+    }
+    if (clearObjectFields(data['chronotype.json'], ['geneticMarkers', 'caffeineMarkers'])) {
+      changed = true;
+    }
+    if (clearObjectFields(data['longevity.json'], ['longevityMarkers', 'cardiovascularMarkers'])) {
+      changed = true;
+    }
+    if (clearNullFields(data['goals.json'], ['lifeExpectancy', 'timeHorizons'])) {
+      changed = true;
+    }
+  }
+
+  if (isPlainObject(snapshot.summary) && snapshot.summary.genomeMarkers !== 0) {
+    changed = true;
+  }
+
+  if (!changed) return { changed: false, snapshot };
+
+  const nextData = data ?? snapshot.data;
+  const dataString = JSON.stringify(nextData ?? {});
+  const dataHash = createHash('sha256').update(dataString).digest('hex').slice(0, 16);
+  const sizeBytes = Buffer.byteLength(dataString, 'utf-8');
+  const summary = isPlainObject(snapshot.summary)
+    ? { ...snapshot.summary, genomeMarkers: 0 }
+    : buildSummary(nextData ?? {});
+
+  return {
+    changed: true,
+    snapshot: {
+      ...snapshot,
+      dataHash,
+      sizeBytes,
+      summary,
+      ...(data ? { data } : {})
+    }
+  };
+}
+
+/**
+ * Strip genome.json and genetic marker fields from all existing Time Capsule snapshots
+ * and update snapshots/index.json atomically under the shared backup lease and write queue.
+ */
+export async function stripGenomeFromSnapshots() {
+  return withBackupAssetPublication(() => queueIndexWrite(async () => {
+    let entries;
+    try {
+      entries = await readdir(SNAPSHOTS_DIR);
+    } catch (error) {
+      if (error.code === 'ENOENT') return { updated: 0 };
+      throw error;
+    }
+
+    const snapshotFiles = entries.filter(name => name.endsWith('.json') && name !== 'index.json');
+    const loaded = [];
+    for (const name of snapshotFiles) {
+      const filePath = join(SNAPSHOTS_DIR, name);
+      const { ok, value } = await readJSONFileStrict(filePath, null);
+      if (!ok) throw unreadableStoreError(filePath);
+      if (value === null) continue;
+      if (!isPlainObject(value)) throw unreadableStoreError(filePath);
+      loaded.push({ filePath, parsed: value });
+    }
+
+    const updatedSnapshots = [];
+    const updatedMetaById = new Map();
+    const allMetas = [];
+
+    for (const { filePath, parsed } of loaded) {
+      const { changed, snapshot } = stripGenomeFromSnapshot(parsed);
+      if (changed) {
+        updatedSnapshots.push({ filePath, snapshot });
+        const meta = indexEntryFromSnapshotFile(snapshot);
+        if (meta) updatedMetaById.set(meta.id, meta);
+      }
+      const meta = indexEntryFromSnapshotFile(snapshot);
+      if (meta) allMetas.push(meta);
+    }
+
+    for (const { filePath, snapshot } of updatedSnapshots) {
+      await atomicWrite(filePath, snapshot);
+    }
+
+    const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null);
+    if (indexOk && isUsableIndex(indexValue)) {
+      const metaById = new Map(allMetas.map(meta => [meta.id, meta]));
+      let indexChanged = false;
+      const nextSnapshots = indexValue.snapshots.map(entry => {
+        if (entry && metaById.has(entry.id)) {
+          const diskMeta = metaById.get(entry.id);
+          const staleIndex = updatedMetaById.has(entry.id)
+            || entry.summary?.genomeMarkers !== diskMeta.summary?.genomeMarkers
+            || entry.dataHash !== diskMeta.dataHash
+            || entry.sizeBytes !== diskMeta.sizeBytes;
+          if (staleIndex) {
+            indexChanged = true;
+            return diskMeta;
+          }
+          return entry;
+        }
+        if (isPlainObject(entry?.summary) && entry.summary.genomeMarkers !== 0) {
+          indexChanged = true;
+          return { ...entry, summary: { ...entry.summary, genomeMarkers: 0 } };
+        }
+        return entry;
+      });
+      if (indexChanged) {
+        await saveIndex({ snapshots: nextSnapshots });
+      }
+    } else if (updatedSnapshots.length > 0 || !indexOk) {
+      allMetas.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      await saveIndex({ snapshots: allMetas });
+    }
+
+    if (updatedSnapshots.length > 0) {
+      console.log(`🧬 Stripped genome data from ${updatedSnapshots.length} Time Capsule snapshot(s)`);
+    }
+    return { updated: updatedSnapshots.length };
   }));
 }
 

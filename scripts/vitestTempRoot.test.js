@@ -218,6 +218,79 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
       rmSync(host, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('reclaims dead-owner and aged roots with SZOMB terminal rows and retains them when a live same-euid row is incomplete', () => {
+    const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
+    const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+    const ancestors = [
+      { pid: process.pid, ppid: process.ppid, start: 'self', terminal: false, args: ['node'], env: {} },
+      { pid: process.ppid, ppid: 1, start: 'parent', terminal: false, args: ['node'], env: {} },
+    ];
+    const zombie = { pid: 900010, ppid: process.pid, start: 'z:1', terminal: true };
+    const uninspectable = { pid: 900011, ownershipComplete: false };
+    try {
+      const dead = join(host, 'pvt-dead');
+      const aged = join(host, 'pvt-aged');
+      mkdirSync(dead);
+      writeFileSync(join(dead, '.owner.pid'), '2147483646 0\n');
+      mkdirSync(aged);
+      utimesSync(aged, old, old);
+
+      sweepStaleRunRoots(host, {
+        read: () => [...ancestors, zombie, uninspectable],
+        probe: () => false,
+        probePid: () => true,
+      });
+      expect(existsSync(dead)).toBe(true);
+      expect(existsSync(aged)).toBe(true);
+
+      sweepStaleRunRoots(host, {
+        read: () => [...ancestors, zombie],
+        probe: () => false,
+        probePid: () => true,
+      });
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(aged)).toBe(false);
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
+  describe.skipIf(process.platform !== 'darwin')('macOS full-inventory stale root reclamation', () => {
+    owned.it('reclaims dead-owner and aged roots on macOS full inventory while a zombie exists', async () => {
+      const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+      recordTempRootOwner(host);
+      const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const closed = new Promise(resolve => child.once('close', resolve));
+      const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+      try {
+        await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+        const dead = join(host, 'pvt-dead');
+        const aged = join(host, 'pvt-aged');
+        mkdirSync(dead);
+        writeFileSync(join(dead, '.owner.pid'), '2147483646 0\n');
+        mkdirSync(aged);
+        utimesSync(aged, old, old);
+        process.kill(child.pid, 'SIGKILL');
+        const deadline = Date.now() + 5000;
+        let current;
+        do {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+          current = readTestProcesses([child.pid]);
+        } while (!current?.[0]?.terminal && Date.now() < deadline);
+        expect(current?.[0]?.terminal).toBe(true);
+
+        sweepStaleRunRoots(host);
+        expect(existsSync(dead)).toBe(false);
+        expect(existsSync(aged)).toBe(false);
+      } finally {
+        child.kill('SIGKILL');
+        await closed;
+        rmSync(host, { recursive: true, force: true });
+      }
+    }, 20000);
+  });
 });
 
 describe('npm debug log containment', () => {

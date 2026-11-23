@@ -13,7 +13,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import PersonaBadge from '../PersonaBadge';
 import { scoreToColor } from '../constants';
 import { timeAgo } from '../../../utils/formatters';
-import { useTwinEvaluationSuite } from '../../../hooks/useTwinEvaluationSuite';
+import { useTwinEvaluationSuite } from './useTwinEvaluationSuite';
 
 /**
  * The per-model result block shared by every suite's expanded detail: a

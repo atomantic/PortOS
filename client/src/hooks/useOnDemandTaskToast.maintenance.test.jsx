@@ -10,7 +10,7 @@ vi.mock('../services/socket', () => ({ default: {
   emit: () => {},
 } }));
 
-const { useOnDemandTaskToast } = await import('./useOnDemandTaskToast');
+const { useOnDemandTaskToast } = await import('../components/useOnDemandTaskToast');
 const run = {
   id: 'maintenance-example', status: 'running', completed: {}, reason: null,
   steps: [{ id: 'quality-step', taskRef: { taskType: 'security' } }],

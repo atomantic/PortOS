@@ -7,7 +7,7 @@ import {
   updateMusicVideoProject,
 } from '../../../services/apiMusicVideo.js';
 import { trackAudioUrl } from '../../../services/apiTracks.js';
-import useMusicVideoManualTempo from '../../../hooks/useMusicVideoManualTempo.js';
+import useMusicVideoManualTempo from './useMusicVideoManualTempo.js';
 
 /**
  * Song step (Setup): the track link, manual tempo, lyric import and word

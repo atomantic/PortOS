@@ -5,7 +5,7 @@ import { join } from 'path';
 import { createRevisionCache, fileRevision, sqliteRevision } from '../lib/fileRevisionCache.js';
 import { decodeMessage } from '../lib/protobufWire.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { UNKNOWN_MODEL, codexServiceTier, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/provider/providerTranscriptUsage.js';
+import { UNKNOWN_MODEL, codexServiceTier, readGrokTurnsFromFile, billGrokTurnsByDay, parseJsonLines, decodeGrokSessionDir, totalTranscriptTokens } from '../lib/provider/providerTranscriptUsage.js';
 import { claudeNativeUsageStore } from './claudeCodeTranscriptUsage.js';
 import { readCodexAccountingSources } from './codexUsageSources.js';
 import { createNativeUsageStore } from './nativeUsageDayStore.js';
@@ -37,7 +37,6 @@ import { familyForProvider, familyLabel } from '../lib/provider/providerFamilies
  * Scans read local files only — no provider calls, no tokens spent.
  */
 
-const DAY_MS = 86_400_000;
 const BASE_FIELDS = ['messages', 'input', 'output', 'cacheRead', 'cacheWrite'];
 const LONG_FIELDS = ['longInput', 'longOutput', 'longCacheRead', 'longCacheWrite'];
 const SPEED_FIELDS = [
@@ -92,25 +91,6 @@ function mergeDays(into, from) {
 // Per-file day buckets, valid while the file revision (and `from`) is unchanged.
 const grokFileCache = createRevisionCache();
 const agyFileCache = createRevisionCache();
-
-/** UTC days touched by `[firstMs, lastMs]`, starting no earlier than `from`. */
-function daysBetween(firstMs, lastMs, from) {
-  const out = [];
-  const start = Math.max(firstMs, from ? dayStartMs(from) : -Infinity);
-  for (let cursor = Math.floor(start / DAY_MS) * DAY_MS; cursor <= lastMs; cursor += DAY_MS) out.push(dayOf(cursor));
-  return out;
-}
-
-/** Split one parsed session into UTC days with a windowed parser `(entries, window) => { byModel }`. */
-function addSessionDays(days, entries, stamps, from, parse) {
-  if (!stamps.length) return;
-  for (const day of daysBetween(Math.min(...stamps), Math.max(...stamps), from)) {
-    const start = dayStartMs(day);
-    for (const [model, buckets] of Object.entries(parse(entries, { from: start, to: start + DAY_MS - 1 }).byModel || {})) {
-      addBuckets(days, day, model, buckets);
-    }
-  }
-}
 
 // A live rollout appended to mid-read is re-read by the next pass, and the
 // store keeps the larger count, so that alone does not hold a fold back. Any
@@ -252,12 +232,12 @@ async function scanGrok({ from, home = homedir() }) {
       const revision = `${from ?? ''}|${await fileRevision(path)}`;
       let fileDays = grokFileCache.get(path, revision);
       if (!fileDays) {
-        const text = await tryReadFile(path);
-        if (!text) continue;
-        const entries = parseJsonLines(text);
-        const stamps = entries.map(grokEventMs).filter((ms) => Number.isFinite(ms));
+        const read = await readGrokTurnsFromFile(path);
+        if (!read) continue;
         fileDays = {};
-        addSessionDays(fileDays, entries, stamps, from, parseGrokTurns);
+        for (const [day, parsed] of billGrokTurnsByDay(read.turns, dayOf, floor)) {
+          for (const [model, buckets] of Object.entries(parsed.byModel || {})) addBuckets(fileDays, day, model, buckets);
+        }
         grokFileCache.set(path, revision, fileDays);
         await yieldToEventLoop();
       }

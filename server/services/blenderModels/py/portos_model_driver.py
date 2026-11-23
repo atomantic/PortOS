@@ -8,7 +8,14 @@ Runs inside Blender (4.2 or newer), started by PortOS:
 It loads a model (`<src>/model.py`), calls `describe(ctx)` and `build(ctx)` in
 an empty factory scene, measures what was built, saves `model.blend`, exports
 `model.glb`, imports that GLB into a fresh empty scene and measures it again.
-The model contract is documented in docs/features/blender-models.md.
+When describe() declares controls it also rigs them, sweeps their range for
+parts passing through each other, and checks that the GLB poses the same
+(portos_model_motion.py). The model contract is documented in docs/features/blender-models.md.
+
+A job with `"mode": "review"` instead opens a build's saved `model.blend` and
+renders each view it lists, textured and clay, under flat light. The server
+computes the cameras; the model's own cameras, lights, world, compositor and
+render settings do not take part, and nothing is saved back.
 
 The driver reports facts, not verdicts: the server turns them into the build's
 findings. Facts go to stdout as one JSON object per line, prefixed with
@@ -25,10 +32,19 @@ import traceback
 from types import SimpleNamespace
 
 import bpy
+from mathutils import Matrix, Vector
+
+# Its own modules are staged beside it, which is not a folder Blender imports from.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Model source stays clean: no __pycache__ beside the authored scripts.
+sys.dont_write_bytecode = True
+import portos_model_motion as motion  # noqa: E402
 
 PREFIX = "PORTOS_MODEL "
 # The most parts and meshes a build reports by name; the rest are still counted.
 MAX_LISTED = 2000
+# Per list describe() returns besides parts; the worker caps a line at 64 KiB.
+MAX_LIST_BYTES = 16 * 1024
 
 
 def emit(event, **fields):
@@ -79,6 +95,11 @@ def make_context(job):
     )
 
 
+def bounded(value):
+    """`value`, or a note the server reads as invalid when it would make the line too long."""
+    return value if len(json.dumps(value, default=str)) <= MAX_LIST_BYTES else "too large"
+
+
 def describe(model, ctx):
     description = model.describe(ctx)
     if not isinstance(description, dict):
@@ -93,9 +114,12 @@ def describe(model, ctx):
         title=description.get("title"),
         sizeMeters=description.get("sizeMeters"),
         triangleBudget=description.get("triangleBudget"),
-        controls=description.get("controls"),
+        controls=bounded(description.get("controls")),
+        actions=bounded(description.get("actions")),
+        allowContact=bounded(description.get("allowContact")),
         partsTruncated=len(parts) > MAX_LISTED,
     )
+    return description
 
 
 def mesh_facts(obj, depsgraph):
@@ -132,8 +156,12 @@ def used_images():
     return [image for image in bpy.data.images if image.users and image.type not in ("RENDER_RESULT", "COMPOSITING")]
 
 
-def measure(report_meshes):
-    """Measure every mesh object in the scene; `report_meshes` also emits one event per mesh."""
+def parents_by_name():
+    return {obj.name: obj.parent.name if obj.parent else None for obj in bpy.context.scene.objects}
+
+
+def measure(parents=None):
+    """Measure every mesh object in the scene; `parents` (as built, before rigging) also emits one event per mesh."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     scene_objects = list(bpy.context.scene.objects)
     meshes = [obj for obj in scene_objects if obj.type == "MESH"]
@@ -146,11 +174,11 @@ def measure(report_meshes):
         bounds = merge_bounds(bounds, low, high)
         slots = {slot.material.name for slot in obj.material_slots if slot.material}
         materials |= slots
-        if report_meshes and index < MAX_LISTED:
+        if parents is not None and index < MAX_LISTED:
             emit(
                 "mesh",
                 name=obj.name,
-                parent=obj.parent.name if obj.parent else None,
+                parent=parents.get(obj.name),
                 triangles=triangles,
                 min=low,
                 max=high,
@@ -171,13 +199,22 @@ def measure(report_meshes):
     }
 
 
-def export_glb(path):
+def export_glb(path, rigged):
+    # A control's action keys only its own bone, so any mix of them can play at once.
+    animation = {
+        "export_animation_mode": "ACTIONS",
+        "export_force_sampling": True,
+        "export_optimize_animation_size": True,
+        "export_optimize_animation_keep_anim_armature": False,
+        "export_rest_position_armature": True,
+    } if rigged else {}
     bpy.ops.export_scene.gltf(
         filepath=path,
         export_format="GLB",
         export_apply=True,
         export_yup=True,
         use_selection=False,
+        **animation,
     )
 
 
@@ -187,9 +224,15 @@ def build(job):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     ctx = make_context(job)
     model = load_model(job["src"])
-    describe(model, ctx)
+    description = describe(model, ctx)
     model.build(ctx)
-    scene = measure(True)
+    parents = parents_by_name()
+    rig = motion.rig_model(description, emit)
+    ends = []
+    if rig:
+        motion.sweep_model(model, ctx, rig, description, emit, job["sweepSeconds"])
+        ends = motion.expected_ends(rig)
+    scene = measure(parents)
     emit("scene", **scene)
 
     out = job["out"]
@@ -197,15 +240,126 @@ def build(job):
     blend = os.path.join(out, "model.blend")
     glb = os.path.join(out, "model.glb")
     bpy.ops.wm.save_as_mainfile(filepath=blend, check_existing=False, copy=True)
-    export_glb(glb)
+    export_glb(glb, rig is not None)
     emit("saved", blend=blend, glb=glb, glbBytes=os.path.getsize(glb) if os.path.isfile(glb) else None)
 
     # A fresh empty scene: what a consumer of the GLB gets back.
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.gltf(filepath=glb)
-    reimported = measure(False)
+    # Without the stand-in mesh the importer draws for bones, which the GLB does not hold.
+    bpy.ops.import_scene.gltf(filepath=glb, disable_bone_shape=True)
+    motion.verify_imported(ends, emit)
+    reimported = measure()
     reimported.pop("truncated", None)
     emit("reimport", **reimported)
+    emit("done", sec=round(time.time() - started, 3))
+
+
+def flat_light(scene):
+    """A uniform white surround the camera sees as mid gray, so light and dark models both read."""
+    world = bpy.data.worlds.new("portos_review")
+    world.use_nodes = True
+    tree = world.node_tree
+    tree.nodes.clear()
+    output = tree.nodes.new("ShaderNodeOutputWorld")
+    mix = tree.nodes.new("ShaderNodeMixShader")
+    path = tree.nodes.new("ShaderNodeLightPath")
+    surround = tree.nodes.new("ShaderNodeBackground")
+    backdrop = tree.nodes.new("ShaderNodeBackground")
+    surround.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+    surround.inputs["Strength"].default_value = 0.55
+    backdrop.inputs["Color"].default_value = (0.12, 0.12, 0.12, 1.0)
+    tree.links.new(path.outputs["Is Camera Ray"], mix.inputs["Fac"])
+    tree.links.new(surround.outputs["Background"], mix.inputs[1])
+    tree.links.new(backdrop.outputs["Background"], mix.inputs[2])
+    tree.links.new(mix.outputs["Shader"], output.inputs["Surface"])
+    scene.world = world
+    for obj in scene.objects:
+        if obj.type in ("LIGHT", "LIGHT_PROBE"):
+            obj.hide_render = True
+    # A shadowless sun along the view direction gives every view the same relief.
+    sun = bpy.data.lights.new("portos_review_sun", "SUN")
+    sun.energy = 1.6
+    sun.use_shadow = False
+    lamp = bpy.data.objects.new("portos_review_sun", sun)
+    scene.collection.objects.link(lamp)
+    return lamp
+
+
+def clay_material():
+    clay = bpy.data.materials.new("portos_review_clay")
+    clay.use_nodes = True
+    shader = next(node for node in clay.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
+    shader.inputs["Base Color"].default_value = (0.5, 0.48, 0.45, 1.0)
+    shader.inputs["Roughness"].default_value = 1.0
+    shader.inputs["Specular IOR Level"].default_value = 0.0
+    return clay
+
+
+def review_settings(scene, size):
+    render = scene.render
+    # Blender 5 named EEVEE's engine BLENDER_EEVEE again.
+    render.engine = "BLENDER_EEVEE_NEXT" if bpy.app.version < (5, 0, 0) else "BLENDER_EEVEE"
+    render.resolution_x = render.resolution_y = size
+    render.resolution_percentage = 100
+    render.pixel_aspect_x = render.pixel_aspect_y = 1.0
+    render.use_border = False
+    render.use_compositing = False
+    render.use_sequencer = False
+    render.use_multiview = False
+    render.use_freestyle = False
+    render.film_transparent = False
+    render.use_stamp = False
+    render.image_settings.file_format = "PNG"
+    render.image_settings.color_mode = "RGB"
+    scene.eevee.taa_render_samples = 32
+    scene.display_settings.display_device = "sRGB"
+    scene.view_settings.view_transform = "Standard"
+    scene.view_settings.look = "None"
+    scene.view_settings.exposure = 0.0
+    scene.view_settings.gamma = 1.0
+
+
+def aim_camera(camera, lamp, view):
+    right, up, back = (Vector(view[axis]) for axis in ("right", "up", "back"))
+    rotation = Matrix((right, up, back)).transposed().to_4x4()
+    camera.matrix_world = Matrix.Translation(Vector(view["location"])) @ rotation
+    lamp.matrix_world = rotation
+    data = camera.data
+    data.type = view["projection"]
+    data.sensor_fit = "AUTO"
+    data.sensor_width = 36.0
+    data.clip_start = view["clipStart"]
+    data.clip_end = view["clipEnd"]
+    if view["projection"] == "ORTHO":
+        data.ortho_scale = view["orthoScale"]
+    else:
+        data.lens = view["lens"]
+
+
+def review(job):
+    started = time.time()
+    emit("start", blender=blender_version(), quality=None)
+    bpy.ops.wm.open_mainfile(filepath=job["blend"], load_ui=False, use_scripts=False)
+    scene = bpy.context.scene
+    review_settings(scene, job["size"])
+    lamp = flat_light(scene)
+    data = bpy.data.cameras.new("portos_review")
+    camera = bpy.data.objects.new("portos_review", data)
+    scene.collection.objects.link(camera)
+    scene.camera = camera
+    clay = clay_material()
+    os.makedirs(job["out"], exist_ok=True)
+    for look in job["looks"]:
+        for layer in scene.view_layers:
+            layer.material_override = clay if look == "clay" else None
+        for view in job["views"]:
+            aim_camera(camera, lamp, view)
+            path = os.path.join(job["out"], "%s-%s.png" % (view["id"], look))
+            scene.render.filepath = path
+            bpy.ops.render.render(write_still=True)
+            if not os.path.isfile(path):
+                raise RuntimeError("The %s %s view was not written" % (look, view["id"]))
+            emit("view", id=view["id"], look=look)
     emit("done", sec=round(time.time() - started, 3))
 
 
@@ -214,9 +368,10 @@ def main():
     if not arguments:
         raise RuntimeError("Usage: blender --background --python portos_model_driver.py -- job.json")
     job = read_json(os.path.abspath(arguments[0]))
-    # Model source stays clean: no __pycache__ beside the authored scripts.
-    sys.dont_write_bytecode = True
-    build(job)
+    if job.get("mode") == "review":
+        review(job)
+    else:
+        build(job)
 
 
 try:

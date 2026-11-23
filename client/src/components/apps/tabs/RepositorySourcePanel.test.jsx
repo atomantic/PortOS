@@ -20,7 +20,7 @@ vi.mock('../../../services/apiLocalLlm', async (importOriginal) => ({
   ...await importOriginal(),
   getToolUseModels: vi.fn().mockResolvedValue({ models: [] }),
 }));
-vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
+vi.mock('../useForgeScopeRefresh', () => ({
   default: vi.fn(() => ({ active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() })),
 }));
 vi.mock('../../../hooks/useAppOperation', () => ({
@@ -30,7 +30,7 @@ vi.mock('../../../hooks/useAppOperation', () => ({
 import { getAppRepositorySources, syncAppRepositoryFork } from '../../../services/apiApps.js';
 import { addCosTask } from '../../../services/apiAgents.js';
 import { getProviders } from '../../../services/apiProviders.js';
-import useForgeScopeRefresh from '../../../hooks/useForgeScopeRefresh';
+import useForgeScopeRefresh from '../useForgeScopeRefresh';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import RepositorySourcePanel from './RepositorySourcePanel';
 import { MemoryRouter } from 'react-router';

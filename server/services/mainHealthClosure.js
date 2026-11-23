@@ -7,8 +7,17 @@
  * bot. Authority comes from the Actions API, which outside contributors cannot
  * forge: the named CI run is a successful push/scheduled `ci.yml` run on the
  * default branch whose commit the live default head contains, and the closure
- * happened while the Main health report job for that same commit was running
- * and that job succeeded. Every missing or mismatched piece fails closed.
+ * happened while exactly one Main health report job was running and that job
+ * succeeded. Every missing or mismatched piece fails closed.
+ *
+ * The monitor is a `workflow_run` workflow, which GitHub runs on the default
+ * branch's latest commit at trigger time, not on the triggering run's commit; the
+ * triggering commit only reaches the job as `CI_RUN_SHA`. So the monitor's head
+ * is never compared to the CI head by equality: it must descend from (or equal)
+ * the CI head and be contained in the live default head. The monitor is bound to
+ * the CI run by creation time and the single-writer rule (the concurrency group
+ * guarantees one report job at any instant), and, once the workflow carries
+ * `run-name: Main health for CI run <id>`, by that title as well.
  *
  * Writer side: scripts/ci-nightly-report.js (`MAIN_RED_TITLE`,
  * `mainHealthRecoveryLine`) run by .github/workflows/main-health.yml.
@@ -22,11 +31,14 @@ const MONITOR_WORKFLOW = '.github/workflows/main-health.yml';
 const MONITOR_JOB = 'Update the main-is-red issue';
 const CI_EVENTS = new Set(['push', 'schedule']);
 const RECOVERY_LINE = /^Green again at `([0-9a-f]{7,40})`: https:\/\/([a-z0-9.-]+)\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/actions\/runs\/([1-9]\d{0,19})$/;
+// Written by `run-name` in main-health.yml; earlier monitor runs have no such title.
+const MONITOR_TITLE = /^Main health for CI run ([1-9]\d{0,19})$/;
 const FULL_SHA = /^[a-f0-9]{40,64}$/i;
 
 const sameText = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const workflowPath = run => typeof run?.path === 'string' ? run.path.split('@', 1)[0] : null;
 const time = value => typeof value === 'string' ? Date.parse(value) : NaN;
+const isoSeconds = ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const isActionsBot = user => user?.type === 'Bot' && sameText(user.login, `${ACTIONS_BOT}[bot]`);
 
 function inRepository(run, fullName, defaultBranch) {
@@ -83,22 +95,37 @@ export async function verifyMainHealthClosure({ number, target, run, closed, def
 
   // Main health runs share one concurrency group, so at most one report job is
   // writing at any instant; a second window containing the closure is ambiguous.
-  const monitors = await read(`${repo}/actions/workflows/main-health.yml/runs?head_sha=${ci.head_sha}&event=workflow_run&per_page=100`);
+  // The monitor runs on the default branch's latest commit when it was triggered,
+  // so list it by creation time (CI completed .. closure), never by the CI head.
+  const ciCompleted = time(ci.updated_at);
+  if (!(ciCompleted <= closedAt)) return refuse('main-health-run-unverified');
+  const window = `${isoSeconds(ciCompleted)}..${isoSeconds(closedAt)}`;
+  const monitors = await read(`${repo}/actions/workflows/main-health.yml/runs?created=${window}&event=workflow_run&per_page=100`);
   const monitorRuns = monitors?.workflow_runs;
   if (!Array.isArray(monitorRuns) || monitors.total_count !== monitorRuns.length) return refuse('main-health-run-unverified');
   const writers = [];
   for (const monitor of monitorRuns) {
     if (!Number.isSafeInteger(monitor?.id) || workflowPath(monitor) !== MONITOR_WORKFLOW || monitor.event !== 'workflow_run'
-      || !inRepository(monitor, target.fullName, defaultBranch) || monitor.head_sha !== ci.head_sha
-      || !(time(monitor.created_at) <= closedAt) || time(monitor.created_at) < time(ci.run_started_at)) continue;
+      || !inRepository(monitor, target.fullName, defaultBranch)
+      || !(time(monitor.created_at) <= closedAt) || time(monitor.created_at) < ciCompleted) continue;
     const jobs = await read(`${repo}/actions/runs/${monitor.id}/jobs?filter=all&per_page=100`);
     if (!Array.isArray(jobs?.jobs) || jobs.total_count !== jobs.jobs.length) return refuse('main-health-run-unverified');
     for (const job of jobs.jobs) {
-      if (job?.run_id === monitor.id && job.name === MONITOR_JOB && job.head_sha === ci.head_sha
+      if (job?.run_id === monitor.id && job.name === MONITOR_JOB && sameText(job.head_sha, monitor.head_sha)
         && job.status === 'completed' && job.conclusion === 'success'
-        && time(job.started_at) <= closedAt && closedAt <= time(job.completed_at)) writers.push(monitor.id);
+        && time(job.started_at) <= closedAt && closedAt <= time(job.completed_at)) writers.push(monitor);
     }
   }
   if (writers.length !== 1) return refuse('main-health-run-unverified');
-  return { verified: true, ciRun: ci.id, ciCommit: ci.head_sha, monitorRun: writers[0] };
+  const [writer] = writers;
+  const titled = MONITOR_TITLE.exec(writer.display_title ?? '');
+  if (titled && Number(titled[1]) !== ci.id) return refuse('main-health-run-unverified');
+  // The monitor's commit must build on the verified CI commit and still be on the live default branch.
+  const monitorHead = writer.head_sha;
+  const fromCi = await read(`${repo}/compare/${ci.head_sha}...${monitorHead}`);
+  const toDefault = await read(`${repo}/compare/${monitorHead}...${defaultCommit}`);
+  if (!['ahead', 'identical'].includes(fromCi?.status) || !['ahead', 'identical'].includes(toDefault?.status)) {
+    return refuse('main-health-run-unverified');
+  }
+  return { verified: true, ciRun: ci.id, ciCommit: ci.head_sha, monitorRun: writer.id };
 }

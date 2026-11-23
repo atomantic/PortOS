@@ -8,9 +8,9 @@ vi.mock('./NotificationBell.jsx', () => ({ NotificationBell: () => null }));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
 vi.mock('../hooks/useInstanceFeatures.js', () => ({ useInstanceFeatures: () => ({ isFeatureEnabled: () => true }) }));
 vi.mock('../hooks/useSidebarApps.js', () => ({ useSidebarApps: () => [] }));
-vi.mock('../hooks/useSidebarSeries.js', () => ({ useSidebarSeries: () => [] }));
-vi.mock('../hooks/useSidebarUniverses.js', () => ({ useSidebarUniverses: () => [] }));
-vi.mock('../hooks/useSidebarMusicVideos.js', () => ({ useSidebarMusicVideos: () => [] }));
+vi.mock('./useSidebarSeries.js', () => ({ useSidebarSeries: () => [] }));
+vi.mock('./useSidebarUniverses.js', () => ({ useSidebarUniverses: () => [] }));
+vi.mock('./useSidebarMusicVideos.js', () => ({ useSidebarMusicVideos: () => [] }));
 
 const renderRail = () => render(
   <MemoryRouter initialEntries={['/']}>

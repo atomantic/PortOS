@@ -4,7 +4,7 @@ import useSingToVerify, {
   VERIFY_COUNT_IN,
   VERIFY_IDLE,
   VERIFY_RECORDING,
-} from '../../hooks/useSingToVerify.js';
+} from './useSingToVerify.js';
 import { GRADE } from '../../lib/colorMatch.js';
 import { parseScore, replaceNotePitch } from '../../lib/scoreNotation.js';
 import MicProcessingHint from './MicProcessingHint.jsx';

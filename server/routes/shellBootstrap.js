@@ -26,7 +26,7 @@ const reads = {
       enabled, hotkey,
       vad: { endOfSpeechMs: vad?.endOfSpeechMs, minUtteranceMs: vad?.minUtteranceMs },
       stt: { engine: stt?.engine, language: stt?.language },
-      llm: { fastPath: llm?.fastPath, personality: llm?.personality },
+      llm: { fastPath: llm?.fastPath, personality: llm?.usePersonality === false ? null : llm?.personality },
       tts: { engine, rate: tts?.rate, ...(engine && { [engine]: { voice: tts[engine]?.voice } }) },
     };
   },

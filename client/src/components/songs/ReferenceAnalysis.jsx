@@ -36,7 +36,7 @@ import {
   referenceMidiTranscriptionEventsUrl,
   cancelReferenceMidiTranscription,
 } from '../../services/apiRounds.js';
-import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
+import useReferenceAudioImport from './useReferenceAudioImport.js';
 import useMidiTranscription from '../../hooks/useMidiTranscription.js';
 import MidiInstallModal from '../install/MidiInstallModal.jsx';
 import MidiGatedModal from '../install/MidiGatedModal.jsx';

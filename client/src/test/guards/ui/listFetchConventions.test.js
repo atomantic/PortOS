@@ -58,6 +58,9 @@ const EXEMPT = Object.freeze({
   // regardless (the server normalizes and creates the canonical row on save), and
   // nothing says "no tags exist" or writes from the suggestion list.
   'src/components/TagPicker.jsx': 1,
+  // Secondary history strip: a failed history read degrades to no history rather than blocking
+  // the suite panel, whose own load-error state (null sentinel + Retry) is handled separately.
+  'src/components/digital-twin/tabs/useTwinEvaluationSuite.js': 1,
 });
 
 const allowedIn = (file) => EXEMPT[file] || 0;

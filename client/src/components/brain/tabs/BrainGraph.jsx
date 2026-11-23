@@ -28,7 +28,7 @@ import TouchDragHint from '../../graph3d/TouchDragHint';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
-import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
+import useGraphNodeDetail from './useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';

@@ -3,7 +3,7 @@ import { getCosAgent, getCosAgentPrompt, getCosAgentStats } from '../../../servi
 import { copyToClipboard } from '../../../lib/clipboard';
 import { estimateCosDuration } from '../../../lib/cosDurationEstimate';
 import { useSocketResource } from '../../../hooks/useSocketResource';
-import useStickToBottom from '../../../hooks/useStickToBottom';
+import useStickToBottom from './useStickToBottom';
 import { useTimeTick } from '../../../hooks/useTimeTick';
 import { formatCount, formatDurationMs } from '../../../utils/formatters';
 

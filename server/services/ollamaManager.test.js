@@ -92,6 +92,11 @@ async function loadManager() {
   return import('./ollamaManager.js')
 }
 
+async function loadImporter() {
+  vi.resetModules()
+  return import('./ollamaSafetensorsImport.js')
+}
+
 const loadPullModel = () => loadManager().then((mod) => mod.pullModel)
 
 describe('ollamaManager residency status', () => {
@@ -493,7 +498,8 @@ describe('ollamaManager HF pull recovery', () => {
         join(modelsDir, 'manifests', 'registry.ollama.ai', 'library', 'example', 'latest'),
         JSON.stringify(manifest()),
       )
-      const { listStoredModels } = await loadManager()
+      vi.resetModules()
+      const { listStoredModels } = await import('./ollamaDiskImport.js')
 
       const rows = await listStoredModels()
 
@@ -831,7 +837,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       return cb(new Error(`unexpected exec: ${cmd} ${args.join(' ')}`))
     }
     const onProgress = vi.fn()
-    const { importModelFromHfSafetensors } = await loadManager()
+    const { importModelFromHfSafetensors } = await loadImporter()
     await scriptCreate((child, cmd, args) => {
       createCall = { cmd, args }
       readFile(args[3], 'utf8').then((modelfile) => {
@@ -879,7 +885,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     execMock.impl = (_cmd, args, _opts, cb) => args[0] === '--version'
       ? cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
       : cb(new Error('An interrupted download must not reach ollama create'))
-    const { importModelFromHfSafetensors } = await loadManager()
+    const { importModelFromHfSafetensors } = await loadImporter()
 
     await expect(importModelFromHfSafetensors(spec)).resolves.toMatchObject({
       success: false, error: expect.stringMatching(/Hugging Face checkpoint download.*interrupted.*connection.*retry/i)
@@ -954,7 +960,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     }
 
     it('lets a conversion that keeps reporting progress outlive the idle limit', async () => {
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       let child
       await scriptCreate((c, _cmd, args) => { child = c; stagingOf(args) })
 
@@ -974,7 +980,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
     })
 
     it('stops a silent create, escalates past an ignored SIGTERM, and removes staging once nothing holds it', async () => {
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       let child
       let root
       await scriptCreate((c, _cmd, args) => {
@@ -1004,7 +1010,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
 
     it('keeps the staged checkpoint when the stopped CLI never exits, and a retry reuses it without downloading', async () => {
       const modelSpec = specFor('unkillable')
-      let { importModelFromHfSafetensors } = await loadManager()
+      let { importModelFromHfSafetensors } = await loadImporter()
       let child
       let root
       await scriptCreate((c, _cmd, args) => { child = c; root = stagingOf(args) })
@@ -1026,7 +1032,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       // probed reuses the retained checkpoint: reading it is non-destructive.
       vi.useRealTimers()
       lsof.available = false
-      ;({ importModelFromHfSafetensors } = await loadManager())
+      ;({ importModelFromHfSafetensors } = await loadImporter())
       let retryRoot
       await scriptCreate((c, _cmd, args) => { retryRoot = stagingOf(args); queueMicrotask(() => c.exit(0)) })
       const retried = await importModelFromHfSafetensors(modelSpec)
@@ -1049,7 +1055,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       await writeFile(join(stale, 'portos-import.json'), JSON.stringify({
         modelId: modelSpec.modelId, repo: 'example/Other-MLX', subdir: '4-bit', phase: 'retained', createdAt: at, retainedAt: at
       }))
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       let createdFrom
       await scriptCreate((c, _cmd, args) => { createdFrom = stagingOf(args); queueMicrotask(() => c.exit(0)) })
 
@@ -1065,7 +1071,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
 
     it('rejects a second import of the same model before any Hugging Face request', async () => {
       const modelSpec = specFor('duplicate')
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       let child
       await scriptCreate((c, _cmd, args) => { child = c; stagingOf(args) })
 
@@ -1095,7 +1101,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       }
       const abandoned = await stage('example/abandoned:4bit', 8 * day)
       const recent = await stage('example/recent:4bit', 1 * day)
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       await scriptCreate((c, _cmd, args) => { stagingOf(args); queueMicrotask(() => c.exit(0)) })
 
       let result
@@ -1109,7 +1115,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
 
     it('retains staging another process still reads, and refuses to stack a second create on it', async () => {
       const modelSpec = specFor('daemon-held')
-      const { importModelFromHfSafetensors } = await loadManager()
+      const { importModelFromHfSafetensors } = await loadImporter()
       let root
       const children = await scriptCreate((c, _cmd, args) => {
         root = stagingOf(args)
@@ -1142,7 +1148,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
 
   it('fails before downloading when the gated repository has no token', async () => {
     stubFetch([])
-    const { importModelFromHfSafetensors } = await loadManager()
+    const { importModelFromHfSafetensors } = await loadImporter()
 
     const result = await importModelFromHfSafetensors(spec)
 
@@ -1174,7 +1180,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       if (cmd === 'ollama' && args.join(' ') === '--version') return cb(null, { stdout: 'ollama 0.31.0', stderr: '' })
       throw new Error(`unexpected exec: ${cmd} ${args.join(' ')} — the size refusal should have happened first`)
     }
-    const { importModelFromHfSafetensors } = await loadManager()
+    const { importModelFromHfSafetensors } = await loadImporter()
 
     const result = await importModelFromHfSafetensors(spec)
 
@@ -1189,7 +1195,7 @@ describe('ollamaManager curated Hugging Face Safetensors import', () => {
       }
       throw new Error(`unexpected fetch: ${url}`)
     }))
-    const { importModelFromHfSafetensors } = await loadManager()
+    const { importModelFromHfSafetensors } = await loadImporter()
 
     const result = await importModelFromHfSafetensors(spec)
 
@@ -1248,6 +1254,28 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
     expect(result.persistent).toBe(true)
     expect(startAttempts).toBe(2) // recovered: bootout then retried
     expect(calls).toContain('brew services stop ollama')
+  })
+
+  it('clears a stale /api/tags error when the service is started', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).endsWith('/api/tags')) throw new Error('tags unavailable')
+      const body = { version: '0.24.0' }
+      return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) }
+    }))
+    execMock.impl = (cmd, args, opts, cb) => {
+      const a = (args || []).join(' ')
+      if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
+      if (cmd === 'brew' && a === 'services start ollama') return cb(null, { stdout: '', stderr: '' })
+      if (cmd === 'brew' && a === 'services list') return cb(null, { stdout: 'ollama started testuser plist\n', stderr: '' })
+      return cb(new Error(`unexpected exec: ${cmd} ${a}`))
+    }
+    const { getInstalledModels, getLastInstalledModelsError, startPersistentService } = await loadManager()
+    await getInstalledModels(true)
+    expect(getLastInstalledModelsError()).toMatch(/\/api\/tags/)
+
+    await startPersistentService()
+
+    expect(getLastInstalledModelsError()).toBeNull()
   })
 
   // A second concurrent `brew services start` fails on the already-loaded job,

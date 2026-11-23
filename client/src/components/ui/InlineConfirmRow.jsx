@@ -71,7 +71,7 @@ export default function InlineConfirmRow({
           type="button"
           onClick={onConfirm}
           title={confirmTitle}
-          className={`min-w-0 min-h-9 px-2 py-1 text-xs rounded transition-colors ${t.confirm}`}
+          className={`min-w-0 min-h-9 pointer-coarse:min-h-11 px-2 py-1 text-xs rounded transition-colors ${t.confirm}`}
         >
           {confirmText}
         </button>
@@ -79,7 +79,7 @@ export default function InlineConfirmRow({
           type="button"
           onClick={onCancel}
           title={cancelTitle}
-          className="min-w-0 min-h-9 px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
+          className="min-w-0 min-h-9 pointer-coarse:min-h-11 px-2 py-1 text-xs text-gray-400 hover:text-white transition-colors"
         >
           {cancelText}
         </button>

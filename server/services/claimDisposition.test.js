@@ -420,6 +420,9 @@ describe('Main health incident closure', () => {
   const incidentBody = () => `${buildMainRedIssueBody({ failedJobs: [], base: null, head: 'e'.repeat(40),
     runUrl: 'https://github.example.test/example/project/actions/runs/400', compareBase: 'https://github.example.test/example/project/compare' })}\n\n${mainHealthRecoveryLine(ciSha, ciRunUrl)}`;
   const repoMeta = { full_name: 'example/project' };
+  // GitHub runs the workflow_run monitor on the default branch's latest commit, not the CI commit.
+  const monitorSha = 'a'.repeat(40);
+  const defaultSha = 'c'.repeat(40);
   const run = extra => ({ repository: repoMeta, head_repository: repoMeta, head_branch: 'main', head_sha: ciSha,
     status: 'completed', conclusion: 'success', ...extra });
 
@@ -429,11 +432,14 @@ describe('Main health incident closure', () => {
     forge = {
       issue: { number: 42, title: 'main is red', state: 'closed', state_reason: 'completed', user: bot, closed_by: bot,
         closed_at: '2026-10-01T11:00:05Z', labels: [{ name: 'area:ci' }], body: incidentBody() },
-      ci: run({ id: 500, path: '.github/workflows/ci.yml', event: 'push', run_started_at: '2026-10-01T10:50:00Z' }),
+      ci: run({ id: 500, path: '.github/workflows/ci.yml', event: 'push', run_started_at: '2026-10-01T10:50:00Z',
+        updated_at: '2026-10-01T10:58:00Z' }),
       compare: { status: 'ahead' },
+      monitorFromCi: { status: 'ahead' },
+      monitorToDefault: { status: 'ahead' },
       monitors: { total_count: 1, workflow_runs: [run({ id: 600, path: '.github/workflows/main-health.yml',
-        event: 'workflow_run', created_at: '2026-10-01T11:00:00Z' })] },
-      jobs: { total_count: 1, jobs: [{ run_id: 600, name: 'Update the main-is-red issue', head_sha: ciSha,
+        event: 'workflow_run', head_sha: monitorSha, display_title: 'Merge pull request #1', created_at: '2026-10-01T11:00:00Z' })] },
+      jobs: { total_count: 1, jobs: [{ run_id: 600, name: 'Update the main-is-red issue', head_sha: monitorSha,
         status: 'completed', conclusion: 'success', started_at: '2026-10-01T11:00:02Z', completed_at: '2026-10-01T11:00:09Z' }] },
     };
     execGh.mockImplementation(async args => {
@@ -441,9 +447,12 @@ describe('Main health incident closure', () => {
       const endpoint = args.at(-1);
       const reply = endpoint === 'repos/example/project/issues/42' ? forge.issue
         : endpoint === 'repos/example/project/actions/runs/500' ? forge.ci
-        : endpoint === `repos/example/project/compare/${ciSha}...${'c'.repeat(40)}` ? forge.compare
-        : endpoint === `repos/example/project/actions/workflows/main-health.yml/runs?head_sha=${ciSha}&event=workflow_run&per_page=100` ? forge.monitors
-        : endpoint === 'repos/example/project/actions/runs/600/jobs?filter=all&per_page=100' ? forge.jobs
+        : endpoint === `repos/example/project/compare/${ciSha}...${defaultSha}` ? forge.compare
+        : endpoint === `repos/example/project/compare/${ciSha}...${monitorSha}` ? forge.monitorFromCi
+        : endpoint === `repos/example/project/compare/${ciSha}...${ciSha}` ? forge.monitorFromCi
+        : endpoint === `repos/example/project/compare/${monitorSha}...${defaultSha}` ? forge.monitorToDefault
+        : endpoint === 'repos/example/project/actions/workflows/main-health.yml/runs?created=2026-10-01T10:58:00Z..2026-10-01T11:00:05Z&event=workflow_run&per_page=100' ? forge.monitors
+        : /^repos\/example\/project\/actions\/runs\/60[01]\/jobs\?filter=all&per_page=100$/.test(endpoint) ? { ...forge.jobs, jobs: forge.jobs.jobs.map(job => ({ ...job, run_id: Number(endpoint.match(/runs\/(\d+)/)[1]) })) }
         : { message: 'Not Found' };
       return JSON.stringify(reply);
     });
@@ -464,6 +473,18 @@ describe('Main health incident closure', () => {
     expect(execGh.mock.calls.every(([args]) => args[0] === 'api' && !args.includes('POST') && !args.includes('PATCH'))).toBe(true);
     // A retry sees the same closure and settles identically.
     expect(await verify()).toEqual(result);
+  });
+
+  it('verifies a monitor run named for the CI run, and one that predates the run-name', async () => {
+    forge.monitors.workflow_runs[0].display_title = 'Main health for CI run 500';
+    expect(await verify()).toMatchObject({ status: 'verified', issues: [{ disposition: 'ci-recovered', monitorRun: 600 }] });
+  });
+
+  it('verifies a monitor run on the same commit as the CI run', async () => {
+    forge.monitors.workflow_runs[0].head_sha = ciSha;
+    forge.jobs.jobs[0].head_sha = ciSha;
+    forge.monitorFromCi = { status: 'identical' };
+    expect(await verify()).toMatchObject({ status: 'verified' });
   });
 
   it('keeps undelivered claim work from settling behind a CI recovery', async () => {
@@ -496,12 +517,22 @@ describe('Main health incident closure', () => {
     ['an unreadable Main health listing', f => { f.monitors = { message: 'Server Error' }; }],
     ['a truncated Main health listing', f => { f.monitors.total_count = 101; }],
     ['another workflow as the monitor', f => { f.monitors.workflow_runs[0].path = '.github/workflows/triage.yml'; }],
-    ['a monitor run for another commit', f => { f.monitors.workflow_runs[0].head_sha = 'f'.repeat(40); }],
+    ['a monitor commit the default branch no longer contains', f => { f.monitorToDefault = { status: 'diverged' }; }],
+    ['a monitor commit that does not descend from the CI commit', f => { f.monitorFromCi = { status: 'behind' }; }],
+    ['an unreadable monitor commit comparison', f => { f.monitorFromCi = { message: 'Not Found' }; }],
+    ['a report job whose commit differs from its run', f => { f.jobs.jobs[0].head_sha = 'f'.repeat(40); }],
+    ['a monitor created before CI completed', f => { f.monitors.workflow_runs[0].created_at = '2026-10-01T10:57:59Z'; }],
+    ['a monitor run named for another CI run', f => { f.monitors.workflow_runs[0].display_title = 'Main health for CI run 501'; }],
+    ['a monitor run from another branch', f => { f.monitors.workflow_runs[0].head_branch = 'release'; }],
     ['a monitor triggered another way', f => { f.monitors.workflow_runs[0].event = 'issues'; }],
     ['a closure outside the report job', f => { f.jobs.jobs[0].completed_at = '2026-10-01T11:00:04Z'; }],
     ['a failed report job', f => { f.jobs.jobs[0].conclusion = 'failure'; }],
     ['another job in the monitor run', f => { f.jobs.jobs[0].name = 'Triage issues'; }],
     ['two report jobs covering the closure', f => { f.jobs.total_count = 2; f.jobs.jobs.push({ ...f.jobs.jobs[0] }); }],
+    ['two monitor runs covering the closure', f => {
+      f.monitors = { total_count: 2, workflow_runs: [f.monitors.workflow_runs[0], { ...f.monitors.workflow_runs[0], id: 601 }] };
+    }],
+    ['a CI run with no completion time', f => { delete f.ci.updated_at; }],
   ])('fails closed on %s', async (_name, mutate) => {
     mutate(forge);
     const result = await verify();
