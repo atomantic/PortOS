@@ -10,15 +10,23 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
-import { PIPER_RELEASE_ARCHIVE_SHA256, inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
+import {
+  PIPER_RELEASE_ARCHIVE_SHA256,
+  PIPER_VOICES_HF_COMMIT,
+  WHISPER_HF_COMMIT,
+  inspectVoiceAsset,
+} from '../server/lib/voiceModelAssets.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VOICE = 'en_US-test-low';
 const STUB_ARCHIVE_SHA256 = createHash('sha256').update('archive-ok').digest('hex');
+const STUB_WHISPER_SHA256 = createHash('sha256').update('whisper-v1').digest('hex');
+const STUB_ONNX_SHA256 = createHash('sha256').update('onnx-v1').digest('hex');
 const PS = ['pwsh', 'powershell'].find((bin) => spawnSync(bin, ['-NoProfile', '-Command', 'exit 0']).status === 0);
 
 const WRAPPER = `
 $ErrorActionPreference = 'Stop'
+if ($env:STUB_WHISPER) { function whisper-server {} }
 function Invoke-WebRequest {
     param($Uri, $OutFile, $Method, [switch]$UseBasicParsing)
     Add-Content -Path $env:CURL_LOG -Value "$Method $Uri"
@@ -39,6 +47,15 @@ function Expand-Archive {
 }
 . (Join-Path $env:REPO_ROOT 'scripts/setup-voice.ps1')
 `;
+
+describe('setup-voice.ps1 static integrity contract', () => {
+  it('uses zero mutable /resolve/main/ URLs and delegates URLs and SHA-256 verification to voice-asset.js', () => {
+    const source = readFileSync(join(ROOT, 'scripts/setup-voice.ps1'), 'utf8');
+    expect(source).not.toContain('/resolve/main/');
+    expect(source).toContain('Invoke-VoiceAsset url');
+    expect(source).toContain("verify-model");
+  });
+});
 
 describe.skipIf(!PS)('setup-voice.ps1 model provisioning', () => {
   let home;
@@ -125,5 +142,57 @@ describe.skipIf(!PS)('setup-voice.ps1 model provisioning', () => {
     expect(run().status).toBe(0);
     expect(existsSync(log)).toBe(false);
     expect(inspectVoiceAsset('piper', onnx()).state).toBe('verified');
+  });
+
+  it('uses pinned 40-char commit SHAs (never /resolve/main/) for Whisper and Piper downloads', () => {
+    const result = run({
+      STT_ENGINE: 'whisper',
+      TTS_ENGINE: 'piper',
+      MODEL_NAME: 'ggml-test.bin',
+      STUB_WHISPER: '1',
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const urls = readFileSync(log, 'utf8').trim().split(/\r?\n/);
+    for (const line of urls) expect(line).not.toContain('/resolve/main/');
+    expect(urls.join('\n')).toContain(`https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_HF_COMMIT}/ggml-test.bin`);
+    expect(urls.join('\n')).toContain(`https://huggingface.co/rhasspy/piper-voices/resolve/${PIPER_VOICES_HF_COMMIT}/en/en_US/test/low/en_US-test-low.onnx`);
+  });
+
+  it('rejects mismatched curated Whisper and Piper assets before promotion, and promotes on match', () => {
+    const modelsDir = join(home, '.portos/voice/models');
+    const catalogModel = 'ggml-base.en.bin';
+    const catalogVoice = 'en_GB-jenny_dioco-medium';
+
+    const badWhisper = run({
+      STT_ENGINE: 'whisper',
+      TTS_ENGINE: 'qwen3-tts',
+      MODEL_NAME: catalogModel,
+      STUB_WHISPER: '1',
+    });
+    expect(badWhisper.status).not.toBe(0);
+    expect(existsSync(join(modelsDir, catalogModel))).toBe(false);
+    expect(readdirSync(modelsDir).filter((f) => f.includes('.part.'))).toEqual([]);
+
+    const goodWhisper = run({
+      STT_ENGINE: 'whisper',
+      TTS_ENGINE: 'qwen3-tts',
+      MODEL_NAME: catalogModel,
+      STUB_WHISPER: '1',
+      PORTOS_TEST_MODEL_SHA256: JSON.stringify({ [catalogModel]: STUB_WHISPER_SHA256 }),
+    });
+    expect(goodWhisper.status, `${goodWhisper.stdout}\n${goodWhisper.stderr}`).toBe(0);
+    expect(inspectVoiceAsset('whisper', join(modelsDir, catalogModel)).state).toBe('verified');
+
+    const badPiper = run({ VOICE_NAME: catalogVoice });
+    expect(badPiper.status).not.toBe(0);
+    expect(existsSync(join(voices, `${catalogVoice}.onnx`))).toBe(false);
+    expect(leftovers()).toEqual([]);
+
+    const goodPiper = run({
+      VOICE_NAME: catalogVoice,
+      PORTOS_TEST_MODEL_SHA256: JSON.stringify({ [`${catalogVoice}.onnx`]: STUB_ONNX_SHA256 }),
+    });
+    expect(goodPiper.status, `${goodPiper.stdout}\n${goodPiper.stderr}`).toBe(0);
+    expect(inspectVoiceAsset('piper', join(voices, `${catalogVoice}.onnx`)).state).toBe('verified');
   });
 });

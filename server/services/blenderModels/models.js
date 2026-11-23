@@ -20,7 +20,9 @@ import {
 import { hashSourceEntries } from '../blenderWorkspace/treeHash.js';
 import { BLENDER_MODEL_NEEDS_TRUSTED_LOCAL } from './driver.js';
 import { presentBlenderModelReferences } from './references.js';
-import { listBlenderModelJobs, pruneBlenderModelBuilds, settleBlenderModelBuilds } from './build.js';
+import { pruneBlenderModelBuilds } from './build.js';
+import { listBlenderModelJobs, settleBlenderModelJobs } from './jobs.js';
+import { newestCompleteBuild, presentBlenderModelReviews } from './review.js';
 import * as store from './store.js';
 import {
   assertBlenderModelId, blenderModelBuildsDir, blenderModelRendersDir, blenderModelSourceDirs,
@@ -55,10 +57,13 @@ export async function getBlenderModelState(id) {
   const model = await requireBlenderModel(id);
   const entries = await walkSourceTree(blenderModelSrcDir(id));
   const { tree } = await hashSourceEntries(entries);
-  const latest = [...(model.builds || [])].reverse().find((build) => build.status === 'complete') ?? null;
+  const latest = newestCompleteBuild(model);
   return {
     ...model,
     ...await presentBlenderModelReferences(model),
+    cameras: model.cameras ?? [],
+    differences: model.differences ?? [],
+    reviews: await presentBlenderModelReviews(model),
     workspace: {
       path: blenderModelWorkspaceDir(id),
       exists: (await lstat(blenderModelWorkspaceDir(id)).catch(() => null))?.isDirectory() === true,
@@ -94,11 +99,11 @@ export async function updateBlenderModel(id, patch) {
 
 /**
  * Soft-delete the record, then remove its builds and renders once any running
- * build has settled. The authored src/ stays on disk.
+ * job has settled. The authored src/ stays on disk.
  */
 export async function deleteBlenderModel(id) {
   await requireBlenderModel(id);
-  await settleBlenderModelBuilds(id);
+  await settleBlenderModelJobs(id);
   const now = new Date().toISOString();
   await store.mutateModel(id, (current) => ({ ...current, deleted: true, deletedAt: now }));
   for (const dir of [blenderModelBuildsDir(id), blenderModelRendersDir(id)]) {
