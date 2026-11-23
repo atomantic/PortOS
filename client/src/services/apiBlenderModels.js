@@ -67,7 +67,9 @@ export const renderBlenderModelReview = (id, buildId, options) => request(review
 
 export const cancelBlenderModelReview = (id, buildId, options) => request(`${reviewBase(id, buildId)}/cancel`, json('POST', {}, options));
 
-export const getBlenderModelReviewLog = (id, buildId, options) => request(`${reviewBase(id, buildId)}/review.log`, { responseType: 'text', ...options });
+const readReviewFile = (id, buildId, name, options) => request(`${reviewBase(id, buildId)}/${encodeURIComponent(name)}`, options);
+
+export const getBlenderModelReviewLog = (id, buildId, options) => readReviewFile(id, buildId, 'review.log', { responseType: 'text', ...options });
 
 // `<view>-<look>.png` or `sheet-<look>.jpg`; `version` (the review's renderedAt) keeps a re-render from showing a cached image.
 export const blenderModelReviewFileUrl = (id, buildId, name, version) => `/api${reviewBase(id, buildId)}/${encodeURIComponent(name)}?v=${encodeURIComponent(version)}`;
