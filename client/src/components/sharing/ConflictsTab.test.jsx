@@ -82,9 +82,11 @@ describe('ConflictsTab', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading conflicts');
     const toggle = await screen.findByRole('button', { name: /universe/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(toggle).toHaveAttribute('aria-controls', 'conflict-detail-entry-1');
+    // The panel is unmounted while collapsed, so no IDREF may point at it.
+    expect(toggle).not.toHaveAttribute('aria-controls');
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'conflict-detail-entry-1');
     expect(document.getElementById('conflict-detail-entry-1')).not.toBeNull();
   });
 
