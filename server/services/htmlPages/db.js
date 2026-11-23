@@ -42,7 +42,7 @@ export async function getRun(id, { includeDeleted = false } = {}) {
   return run;
 }
 
-export async function createRun({ backend, modelId, route = null, pageCount, themes, prompts }) {
+export async function createRun({ backend, modelId, route = null, pageCount, themes, planPrompts = null, prompts = null }) {
   const now = new Date().toISOString();
   const run = {
     id: `htmlpages-${randomUUID()}`,
@@ -52,9 +52,10 @@ export async function createRun({ backend, modelId, route = null, pageCount, the
     // A provider route ({ providerId, providerName, model, effort }) when `backend` is 'provider'; null for a local model.
     route,
     pageCount,
-    // The person's brief for each page, and the full prompt each one sent (the brief inside PortOS's fixed text).
+    // The person's brief for each page and the planning request each one sends. Each page records the page prompt it sent, which carries the model's plan. `prompts` (page prompts fixed up front) is only set on runs stored before the plan step.
     themes,
-    prompts,
+    planPrompts,
+    ...(prompts ? { prompts } : {}),
     status: 'queued',
     // Pages finished so far; `pages` fills in as each one returns.
     progress: { done: 0, total: pageCount },

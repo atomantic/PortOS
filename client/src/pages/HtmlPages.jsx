@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
-import { GalleryVertical, LayoutGrid, List, LoaderCircle, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
+import { GalleryVertical, LayoutGrid, List, LoaderCircle, Play, Plus, RotateCcw, SquarePen, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
@@ -10,7 +10,8 @@ import EmptyState from '../components/EmptyState';
 import HtmlPreviewFrame from '../components/htmlPages/HtmlPreviewFrame';
 import HtmlPageGallery from '../components/htmlPages/HtmlPageGallery';
 import PageFileActions from '../components/htmlPages/PageFileActions';
-import TabPills from '../components/ui/TabPills';
+import PagePrompts from '../components/htmlPages/PagePrompts';
+import RouteTabsHeader from '../components/ui/RouteTabsHeader';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import toast from '../components/ui/Toast';
@@ -21,11 +22,13 @@ const RUN_EVENTS = ['html-page-run:changed'];
 // The installed-model list changes when the user installs a model, not when a run changes.
 const NO_EVENTS = [];
 const MAX_COMPARE = 4;
-// The stored work as run cards or as one gallery of every page; `?view=gallery` deep-links the gallery.
-const VIEWS = [
-  { id: 'runs', label: 'Runs', icon: List },
-  { id: 'gallery', label: 'Gallery', icon: LayoutGrid },
+// Three routed tabs: the run form, the stored runs as cards, and one gallery of every page. `?view=gallery`, the gallery's old deep link, lands on the Gallery tab.
+const TABS = [
+  { id: 'create', label: 'Create', icon: SquarePen, to: '/html-pages' },
+  { id: 'runs', label: 'Runs', icon: List, to: '/html-pages/runs' },
+  { id: 'gallery', label: 'Gallery', icon: LayoutGrid, to: '/html-pages/gallery' },
 ];
+const tabForPath = (pathname) => TABS.find((t) => t.id !== 'create' && (pathname === t.to || pathname.startsWith(`${t.to}/`)))?.id ?? 'create';
 // Mirrors HTML_PAGES_MAX_MODELS on the server: local models and provider routes together.
 const MAX_TARGETS = 8;
 
@@ -153,7 +156,7 @@ function RunForm({ catalog, onStarted }) {
   const addPage = () => setPages((prev) => [...prev, catalog.defaultPages[prev.length] ?? '']);
   const removePage = (index) => setPages((prev) => prev.filter((_, i) => i !== index));
 
-  const { before, after } = catalog.promptParts;
+  const { planBefore, planAfter, before, planLabel, after } = catalog.promptParts;
   const problems = pages.map((brief) => (!brief.trim() ? 'Write a brief for this page, or remove it.' : (brief.length > catalog.briefMaxChars ? `${brief.length} characters — the limit is ${catalog.briefMaxChars}.` : null)));
   const seen = new Set();
   const duplicates = new Set();
@@ -227,18 +230,14 @@ function RunForm({ catalog, onStarted }) {
           </button>
         )}
         <details className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
-          <summary className="cursor-pointer text-gray-300">Text PortOS adds around each brief</summary>
-          <p className="mt-2">Before your brief:</p>
-          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{before}</pre>
-          <p className="mt-2">After your brief:</p>
-          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{after}</pre>
-        </details>
-        <details className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
-          <summary className="cursor-pointer text-gray-300">Show the full prompt for each page</summary>
+          <summary className="cursor-pointer text-gray-300">Show the full prompts for each page</summary>
+          <p className="mt-2">Each page asks the model for a plan first, then for the page built from your brief and that plan. Both prompts and the plan are kept with the page.</p>
           {pages.map((brief, index) => (
-            <div key={index} className="mt-2">
-              <p>Page {index + 1}</p>
-              <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{before + brief + after}</pre>
+            <div key={index} className="mt-2 space-y-1">
+              <p>Page {index + 1}: plan request</p>
+              <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{planBefore + brief + planAfter}</pre>
+              <p>Page {index + 1}: page prompt</p>
+              <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words rounded border border-port-border p-2 font-mono text-[11px] text-gray-300">{before + brief + planLabel}<span className="text-port-accent">[the model's plan]</span>{after}</pre>
             </div>
           ))}
         </details>
@@ -249,7 +248,7 @@ function RunForm({ catalog, onStarted }) {
           {starting ? <LoaderCircle size={14} className="animate-spin" /> : <Play size={14} />}
           {targets.length ? `Run ${targets.length} model${targets.length === 1 ? '' : 's'} × ${pages.length} page${pages.length === 1 ? '' : 's'}` : 'Pick a model to run'}
         </button>
-        <p className="text-[11px] text-gray-500">One model after another, one request per page. Pages preview sandboxed with network access blocked, and are stored exactly as returned.</p>
+        <p className="text-[11px] text-gray-500">One model after another, a plan request then a page request for each page. Pages preview sandboxed with network access blocked, and are stored exactly as returned.</p>
       </div>
     </form>
   );
@@ -365,7 +364,7 @@ function Comparison({ ids, onRemove, onClear, onPruneMissing }) {
                     <div className="space-y-0.5 text-[11px] text-gray-500">
                       <div className="flex items-center justify-between gap-2">
                         <p className="min-w-0">
-                          {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs)}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
+                          {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs + (page.planElapsedMs ?? 0))}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
                           {Number.isFinite(page.completionTokens) ? ` · ${formatCount(page.completionTokens)} tokens` : ''}
                           {page.error ? <span className="text-port-warning"> · {page.error}</span> : ''}
                         </p>
@@ -373,6 +372,7 @@ function Comparison({ ids, onRemove, onClear, onPruneMissing }) {
                       </div>
                       {page.hitTokenLimit && <p className="text-port-warning">Stopped at the token limit — the model was cut off before it finished.</p>}
                       {page.checks?.some((c) => !c.ok) && <p>Failed: {page.checks.filter((c) => !c.ok).map((c) => c.label).join('; ')}</p>}
+                      <PagePrompts run={run} page={page} index={row} label={`${run.modelId} — ${label}`} />
                     </div>
                   )}
                 </div>
@@ -385,20 +385,24 @@ function Comparison({ ids, onRemove, onClear, onPruneMissing }) {
   );
 }
 
-export default function HtmlPages() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const compareIds = useMemo(() => (searchParams.get('compare') || '').split(',').filter(Boolean).slice(0, MAX_COMPARE), [searchParams]);
-  const view = searchParams.get('view') === 'gallery' ? 'gallery' : 'runs';
-  const setView = (id) => {
-    const next = new URLSearchParams(searchParams);
-    if (id === 'gallery') next.set('view', 'gallery'); else next.delete('view');
-    setSearchParams(next, { replace: true });
-  };
-
-  const { data: catalog, error: catalogError, refetch: refetchCatalog } = useSocketResource(
+/** The Create tab: the installed-model catalog the form needs is read only here. */
+function CreateTab({ onStarted }) {
+  const { data: catalog, error, refetch } = useSocketResource(
     ({ signal }) => listHtmlPageModels({ silent: true, signal }),
     { events: NO_EVENTS, requestTimeoutMs: 30_000 },
   );
+  if (error) return <ListLoadError what="installed models" error={error} onRetry={refetch} />;
+  return catalog ? <RunForm catalog={catalog} onStarted={onStarted} /> : <PageSkeleton label="Loading installed models" />;
+}
+
+export default function HtmlPages() {
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const compareIds = useMemo(() => (searchParams.get('compare') || '').split(',').filter(Boolean).slice(0, MAX_COMPARE), [searchParams]);
+  const tab = tabForPath(pathname);
+  const legacyGallery = tab === 'create' && searchParams.get('view') === 'gallery';
+
   const { data: runs, loading, error, refetch, updateData } = useSocketResource(
     ({ signal }) => listHtmlPageRuns({ silent: true, signal }),
     { events: RUN_EVENTS, requestTimeoutMs: 30_000 },
@@ -428,8 +432,19 @@ export default function HtmlPages() {
   const started = (created) => {
     updateData((prev) => [...created, ...(prev || [])]);
     toast.success(`Queued ${created.length} run${created.length === 1 ? '' : 's'}`);
+    navigate({ pathname: '/html-pages/runs', search });
   };
 
+  if (legacyGallery) {
+    const next = new URLSearchParams(searchParams);
+    next.delete('view');
+    const query = next.toString();
+    return <Navigate to={`/html-pages/gallery${query ? `?${query}` : ''}`} replace />;
+  }
+
+  // The comparison rides along between Runs and Gallery.
+  const tabs = TABS.map((t) => ({ ...t, to: t.id === 'create' ? t.to : `${t.to}${search}` }));
+  const compareFull = compareIds.length >= MAX_COMPARE;
   return (
     <PageLayout
       header={(
@@ -439,32 +454,32 @@ export default function HtmlPages() {
           subtitle="Ask any model for standalone web pages and compare them side by side."
         />
       )}
+      navigation={<RouteTabsHeader tabs={tabs} activeTab={tab} ariaLabel="HTML Pages sections" />}
     >
       <div className="mx-auto max-w-7xl space-y-5">
-        {catalogError
-          ? <ListLoadError what="installed models" error={catalogError} onRetry={refetchCatalog} />
-          : (catalog ? <RunForm catalog={catalog} onStarted={started} /> : <PageSkeleton label="Loading installed models" />)}
+        {tab === 'create' && <CreateTab onStarted={started} />}
 
-        {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} onClear={() => setCompare([])} onPruneMissing={(missing) => setCompare(compareIds.filter((id) => !missing.includes(id)))} />}
+        {tab !== 'create' && compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} onClear={() => setCompare([])} onPruneMissing={(missing) => setCompare(compareIds.filter((id) => !missing.includes(id)))} />}
 
-        <section className="space-y-3">
-          <TabPills tabs={VIEWS} activeTab={view} onChange={setView} mobileCompact ariaLabel="Stored runs or every page" />
-          {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
-          {!error && loading && <PageSkeleton label="Loading runs" />}
-          {!error && !loading && runs && runs.length === 0 && (
-            <EmptyState icon={GalleryVertical} title="No runs yet" message="Pick a model above and run the pages." />
-          )}
-          {!error && runs && runs.length > 0 && view === 'gallery' && (
-            <HtmlPageGallery runs={runs} compareIds={compareIds} compareFull={compareIds.length >= MAX_COMPARE} onCompare={toggle} />
-          )}
-          {!error && runs && runs.length > 0 && view === 'runs' && (
-            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {runs.map((run) => (
-                <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} onResume={resume} />
-              ))}
-            </ul>
-          )}
-        </section>
+        {tab !== 'create' && (
+          <section className="space-y-3">
+            {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
+            {!error && loading && <PageSkeleton label="Loading runs" />}
+            {!error && !loading && runs && runs.length === 0 && (
+              <EmptyState icon={GalleryVertical} title="No runs yet" message="Pick a model on the Create tab and run the pages." />
+            )}
+            {!error && runs && runs.length > 0 && tab === 'gallery' && (
+              <HtmlPageGallery runs={runs} compareIds={compareIds} compareFull={compareFull} onCompare={toggle} />
+            )}
+            {!error && runs && runs.length > 0 && tab === 'runs' && (
+              <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {runs.map((run) => (
+                  <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareFull} onToggle={toggle} onDelete={remove} onResume={resume} />
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
       </div>
     </PageLayout>
   );

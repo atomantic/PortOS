@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import HtmlPreviewFrame from './HtmlPreviewFrame';
 import PageFileActions from './PageFileActions';
+import PagePrompts from './PagePrompts';
 import { getHtmlPageRun } from '../../services/apiHtmlPages.js';
 import { formatCount, formatDurationMs, timeAgo } from '../../utils/formatters';
 
@@ -23,7 +24,8 @@ function GalleryCard({ entry, loadRun, inComparison, compareFull, onCompare }) {
   const { run, page, index, at } = entry;
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
-  const [html, setHtml] = useState(null);
+  // The page as its full run read has it: the HTML, and the prompts and plan behind it.
+  const [full, setFull] = useState(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -37,8 +39,8 @@ function GalleryCard({ entry, loadRun, inComparison, compareFull, onCompare }) {
   useEffect(() => {
     if (!visible) return undefined;
     let active = true;
-    loadRun(run).then((full) => {
-      if (active) setHtml(full?.pages?.[index]?.html ?? '');
+    loadRun(run).then((loaded) => {
+      if (active) setFull({ run: loaded, page: loaded?.pages?.[index] ?? { html: '' } });
     }).catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
   }, [visible, loadRun, run, index]);
@@ -46,11 +48,11 @@ function GalleryCard({ entry, loadRun, inComparison, compareFull, onCompare }) {
   const title = `${run.modelId} — page ${index + 1}`;
   return (
     <li ref={ref} className="flex min-w-0 flex-col gap-2 rounded-xl border border-port-border bg-port-card p-3">
-      {html
-        ? <HtmlPreviewFrame html={html} title={title} />
+      {full?.page.html
+        ? <HtmlPreviewFrame html={full.page.html} title={title} />
         : (
           <div className="flex aspect-[16/10] items-center justify-center rounded-lg border border-dashed border-port-border bg-port-bg text-xs text-gray-500">
-            {failed ? 'Could not load this page' : 'Loading…'}
+            {failed ? 'Could not load this page' : (full ? 'No HTML came back for this page' : 'Loading…')}
           </div>
         )}
       <div className="min-w-0">
@@ -58,10 +60,11 @@ function GalleryCard({ entry, loadRun, inComparison, compareFull, onCompare }) {
         <p className="text-[11px] text-gray-500">{sourceLabel(run)} · {timeAgo(at)}</p>
       </div>
       <dl className="grid grid-cols-3 gap-1 text-[11px]">
-        <div><dt className="text-gray-500">Time</dt><dd className="text-gray-200">{Number.isFinite(page.elapsedMs) ? formatDurationMs(page.elapsedMs) : '—'}</dd></div>
+        <div><dt className="text-gray-500" title="Plan and page together">Time</dt><dd className="text-gray-200">{Number.isFinite(page.elapsedMs) ? formatDurationMs(page.elapsedMs + (page.planElapsedMs ?? 0)) : '—'}</dd></div>
         <div><dt className="text-gray-500">tok/s</dt><dd className="text-gray-200">{formatCount(page.tokensPerSecond, { maximumFractionDigits: 1 })}</dd></div>
         <div><dt className="text-gray-500">Tokens</dt><dd className="text-gray-200">{formatCount(page.completionTokens)}</dd></div>
       </dl>
+      {full && <PagePrompts run={full.run} page={full.page} index={index} label={title} />}
       <div className="mt-auto flex flex-wrap items-center justify-between gap-2">
         <span className={`text-[11px] ${page.passed === page.total ? 'text-port-success' : 'text-port-warning'}`}>{page.passed}/{page.total} checks</span>
         <PageFileActions runId={run.id} index={index} label={title} />
@@ -74,7 +77,7 @@ function GalleryCard({ entry, loadRun, inComparison, compareFull, onCompare }) {
 }
 
 /**
- * Every page the bench has stored, newest first, with the model, when it finished, how long it took, its tok/s and its token count. Filter by model; open a page full size from its frame, download it or copy its file path, or add its run to the comparison.
+ * Every page the bench has stored, newest first, with the model, when it finished, how long it took, its tok/s and its token count, and the prompt and plan behind it to copy. Filter by model; open a page full size from its frame, download it or copy its file path, or add its run to the comparison.
  */
 export default function HtmlPageGallery({ runs, compareIds, compareFull, onCompare }) {
   const [model, setModel] = useState('');

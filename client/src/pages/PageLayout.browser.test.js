@@ -124,7 +124,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
                       h(Route, { path: '/code-animation/gallery', element: h(CodeAnimation) }),
                       h(Route, { path: '/devtools/usage', element: h(UsagePage) }),
                       h(Route, { path: '/system-resources/:tab', element: h(SystemHealthPage) }),
-                      h(Route, { path: '/html-pages', element: h(HtmlPages) })))));
+                      h(Route, { path: '/html-pages/runs', element: h(HtmlPages) })))));
 
             `;
           },
@@ -261,7 +261,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
     });
     try {
-      await page.goto(`${fixture.origin}layout-test?route=/html-pages`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${fixture.origin}layout-test?route=/html-pages/runs`, { waitUntil: 'domcontentloaded' });
       await page.getByText('example-model-23', { exact: true }).waitFor();
       const body = page.locator('main > div > div').last();
       const before = await page.locator('h1').boundingBox();

@@ -4,9 +4,9 @@ const store = new Map();
 vi.mock('./db.js', () => ({
   listRuns: vi.fn(async () => [...store.values()].filter((r) => !r.deleted)),
   getRun: vi.fn(async (id) => store.get(id) ?? null),
-  createRun: vi.fn(async ({ backend, modelId, route = null, pageCount, themes, prompts }) => {
+  createRun: vi.fn(async ({ backend, modelId, route = null, pageCount, themes, planPrompts, prompts }) => {
     const run = {
-      id: `run-${store.size + 1}`, backend, modelId, route, pageCount, themes, prompts, status: 'queued',
+      id: `run-${store.size + 1}`, backend, modelId, route, pageCount, themes, planPrompts, prompts, status: 'queued',
       progress: { done: 0, total: pageCount }, pages: [], detail: null, error: null, deleted: false,
     };
     store.set(run.id, run);
@@ -54,12 +54,22 @@ import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
 import { getMtplxServerStatus, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
+import { htmlPagePromptParts, htmlPagePrompt } from '../../lib/htmlPageBench.js';
 import { createRun, mutateRun } from './db.js';
 import { listRuns, listSelectableModels, pageFile, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
 const model = { backend: 'ollama', modelId: 'example-coder:7b' };
 const PAGES = ['A lighthouse at dusk with a sweeping beam', 'A tide-pool you can poke'];
+const PLAN = 'A detailed plan for the page.';
+const { planBefore } = htmlPagePromptParts();
+const isPlanRequest = (prompt) => String(prompt).startsWith(planBefore);
+// Every planning request answers with PLAN; page requests take the given replies in order, the last one repeating.
+const replyWith = (...replies) => {
+  let n = 0;
+  generate.mockImplementation(async ({ prompt }) => (isPlanRequest(prompt) ? { text: PLAN } : replies[Math.min(n++, replies.length - 1)]));
+};
+const pagePrompts = () => generate.mock.calls.map(([args]) => args.prompt).filter((prompt) => !isPlanRequest(prompt));
 const settled = (id) => vi.waitFor(async () => {
   const run = await readRun(id);
   expect(['complete', 'failed']).toContain(run.status);
@@ -107,18 +117,18 @@ describe('startRuns', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
-  it('sends each page its own brief verbatim inside the fixed rules, records the prompts, and stores a scored complete run', async () => {
-    generate.mockResolvedValue({ text: `Here you go:\n\`\`\`html\n${goodPage}\n\`\`\``, timings: { tokensPerSecond: 40, completionTokens: 5200 } });
+  it('plans each page from its brief first, then sends the brief and that plan, records every prompt, and stores a scored complete run', async () => {
+    replyWith({ text: `Here you go:\n\`\`\`html\n${goodPage}\n\`\`\``, timings: { tokensPerSecond: 40, completionTokens: 5200 } });
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     expect(queued.themes).toEqual(PAGES);
-    expect(queued.prompts[0]).toContain(PAGES[0]);
+    expect(queued.planPrompts[0]).toContain(PAGES[0]);
 
     const run = await settled(queued.id);
     expect(run.status).toBe('complete');
-    expect(generate).toHaveBeenCalledTimes(2);
-    expect(generate.mock.calls[0][0].prompt).toBe(queued.prompts[0]);
-    expect(generate.mock.calls[1][0].prompt).toBe(queued.prompts[1]);
-    expect(generate.mock.calls[1][0].prompt).toContain(`\n\n${PAGES[1]}\n\n`);
+    expect(generate.mock.calls.map(([args]) => args.prompt)).toEqual([
+      queued.planPrompts[0], htmlPagePrompt(PAGES[0], PLAN), queued.planPrompts[1], htmlPagePrompt(PAGES[1], PLAN),
+    ]);
+    expect(run.pages[1]).toMatchObject({ planPrompt: queued.planPrompts[1], plan: PLAN, planError: null, prompt: htmlPagePrompt(PAGES[1], PLAN) });
     expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
     expect(run.detail).toMatchObject({ verdict: 'passed', complete: 2, pageCount: 2 });
     expect(run.progress).toEqual({ done: 2, total: 2 });
@@ -130,7 +140,7 @@ describe('startRuns', () => {
   });
 
   it('keeps a page in the record when its file cannot be written', async () => {
-    generate.mockResolvedValue({ text: goodPage, timings: null });
+    replyWith({ text: goodPage, timings: null });
     writePageFile.mockRejectedValueOnce(new Error('disk full'));
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     const run = await settled(queued.id);
@@ -139,9 +149,7 @@ describe('startRuns', () => {
   });
 
   it('keeps a page the model truncated as returned and scores the run partial', async () => {
-    generate
-      .mockResolvedValueOnce({ text: goodPage })
-      .mockResolvedValueOnce({ text: goodPage.replace('</html>', '') });
+    replyWith({ text: goodPage }, { text: goodPage.replace('</html>', '') });
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     const run = await settled(queued.id);
     expect(run.status).toBe('complete');
@@ -155,6 +163,14 @@ describe('startRuns', () => {
     const run = await settled(queued.id);
     expect(run.pages[0]).toMatchObject({ html: '', hitTokenLimit: true });
     expect(run.detail.verdict).toBe('failed');
+  });
+
+  it('builds the page from the brief alone when the plan step fails, and records why', async () => {
+    generate.mockImplementation(async ({ prompt }) => (isPlanRequest(prompt) ? { text: 'A partial pl', error: 'plan timed out' } : { text: goodPage }));
+    const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
+    const run = await settled(queued.id);
+    expect(run.pages[0]).toMatchObject({ html: goodPage, plan: null, planError: 'plan timed out', prompt: htmlPagePrompt(PAGES[0]) });
+    expect(pagePrompts()).toEqual([htmlPagePrompt(PAGES[0])]);
   });
 
   it('marks the run failed with the runtime error when no page ever came back', async () => {
@@ -204,16 +220,17 @@ describe('other targets', () => {
     expect(generate.mock.calls[0][0]).toMatchObject({ backend: 'mtplx', modelId: 'mtplx-example-other' });
   });
 
-  it('runs a provider route with its model and effort, no fallback, and the prompt exactly as recorded', async () => {
-    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: `${prompt}\n${goodPage}` }));
+  it('runs a provider route with its model and effort, no fallback, and the prompts exactly as recorded', async () => {
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: `${prompt}\n${isPlanRequest(prompt) ? PLAN : goodPage}` }));
     const [queued] = await startRuns({ routes: [{ providerId: 'example-cli', model: null, effort: 'high' }], pages: PAGES.slice(0, 1) });
     expect(queued).toMatchObject({ backend: 'provider', modelId: 'example-default', route: { providerId: 'example-cli', providerName: 'Example CLI', model: 'example-default', effort: 'high' } });
     const run = await settled(queued.id);
-    expect(run.pages[0].html).toBe(goodPage);
+    expect(run.pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
     // A provider route reports no token count; null, never a made-up zero.
     expect(run.pages[0]).toMatchObject({ completionTokens: null, tokensPerSecond: null });
-    expect(runPromptThroughProvider.mock.calls[0][0]).toMatchObject({
-      prompt: queued.prompts[0], model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
+    expect(runPromptThroughProvider.mock.calls.map(([args]) => args.prompt)).toEqual([queued.planPrompts[0], htmlPagePrompt(PAGES[0], PLAN)]);
+    expect(runPromptThroughProvider.mock.calls[1][0]).toMatchObject({
+      prompt: run.pages[0].prompt, model: 'example-default', effort: 'high', allowFallback: false, toolFree: true, source: 'html-pages-bench',
     });
     expect(generate).not.toHaveBeenCalled();
   });
@@ -226,7 +243,7 @@ describe('other targets', () => {
 
 describe('pageFile', () => {
   it('answers a page file and its download name, written from the record if missing, and 404s a page with no HTML', async () => {
-    generate.mockResolvedValueOnce({ text: goodPage, timings: null }).mockResolvedValueOnce({ text: 'sorry, no page', timings: null });
+    replyWith({ text: goodPage, timings: null }, { text: 'sorry, no page', timings: null });
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     await settled(queued.id);
     await expect(pageFile(queued.id, 0)).resolves.toEqual({ path: `/files/${queued.id}/1.html`, fileName: '1-page.html' });
@@ -245,14 +262,15 @@ describe('pageFile', () => {
 });
 
 describe('listRuns', () => {
-  it('returns summaries without the generated HTML, while a single run read keeps it', async () => {
-    generate.mockResolvedValue({ text: goodPage });
+  it('returns summaries without the generated HTML, plans or prompts, while a single run read keeps them', async () => {
+    replyWith({ text: goodPage });
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     await settled(queued.id);
     const [summary] = await listRuns();
-    expect(summary.pages[0]).not.toHaveProperty('html');
+    for (const key of ['html', 'plan', 'planPrompt', 'prompt']) expect(summary.pages[0]).not.toHaveProperty(key);
+    expect(summary).not.toHaveProperty('planPrompts');
     expect(summary.pages[0]).toMatchObject({ theme: PAGES[0], passed: 6, total: 6 });
-    expect((await readRun(queued.id)).pages[0].html).toBe(goodPage);
+    expect((await readRun(queued.id)).pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
   });
 });
 
@@ -337,10 +355,12 @@ describe('interrupted and deleted runs', () => {
 
   it('shows a queued or generating run in Live activity until it settles, so the updater waits for it', async () => {
     let release;
-    generate.mockImplementation(() => new Promise((resolve) => { release = () => resolve({ text: goodPage }); }));
+    generate.mockImplementation(({ prompt }) => (isPlanRequest(prompt)
+      ? Promise.resolve({ text: PLAN })
+      : new Promise((resolve) => { release = () => resolve({ text: goodPage }); })));
     const [queued] = await startRuns({ models: [model], pages: PAGES.slice(0, 1) });
     expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'html-pages', noun: 'HTML pages run', to: '/html-pages' })]);
-    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
     expect((await readRun(queued.id)).status).toBe('generating');
     release();
     await settled(queued.id);
@@ -377,19 +397,19 @@ describe('resumeRun', () => {
   });
 
   it('retries a finished run from its first page that failed a check, keeping the passing pages before it', async () => {
-    generate.mockResolvedValueOnce({ text: goodPage }).mockResolvedValueOnce({ text: goodPage.replace('</html>', '') });
+    replyWith({ text: goodPage }, { text: goodPage.replace('</html>', '') });
     const [queued] = await startRuns({ models: [model], pages: PAGES });
     expect((await settled(queued.id)).detail.verdict).toBe('partial');
     await vi.waitFor(() => expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0));
     generate.mockClear();
-    generate.mockResolvedValue({ text: goodPage });
+    replyWith({ text: goodPage });
     await expect(resumeRun(queued.id)).resolves.toMatchObject({ status: 'queued', progress: { done: 1, total: 2 } });
     const run = await vi.waitFor(async () => {
       const current = await readRun(queued.id);
       expect(current.detail?.verdict).toBe('passed');
       return current;
     });
-    expect(generate.mock.calls.map(([args]) => args.prompt)).toEqual([queued.prompts[1]]);
+    expect(generate.mock.calls.map(([args]) => args.prompt)).toEqual([queued.planPrompts[1], htmlPagePrompt(PAGES[1], PLAN)]);
     expect(run.pages.map((p) => p.html)).toEqual([goodPage, goodPage]);
   });
 
