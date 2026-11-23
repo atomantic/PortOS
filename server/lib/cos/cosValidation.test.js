@@ -368,3 +368,21 @@ describe('cosValidation task status/priority vocabulary (#7239)', () => {
     expect(updateCosTaskSchema.parse({ status: '' }).status).toBeUndefined();
   });
 });
+
+describe('sanitizeTaskMetadata table-driven gates', () => {
+  it('keeps boolean reviewerApplies and enum prCompletion, drops mistyped values', () => {
+    expect(sanitizeTaskMetadata({ reviewerApplies: true, prCompletion: 'review-then-merge' })).toMatchObject({ reviewerApplies: true });
+    expect(sanitizeTaskMetadata({ reviewerApplies: 'yes', prCompletion: true })).toBeNull();
+  });
+
+  it('ignores inherited keys and out-of-range integers', () => {
+    const inherited = Object.create({ whenDone: 'commit-push', swarmCount: 4 });
+    expect(sanitizeTaskMetadata(inherited)).toBeNull();
+    expect(sanitizeTaskMetadata({ swarmCount: 0, issueMinAgeMinutes: 1441 })).toEqual({ swarmCount: 0 });
+    expect(sanitizeTaskMetadata({ swarmCount: 1 })).toBeNull();
+  });
+
+  it('skips non-string reviewers and dedupes aliases', () => {
+    expect(sanitizeTaskMetadata({ reviewers: [{}, 7, null, 'claude', 'claude'] })).toEqual({ reviewers: ['claude'] });
+  });
+});
