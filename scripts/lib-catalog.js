@@ -11,10 +11,14 @@
  * script prints `path — summary — exported names` for every module whose path,
  * exports or header matches all of the given terms (case-insensitive).
  *
- *   node scripts/lib-catalog.js [term ...] [--dir <catalog dir>]
+ * Search is wider than the enforced list: `discoverSearchDirs` also walks the
+ * nested `server/lib/**` subdirectories, `scripts/lib` and the client lib dirs,
+ * and `--services` adds `server/services/**` on demand.
+ *
+ *   node scripts/lib-catalog.js [term ...] [--dir <search dir>] [--services]
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -38,6 +42,27 @@ export const CATALOG_DIRS = Object.freeze([
 ]);
 
 export const SUMMARY_MAX = 200;
+
+const SEARCH_ROOTS = Object.freeze(['server/lib', 'scripts/lib', 'client/src/lib', 'client/src/hooks', 'client/src/utils', 'client/src/services']);
+// Test data and vendored code are not reusable helpers.
+const EXCLUDED_DIR_NAMES = new Set(['fixtures', '__fixtures__', 'node_modules']);
+const EXCLUDED_DIR_PATHS = new Set(['server/lib/aiToolkit/internal']);
+
+/** `base` and every non-excluded subdirectory below it (repo-relative, sorted); [] when `base` is absent. */
+function walkDirs(base, root) {
+  if (!existsSync(join(root, base))) return [];
+  const subdirs = readdirSync(join(root, base), { withFileTypes: true })
+    .filter((e) => e.isDirectory() && !EXCLUDED_DIR_NAMES.has(e.name) && !EXCLUDED_DIR_PATHS.has(`${base}/${e.name}`))
+    .map((e) => e.name)
+    .sort();
+  return [base, ...subdirs.flatMap((name) => walkDirs(`${base}/${name}`, root))];
+}
+
+/** Every directory `searchCatalog` covers by default, a superset of `CATALOG_DIRS`. */
+export const discoverSearchDirs = (root = ROOT) => SEARCH_ROOTS.flatMap((base) => walkDirs(base, root));
+
+/** `server/services` and its subdirectories, searched only on request. */
+export const discoverServicesDirs = (root = ROOT) => walkDirs('server/services', root);
 
 // Lines that may precede the header without being it: shebangs, tool
 // directives and string directives.
@@ -115,7 +140,7 @@ export function summaryProblems(dir, root = ROOT) {
       : `${path}: missing header — open the file with a one-sentence summary comment`));
 }
 
-export function searchCatalog(terms, { dirs = CATALOG_DIRS, root = ROOT } = {}) {
+export function searchCatalog(terms, { root = ROOT, dirs = discoverSearchDirs(root) } = {}) {
   const needles = terms.map((term) => term.toLowerCase());
   return dirs.flatMap((dir) => catalogDir(dir, root)).filter((entry) => {
     const haystack = `${entry.path} ${entry.exports.join(' ')} ${entry.header}`.toLowerCase();
@@ -129,16 +154,20 @@ if (isDirectlyInvoked(import.meta.url)) {
   const args = process.argv.slice(2);
   const dirs = [];
   const terms = [];
+  let services = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--dir') dirs.push(args[++i]?.replace(/\/+$/, ''));
+    else if (args[i] === '--services') services = true;
     else terms.push(args[i]);
   }
-  const unknown = dirs.filter((dir) => !CATALOG_DIRS.includes(dir));
+  const known = [...discoverSearchDirs(), ...(services ? discoverServicesDirs() : [])];
+  const unknown = dirs.filter((dir) => !known.includes(dir));
   if (unknown.length) {
-    console.error(`❌ Not a catalog directory: ${unknown.join(', ')} (one of ${CATALOG_DIRS.join(', ')})`);
+    console.error(`❌ Not a search directory: ${unknown.join(', ')} (one of ${known.join(', ')}${services ? '' : '; add --services for server/services'})`);
     process.exit(2);
   }
-  const matches = searchCatalog(terms, dirs.length ? { dirs } : {});
+  const searched = dirs.length ? dirs : known;
+  const matches = searchCatalog(terms, { dirs: searched });
   for (const entry of matches) console.log(formatEntry(entry));
   if (!matches.length) process.exitCode = 1;
 }
