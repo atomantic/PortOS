@@ -2,13 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
-vi.mock('../services/meatspacePostTraining.js', () => ({
+vi.mock('../services/meatspace/meatspacePostTraining.js', () => ({
   submitTrainingEntry: vi.fn(),
   submitTrainingRun: vi.fn(),
   getTrainingStats: vi.fn(),
 }));
 
-import * as trainingService from '../services/meatspacePostTraining.js';
+import * as trainingService from '../services/meatspace/meatspacePostTraining.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

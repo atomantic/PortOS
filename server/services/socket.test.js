@@ -1,7 +1,7 @@
 import { jevEvents } from './jevEvents.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
-import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
+import { meatspaceEvents, invalidateMeatspace } from './meatspace/meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
@@ -53,7 +53,7 @@ vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
 // The Beeper realtime bus is a real EventEmitter here — the relay boundary test
 // below drives it directly to prove where its frames land (and where they don't).
-vi.mock('./beeperSocketEvents.js', async () => {
+vi.mock('./beeper/beeperSocketEvents.js', async () => {
   const { EventEmitter } = await import('events');
   return { beeperSocketEvents: new EventEmitter() };
 });
@@ -112,7 +112,7 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged } from './apps.js';
 import { resolvePm2HomeForProcess } from './appProcessStatus.js';
 import { logAction } from './history.js';
-import { beeperSocketEvents } from './beeperSocketEvents.js';
+import { beeperSocketEvents } from './beeper/beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { imageGenEvents } from './imageGenEvents.js';

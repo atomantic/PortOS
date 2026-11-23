@@ -9,15 +9,15 @@ vi.mock('../services/brain.js', () => ({
   captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
   getInboxLog: vi.fn(async () => []),
 }));
-vi.mock('../services/meatspaceAlcohol.js', () => ({
+vi.mock('../services/meatspace/meatspaceAlcohol.js', () => ({
   logDrink: vi.fn(async () => ({ standardDrinks: 1, dayTotal: 1 })),
   getAlcoholSummary: vi.fn(async () => ({ today: 0 })),
 }));
-vi.mock('../services/meatspaceNicotine.js', () => ({
+vi.mock('../services/meatspace/meatspaceNicotine.js', () => ({
   logNicotine: vi.fn(async () => ({ totalMg: 1, dayTotal: 1 })),
   getNicotineSummary: vi.fn(async () => ({ today: 0 })),
 }));
-vi.mock('../services/meatspaceHealth.js', () => ({
+vi.mock('../services/meatspace/meatspaceHealth.js', () => ({
   addBodyEntry: vi.fn(async () => ({ date: '2026-04-24' })),
 }));
 vi.mock('../services/identity.js', () => ({

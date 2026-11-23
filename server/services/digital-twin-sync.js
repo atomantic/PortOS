@@ -56,7 +56,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  * account id (#3532) — see mergeSocialAccounts.
  */
 
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 import { join } from 'path';
 import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';

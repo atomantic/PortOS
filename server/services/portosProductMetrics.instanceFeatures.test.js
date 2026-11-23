@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
   todayInTimezone: vi.fn(),
 }));
 
-vi.mock('./meatspacePost.js', () => ({ getPostSessions: mock.getPostSessions }));
+vi.mock('./meatspace/meatspacePost.js', () => ({ getPostSessions: mock.getPostSessions }));
 vi.mock('./postTrainingLogStore.js', () => ({ getAllTrainingEntries: mock.getAllTrainingEntries }));
 vi.mock('./creativeCommissions/store.js', () => ({ listCommissions: mock.listCommissions }));
 vi.mock('./creativeDirector/local.js', () => ({ getProjectsByIds: mock.getProjectsByIds }));

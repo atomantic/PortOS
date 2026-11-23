@@ -255,7 +255,7 @@ function ParticipantRow({
 /**
  * The exact sentence shown for a send the server found stranded in `sending` at
  * boot (`SEND_INTERRUPTED`, written by `reconcileOutboxOnBoot` in
- * `server/services/beeperOutbox.js`, which owns the identical literal — the two
+ * `server/services/beeper/beeperOutbox.js`, which owns the identical literal — the two
  * bundles cannot share a module, so they share a test instead).
  *
  * It deliberately does not claim a delivery verdict. The POST was in flight
@@ -274,12 +274,12 @@ const RENDERED_OUTBOX_STATES = new Set(['approved', 'sending', 'awaiting-confirm
  * see `TitleTribeChip` below, which branches on `conversation.isGroup` first).
  *
  * There is no per-participant self/is-sender marker anywhere in the mirrored
- * schema to filter by: `shapeParticipant` (`server/services/beeperConversations.js`)
+ * schema to filter by: `shapeParticipant` (`server/services/beeper/beeperConversations.js`)
  * carries `sourceUserId`/`displayName`/`handle`/`tribePersonId`/`tribePersonName`
  * only, and `isSender` exists solely on MESSAGES, never on a participant row
  * (see the `MessageBody`/`OutboxRow` docs above). No account user id is
  * exposed to the client either. What IS true, straight from how the roster is
- * built (`normalizeParticipants` in `server/services/beeperSync.js` maps
+ * built (`normalizeParticipants` in `server/services/beeper/beeperSync.js` maps
  * `chat.participants.items` verbatim, and Beeper's own `items` for a `single`
  * chat never includes the local account's own user — see the 1:1 fixtures in
  * `beeperSync.test.js`, always exactly one item): a 1:1 conversation's roster

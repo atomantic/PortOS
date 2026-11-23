@@ -255,7 +255,7 @@ describe('composedSessionDrillTypes (issue #3252)', () => {
 });
 
 // Mirrors the server's progressive override in `resolveDrillConfig`
-// (server/services/meatspacePost.js). Anything that DESCRIBES a cognitive drill
+// (server/services/meatspace/meatspacePost.js). Anything that DESCRIBES a cognitive drill
 // to the user has to resolve through this, or it explains the stored knobs while
 // a different rung actually runs.
 describe('effectiveCognitiveDrillConfig', () => {

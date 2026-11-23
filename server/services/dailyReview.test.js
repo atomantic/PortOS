@@ -32,7 +32,7 @@ vi.mock('./calendarSync.js', () => ({
 }));
 vi.mock('./calendarAccounts.js', () => ({ listAccounts: async () => [] }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: vi.fn() }));
-vi.mock('./meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
+vi.mock('./meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
 vi.mock('./identity.js', () => ({
   // Dynamic forwarding matters after resetModules: the real store queue and the
   // manual progress writer must come from the same fresh module instance.

@@ -7,7 +7,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import * as tribe from '../services/tribe.js';
 import * as tribeOutreach from '../services/tribeOutreach.js';
-import * as beeperTribe from '../services/beeperTribe.js';
+import * as beeperTribe from '../services/beeper/beeperTribe.js';
 
 const router = Router();
 
@@ -62,7 +62,7 @@ const memoryLinkSchema = z.object({
 // but that let a request omit it (writing an inert kind='handle' row no
 // later lookup can ever match) or spoof a WRONG network (silently stealing
 // another person's claim on a UNIQUE (kind, network, handle) collision) —
-// see server/services/beeperTribe.js. The network is now derived server-side
+// see server/services/beeper/beeperTribe.js. The network is now derived server-side
 // from the participant's own beeper_conversations.network; a phone-shaped
 // claim stays network-less (see server/lib/tribeMatch.js).
 const beeperLinkSchema = z.object({

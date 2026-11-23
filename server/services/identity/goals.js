@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getActivities } from '../meatspaceCalendar.js';
+import { getActivities } from '../meatspace/meatspaceCalendar.js';
 import { callProviderAISimple, parseLLMJSON } from '../aiProvider.js';
 import { userLocalToday } from '../userTimezone.js';
 import {
@@ -268,7 +268,7 @@ export async function setBirthDate(birthDate) {
 
   // External work stays outside the goal queue.
   // Lazy: meatspace.js reads PATHS at load; suites that mock paths.js load goals.js without it.
-  const { updateBirthDate } = await import('../meatspace.js');
+  const { updateBirthDate } = await import('../meatspace/meatspace.js');
   await updateBirthDate(birthDate, { syncGoals: false });
   const longevity = await deriveLongevity(birthDate);
 

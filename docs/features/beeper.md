@@ -13,7 +13,7 @@ The feature is off by default and ships no credential. It becomes reachable only
 ## What it talks to
 
 Beeper Desktop exposes a local HTTP + WebSocket API. PortOS defaults to
-`http://127.0.0.1:23373` (`DEFAULT_BASE_URL` in `server/services/beeperClient.js`), and
+`http://127.0.0.1:23373` (`DEFAULT_BASE_URL` in `server/services/beeper/beeperClient.js`), and
 `settings.beeper.baseUrl` makes that editable for an install listening somewhere else. The
 loopback literal rather than `localhost` is deliberate: a dual-stack box may resolve `localhost`
 to `::1` first.
@@ -23,7 +23,7 @@ to `::1` first.
 WebSocket URL — a value pointed at an attacker-controlled host would turn one settings write into
 a credential exfiltration. `beeperSettingsSchema` (`server/lib/mediaValidation.js`) refuses a
 non-loopback `baseUrl` unless the sibling field `allowNonLoopbackBaseUrl` is explicitly set to
-`true` (default `false`), and `normalizeBaseUrl` in `server/services/beeperClient.js` re-applies
+`true` (default `false`), and `normalizeBaseUrl` in `server/services/beeper/beeperClient.js` re-applies
 the identical check on every read — `settings.json` is not schema-validated when it is loaded, so
 a hand-edited file is a second path to the same value the PUT route already refuses; a value that
 fails either check falls back to the shipped loopback default rather than reaching a request. The
@@ -76,7 +76,7 @@ idempotency key on send, so a retried POST delivers a second real message to a r
 `BeeperApiError` carries a `retryable` flag callers key on rather than re-deriving from the
 status code.
 
-**The liveness probe caps at 3s** (`DEFAULT_PROBE_TIMEOUT_MS` in `server/services/beeperClient.js`
+**The liveness probe caps at 3s** (`DEFAULT_PROBE_TIMEOUT_MS` in `server/services/beeper/beeperClient.js`
 — fork issue #61, decision 7; raised from 1s after that turned out too tight for a briefly-busy
 Beeper Desktop). A probe *timeout* specifically — never a fast refusal, which still means
 "unreachable" immediately — is ambiguous alone: nothing distinguishes "briefly slow" from
@@ -109,7 +109,7 @@ no token field at all, so a credential can never ride the generic settings route
 
 Storing a credential, flipping the Beeper feature or the Comms group, or saving a change to
 **Enable scheduled Beeper sync** itself, arms or disarms both the sweep scheduler and the
-realtime transport immediately — `reconcileBeeperIngestion()` in `server/services/beeperArming.js`
+realtime transport immediately — `reconcileBeeperIngestion()` in `server/services/beeper/beeperArming.js`
 is called from every one of those paths, so no restart is needed and a disconnect stops the relay
 rather than leaving it running on a revoked token. **Arming also runs one sweep right away**
 (fork issue #79): before this, connecting (or turning a toggle on) registered the interval timer
@@ -420,13 +420,13 @@ component tests plus static analysis:
 
 ## Files
 
-- `server/services/beeperClient.js` — the HTTP client, pagination, error mapping, asset streaming
-- `server/services/beeperOAuth.js`, `beeperCredentials.js` — connect, disconnect, the vault
-- `server/services/beeperSync.js`, `beeperScheduler.js`, `beeperArming.js` — the sweep and its gates
-- `server/services/beeperSweepProgress.js` — the sweep-progress leaf module `beeperStatus.js` reads
-- `server/services/beeperSocket.js`, `beeperSocketEvents.js` — the realtime transport and its bus
-- `server/services/beeperConversations.js`, `beeperAttachments.js`, `beeperAttachmentGc.js` — the read model, the byte mirror, the housekeeping sweep
-- `server/services/beeperOutbox.js`, `beeperStatus.js`, `beeperTribe.js` — sending, the status card, identity linking
+- `server/services/beeper/beeperClient.js` — the HTTP client, pagination, error mapping, asset streaming
+- `server/services/beeper/beeperOAuth.js`, `beeperCredentials.js` — connect, disconnect, the vault
+- `server/services/beeper/beeperSync.js`, `beeperScheduler.js`, `beeperArming.js` — the sweep and its gates
+- `server/services/beeper/beeperSweepProgress.js` — the sweep-progress leaf module `beeperStatus.js` reads
+- `server/services/beeper/beeperSocket.js`, `beeperSocketEvents.js` — the realtime transport and its bus
+- `server/services/beeper/beeperConversations.js`, `beeperAttachments.js`, `beeperAttachmentGc.js` — the read model, the byte mirror, the housekeeping sweep
+- `server/services/beeper/beeperOutbox.js`, `beeperStatus.js`, `beeperTribe.js` — sending, the status card, identity linking
 - `server/lib/db/schema/beeper.js` — the eight `beeper_*` tables
 - `server/routes/beeper.js` — every route above
 - `client/src/components/messages/BeeperTab.jsx` and `components/messages/beeper/` — the chat surface, thread, composer, attachments, settings drawer

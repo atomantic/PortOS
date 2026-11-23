@@ -68,7 +68,7 @@ const TRIPPED_BREAKER = { tripped: true, reason: 'too many sends' };
 
 // The server's own copy for a send interrupted by a restart, repeated here on
 // purpose: client and server cannot share a module, so this literal and
-// `SEND_INTERRUPTED_MESSAGE` in `server/services/beeperOutbox.js` are pinned by
+// `SEND_INTERRUPTED_MESSAGE` in `server/services/beeper/beeperOutbox.js` are pinned by
 // a test on each side rather than by an import.
 const SEND_INTERRUPTED_COPY = 'Delivery unconfirmed: PortOS restarted mid-send. Check the chat before retrying.';
 const DELIVERY_UNCONFIRMED_COPY = 'Delivery unconfirmed; check the chat before sending again.';
@@ -356,7 +356,7 @@ describe('BeeperThread — message bodies', () => {
  * soft-deleted, so this row's `if (participant.tribePersonId)` branch read it
  * as still linked and rendered "Linked · <deleted person>" with no way back —
  * the re-link `<select>`/buttons never appeared. The server fix (parity test
- * in `server/services/beeperConversations.test.js`) now sends such a
+ * in `server/services/beeper/beeperConversations.test.js`) now sends such a
  * participant with `tribePersonId: null` and no `tribePersonName`, exactly
  * like a participant that was never linked at all. This pins the client's
  * side of that contract: given that shape, the People drawer must render the

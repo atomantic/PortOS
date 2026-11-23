@@ -80,7 +80,7 @@ export const tribeDdl = [
     // two bridge accounts on one network mint independent user-id spaces. The
     // overload is deliberate — no new column, no widened UNIQUE, and the same
     // `(kind, network, handle)` lookup serves it — and the writer/reader pair
-    // lives in `server/services/beeperTribe.js` (`beeperUserScopeFor`).
+    // lives in `server/services/beeper/beeperTribe.js` (`beeperUserScopeFor`).
     // A `source_user_id` is opaque, so it is stored RAW: unlike a phone or a
     // username it is never normalized by `server/lib/tribeMatch.js`.
     //
@@ -94,7 +94,7 @@ export const tribeDdl = [
     // colliding on UNIQUE (kind, network, handle) with a stale row. The app's
     // only delete path (tribe.deletePerson) is a SOFT delete (`deleted =
     // TRUE`), which this cascade does NOT fire on — resolvePersonByIdentity
-    // and resolveParticipantPerson (server/services/beeperTribe.js) instead
+    // and resolveParticipantPerson (server/services/beeper/beeperTribe.js) instead
     // filter `tribe_people.deleted = FALSE` explicitly, and linkIdentity /
     // linkParticipant refuse to claim/link a soft-deleted personId.
     `CREATE TABLE IF NOT EXISTS tribe_identities (

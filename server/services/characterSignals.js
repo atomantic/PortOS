@@ -9,9 +9,9 @@
 import { countUniverses } from './universeBuilder.js';
 import { countWorks } from './writersRoom/local.js';
 import { getCatalogStats } from './catalog/catalogDB.js';
-import { getPostSessions } from './meatspacePost.js';
-import { getAllTrainingEntries } from './meatspacePostTraining.js';
-import { getLoggingStats } from './meatspaceLoggingStats.js';
+import { getPostSessions } from './meatspace/meatspacePost.js';
+import { getAllTrainingEntries } from './meatspace/meatspacePostTraining.js';
+import { getLoggingStats } from './meatspace/meatspaceLoggingStats.js';
 import { getGoals } from './identity/goals.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';

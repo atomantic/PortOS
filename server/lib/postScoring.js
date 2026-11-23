@@ -1,6 +1,6 @@
 /**
  * Scoring and accuracy helpers for post-training drill types shared between
- * server (`services/meatspacePost.js`) and client (drill UI, via
+ * server (`services/meatspace/meatspacePost.js`) and client (drill UI, via
  * `components/meatspace/post/constants.js`).
  */
 

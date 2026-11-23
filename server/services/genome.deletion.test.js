@@ -19,7 +19,7 @@ const { deleteGenome, getGenomeSummary, getSnpIndex } = await import('./genome.j
 const { deriveChronotype, getChronotype } = await import('./identity/chronotype.js');
 const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
 const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE } = await import('./identity/store.js');
-const { meatspaceEvents } = await import('./meatspaceEvents.js');
+const { meatspaceEvents } = await import('./meatspace/meatspaceEvents.js');
 
 const readJSON = async path => JSON.parse(await readFile(path, 'utf8'));
 const behavioralData = { preferredWakeTime: '06:00', preferredSleepTime: '22:00', notes: 'Synthetic preference' };

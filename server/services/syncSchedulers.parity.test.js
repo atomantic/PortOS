@@ -44,7 +44,7 @@ vi.mock('./youtubeSync.js', () => ({
   runSync: vi.fn(),
   readSyncState: async () => syncStates.youtube,
 }));
-vi.mock('./beeperSync.js', () => ({
+vi.mock('./beeper/beeperSync.js', () => ({
   getBeeperSyncConfig: enabledConfig,
   isBeeperIngestionArmed: async () => true,
   runBeeperSweep: vi.fn(),
@@ -55,7 +55,7 @@ const { startImessageScheduler } = await import('./imessageScheduler.js');
 const { startSignalScheduler } = await import('./signalScheduler.js');
 const { startSpotifyScheduler } = await import('./spotifyScheduler.js');
 const { startYoutubeScheduler } = await import('./youtubeScheduler.js');
-const { startBeeperScheduler } = await import('./beeperScheduler.js');
+const { startBeeperScheduler } = await import('./beeper/beeperScheduler.js');
 
 const DOMAINS = [
   { name: 'iMessage', key: 'imessage', start: startImessageScheduler, id: 'imessage-sync', source: 'imessageScheduler', icon: '💬', label: 'iMessage' },

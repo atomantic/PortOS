@@ -17,7 +17,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspaceEvents.js';
+import { invalidateMeatspace, invalidateMortalLoomChanges } from './meatspace/meatspaceEvents.js';
 import { randomUUID } from 'crypto';
 import { atomicWrite, safeJSONParse, readJSONFile, dataPath, ensureDir, sleep } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isEvictedStats, materializeAndWait, readIfMaterialized, requestMaterialization } from '../lib/icloudFile.js';
@@ -25,7 +25,7 @@ import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { rowIdentityKeys, ROW_TOMBSTONES_KEY } from '../lib/meatspaceRowIdentity.js';
 import { isTombstoned } from '../lib/tombstones.js';
-import { queueHealthWrite } from './meatspaceWriteQueues.js';
+import { queueHealthWrite } from './meatspace/meatspaceWriteQueues.js';
 import { getSettings, settingsEvents } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -1019,8 +1019,8 @@ export async function importToPortOS() {
   const profile = isPlainObject(store.profile) ? store.profile : null;
   const hasDaily = dailyKeys.some(key => store[key]?.length);
   const [dailyLog, meatspaceConfig] = await Promise.all([
-    import('./meatspaceDailyLog.js'),
-    import('./meatspace.js'),
+    import('./meatspace/meatspaceDailyLog.js'),
+    import('./meatspace/meatspace.js'),
   ]);
   const readDestination = async ({ localPath, fileName, arrayKey }) => {
     const document = await readJSONFile(localPath, arrayKey ? { [arrayKey]: [] } : [], { strict: true });
@@ -1095,7 +1095,7 @@ export async function importToPortOS() {
   }
 
   if (hasDaily) {
-    const { computeStandardDrinks } = await import('./meatspaceAlcohol.js');
+    const { computeStandardDrinks } = await import('./meatspace/meatspaceAlcohol.js');
     // Day totals are recomputed from the full retained item list, with the same
     // per-item formulas the alcohol/nicotine services use on a local write.
     const itemTotals = {

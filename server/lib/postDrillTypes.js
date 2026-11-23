@@ -1,11 +1,11 @@
 /**
  * MeatSpace POST drill vocabularies, kept below validation and the POST services.
  *
- * MeatSpace POST drill vocabularies (`LLM_DRILL_TYPES`, `CACHEABLE_TYPES`, `COGNITIVE_DRILL_TYPES`, `POST_SUPPORTED_MEMORY_TYPES`), kept below validation and the POST services so a route schema can enumerate a drill type without importing service orchestration (#4901: `CACHEABLE_TYPES` lived in `services/meatspacePostDrillCache.js`, which imports the LLM drill generator, so `lib/postValidation.js`, loaded on every POST route, pulled in the LLM path for four strings).
+ * MeatSpace POST drill vocabularies (`LLM_DRILL_TYPES`, `CACHEABLE_TYPES`, `COGNITIVE_DRILL_TYPES`, `POST_SUPPORTED_MEMORY_TYPES`), kept below validation and the POST services so a route schema can enumerate a drill type without importing service orchestration (#4901: `CACHEABLE_TYPES` lived in `services/meatspace/meatspacePostDrillCache.js`, which imports the LLM drill generator, so `lib/postValidation.js`, loaded on every POST route, pulled in the LLM path for four strings).
  * A leaf (no imports): service modules re-export the lists they used to own and the client's `meatspace/post/constants.js` re-exports them, so each vocabulary has one definition.
  */
 
-// Every drill type the LLM drill generator (`services/meatspacePostLlm.js`) can produce and score; also the enum behind the llm-drill config/task schemas in `lib/postValidation.js` and the client's "is this an LLM drill?" checks.
+// Every drill type the LLM drill generator (`services/meatspace/meatspacePostLlm.js`) can produce and score; also the enum behind the llm-drill config/task schemas in `lib/postValidation.js` and the client's "is this an LLM drill?" checks.
 export const LLM_DRILL_TYPES = Object.freeze([
   'word-association',
   'story-recall',
@@ -30,7 +30,7 @@ export const CACHEABLE_TYPES = Object.freeze([
 ]);
 
 // Non-LLM cognitive drills, each backed by a generator in
-// `services/meatspacePostCognitive.js`.
+// `services/meatspace/meatspacePostCognitive.js`.
 export const COGNITIVE_DRILL_TYPES = Object.freeze([
   'n-back',
   'digit-span',

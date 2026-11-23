@@ -25,14 +25,14 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})), updateSettingsWith: vi.fn(),
 }));
-vi.mock('../services/beeperConversations.js', () => ({ setConversationArchived: effects.archive }));
+vi.mock('../services/beeper/beeperConversations.js', () => ({ setConversationArchived: effects.archive }));
 vi.mock('../services/messageDrafts.js', async (importOriginal) => ({ ...await importOriginal(), approveDraft: effects.approve }));
 // Service graphs the mounted routers import; their handlers are not reached.
-vi.mock('../services/beeperSync.js', () => ({}));
-vi.mock('../services/beeperStatus.js', () => ({}));
-vi.mock('../services/beeperOAuth.js', () => ({}));
-vi.mock('../services/beeperOutbox.js', () => ({}));
-vi.mock('../services/beeperAttachments.js', () => ({}));
+vi.mock('../services/beeper/beeperSync.js', () => ({}));
+vi.mock('../services/beeper/beeperStatus.js', () => ({}));
+vi.mock('../services/beeper/beeperOAuth.js', () => ({}));
+vi.mock('../services/beeper/beeperOutbox.js', () => ({}));
+vi.mock('../services/beeper/beeperAttachments.js', () => ({}));
 vi.mock('../services/messageSync.js', () => ({}));
 vi.mock('../services/messageAccounts.js', () => ({}));
 vi.mock('../services/review.js', () => ({ reviewEvents: { emit: vi.fn() } }));

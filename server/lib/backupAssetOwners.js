@@ -513,7 +513,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // and the local_path row commit share a lease/queue with eviction and orphan
     // cleanup. The byte mirror is an overridable backup exclusion.
     id: 'beeper-attachment-mirror', status: 'admitted',
-    modules: ['services/beeperAttachments.js'],
+    modules: ['services/beeper/beeperAttachments.js'],
   },
 ]);
 

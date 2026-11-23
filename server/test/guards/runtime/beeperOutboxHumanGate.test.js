@@ -48,13 +48,13 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
   it('scanned a recognizably complete server tree', () => {
     expect(SOURCES.length).toBeGreaterThan(200);
     expect(PRODUCTION_SOURCES.length).toBeGreaterThan(100);
-    expect(PRODUCTION_SOURCES.some((file) => file.path === 'services/beeperOutbox.js')).toBe(true);
+    expect(PRODUCTION_SOURCES.some((file) => file.path === 'services/beeper/beeperOutbox.js')).toBe(true);
   });
 
   it('is imported for a send by exactly one production module: the human HTTP route', () => {
     const importers = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeperOutbox.js')
-      .filter((file) => /from '\.{1,2}\/(?:services\/)?beeperOutbox\.js'/.test(file.source))
+      .filter((file) => file.path !== 'services/beeper/beeperOutbox.js')
+      .filter((file) => /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperOutbox\.js'/.test(file.source))
       .map((file) => file.path)
       .sort();
     // Two non-send importers ride alongside the route, and the test below is
@@ -62,12 +62,12 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
     // the settings card, and `bootstrap.js` calls the boot reconcile, whose two
     // arms are a state write and a re-armed LOOKUP — neither reaches
     // `sendMessage`, which is why a crash mid-send can never resend itself.
-    expect(importers).toEqual(['routes/beeper.js', 'services/beeperStatus.js', 'services/bootstrap.js']);
+    expect(importers).toEqual(['routes/beeper.js', 'services/beeper/beeperStatus.js', 'services/bootstrap.js']);
   });
 
   it('names the send functions in no production module but the route', () => {
     const callers = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeperOutbox.js')
+      .filter((file) => file.path !== 'services/beeper/beeperOutbox.js')
       .filter((file) => SEND_SYMBOLS.some((symbol) => file.source.includes(symbol)))
       .map((file) => file.path);
     expect(callers).toEqual(['routes/beeper.js']);
@@ -78,10 +78,10 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
     // common name (Telegram has its own), and this guard is about who can
     // reach `POST /v1/chats/{chatID}/messages`, not about the identifier.
     const senders = PRODUCTION_SOURCES
-      .filter((file) => file.path !== 'services/beeperClient.js')
+      .filter((file) => file.path !== 'services/beeper/beeperClient.js')
       .filter((file) => /from '\.{1,2}\/(?:services\/)?beeperClient\.js'/.test(file.source))
       .filter((file) => /\bsendMessage\b/.test(file.source))
       .map((file) => file.path);
-    expect(senders).toEqual(['services/beeperOutbox.js']);
+    expect(senders).toEqual(['services/beeper/beeperOutbox.js']);
   });
 });

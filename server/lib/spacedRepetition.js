@@ -1,7 +1,7 @@
 /**
  * Spaced repetition (SM-2 inspired): the shared scheduling core.
  *
- * A record that resurfaces on a review cadence carries `{ ease, intervalDays, nextReview, lastReviewed }` and is "due" when `nextReview <= now`; a correct-heavy review pushes the next one out, a miss resets the interval to 0. Additive and migration-safe: a record predating this has no schedule and `scheduleOrDefault` derives one anchored to its own `updatedAt`/`createdAt` (stable, in the past → due now) so "due" can't flap between reads. No `repetitions` counter: the 0 → 1 → 6 → round(prev * ease) ladder derives from the previous interval, so a schedule round-tripping import/export/federation needs only these four fields. Extracted from `services/meatspacePostMemory.js` (which re-exports it) when SongBook practice became the second consumer (#4102).
+ * A record that resurfaces on a review cadence carries `{ ease, intervalDays, nextReview, lastReviewed }` and is "due" when `nextReview <= now`; a correct-heavy review pushes the next one out, a miss resets the interval to 0. Additive and migration-safe: a record predating this has no schedule and `scheduleOrDefault` derives one anchored to its own `updatedAt`/`createdAt` (stable, in the past → due now) so "due" can't flap between reads. No `repetitions` counter: the 0 → 1 → 6 → round(prev * ease) ladder derives from the previous interval, so a schedule round-tripping import/export/federation needs only these four fields. Extracted from `services/meatspace/meatspacePostMemory.js` (which re-exports it) when SongBook practice became the second consumer (#4102).
  */
 
 import { todayInTimezone } from './timezone.js';

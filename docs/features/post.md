@@ -24,7 +24,7 @@ Memory Builder drills drawn from the user's memory items: `memory-sequence`, `me
 `what-if` (absurd hypotheticals), `alternative-uses` (divergent-thinking classic), `story-prompt` (micro-story from 3 random words), `invention-pitch`, `reframe` (recast a negative situation positively/humorously). LLM-scored for originality, elaboration, and feasibility.
 
 ### Cognitive (~90s)
-Focused cognitive-skill drills, scored deterministically server-side (`server/services/meatspacePostCognitive.js`, runner `PostCognitiveDrillRunner.jsx`): `n-back`, `digit-span`, `stroop`, `schulte-table`, `mental-rotation`, `reaction-time`, `task-switching`, `go-no-go`, and `flanker`.
+Focused cognitive-skill drills, scored deterministically server-side (`server/services/meatspace/meatspacePostCognitive.js`, runner `PostCognitiveDrillRunner.jsx`): `n-back`, `digit-span`, `stroop`, `schulte-table`, `mental-rotation`, `reaction-time`, `task-switching`, `go-no-go`, and `flanker`.
 
 The executive-control pack practices three narrow task skills; it is not a clinical assessment and makes no claim of generalized cognitive transfer:
 
@@ -53,7 +53,7 @@ The session launcher (`PostSessionLauncher.jsx`) has a per-session Test/Train to
 
 ## Memory Builder
 
-Configurable memory training for songs, poems, sequences, speeches, or any ordered content (`server/services/meatspacePostMemory.js`; client `MemoryBuilder.jsx`, `MemoryPractice.jsx`).
+Configurable memory training for songs, poems, sequences, speeches, or any ordered content (`server/services/meatspace/meatspacePostMemory.js`; client `MemoryBuilder.jsx`, `MemoryPractice.jsx`).
 
 - **Built-in content**: Tom Lehrer's "The Elements" (code-embedded, id `elements-song`, non-deletable) with per-line element mappings and a specialized `ElementsSong.jsx` UI with periodic-table visualization.
 - **Custom items**: users add any text/song/sequence; the system chunks it into progressive recall exercises.
@@ -64,14 +64,14 @@ Configurable memory training for songs, poems, sequences, speeches, or any order
 
 - **Math**: server-rescored — the server strips client-provided correctness and re-derives expected answers (`meatspacePost.js`, "never trust client-provided expected"); estimation compares within tolerance. Accuracy plus speed bonus.
 - **Cognitive**: deterministic server-side rescoring per drill type. Executive-control attempts additionally retain switch/congruency cost, false alarms, omissions, commission errors, accuracy/completion, and the per-response latency distribution in the unified run/attempt record.
-- **Wordplay/Verbal/Imagination**: LLM-scored against per-drill rubrics (e.g. wit-comeback: humor 40% / cleverness 30% / relevance 30%), blended as quality 80% + speed bonus 20% (`server/services/meatspacePostLlm.js`).
+- **Wordplay/Verbal/Imagination**: LLM-scored against per-drill rubrics (e.g. wit-comeback: humor 40% / cleverness 30% / relevance 30%), blended as quality 80% + speed bonus 20% (`server/services/meatspace/meatspacePostLlm.js`).
 - **Session score**: per-module weighted mean across completed drills (`computeSessionScore`, weights from `config.scoring.weights`, issue #2099). Every module defaults to weight `1.0`, so an unconfigured install still gets the plain arithmetic mean; a module absent from a saved `weights` map also defaults to `1.0` rather than dropping out.
 
 ## Benchmark vs. Training (issue #4442)
 
 An ordinary **Test** session (above) scores whatever drills the user's current, possibly adaptive, configuration happens to select — useful for daily practice, but not a stable measurement, since two Test sessions can differ in composition, difficulty rung, or drill order and still get compared as if they were the same instrument. A **Benchmark** run is a separate, fixed-form assessment:
 
-- Composition, drill order, difficulty, and timing come entirely from a registered protocol (`POST_BENCHMARK_PROTOCOL`, `server/services/meatspacePost.js`), never from the user's adaptive/training configuration — no progressive ladder, no random Quick composition, no due maintenance reps, no hints or training feedback.
+- Composition, drill order, difficulty, and timing come entirely from a registered protocol (`POST_BENCHMARK_PROTOCOL`, `server/services/meatspace/meatspacePost.js`), never from the user's adaptive/training configuration — no progressive ladder, no random Quick composition, no due maintenance reps, no hints or training feedback.
 - Every run stores `protocolId`, `protocolVersion`, `scorerVersion`, and `formId` on its durable session record (`postBenchmarkSchema`, `server/lib/postValidation.js`), and the server rejects a submission whose tasks/config don't match the form it claims (`assertBenchmarkSession`) — a benchmark result can't be silently produced by a mismatched or hand-edited config.
 - The protocol offers a small set of alternate **forms** (`GET /api/meatspace/post/benchmark/protocol`), rotated without immediate repetition so back-to-back runs don't reuse the same generated shapes; each form's tasks are deterministic/seeded, so a stored run is reproducible from its identity alone.
 - **Trend comparisons stay protocol-scoped.** `getPostProgress`'s `series.benchmark` includes only sessions whose `protocolId`/`protocolVersion`/`scorerVersion` match the *currently registered* protocol; a run under a retired protocol/scorer version, or an ordinary Test/Train/Quick session, is excluded from that series (never silently blended in) and counted in `excludedCount` so the Progress UI can say why a session doesn't appear. The general `series.byDay` "Score Trend" is unchanged and still blends every scored session — it answers "how active/well am I doing generally," not "is this benchmark-comparable."
@@ -85,11 +85,11 @@ Opt-in adaptive tuning for math drills (`server/lib/postAdaptive.js`): recent te
 
 ## Drill Cache
 
-The four cacheable wordplay types are pre-generated so drills serve instantly (`server/services/meatspacePostDrillCache.js` → `data/meatspace/post-drill-cache.json`, seeded from `data.reference/`). Per the AI-provider policy, a cold cache is never filled silently: boot loads only what's on disk, and the bulk fill runs solely from `POST /api/meatspace/post/drill-cache/fill` behind a consent prompt in `WordplayTrainer.jsx` that names the provider/model. Incremental top-ups after the user has engaged are silent by design.
+The four cacheable wordplay types are pre-generated so drills serve instantly (`server/services/meatspace/meatspacePostDrillCache.js` → `data/meatspace/post-drill-cache.json`, seeded from `data.reference/`). Per the AI-provider policy, a cold cache is never filled silently: boot loads only what's on disk, and the bulk fill runs solely from `POST /api/meatspace/post/drill-cache/fill` behind a consent prompt in `WordplayTrainer.jsx` that names the provider/model. Incremental top-ups after the user has engaged are silent by design.
 
 ## Daily Reminder
 
-`server/services/meatspacePostReminder.js` schedules an optional daily POST reminder, re-registered whenever the config changes.
+`server/services/meatspace/meatspacePostReminder.js` schedules an optional daily POST reminder, re-registered whenever the config changes.
 
 ## Storage
 

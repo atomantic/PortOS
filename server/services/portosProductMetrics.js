@@ -11,7 +11,7 @@
 
 import { asArray } from '../lib/arrayUtils.js';
 import { isPlainObject as isObject } from '../lib/objects.js';
-import { getPostSessions } from './meatspacePost.js';
+import { getPostSessions } from './meatspace/meatspacePost.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { listCommissions } from './creativeCommissions/store.js';
 import { getProjectsByIds } from './creativeDirector/local.js';

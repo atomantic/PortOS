@@ -65,7 +65,7 @@ Cross-link an issue in slashdo and PortOS only when both need changes.
 
 ## Provider calls and model input
 
-The cold-bootstrap reference implementation is `initDrillCache` (boot, disk only) and `requestCacheFill` (user-triggered fill) in `server/services/meatspacePostDrillCache.js`.
+The cold-bootstrap reference implementation is `initDrillCache` (boot, disk only) and `requestCacheFill` (user-triggered fill) in `server/services/meatspace/meatspacePostDrillCache.js`.
 
 Static additions shown as chips beside the user's own words include universe/project style, production bible, mood-board style, shot actions, preset negatives, the agent wrapper and policy clauses.
 

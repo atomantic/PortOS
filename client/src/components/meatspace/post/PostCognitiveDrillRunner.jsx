@@ -21,7 +21,7 @@ import {
  * type, config, drillData, questions, score, totalMs }` — and hands it to
  * `onComplete`. The client score is a local estimate for the immediate results
  * view; the server recomputes it deterministically from `drillData` on save
- * (server/services/meatspacePostCognitive.js). NO provider calls anywhere.
+ * (server/services/meatspace/meatspacePostCognitive.js). NO provider calls anywhere.
  */
 export default function PostCognitiveDrillRunner({ drill, drillIndex, drillCount, onComplete, isTraining }) {
   if (!drill) {
@@ -286,7 +286,7 @@ function ShapeGrid({ cells, size = 4, cellPx = 14 }) {
 
 // Shared result-assembly shape every sub-runner hands to `onComplete`. The
 // server rescores deterministically from `drillData`/`questions` on save
-// (server/services/meatspacePostCognitive.js) — this is the client-side
+// (server/services/meatspace/meatspacePostCognitive.js) — this is the client-side
 // mirror, and its `index`/`answered`/`responseMs` fields are what that
 // rescoring depends on.
 export function buildCognitiveResult({ type, drill, questions, totalMs }) {

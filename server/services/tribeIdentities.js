@@ -6,7 +6,7 @@
  * This is the durable-handle "truth" half of #10's split-by-durability
  * design. The other half — `beeper_participants.tribe_person_id` as a cache
  * authoritative only when no durable handle exists — lives in
- * `server/services/beeperTribe.js`, which is also this table's only caller
+ * `server/services/beeper/beeperTribe.js`, which is also this table's only caller
  * today. Kept as its own service (rather than folded into `beeperTribe.js`)
  * because `tribe_identities` is Tribe-domain, not Beeper-domain — the same
  * table is the documented landing spot for a future Signal retrofit (#16,
@@ -85,7 +85,7 @@ export async function resolvePersonByIdentity({ kind, network = '', handle }) {
  * an identity or a `beeper_participants` link. The `tribe_people` FK alone
  * does not block linking to a soft-deleted person — `tribe.deletePerson` is
  * `UPDATE ... SET deleted = TRUE`, not a hard delete, so the row (and its FK)
- * still exists. Exported so `server/services/beeperTribe.js` can run the same
+ * still exists. Exported so `server/services/beeper/beeperTribe.js` can run the same
  * check before writing `beeper_participants.tribe_person_id`, including the
  * no-durable-handle case where `linkIdentity` below is never reached.
  */

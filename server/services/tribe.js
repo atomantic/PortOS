@@ -575,7 +575,7 @@ export async function createTouchpoint(personId, data = {}) {
 //
 // Exported (in addition to being used internally by autoLogTouchpoints below)
 // so a caller that has ALREADY resolved a personId through a different axis —
-// server/services/beeperTribe.js resolves via tribe_identities / the
+// server/services/beeper/beeperTribe.js resolves via tribe_identities / the
 // beeper_participants cache, not the email/phone/name matcher in
 // tribeMatch.js — can reuse this exact dedupe-keyed insert + last_contact_on
 // advance instead of re-implementing it (#34).
