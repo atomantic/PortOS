@@ -43,6 +43,10 @@ import {
   formatProbeDiagnosticLog,
 } from '../lib/peerProbeDiagnostics.js';
 
+// Streamed-size caps for probe/query bodies: plain-HTTP peers ignore peerFetch's `maxBytes`, so an
+// unbounded `res.json()` would buffer whatever a stalled or hostile peer streams.
+const PEER_PROBE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const PEER_QUERY_BODY_MAX_BYTES = 64 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
@@ -891,7 +895,7 @@ export async function probePeer(peer) {
       err.httpStatus = healthRes.status;
       throw err;
     }
-    const json = await healthRes.json();
+    const json = await readPeerBody(healthRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES });
     status = 'online';
     lastHealth = json;
     lastSeen = new Date().toISOString();
@@ -899,7 +903,7 @@ export async function probePeer(peer) {
     remoteVersion = json.version ?? null;
 
     if (appsRes?.ok) {
-      const appsJson = await appsRes.json().catch(() => null);
+      const appsJson = await readPeerBody(appsRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES }).catch(() => null);
       const appsList = Array.isArray(appsJson) ? appsJson : appsJson?.apps;
       remoteApps = appsList?.map(a => ({
         id: a.id, name: a.name, icon: a.icon,
@@ -907,7 +911,7 @@ export async function probePeer(peer) {
       })) ?? null;
     }
     if (syncRes?.ok) {
-      remoteSyncSeqs = await syncRes.json().catch(() => null);
+      remoteSyncSeqs = await readPeerBody(syncRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES }).catch(() => null);
     }
   }).catch((err) => {
     probeFailure = err;
@@ -1074,7 +1078,7 @@ export async function queryPeer(id, apiPath) {
   const url = `${peerBaseUrl(peer)}${target}`;
   return withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
     const res = await peerFetch(url, { signal }, peer);
-    return { success: true, data: await res.json() };
+    return { success: true, data: await readPeerBody(res, 'json', { maxBytes: PEER_QUERY_BODY_MAX_BYTES }) };
   }).catch((err) => ({ error: `Failed to query peer: ${err.message}` }));
 }
 
