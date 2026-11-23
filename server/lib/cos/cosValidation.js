@@ -543,6 +543,13 @@ export const createCosJobSchema = z.object({
   // `effort` by generateTaskFromJob; no-op'd at spawn for non-effort providers.
   effort: effortUpdateSchema,
   executionOptions: executionOptionsSchema.optional(),
+  // Daily Briefing enrichment toggles (skillTemplates.js reads them); Zod strips
+  // unknown keys, so without this row the JobCard checkboxes never persist.
+  config: z.object({
+    dailyJoke: z.boolean().optional(),
+    dailyQuote: z.boolean().optional(),
+    dailyImage: z.boolean().optional(),
+  }).strict().nullable().optional(),
   // Optional managed-app scope. Empty string from the UI picker → null so a PUT
   // can actively un-scope a job back to global (updateJob only skips `undefined`,
   // so undefined would silently preserve the old scope). Absent key stays
