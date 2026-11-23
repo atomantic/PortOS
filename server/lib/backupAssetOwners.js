@@ -65,7 +65,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'restored-gallery-image-stamp', status: 'admitted', modules: ['services/mediaRestoreTombstones.js'] },
   { id: 'video-history-deletion', status: 'admitted', modules: ['services/videoGen/historyOps.js'] },
   { id: 'music-video-render-cleanup', status: 'admitted', modules: ['services/musicVideo/renderCleanup.js'] },
-  { id: 'music-video-pool-deletion', status: 'admitted', modules: ['services/musicVideo/mediaPool.js'] },
+  { id: 'music-video-pool-deletion', status: 'admitted', modules: ['services/musicVideo/mediaPoolDelete.js'] },
   { id: 'music-video-handoff-frame', status: 'admitted', modules: ['services/musicVideo/continueShot.js'] },
   {
     id: 'lora-dataset-workflows',

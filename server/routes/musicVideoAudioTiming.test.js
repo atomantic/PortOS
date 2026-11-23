@@ -21,6 +21,7 @@ vi.mock('../lib/audioFingerprint.js', async (original) => ({
 }));
 const { default: routes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const { windowFingerprint } = await import('../lib/audioFingerprint.js');
 const { compareSchemaVersions, PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 const app = express(); app.use(express.json()); app.use('/api/music-video', routes); app.use(errorMiddleware);
@@ -72,7 +73,7 @@ describe('audio timing preview and Apply', () => {
     expect(replay.body.project.audioTimingRevisions).toHaveLength(1);
     expect(replay.body.project.scenes[1].startSec).toBe(10);
     expect((await post(before.id, 'apply', { ...body, targetTrackId: 'delete' })).status).toBe(409);
-    const clone = await projects.cloneProject(before.id, {});
+    const clone = await filmActions.cloneProject(before.id, {});
     expect(clone.audioTimingRevisions).toEqual([]);
     expect(clone.scenes[1].startSec).toBe(10);
   });

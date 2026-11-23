@@ -54,6 +54,8 @@ vi.mock('../../lib/pathSafety.js', async (importOriginal) => {
 });
 
 const projects = await import('./projects.js');
+const boardEdits = await import('./projectBoardEdits.js');
+const filmActions = await import('./projectFilmActions.js');
 
 function reset() {
   rmSync(join(TEST_DATA_ROOT, 'music-video-projects.json'), { force: true });
@@ -88,8 +90,8 @@ describe('musicVideo dispatcher — record-event emit (#1770)', () => {
     const s1 = await projects.addProjectScene(p.id, { prompt: 'one' });
     const s2 = await projects.addProjectScene(p.id, { prompt: 'two' });
     await projects.updateScene(p.id, s1.sceneId, { prompt: 'one-edited' });
-    await projects.reorderProjectScenes(p.id, [s2.sceneId, s1.sceneId]);
-    await projects.deleteScene(p.id, s2.sceneId);
+    await boardEdits.reorderProjectScenes(p.id, [s2.sceneId, s1.sceneId]);
+    await boardEdits.deleteScene(p.id, s2.sceneId);
 
     // update + analysis + 2 add + update + reorder + deleteScene = 7 structural emits
     expect(emitRecordUpdated).toHaveBeenCalledTimes(7);
@@ -251,7 +253,7 @@ describe('refreshSongStyleFromSuno', () => {
     getTrack.mockResolvedValue({ id: 'track-1', title: 'Example', prompt: 'synth-pop' });
     const project = await projects.createProject({ trackId: 'track-1', concept: { style: 'soft analog glow' } });
     readSunoSongStyle.mockResolvedValue({ style: 'synth-pop, -metal', excludedStylesKnown: true });
-    const { project: updated, excludedStylesKnown } = await projects.refreshSongStyleFromSuno(project.id, 'https://suno.com/song/x');
+    const { project: updated, excludedStylesKnown } = await filmActions.refreshSongStyleFromSuno(project.id, 'https://suno.com/song/x');
     expect(excludedStylesKnown).toBe(true);
     expect(updated.concept).toMatchObject({ style: 'soft analog glow', songStyle: 'synth-pop, -metal' });
     expect(updateTrack).toHaveBeenCalledWith('track-1', { prompt: 'synth-pop, -metal' });
@@ -372,14 +374,12 @@ describe('take decisions', () => {
       scenes: current.scenes.map((scene) => ({ ...scene, ...shot, takes: [frame('t-a', 'frame-a.png'), frame('t-b', 'frame-b.png'), frame('t-c', 'frame-c.png')] })) } }), { sceneOnly: true });
     const states = (scene) => scene.takes.map((take) => `${take.takeId}:${take.status}:${take.dependencyState?.status}`);
     const sceneOf = (edit) => edit.scenes.find((scene) => scene.sceneId === sceneId);
-    const board = { edit: true };
-
-    const reviewed = await projects.reviewSceneTake(p.id, sceneId, 't-b', { status: 'rejected' }, board);
+    const reviewed = await boardEdits.reviewSceneTake(p.id, sceneId, 't-b', { status: 'rejected' });
     expect(states(sceneOf(reviewed.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
     expect(states(sceneOf(reviewed.edit))[0]).toBe('t-a:candidate:current');
-    const unused = await projects.rejectUnusedSceneTakes(p.id, sceneId, board);
+    const unused = await boardEdits.rejectUnusedSceneTakes(p.id, sceneId);
     expect(states(sceneOf(unused.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
-    const selected = await projects.selectSceneTake(p.id, sceneId, 't-c', {}, board);
+    const selected = await boardEdits.selectSceneTake(p.id, sceneId, 't-c', {});
     expect(states(sceneOf(selected.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
     withCatalogCheckin.mockImplementation(actual);
   });
@@ -536,9 +536,9 @@ describe('scene mutation transactions', () => {
       { startSec: 1, endSec: 2, prompt: 'Original next' },
       { startSec: 2, endSec: 3, prompt: 'New next' },
     ]);
-    const pending = await pauseSceneWrite(() => projects.mergeProjectNextScene(p.id, a.sceneId));
+    const pending = await pauseSceneWrite(() => boardEdits.mergeProjectNextScene(p.id, a.sceneId));
     try {
-      await projects.reorderProjectScenes(p.id, [a.sceneId, c.sceneId, b.sceneId]);
+      await boardEdits.reorderProjectScenes(p.id, [a.sceneId, c.sceneId, b.sceneId]);
     } finally {
       pending.resume();
     }
@@ -558,9 +558,9 @@ describe('automatic shot clean-up (#15317)', () => {
       { startSec: 4, endSec: 6, label: 'Shot 3' },
       { startSec: 6, endSec: 8, label: 'Fence run' },
     ]);
-    const { project: deleted } = await projects.deleteScene(p.id, b.sceneId);
+    const { project: deleted } = await boardEdits.deleteScene(p.id, b.sceneId);
     expect(deleted.scenes.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2', 'Fence run']);
-    const { scenes: pieces } = await projects.splitProjectScene(p.id, a.sceneId, { atSec: 1 });
+    const { scenes: pieces } = await boardEdits.splitProjectScene(p.id, a.sceneId, { atSec: 1 });
     expect(pieces.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2']);
     const stored = await projects.getProject(p.id);
     expect(stored.scenes.map(scene => [scene.sceneId === c.sceneId || scene.sceneId === d.sceneId ? scene.sceneId : 'piece', scene.label]))
@@ -576,15 +576,15 @@ describe('moving the cut before a shot', () => {
       { startSec: 0, endSec: 2, prompt: 'First' },
       { startSec: 2, endSec: 4, prompt: 'Second' },
     ]);
-    const later = await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 2.5 });
+    const later = await boardEdits.moveProjectSceneStart(p.id, b.sceneId, { startSec: 2.5 });
     expect([later.previous.endSec, later.scene.startSec, later.scene.endSec]).toEqual([2.5, 2.5, 4]);
-    const earlier = await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.25 });
+    const earlier = await boardEdits.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.25 });
     expect(earlier.project.scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.25], [1.25, 4]]);
-    await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 4 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
-    await expect(projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 0 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(boardEdits.moveProjectSceneStart(p.id, b.sceneId, { startSec: 4 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    await expect(boardEdits.moveProjectSceneStart(p.id, b.sceneId, { startSec: 0 })).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
     await projects.updateScene(p.id, a.sceneId, { videoHistoryId: 'clip-a' });
     await projects.mutateProjectRecord(p.id, (current) => ({ project: withLegacyClipLock(current, a.sceneId, 'clip-a') }));
-    await projects.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.5 });
+    await boardEdits.moveProjectSceneStart(p.id, b.sceneId, { startSec: 1.5 });
     expect((await projects.getProject(p.id)).scenes.map((scene) => [scene.startSec, scene.endSec])).toEqual([[0, 1.5], [1.5, 4]]);
   });
 });
@@ -629,7 +629,7 @@ describe('board time order (#16117)', () => {
     expect(ids(read)).toEqual([a.sceneId, b.sceneId, c.sceneId]);
     expect(read.scenes.map((scene) => scene.order)).toEqual([0, 1, 2]);
     expect(read.updatedAt).toBe(saved.updatedAt);
-    const moved = await projects.moveProjectSceneStart(p.id, c.sceneId, { startSec: 3 });
+    const moved = await boardEdits.moveProjectSceneStart(p.id, c.sceneId, { startSec: 3 });
     expect(moved.previous.sceneId).toBe(b.sceneId);
     expect((await file.getProject(p.id)).scenes.map((scene) => [scene.sceneId, scene.startSec, scene.endSec, scene.order]))
       .toEqual([[a.sceneId, 0, 2, 0], [b.sceneId, 2, 3, 1], [c.sceneId, 3, 6, 2]]);

@@ -12,6 +12,7 @@ vi.mock('./blender/song.js', async original => {
 vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(), autoSubscribeRecordToAllPeers: vi.fn(async () => {}) }));
 
 const projects = await import('./projects.js');
+const filmActions = await import('./projectFilmActions.js');
 const file = await import('./projectsFile.js');
 const { writeBlenderSong } = await import('./blender/song.js');
 const { blenderSrcDir, blenderSongFile, blenderWorkspaceDir } = await import('./blender/workspace.js');
@@ -36,7 +37,7 @@ async function sourceProject({ film = true } = {}) {
 describe('project clone film transaction', () => {
   it('copies a film and rewrites song context for the new project before announcing it', async () => {
     const source = await sourceProject();
-    const clone = await projects.cloneProject(source.id);
+    const clone = await filmActions.cloneProject(source.id);
     expect(clone.id).not.toBe(source.id);
     expect(await readFile(join(blenderSrcDir(clone.id), 'film.py'), 'utf8')).toBe('# Example film source');
     expect(JSON.parse(await readFile(blenderSongFile(clone.id), 'utf8'))).toMatchObject({ projectId: clone.id, title: clone.name });
@@ -49,7 +50,7 @@ describe('project clone film transaction', () => {
     const source = await sourceProject();
     emitRecordUpdated.mockClear();
     writeBlenderSong.mockRejectedValueOnce(new Error('Synthetic song write failure'));
-    await expect(projects.cloneProject(source.id)).rejects.toThrow('Synthetic song write failure');
+    await expect(filmActions.cloneProject(source.id)).rejects.toThrow('Synthetic song write failure');
     const clone = writeBlenderSong.mock.calls[0][0];
     expect(await projects.getProject(clone.id)).toBeNull();
     expect(await stat(blenderWorkspaceDir(clone.id)).catch(error => error.code)).toBe('ENOENT');
@@ -60,7 +61,7 @@ describe('project clone film transaction', () => {
 
   it('ignores caller-supplied clone ids and film-copy metadata when no film was copied', async () => {
     const source = await sourceProject({ film: false });
-    const clone = await projects.cloneProject(source.id, { id: source.id, blenderFilm: true });
+    const clone = await filmActions.cloneProject(source.id, { id: source.id, blenderFilm: true });
     expect(clone.id).not.toBe(source.id);
     expect(clone.blender).toEqual({ settings: source.blender.settings });
     expect((await projects.getProject(source.id)).blender.sceneMap).toEqual(source.blender.sceneMap);

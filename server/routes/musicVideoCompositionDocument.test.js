@@ -48,6 +48,7 @@ const { createSession } = await import('../services/auth.js');
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
 const { buildDocumentPreview } = await import('../services/musicVideo/documentPreview.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideo/musicVideoDependencies.js');
@@ -198,7 +199,7 @@ describe('music-video composition documents', () => {
     const imported = await uploadZip(project.id, createZip(Object.entries(authored).map(([name, data]) => ({ name, data }))));
     const original = imported.body.document.directory;
     const dependencies = captureMusicVideoEvidence(imported.body.project);
-    const clone = await projects.cloneProject(project.id);
+    const clone = await filmActions.cloneProject(project.id);
     const upgrade = () => request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
     const attempts = await Promise.all([upgrade(), upgrade()]);
     expect(attempts.map(result => result.status).sort()).toEqual([200, 409]);
@@ -251,7 +252,7 @@ describe('music-video composition documents', () => {
       { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
     ]));
     expect(imported.status).toBe(201);
-    const clone = await projects.cloneProject(project.id);
+    const clone = await filmActions.cloneProject(project.id);
     const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
       .send({ directory: imported.body.document.directory });
     expect(result.status).toBe(200);
