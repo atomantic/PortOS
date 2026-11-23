@@ -484,6 +484,32 @@ describe('universe-builder routes', () => {
     expect(res.body.categories.vehicles.kind).toBe('objects');
   });
 
+  it('PATCH /:id with replaceCategories drops omitted buckets; without it the map merges per key', async () => {
+    const app = buildApp();
+    const c = await request(app).post('/api/universe-builder').send({
+      name: 'Buckets',
+      categories: {
+        factions: { kind: 'characters', variations: [] },
+        colonies: { kind: 'places', variations: [] },
+      },
+    });
+    const merged = await request(app)
+      .patch(`/api/universe-builder/${c.body.id}`)
+      .send({ categories: { colonies: { kind: 'places', variations: [] } } });
+    expect(merged.status).toBe(200);
+    expect(merged.body.categories.factions).toBeDefined();
+
+    const replaced = await request(app)
+      .patch(`/api/universe-builder/${c.body.id}`)
+      .send({ replaceCategories: true, categories: { colonies: { kind: 'places', variations: [] } } });
+    expect(replaced.status).toBe(200);
+    expect(replaced.body.categories.factions).toBeUndefined();
+    expect(replaced.body.categories.colonies).toBeDefined();
+    expect(replaced.body).not.toHaveProperty('replaceCategories');
+    const reloaded = await request(app).get(`/api/universe-builder/${c.body.id}`);
+    expect(reloaded.body.categories.factions).toBeUndefined();
+  });
+
   it('POST / accepts and persists a `kind` on each category', async () => {
     const res = await request(buildApp())
       .post('/api/universe-builder')

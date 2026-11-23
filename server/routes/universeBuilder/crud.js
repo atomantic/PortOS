@@ -86,6 +86,10 @@ const patchSchema = z.object({
   // Linked mood board pointer (#4188) — null/'' clears, absent preserves.
   moodBoardId: z.string().trim().max(svc.MOOD_BOARD_ID_MAX).nullable().optional(),
   categories: categoriesSchema.optional(),
+  // Full-map save: `categories` replaces the persisted map (so a deleted custom
+  // bucket stays deleted) instead of the default per-key union. Partial
+  // callers omit it and keep the merge.
+  replaceCategories: z.boolean().optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   influences: influencesSchema.optional(),
   visualProfile: universeVisualProfileSchema.nullable().optional(),
@@ -189,8 +193,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
-  const body = validateRequest(patchSchema, req.body ?? {});
-  const w = await svc.updateUniverse(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  const { replaceCategories, ...body } = validateRequest(patchSchema, req.body ?? {});
+  const w = await svc.updateUniverse(req.params.id, body, { replaceCategories: replaceCategories === true }).catch((err) => { throw mapServiceError(err); });
   // Re-check the same-name warning when the rename actually changed the name.
   if ('name' in body) {
     const duplicateName = await findSameNameUniverses(w.name, { excludeId: req.params.id });
