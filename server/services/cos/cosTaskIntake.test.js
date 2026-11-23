@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createCosTaskSchema } from '../../lib/cos/cosValidation.js';
-import { REVIEW_STOP_MODES } from '../../lib/reviewerConfig.js';
+import { REVIEWER_OVERRIDE_KEYS, REVIEW_STOP_MODES } from '../../lib/reviewerConfig.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { buildTaskMetadata } from './cosTaskIntake.js';
 
@@ -140,5 +140,16 @@ describe('checkout recovery intake', () => {
       analysisType: 'app-checkout-recovery', useWorktree: false,
       openPR: false, simplify: false, reviewLoop: false,
     });
+  });
+});
+
+describe('planOnly reviewer override strip', () => {
+  it('clears every reviewer override key, including a seeded legacy `reviewer`', () => {
+    const metadata = buildTaskMetadata({
+      description: 'plan', planOnly: true,
+      metadata: { reviewer: 'codex', reviewers: ['codex'], reviewStopMode: 'all' },
+    }, 'user');
+    for (const key of REVIEWER_OVERRIDE_KEYS) expect(metadata).not.toHaveProperty(key);
+    expect(metadata.planOnly).toBe(true);
   });
 });
