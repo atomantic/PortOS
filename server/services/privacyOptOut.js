@@ -108,10 +108,14 @@ export function renderDisclosedSummary(disclosedFields, payload, { listingUrls =
     full_name: 'Full name', email: 'Email', phone: 'Phone',
     city: 'City', state: 'State', dob: 'Date of birth', listing_url: 'Listing URL',
   };
+  // listing_url lines are appended only when the allowlist carries it.
+  const urlLines = disclosedFields.includes('listing_url')
+    ? listingUrls.map((u) => `- ${LABELS.listing_url}: ${u}`)
+    : [];
   return disclosedFields
     .filter((f) => f !== 'listing_url')
     .map((f) => `- ${LABELS[f]}: ${payload[f]}`)
-    .concat(listingUrls.map((u) => `- ${LABELS.listing_url}: ${u}`))
+    .concat(urlLines)
     .join('\n');
 }
 
@@ -176,12 +180,16 @@ export function fillTemplate(raw, tokens) {
 export async function renderOptOutEmail({ broker, payload, disclosedFields, listingUrls = [], now = new Date(), templateLoader = loadTemplate }) {
   const templateName = chooseEmailTemplate(broker, payload);
   const raw = await templateLoader(templateName);
-  const disclosedSummary = renderDisclosedSummary(disclosedFields, payload, { listingUrls });
-  const listingSection = listingUrls.length
+  // Least-disclosure: listing URLs render only in the dedicated listingSection
+  // (not duplicated in the summary), and only when allowlisted; likewise the name.
+  const allowListingUrls = disclosedFields.includes('listing_url');
+  const allowFullName = disclosedFields.includes('full_name');
+  const disclosedSummary = renderDisclosedSummary(disclosedFields, payload, { listingUrls: [] });
+  const listingSection = allowListingUrls && listingUrls.length
     ? `The specific listing(s) to remove:\n${listingUrls.map((u) => `  ${u}`).join('\n')}\n`
     : '';
   const filled = fillTemplate(raw, {
-    fullName: payload.full_name || 'the requesting individual',
+    fullName: allowFullName && payload.full_name ? payload.full_name : 'the requesting individual',
     brokerName: broker?.name || broker?.id || 'the data broker',
     disclosedSummary,
     listingSection,
