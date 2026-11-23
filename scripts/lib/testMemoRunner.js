@@ -44,7 +44,8 @@ import { resolveTestChrome } from './testChrome.js';
 import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
-import { pruneMemoStore, readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
+import { loadFactsCache } from './testMemo/factsCache.js';
+import { memoDirs, pruneMemoStore, readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
@@ -77,13 +78,14 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
  * @param {'full'|'files'|'related'} options.mode
  * @param {string[]} options.repoFiles planner-selected test files (repo-relative)
  * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
- * @param {string|null} options.memoDir null when the memo is off
+ * @param {string|string[]|null} options.memoDir null when the memo is off; several directories read in order (`testMemoStore.js`)
+ * @param {object|null} [options.factsCache] parsed file facts from earlier runs (`factsCache.js`); loaded from the store by default
  * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
  *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
  *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
   const candidates = mode === 'files' ? uniqueSorted(repoFiles)
     : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
@@ -93,7 +95,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
     ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null) => {
@@ -168,11 +170,12 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     run.push(test);
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0 };
+  return { selected, slice, run, skipped, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
 }
 
 export function memoSummaryLine(plan) {
-  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.${plan.unanalyzed ? ` ${plan.unanalyzed} never-memoized guards not analyzed.` : ''}${plan.narrowed ? ` Related selection used ${plan.narrowed} digest records.` : ''}`;
+  const facts = plan.factsCache?.stats();
+  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.${plan.unanalyzed ? ` ${plan.unanalyzed} never-memoized guards not analyzed.` : ''}${plan.narrowed ? ` Related selection used ${plan.narrowed} digest records.` : ''}${facts && (facts.hits || facts.misses) ? ` Parsed ${facts.misses} files, reused ${facts.hits}.` : ''}`;
 }
 
 /** Vitest's `BaseSequencer.calculateShardRange`: the [start, end) slice of `count` hash-sorted files for shard `index` of `total`. */
@@ -486,7 +489,7 @@ export function pruneTestMemo({ memoDir, repoRoot, trustedCi, now = Date.now(), 
   if (trustedCi) {
     return prune(memoDir, { now, testExists: (_workspace, test) => nodeFs.existsSync(join(repoRoot, ...test.split('/'))) });
   }
-  const [root] = Array.isArray(memoDir) ? memoDir : [memoDir];
+  const [root] = memoDirs(memoDir);
   const stampPath = join(root, 'pruned-at');
   let last = Number.NaN;
   try { last = Date.parse(readFileSync(stampPath, 'utf8').trim()); } catch { /* never pruned */ }

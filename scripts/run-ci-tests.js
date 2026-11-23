@@ -18,6 +18,7 @@ import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
   memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
+import { saveFactsCache } from './lib/testMemo/factsCache.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -546,6 +547,8 @@ async function main() {
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
+    // The next run's planner starts from these parsed facts; a pull request's store is discarded.
+    if (!readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }

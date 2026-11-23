@@ -306,6 +306,21 @@ walk the closures of the files it is about to skip (#17617). Every file
 that runs has had its floor key computed before Vitest starts, which the
 after-run comparison above relies on.
 
+Parsing every file the plan reaches (about 9k on the server side) was the
+rest of the planning time, so the parsed facts persist too
+(`scripts/lib/testMemo/factsCache.js`, `facts/<workspace>.json` in the
+store). An entry is keyed by the file's bytes and path, the workspace, the
+three sources the setup files replace, and the version of the extraction code
+(`FACTS_CODE`, the Node version and the platform). Every constant the file
+imported from another module (`exportedConstant`) is recorded with it and
+looked up again on reuse; a different answer re-parses the file. Facts or
+lookups that would not decode to exactly what extraction returned are never
+stored. A save keeps what the run used and anything another branch used in
+the last 14 days. A pull request reads it from the parked lineages and never
+writes it, and the merge copies it into a store that has none. Over the real
+tree, keys, closures and narrowed reach match an uncached analysis exactly,
+and a warm server plan parses 2 of about 12k files.
+
 A store can also be several directories: `PORTOS_TEST_MEMO_READ_DIRS` (a
 `path.delimiter` list) adds read-only ones after the usual directory. An
 entry is the first valid one across them, a record the newest by
