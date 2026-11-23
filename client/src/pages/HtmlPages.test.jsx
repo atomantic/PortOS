@@ -287,6 +287,35 @@ describe('HtmlPages', () => {
     expect(getHtmlPageRun).toHaveBeenCalledWith('r2', expect.anything());
   });
 
+  it('prunes a deleted run from the comparison and still shows the survivors', async () => {
+    getHtmlPageRun.mockImplementation(async (id) => {
+      if (id === 'gone') throw Object.assign(new Error('Run not found'), { status: 404, code: 'NOT_FOUND' });
+      return fullRun(run(id, 'example-a:7b'));
+    });
+    renderPage('/media/pages?compare=gone,r1');
+    const comparison = await screen.findByRole('region', { name: 'Comparison' });
+    expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
+    await waitFor(() => expect(new URLSearchParams(screen.getByLabelText('query').textContent).get('compare')).toBe('r1'));
+    expect(screen.queryByText(/Could not load the selected runs/i)).not.toBeInTheDocument();
+  });
+
+  it('retries a failed comparison load in place', async () => {
+    getHtmlPageRun.mockRejectedValueOnce(new Error('boom'));
+    renderPage('/media/pages?compare=r1');
+    const alert = (await screen.findAllByRole('alert')).find((el) => /selected runs/.test(el.textContent));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    const comparison = await screen.findByRole('region', { name: 'Comparison' });
+    expect(await within(comparison).findAllByTestId('frame')).toHaveLength(2);
+  });
+
+  it('clears a failed comparison without editing the URL', async () => {
+    getHtmlPageRun.mockRejectedValue(new Error('boom'));
+    renderPage('/media/pages?compare=r1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear comparison' }));
+    await waitFor(() => expect(screen.getByLabelText('query')).not.toHaveTextContent('compare'));
+    expect(screen.queryByRole('button', { name: 'Clear comparison' })).not.toBeInTheDocument();
+  });
+
   it('refetches the list when a run changes, so progress arrives without polling', async () => {
     renderPage();
     await screen.findByText(/2 of 2 pages pass every check/);
