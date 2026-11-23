@@ -20,7 +20,7 @@ const builds = () => import('../services/blenderModels/build.js');
 
 router.get('/', asyncHandler(async (_req, res) => {
   const { listBlenderModels } = await models();
-  res.json({ models: await listBlenderModels() });
+  res.json(await listBlenderModels());
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -37,8 +37,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const input = validateRequest(patchBlenderModelSchema, req.body ?? {});
-  const { renameBlenderModel } = await models();
-  res.json(await renameBlenderModel(req.params.id, input));
+  const { updateBlenderModel } = await models();
+  res.json(await updateBlenderModel(req.params.id, input));
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {

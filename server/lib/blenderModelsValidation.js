@@ -8,12 +8,14 @@ import { z } from 'zod';
 import { MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES } from './musicVideo/musicVideoBlender.js';
 
 const name = z.string().trim().min(1).max(120);
+const description = z.string().trim().max(300).regex(/^[^\r\n]*$/, 'description must be one line');
 const sourcePath = z.string().min(1).max(400).regex(MUSIC_VIDEO_BLENDER_SOURCE_PATH, 'path must be a relative file path under src/');
 const buildId = z.string().regex(/^build-\d{8}T\d{6}Z-[0-9a-f]{8}$/, 'buildId must name a build');
 
-export const createBlenderModelSchema = z.object({ name }).strict();
+export const createBlenderModelSchema = z.object({ name, description: description.optional() }).strict();
 
-export const patchBlenderModelSchema = z.object({ name }).strict();
+export const patchBlenderModelSchema = z.object({ name: name.optional(), description: description.optional() }).strict()
+  .refine((patch) => patch.name !== undefined || patch.description !== undefined, 'name or description is required');
 
 export const blenderModelWorkspaceSchema = z.object({ template: z.literal('starter').optional() }).strict();
 

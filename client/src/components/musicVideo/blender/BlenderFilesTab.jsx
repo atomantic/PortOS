@@ -10,6 +10,13 @@ import { formatBytes, formatCount } from '../../../utils/formatters.js';
 import { buttonCls, inputCls, labelCls, primaryCls } from './blenderStyles.js';
 
 export const BLENDER_FILE_PARAM = 'bfile';
+// What the empty states and hints say for a film; the model page passes its own.
+const FILM_COPY = {
+  empty: <>No source files yet. Create the starter workspace under Settings, or add <code className="font-mono">film.py</code> below.</>,
+  binary: 'It is used by the film but cannot be edited here.',
+  hint: 'Select a text file to read or edit it. Saving writes it to the workspace; nothing runs until you sync or render.',
+  newFile: 'shots/s010.py',
+};
 const IDLE = { path: null, content: '', status: 'idle', error: null };
 // A new file is never empty, so the write is a real file the editor can open.
 const starterContent = (path) => (path.toLowerCase().endsWith('.json') ? '{}\n' : path.toLowerCase().endsWith('.py') ? `# src/${path}\n` : '\n');
@@ -30,7 +37,7 @@ const newPathProblem = (path, files) => {
  * live in the Blender hook, so they survive leaving the tab, and hold back
  * syncs and renders until saved or discarded.
  */
-export default function BlenderFilesTab({ blender }) {
+export default function BlenderFilesTab({ blender, copy = FILM_COPY }) {
   const { getMusicVideoBlenderFile, listMusicVideoBlenderFiles } = useFilmApi();
   const { projectId, pending, fileDrafts, filesRevision } = blender;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -141,7 +148,7 @@ export default function BlenderFilesTab({ blender }) {
         {files.state === 'error' && <ListLoadError what="the source files" error={files.error} onRetry={files.retry} />}
         {files.state === 'loading' && <p role="status" className="text-xs text-port-text-muted">Loading the source files…</p>}
         {files.state === 'ready' && sorted.length === 0 && (
-          <p className="text-xs text-port-text-muted">No source files yet. Create the starter workspace under Settings, or add <code className="font-mono">film.py</code> below.</p>
+          <p className="text-xs text-port-text-muted">{copy.empty}</p>
         )}
         {sorted.length > 0 && (
           <ul aria-label="Source files" className="max-h-[50dvh] min-w-0 divide-y divide-port-border overflow-y-auto rounded border border-port-border">
@@ -182,7 +189,7 @@ export default function BlenderFilesTab({ blender }) {
         <div className="min-w-0 space-y-1">
           <label htmlFor="mv-blender-new-file" className={labelCls}>New text file under src/</label>
           <div className="flex min-w-0 items-center gap-1.5">
-            <input id="mv-blender-new-file" value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder="shots/s010.py" spellCheck={false}
+            <input id="mv-blender-new-file" value={newPath} onChange={(event) => setNewPath(event.target.value)} placeholder={copy.newFile} spellCheck={false}
               autoCapitalize="off" autoCorrect="off" aria-invalid={problem ? true : undefined} aria-describedby={problem ? 'mv-blender-new-file-problem' : undefined}
               className={`${inputCls} font-mono`} />
             <button type="button" className={`${buttonCls} shrink-0`} disabled={!newPath.trim() || !!problem || creating || files.state !== 'ready'} onClick={create}>
@@ -197,8 +204,8 @@ export default function BlenderFilesTab({ blender }) {
         {requested && files.state === 'ready' && !file && (
           <p role="status" className="text-xs text-port-warning">src/{requested} is not in the workspace any more. Pick a file from the list.</p>
         )}
-        {file && !editable && <p className="text-xs text-port-text-muted">src/{file.path} is a binary asset. It is used by the film but cannot be edited here.</p>}
-        {!file && !requested && <p className="text-xs text-port-text-muted">Select a text file to read or edit it. Saving writes it to the workspace; nothing runs until you sync or render.</p>}
+        {file && !editable && <p className="text-xs text-port-text-muted">src/{file.path} is a binary asset. {copy.binary}</p>}
+        {!file && !requested && <p className="text-xs text-port-text-muted">{copy.hint}</p>}
         {file && editable && (
           <>
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">

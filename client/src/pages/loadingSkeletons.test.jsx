@@ -125,6 +125,7 @@ const RENDERED = [
   ['AgentsPage', () => import('./AgentsPage').then((m) => m.AgentsPage), '/devtools/agents', '/devtools/agents', 'Scanning for AI agents'],
   ['AIProviders', () => import('./AIProviders'), '/ai', '/ai', 'Loading providers'],
   ['BrainScanReport', () => import('./BrainScanReport'), '/brain/links/:id/scan-report', '/brain/links/l1/scan-report', 'Loading scan report'],
+  ['BlenderModelDetail', () => import('./BlenderModelDetail'), '/3d/blender/:id/:tab?', '/3d/blender/bmodel-1', 'Loading Blender model'],
   ['CatalogIngredient', () => import('./CatalogIngredient'), '/catalog/:type/:id', '/catalog/idea/i1', 'Loading ingredient'],
   ['CreativeDirector', () => import('./CreativeDirector'), '/creative-director', '/creative-director', 'Loading Creative Director projects'],
   ['Game', () => import('./Game'), '/game', '/game', 'Loading Game studio'],

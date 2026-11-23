@@ -54,12 +54,13 @@ export async function getModel(id, { includeDeleted = false } = {}) {
   return model;
 }
 
-export async function createModel({ name }) {
+export async function createModel({ name, description = '' }) {
   const now = new Date().toISOString();
   const model = {
     id: `bmodel-${randomUUID()}`,
     schemaVersion: 1,
     name,
+    description,
     status: 'draft',
     publishedBuildId: null,
     describe: null,

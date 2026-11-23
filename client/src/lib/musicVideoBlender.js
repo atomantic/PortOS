@@ -152,20 +152,25 @@ export function sortBlenderJobs(jobs) {
   }).map(({ job }) => job);
 }
 
-const JOB_KIND_LABELS = { sync: 'Sync shots', render: 'Render', cut: 'Assemble cut' };
-const QUALITY_LABELS = { still: 'still', preview: 'preview', final: 'final' };
+const JOB_KIND_LABELS = { sync: 'Sync shots', render: 'Render', cut: 'Assemble cut', build: 'Build' };
+const QUALITY_LABELS = { still: 'still', draft: 'draft', full: 'full', preview: 'preview', final: 'final' };
 
-/** "Render preview · s010", "Sync shots", "Assemble cut · final". */
+/** "Render preview · s010", "Sync shots", "Assemble cut · final", "Build draft". */
 export function blenderJobTitle(job) {
   const kind = JOB_KIND_LABELS[job?.kind] || 'Job';
   const quality = QUALITY_LABELS[job?.quality];
-  const head = job?.kind === 'render' && quality ? `${kind} ${quality}` : kind;
+  const head = (job?.kind === 'render' || job?.kind === 'build') && quality ? `${kind} ${quality}` : kind;
   return [head, job?.kind === 'cut' ? quality : null, job?.shotId].filter(Boolean).join(' · ');
 }
 
-export const BLENDER_JOB_STATUS_LABELS = {
+const BLENDER_JOB_STATUS_LABELS = {
   queued: 'Queued', running: 'Rendering', encoding: 'Encoding', done: 'Done', error: 'Failed', canceled: 'Canceled',
 };
+
+/** The job's status in words; a running model build builds rather than renders. */
+export const blenderJobStatusLabel = (job) => (
+  job?.kind === 'build' && job.status === 'running' ? 'Building' : BLENDER_JOB_STATUS_LABELS[job?.status] || job?.status
+);
 
 // ---- shots -----------------------------------------------------------------
 

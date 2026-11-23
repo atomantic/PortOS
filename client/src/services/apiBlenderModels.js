@@ -17,7 +17,7 @@ export const getBlenderModel = (id, options) => request(base(id), options);
 
 export const createBlenderModel = (input, options) => request('/blender-models', json('POST', input, options));
 
-export const renameBlenderModel = (id, name, options) => request(base(id), json('PATCH', { name }, options));
+export const updateBlenderModel = (id, patch, options) => request(base(id), json('PATCH', patch, options));
 
 export const deleteBlenderModel = (id, options) => request(base(id), { method: 'DELETE', ...options });
 
@@ -48,6 +48,13 @@ export const openBlenderModelBuild = (id, buildId, options) =>
 // Only a completed build without error findings can be published.
 export const publishBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/publish`, json('POST', { buildId }, options));
+
+const readBuildFile = (id, buildId, name, options) =>
+  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/files/${encodeURIComponent(name)}`, options);
+
+export const getBlenderModelBuildReport = (id, buildId, options) => readBuildFile(id, buildId, 'report.json', options);
+
+export const getBlenderModelBuildLog = (id, buildId, options) => readBuildFile(id, buildId, 'build.log', { responseType: 'text', ...options });
 
 // model.glb, model.blend, report.json or build.log of one build, for a viewer, a download link or fetch().
 export const blenderModelBuildFileUrl = (id, buildId, name) =>

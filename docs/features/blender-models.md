@@ -4,8 +4,21 @@ A **Blender model** is a reusable 3D asset made from Python you (or a coding age
 in Blender, measures what it built, exports a GLB, imports that GLB back into an empty scene and measures it again.
 Every build is kept with a report; you publish the build you want, and its GLB is what other parts of PortOS use.
 
-This page covers the server engine (issue #17874, part of the Blender Models epic #17869). The 3D page lane, reference
-sheets, joints and texture baking arrive in later phases.
+This page covers the engine (issue #17874) and its page (issue #17875), part of the Blender Models epic #17869.
+Reference sheets, joints and texture baking arrive in later phases.
+
+## On the 3D page
+
+**3D** (`/3d`) lists Blender models beside image-to-3D renders with a "Blender" tag, and **New Blender model** creates one
+(a name and an optional one-line description). When Blender cannot build yet, the form names the reason and links to
+Code Animation › Blender execution. A model opens at `/3d/blender/:id/:tab?`:
+
+- **Model**: the newest completed build (`?build=` picks another), its size and triangles against budget, its findings
+  by severity, and the part list. Choosing a part (`?part=`) shows it alone in the viewer. Build, Publish, Copy agent
+  brief, Open in Blender and the GLB / .blend downloads are here.
+- **Files**: the `src/` editor films use. Unsaved edits hold builds back until saved or discarded.
+- **Builds**: running and recent jobs with their logs, then every kept build with its log, review and Publish.
+- **Settings**: Blender readiness, the workspace path, the name and description, and Delete.
 
 ## Trust and requirements
 
@@ -101,10 +114,10 @@ action counts and bounds.
 
 | Method and path | What it does |
 |---|---|
-| `GET /api/blender-models` | List live models |
-| `POST /api/blender-models` `{ name }` | Create a model (201, its state) |
+| `GET /api/blender-models` | `{ models, tool }`: live models, and whether Blender can build here |
+| `POST /api/blender-models` `{ name, description? }` | Create a model (201, its state) |
 | `GET /api/blender-models/:id` | The record plus `workspace` (path, `hasModel`, file count, `srcHash`, `srcChanged`), `tool` readiness and `jobs` |
-| `PATCH /api/blender-models/:id` `{ name }` | Rename |
+| `PATCH /api/blender-models/:id` `{ name?, description? }` | Rename or describe |
 | `DELETE /api/blender-models/:id` | Soft-delete (cancels a running build first) |
 | `POST /api/blender-models/:id/workspace` | Copy the starter `src/model.py` (409 once it exists) |
 | `GET /api/blender-models/:id/files` | List `src/` |

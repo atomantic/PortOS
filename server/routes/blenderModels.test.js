@@ -37,9 +37,9 @@ vi.mock('../services/blenderModels/store.js', async (importOriginal) => {
       const row = blender.rows.get(id);
       return row && (includeDeleted || !row.deleted) ? copy(row) : null;
     },
-    createModel: async ({ name }) => {
+    createModel: async ({ name, description = '' }) => {
       const now = new Date().toISOString();
-      const model = { id: `bmodel-${crypto.randomUUID()}`, schemaVersion: 1, name, status: 'draft', publishedBuildId: null, describe: null, builds: [], createdAt: now, updatedAt: now, deleted: false, deletedAt: null };
+      const model = { id: `bmodel-${crypto.randomUUID()}`, schemaVersion: 1, name, description, status: 'draft', publishedBuildId: null, describe: null, builds: [], createdAt: now, updatedAt: now, deleted: false, deletedAt: null };
       blender.rows.set(model.id, copy(model));
       announce(model.id);
       return model;
@@ -244,6 +244,18 @@ describe('Blender Models: workspace, build, report, publish', () => {
     expect(existsSync(join(workspace(id), 'src', 'parts', 'lamp.py'))).toBe(false);
     const again = await request(app).post(api(id, '/workspace')).send({});
     expect([again.status, again.body.code]).toEqual([409, 'BLENDER_MODEL_WORKSPACE_EXISTS']);
+  });
+
+  it('keeps a one-line description, changes only the fields a patch names, and lists models with readiness', async () => {
+    const created = await request(app).post('/api/blender-models').send({ name: 'Lamp', description: 'A folding desk lamp' });
+    expect(created.body).toMatchObject({ name: 'Lamp', description: 'A folding desk lamp' });
+    const id = created.body.id;
+    expect((await request(app).patch(api(id)).send({ name: 'Desk lamp' })).body).toMatchObject({ name: 'Desk lamp', description: 'A folding desk lamp' });
+    expect((await request(app).patch(api(id)).send({ description: '' })).body).toMatchObject({ name: 'Desk lamp', description: '' });
+    expect((await request(app).patch(api(id)).send({})).status).toBe(400);
+    expect((await request(app).post('/api/blender-models').send({ name: 'Lamp', description: 'two\nlines' })).status).toBe(400);
+    const list = await request(app).get('/api/blender-models');
+    expect(list.body).toMatchObject({ models: [{ id, name: 'Desk lamp' }], tool: { ready: true, executionMode: 'trusted-local' } });
   });
 
   it('marks a build a restart interrupted as failed, and delete keeps src/ but removes builds', async () => {

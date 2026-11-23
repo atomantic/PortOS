@@ -4,8 +4,10 @@ import {
   Bounds,
   Environment,
   OrbitControls,
+  useBounds,
   useGLTF,
 } from '@react-three/drei';
+import { Box3 } from 'three';
 import { AlertTriangle, Download, RefreshCw, Rotate3d, SlidersHorizontal } from 'lucide-react';
 import ErrorBoundary from '../ErrorBoundary';
 import { GltfPrimitive } from '../../hooks/useClonedGltf';
@@ -54,7 +56,55 @@ export function cloneGlbSceneWithOpaqueMaterials(scene) {
   return clone;
 }
 
-function GlbModel({ src, forceOpaque, onSceneLoaded }) {
+// The glTF node a mesh came from: the loader keeps the authored name in
+// `userData.name` (`name` itself is sanitized for animation bindings, dropping
+// dots). A node with several materials becomes a Group of unnamed meshes.
+function ownerNodeName(mesh) {
+  for (let object = mesh; object; object = object.parent) if (object.userData?.name) return object.userData.name;
+  return mesh.name;
+}
+
+/**
+ * Show only the meshes of the node named `nodeName`; returns the function that
+ * shows the rest again and the isolated part's bounds. Layers, not `visible`:
+ * hiding a parent part through `visible` would hide the child part on display.
+ * A name no mesh carries isolates nothing (`box` null).
+ */
+export function isolateGlbNode(scene, nodeName) {
+  const meshes = [];
+  scene.traverse((object) => { if (object.isMesh) meshes.push(object); });
+  const kept = meshes.filter((mesh) => ownerNodeName(mesh) === nodeName);
+  if (!kept.length) return { box: null, restore: () => {} };
+  scene.updateWorldMatrix(true, true);
+  const box = new Box3();
+  for (const mesh of kept) {
+    mesh.geometry.computeBoundingBox();
+    box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+  }
+  const hidden = meshes.filter((mesh) => !kept.includes(mesh)).map((mesh) => ({ mesh, mask: mesh.layers.mask }));
+  for (const { mesh } of hidden) mesh.layers.disableAll();
+  return { box, restore: () => { for (const { mesh, mask } of hidden) mesh.layers.mask = mask; } };
+}
+
+// The cached scene is shared, so the cleanup puts every mesh back.
+function NodeIsolation({ scene, nodeName }) {
+  const bounds = useBounds();
+  // Bounds re-fits the whole model from a layout effect (first paint, resize); a later passive effect keeps the part framed.
+  const size = useThree((state) => state.size);
+  useEffect(() => {
+    if (!nodeName) return undefined;
+    const { box, restore } = isolateGlbNode(scene, nodeName);
+    if (!box) return undefined;
+    bounds.refresh(box).clip().fit();
+    return () => {
+      restore();
+      bounds.refresh(scene).clip().fit();
+    };
+  }, [bounds, scene, nodeName, size]);
+  return null;
+}
+
+function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode }) {
   // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
@@ -83,7 +133,12 @@ function GlbModel({ src, forceOpaque, onSceneLoaded }) {
     onSceneLoaded?.(renderedScene);
     return () => onSceneLoaded?.(null);
   }, [onSceneLoaded, renderedScene]);
-  return <GltfPrimitive object={renderedScene} />;
+  return (
+    <>
+      <GltfPrimitive object={renderedScene} />
+      {isolateNode !== undefined && <NodeIsolation scene={renderedScene} nodeName={isolateNode} />}
+    </>
+  );
 }
 
 // r3f prefixes every loader failure with "Could not load <url>", so this is what
@@ -176,6 +231,9 @@ export default function GlbViewer({
   // `null` when it unloads. Must be referentially stable (a `useState` setter or a
   // `useCallback`) — an inline arrow re-fires the effect on every render.
   onSceneLoaded,
+  // The glTF node to show alone and frame; null shows the whole model. Omit it
+  // on a viewer that never isolates parts.
+  isolateNode,
 }) {
   const backgroundInputId = useId();
   const controlsPanelId = useId();
@@ -283,7 +341,7 @@ export default function GlbViewer({
               </ErrorBoundary>
               <Suspense fallback={null}>
                 <Bounds fit clip observe margin={1.2}>
-                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} />
+                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} isolateNode={isolateNode} />
                 </Bounds>
               </Suspense>
               <OrbitControls makeDefault enablePan enableZoom enableRotate />

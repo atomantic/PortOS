@@ -26,6 +26,14 @@ vi.mock('../services/apiImageTo3d.js', () => ({
   getImageTo3dModel: (...a) => getImageTo3dModel(...a),
   listImageTo3dModels: (...a) => listImageTo3dModels(...a),
 }));
+const listBlenderModels = vi.fn();
+const createBlenderModel = vi.fn();
+vi.mock('../services/apiBlenderModels.js', () => ({
+  listBlenderModels: (...a) => listBlenderModels(...a),
+  createBlenderModel: (...a) => createBlenderModel(...a),
+}));
+const READY = { ready: true, reason: null, executionMode: 'trusted-local', version: '5.3.0' };
+beforeEach(() => { listBlenderModels.mockReset().mockResolvedValue({ models: [], tool: READY }); });
 vi.mock('../services/apiImageVideo.js', () => ({
   getHfTokenStatus: (...a) => getHfTokenStatus(...a),
 }));
@@ -337,5 +345,50 @@ describe('Media3D — generation workspace', () => {
     renderAt();
     const link = await screen.findByRole('link', { name: /Example Beacon/i });
     expect(link.getAttribute('href')).toBe('/3d/image3d-abc');
+  });
+});
+
+describe('Media3D — Blender models', () => {
+  beforeEach(() => {
+    window.matchMedia = vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    listImageTo3dModels.mockResolvedValue([]);
+    getImageTo3dTargets.mockResolvedValue({ targets: [] });
+    getHfTokenStatus.mockResolvedValue({ hfTokenPresent: false, source: 'none' });
+  });
+
+  it('lists them in the same library with a tag, newest first, and updates on a socket event', async () => {
+    listImageTo3dModels.mockResolvedValue([{ id: 'm1', name: 'Example mesh', status: 'ready', updatedAt: '2026-11-01T00:00:00.000Z' }]);
+    listBlenderModels.mockResolvedValue({ models: [{ id: 'bmodel-1', name: 'Example lamp', status: 'building', updatedAt: '2026-11-02T00:00:00.000Z' }], tool: READY });
+    renderAt();
+    const lamp = await screen.findByRole('link', { name: /Example lamp/ });
+    expect(lamp).toHaveAttribute('href', '/3d/blender/bmodel-1');
+    expect(lamp).toHaveTextContent('Blender');
+    expect(lamp).toHaveTextContent('Building…');
+    const mesh = await screen.findByRole('link', { name: /Example mesh/ });
+    expect(lamp.compareDocumentPosition(mesh) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    listBlenderModels.mockResolvedValue({ models: [{ id: 'bmodel-1', name: 'Example lamp', status: 'published', updatedAt: '2026-11-02T00:00:00.000Z' }], tool: READY });
+    await emitModel('blender-model:changed', { id: 'bmodel-1' });
+    expect(screen.getByRole('link', { name: /Example lamp/ })).toHaveTextContent('Published');
+  });
+
+  it('names what is missing on the create form, creates the model and opens it', async () => {
+    listBlenderModels.mockResolvedValue({ models: [], tool: { ready: false, reason: 'Blender: Not configured.', executionMode: 'contained' } });
+    createBlenderModel.mockResolvedValue({ id: 'bmodel-2' });
+    function PathProbe() { return <output aria-label="Current path">{useLocation().pathname}</output>; }
+    renderAt('/3d', <PathProbe />);
+    fireEvent.click(screen.getByRole('button', { name: 'New Blender model' }));
+    expect(await screen.findByText(/Blender: Not configured/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Blender execution' })).toHaveAttribute('href', '/code-animation/production#blender-execution');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example lamp' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create model' }));
+    await waitFor(() => expect(screen.getByLabelText('Current path')).toHaveTextContent('/3d/blender/bmodel-2'));
+    expect(createBlenderModel).toHaveBeenCalledWith({ name: 'Example lamp' }, { silent: true });
+  });
+
+  it('never shows a failed Blender list as an empty library', async () => {
+    listBlenderModels.mockRejectedValue(new Error('boom'));
+    renderAt();
+    expect(await screen.findByText(/Could not load your Blender models/)).toBeInTheDocument();
+    expect(screen.queryByText('No 3D models yet')).toBeNull();
   });
 });

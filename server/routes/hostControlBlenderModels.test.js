@@ -18,7 +18,7 @@ const ID = 'bmodel-00000000-0000-4000-8000-000000000000';
 const BUILD = 'build-20260101T000000Z-0000abcd';
 const sink = vi.hoisted(() => ({
   createBlenderModel: vi.fn(async () => ({ id: 'bmodel-00000000-0000-4000-8000-000000000000' })),
-  renameBlenderModel: vi.fn(async () => ({})),
+  updateBlenderModel: vi.fn(async () => ({})),
   deleteBlenderModel: vi.fn(async () => ({ ok: true })),
   scaffoldBlenderModelWorkspace: vi.fn(async () => ({})),
   writeBlenderModelFile: vi.fn(async () => ({ path: 'model.py', bytes: 1 })),
@@ -41,7 +41,7 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/blenderModels/models.js', () => ({
   createBlenderModel: sink.createBlenderModel,
   getBlenderModelState: vi.fn(async (id) => ({ id })),
-  renameBlenderModel: sink.renameBlenderModel,
+  updateBlenderModel: sink.updateBlenderModel,
   deleteBlenderModel: sink.deleteBlenderModel,
   scaffoldBlenderModelWorkspace: sink.scaffoldBlenderModelWorkspace,
   writeBlenderModelFile: sink.writeBlenderModelFile,
@@ -68,7 +68,7 @@ const workflows = [
   ['post', `${MODEL}/publish`, { buildId: BUILD }, sink.publishBlenderModelBuild, 200],
   // Records and cancellation: nothing here chooses or starts what runs.
   ['post', '/api/blender-models', { name: 'Example model' }, sink.createBlenderModel, 201],
-  ['patch', MODEL, { name: 'Renamed example' }, sink.renameBlenderModel, 200],
+  ['patch', MODEL, { name: 'Renamed example' }, sink.updateBlenderModel, 200],
   ['post', `${MODEL}/builds/${BUILD}/cancel`, {}, sink.cancelBlenderModelBuild, 200],
   ['delete', MODEL, undefined, sink.deleteBlenderModel, 200],
 ];

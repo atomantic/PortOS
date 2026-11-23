@@ -60,6 +60,7 @@ const SyncView = lazyWithReload(() => import('./pages/SyncView'));
 const ThreejsModels = lazyWithReload(() => import('./pages/ThreejsModels'));
 const HtmlPages = lazyWithReload(() => import('./pages/HtmlPages'));
 const Media3D = lazyWithReload(() => import('./pages/Media3D'));
+const BlenderModelDetail = lazyWithReload(() => import('./pages/BlenderModelDetail'));
 const Media3DDetail = lazyWithReload(() => import('./pages/Media3DDetail'));
 const ThreejsModelDetail = lazyWithReload(() => import('./pages/ThreejsModelDetail'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
@@ -464,6 +465,7 @@ export default function App() {
             {/* 3D — a top-level Create page (moved out of the Media Gen tabs). The
                 record id is the URL, per the ID-based deep-linking convention. */}
             <Route path="3d" element={<Media3D />} />
+            <Route path="3d/blender/:id/:tab?" element={<BlenderModelDetail />} />
             {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
                 detail page (editable config + render history), not a sidebar edit
                 drawer. React Router ranks the static `new` segment above `:id`, so
