@@ -25,8 +25,63 @@ fi
 [[ ! -L .venv ]] || { echo 'Refusing to rebuild a symlinked Pixal3D environment.' >&2; exit 1; }
 "$PY" -m venv --clear .venv
 VPY=.venv/bin/python
-"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps.lock.txt"
-"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps-sources.lock.txt"
+WHEEL_LOCK="$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps.lock.txt"
+SOURCE_LOCK="$SCRIPTS_DIR/ml/requirements/requirements-pixal3d-mps-sources.lock.txt"
+"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$WHEEL_LOCK"
+
+# MoGe's published metadata still requires Gradio and a second OpenCV distribution.
+# Split it out of the hashed source lock, unpack the verified archive, and patch
+# before install so `pip check` sees the CLI lane rather than the web demo.
+FILTERED=".venv/sources-without-moge.txt"
+MOGE_REQ=".venv/moge-requirement.txt"
+"$VPY" - "$SOURCE_LOCK" "$FILTERED" "$MOGE_REQ" <<'PY'
+from pathlib import Path
+import sys
+blocks, current = [], []
+for line in Path(sys.argv[1]).read_text().splitlines(True):
+    if line.startswith('#') or not line.strip():
+        continue
+    if current and not line[:1].isspace():
+        blocks.append(''.join(current))
+        current = []
+    current.append(line)
+if current:
+    blocks.append(''.join(current))
+moge = [block for block in blocks if block.startswith('moge ')]
+rest = [block for block in blocks if not block.startswith('moge ')]
+if len(moge) != 1:
+    raise SystemExit('Expected exactly one hashed MoGe source requirement')
+Path(sys.argv[2]).write_text(''.join(rest))
+Path(sys.argv[3]).write_text(moge[0])
+PY
+"$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$FILTERED"
+MOGE_DOWNLOAD=".venv/moge-download"
+MOGE_STAGE=".venv/moge-src"
+rm -rf "$MOGE_DOWNLOAD" "$MOGE_STAGE"
+mkdir -p "$MOGE_DOWNLOAD" "$MOGE_STAGE"
+"$VPY" -m pip download --disable-pip-version-check --require-hashes --no-deps -r "$MOGE_REQ" -d "$MOGE_DOWNLOAD"
+"$VPY" - "$MOGE_DOWNLOAD" "$MOGE_STAGE" "$SCRIPTS_DIR/ml/patch-moge-metadata.py" <<'PY'
+import sys
+import tarfile
+from pathlib import Path
+download, stage, patcher = (Path(arg) for arg in sys.argv[1:])
+archives = sorted(download.glob('*.tar.gz'))
+if len(archives) != 1:
+    raise SystemExit('Expected one hash-verified MoGe archive')
+if not hasattr(tarfile, 'data_filter'):
+    raise SystemExit('Update the bootstrap Python to a security-patched build with tarfile.data_filter.')
+with tarfile.open(archives[0]) as source:
+    source.extractall(stage, filter='data')
+roots = [path for path in stage.iterdir() if path.is_dir()]
+if len(roots) != 1 or not (roots[0] / 'pyproject.toml').is_file():
+    raise SystemExit('Expected one MoGe source root')
+destination = stage / 'pkg'
+roots[0].rename(destination)
+sys.argv = [str(patcher), str(destination)]
+import runpy
+runpy.run_path(str(patcher), run_name='__main__')
+PY
+"$VPY" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-cache-dir "$MOGE_STAGE/pkg"
 
 # Archive Git objects, not the working directory: builds and renders use the
 # same pinned source, even if an earlier checkout has local changes/artifacts.
@@ -56,3 +111,4 @@ assert torchvision.__version__.split('+')[0] == '0.29.2'
 assert torch.backends.mps.is_available(), 'MPS backend unavailable'
 print('[setup] Torch 2.15.0, torchvision 0.29.2, MPS and native imports OK')
 PY
+"$VPY" -m pip check
