@@ -2,6 +2,7 @@ import { copyFile, mkdtemp, readdir, rm, stat } from 'fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { createRevisionCache, fileRevision, sqliteRevision } from '../lib/fileRevisionCache.js';
 import { decodeMessage } from '../lib/protobufWire.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { UNKNOWN_MODEL, codexServiceTier, readGrokTurnsFromFile, billGrokTurnsByDay, parseJsonLines, decodeGrokSessionDir, totalTranscriptTokens } from '../lib/provider/providerTranscriptUsage.js';
@@ -76,6 +77,20 @@ function addBuckets(days, day, model, buckets) {
     add('ultrafastCacheWrite', buckets.ultrafastCacheWriteTokens);
   }
 }
+
+/** Add one cached per-file day map into the scan's days. */
+function mergeDays(into, from) {
+  for (const [day, models] of Object.entries(from)) {
+    for (const [model, counts] of Object.entries(models)) {
+      const row = (into[day] ??= {})[model] ??= {};
+      for (const [field, value] of Object.entries(counts)) row[field] = (row[field] || 0) + value;
+    }
+  }
+}
+
+// Per-file day buckets, valid while the file revision (and `from`) is unchanged.
+const grokFileCache = createRevisionCache();
+const agyFileCache = createRevisionCache();
 
 // A live rollout appended to mid-read is re-read by the next pass, and the
 // store keeps the larger count, so that alone does not hold a fold back. Any
@@ -214,13 +229,20 @@ async function scanGrok({ from, home = homedir() }) {
       const path = join(root, dirName, sessionId, 'updates.jsonl');
       const info = await stat(path).catch(() => null);
       if (!info || (floor != null && info.mtimeMs < floor)) continue;
-      const read = await readGrokTurnsFromFile(path);
-      if (!read) continue;
-      filesScanned += 1;
-      for (const [day, parsed] of billGrokTurnsByDay(read.turns, dayOf, floor)) {
-        for (const [model, buckets] of Object.entries(parsed.byModel || {})) addBuckets(days, day, model, buckets);
+      const revision = `${from ?? ''}|${await fileRevision(path)}`;
+      let fileDays = grokFileCache.get(path, revision);
+      if (!fileDays) {
+        const read = await readGrokTurnsFromFile(path);
+        if (!read) continue;
+        fileDays = {};
+        for (const [day, parsed] of billGrokTurnsByDay(read.turns, dayOf, floor)) {
+          for (const [model, buckets] of Object.entries(parsed.byModel || {})) addBuckets(fileDays, day, model, buckets);
+        }
+        grokFileCache.set(path, revision, fileDays);
+        await yieldToEventLoop();
       }
-      await yieldToEventLoop();
+      filesScanned += 1;
+      mergeDays(days, fileDays);
     }
   }
   return { days, filesScanned };
@@ -249,18 +271,17 @@ async function readAgySteps(path, scratch) {
   await copyFile(path, copy);
   await copyFile(`${path}-wal`, `${copy}-wal`).catch((err) => { if (err.code !== 'ENOENT') throw err; });
   const db = new DatabaseSync(copy);
-  let rows;
+  const steps = [];
   try {
-    rows = db.prepare('SELECT metadata FROM steps WHERE length(metadata) <= ? ORDER BY idx').all(AGY_MAX_METADATA_BYTES);
+    // iterate() keeps one step blob resident at a time instead of all of them.
+    for (const { metadata } of db.prepare('SELECT metadata FROM steps WHERE length(metadata) <= ? ORDER BY idx').iterate(AGY_MAX_METADATA_BYTES)) {
+      if (!metadata) continue;
+      const { created, usage } = decodeMessage(AGY_STEP_METADATA, metadata);
+      const ms = Number(created?.seconds) * 1000;
+      if (usage && Number.isFinite(ms)) steps.push({ ms, usage });
+    }
   } finally {
     db.close();
-  }
-  const steps = [];
-  for (const { metadata } of rows) {
-    if (!metadata) continue;
-    const { created, usage } = decodeMessage(AGY_STEP_METADATA, metadata);
-    const ms = Number(created?.seconds) * 1000;
-    if (usage && Number.isFinite(ms)) steps.push({ ms, usage });
   }
   return steps;
 }
@@ -302,14 +323,20 @@ async function scanAgy({ from, home = homedir() }) {
       const mtime = await databaseMtime(path);
       if (mtime == null) continue;
       if (floor != null && mtime < floor) { fromDatabase.add(conversation); continue; }
-      scratch ??= await mkdtemp(join(tmpdir(), 'portos-agy-usage-'));
-      // A copy torn by a live write fails to open or decode; that conversation
-      // falls back to its transcript and the next pass reads the DB again.
-      const steps = await readAgySteps(path, scratch).catch((err) => {
-        console.log(`⏭️ Antigravity conversation DB unreadable (${err.code ?? 'unknown'}); using its transcript`);
-        return null;
-      });
-      if (!steps) continue;
+      // Unchanged DB + WAL: reuse the decoded steps, no copy, open or decode.
+      const revision = await sqliteRevision(path);
+      let steps = revision == null ? undefined : agyFileCache.get(path, revision);
+      if (!steps) {
+        scratch ??= await mkdtemp(join(tmpdir(), 'portos-agy-usage-'));
+        // A copy torn by a live write fails to open or decode; that conversation
+        // falls back to its transcript and the next pass reads the DB again.
+        steps = await readAgySteps(path, scratch).catch((err) => {
+          console.log(`⏭️ Antigravity conversation DB unreadable (${err.code ?? 'unknown'}); using its transcript`);
+          return null;
+        });
+        if (!steps) continue;
+        if (revision != null) agyFileCache.set(path, revision, steps);
+      }
       fromDatabase.add(conversation);
       filesScanned += 1;
       for (const { ms, usage } of steps) add(ms, usage);
@@ -406,7 +433,7 @@ export async function refreshNativeUsageHistory({ force = false, home } = {}) {
 
 /** Background keep-fresh so the report and peers stay current without opening the page. */
 export function startNativeUsageRefresh({ intervalMs = 30 * 60_000, firstDelayMs = 60_000 } = {}) {
-  const run = () => refreshNativeUsageHistory({ force: true }).catch((err) => {
+  const run = () => refreshNativeUsageHistory({ force: false }).catch((err) => {
     console.error(`❌ Native usage refresh failed: ${err.message}`);
   });
   loadNativeUsageSnapshot().catch(() => {});

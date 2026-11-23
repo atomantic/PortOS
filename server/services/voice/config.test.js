@@ -54,3 +54,14 @@ it('persists retirement acknowledgement without removing customized TTS settings
   expect(updateSettings).toHaveBeenCalledWith({ voice: saved });
   expect(await getVoiceConfig()).toBe(saved);
 });
+
+it('strips the retired voice.trigger key on read and on save', async () => {
+  getSettings.mockResolvedValue({ voice: { enabled: true, trigger: 'hotword' } });
+  expect(VOICE_DEFAULTS).not.toHaveProperty('trigger');
+  expect(await getVoiceConfig()).not.toHaveProperty('trigger');
+  invalidateVoiceConfigCache();
+  const saved = await updateVoiceConfig({ trigger: 'vad', hotkey: 'F5' });
+  expect(saved).not.toHaveProperty('trigger');
+  expect(saved.hotkey).toBe('F5');
+  expect(updateSettings.mock.calls[0][0].voice).not.toHaveProperty('trigger');
+});

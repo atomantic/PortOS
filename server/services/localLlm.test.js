@@ -125,13 +125,15 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 
 const mocks = vi.hoisted(() => ({
+  safetensors: {
+    importModelFromHfSafetensors: vi.fn(async ({ modelId }) => ({ success: true, modelId }))
+  },
   settings: { getSettings: vi.fn(async () => ({})) },
   ollama: {
     getBaseUrl: vi.fn(() => 'http://localhost:11434'),
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
-    importModelFromHfSafetensors: vi.fn(async ({ modelId }) => ({ success: true, modelId })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
@@ -141,7 +143,9 @@ const mocks = vi.hoisted(() => ({
     startServer: vi.fn(async () => ({ success: true, running: true })),
     stopServer: vi.fn(async () => ({ success: true, running: false })),
     startPersistentService: vi.fn(async () => ({ success: true, running: true, persistent: true })),
-    stopPersistentService: vi.fn(async () => ({ success: true, running: false, persistent: false })),
+    stopPersistentService: vi.fn(async () => ({ success: true, running: false, persistent: false }))
+  },
+  ollamaDisk: {
     // No local GGUF found by default → migrate falls back to re-pull.
     resolveLocalModel: vi.fn(async () => null),
     // Echo the requested mode as the real outcome (link mode "succeeds" in tests).
@@ -177,6 +181,8 @@ const mocks = vi.hoisted(() => ({
   }
 }));
 vi.mock('./ollamaManager.js', () => mocks.ollama);
+vi.mock('./ollamaSafetensorsImport.js', () => mocks.safetensors);
+vi.mock('./ollamaDiskImport.js', () => mocks.ollamaDisk);
 vi.mock('./lmStudioManager.js', () => mocks.lmstudio);
 // The classification predicate comes from the REAL toolkit module rather than
 // being re-implemented here: it decides which providers get refreshed at all, so
@@ -428,7 +434,7 @@ describe('localLlm', () => {
     it('routes a curated Safetensors model through Ollama create instead of registry pull', async () => {
       const onProgress = vi.fn();
       await svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', onProgress);
-      expect(mocks.ollama.importModelFromHfSafetensors).toHaveBeenCalledWith({
+      expect(mocks.safetensors.importModelFromHfSafetensors).toHaveBeenCalledWith({
         modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
         repo: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
         subdir: '4-bit',
@@ -438,7 +444,7 @@ describe('localLlm', () => {
     });
     it('refuses to cancel a Safetensors import, which cannot be stopped mid-create', async () => {
       let finish;
-      mocks.ollama.importModelFromHfSafetensors.mockImplementationOnce(({ modelId }) => new Promise((resolve) => { finish = () => resolve({ success: true, modelId }); }));
+      mocks.safetensors.importModelFromHfSafetensors.mockImplementationOnce(({ modelId }) => new Promise((resolve) => { finish = () => resolve({ success: true, modelId }); }));
       const install = svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit');
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
       expect(svc.listActiveInstalls()).toEqual([expect.objectContaining({ modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', cancelable: false })]);
@@ -737,7 +743,7 @@ describe('localLlm', () => {
       expect(r.error).toBe('LM Studio is unavailable');
       expect(events.at(-1)).toEqual({ event: 'error', message: 'LM Studio is unavailable' });
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
     });
 
     it('returns success with no results when the source backend has no models', async () => {
@@ -747,7 +753,7 @@ describe('localLlm', () => {
       expect(r.success).toBe(true);
       expect(r.results).toEqual([]);
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
     });
 
     it('skips a model with no known target equivalent (→ LM Studio)', async () => {
@@ -773,7 +779,7 @@ describe('localLlm', () => {
       const r = await svc.migrateBackend('ollama'); // mode defaults to 'link'
       expect(r.results[0].status).toBe('imported');
       expect(r.results[0].linked).toBe(true);
-      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'link' });
+      expect(mocks.ollamaDisk.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'link' });
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled(); // no network download
     });
 
@@ -789,7 +795,7 @@ describe('localLlm', () => {
       expect(r.mode).toBe('copy');
       expect(r.results[0].status).toBe('imported');
       expect(r.results[0].linked).toBe(false);
-      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'copy' });
+      expect(mocks.ollamaDisk.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'copy' });
     });
 
     it('does not local-import an MLX model — falls back to re-pull', async () => {
@@ -802,7 +808,7 @@ describe('localLlm', () => {
       });
 
       const r = await svc.migrateBackend('ollama');
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
       expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function), { signal: expect.any(AbortSignal) });
       expect(r.results[0].status).toBe('installed');
     });
@@ -816,7 +822,7 @@ describe('localLlm', () => {
       });
 
       const r = await svc.migrateBackend('ollama');
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
       expect(mocks.ollama.pullModel).toHaveBeenCalled();
       expect(r.results[0].status).toBe('installed');
     });

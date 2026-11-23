@@ -53,9 +53,16 @@ const validEngine = (v) => VALID_ENGINES.has(v) ? v : undefined;
 
 const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
+// Older clients/configs still send `trigger`; it was never read, so drop it
+// before .strict() validation instead of 400ing them.
+const stripLegacyTrigger = (body) => {
+  if (!body || typeof body !== 'object' || !('trigger' in body)) return body;
+  const { trigger: _trigger, ...rest } = body;
+  return rest;
+};
+
 const voiceConfigPatchSchema = z.object({
   enabled: z.boolean().optional(),
-  trigger: z.enum(['push-to-talk', 'hotword', 'vad']).optional(),
   hotkey: z.string().max(32).optional(),
   facetime: z.object({
     maxCallMinutes: z.number().int().min(1).max(120).optional(),
@@ -149,7 +156,7 @@ router.get('/config', asyncHandler(async (_req, res) => {
 
 // PUT /api/voice/config — deep-merge patch, save, and reconcile PM2 state
 router.put('/config', asyncHandler(async (req, res) => {
-  const parsed = voiceConfigPatchSchema.safeParse(req.body || {});
+  const parsed = voiceConfigPatchSchema.safeParse(stripLegacyTrigger(req.body) || {});
   if (!parsed.success) {
     throw new ServerError(
       `Invalid voice config: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
@@ -175,6 +182,7 @@ router.put('/config', asyncHandler(async (req, res) => {
     hotkey: next.hotkey,
     vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
     fastPath: next.llm?.fastPath || null,
+    personality: next.llm?.usePersonality === false ? null : (next.llm?.personality || null),
   });
   res.json({ config: next, reconciliation });
 }));
@@ -403,7 +411,7 @@ router.post('/profiles/clone', asyncHandler(async (req, res) => {
   const body = validateRequest(voiceCloneCandidateSchema, req.body || {});
   const audioBuffer = Buffer.from(body.audioBase64, 'base64');
   if (audioBuffer.length > MAX_BASE64_UPLOAD_BYTES) {
-    throw new ServerError('FILE_TOO_LARGE', `Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`);
+    throw new ServerError(`Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`, { status: 413, code: 'FILE_TOO_LARGE' });
   }
   const profile = await createClonedVoiceCandidate({
     ...body,

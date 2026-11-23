@@ -2,7 +2,6 @@
   "timezone": "America/Los_Angeles",
   "voice": {
     "enabled": false,
-    "trigger": "push-to-talk",
     "hotkey": "Space",
     "stt": {
       "engine": "web-speech",

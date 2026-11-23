@@ -22,6 +22,7 @@ import { getDataOverview } from './dataManager.js';
 import { listHfModelStorage, listLoraStorage } from './mediaModelStorage.js';
 import { listModelStore } from './modelStoreStorage.js';
 import * as ollamaManager from './ollamaManager.js';
+import { listStoredModels as listOllamaStoredModels } from './ollamaDiskImport.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
 import { getAgents } from './cos/cosAgentLifecycle.js';
@@ -443,7 +444,7 @@ export async function buildSystemResourceReport() {
     listLoraStorage({ strict: true }).catch(() => null),
     Promise.all(MODEL_STORES.map(({ backend }) => listModelStore(backend).catch(() => null))),
     ollamaManager.getStatus(true).catch(() => null),
-    ollamaManager.listStoredModels().catch(() => null),
+    listOllamaStoredModels().catch(() => null),
     ollamaManager.getLoadedModels().catch(() => null),
     dirSize(ollamaManager.getModelsDir(), { strict: true }).catch(() => null),
     lmStudioManager.checkLMStudioAvailable(true).catch(() => null),

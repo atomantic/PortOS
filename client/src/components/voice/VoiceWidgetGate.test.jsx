@@ -111,6 +111,7 @@ vi.mock('../../services/uiInteract', () => ({
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
 
+import { warmNano } from '../../services/browserLlm';
 import VoiceWidgetGate from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
 
@@ -194,6 +195,24 @@ describe('VoiceWidgetGate — voice stays out of the page until it is on', () =>
     // Turning voice on shows the controls; it does not open the mic.
     expect(mocks.startContinuous).not.toHaveBeenCalled();
     expect(mocks.getVoiceConfig).toHaveBeenCalledOnce();
+  });
+
+  it('applies a live personality change and re-warms Nano with it', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    mocks.getVoiceConfig.mockResolvedValue({
+      ...ENABLED_CONFIG,
+      llm: { fastPath: { enabled: true, browserLlm: true }, personality: { name: 'First' } },
+    });
+    warmNano.mockResolvedValue(undefined);
+    renderGate();
+    expect(await screen.findByRole('button', { name: WIDGET_MIC })).toBeInTheDocument();
+    await settle();
+    const before = warmNano.mock.calls.length;
+    expect(before).toBeGreaterThan(0);
+
+    act(() => emitSocket('voice:config:changed', { personality: { name: 'Second' } }));
+    await settle();
+    expect(warmNano.mock.calls.length).toBeGreaterThan(before);
   });
 
   it('keeps one config subscription and releases it on unmount', async () => {

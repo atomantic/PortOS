@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 const { request } = await import('../lib/testHelper.js');
 
+// Shrink the upload cap so an oversized clone body fits express.json's default limit.
+vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
 
 // Mock all voice service modules before importing the router so the route
@@ -180,6 +182,21 @@ describe('Voice Routes', () => {
       expect(res.body.profile.kind).toBe('designed');
     });
 
+    it('rejects an oversized clone upload with 413 FILE_TOO_LARGE and a readable message', async () => {
+      const res = await request(buildApp()).post('/api/voice/profiles/clone').send({
+        universeId: 'uni-1',
+        characterId: 'char-1',
+        filename: 'reference.wav',
+        audioBase64: Buffer.alloc(64).toString('base64'),
+        transcript: 'sample transcript',
+        performerConsentConfirmed: true,
+      });
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('FILE_TOO_LARGE');
+      expect(res.body.error).toMatch(/exceeds maximum size limit of 8 bytes/);
+      expect(voiceProfiles.createClonedVoiceCandidate).not.toHaveBeenCalled();
+    });
+
     it('creates a consented clone candidate profile with verified performer consent', async () => {
       voiceProfiles.createClonedVoiceCandidate.mockResolvedValue({ id: 'voice-clone-1', kind: 'cloned', approval: { status: 'draft' } });
       const res = await request(buildApp()).post('/api/voice/profiles/clone').send({
@@ -349,6 +366,26 @@ describe('Voice Routes', () => {
       const res = await request(buildApp()).put('/api/voice/config').send(patch);
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('accepts a legacy trigger key by stripping it instead of returning 400', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const res = await request(buildApp()).put('/api/voice/config').send({ trigger: 'hotword', enabled: true });
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith({ enabled: true });
+    });
+
+    it('broadcasts personality on voice:config:changed, null when disabled', async () => {
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const emit = vi.fn();
+      const personality = { name: 'Example', speechStyle: 'calm' };
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: true, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality }));
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: false, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality: null }));
     });
 
     it('accepts Qwen3-TTS engine and voice configuration', async () => {
