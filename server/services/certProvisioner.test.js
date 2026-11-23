@@ -30,7 +30,7 @@ const CERT = join(CERT_DIR, 'cert.pem');
 const KEY = join(CERT_DIR, 'key.pem');
 const META = join(CERT_DIR, 'meta.json');
 
-const runningStatus = (dns = 'host.tail1234.ts.net.') =>
+const runningStatus = (dns = 'host.example.ts.net.') =>
   JSON.stringify({ BackendState: 'Running', Self: { DNSName: dns } });
 
 // Routes the two CLI invocations; `cert` may write the files like the real CLI.
@@ -128,11 +128,11 @@ describe('provisionTailscaleCert success', () => {
   it('strips the trailing dot, passes cert/key paths, and persists meta.json', async () => {
     stubCli({ status: runningStatus(), cert: writeCertFiles(2_000_000) });
     const result = await provisionTailscaleCert();
-    expect(result).toMatchObject({ ok: true, mode: 'tailscale', hostname: 'host.tail1234.ts.net', wroteNew: true });
+    expect(result).toMatchObject({ ok: true, mode: 'tailscale', hostname: 'host.example.ts.net', wroteNew: true });
     const certCall = execFile.mock.calls.find(c => c[1][0] === 'cert');
-    expect(certCall[1]).toEqual(['cert', `--cert-file=${CERT}`, `--key-file=${KEY}`, 'host.tail1234.ts.net']);
+    expect(certCall[1]).toEqual(['cert', `--cert-file=${CERT}`, `--key-file=${KEY}`, 'host.example.ts.net']);
     const meta = JSON.parse(readFileSync(META, 'utf8'));
-    expect(meta).toMatchObject({ mode: 'tailscale', hostname: 'host.tail1234.ts.net', certMtime: 2_000_000_000 });
+    expect(meta).toMatchObject({ mode: 'tailscale', hostname: 'host.example.ts.net', certMtime: 2_000_000_000 });
     expect(Number.isNaN(Date.parse(meta.issuedAt))).toBe(false);
   });
 
