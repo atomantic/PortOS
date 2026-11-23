@@ -59,7 +59,7 @@ async function getFeedChangesSince(stream, mapRow, since, limit) {
 export const getRelationChangesSince = (since = '0', limit = 100) =>
   getFeedChangesSince('catalog_ingredient_relations', rowToRelation, since, limit);
 
-export async function upsertRelationFromPeer(rel) {
+export async function upsertRelationFromPeer(rel, batch) {
   return withPeerIdentityWrite([rel.fromId, rel.toId], async (query) => {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
   // the relations feature never emits these rows, so there's no v1-without-
@@ -101,7 +101,7 @@ export async function upsertRelationFromPeer(rel) {
       [rel.fromId, rel.toId, rel.kind, rel.createdAt],
     );
   }
-  });
+  }, batch);
 }
 
 export const getMediaChangesSince = (since = '0', limit = 100) =>
@@ -112,7 +112,7 @@ function assetApplyResult([row]) {
   return row ? { applied: true, ingredientId: row.ingredient_id } : { applied: false };
 }
 
-export async function upsertMediaFromPeer(media) {
+export async function upsertMediaFromPeer(media, batch) {
   return withPeerIdentityWrite([media.ingredientId], async (query) => {
   // Mirrors upsertRefFromPeer's mixed-version handling: a peer that predates
   // the media feature never emits these rows, so there's no pre-tombstone
@@ -185,7 +185,7 @@ export async function upsertMediaFromPeer(media) {
     [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam, ...libraryParam],
   );
   return assetApplyResult(rows);
-  });
+  }, batch);
 }
 
 export const getTagChangesSince = (since = '0', limit = 100) =>
@@ -316,7 +316,7 @@ export async function upsertScrapFromPeer(scrap) {
   return { applied: result.rows.length > 0, isInsert: result.rows[0]?.is_insert ?? false };
 }
 
-export async function upsertIngredientFromPeer(ing) {
+export async function upsertIngredientFromPeer(ing, batch) {
   return withPeerIdentityWrite([ing.id], async (query) => {
   const result = await query(
     `INSERT INTO catalog_ingredients
@@ -352,10 +352,10 @@ export async function upsertIngredientFromPeer(ing) {
     ],
   );
   return { applied: result.rows.length > 0, isInsert: result.rows[0]?.is_insert ?? false };
-  });
+  }, batch);
 }
 
-export async function upsertSourceFromPeer(src) {
+export async function upsertSourceFromPeer(src, batch) {
   return withPeerIdentityWrite([src.ingredientId], async (query) => {
   await query(
     `INSERT INTO catalog_ingredient_sources (ingredient_id, scrap_id, span, extracted_at)
@@ -363,10 +363,10 @@ export async function upsertSourceFromPeer(src) {
      ON CONFLICT (ingredient_id, scrap_id) DO UPDATE SET span = EXCLUDED.span`,
     [src.ingredientId, src.scrapId, src.span ? toPgJson(src.span) : null, src.extractedAt],
   );
-  });
+  }, batch);
 }
 
-export async function upsertRefFromPeer(ref) {
+export async function upsertRefFromPeer(ref, batch) {
   return withPeerIdentityWrite([ref.ingredientId], async (query) => {
   // ON CONFLICT DO UPDATE so a peer's soft-delete (or revival) of a ref row
   // is mirrored locally. Refs are tuple-unique (no editable content fields),
@@ -431,7 +431,7 @@ export async function upsertRefFromPeer(ref) {
     [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
   );
   return assetApplyResult(rows);
-  });
+  }, batch);
 }
 
 // The inbox is db-primary, receiver-local, and covered by the normal DB backup.
@@ -485,15 +485,55 @@ export async function drainPendingCatalogApplies() {
   }
 }
 
-async function withPeerIdentityWrite(ids, write) {
+const PENDING_IDENTITY_OPERATIONS_SQL = `SELECT source_id, survivor_id, state FROM catalog_identity_operations
+  WHERE state IN ('prepared', 'committed', 'recovery_prepared')
+    AND (source_id = ANY($1::text[]) OR survivor_id = ANY($1::text[]))`;
+
+function identityFenceResult(operations) {
+  if (!operations.length) return null;
+  return { applied: false, isInsert: false, protectedIdentity: true,
+    identityPending: operations.some(row => row.state !== 'committed') };
+}
+
+// Peer-apply batch: ONE transaction, ONE set_config and ONE fence query for a
+// whole envelope kind instead of per row. The fence snapshot is taken up front;
+// an identity operation that starts mid-batch is caught by the DB-side
+// portos.catalog_identity_peer_apply trigger fence as before. `isolate` wraps
+// each row in a SAVEPOINT so one failing row (FK, malformed) rolls back alone
+// and the transaction stays usable for the rest.
+export async function withPeerIdentityBatch(ids, fn) {
   return withTransaction(async client => {
     const exec = client.query.bind(client);
     await exec("SELECT set_config('portos.catalog_identity_peer_apply', 'on', true)");
-    const { rows } = await exec(`SELECT id, state FROM catalog_identity_operations
-      WHERE state IN ('prepared', 'committed', 'recovery_prepared')
-        AND (source_id = ANY($1::text[]) OR survivor_id = ANY($1::text[]))`, [ids]);
-    if (rows.length) return { applied: false, isInsert: false, protectedIdentity: true,
-      identityPending: rows.some(row => row.state !== 'committed') };
-    return write(exec);
+    const { rows: operations } = await exec(PENDING_IDENTITY_OPERATIONS_SQL, [ids]);
+    const batch = {
+      exec,
+      operations,
+      async isolate(work) {
+        await exec('SAVEPOINT peer_row');
+        try {
+          const result = await work();
+          await exec('RELEASE SAVEPOINT peer_row');
+          return result;
+        } catch (err) {
+          await exec('ROLLBACK TO SAVEPOINT peer_row');
+          throw err;
+        }
+      },
+    };
+    return fn(batch);
+  });
+}
+
+async function withPeerIdentityWrite(ids, write, batch) {
+  if (batch) {
+    const mine = batch.operations.filter(op => ids.includes(op.source_id) || ids.includes(op.survivor_id));
+    return identityFenceResult(mine) ?? write(batch.exec);
+  }
+  return withTransaction(async client => {
+    const exec = client.query.bind(client);
+    await exec("SELECT set_config('portos.catalog_identity_peer_apply', 'on', true)");
+    const { rows } = await exec(PENDING_IDENTITY_OPERATIONS_SQL, [ids]);
+    return identityFenceResult(rows) ?? write(exec);
   });
 }

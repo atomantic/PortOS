@@ -48,6 +48,7 @@ import {
   upsertRelationFromPeer,
   upsertTagFromPeer,
   upsertMediaFromPeer,
+  withPeerIdentityBatch,
   drainPendingCatalogApplies,
   normalizeTags,
 } from './catalogDB.js';
@@ -186,34 +187,43 @@ export async function applyRemoteChanges(envelope = {}) {
   // row to upsert (used to clean legacy tags in-place so the row lands in its
   // final shape in ONE write). A failed prepare falls back to the raw row.
   // Only actual committed writes contribute to local invalidation.
-  const applyKind = async ({ items, upsertFn, tally, lww, errLabel, idFor, prepare, onApplied }) => {
-    for (const raw of items || []) {
-      let item = raw;
-      if (prepare) {
-        try { item = (await prepare(raw)) || raw; }
-        catch (err) { recordFailure(`${errLabel}-prepare`, idFor(raw), err); }
-      }
-      let res;
-      try {
-        res = await upsertFn(item);
-        if (res?.identityPending) tally.identityPending = (tally.identityPending || 0) + 1;
-        if (lww) {
-          if (res.deferred) tally.deferred = (tally.deferred || 0) + 1;
-          else if (!res.applied) tally.skipped++;
-          else if (res.isInsert) tally.inserted++;
-          else tally.updated++;
-        } else if (res?.protectedIdentity) {
-          tally.skipped = (tally.skipped || 0) + 1;
-        } else {
-          tally.applied++;
+  // `fenceIds(item)` opts a kind into the identity-fenced batch: one
+  // transaction + one fence query for the whole kind, each row isolated by a
+  // SAVEPOINT (withPeerIdentityBatch). Kinds without it apply row by row.
+  const applyKind = async ({ items, upsertFn, tally, lww, errLabel, idFor, prepare, onApplied, fenceIds }) => {
+    const rows = items || [];
+    const applyRows = async (batch) => {
+      for (const raw of rows) {
+        let item = raw;
+        if (prepare) {
+          try { item = (await prepare(raw)) || raw; }
+          catch (err) { recordFailure(`${errLabel}-prepare`, idFor(raw), err); }
         }
-      } catch (err) {
-        tally.failed++;
-        recordFailure(errLabel, idFor(item), err);
-        continue;
+        let res;
+        try {
+          res = batch ? await batch.isolate(() => upsertFn(item, batch)) : await upsertFn(item);
+          if (res?.identityPending) tally.identityPending = (tally.identityPending || 0) + 1;
+          if (lww) {
+            if (res.deferred) tally.deferred = (tally.deferred || 0) + 1;
+            else if (!res.applied) tally.skipped++;
+            else if (res.isInsert) tally.inserted++;
+            else tally.updated++;
+          } else if (res?.protectedIdentity) {
+            tally.skipped = (tally.skipped || 0) + 1;
+          } else {
+            tally.applied++;
+          }
+        } catch (err) {
+          tally.failed++;
+          recordFailure(errLabel, idFor(item), err);
+          continue;
+        }
+        if (res?.applied) onApplied?.(item, res);
       }
-      if (res?.applied) onApplied?.(item, res);
-    }
+    };
+    if (!fenceIds || rows.length === 0) return applyRows(null);
+    const ids = [...new Set(rows.flatMap((row) => fenceIds(row)).filter((id) => typeof id === 'string'))];
+    return withPeerIdentityBatch(ids, applyRows);
   };
 
   // Legacy universe tags (`from-universe` + `universe:<id>`) friendlify on
@@ -318,18 +328,18 @@ export async function applyRemoteChanges(envelope = {}) {
 
   await applyKind({
     items: envelope.ingredients, upsertFn: upsertIngredientFromPeer, tally: stats.ingredients, lww: true,
-    errLabel: 'ingredient', idFor: (i) => i?.id, prepare: friendlifyIngredientTagsBeforeApply,
+    errLabel: 'ingredient', idFor: (i) => i?.id, fenceIds: (i) => [i?.id],  prepare: friendlifyIngredientTagsBeforeApply,
     onApplied: ({ id }) => changedIngredients.set(id, 'primitive-changed'),
   });
 
   await applyKind({
     items: envelope.sources, upsertFn: upsertSourceFromPeer, tally: stats.sources, lww: false,
-    errLabel: 'source', idFor: (s) => `${s?.ingredientId}↔${s?.scrapId}`,
+    errLabel: 'source', idFor: (s) => `${s?.ingredientId}↔${s?.scrapId}`, fenceIds: (s) => [s?.ingredientId],
   });
 
   await applyKind({
     items: envelope.refs, upsertFn: upsertRefFromPeer, tally: stats.refs, lww: false,
-    errLabel: 'ref', idFor: (r) => `${r?.ingredientId}/${r?.refKind}/${r?.refId}`,
+    errLabel: 'ref', idFor: (r) => `${r?.ingredientId}/${r?.refKind}/${r?.refId}`, fenceIds: (r) => [r?.ingredientId],
     onApplied: (_ref, result) => markAssetsChanged(result),
   });
 
@@ -337,7 +347,7 @@ export async function applyRemoteChanges(envelope = {}) {
   // ingredient upserts above (same envelope ordering rationale as sources).
   await applyKind({
     items: envelope.relations, upsertFn: upsertRelationFromPeer, tally: stats.relations, lww: false,
-    errLabel: 'relation', idFor: (r) => `${r?.fromId}/${r?.kind}/${r?.toId}`,
+    errLabel: 'relation', idFor: (r) => `${r?.fromId}/${r?.kind}/${r?.toId}`, fenceIds: (r) => [r?.fromId, r?.toId],
   });
 
   // Media rows FK ingredient_id to catalog_ingredients, so they land after the
@@ -348,7 +358,7 @@ export async function applyRemoteChanges(envelope = {}) {
   // drop the attachment metadata entirely).
   await applyKind({
     items: envelope.media, upsertFn: upsertMediaFromPeer, tally: stats.media, lww: false,
-    errLabel: 'media', idFor: (m) => `${m?.ingredientId}/${m?.kind}/${m?.mediaKey}`,
+    errLabel: 'media', idFor: (m) => `${m?.ingredientId}/${m?.kind}/${m?.mediaKey}`, fenceIds: (m) => [m?.ingredientId],
     onApplied: (media, result) => {
       if (media.kind === 'portrait' || media.kind === 'reference') markAssetsChanged(result);
     },
