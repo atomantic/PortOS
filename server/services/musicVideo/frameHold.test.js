@@ -11,12 +11,13 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const { seen } = vi.hoisted(() => ({ seen: { args: null, real: false } }));
+const { seen } = vi.hoisted(() => ({ seen: { args: null, real: false, installFails: false } }));
 vi.mock('../../lib/ffmpeg.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
     findFfmpeg: async () => 'ffmpeg',
+    installEncodedVideo: async (...args) => (seen.installFails ? { ok: false, reason: 'Failed to install frame hold video: locked' } : actual.installEncodedVideo(...args)),
     probeVideoGeometry: async (path) => (seen.real ? actual.probeVideoGeometry(path)
       : { width: 64, height: 64, fps: 24, numFrames: 72, durationSec: 3 }),
     runFfmpegProcess: async (options) => {
@@ -32,7 +33,7 @@ const { applyFrameHold, projectFrameHold } = await import('./frameHold.js');
 const dirs = [];
 const scratch = async () => { const dir = await mkdtemp(join(tmpdir(), 'portos-frame-hold-')); dirs.push(dir); return dir; };
 afterEach(async () => {
-  seen.args = null; seen.real = false;
+  seen.args = null; seen.real = false; seen.installFails = false;
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -62,6 +63,15 @@ describe('applyFrameHold', () => {
     expect(graph).toContain('concat=n=3:v=1:a=0[outv]');
     expect(seen.args).toEqual(expect.arrayContaining(['-r', '24', '-frames:v', '72', '-c:a', 'copy']));
     expect(await readFile(path, 'utf8')).toBe('held-video');
+  });
+
+  it('fails the pass with a ServerError and keeps the source when the install step refuses', async () => {
+    const dir = await scratch();
+    const path = join(dir, 'cut.mp4');
+    await writeFile(path, 'source');
+    seen.installFails = true;
+    await expect(applyFrameHold({ path, sections, performanceSceneIds: ['p'] })).rejects.toMatchObject({ status: 500, code: 'FRAME_HOLD_INSTALL' });
+    expect(await readFile(path, 'utf8')).toBe('source');
   });
 
   it('leaves the file alone when every shot is a performance', async () => {

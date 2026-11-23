@@ -17,6 +17,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 const { seen } = vi.hoisted(() => ({ seen: { webAdmitted: false, webFail: null, webAbort: null, webCheck: null, geometryFrames: 48, opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
+  installEncodedVideo: async (tmp, target) => { const { rename: move } = await import('node:fs/promises'); await move(tmp, target); return { ok: true, outPath: target }; },
   findFfmpeg: async () => 'ffmpeg',
   // 48 frames at 24 fps: the container reports a hair more than the frames hold.
   probeVideoGeometry: async () => ({ width: 1280, height: 720, fps: 24, numFrames: seen.geometryFrames, durationSec: seen.geometryFrames / 24 + 0.04 }),
