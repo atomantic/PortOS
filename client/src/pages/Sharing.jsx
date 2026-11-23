@@ -325,6 +325,7 @@ function SharingBuckets({ selectedId }) {
         <button
           type="button"
           onClick={() => setShowAdd((v) => !v)}
+          aria-expanded={showAdd}
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 text-white text-sm font-medium"
         >
           <Plus size={16} />
@@ -477,7 +478,7 @@ function SharingBuckets({ selectedId }) {
 
       <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
         {/* Bucket list */}
-        <aside>
+        <aside aria-label="Share buckets">
           {loading ? (
             <PageSkeleton header="none" label="Loading buckets" cards={3} sidebar={false} />
           ) : bucketsState === 'error' ? (
@@ -497,11 +498,12 @@ function SharingBuckets({ selectedId }) {
                     <button
                       type="button"
                       onClick={() => navigate(`/sharing/buckets/${encodeURIComponent(b.id)}`)}
+                      aria-current={isSelected ? 'true' : undefined}
                       className={`w-full text-left p-3 rounded-lg border ${isSelected ? 'bg-port-card border-port-accent/40' : 'bg-port-card border-port-border'} hover:border-port-accent/30 transition-colors`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-white text-sm font-medium truncate flex items-center gap-1">
-                          {incompatible ? <AlertCircle size={12} className="text-port-error shrink-0" /> : null}
+                          {incompatible ? <AlertCircle size={12} aria-hidden="true" className="text-port-error shrink-0" /> : null}
                           <span className="truncate">{b.name}</span>
                         </span>
                         {inboxCount > 0 && (
@@ -519,6 +521,7 @@ function SharingBuckets({ selectedId }) {
                         {b.bucketSchemaVersion != null && (
                           <span className={incompatible ? 'text-port-error' : ''} title={incompatible ? `Bucket protocol v${b.bucketSchemaVersion} > your PortOS (v${b.localSchemaVersion}). Upgrade required to read incoming shares.` : `Protocol v${b.bucketSchemaVersion}`}>
                             schema v{b.bucketSchemaVersion}
+                            {incompatible && <span className="sr-only"> (incompatible, upgrade PortOS required to read incoming shares)</span>}
                           </span>
                         )}
                       </div>
@@ -556,33 +559,36 @@ function SharingBuckets({ selectedId }) {
                 size="sm"
                 mobileCompact
                 ariaLabel="Bucket views"
+                controlsIdPrefix="bucket-panel"
                 className="mb-3"
               />
 
-              {activeTab === 'inbox' && (
-                <Inboxlist
-                  bucket={selected}
-                  items={inbox.items}
-                  state={inbox.state}
-                  error={inbox.error}
-                  onRetry={inbox.retry}
-                  onPromote={(id) => handlePromote(selected.id, id)}
-                  onDismiss={(id) => handleDismiss(selected.id, id)}
-                />
-              )}
-              {activeTab === 'activity' && (
-                <ActivityList manifests={activity.items} state={activity.state} error={activity.error} onRetry={activity.retry} />
-              )}
-              {activeTab === 'settings' && (
-                <SettingsPanel
-                  bucket={selected}
-                  onToggleMode={() => handleModeToggle(selected)}
-                  onRequestDelete={() => armRemove(selected.id)}
-                  onConfirmDelete={() => handleDelete(selected)}
-                  onCancelDelete={cancelRemove}
-                  armed={isRemoveArmed(selected.id)}
-                />
-              )}
+              <div role="tabpanel" id={`bucket-panel-${activeTab}`} aria-labelledby={`tab-${activeTab}`}>
+                {activeTab === 'inbox' && (
+                  <Inboxlist
+                    bucket={selected}
+                    items={inbox.items}
+                    state={inbox.state}
+                    error={inbox.error}
+                    onRetry={inbox.retry}
+                    onPromote={(id) => handlePromote(selected.id, id)}
+                    onDismiss={(id) => handleDismiss(selected.id, id)}
+                  />
+                )}
+                {activeTab === 'activity' && (
+                  <ActivityList manifests={activity.items} state={activity.state} error={activity.error} onRetry={activity.retry} />
+                )}
+                {activeTab === 'settings' && (
+                  <SettingsPanel
+                    bucket={selected}
+                    onToggleMode={() => handleModeToggle(selected)}
+                    onRequestDelete={() => armRemove(selected.id)}
+                    onConfirmDelete={() => handleDelete(selected)}
+                    onCancelDelete={cancelRemove}
+                    armed={isRemoveArmed(selected.id)}
+                  />
+                )}
+              </div>
             </div>
           )}
         </section>
@@ -604,7 +610,7 @@ function Inboxlist({ bucket, items, state, error, onRetry, onPromote, onDismiss 
     );
   }
   if (state === 'error') return <ListLoadError what="the inbox" error={error} onRetry={onRetry} />;
-  if (state === 'loading') return <div className="p-4 text-sm text-gray-500">Loading inbox…</div>;
+  if (state === 'loading') return <div role="status" className="p-4 text-sm text-gray-500">Loading inbox…</div>;
   if (items.length === 0) {
     return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No pending imports.</div>;
   }
@@ -677,7 +683,7 @@ function Inboxlist({ bucket, items, state, error, onRetry, onPromote, onDismiss 
 
 function ActivityList({ manifests, state, error, onRetry }) {
   if (state === 'error') return <ListLoadError what="share activity" error={error} onRetry={onRetry} />;
-  if (state === 'loading') return <div className="p-4 text-sm text-gray-500">Loading activity…</div>;
+  if (state === 'loading') return <div role="status" className="p-4 text-sm text-gray-500">Loading activity…</div>;
   if (manifests.length === 0) {
     return <div className="p-4 bg-port-card border border-port-border rounded-lg text-sm text-gray-500">No share activity yet.</div>;
   }

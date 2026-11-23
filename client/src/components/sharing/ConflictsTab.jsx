@@ -42,14 +42,14 @@ export default function ConflictsTab() {
   const removeEntry = useCallback((id) => setConflicts((cs) => cs?.filter((c) => c.id !== id) ?? cs), []);
 
   if (loading) {
-    return <div className="flex items-center gap-2 text-gray-400 text-sm py-8"><Loader2 className="animate-spin" size={16} /> Loading conflicts…</div>;
+    return <div role="status" className="flex items-center gap-2 text-gray-400 text-sm py-8"><Loader2 className="animate-spin" size={16} /> Loading conflicts…</div>;
   }
 
   return (
     <div className="space-y-4">
       {conflicts === null && <LoadFailedState title="Could not load pending conflicts." hint="Retry to try again." onRetry={load} />}
       {degraded && (
-        <div className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
+        <div role="alert" className="bg-port-warning/10 border border-port-warning/40 rounded-lg px-3 py-2 text-sm text-port-warning">
           ⚠️ Conflict detection is degraded — {degraded.reason || 'the sync base-hash store is unreadable'}. Overwrites are still archived here fail-closed.
         </div>
       )}
@@ -123,8 +123,8 @@ function ConflictEntry({ entry, onResolved }) {
   return (
     <div className="border border-port-border rounded-lg bg-port-card">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3">
-        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 basis-full sm:flex-1 min-h-[44px] pointer-fine:sm:min-h-0 text-left">
-          {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
+        <button type="button" onClick={toggleExpanded} aria-expanded={expanded} aria-controls={`conflict-detail-${entry.id}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 basis-full sm:flex-1 min-h-[44px] pointer-fine:sm:min-h-0 text-left">
+          {expanded ? <ChevronDown size={14} aria-hidden="true" className="text-gray-500 shrink-0" /> : <ChevronRight size={14} aria-hidden="true" className="text-gray-500 shrink-0" />}
           <span className="text-sm text-white truncate">
             {entry.recordKind} <span className="font-mono text-[11px] text-gray-500">{entry.recordId?.slice(0, 14)}</span>
           </span>
@@ -148,8 +148,8 @@ function ConflictEntry({ entry, onResolved }) {
       </div>
 
       {expanded && (
-        <div className="border-t border-port-border p-3 space-y-3">
-          {detailLoading && <div className="flex items-center gap-2 text-gray-400 text-xs"><Loader2 className="animate-spin" size={14} /> Loading diff…</div>}
+        <div id={`conflict-detail-${entry.id}`} className="border-t border-port-border p-3 space-y-3">
+          {detailLoading && <div role="status" className="flex items-center gap-2 text-gray-400 text-xs"><Loader2 className="animate-spin" size={14} /> Loading diff…</div>}
           {detailError && (
             <div role="alert" className="text-xs text-port-error flex items-center gap-2">
               Could not load the diff: {detailError}
