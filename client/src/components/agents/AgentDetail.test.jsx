@@ -146,4 +146,18 @@ describe('AgentDetail route lifecycle', () => {
     expect(screen.getByText('Agent Beta')).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading agent' })).not.toBeInTheDocument();
   });
+
+  it('gives the icon-only back link a name and a 44px touch target that shrinks only on fine pointers', async () => {
+    renderAgentDetail();
+    await act(async () => {
+      mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+      mockPlatformDeferreds['agent-a'].resolve([]);
+    });
+    const back = await screen.findByRole('link', { name: 'Back to Social Agents' });
+    expect(back.className).toContain('min-h-[44px]');
+    expect(back.className).toContain('min-w-[44px]');
+    expect(back.className).toContain('pointer-fine:sm:min-h-0');
+    expect(back.className).toContain('pointer-fine:sm:min-w-0');
+    expect(back.parentElement.className).toContain('flex-wrap');
+  });
 });

@@ -124,4 +124,16 @@ it('shows a failed account test inline and releases the Test button for retry', 
   expect(await screen.findByText('Platform unavailable')).toBeInTheDocument();
   expect(testButton).toBeEnabled();
   expect(testPlatformAccount).toHaveBeenCalledWith('account-1', { silent: true });
+  expect(testButton.className).toContain('pointer-coarse:min-h-11');
+  expect(testButton.parentElement.className).toContain('flex-wrap');
+});
+
+it('stacks personality fields below sm and wraps the tone row', async () => {
+  render(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ id: 'agent-1', name: 'Example Agent', enabled: true, personality: {}, avatar: {} }} /></MemoryRouter>);
+  const nameGrid = (await screen.findByText('Name')).closest('.grid');
+  expect(nameGrid.className).toContain('grid-cols-1');
+  expect(nameGrid.className).toContain('sm:grid-cols-2');
+  const tone = screen.getByText('Tone').closest('.flex');
+  expect(tone.className).toContain('flex-wrap');
+  expect(screen.getByText('Tone').parentElement.className).toContain('min-w-0');
 });

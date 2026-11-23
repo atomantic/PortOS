@@ -346,7 +346,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
             <form onSubmit={handleSave}>
               {/* Name + Style */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <FormField label="Name">
                   <input
                     type="text"
@@ -380,8 +380,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               </FormField>
 
               {/* Tone + Avatar (emoji + color) */}
-              <div className="flex items-end gap-4 mb-4">
-                <FormField label="Tone" className="flex-1">
+              <div className="flex flex-wrap items-end gap-2 mb-4">
+                <FormField label="Tone" className="flex-1 min-w-0">
                   <input
                     type="text"
                     value={formData.personality.tone}
@@ -410,7 +410,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               </div>
 
               {/* Topics + Quirks */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <FormField label="Topics (comma-separated)">
                   <input
                     type="text"
@@ -625,11 +625,11 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
           {/* Accounts Section */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-md font-semibold text-white">Platform Accounts</h3>
+            <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+              <h3 className="text-md font-semibold text-white min-w-0">Platform Accounts</h3>
               <button
                 onClick={() => setShowAccountForm(!showAccountForm)}
-                className="px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80"
+                className="shrink-0 pointer-coarse:min-h-11 px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80"
               >
                 {showAccountForm ? 'Cancel' : '+ Link Account'}
               </button>
@@ -637,7 +637,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
             {showAccountForm && (
               <form onSubmit={handleAccountSubmit} className="mb-4 p-3 bg-port-bg border border-port-border rounded-lg">
-                <div className="grid grid-cols-2 gap-4 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
                   <FormField label="Platform">
                     <select
                       value={accountForm.platform}
@@ -718,8 +718,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
                   return (
                     <div key={account.id} className="p-3 bg-port-bg border border-port-border rounded-lg">
-                      <div className="flex items-start justify-between">
-                        <div>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <span>{platform?.icon || '🔗'}</span>
                             <span className="font-medium text-white">{account.credentials.username}</span>
@@ -737,25 +737,25 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                             </a>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <button
                             onClick={() => handleAccountTest(account.id)}
                             disabled={testingId === account.id}
-                            className="px-2 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
+                            className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             {testingId === account.id ? 'Testing...' : 'Test'}
                           </button>
                           {account.status === 'pending' && (
                             <button
                               onClick={() => handleAccountClaim(account.id)}
-                              className="px-2 py-1 text-xs bg-port-success/20 text-port-success rounded hover:bg-port-success/30"
+                              className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-success/20 text-port-success rounded hover:bg-port-success/30"
                             >
                               Claimed
                             </button>
                           )}
                           <button
                             onClick={() => handleAccountDelete(account.id)}
-                            className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30"
+                            className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30"
                           >
                             Delete
                           </button>

@@ -169,10 +169,11 @@ function AgentDetailContent() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-port-border px-6 py-4">
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           <Link
             to="/agents"
-            className="p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-port-border/50"
+            aria-label="Back to Social Agents"
+            className="inline-flex items-center justify-center min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1.5 text-gray-400 hover:text-white transition-colors rounded hover:bg-port-border/50 shrink-0"
           >
             <ArrowLeft size={20} />
           </Link>
@@ -192,7 +193,7 @@ function AgentDetailContent() {
           </div>
           <button
             onClick={handleToggle}
-            className={`px-3 py-1.5 text-sm rounded ${
+            className={`shrink-0 pointer-coarse:min-h-11 px-3 py-1.5 text-sm rounded ${
               agent.enabled
                 ? 'bg-port-success/20 text-port-success hover:bg-port-success/30'
                 : 'bg-port-border text-gray-400 hover:bg-port-border/80'

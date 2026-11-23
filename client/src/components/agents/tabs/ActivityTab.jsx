@@ -106,14 +106,14 @@ export default function ActivityTab({ agentId }) {
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-lg font-semibold text-white">Activity Log</h2>
-        <div className="flex gap-2">
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+        <h2 className="text-lg font-semibold text-white min-w-0">Activity Log</h2>
+        <div className="flex flex-wrap gap-2 min-w-0">
           <select
             aria-label="Filter by action"
             value={actionFilter}
             onChange={(e) => setActionFilter(e.target.value)}
-            className="px-3 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+            className="min-w-0 px-3 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
           >
             <option value="">All Actions</option>
             {ACTION_TYPES.map(action => (
@@ -124,7 +124,7 @@ export default function ActivityTab({ agentId }) {
           </select>
           <button
             onClick={fetchData}
-            className="px-3 py-1 bg-port-border text-gray-300 rounded text-sm hover:bg-port-border/80"
+            className="pointer-coarse:min-h-11 px-3 py-1 bg-port-border text-gray-300 rounded text-sm hover:bg-port-border/80"
           >
             Refresh
           </button>
@@ -144,8 +144,8 @@ export default function ActivityTab({ agentId }) {
                 key={`${activity.id}-${index}`}
                 className="p-3 bg-port-card border border-port-border rounded-lg"
               >
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-lg">{getActionIcon(activity.action)}</span>
                       <span className="text-gray-300">{activity.action}</span>

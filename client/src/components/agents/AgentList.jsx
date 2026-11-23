@@ -197,8 +197,8 @@ export default function AgentList() {
     <div className="flex flex-col h-full">
       {/* Header */}
       <div className="border-b border-port-border px-6 py-4">
-        <div className="flex justify-between items-center">
-          <div>
+        <div className="flex flex-wrap justify-between items-center gap-2">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold text-white">Social Agents</h1>
             <p className="text-sm text-gray-400 mt-1">
               Manage AI agent personalities and their platform automation
@@ -206,7 +206,7 @@ export default function AgentList() {
           </div>
           <button
             onClick={() => setShowForm(!showForm)}
-            className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80"
+            className="shrink-0 pointer-coarse:min-h-11 px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80"
           >
             {showForm ? 'Cancel' : '+ New Agent'}
           </button>
@@ -248,7 +248,7 @@ export default function AgentList() {
                 <Sparkles size={16} className="text-port-accent" />
                 <span className="text-sm font-medium text-white">Generate with AI</span>
               </div>
-              <div className="flex items-end gap-3">
+              <div className="flex flex-wrap items-end gap-2">
                 <div className="flex-1 min-w-0">
                   <ProviderModelSelector
                     providers={providers}
@@ -267,7 +267,7 @@ export default function AgentList() {
                   type="button"
                   onClick={handleGenerate}
                   disabled={generating}
-                  className="px-4 py-1.5 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  className="shrink-0 pointer-coarse:min-h-11 px-4 py-1.5 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
                   {generating ? (
                     <><span className="animate-spin">⚡</span>Generating...</>
@@ -281,7 +281,7 @@ export default function AgentList() {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <FormField label="Name">
                 <input
                   type="text"
@@ -354,7 +354,7 @@ export default function AgentList() {
               />
             </FormField>
 
-            <div className="flex items-center gap-4 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
               <label htmlFor="agent-avatar-emoji" className="block text-sm text-gray-400">Avatar Emoji</label>
               <input
                 id="agent-avatar-emoji"

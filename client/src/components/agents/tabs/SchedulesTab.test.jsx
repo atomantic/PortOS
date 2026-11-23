@@ -90,4 +90,26 @@ describe('SchedulesTab', () => {
     expect(await screen.findByText('No schedules')).toBeInTheDocument();
     expect(getAutomationSchedules).toHaveBeenCalledTimes(1);
   });
+
+  it('wraps schedule cards and gives compact actions a coarse-pointer hit area', async () => {
+    getAutomationSchedules.mockResolvedValue([{
+      id: 'schedule-1', agentId: 'agent-1', accountId: 'account-1', enabled: true,
+      action: { type: 'heartbeat', params: {} }, schedule: { type: 'interval', intervalMs: 60000 },
+      rateLimit: { maxPerDay: 5 },
+    }]);
+    getPlatformAccounts.mockResolvedValue([{ id: 'account-1', status: 'active', credentials: { username: 'example-user' } }]);
+    getScheduleStats.mockResolvedValue({});
+
+    render(<SchedulesTab agentId="agent-1" />);
+    const run = await screen.findByRole('button', { name: 'Run Now' });
+    expect(run.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: 'Delete' }).className).toContain('pointer-coarse:min-h-11');
+    expect(run.parentElement.parentElement.className).toContain('flex-wrap');
+    expect(screen.getByRole('heading', { name: 'Automation Schedules' }).parentElement.parentElement.className).toContain('flex-wrap');
+
+    fireEvent.click(screen.getByRole('button', { name: '+ New Schedule' }));
+    const grid = screen.getByText('Account').closest('.grid');
+    expect(grid.className).toContain('grid-cols-1');
+    expect(grid.className).toContain('sm:grid-cols-2');
+  });
 });
