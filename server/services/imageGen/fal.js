@@ -546,7 +546,7 @@ async function runFal(job, jobId, {
         // account; this only lets a gallery record say roughly what it cost.
         estimatedCostUsd: request.estimatedCostUsd,
       },
-      doneNote: `fal ${request.endpointId}, ${request.estimatedCostUsd == null ? 'price unknown' : `~${request.estimatedCostUsd}`}`,
+      doneNote: `fal ${request.endpointId}, ${request.estimatedCostUsd == null ? 'price unknown' : `~$${request.estimatedCostUsd}`}`,
     });
     if (job.status === 'complete') void autoDeleteHostedCopy('fal', 'image', meta.filename, { apiKey });
   } catch (err) {
