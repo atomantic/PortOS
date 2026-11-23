@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Box, Check, Code2, Download, Info, LoaderCircle, RefreshCw, Trash2, X } from 'lucide-react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { ArrowLeft, Box, Check, Code2, Download, Eye, Info, LoaderCircle, RefreshCw, Trash2, X } from 'lucide-react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect';
@@ -50,7 +50,12 @@ const countSeverities = (findings) => findings.reduce((counts, finding) => {
  * severity-styled finding list. Shared so a second gate cannot drift into a
  * different look for the same data.
  */
-function GatePanel({ title, findings, cleanLabel, footer, children = null }) {
+// A finding that names a clip and a moment can be replayed in the preview.
+const isReplayable = (finding) => Boolean(finding.clipId)
+  && Number.isFinite(finding.timeSeconds)
+  && Array.isArray(finding.partIds);
+
+function GatePanel({ title, findings, cleanLabel, footer, children = null, onShowFinding = null }) {
   const counts = countSeverities(findings);
   return (
     <section className="rounded-xl border border-port-border bg-port-card p-4">
@@ -71,6 +76,15 @@ function GatePanel({ title, findings, cleanLabel, footer, children = null }) {
             >
               <span className="mr-2 text-[9px] uppercase tracking-wide opacity-80">{finding.severity}</span>
               {finding.message}
+              {onShowFinding && isReplayable(finding) && (
+                <button
+                  type="button"
+                  onClick={() => onShowFinding(finding)}
+                  className="mt-2 flex items-center gap-1.5 rounded border border-current/40 px-2 py-1 text-[11px] hover:bg-white/5 pointer-coarse:min-h-11"
+                >
+                  <Eye className="h-3 w-3" /> Show in preview
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -308,6 +322,11 @@ export default function ThreejsModelDetail() {
   const { families, status: familiesStatus, retry: retryFamilies } = useThreejsModelFamilies();
   const [family, setFamily] = useState(GENERAL_FAMILY_ID);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [, setSearchParams] = useSearchParams();
+  // Bumped on every "Show in preview" so the same moment can be requested again
+  // after the viewer scrubbed away from it; the URL alone would not change.
+  const [seekToken, setSeekToken] = useState(0);
+  const previewRef = useRef(null);
   const providerSyncRef = useRef('');
   const {
     providers,
@@ -377,6 +396,20 @@ export default function ThreejsModelDetail() {
     }
   };
 
+  // The clip, the moment and the two parts all go in the URL, so what the viewer
+  // is looking at survives a reload and can be shared.
+  const handleShowFinding = (finding) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set('clip', finding.clipId);
+      next.set('time', String(finding.timeSeconds));
+      next.set('highlight', finding.partIds.join(','));
+      return next;
+    }, { replace: true });
+    setSeekToken((token) => token + 1);
+    previewRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+
   const handleCopySource = async () => {
     const source = await getThreejsModelSource(id, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to load source');
@@ -416,7 +449,25 @@ export default function ThreejsModelDetail() {
   const coverageFindings = Array.isArray(record.coverage?.findings) ? record.coverage.findings : null;
   const flatnessFindings = Array.isArray(record.flatness?.findings) ? record.flatness.findings : null;
   const flatnessHasWarnings = flatnessFindings?.some((finding) => finding.severity === 'warning');
-  const penetrationFindings = Array.isArray(record.penetration?.findings) ? record.penetration.findings : null;
+  // A penetration result stored before clip poses were swept has no
+  // `poseCoverage`; for a model that declares clips that is "never measured
+  // while moving", said on screen rather than read as a clean panel.
+  const penetrationPoseCoverage = Array.isArray(record.penetration?.poseCoverage?.clips)
+    ? record.penetration.poseCoverage
+    : null;
+  const penetrationPosesUnrecorded = Array.isArray(record.penetration?.findings)
+    && !penetrationPoseCoverage
+    && listThreejsClips(record.spec).length > 0;
+  const penetrationFindings = Array.isArray(record.penetration?.findings)
+    ? [
+      ...record.penetration.findings,
+      ...(penetrationPosesUnrecorded ? [{
+        code: 'clip-collisions-unrecorded',
+        severity: 'note',
+        message: 'This check predates clip-pose sweeping: parts were compared only in the resting pose, so a part could pass through another while a clip plays unreported. Regenerate to check the clips.',
+      }] : []),
+    ]
+    : null;
   // An attachment whose anchor could not be measured was not checked, so it is
   // rendered as a note rather than left to the panel's clean label — "no
   // findings" and "never verified" must not read the same on screen.
@@ -566,8 +617,8 @@ export default function ThreejsModelDetail() {
             </div>
           )}
         </aside>
-        <div className="relative min-h-[520px]">
-          <ThreejsModelPreview spec={record.spec} family={coverageFamily} className="h-full min-h-[520px] w-full" />
+        <div ref={previewRef} className="relative min-h-[520px]">
+          <ThreejsModelPreview spec={record.spec} family={coverageFamily} seekToken={seekToken} className="h-full min-h-[520px] w-full" />
           {generating && (
             <div className="port-media-overlay absolute inset-x-0 top-0 flex items-center justify-center gap-2 border-b border-port-border px-3 py-2 text-xs">
               <LoaderCircle className="h-4 w-4 animate-spin text-port-accent" />
@@ -662,12 +713,15 @@ export default function ThreejsModelDetail() {
           title="Cross-part penetration"
           findings={penetrationFindings}
           cleanLabel="No unrelated parts share the same space"
-          footer={`Parts modelled inside each other look correct from the hero angle and fall apart the moment the model is orbited, so this check compares every unrelated pair by volume. Parts parented together or declared as attachments are exempt — embedding is what those relationships are for.${
+          onShowFinding={handleShowFinding}
+          footer={`Parts modelled inside each other look correct from the hero angle and fall apart the moment the model is orbited, so this check compares every unrelated pair by volume. For a model with clips it also sweeps each clip through its sampled poses and reports a pair only when a pose makes it worse than at rest — a hatch swinging through its frame, a leg folding through the hull. Parts parented together, joined by an articulation joint or declared as attachments are exempt — embedding is what those relationships are for.${
             penetrationDefects.error + penetrationDefects.warning > 0
-              ? ' Refining without your own feedback will also ask for each part to get its own volume.'
+              ? ' Refining without your own feedback will also ask for each part to get its own volume and for no clip to drive one part through another.'
               : ''
           }`}
-        />
+        >
+          {penetrationPoseCoverage?.clips.length > 0 && <PoseCoverageList coverage={penetrationPoseCoverage} />}
+        </GatePanel>
       )}
 
       {physicalAuditFindings && (

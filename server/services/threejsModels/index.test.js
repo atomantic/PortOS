@@ -385,6 +385,70 @@ describe('Three.js model generation orchestration', () => {
     expect(current.runs.at(-1).feedback).toContain('cross-part penetration check');
   });
 
+  it('records parts that pass through each other while a clip plays and feeds the warning back', async () => {
+    // Clear of the body at rest; the clip drives the lens straight into it.
+    const plungeSpec = {
+      ...spec,
+      parts: [
+        { id: 'body', name: 'Body', geometry: { type: 'box', width: 3, height: 3, depth: 3 }, material: 'body' },
+        { id: 'lens', name: 'Lens', geometry: { type: 'sphere', radius: 0.35 }, material: 'lens', position: [5, 0, 0] },
+      ],
+      animation: {
+        clips: [{
+          id: 'plunge',
+          name: 'Plunge',
+          durationSeconds: 2,
+          sequences: [{
+            id: 'drive-in',
+            name: 'Drive in',
+            partId: 'lens',
+            startSeconds: 0,
+            endSeconds: 2,
+            easing: 'linear',
+            channels: { position: { from: [5, 0, 0], to: [0, 0, 0] } },
+          }],
+        }],
+      },
+    };
+    let current = {
+      id: 'threejs-plunge',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      penetration: null,
+      runs: [],
+    };
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(plungeSpec),
+      runId: 'run-plunge',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.penetration).toMatchObject({ errorCount: 0, warningCount: 1, evaluatedPoseCount: 3 });
+    expect(current.penetration.findings[0]).toMatchObject({
+      code: 'clip-part-collision',
+      severity: 'warning',
+      clipId: 'plunge',
+      timeSeconds: 2,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    expect(current.runs.at(-1).feedback).toContain('pass through each other while a clip plays');
+  });
+
   it('records the material-plausibility gate and folds it into an unsteered refinement', async () => {
     // The body is named for oak and lit like polished chrome — valid against the
     // schema, implausible against the substance the id names.

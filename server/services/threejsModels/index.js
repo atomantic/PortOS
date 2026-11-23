@@ -114,9 +114,10 @@ async function executeGeneration({
     // renders correctly from the generated camera, so it is recorded rather than
     // rejected — the user sees it and an unsteered refinement asks for depth.
     const flatness = evaluateThreejsFlatness(spec);
-    // And likewise for a spec whose parts are modelled inside each other: it
-    // still renders, and from the hero angle it still looks right, so the
-    // finding is recorded and fed back rather than thrown away.
+    // And likewise for a spec whose parts are modelled inside each other, or
+    // driven through each other by a clip: it still renders, and from the hero
+    // angle it still looks right, so the finding is recorded and fed back
+    // rather than thrown away.
     const penetration = evaluateThreejsPenetration(spec);
     // And likewise for deterministic physical-conformance audits: floating parts,
     // swallowed geometry, coplanar z-fighting surfaces, unprovenanced clip transitions,
