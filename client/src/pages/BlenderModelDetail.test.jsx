@@ -26,7 +26,7 @@ vi.mock('../services/apiBlenderModels.js', () => ({
   renderBlenderModelReview: vi.fn(), cancelBlenderModelReview: vi.fn(), getBlenderModelReviewLog: vi.fn(),
   addBlenderModelCamera: vi.fn(), updateBlenderModelCamera: vi.fn(), removeBlenderModelCamera: vi.fn(),
   addBlenderModelDifference: vi.fn(), updateBlenderModelDifference: vi.fn(), removeBlenderModelDifference: vi.fn(),
-  blenderModelReviewFileUrl: (id, buildId, name) => `/review/${buildId}/${name}`,
+  blenderModelReviewFileUrl: (_id, buildId, name) => `/review/${buildId}/${name}`,
   blenderModelBuildFileUrl: (id, buildId, name) => `/api/blender-models/${id}/builds/${buildId}/files/${name}`,
   blenderModelAssetUrl: (id) => `/api/blender-models/${id}/asset`,
 }));
