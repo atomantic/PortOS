@@ -547,12 +547,16 @@ const STALE_SHIPPED_LYRIC_TYPE_JS = new Set([
   '2a9fc1fd8d983a54b50f373d47d6b83fa1b984a189922ba3e5f401f16dd2c9e2',
   '40c3f48c6eebfc8dff62c48c0a0bf70269efaf81a97e004e79acf72bc96fd414',
 ]);
+const STALE_SHIPPED_CAMERA_RIG = new Set([
+  // Shipped before Object.hasOwn replaced hasOwnProperty.call (#17890); same behavior.
+  '508b9bbad6490903f53c0928fb24a62812caf17800ded5c7248bf7b7740b95a2',
+]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
 // The helper files documentPreviewPlayback compares byte for byte, with where the shipped copy lives.
 // The still-effect module only ever grew its exports, so every earlier shipped copy is replaceable.
 const STOCK_HELPERS = [
-  { rel: 'cameraRig.js', source: SHIPPED_CAMERA_RIG, stale: new Set() },
+  { rel: 'cameraRig.js', source: SHIPPED_CAMERA_RIG, stale: STALE_SHIPPED_CAMERA_RIG },
   { rel: 'lyricType.js', source: new URL('./documentTemplates/shared/lyricType.js', import.meta.url), stale: STALE_SHIPPED_LYRIC_TYPE_JS },
   { rel: 'lyricType.css', source: new URL('./documentTemplates/shared/lyricType.css', import.meta.url), stale: new Set() },
   { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url),
