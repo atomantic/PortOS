@@ -14,7 +14,7 @@ import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { filmLookPreset } from '../../lib/filmLook.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 
-// Bundled StoryboardAnimatic.jsx exercises musicVideoFrameCapture.js and FrameStepper.jsx.
+// Bundled StoryboardAnimatic.jsx exercises musicVideoFrameCapture.js, FrameStepper.jsx and PreviewVideo.jsx.
 // These source references are the fixture's CI dependency contract: generated JSX has no static import edge.
 const client = resolve(import.meta.dirname, '../../../client');
 const bundlers = resolveClientBundler(resolve(client, '..'));
