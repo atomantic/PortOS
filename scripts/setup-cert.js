@@ -31,7 +31,7 @@
  */
 import { execFileSync } from 'child_process';
 import { createSecureContext } from 'tls';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync, statSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, statSync } from 'fs';
 import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -39,6 +39,7 @@ import { findTailscale, hasOnlySandboxedTailscale } from '../server/lib/tailscal
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 import { readCertExpiresAt } from '../lib/certMeta.js';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -364,15 +365,6 @@ export function runSetupCert(options = {}) {
   log(`✅ Tailscale cert installed for ${hostname} (expires ${expiry?.toISOString() ?? 'unknown'})`);
 }
 
-function isDirectRun() {
-  if (!process.argv[1]) return false;
-  try {
-    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectRun()) {
+if (isDirectlyInvoked(import.meta.url)) {
   runSetupCert();
 }
