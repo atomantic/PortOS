@@ -360,6 +360,9 @@ export default function ConfigTab({ onRefresh }) {
               Reprocess all embeddings
             </button>
           </div>
+          {embeddingDirty && (
+            <p className="text-xs text-port-warning">Save the embedding config before reprocessing.</p>
+          )}
           <p className="text-xs text-gray-500">
             Reprocess re-embeds every brain record (memories, people, projects, ideas, daily log) — run it after importing or switching models. It drains sequentially in the background.
           </p>
@@ -500,6 +503,8 @@ export default function ConfigTab({ onRefresh }) {
             <h4 className="text-sm font-medium text-gray-400">Schedule Summary</h4>
           </div>
           <div className="space-y-2 text-sm text-gray-300">
+            {scheduledReviewsEnabled ? (
+              <>
             <div className="flex items-center gap-2">
               <CheckCircle size={14} className="text-port-accent" />
               <span>Daily digest at {dailyDigestTime}</span>
@@ -508,6 +513,10 @@ export default function ConfigTab({ onRefresh }) {
               <CheckCircle size={14} className="text-port-accent-2" />
               <span>Weekly review on {weeklyReviewDay.charAt(0).toUpperCase() + weeklyReviewDay.slice(1)}s at {weeklyReviewTime}</span>
             </div>
+              </>
+            ) : (
+              <div className="text-gray-400">Scheduled reviews are off</div>
+            )}
             {settings.lastDailyDigest && (
               <div className="flex items-center gap-2 text-gray-500">
                 <Clock size={14} />
