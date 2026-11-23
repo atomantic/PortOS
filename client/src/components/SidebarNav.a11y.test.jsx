@@ -45,6 +45,29 @@ describe('SidebarNav accessibility', () => {
     expect(within(nav).getByRole('button', { name: `Expand ${label}` })).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it.each(['Models', 'Settings'])('labels %s subgroups without headings ahead of the page h1', (section) => {
+    const { unmount } = renderNav();
+    fireEvent.click(screen.getByRole('button', { name: `Expand ${section}` }));
+    const expanded = screen.getAllByRole('group');
+    expect(expanded.length).toBeGreaterThan(1);
+    expanded.forEach((group) => {
+      expect(group).toHaveAccessibleName();
+      expect(within(group).getAllByRole('link').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByRole('heading')).toBeNull();
+    const names = expanded.map(group => document.getElementById(group.getAttribute('aria-labelledby')).textContent);
+    unmount();
+
+    renderRail();
+    act(() => screen.getByRole('button', { name: section, exact: true }).focus());
+    const flyout = screen.getByRole('navigation', { name: `${section} pages` });
+    names.forEach((name) => {
+      const list = within(flyout).getByRole('list', { name });
+      expect(within(list).getAllByRole('link').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByRole('heading')).toBeNull();
+  });
+
   describe('collapsed rail flyout keyboard access', () => {
     const findSectionTrigger = () => {
       const nav = screen.getByRole('navigation', { name: 'Primary navigation' });

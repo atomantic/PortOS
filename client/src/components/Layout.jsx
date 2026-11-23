@@ -80,15 +80,13 @@ export default function Layout() {
             >
               Skip to main content
             </a>
-            {/* Mobile overlay */}
+            {/* Pointer-only scrim: the drawer's own button and Esc are the accessible dismissals. */}
             {mobileNavActive && (
-              <button
-                type="button"
-                tabIndex={-1}
-                aria-label="Close sidebar"
+              <div
+                aria-hidden="true"
+                data-testid="mobile-nav-scrim"
                 className="fixed inset-0 bg-black/50 z-40 lg:hidden"
                 onClick={closeMobileNav}
-                onKeyDown={(e) => e.key === 'Escape' && closeMobileNav()}
               />
             )}
 
@@ -101,7 +99,11 @@ export default function Layout() {
             />
 
             {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
-            <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
+            <div
+              inert={mobileNavActive}
+              aria-hidden={mobileNavActive || undefined}
+              className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}
+            >
               {/* Mobile header */}
               <header className="port-app-topbar lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
                 <button

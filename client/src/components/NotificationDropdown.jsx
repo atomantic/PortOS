@@ -6,6 +6,7 @@ import { timeAgo, formatCount } from '../utils/formatters';
 import { useActionQueue } from '../hooks/useActionQueue';
 import ActionQueuePreview from './ActionQueuePreview';
 import { isHttpUrl } from '../utils/urlNormalize';
+import { useEscLayer } from './ui/Modal';
 import useFocusTrap from '../hooks/useFocusTrap.js';
 import useClickOutside from '../hooks/useClickOutside.js';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
@@ -142,14 +143,8 @@ export default function NotificationDropdown({
   // trigger-only containment check would read clicks on the panel as outside.
   useClickOutside([containerRef, popoverRef], isOpen, () => setIsOpen(false));
 
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') setIsOpen(false);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [isOpen]);
+  // On the shared Esc stack so it dismisses before the mobile nav drawer holding it.
+  useEscLayer(isOpen, () => setIsOpen(false));
 
   // Collapse back to the first page each time the panel is dismissed
   useEffect(() => {

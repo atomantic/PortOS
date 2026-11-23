@@ -5,7 +5,7 @@ import { useThemeContext } from './ThemeContext';
 import { getFamilyIcon } from '../themes/familyIcons';
 import usePopoverPosition, { VIEWPORT_PADDING } from '../hooks/usePopoverPosition.js';
 import useClickOutside from '../hooks/useClickOutside.js';
-import useEscapeKey from '../hooks/useEscapeKey.js';
+import { useEscLayer } from './ui/Modal';
 
 const MENU_WIDTH = 288;
 const ITEM_SELECTOR = '[role="menuitemradio"]';
@@ -31,7 +31,8 @@ export default function ThemeSwitcher({ position = 'above', className = '' }) {
   // portaled to <body>, so both the trigger container and the panel have to count
   // as "inside" — that's what the array form of useClickOutside is for.
   useClickOutside([containerRef, menuRef], open, () => setOpen(false));
-  useEscapeKey(open, () => close(true));
+  // On the shared Esc stack so it dismisses before the mobile nav drawer holding it.
+  useEscLayer(open, () => close(true));
 
   useEffect(() => {
     if (!open || !menuStyle) return;
