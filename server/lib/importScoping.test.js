@@ -120,6 +120,8 @@ describe('instance identity stays a leaf (#6836)', () => {
 const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
 const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
+  ['services/llamaServerManager.js', 'services/specDecodeModels.js',
+    'resolves launcher paths from the leaf preset module so the download stack stays out of its closure'],
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
     'classifies observed facts without importing reconciliation or CoS orchestration'],
   ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
