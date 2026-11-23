@@ -112,14 +112,52 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
       ;;
   esac
 
+  # Download $1 (archive name under release URL $2), verify its pinned sha256 BEFORE any
+  # extraction, then extract into a fresh staging dir left in STAGED_EXTRACT. Nothing under
+  # PIPER_DIR is touched until the caller promotes the verified, fully extracted tree.
+  fetch_verified_archive() {
+    local archive="$1" url="$2"
+    download_staged "$url" "${VOICE_HOME}/${archive}"
+    if ! asset verify-archive "$archive" "$STAGED_TMP"; then
+      echo "❌ ${archive} failed SHA-256 verification — refusing to extract" >&2
+      exit 1
+    fi
+    STAGED_EXTRACT="$(mktemp -d "${VOICE_HOME}/.piper-stage.XXXXXX")"
+    STAGED_DIRS+=("$STAGED_EXTRACT")
+    tar xzf "$STAGED_TMP" -C "$STAGED_EXTRACT"
+  }
+
+  # Atomically replace $2 with the staged $1. The previous tree is renamed aside (and removed
+  # on exit) so a failed promotion restores it instead of leaving a half-installed directory.
+  promote_dir() {
+    local src="$1" dest="$2" old=""
+    if [[ -e "$dest" ]]; then
+      old="$(mktemp -u "${dest}.old.XXXXXX")"
+      mv "$dest" "$old"
+      STAGED_DIRS+=("$old")
+    fi
+    if ! mv "$src" "$dest"; then
+      if [[ -n "$old" ]]; then mv "$old" "$dest"; fi
+      exit 1
+    fi
+  }
+
   if [[ ! -x "${PIPER_DIR}/piper" ]]; then
     PIPER_VERSION="2023.11.14-2"
     TAR="piper_${OS}_${ARCH}.tar.gz"
     URL="https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${TAR}"
     echo "⬇️  Piper TTS → ${PIPER_DIR}/"
-    mkdir -p "${PIPER_DIR}"
-    curl --fail --location --progress-bar "$URL" | tar xz -C "${VOICE_HOME}"
-    chmod +x "${PIPER_DIR}/piper" 2>/dev/null || true
+    fetch_verified_archive "$TAR" "$URL"
+    if [[ ! -f "${STAGED_EXTRACT}/piper/piper" ]]; then
+      echo "❌ ${TAR} did not contain piper/piper" >&2
+      exit 1
+    fi
+    chmod +x "${STAGED_EXTRACT}/piper/piper"
+    # Keep already-installed companion libs when only the binary is being repaired.
+    if [[ -d "$PIPER_LIB" && ! -e "${STAGED_EXTRACT}/piper/lib" ]]; then
+      cp -R "$PIPER_LIB" "${STAGED_EXTRACT}/piper/lib"
+    fi
+    promote_dir "${STAGED_EXTRACT}/piper" "$PIPER_DIR"
   fi
 
   # Companion dylibs (espeak-ng, piper_phonemize, onnxruntime) from piper-phonemize
@@ -128,13 +166,18 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
     PTTAR="piper-phonemize_${OS}_${ARCH}.tar.gz"
     PTURL="https://github.com/rhasspy/piper-phonemize/releases/download/${PHONEMIZE_VERSION}/${PTTAR}"
     echo "⬇️  Piper libs → ${PIPER_LIB}/"
-    TMPDIR_PT="$(mktemp -d)"
-    STAGED_DIRS+=("$TMPDIR_PT")
-    curl --fail --location --progress-bar "$PTURL" | tar xz -C "$TMPDIR_PT"
-    mkdir -p "${PIPER_LIB}"
+    fetch_verified_archive "$PTTAR" "$PTURL"
+    LIB_STAGE="$(mktemp -d "${VOICE_HOME}/.piper-lib.XXXXXX")"
+    STAGED_DIRS+=("$LIB_STAGE")
     # Copy whichever extension is present; let one pattern miss without aborting.
-    cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "${PIPER_LIB}/" 2>/dev/null || true
-    cp "$TMPDIR_PT"/piper-phonemize/lib/*.so "${PIPER_LIB}/" 2>/dev/null || true
+    cp "$STAGED_EXTRACT"/piper-phonemize/lib/*.dylib "$LIB_STAGE/" 2>/dev/null || true
+    cp "$STAGED_EXTRACT"/piper-phonemize/lib/*.so* "$LIB_STAGE/" 2>/dev/null || true
+    if [[ -z "$(ls -A "$LIB_STAGE")" ]]; then
+      echo "❌ ${PTTAR} contained no shared libraries" >&2
+      exit 1
+    fi
+    mkdir -p "${PIPER_DIR}"
+    promote_dir "$LIB_STAGE" "$PIPER_LIB"
   fi
 fi
 

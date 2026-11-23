@@ -9,10 +9,14 @@ import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
+import { createHash } from 'crypto';
+import { PIPER_RELEASE_ARCHIVE_SHA256, inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VOICE = 'en_US-test-low';
+// The curl stub's archive payload; the real digest table is swapped for this one under VITEST.
+const STUB_ARCHIVE_SHA256 = createHash('sha256').update('archive-ok').digest('hex');
+const ARCHIVE_NAMES = Object.keys(PIPER_RELEASE_ARCHIVE_SHA256);
 const CURL_STUB = `#!/usr/bin/env bash
 dest=""; head=0; url=""
 while [[ $# -gt 0 ]]; do
@@ -33,11 +37,8 @@ if [[ -n "\${CURL_FAIL_MATCH:-}" && "$url" == *"\${CURL_FAIL_MATCH}"* ]]; then
   [[ -n "$dest" ]] && printf 'partial' > "$dest"
   exit 18
 fi
-if [[ -z "$dest" ]]; then
-  printf 'archive'
-  exit 0
-fi
 case "$url" in
+  *.tar.gz) printf 'archive-%s' "\${CURL_ARCHIVE_TAG:-ok}" > "$dest" ;;
   *.onnx.json) printf '{"audio":{"sample_rate":22050}}' > "$dest" ;;
   *.onnx) printf 'onnx-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
   *) printf 'whisper-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
@@ -67,15 +68,16 @@ if [[ -n "\${UNZIP_FAIL:-}" ]]; then exit 9; fi
 : > "$dest/ggml-test-encoder.mlmodelc/model.mil"
 `;
 const TAR_STUB = `#!/usr/bin/env bash
-dest=""
+dest=""; archive=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -C) dest="$2"; shift 2 ;;
+    xzf) archive="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
-cat >/dev/null
-if [[ "$dest" == *"/.portos/voice" ]]; then
+echo "extract $archive" >> "$CURL_LOG"
+if [[ "$archive" != *phonemize* ]]; then
   mkdir -p "$dest/piper"
   printf '#!/bin/sh\\n' > "$dest/piper/piper"
   chmod +x "$dest/piper/piper"
@@ -105,6 +107,7 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
       VOICE_NAME: VOICE,
       MODEL_NAME: 'ggml-test.bin',
       CURL_LOG: log,
+      PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify(Object.fromEntries(ARCHIVE_NAMES.map((n) => [n, STUB_ARCHIVE_SHA256]))),
       ...env,
     },
   });
@@ -184,6 +187,33 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Unsupported Piper platform: freebsd/x86_64');
     expect(downloads()).toEqual([]);
+  });
+
+  it('rejects a mismatched Piper archive before extracting and leaves the install untouched', () => {
+    const piperDir = join(home, '.portos/voice/piper');
+    rmSync(join(piperDir, 'piper')); // binary missing → archive is fetched; lib/ is the existing content
+    const result = run({ FAKE_UNAME_S: 'Linux', FAKE_UNAME_M: 'x86_64', CURL_ARCHIVE_TAG: 'evil' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SHA-256');
+    expect(readFileSync(log, 'utf8')).not.toContain('extract');
+    expect(readdirSync(piperDir)).toEqual(['lib']);
+    expect(readdirSync(join(home, '.portos/voice')).filter((f) => f.startsWith('.piper') || f.includes('.part.'))).toEqual([]);
+  });
+
+  it('rejects a mismatched phonemize archive before extracting and installs no libs', () => {
+    const piperDir = join(home, '.portos/voice/piper');
+    rmSync(join(piperDir, 'lib'), { recursive: true });
+    const result = run({ FAKE_UNAME_S: 'Linux', FAKE_UNAME_M: 'x86_64', PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify({ 'piper-phonemize_linux_x86_64.tar.gz': '0'.repeat(64) }) });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SHA-256');
+    expect(readFileSync(log, 'utf8')).not.toContain('extract');
+    expect(existsSync(join(piperDir, 'lib'))).toBe(false);
+  });
+
+  it('rejects an archive with no pinned digest', () => {
+    const result = spawnSync('node', [join(ROOT, 'scripts/voice-asset.js'), 'verify-archive', 'piper_linux_riscv.tar.gz', join(ROOT, 'package.json')], { encoding: 'utf8' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('no pinned sha256');
   });
 
   it('repairs a poisoned ONNX with no sidecar instead of reporting ready', () => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -69,5 +70,28 @@ describe('voice model asset completion contract', () => {
     expect(isManagedVoiceAsset(join(dir, 'voices', 'a.onnx'), join(dir, 'voices'))).toBe(true);
     expect(isManagedVoiceAsset(join(dir, 'mine', 'a.onnx'), join(dir, 'voices'))).toBe(false);
     expect(isManagedVoiceAsset(join(dir, 'voices', 'nested', 'a.onnx'), join(dir, 'voices'))).toBe(false);
+  });
+});
+
+describe('verifyVoiceArchiveSha256', () => {
+  it('pins digests for all 10 Piper release archives', async () => {
+    const { PIPER_RELEASE_ARCHIVE_SHA256 } = await import('./voiceModelAssets.js');
+    expect(Object.keys(PIPER_RELEASE_ARCHIVE_SHA256)).toHaveLength(10);
+    expect(Object.isFrozen(PIPER_RELEASE_ARCHIVE_SHA256)).toBe(true);
+    for (const digest of Object.values(PIPER_RELEASE_ARCHIVE_SHA256)) expect(digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('accepts a match, rejects a mismatch and unknown names', async () => {
+    const { verifyVoiceArchiveSha256 } = await import('./voiceModelAssets.js');
+    const archiveDir = mkdtempSync(join(tmpdir(), 'voice-archive-'));
+    const file = join(archiveDir, 'a.tar.gz');
+    writeFileSync(file, 'archive-ok');
+    const good = createHash('sha256').update('archive-ok').digest('hex');
+    await expect(verifyVoiceArchiveSha256('a.tar.gz', file, { 'a.tar.gz': good })).resolves.toBeUndefined();
+    const table = { 'a.tar.gz': '0'.repeat(64) };
+    await expect(verifyVoiceArchiveSha256('a.tar.gz', file, table)).rejects.toThrow(/mismatch/);
+    await expect(verifyVoiceArchiveSha256('b.tar.gz', file, table)).rejects.toThrow(/no pinned sha256/);
+    await expect(verifyVoiceArchiveSha256('toString', file, table)).rejects.toThrow(/no pinned sha256/);
+    rmSync(archiveDir, { recursive: true, force: true });
   });
 });

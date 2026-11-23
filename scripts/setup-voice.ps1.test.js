@@ -9,10 +9,12 @@ import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
+import { createHash } from 'crypto';
+import { PIPER_RELEASE_ARCHIVE_SHA256, inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VOICE = 'en_US-test-low';
+const STUB_ARCHIVE_SHA256 = createHash('sha256').update('archive-ok').digest('hex');
 const PS = ['pwsh', 'powershell'].find((bin) => spawnSync(bin, ['-NoProfile', '-Command', 'exit 0']).status === 0);
 
 const WRAPPER = `
@@ -24,7 +26,8 @@ function Invoke-WebRequest {
         Set-Content -Path $OutFile -Value 'partial' -NoNewline
         throw 'transfer dropped'
     }
-    if ($Uri -like '*.onnx.json') { Set-Content -Path $OutFile -Value '{"audio":{"sample_rate":22050}}' -NoNewline }
+    if ($Uri -like '*.zip') { Set-Content -Path $OutFile -Value 'archive-ok' -NoNewline }
+    elseif ($Uri -like '*.onnx.json') { Set-Content -Path $OutFile -Value '{"audio":{"sample_rate":22050}}' -NoNewline }
     elseif ($Uri -like '*.onnx') { Set-Content -Path $OutFile -Value 'onnx-v1' -NoNewline }
     else { Set-Content -Path $OutFile -Value 'whisper-v1' -NoNewline }
 }
@@ -54,6 +57,7 @@ describe.skipIf(!PS)('setup-voice.ps1 model provisioning', () => {
       TTS_ENGINE: 'piper',
       VOICE_NAME: VOICE,
       CURL_LOG: log,
+      PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify(Object.fromEntries(Object.keys(PIPER_RELEASE_ARCHIVE_SHA256).map((n) => [n, STUB_ARCHIVE_SHA256]))),
       ...env,
     },
   });
@@ -88,13 +92,21 @@ describe.skipIf(!PS)('setup-voice.ps1 model provisioning', () => {
   it.each([
     ['download', { CURL_FAIL_MATCH: 'piper_windows' }],
     ['extraction', { EXPAND_FAIL: '1' }],
-  ])('removes the Piper zip from TEMP when the %s fails', (_label, fail) => {
-    const tmp = join(home, 'tmp');
-    mkdirSync(tmp);
+  ])('leaves no Piper zip or staging dir when the %s fails', (_label, fail) => {
     rmSync(join(home, '.portos/voice/piper/piper.exe'));
-    const failed = run({ TEMP: tmp, ...fail });
+    const failed = run(fail);
     expect(failed.status).not.toBe(0);
-    expect(readdirSync(tmp)).toEqual([]);
+    expect(readdirSync(join(home, '.portos/voice')).filter((f) => f.startsWith('.piper'))).toEqual([]);
+  });
+
+  it('rejects a mismatched Piper archive before extracting and leaves the install untouched', () => {
+    const piperDir = join(home, '.portos/voice/piper');
+    writeFileSync(join(piperDir, 'marker.txt'), 'keep');
+    rmSync(join(piperDir, 'piper.exe'));
+    const result = run({ PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify({ 'piper_windows_amd64.zip': '0'.repeat(64) }) });
+    expect(result.status).not.toBe(0);
+    expect(readdirSync(piperDir)).toEqual(['marker.txt']);
+    expect(readdirSync(join(home, '.portos/voice')).filter((f) => f.startsWith('.piper'))).toEqual([]);
   });
 
   it('repairs a poisoned ONNX that has no sidecar', () => {
