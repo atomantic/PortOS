@@ -129,4 +129,15 @@ describe('ActivityTab', () => {
     await act(async () => { resolveComment(page('comment', 1, 'c')); });
     expect(screen.getByText('comment')).toBeInTheDocument();
   });
+
+  it('wraps the activity toolbar and sizes the refresh control for coarse pointers', async () => {
+    getAgentActivityTimeline.mockResolvedValue(page('vote', 1, 'v'));
+    render(<ActivityTab agentId="agent-1" />);
+    const heading = await screen.findByRole('heading', { name: 'Activity Log' });
+    expect(heading.parentElement.className).toContain('flex-wrap');
+    expect(heading.className).toContain('min-w-0');
+    const refresh = screen.getByRole('button', { name: 'Refresh' });
+    expect(refresh.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByLabelText('Filter by action').className).toContain('min-w-0');
+  });
 });

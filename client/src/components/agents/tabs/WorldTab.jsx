@@ -490,7 +490,7 @@ export default function WorldTab({ agentId }) {
       <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
         <span className="text-sm text-gray-400">Account: <span className="text-white font-medium">{accountName}</span></span>
         {rateLimits && (
-          <div className="flex gap-3 ml-auto">
+          <div className="flex flex-wrap gap-2 ml-auto min-w-0">
             {Object.entries(rateLimits).map(([action, rl]) => {
               if (!rl?.cooldownMs) return null;
               const cooldownMs = getCooldownMs(action);
@@ -513,12 +513,12 @@ export default function WorldTab({ agentId }) {
         <div className="space-y-4">
           {/* Status Card */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">World Status</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">World Status</h3>
               <button
                 onClick={fetchStatus}
                 disabled={statusLoading}
-                className="px-3 py-1 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
+                className="shrink-0 pointer-coarse:min-h-11 px-3 py-1 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
               >
                 {statusLoading ? <BrailleSpinner text="Loading" /> : 'Refresh'}
               </button>
@@ -634,8 +634,8 @@ export default function WorldTab({ agentId }) {
             ) : (
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 {displayNearby.slice(0, 20).map((agent, i) => (
-                  <div key={agent.id || i} className="flex items-center justify-between p-2 bg-port-bg rounded text-sm">
-                    <div className="flex items-center gap-2">
+                  <div key={agent.id || i} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-port-bg rounded text-sm">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span>{agent.appearance?.emoji || '🤖'}</span>
                       <span className="text-white">{agent.name || 'Unknown'}</span>
                       {agent.thinking && <span className="text-gray-500 text-xs truncate max-w-[150px]">"{agent.thinking}"</span>}
@@ -675,14 +675,14 @@ export default function WorldTab({ agentId }) {
 
           {/* Activity History */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">Activity History</h3>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">Activity History</h3>
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <select
                   aria-label="Filter history"
                   value={historyFilter}
                   onChange={e => setHistoryFilter(e.target.value)}
-                  className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                  className="min-w-0 pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
                 >
                   {HISTORY_FILTERS.map(f => (
                     <option key={f.value} value={f.value}>{f.label}</option>
@@ -691,7 +691,7 @@ export default function WorldTab({ agentId }) {
                 <button
                   onClick={() => fetchHistory()}
                   disabled={historyLoading}
-                  className="px-2 py-1 text-xs bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
+                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
                 >
                   {historyLoading ? '...' : 'Refresh'}
                 </button>
@@ -750,15 +750,15 @@ export default function WorldTab({ agentId }) {
         <div className="space-y-4">
           {/* Action Queue */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">Action Queue</h3>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">Action Queue</h3>
+              <div className="flex flex-wrap items-center gap-2">
                 {queue.length > 0 && (
                   <span className="text-xs text-gray-500">{queue.length} item{queue.length !== 1 ? 's' : ''}</span>
                 )}
                 <button
                   onClick={() => { setShowAddForm(!showAddForm); setNewActionParams({}); }}
-                  className="px-2 py-1 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80"
+                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80"
                 >
                   {showAddForm ? 'Cancel' : '+ Add'}
                 </button>

@@ -102,4 +102,17 @@ describe('ToolsTab action failures', () => {
     expect(browse).toHaveTextContent('Browse Feed');
     expect(getAgentFeed).toHaveBeenCalledWith({ accountId: 'account-1', sort: 'hot', limit: 25 });
   });
+
+  it('wraps the feed toolbar and sizes compact actions for coarse pointers', async () => {
+    render(<ToolsTab agentId="agent-1" agent={{ id: 'agent-1', aiConfig: {} }} />);
+    const browse = await screen.findByRole('button', { name: 'Browse Feed' });
+    expect(browse.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: 'Find Relevant' }).className).toContain('pointer-coarse:min-h-11');
+    expect(browse.parentElement.parentElement.className).toContain('flex-wrap');
+    expect(screen.getByLabelText('Sort feed').className).toContain('min-w-0');
+    const composer = screen.getByLabelText('Submolt').parentElement;
+    expect(composer.className).toContain('flex-wrap');
+    expect(screen.getByLabelText('Submolt').className).toContain('min-w-0');
+    expect(screen.getByRole('button', { name: 'Generate Post' }).className).not.toContain('whitespace-nowrap');
+  });
 });

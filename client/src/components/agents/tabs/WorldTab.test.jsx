@@ -133,4 +133,15 @@ describe('WorldTab activity history', () => {
     expect(await screen.findByText('No queued actions')).toBeInTheDocument();
     expect(screen.queryByText(/Could not load action queue/)).toBeNull();
   });
+
+  it('wraps world headers and sizes compact actions for coarse pointers', async () => {
+    render(<WorldTab agentId="agent-1" />);
+    const history = await screen.findByRole('heading', { name: 'Activity History' });
+    expect(history.parentElement.className).toContain('flex-wrap');
+    const refresh = screen.getAllByRole('button', { name: 'Refresh' })[0];
+    expect(refresh.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByLabelText('Filter history').className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: '+ Add' }).className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('heading', { name: 'Action Queue' }).parentElement.className).toContain('flex-wrap');
+  });
 });
