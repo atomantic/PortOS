@@ -51,6 +51,7 @@ router.post('/auth/credentials', asyncHandler(async (req, res) => {
   });
   const data = validateRequest(schema, req.body);
   const result = await spotifyAuth.saveCredentials(data, requestRedirectOptions(req));
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 
