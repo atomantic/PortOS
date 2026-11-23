@@ -92,7 +92,6 @@ vi.mock('./shotSegments.js', () => ({
   })),
   stitchSegments: (...args) => seg.stitch(...args),
   pruneSegments: vi.fn(async () => 0),
-  sweepPartialSegments: vi.fn(async () => {}),
 }));
 
 import { renderMusicVideo, getRenderJobStatus, getActiveRenderJobId, cancelRender } from './render.js';

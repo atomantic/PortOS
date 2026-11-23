@@ -39,7 +39,6 @@ import { basename, join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
-import { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } from '../../lib/audioFingerprint.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import {
   clipRelativeCues,
@@ -54,7 +53,6 @@ import {
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
-import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';
 
 import { getTrack } from '../tracks/index.js';
 export const SHOT_INSTRUCTION_VERSION = 2;
@@ -148,7 +146,7 @@ function legacyMasterLookup(project, masterPath) {
     for (const candidate of await listCandidates()) {
       candidate.sha256 ??= await hashFile(candidate.path).catch(() => '');
       if (candidate.sha256 !== sha256) continue;
-      envelope = await computeRmsEnvelope(candidate.path);
+      envelope = await (await import('../../lib/audioFingerprint.js')).computeRmsEnvelope(candidate.path);
       break;
     }
     envelopes.set(sha256, envelope);
@@ -201,6 +199,8 @@ async function reviewPerformanceTakes(project, masterPath, { decode = true } = {
   const oldEnvelope = legacyMasterLookup(project, masterPath);
   const windowUnchanged = async (instruction) => {
     if (!decode) return true;
+    // Lazy: boot loads this module, and only a lip-synced take compares windows.
+    const { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } = await import('../../lib/audioFingerprint.js');
     let fingerprint = instruction.audio?.windowFingerprint;
     if (!fingerprint) {
       const envelope = await oldEnvelope(instruction.audio?.sha256);
@@ -338,9 +338,8 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     throw refuse(`A performance shot renders from its reference frame and the song — mode '${mode}' is not supported.`, 'MUSIC_VIDEO_PERFORMANCE_MODE_UNSUPPORTED');
   }
 
-  // Lazy: render.js pulls the whole render pipeline, which a cutaway
-  // submission (the common case) never needs.
-  const { resolveMasterAudioPath } = await import('./render.js');
+  // Lazy: a cutaway submission (the common case) never reads the master.
+  const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   const masterPath = await resolveMasterAudioPath(project);
   if (scene.performanceRepair) await assertCurrentPerformanceTakes(project, masterPath);
   const songDurationSec = await probeVideoDuration(masterPath);
@@ -365,14 +364,17 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // everything else a vocal stem leaves out are what drive its motion.
   const conditioningSource = musicDriven ? 'master'
     : project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
-  const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
+  // Lazy: boot loads this module, and only a stem-conditioned take reads the stem.
+  const stems = conditioningSource === 'master' ? null : await import('./vocalStem.js');
+  const stemPath = stems ? stems.resolveVocalStemPath(project) : null;
   if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
-  if (stemPath) await assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
+  if (stemPath) await stems.assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
 
   const audioSha256 = await hashFile(masterPath);
   // #9266: the MASTER's loudness over this window, so a later re-master that
   // leaves these bars alone keeps the take. Best-effort — a take without one
   // falls back to the old-master lookup, and then to whole-file staleness.
+  const { computeRmsEnvelope, windowFingerprint } = await import('../../lib/audioFingerprint.js');
   const windowFingerprintRecord = await computeRmsEnvelope(masterPath)
     .then((envelope) => windowFingerprint(envelope, { startSec: plan.windowStartSec, endSec: plan.windowEndSec }))
     .catch((err) => {

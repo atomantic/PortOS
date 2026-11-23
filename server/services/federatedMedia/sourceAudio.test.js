@@ -11,7 +11,7 @@ import { assertCurrentSourceAudioWindow, pcmAudioInfo, prepareSourceAudioWindow,
 import { applyRemoteInputAssets } from './inputAssets.js';
 
 const mocks = vi.hoisted(() => ({ master: '', run: vi.fn() }));
-vi.mock('../musicVideo/render.js', () => ({ resolveMasterAudioPath: async () => mocks.master }));
+vi.mock('../musicVideo/masterAudioPath.js', () => ({ resolveMasterAudioPath: async () => mocks.master }));
 vi.mock('../../lib/ffmpeg.js', () => ({ findFfmpeg: async () => 'fixture-ffmpeg', runFfmpegProcess: mocks.run }));
 
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();

@@ -212,7 +212,7 @@ export async function getRenderCleanup(projectId, options) {
 
 export async function cleanupRenders(projectId, { unusedLooks = false } = {}, options) {
   return withRenderCleanupReservation(projectId, async () => {
-    const { isProjectRenderActive } = await import('./render.js');
+    const { isProjectRenderActive } = await import('./renderActivityState.js');
     const { cleanupShotSegments, assertSegmentCleanupIdle } = await import('./shotSegments.js');
     if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before cleanup.', { status: 409, code: 'RENDER_IN_PROGRESS' });
     assertSegmentCleanupIdle(projectId);

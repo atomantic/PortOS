@@ -38,7 +38,7 @@ function mapTimed(items, intervals) {
 
 async function prepare(project, input) {
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { resolveMasterAudioPath } = await import('./render.js');
+  const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   const { analyzeAudioFile } = await import('./audioAnalysis.js');
   const oldPath = await resolveMasterAudioPath(project);
   const newPath = await resolveMasterAudioPath({ trackId: input.targetTrackId });

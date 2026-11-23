@@ -151,6 +151,16 @@ const SELECTION_CUTS = [
     'reads owner decisions from branchRetirementDecision.js and forge shipment from branchReconcile/forgeShipment.js'],
   ['services/apps.js', 'services/taskSchedule.js',
     'resets watcher cooldowns through taskScheduleStore.js'],
+  // #17578: music video modules that resolve the master or plan a cut, not render it.
+  ...[
+    'services/musicVideo/performanceShot.js', 'services/musicVideo/vocalStem.js', 'services/federatedMedia/sourceAudio.js',
+    'services/musicVideo/audioTiming.js', 'services/musicVideo/lyricAlign.js', 'services/musicVideo/lyricAlignCore.js',
+    'services/musicVideo/lyricVerify.js', 'services/musicVideo/performanceRepair.js', 'services/musicVideo/revisionService.js',
+    'services/musicVideo/vocalSeparation.js', 'services/musicVideo/renderPlan.js', 'services/musicVideo/renderCleanup.js',
+    'services/musicVideo/masterAudioPath.js', 'services/musicVideo/renderActivityState.js', 'services/musicVideo/blender/song.js',
+  ].map(entry => [entry, 'services/musicVideo/render.js', 'resolves the master through masterAudioPath.js and render activity through renderActivityState.js']),
+  ['services/musicVideo/shotSegments.js', 'services/musicVideo/render.js',
+    'plans through renderPlan.js, builds args with renderFfmpegArgs.js and reads render activity from renderActivityState.js'],
   // #17577: the Music Video project store and the siblings it imports never import back up.
   ['services/musicVideo/projects.js', MUSIC_VIDEO_STORE_UPWARD,
     'is the low-level store; board edits and film workflows import it from projectBoardEdits.js and projectFilmActions.js'],
