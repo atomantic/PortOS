@@ -8,7 +8,7 @@ const emitModel = async (event, payload) => act(async () => {
 });
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModelDetail from './ThreejsModelDetail';
 
@@ -39,7 +39,7 @@ vi.mock('../components/ProviderModelSelector', () => ({
 
 // The preview mounts a react-three-fiber Canvas, which cannot render in jsdom.
 vi.mock('../components/threejsModels/ThreejsModelPreview', () => ({
-  default: ({ family }) => <div>Model preview {family?.id || 'no family'}</div>,
+  default: ({ family, seekToken }) => <div data-testid="preview" data-seek-token={seekToken}>Model preview {family?.id || 'no family'}</div>,
 }));
 
 import { generateThreejsModel, getThreejsModel, listThreejsModelFamilies } from '../services/apiThreejsModels.js';
@@ -91,6 +91,8 @@ const renderDetail = (
     </Routes>
   </MemoryRouter>,
 );
+
+const LocationProbe = () => <output data-testid="location-probe">{useLocation().search}</output>;
 
 const renderLifecycleDetail = (initialEntries) => renderDetail(initialEntries, { withSwitcher: true });
 
@@ -375,6 +377,97 @@ describe('ThreejsModelDetail cross-part penetration gate', () => {
 
     await waitFor(() => expect(screen.getByText('Cross-part penetration')).toBeInTheDocument());
     expect(screen.queryByText(/each part to get its own volume/)).not.toBeInTheDocument();
+  });
+
+  const clipRecord = {
+    ...baseRecord,
+    spec: {
+      ...baseRecord.spec,
+      animation: { clips: [{ id: 'open', name: 'Open', durationSeconds: 2, sequences: [] }] },
+    },
+  };
+  const collisionFinding = {
+    code: 'clip-part-collision',
+    severity: 'warning',
+    partIds: ['hatch', 'deck'],
+    clipId: 'open',
+    clipName: 'Open',
+    timeSeconds: 1.25,
+    worstFraction: 0.6,
+    message: 'In clip "Open", "Hatch" and "Deck" pass through each other from 1.25s.',
+  };
+
+  it('replays a clip collision in the preview: clip, time and both parts go in the URL', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...clipRecord,
+      penetration: {
+        errorCount: 0,
+        warningCount: 1,
+        noteCount: 0,
+        evaluatedPoseCount: 3,
+        poseCoverage: { status: 'complete', budget: 48, comparedPairCount: 2, clips: [{ clipId: 'open', clipName: 'Open', sampledTimes: [0, 1, 2], omittedCount: 0, omittedTimes: [] }] },
+        findings: [collisionFinding],
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={['/media/threejs/threejs-example']}>
+        <LocationProbe />
+        <Routes>
+          <Route path="/media/threejs/:id" element={<ThreejsModelDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const show = await screen.findByRole('button', { name: /Show in preview/ });
+    expect(screen.getByTestId('preview')).toHaveAttribute('data-seek-token', '0');
+    fireEvent.click(show);
+
+    const search = new URLSearchParams(screen.getByTestId('location-probe').textContent);
+    expect(search.get('clip')).toBe('open');
+    expect(search.get('time')).toBe('1.25');
+    expect(search.get('highlight')).toBe('hatch,deck');
+    expect(screen.getByTestId('preview')).toHaveAttribute('data-seek-token', '1');
+    // Asking again for the same moment still re-seeks, though the URL is unchanged.
+    fireEvent.click(show);
+    expect(screen.getByTestId('preview')).toHaveAttribute('data-seek-token', '2');
+    expect(screen.getByText('Clip poses checked:')).toBeInTheDocument();
+  });
+
+  it('offers no replay for a finding with no moment to seek to', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      penetration: {
+        errorCount: 1,
+        warningCount: 0,
+        noteCount: 0,
+        findings: [{ code: 'buried-part', severity: 'error', partIds: ['lens', 'body'], message: 'Lens is inside Body.' }],
+      },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Lens is inside Body.')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /Show in preview/ })).not.toBeInTheDocument();
+  });
+
+  it('says a stored result predates clip sweeping instead of reading clean for a model with clips', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...clipRecord,
+      penetration: { errorCount: 0, warningCount: 0, noteCount: 0, findings: [] },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText(/predates clip-pose sweeping/)).toBeInTheDocument());
+  });
+
+  it('does not flag a static model\'s older result as unmeasured while moving', async () => {
+    getThreejsModel.mockResolvedValue({
+      ...baseRecord,
+      penetration: { errorCount: 0, warningCount: 0, noteCount: 0, findings: [] },
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Cross-part penetration')).toBeInTheDocument());
+    expect(screen.queryByText(/predates clip-pose sweeping/)).not.toBeInTheDocument();
   });
 
   it('hides the section for a record generated before the gate existed', async () => {

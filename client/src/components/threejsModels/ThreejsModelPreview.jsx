@@ -164,7 +164,7 @@ function Material({ definition, highlighted = false, auditMode = 'final', partId
 const offsetPosition = (position = [0, 0, 0], offset) =>
   (Array.isArray(offset) ? position.map((value, axis) => value + offset[axis]) : position);
 
-function Part({ part, materials, layout, selection, selectedId, onSelect, auditMode, pose, envMapIntensity }) {
+function Part({ part, materials, layout, selection, highlightIds, onSelect, auditMode, pose, envMapIntensity }) {
   // The clip's pose for this part, or nothing — a part no sequence drives keeps
   // exactly the transform the spec authored, which is also what every part of a
   // model with no clips at all gets.
@@ -179,8 +179,9 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
     visible: posed?.visible !== false,
   };
   // The whole selected subtree lights up, so selecting a container reads as one
-  // component rather than one lonely mesh inside it.
-  const highlighted = Boolean(selectedId) && (selection.ancestry[part.id] || []).includes(selectedId);
+  // component rather than one lonely mesh inside it. `highlightIds` is the picked
+  // part plus any parts a finding asked to be shown.
+  const highlighted = highlightIds.size > 0 && (selection.ancestry[part.id] || []).some((id) => highlightIds.has(id));
   const select = (event) => {
     // Without this the ray keeps going and every part behind the click selects too.
     event.stopPropagation();
@@ -198,7 +199,7 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
         </mesh>
       )}
       {part.children.filter(isReliefPart).map((child) => (
-        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} selectedId={selectedId} onSelect={onSelect} auditMode={auditMode} pose={pose} envMapIntensity={envMapIntensity} />
+        <Part key={child.id} part={child} materials={materials} layout={layout} selection={selection} highlightIds={highlightIds} onSelect={onSelect} auditMode={auditMode} pose={pose} envMapIntensity={envMapIntensity} />
       ))}
     </>
   );
@@ -213,7 +214,7 @@ function Part({ part, materials, layout, selection, selectedId, onSelect, auditM
           materials={materials}
           layout={layout}
           selection={selection}
-          selectedId={selectedId}
+          highlightIds={highlightIds}
           onSelect={onSelect}
           auditMode={auditMode}
           pose={pose}
@@ -322,7 +323,7 @@ function SceneEnvironment({ preset }) {
   return null;
 }
 
-function ProceduralScene({ spec, background, layout, selection, selectedId, onSelect, auditMode, pose, clipId }) {
+function ProceduralScene({ spec, background, layout, selection, selectedId, highlightIds, onSelect, auditMode, pose, clipId }) {
   const environment = resolveSculptEnvironment(spec);
   return (
     <>
@@ -342,7 +343,7 @@ function ProceduralScene({ spec, background, layout, selection, selectedId, onSe
               materials={spec.materials}
               layout={layout}
               selection={selection}
-              selectedId={selectedId}
+              highlightIds={highlightIds}
               onSelect={onSelect}
               auditMode={auditMode}
               pose={pose}
@@ -375,7 +376,7 @@ function ProceduralScene({ spec, background, layout, selection, selectedId, onSe
  * Scrubbing moves the same playhead and fires nothing: only this loop collects
  * cues, which is the entire difference between silent scrubbing and playback.
  */
-function useClipPlayback({ clip, cuesById, onCue }) {
+function useClipPlayback({ clip, cuesById, onCue, seekSeconds, seekToken }) {
   const [timeSeconds, setTimeSeconds] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -398,11 +399,15 @@ function useClipPlayback({ clip, cuesById, onCue }) {
   // generation runs, so an equivalent snapshot must NOT reset it — which is why
   // this compares the content rather than the object identity, the same way the
   // part and model signatures above do.
+  //
+  // A requested seek (a finding's "Show in preview", or a shared link) replaces
+  // the rewind: the playhead parks, stopped, on that moment. `seekToken` lets the
+  // same moment be requested again after the viewer scrubbed away from it.
   const clipSignature = useMemo(() => JSON.stringify(clip ?? null), [clip]);
   useEffect(() => {
     setPlaying(false);
-    setPlayhead(0);
-  }, [clipSignature, setPlayhead]);
+    setPlayhead(seekSeconds === null ? 0 : Math.min(seekSeconds, duration));
+  }, [clipSignature, seekSeconds, seekToken, duration, setPlayhead]);
 
   // Held in a ref so a caller passing an inline handler cannot restart the loop
   // on every render.
@@ -516,7 +521,7 @@ function SpecRenderFailure({ error, onRetry }) {
   );
 }
 
-export default function ThreejsModelPreview({ spec, family = null, className = '', onCue = null }) {
+export default function ThreejsModelPreview({ spec, family = null, className = '', onCue = null, seekToken = 0 }) {
   const [background, setBackground] = useState(() => spec?.background || '#000000');
   const [explode, setExplode] = useState(0);
   const [qualityMode, setQualityMode] = useState('auto');
@@ -580,6 +585,17 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
   const requestedAuditMode = searchParams.get('auditMode');
   const auditMode = isAuditRenderMode(requestedAuditMode) ? requestedAuditMode : 'final';
   const auditCameraPosition = getAuditCameraPosition(spec, auditCamera);
+  // Parts a finding asked to be shown together (`?highlight=a,b`); ids this model
+  // does not have drop out rather than lighting nothing under a stale label.
+  const requestedHighlight = searchParams.get('highlight');
+  const highlightedPartIds = useMemo(
+    () => (requestedHighlight || '').split(',').filter((partId) => partId && selection.names[partId]),
+    [requestedHighlight, selection],
+  );
+  const highlightIds = useMemo(
+    () => new Set(selectedId ? [selectedId, ...highlightedPartIds] : highlightedPartIds),
+    [selectedId, highlightedPartIds],
+  );
   // Which clip is open is part of what the URL describes, the same way the audit
   // camera and inspection mode are — a clip a model does not declare degrades to
   // its first one rather than to an empty transport.
@@ -596,7 +612,13 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
     for (const cue of listThreejsCues(spec)) map[cue.id] = cue;
     return map;
   }, [spec]);
-  const playback = useClipPlayback({ clip, cuesById, onCue });
+  // `time` is where a finding or a shared link wants the playhead parked; an
+  // absent or malformed value means "start of the clip", never NaN seconds.
+  const requestedTime = searchParams.get('time');
+  const seekSeconds = requestedTime !== null && requestedTime.trim() !== '' && Number.isFinite(Number(requestedTime)) && Number(requestedTime) >= 0
+    ? Number(requestedTime)
+    : null;
+  const playback = useClipPlayback({ clip, cuesById, onCue, seekSeconds, seekToken });
   const { pose, activeSequenceIds } = useMemo(
     () => evaluateThreejsClipPose(clip, playback.timeSeconds),
     [clip, playback.timeSeconds],
@@ -609,6 +631,23 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
       const next = new URLSearchParams(previous);
       if (partId) next.set('part', partId);
       else next.delete('part');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  const clearHighlight = useCallback(() => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.delete('highlight');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  const handleSelectClip = useCallback((clipId) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set('clip', clipId);
+      // A seek belongs to the clip it named; carrying it into another clip would
+      // park that one at a time nobody asked for.
+      next.delete('time');
       return next;
     }, { replace: true });
   }, [setSearchParams]);
@@ -670,6 +709,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
               layout={layout}
               selection={selection}
               selectedId={selectedId}
+              highlightIds={highlightIds}
               onSelect={handleSelect}
               auditMode={auditMode}
               pose={pose}
@@ -809,6 +849,21 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
           </button>
         </div>
       )}
+      {highlightedPartIds.length > 0 && !specError && (
+        <div className={`port-media-overlay absolute right-2 ${selectedId ? 'top-12' : 'top-2'} flex max-w-[calc(100%-1rem)] items-center gap-2 rounded-lg px-2 py-1.5 text-[10px]`}>
+          <span className="truncate font-medium">
+            Showing {highlightedPartIds.map((partId) => selection.names[partId]).join(' and ')}
+          </span>
+          <button
+            type="button"
+            aria-label="Clear highlighted parts"
+            onClick={clearHighlight}
+            className="port-media-overlay-item rounded px-1.5 py-0.5"
+          >
+            Clear
+          </button>
+        </div>
+      )}
       {!specError && (
         <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 text-[10px]">
           <ThreejsClipTransport
@@ -819,7 +874,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
             playing={playback.playing}
             speed={playback.speed}
             activeSequenceNames={activeSequenceNames}
-            onSelectClip={(clipId) => setPreviewParam('clip', clipId)}
+            onSelectClip={handleSelectClip}
             onTogglePlay={playback.togglePlay}
             onStop={playback.stop}
             onScrub={playback.setPlayhead}

@@ -27,7 +27,12 @@ import {
   listSpecNames,
   resolveThreejsAttachments,
 } from './threejsModel.js';
-import { evaluateThreejsModelClipPose } from './threejsModelClipPose.js';
+import {
+  MAX_CLIP_AUDIT_POSES,
+  MAX_LISTED_OMITTED_TIMES,
+  getThreejsClipPoseState,
+  planThreejsClipPoseSamples,
+} from './threejsModelClipSampling.js';
 import {
   applyTransform,
   composeTransform,
@@ -38,21 +43,6 @@ import {
 const EPSILON = 1e-4;
 const COPLANAR_TOLERANCE = 1e-3;
 const TOUCH_TOLERANCE = 0.02;
-// Clip poses measured per audit, shared by every clip. Boundaries alone miss
-// motion that leaves and comes back inside one window — an arm turned through
-// 360° is back at rest at both ends — so each sequence also contributes interior
-// samples. The budget is dealt round-robin across clips, so a sequence-heavy
-// first clip cannot starve a later one, and every sample that does not fit is
-// reported rather than dropped. 48 keeps the walk bounded (12 clips is the
-// schema maximum, four poses each) while covering a typical model completely.
-const MAX_CLIP_AUDIT_POSES = 48;
-// A rotating sequence gets one interior sample per this many degrees of turn,
-// up to MAX_INTERIOR_SEGMENTS segments; every sequence gets at least its midpoint.
-const MAX_ROTATION_STEP_DEGREES = 90;
-const MAX_INTERIOR_SEGMENTS = 8;
-// Omitted times are listed for the reader up to this many per clip; the count
-// is always exact.
-const MAX_LISTED_OMITTED_TIMES = 24;
 // One percent anisotropy is small enough to ignore authoring noise while still
 // catching the intentional shape-squashing that distorts a child hierarchy.
 const NONUNIFORM_SCALE_TOLERANCE = 0.01;
@@ -197,82 +187,7 @@ function faceAreaOverlap2D(minA1, maxA1, minA2, maxA2, minB1, maxB1, minB2, maxB
 const isTransparent = (material) => Boolean(material)
   && ((material.transparent === true && (material.opacity ?? 1) < 1) || (material.transmission ?? 0) > 0);
 
-// The clip pose is the one the preview and the exported player show
-// (`threejsModelClipPose.js`); a part no sequence drives keeps its authored pose.
-function getPoseStateResolver(clip, timeSeconds) {
-  const pose = evaluateThreejsModelClipPose(clip, timeSeconds);
-  return (part) => {
-    const driven = pose[part.id] || {};
-    return {
-      position: driven.position ?? part.position ?? [0, 0, 0],
-      rotationDegrees: driven.rotationDegrees ?? part.rotationDegrees ?? [0, 0, 0],
-      scale: driven.scale ?? part.scale ?? [1, 1, 1],
-      visible: driven.visible ?? (part.visible !== false),
-      opacity: driven.opacity ?? part.opacity ?? 1,
-    };
-  };
-}
-
-const roundTime = (value) => Number(value.toFixed(4));
-
 const formatTimes = (times) => times.map((time) => `${time}s`).join(', ');
-
-const sequenceSegments = (sequence) => {
-  const range = sequence.channels?.rotationDegrees;
-  const turn = range && Array.isArray(range.from) && Array.isArray(range.to)
-    ? Math.max(...range.from.map((value, axis) => Math.abs((range.to[axis] ?? value) - value)))
-    : 0;
-  return Math.min(MAX_INTERIOR_SEGMENTS, Math.max(2, Math.ceil(turn / MAX_ROTATION_STEP_DEGREES)));
-};
-
-/**
- * Every pose time worth measuring in one clip, highest priority first: the clip
- * boundaries, then each sequence's midpoint, then sequence boundaries, then the
- * extra subdivisions of large rotations. Priority only matters when the budget
- * runs out, and then it decides which poses are reported as omitted.
- */
-const planClipSampleTimes = (clip) => {
-  const sequences = (Array.isArray(clip.sequences) ? clip.sequences : [])
-    .filter((sequence) => Number.isFinite(sequence.startSeconds) && Number.isFinite(sequence.endSeconds))
-    .sort((a, b) => (a.startSeconds - b.startSeconds) || (a.endSeconds - b.endSeconds));
-  const tiers = [
-    [0, Number.isFinite(clip.durationSeconds) ? clip.durationSeconds : 0],
-    sequences.map((sequence) => (sequence.startSeconds + sequence.endSeconds) / 2),
-    sequences.flatMap((sequence) => [sequence.startSeconds, sequence.endSeconds]),
-    sequences.flatMap((sequence) => {
-      const segments = sequenceSegments(sequence);
-      const span = sequence.endSeconds - sequence.startSeconds;
-      return Array.from({ length: segments - 1 }, (_, index) => sequence.startSeconds + ((span * (index + 1)) / segments));
-    }),
-  ];
-  const ordered = [];
-  const seen = new Set();
-  for (const time of tiers.flat()) {
-    const rounded = roundTime(time);
-    if (seen.has(rounded)) continue;
-    seen.add(rounded);
-    ordered.push(rounded);
-  }
-  return ordered;
-};
-
-// Round-robin, in clip declaration order: deterministic, and no clip gets a
-// second pose until every clip with candidates left has had another one.
-const allocateClipPoseBudget = (candidateLists, budget) => {
-  const quotas = candidateLists.map(() => 0);
-  let remaining = budget;
-  let progressed = true;
-  while (remaining > 0 && progressed) {
-    progressed = false;
-    candidateLists.forEach((candidates, index) => {
-      if (remaining <= 0 || quotas[index] >= candidates.length) return;
-      quotas[index] += 1;
-      remaining -= 1;
-      progressed = true;
-    });
-  }
-  return quotas;
-};
 
 function collectPoseVolumes(spec, getPartState) {
   const volumes = [];
@@ -994,11 +909,9 @@ export function evaluateThreejsPhysicalAudit(spec) {
 
   // 2. Animated Clips & Pose Evaluation
   const clips = Array.isArray(spec.animation?.clips) ? spec.animation.clips : [];
-  const candidateTimes = clips.map(planClipSampleTimes);
-  const quotas = allocateClipPoseBudget(candidateTimes, MAX_CLIP_AUDIT_POSES);
   const clipCoverage = [];
 
-  clips.forEach((clip, clipIndex) => {
+  planThreejsClipPoseSamples(clips).forEach(({ clip, candidates, timesToTest, omittedTimes }) => {
     const sequences = Array.isArray(clip.sequences) ? clip.sequences : [];
 
     for (const part of parts) {
@@ -1017,9 +930,6 @@ export function evaluateThreejsPhysicalAudit(spec) {
       }
     }
 
-    const candidates = candidateTimes[clipIndex];
-    const timesToTest = candidates.slice(0, quotas[clipIndex]).sort((a, b) => a - b);
-    const omittedTimes = candidates.slice(quotas[clipIndex]).sort((a, b) => a - b);
     evaluatedPoseCount += timesToTest.length;
     clipCoverage.push({
       clipId: clip.id,
@@ -1051,7 +961,7 @@ export function evaluateThreejsPhysicalAudit(spec) {
     if (anchoredAttachments.length > 0) {
       const worstByPartId = new Map();
       for (const timeSeconds of timesToTest) {
-        const pose = collectPoseVolumes(spec, getPoseStateResolver(clip, timeSeconds));
+        const pose = collectPoseVolumes(spec, getThreejsClipPoseState(clip, timeSeconds));
         const report = measureAttachmentAnchors({
           attachments: anchoredAttachments,
           volumes: pose.volumes,
@@ -1084,7 +994,7 @@ export function evaluateThreejsPhysicalAudit(spec) {
         || (opacCh && opacCh.from === 0 && opacCh.to > 0);
 
       if (appears && seq.startSeconds > 0) {
-        const getPoseState = getPoseStateResolver(clip, seq.startSeconds);
+        const getPoseState = getThreejsClipPoseState(clip, seq.startSeconds);
         const { volumes: poseVolumes } = collectPoseVolumes(spec, getPoseState);
         const partVolume = poseVolumes.find((v) => v.id === seq.partId);
 

@@ -15,7 +15,7 @@ const part = (id, geometry, overrides = {}) => ({
 // Every fixture goes through the real schema first: the evaluator's contract is
 // "already validated", so a test that skipped parsing would exercise a shape the
 // evaluator never sees (missing `position`/`scale`/`children` defaults).
-const makeSpec = ({ parts, materials, articulation }) => threejsSculptSpecSchema.parse({
+const makeSpec = ({ parts, materials, articulation, animation }) => threejsSculptSpecSchema.parse({
   schemaVersion: 1,
   name: 'Example Assembly',
   summary: 'Placeholder spec used to exercise the cross-part penetration gate.',
@@ -25,6 +25,7 @@ const makeSpec = ({ parts, materials, articulation }) => threejsSculptSpecSchema
   lights: [{ type: 'directional', intensity: 2 }],
   parts,
   articulation,
+  animation,
   detailInventory: [{
     feature: 'Overall silhouette',
     evidence: 'Visible in the reference image.',
@@ -330,7 +331,246 @@ it('still measures a stored spec whose rotation or scale is not a finite triple'
   });
 });
 
+const collisions = (penetration) => penetration.findings.filter((entry) => entry.code === 'clip-part-collision');
+
+const turn = (id, partId, from, to, { startSeconds = 0, endSeconds = 2, channel = 'rotationDegrees' } = {}) => ({
+  id,
+  name: id,
+  partId,
+  startSeconds,
+  endSeconds,
+  easing: 'linear',
+  channels: { [channel]: { from, to } },
+});
+
+const makeClip = (sequences, overrides = {}) => ({
+  id: 'open',
+  name: 'Open',
+  durationSeconds: 2,
+  sequences,
+  ...overrides,
+});
+
+// A deck whose top face is y = 0, and a hatch lying on it. The hatch is a
+// 3 x 0.2 x 2 slab; what differs between the two fixtures below is only where it pivots.
+const deck = () => part('deck', { type: 'box', width: 4, height: 3, depth: 4 }, { position: [0, -1.5, 0] });
+const hatchGeometry = { type: 'box', width: 3, height: 0.2, depth: 2 };
+
+describe('evaluateThreejsPenetration over clip poses', () => {
+  it('keeps a door hinged on its edge clean while the same door hinged at its centre is flagged at the right time', () => {
+    const edgeHinged = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        deck(),
+        part('hinge', null, {
+          geometry: undefined,
+          position: [-1.5, 0.1, 0],
+          children: [part('hatch', hatchGeometry, { position: [1.5, 0, 0] })],
+        }),
+      ],
+      animation: { clips: [makeClip([turn('swing', 'hinge', [0, 0, 0], [0, 0, 30])])] },
+    }));
+    expect(collisions(edgeHinged)).toEqual([]);
+    expect(edgeHinged.poseCoverage).toMatchObject({ status: 'complete' });
+    expect(edgeHinged.evaluatedPoseCount).toBeGreaterThan(0);
+
+    const centreHinged = evaluateThreejsPenetration(makeSpec({
+      parts: [deck(), part('hatch', hatchGeometry, { position: [0, 0.1, 0] })],
+      animation: { clips: [makeClip([turn('swing', 'hatch', [0, 0, 0], [0, 0, 30])])] },
+    }));
+    const [collision] = collisions(centreHinged);
+    expect(collisions(centreHinged)).toHaveLength(1);
+    expect(collision).toMatchObject({
+      severity: 'note',
+      clipId: 'open',
+      timeSeconds: 1,
+      restFraction: 0,
+    });
+    expect([...collision.partIds].sort()).toEqual(['deck', 'hatch']);
+    expect(collision.worstFraction).toBeGreaterThanOrEqual(0.15);
+    expect(collision.message).toContain('Open');
+    expect(centreHinged.noteCount).toBeGreaterThan(0);
+  });
+
+  it('does not report a pair that overlaps as much in motion as it does at rest', () => {
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('plate', box(4)),
+        part('ball', { type: 'sphere', radius: 1 }, { position: [2, 0, 0] }),
+      ],
+      animation: { clips: [makeClip([turn('spin', 'ball', [0, 0, 0], [0, 180, 0])])] },
+    }));
+    expect(penetration.findings.length).toBeGreaterThan(0);
+    expect(collisions(penetration)).toEqual([]);
+  });
+
+  it('catches a 360 degree turn that collides only mid-window', () => {
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('arm', null, {
+          geometry: undefined,
+          position: [0, 1, 0],
+          children: [part('beam', { type: 'box', width: 3, height: 0.2, depth: 0.2 }, { position: [1.5, 0, 0] })],
+        }),
+        part('post', { type: 'box', width: 0.6, height: 1, depth: 0.6 }, { position: [0, 1, 1.5] }),
+      ],
+      animation: { clips: [makeClip([turn('sweep', 'arm', [0, 0, 0], [0, 360, 0], { endSeconds: 4 })], { durationSeconds: 4 })] },
+    }));
+    const [collision] = collisions(penetration);
+    // A positive turn about Y carries +X toward -Z, so the beam reaches the post at 270 degrees.
+    expect(collision).toMatchObject({ clipId: 'open', timeSeconds: 3 });
+    expect([...collision.partIds].sort()).toEqual(['beam', 'post']);
+    // Both clip boundaries are the rest pose, so only the interior samples can see this.
+    expect(penetration.poseCoverage.clips[0].sampledTimes).toEqual(expect.arrayContaining([0, 1, 2, 3, 4]));
+  });
+
+  it('marks a pose that swallows a part whole as a warning', () => {
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        part('housing', box(4)),
+        part('plunger', box(1), { position: [6, 0, 0] }),
+      ],
+      animation: { clips: [makeClip([turn('plunge', 'plunger', [6, 0, 0], [0, 0, 0], { channel: 'position' })])] },
+    }));
+    const [collision] = collisions(penetration);
+    expect(collision).toMatchObject({ severity: 'warning', timeSeconds: 2 });
+    expect(collision.worstFraction).toBeGreaterThanOrEqual(0.98);
+    expect(penetration.warningCount).toBe(1);
+  });
+
+  it('exempts pairs an articulation joint connects, and parented or attached parts', () => {
+    const parts = [deck(), part('hatch', hatchGeometry, { position: [0, 0.1, 0] })];
+    const animation = { clips: [makeClip([turn('swing', 'hatch', [0, 0, 0], [0, 0, 90])])] };
+    const joined = evaluateThreejsPenetration(makeSpec({
+      parts,
+      animation,
+      articulation: {
+        joints: [
+          { id: 'frame-joint', partId: 'deck' },
+          { id: 'hatch-joint', partId: 'hatch', parentJointId: 'frame-joint', pivotSocket: null },
+        ],
+      },
+    }));
+    expect(collisions(joined)).toEqual([]);
+
+    const attached = evaluateThreejsPenetration(makeSpec({
+      parts,
+      animation,
+      articulation: { joints: [{ id: 'frame-joint', partId: 'deck' }], attachmentPartIds: ['hatch'] },
+    }));
+    expect(collisions(attached)).toEqual([]);
+  });
+
+  it('skips a part that is hidden or fully transparent while it collides', () => {
+    const hidden = evaluateThreejsPenetration(makeSpec({
+      parts: [deck(), part('hatch', hatchGeometry, { position: [0, 0.1, 0] })],
+      animation: {
+        clips: [makeClip([{
+          ...turn('swing', 'hatch', [0, 0, 0], [0, 0, 90]),
+          channels: {
+            rotationDegrees: { from: [0, 0, 0], to: [0, 0, 90] },
+            visible: { from: false, to: false },
+          },
+        }])],
+      },
+    }));
+    expect(collisions(hidden)).toEqual([]);
+
+    const faded = evaluateThreejsPenetration(makeSpec({
+      parts: [deck(), part('hatch', hatchGeometry, { position: [0, 0.1, 0] })],
+      animation: {
+        clips: [makeClip([{
+          ...turn('swing', 'hatch', [0, 0, 0], [0, 0, 90]),
+          channels: {
+            rotationDegrees: { from: [0, 0, 0], to: [0, 0, 90] },
+            opacity: { from: 0, to: 0 },
+          },
+        }])],
+      },
+    }));
+    // The turn satisfies the schema's "must change a channel" rule; opacity 0 is what hides it.
+    expect(collisions(faded)).toEqual([]);
+  });
+
+  it('ignores a pass-through into a transparent container', () => {
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [
+        { ...deck(), material: 'glass' },
+        part('hatch', hatchGeometry, { position: [0, 0.1, 0] }),
+      ],
+      materials: { shell: { color: '#334455' }, glass: { color: '#aaccff', transparent: true, opacity: 0.3 } },
+      animation: { clips: [makeClip([turn('swing', 'hatch', [0, 0, 0], [0, 0, 90])])] },
+    }));
+    expect(collisions(penetration)).toEqual([]);
+  });
+
+  it('reports the poses the shared budget left out instead of reading clean', () => {
+    const sequences = Array.from({ length: 8 }, (_, index) => turn(
+      `step-${index}`,
+      'hatch',
+      [0, 0, index],
+      [0, 0, index + 1],
+      { startSeconds: index * 0.25, endSeconds: (index + 1) * 0.25 },
+    ));
+    const clips = Array.from({ length: 12 }, (_, index) => makeClip(sequences, { id: `clip-${index}`, name: `Clip ${index}` }));
+    const penetration = evaluateThreejsPenetration(makeSpec({
+      parts: [deck(), part('hatch', hatchGeometry, { position: [0, 3, 0] })],
+      animation: { clips },
+    }));
+    expect(penetration.evaluatedPoseCount).toBe(48);
+    expect(penetration.poseCoverage).toMatchObject({ status: 'partial', budget: 48 });
+    const unsampled = penetration.findings.filter((entry) => entry.code === 'clip-poses-unsampled');
+    expect(unsampled).toHaveLength(12);
+    expect(unsampled[0]).toMatchObject({ severity: 'note', clipId: 'clip-0' });
+    expect(unsampled[0].omittedCount).toBeGreaterThan(0);
+  });
+
+  it('bounds the work for a 160-part, 12-clip spec by pose and pair counts', () => {
+    // The schema caps one level at 40 parts, so 156 parts sit under four bare groups (160 in all, the schema maximum).
+    const parts = Array.from({ length: 4 }, (_, group) => part(`g${group}`, null, {
+      geometry: undefined,
+      children: Array.from({ length: 39 }, (__, slot) => {
+        const index = (group * 39) + slot;
+        return part(`p${index}`, box(1), { position: [(index % 16) * 3, Math.floor(index / 16) * 3, 0] });
+      }),
+    }));
+    const clips = Array.from({ length: 12 }, (_, index) => makeClip(
+      [turn('slide', `p${index}`, [(index % 16) * 3, 0, 0], [(index % 16) * 3 + 2.6, 0, 0], { channel: 'position', startSeconds: 0.5, endSeconds: 1.5 })],
+      { id: `clip-${index}`, name: `Clip ${index}` },
+    ));
+    const penetration = evaluateThreejsPenetration(makeSpec({ parts, animation: { clips } }));
+    expect(penetration.evaluatedPartCount).toBe(156);
+    expect(penetration.evaluatedPoseCount).toBe(48);
+    // Each clip moves one part, so only its pairs are ever measured — and only the
+    // pose where it reaches its neighbour has bounds that touch (the first 12 parts
+    // share row 0, three units apart).
+    expect(penetration.poseCoverage.comparedPairCount).toBe(12);
+    expect(collisions(penetration)).toHaveLength(12);
+  });
+
+  it('returns a static spec exactly as before, with no clip fields', () => {
+    const penetration = evaluateThreejsPenetration(makeSpec({ parts: [part('hull', box(2))] }));
+    expect(Object.keys(penetration).sort()).toEqual([
+      'comparedPairCount', 'errorCount', 'evaluatedPartCount', 'findings', 'noteCount', 'undecidedPairCount', 'warningCount',
+    ]);
+  });
+});
+
 describe('buildThreejsPenetrationFeedback', () => {
+  it('feeds clip collision warnings back with a motion-focused remedy, and never the notes', () => {
+    const feedback = buildThreejsPenetrationFeedback({
+      findings: [
+        { code: 'clip-part-collision', severity: 'warning', message: 'hatch passes through deck' },
+        { code: 'clip-part-collision', severity: 'note', message: 'latch grazes frame' },
+        { code: 'clip-poses-unsampled', severity: 'note', message: 'poses omitted' },
+      ],
+    });
+    expect(feedback).toContain('1. hatch passes through deck');
+    expect(feedback).toContain('pass through each other while a clip plays');
+    expect(feedback).not.toContain('grazes');
+    expect(feedback).not.toContain('omitted');
+    expect(feedback).not.toContain('Give every part its own volume');
+  });
+
   it('says nothing when there is nothing to fix', () => {
     expect(buildThreejsPenetrationFeedback(null)).toBe('');
     expect(buildThreejsPenetrationFeedback({ findings: [] })).toBe('');
