@@ -1,8 +1,8 @@
 /**
- * Owner-only storage for OAuth client secrets and tokens: directory 0700,
- * files 0600. mkdir's mode only applies to newly created directories (and is
- * masked by umask), so chmod enforces it on pre-existing ones too. atomicWrite
- * preserves an existing file's mode on rewrite, so chmod after each write.
+ * Owner-only storage for OAuth secrets and tokens: directory 0700, files 0600.
+ *
+ * mkdir's mode is umask-masked and ignored for existing dirs, so chmod enforces
+ * it; atomicWrite preserves an old file's mode, so chmod follows each write.
  * Best-effort: chmod is a no-op on Windows and must not break the auth flow.
  */
 import { mkdir, chmod } from 'fs/promises';
