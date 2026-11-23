@@ -233,6 +233,33 @@ describe('sharing/subscriptions', () => {
     }, { timeout: 2_000, interval: 20 });
   });
 
+  it('uninstallSubscriptionListener drops the record listeners and a pending debounce', async () => {
+    const { recordEvents } = await import('./recordEvents.js');
+    fakeDebounceTimers();
+    const updatedBefore = recordEvents.listenerCount('updated');
+    const deletedBefore = recordEvents.listenerCount('deleted');
+    subs.installSubscriptionListener();
+    expect(recordEvents.listenerCount('updated')).toBe(updatedBefore + 1);
+    expect(recordEvents.listenerCount('deleted')).toBe(deletedBefore + 1);
+
+    const bucket = await buckets.createBucket({ name: 'Un', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-uninstall' });
+    await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const stamped = (await subs.listSubscriptions({ recordId: u.id }))[0].lastExportedAt;
+    await subs.reexportSubscribedRecord('universe', u.id);
+
+    subs.uninstallSubscriptionListener();
+    expect(recordEvents.listenerCount('updated')).toBe(updatedBefore);
+    expect(recordEvents.listenerCount('deleted')).toBe(deletedBefore);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await subs.listSubscriptions({ recordId: u.id }))[0].lastExportedAt).toBe(stamped);
+
+    recordEvents.emit('deleted', { recordKind: 'universe', recordId: u.id });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(await subs.listSubscriptions({ recordId: u.id })).toHaveLength(1);
+  });
+
   // vi.waitFor polls on setTimeout, which these tests fake; poll on setImmediate.
   async function until(check) {
     // Bound by wall-clock, not iterations: the export awaits real fs I/O, which a loaded CI box can stretch.
