@@ -27,7 +27,10 @@ import { getTasteProfile } from './taste-questionnaire.js';
 import { getChronotype, getLongevity } from './identity.js';
 import { getTraits } from './digital-twin-analysis.js';
 import { getAll as getBrainAll } from './brainStorage.js';
-import { getMemories } from './memory.js';
+import { getMemories } from './memoryBackend.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMindChosenName.js';
 import { getGoalsTree } from './identity/goals.js';
 import { getLatestMetricValues } from './appleHealthQuery.js';
 
@@ -105,6 +108,15 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * when running file-only) degrades to an empty section instead of failing the
  * whole export.
  */
+// The resident mind's memories are machine-local, never part of the human's
+// portable export (ETHOS; mirrors memorySync's outbound filter).
+const MIND_PRIVATE_TAGS = new Set([
+  PERSISTENT_MIND_CHOSEN_NAME_TAG,
+  ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS),
+]);
+const isMindPrivateMemory = (mem) => mem?.sourceAgentId === PERSISTENT_MIND_ID
+  || (Array.isArray(mem?.tags) && mem.tags.some((t) => MIND_PRIVATE_TAGS.has(t)));
+
 export async function gatherLegacyData() {
   const brainEntries = {};
   await Promise.all(BRAIN_LEGACY_TYPES.map(async (type) => {
@@ -138,7 +150,9 @@ export async function gatherLegacyData() {
     longevity: longevity || null,
     traits: traits || null,
     brain: brainEntries,
-    memories: Array.isArray(memoriesResult?.memories) ? memoriesResult.memories : [],
+    memories: Array.isArray(memoriesResult?.memories)
+      ? memoriesResult.memories.filter((m) => !isMindPrivateMemory(m))
+      : [],
     goals: Array.isArray(goalsTree?.flat) ? goalsTree.flat : [],
     health: healthValues || {},
   };

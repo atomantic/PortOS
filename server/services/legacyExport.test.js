@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Readable, Writable } from 'stream';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
+
+const memoryMock = vi.hoisted(() => ({ getMemories: vi.fn(async () => ({ total: 0, memories: [] })) }));
+vi.mock('./memoryBackend.js', () => memoryMock);
+
 import {
   redactSecrets,
   buildBundleFiles,
@@ -373,5 +378,23 @@ describe('previewLegacyExport', () => {
 describe('getSectionKeys', () => {
   it('lists the known sections', () => {
     expect(getSectionKeys()).toEqual(['identity', 'autobiography', 'brain', 'goals', 'decisions', 'health']);
+  });
+});
+
+describe('gatherLegacyData memories', () => {
+  it('reads via memoryBackend and excludes Persistent Mind private memories', async () => {
+    memoryMock.getMemories.mockResolvedValueOnce({ total: 4, memories: [
+      { id: 'm1', content: 'regular', tags: ['family'] },
+      { id: 'm2', content: 'mind own', sourceAgentId: PERSISTENT_MIND_ID, tags: [] },
+      { id: 'm3', content: 'core', tags: ['mind:core-identity'] },
+      { id: 'm4', content: 'important', tags: ['mind:important'] },
+    ] });
+    const { gatherLegacyData } = await import('./legacyExport.js');
+    const data = await gatherLegacyData();
+    expect(data.memories.map((m) => m.id)).toEqual(['m1']);
+    const { files } = buildBundleFiles(data);
+    const brainJson = JSON.parse(files.find((f) => f.name === 'data/brain.json').data.toString());
+    expect(brainJson.memories.map((m) => m.id)).toEqual(['m1']);
+    expect(files.find((f) => f.name === 'brain/memories.md').data.toString()).not.toMatch(/mind own|core/);
   });
 });
