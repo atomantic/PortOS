@@ -681,7 +681,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
       {!specError && (
         <div className="port-media-overlay absolute left-2 top-2 flex max-w-[calc(100%-1rem)] flex-wrap items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px]">
           <span className="mr-1 whitespace-nowrap text-port-text-muted">Background</span>
-          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Preview background">
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Preview background">
             {BACKGROUND_PRESETS.map((preset) => (
               <button
                 key={preset.id}
@@ -748,7 +748,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
           )}
           <span className="port-media-overlay-divider mx-1 hidden h-3 w-px sm:block" />
           <span className="whitespace-nowrap text-port-text-muted">Audit camera</span>
-          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Audit camera">
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Audit camera">
             {AUDIT_CAMERAS.map((camera) => {
               const unavailable = camera.id === 'family' && !family;
               return (
@@ -769,7 +769,7 @@ export default function ThreejsModelPreview({ spec, family = null, className = '
           </div>
           <span className="port-media-overlay-divider mx-1 hidden h-3 w-px sm:block" />
           <span className="whitespace-nowrap text-port-text-muted">Inspection</span>
-          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label="Inspection mode">
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Inspection mode">
             {AUDIT_RENDER_MODES.map((mode) => (
               <button
                 key={mode.id}
