@@ -25,7 +25,8 @@ export default {
           try {
             try {
               await global.__portosCleanupGitTemplates?.();
-              await global.__portosGitSupervisorCleanup?.();
+              if (global.__portosReleaseGitSupervisor) await global.__portosReleaseGitSupervisor();
+              else await global.__portosGitSupervisorCleanup?.();
             } finally {
               disposeObservations();
               disposeProcesses();

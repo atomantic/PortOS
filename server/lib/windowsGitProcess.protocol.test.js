@@ -9,6 +9,7 @@ vi.mock('./processEnv.js', () => ({ windowsPowerShell51Path: () => 'fixture-comp
 import { spawn } from './childProcess.js';
 import { findCommandOnPath } from './processEnv.js';
 import { assertGitWorkSettled, execGit, withGitMutationLifetime } from './execGit.js';
+import { WINDOWS_GIT_COMPILER_BUDGET_MS } from './windowsGitProcess.js';
 
 const key = Symbol.for('portos.windowsGitSupervisor');
 let broker, compiler, requests, startupFailure;
@@ -98,7 +99,11 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     startupFailure = phase;
     const failure = execGit(['status'], '/synthetic-startup-timeout').catch(error => error);
     await vi.waitFor(() => expect(phase === 'compiler-timeout' ? compiler : broker).not.toBeNull());
-    await vi.advanceTimersByTimeAsync(15000);
+    if (phase === 'compiler-timeout') {
+      await vi.advanceTimersByTimeAsync(WINDOWS_GIT_COMPILER_BUDGET_MS - 1);
+      expect(compiler.kill).not.toHaveBeenCalled();
+    }
+    await vi.advanceTimersByTimeAsync(phase === 'compiler-timeout' ? 1 : 15000);
     expect(await failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: phase });
     expect(requests).toEqual([]);
     expect((phase === 'compiler-timeout' ? compiler : broker).kill).toHaveBeenCalledOnce();
@@ -118,7 +123,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     await writeFile(join(process[key].directory, 'compiler-progress.json'), JSON.stringify({
       stage, elapsedMs: 73, startedAt: Date.now(),
     }));
-    await vi.advanceTimersByTimeAsync(15000);
+    await vi.advanceTimersByTimeAsync(WINDOWS_GIT_COMPILER_BUDGET_MS);
     const failure = await outcome;
     expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: 'compiler-timeout',
       compilerStage: stage, compilerScriptMs: 73, compilerScriptStartMs: expect.any(Number), compilerElapsedMs: expect.any(Number) });
@@ -140,7 +145,7 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     const outcome = execGit(['status'], '/synthetic-compiler-invalid-progress').catch(error => error);
     await vi.waitFor(() => expect(compiler).not.toBeNull());
     await writeFile(join(process[key].directory, 'compiler-progress.json'), receipt);
-    await vi.advanceTimersByTimeAsync(15000);
+    await vi.advanceTimersByTimeAsync(WINDOWS_GIT_COMPILER_BUDGET_MS);
     const failure = await outcome;
     expect(failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: 'compiler-timeout',
       compilerStage: 'unconfirmed-progress', compilerElapsedMs: expect.any(Number) });
