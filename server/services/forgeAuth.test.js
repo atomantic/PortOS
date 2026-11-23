@@ -208,7 +208,7 @@ describe('per-app forge account pinning', () => {
   // → `git remote get-url origin` → `gh auth token` → `gh api user`. `gh auth status` is
   // deliberately absent: a named account is not something to second-guess
   // against the owner.
-  function pinnedAccount({ tokenCode = 0, identity = '4242\tacme-bot\tAcme Bot\n', identityCode = 0 } = {}) {
+  function pinnedAccount({ tokenCode = 0, identity = '[4242,"acme-bot","Acme Bot",null]', identityCode = 0 } = {}) {
     listForgePinnedApps.mockResolvedValue([{ repoPath: '/example/repo', forgeAccount: 'acme-bot' }]);
     respond({ stdout: '/example/repo/.git\n' });
     respond({ stdout: 'git@github.com:acme/widget.git\n' });
@@ -260,11 +260,31 @@ describe('per-app forge account pinning', () => {
     respond({ stdout: '/example/repo/.git\n' });
     respond({ stdout: 'git@github.com:acme/widget.git\n' });
     respond({ stdout: 'acme-bot-token\n' });
-    respond({ stdout: '4242\tacme-bot\t\n' });
+    respond({ stdout: '[4242,"acme-bot",null,null]' });
     const env = await resolveForgeTokenEnv('/portos/data/cos/worktrees/agent-1');
     // A null `.name` falls back to the login rather than committing as "".
     expect(env.GIT_AUTHOR_NAME).toBe('acme-bot');
     expect(env.GH_TOKEN).toBe('acme-bot-token');
+  });
+
+  it('carries a display name with an interior backslash unchanged', async () => {
+    listForgePinnedApps.mockResolvedValue([{ repoPath: '/example/repo', forgeAccount: 'acme-bot' }]);
+    respond({ stdout: '/example/repo/.git\n' });
+    respond({ stdout: 'git@github.com:acme/widget.git\n' });
+    respond({ stdout: 'acme-bot-token\n' });
+    respond({ stdout: JSON.stringify([4242, 'acme-bot', 'Example\\Bot', null]) });
+    const env = await resolveForgeTokenEnv('/portos/data/cos/worktrees/agent-1');
+    expect(env.GIT_AUTHOR_NAME).toBe('Example\\Bot');
+  });
+
+  it('yields no identity for malformed gh output', async () => {
+    listForgePinnedApps.mockResolvedValue([{ repoPath: '/example/repo', forgeAccount: 'acme-bot' }]);
+    respond({ stdout: '/example/repo/.git\n' });
+    respond({ stdout: 'git@github.com:acme/widget.git\n' });
+    respond({ stdout: 'acme-bot-token\n' });
+    respond({ stdout: '4242\tacme-bot\tAcme Bot' });
+    const env = await resolveForgeTokenEnv('/portos/data/cos/worktrees/agent-1');
+    expect(env.GIT_AUTHOR_NAME).toBeUndefined();
   });
 
   it('matches a pin registered against the real path when the checkout is reached through a symlink', async () => {
@@ -280,7 +300,7 @@ describe('per-app forge account pinning', () => {
       respond({ stdout: `${link}/.git\n` });
       respond({ stdout: 'git@github.com:acme/widget.git\n' });
       respond({ stdout: 'acme-bot-token\n' });
-      respond({ stdout: '4242\tacme-bot\tAcme Bot\n' });
+      respond({ stdout: '[4242,"acme-bot","Acme Bot",null]' });
       await expect(resolveForgeTokenEnv(link)).resolves.toMatchObject({ GH_HOST: 'github.com', GH_TOKEN: 'acme-bot-token' });
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -308,7 +328,7 @@ describe('per-app forge account pinning', () => {
     vi.stubEnv('GH_ENTERPRISE_TOKEN', 'ambient-enterprise-token');
     respond({ stdout: 'git@github.com:example-owner/project.git\n' });
     respond({ stdout: 'direct-account-token\n' });
-    respond({ stdout: '9999\tdirect-bot\tDirect Bot\n' });
+    respond({ stdout: '[9999,"direct-bot","Direct Bot",null]' });
 
     const forge = await resolveForgeForRepo('/example/repo', { forgeAccount: 'direct-bot' });
     expect(forge.account).toBe('direct-bot');
@@ -333,7 +353,7 @@ describe('host-bound execution and child credentials', () => {
     const queuePin = () => {
       respond({ stdout: `git@${host}:acme/widget.git` });
       respond({ stdout: `${host}-token` });
-      respond({ stdout: '4242\tacme-bot\tAcme Bot\tbot@example.com\n' });
+      respond({ stdout: '[4242,"acme-bot","Acme Bot","bot@example.com"]' });
     };
     queuePin();
     const options = await resolveForgeExecOptions('/example/repo', { forgeAccount: 'acme-bot' });
@@ -344,7 +364,7 @@ describe('host-bound execution and child credentials', () => {
       if (key !== tokenKey) expect(options.env[key]).toBeUndefined();
     }
     expect(spawn.mock.calls[1][1]).toEqual(['auth', 'token', '-u', 'acme-bot', '-h', host]);
-    expect(spawn.mock.calls[2][1]).toEqual(['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | @tsv']);
+    expect(spawn.mock.calls[2][1]).toEqual(['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | tojson']);
     expect(spawn.mock.calls[2][2].env).toEqual(options.env);
 
     queuePin();
@@ -380,7 +400,7 @@ describe('host-bound execution and child credentials', () => {
   it('does not invent a public-host noreply identity when enterprise email is unavailable', async () => {
     respond({ stdout: 'git@ghe.example.com:acme/widget.git' });
     respond({ stdout: 'enterprise-token' });
-    respond({ stdout: '4242\tacme-bot\tAcme Bot\t\n' });
+    respond({ stdout: '[4242,"acme-bot","Acme Bot",null]' });
     await expect(resolveForgeTokenEnv('/example/repo', { forgeAccount: 'acme-bot' }))
       .resolves.toEqual({ GH_HOST: 'ghe.example.com', GH_ENTERPRISE_TOKEN: 'enterprise-token' });
   });
@@ -424,7 +444,7 @@ it('refuses a timed-out explicit pin instead of launching with ambient credentia
 it('keeps the public SSH-over-443 alias on github.com credentials', async () => {
   respond({ stdout: 'git@ssh.github.com:acme/widget.git' });
   respond({ stdout: 'public-token' });
-  respond({ stdout: '4242\tacme-bot\tAcme Bot\n' });
+  respond({ stdout: '[4242,"acme-bot","Acme Bot",null]' });
   const env = await resolveForgeTokenEnv('/example/repo', { forgeAccount: 'acme-bot' });
   expect(env).toMatchObject({ GH_HOST: 'github.com', GH_TOKEN: 'public-token' });
   expect(env.GH_ENTERPRISE_TOKEN).toBeUndefined();
