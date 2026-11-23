@@ -53,7 +53,7 @@ case "$*" in
     printf '%s\n' "\${PROBE_RESULT:-t}"
     exit "\${PROBE_EXIT:-0}" ;;
 esac
-if [ -n "\${PORTOS_BOOTSTRAP_ROLE:-}" ]; then cat > "$ROLE_INPUT_LOG"; fi
+if [ -n "\${PORTOS_BOOTSTRAP_ROLE:-}" ]; then cat >> "$ROLE_INPUT_LOG"; fi
 case "$*" in *count*) echo 3 ;; esac
 exit 0
 `;
@@ -502,12 +502,15 @@ describe.skipIf(process.platform === 'win32')('scripts/db.sh export + migrate', 
     const PROVISION_PSQL_STUB = `#!/bin/sh
 echo "psql $*" >> "$STUB_LOG"
 case "$*" in
-  *pg_roles*) [ -n "$ROLE_EXISTS" ] && echo 1; exit 0 ;;
-  *-lqt*) echo " $PGDATABASE |"; exit 0 ;;
   *--single-transaction*) cat >> "$IMPORT_LOG"; exit 0 ;;
   *-c*|*-f*) exit 0 ;;
 esac
-cat >> "$STUB_LOG_DIR/psql.stdin"
+input="$(cat)"
+case "$input" in
+  *pg_roles*) [ -n "$ROLE_EXISTS" ] && echo 1; exit 0 ;;
+  *pg_database*) echo 1; exit 0 ;;
+esac
+printf '%s\n' "$input" >> "$STUB_LOG_DIR/psql.stdin"
 printf '%s|%s' "$PORTOS_BOOTSTRAP_ROLE" "$PORTOS_BOOTSTRAP_PASSWORD" >> "$STUB_LOG_DIR/psql.env"
 exit "\${PROVISION_EXIT:-0}"
 `;
