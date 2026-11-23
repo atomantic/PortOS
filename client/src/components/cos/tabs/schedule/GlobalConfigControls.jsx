@@ -25,7 +25,7 @@ import SwarmAndAgentOptionsSection from './SwarmAndAgentOptionsSection';
 import TaskOverrides from './TaskOverrides';
 import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, managedAgentOptionsFor } from './scheduleConstants';
 
-export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, providersLoaded = true, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
+export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, providersLoaded = true, activeProviderId, apps, appsStatus, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
@@ -264,6 +264,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <RunTaskButton
             taskType={taskType}
             apps={apps}
+            appsStatus={appsStatus}
             onTrigger={onTrigger}
             installWide={config.installWide}
             programmatic={config.programmatic}

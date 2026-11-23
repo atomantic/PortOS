@@ -44,7 +44,7 @@ function mergeOnDemandRequest(schedule, request) {
 // passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
 // model pickers stay live without standing up a second independent poll of the
 // same data.
-export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId, daemonRunning }) {
+export default function ScheduleTab({ apps, appsStatus, onReadApps, providers, providersLoaded, activeProviderId, daemonRunning }) {
   const [showLegacy, setShowLegacy] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: schedule, updateData: setSchedule, loading, error, refetch: fetchSchedule } = useSocketResource(
@@ -178,7 +178,10 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
           <p className="text-sm text-gray-400">Configure how often each task type runs.</p>
         </div>
         <button
-          onClick={fetchSchedule}
+          onClick={() => {
+            fetchSchedule();
+            if (appsStatus === 'error') onReadApps?.();
+          }}
           className="flex items-center gap-2 px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
           title="Refresh schedule"
         >
@@ -232,6 +235,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
       <AppTaskTypeSection
         tasks={listedTasks}
         apps={apps}
+        appsStatus={appsStatus}
         providers={providers}
         providersLoaded={providersLoaded}
         activeProviderId={activeProviderId}
@@ -264,6 +268,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         providersLoaded={providersLoaded}
         activeProviderId={activeProviderId}
         apps={apps}
+        appsStatus={appsStatus}
         onUpdateOverride={handleUpdateOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
         allTaskTypes={allTaskTypes}

@@ -189,8 +189,8 @@ describe('AppTaskCard', () => {
     expect(screen.getByText(/waiting on build/)).toBeTruthy();
   });
 
-  it('fires a global on-demand run when the task has no managed apps', () => {
-    const { onTrigger, onConfigure } = renderCard();
+  it('fires a programmatic run when the task has no managed apps', () => {
+    const { onTrigger, onConfigure } = renderCard({ programmatic: true });
     fireEvent.click(screen.getByRole('button', { name: /Run Now/i }));
     expect(onTrigger).toHaveBeenCalledWith('code-review');
     expect(onConfigure).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe('AppTaskCard', () => {
   });
 
   it('does not trigger when improvement is disabled', () => {
-    const { onTrigger } = renderCard({}, { improvementDisabled: true });
+    const { onTrigger } = renderCard({ programmatic: true }, { improvementDisabled: true });
     fireEvent.click(screen.getByRole('button', { name: /Run Now/i }));
     expect(onTrigger).not.toHaveBeenCalled();
   });
@@ -341,7 +341,7 @@ describe('AppTaskCard', () => {
     it('blocks Run while a pin write is still in flight, then re-enables it', async () => {
       let resolveUpdate;
       const onUpdate = vi.fn(() => new Promise(resolve => { resolveUpdate = resolve; }));
-      const { onTrigger } = renderCardWithPins({ providerId: 'claude-code' }, { onUpdate });
+      const { onTrigger } = renderCardWithPins({ providerId: 'claude-code', programmatic: true }, { onUpdate });
 
       fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'sonnet' } });
       const run = screen.getByRole('button', { name: /Run Now/i });

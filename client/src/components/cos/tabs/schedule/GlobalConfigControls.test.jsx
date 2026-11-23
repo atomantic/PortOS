@@ -49,7 +49,7 @@ function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskTy
       onUpdate={onUpdate}
       onTrigger={() => {}}
       providers={providers}
-      apps={[]}
+      apps={[{ id: 'example', name: 'Example App' }]}
       updating={false}
       setUpdating={setUpdating}
       allTaskTypes={['feature-ideas']}
@@ -84,7 +84,7 @@ it('keeps secondary settings collapsed and shows active filter overrides', () =>
 
   expect(screen.getByRole('combobox', { name: 'Interval Type' })).toBeVisible();
   expect(screen.getByRole('combobox', { name: 'Provider (optional)' })).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Run Now' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Run on App' })).toBeVisible();
   expect(screen.queryByRole('textbox', { name: 'Cron expression' })).toBeNull();
   expect(screen.queryByRole('combobox', { name: 'Issue author filter' })).toBeNull();
   const filters = screen.getByRole('button', { name: 'PR & issue filters Overrides: 2 active' });
@@ -518,7 +518,7 @@ describe('GlobalConfigControls — failed saves', () => {
 
     expect(screen.getByLabelText('Cron expression')).toHaveValue('15 8 * * *');
     fireEvent.click(screen.getByRole('button', { name: /^Edit schedule/ }));
-    expect(screen.getByRole('button', { name: 'Run Now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run on App' })).toBeDisabled();
     expect(screen.getByText('Unsaved changes — save before closing')).toBeInTheDocument();
     expect(setUpdating).toHaveBeenLastCalledWith(false);
   });
