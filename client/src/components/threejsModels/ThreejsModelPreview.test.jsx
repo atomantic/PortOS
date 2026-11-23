@@ -848,7 +848,7 @@ describe('ThreejsModelPreview spec-render failures', () => {
     // The overlay chrome is a DOM peer that comes AFTER the panel, so leaving it
     // mounted paints it over the message — and every control on it drives a
     // canvas that no longer exists.
-    expect(screen.queryByRole('radiogroup', { name: 'Preview background' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Preview background' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Explode')).not.toBeInTheDocument();
     expect(screen.queryByText(/Drag to orbit/)).not.toBeInTheDocument();
   });
