@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import toast from '../../ui/Toast';
 import {
   getPlatformAccounts,
@@ -61,6 +61,8 @@ export default function ToolsTab({ agentId, agent }) {
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState(null);
 
+  const [accountError, setAccountError] = useState(null);
+
   // Drafts state
   const [drafts, setDrafts] = useState([]);
   const [draftsError, setDraftsError] = useState(false);
@@ -69,24 +71,33 @@ export default function ToolsTab({ agentId, agent }) {
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
 
-  // Auto-resolve the moltbook account for this agent
-  useEffect(() => {
-    let live = true;
-    getPlatformAccounts(agentId, 'moltbook').then(data => {
-      if (!live) return;
-      const active = data.filter(a => a.status === 'active');
+  // Auto-resolve the moltbook account for this agent. A failed read sets
+  // accountError so it never falls through into the "no account" onboarding copy.
+  const accountRequestRef = useRef(0);
+  const loadAccount = useCallback(async () => {
+    const requestId = ++accountRequestRef.current;
+    setLoading(true);
+    setAccountError(null);
+    const result = await getPlatformAccounts(agentId, 'moltbook', { silent: true })
+      .then(data => ({ data }), error => ({ error }));
+    if (requestId !== accountRequestRef.current) return;
+    if (result.error) {
+      console.warn('⚠️ Failed to resolve moltbook account: ' + result.error.message);
+      setAccountError(result.error);
+    } else {
+      const active = result.data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setSelectedAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
-      setLoading(false);
-    }).catch(err => {
-      if (!live) return;
-      console.warn('⚠️ Failed to resolve moltbook account: ' + err.message);
-      setLoading(false);
-    });
-    return () => { live = false; };
+    }
+    setLoading(false);
   }, [agentId]);
+
+  useEffect(() => {
+    loadAccount();
+    return () => { accountRequestRef.current += 1; };
+  }, [loadAccount]);
 
   // Load rate limits when account resolves
   useEffect(() => {
@@ -374,6 +385,10 @@ export default function ToolsTab({ agentId, agent }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading tools" /></div>;
+  }
+
+  if (accountError) {
+    return <div className="p-4"><ListLoadError what="Moltbook account" error={accountError} onRetry={loadAccount} /></div>;
   }
 
   if (!selectedAccountId) {

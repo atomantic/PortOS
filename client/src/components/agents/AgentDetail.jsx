@@ -3,6 +3,8 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { Link, useParams, useNavigate } from 'react-router';
 import { ArrowLeft } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import LoadFailedState from '../ui/LoadFailedState';
+import ListLoadError from '../ui/ListLoadError';
 import { getAgentPersonality, toggleAgentPersonality } from '../../services/apiPersonalities.js';
 import { getPlatformAccounts } from '../../services/apiAccounts.js';
 import { AGENT_DETAIL_TABS } from './constants';
@@ -33,7 +35,9 @@ function AgentDetailContent() {
   const [agent, setAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [platformAccounts, setPlatformAccounts] = useState([]);
+  const [platformAccountsError, setPlatformAccountsError] = useState(null);
   const mountedRef = useRef(false);
   const latestAgentIdRef = useRef(agentId);
   const agentRequestRef = useRef(0);
@@ -51,7 +55,8 @@ function AgentDetailContent() {
   const fetchAgent = useCallback(async (isCurrent = () => true) => {
     const requestId = ++agentRequestRef.current;
     const requestedAgentId = agentId;
-    const data = await getAgentPersonality(requestedAgentId).catch(() => null);
+    const result = await getAgentPersonality(requestedAgentId, { silent: true })
+      .then(data => ({ data }), error => ({ error }));
     if (
       !isCurrent() ||
       !mountedRef.current ||
@@ -60,12 +65,16 @@ function AgentDetailContent() {
     ) {
       return;
     }
-    if (!data) {
-      setNotFound(true);
+    if (result.error) {
+      // Only a 404 means the agent is gone; anything else is a retryable load failure.
+      if (result.error.status === 404) setNotFound(true);
+      else setLoadError(result.error);
       setLoading(false);
       return;
     }
-    setAgent(data);
+    setLoadError(null);
+    setNotFound(false);
+    setAgent(result.data);
     setLoading(false);
   }, [agentId]);
 
@@ -75,31 +84,33 @@ function AgentDetailContent() {
     setPlatformAccounts([]);
     setLoading(true);
     setNotFound(false);
+    setLoadError(null);
     fetchAgent(() => !cancelled);
     return () => {
       cancelled = true;
     };
   }, [fetchAgent]);
 
-  useEffect(() => {
-    let cancelled = false;
+  const fetchPlatformAccounts = useCallback(() => {
     const requestId = ++platformRequestRef.current;
     const requestedAgentId = agentId;
-    getPlatformAccounts(requestedAgentId).then(accounts => {
-      if (
-        cancelled ||
-        !mountedRef.current ||
-        requestId !== platformRequestRef.current ||
-        latestAgentIdRef.current !== requestedAgentId
-      ) {
-        return;
-      }
+    setPlatformAccountsError(null);
+    getPlatformAccounts(requestedAgentId, null, { silent: true }).then(accounts => {
+      if (!mountedRef.current || requestId !== platformRequestRef.current) return;
       setPlatformAccounts(accounts);
-    }).catch(() => {});
-    return () => {
-      cancelled = true;
-    };
+    }, error => {
+      if (!mountedRef.current || requestId !== platformRequestRef.current) return;
+      setPlatformAccountsError(error);
+    });
   }, [agentId]);
+
+  useEffect(() => {
+    setPlatformAccountsError(null);
+    fetchPlatformAccounts();
+    return () => {
+      platformRequestRef.current += 1;
+    };
+  }, [fetchPlatformAccounts]);
 
   const hasMoltbookAccount = useMemo(
     () => platformAccounts.some(a => a.platform === 'moltbook'),
@@ -133,6 +144,16 @@ function AgentDetailContent() {
 
   if (loading) {
     return <div className="p-6"><BrailleSpinner text="Loading agent" /></div>;
+  }
+
+  if (loadError) {
+    return (
+      <LoadFailedState
+        title="Could not load agent."
+        hint={loadError.message}
+        onRetry={() => { setLoadError(null); setLoading(true); fetchAgent(); }}
+      />
+    );
   }
 
   if (notFound) {
@@ -205,6 +226,15 @@ function AgentDetailContent() {
 
       <TabPills tabs={visibleTabs} activeTab={activeTab} onChange={(tab) => navigate(`/agents/${agentId}/${tab}`)}
         ariaLabel="Social agent sections" mobileCompact className="shrink-0 min-w-0" />
+
+      {platformAccountsError && (
+        <ListLoadError
+          what="platform accounts (Moltbook and World tabs may be hidden)"
+          error={platformAccountsError}
+          onRetry={fetchPlatformAccounts}
+          className="mx-6 mt-3"
+        />
+      )}
 
       {/* Tab Content */}
       <div className="flex-1 overflow-auto bg-port-bg">

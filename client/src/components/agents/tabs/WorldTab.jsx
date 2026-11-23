@@ -104,6 +104,7 @@ export default function WorldTab({ agentId }) {
   const [accountName, setAccountName] = useState('');
   const [rateLimits, setRateLimits] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [accountError, setAccountError] = useState(null);
 
   // Status state
   const [status, setStatus] = useState(null);
@@ -175,20 +176,32 @@ export default function WorldTab({ agentId }) {
 
   const wsConnected = connectionStatus === 'connected';
 
-  // Auto-resolve the moltworld account for this agent
-  useEffect(() => {
-    let live = true;
-    getPlatformAccounts(agentId, 'moltworld').then(data => {
-      if (!live) return;
-      const active = data.filter(a => a.status === 'active');
+  // Auto-resolve the moltworld account for this agent. A failed read sets
+  // accountError so it never falls through into the "no account" onboarding copy.
+  const accountRequestRef = useRef(0);
+  const loadAccount = useCallback(async () => {
+    const requestId = ++accountRequestRef.current;
+    setLoading(true);
+    setAccountError(null);
+    const result = await getPlatformAccounts(agentId, 'moltworld', { silent: true })
+      .then(data => ({ data }), error => ({ error }));
+    if (requestId !== accountRequestRef.current) return;
+    if (result.error) {
+      setAccountError(result.error);
+    } else {
+      const active = result.data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
-      setLoading(false);
-    }).catch(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+    }
+    setLoading(false);
   }, [agentId]);
+
+  useEffect(() => {
+    loadAccount();
+    return () => { accountRequestRef.current += 1; };
+  }, [loadAccount]);
 
   const fetchStatus = useCallback(async () => {
     if (!accountId) return;
@@ -397,6 +410,10 @@ export default function WorldTab({ agentId }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading world tools" /></div>;
+  }
+
+  if (accountError) {
+    return <div className="p-4"><ListLoadError what="Moltworld account" error={accountError} onRetry={loadAccount} /></div>;
   }
 
   if (!accountId) {
