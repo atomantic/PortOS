@@ -170,6 +170,9 @@ export function VoiceTab() {
 
   useEffect(() => {
     loadConfig();
+  }, [loadConfig]);
+
+  useEffect(() => {
     listVoiceEngines({ silent: true })
       .then((data) => {
         const engines = Array.isArray(data?.engines) ? data.engines : [];
@@ -180,7 +183,7 @@ export function VoiceTab() {
         setTtsEngines([]);
         setTtsEngineError('Could not load the TTS engine registry. The saved engine remains selected.');
       });
-  }, [loadConfig]);
+  }, []);
 
   // Functional setState form so sequential patch() calls in one event handler
   // compose correctly — each one sees the prior's result instead of cloning
