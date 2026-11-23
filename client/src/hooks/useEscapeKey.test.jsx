@@ -60,3 +60,36 @@ describe('useEscapeKey', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+describe('useEscapeKey inside a Modal', () => {
+  it('closes the popover first, then the Modal on a second Escape', async () => {
+    const { render, screen } = await import('@testing-library/react');
+    const Modal = (await import('../components/ui/Modal.jsx')).default;
+    const onClose = vi.fn();
+    const onPop = vi.fn();
+    const Popover = () => { useEscapeKey(true, onPop); return <button>pop</button>; };
+    // The popover opens after the Modal, as a real menu does.
+    const ui = (show) => <Modal open onClose={onClose} ariaLabel="m">{show ? <Popover /> : null}</Modal>;
+    const { rerender } = render(ui(false));
+    rerender(ui(true));
+    screen.getByText('pop').focus();
+    fireEvent.keyDown(document.activeElement, { key: 'Escape' });
+    expect(onPop).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('still closes the popover when the Modal has closeOnEsc={false}', async () => {
+    const { render, screen } = await import('@testing-library/react');
+    const Modal = (await import('../components/ui/Modal.jsx')).default;
+    const onClose = vi.fn();
+    const onPop = vi.fn();
+    const Popover = () => { useEscapeKey(true, onPop); return <button>pop</button>; };
+    // The popover opens after the Modal, as a real menu does.
+    const ui = (show) => <Modal open onClose={onClose} closeOnEsc={false} ariaLabel="m">{show ? <Popover /> : null}</Modal>;
+    const { rerender } = render(ui(false));
+    rerender(ui(true));
+    fireEvent.keyDown(screen.getByText('pop'), { key: 'Escape' });
+    expect(onPop).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
