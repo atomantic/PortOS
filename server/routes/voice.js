@@ -1,3 +1,4 @@
+import * as callSession from '../services/voice/callSession.js';
 import { voiceObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
 import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
@@ -186,13 +187,32 @@ router.get('/facetime/status', asyncHandler(async (_req, res) => {
   res.json(await facetimeBridge.checkSetup());
 }));
 
-const facetimeActions = { probe: facetimeBridge.probe, call: facetimeBridge.call, hangup: facetimeBridge.hangup };
-for (const command of ['probe', 'call', 'hangup']) {
-  router.post(`/facetime/${command}`, asyncHandler(async (req, res) => {
-    validateRequest(facetimeActionSchema, req.body || {});
-    res.json(await facetimeActions[command]());
-  }));
-}
+router.post('/facetime/probe', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  res.json(await facetimeBridge.probe());
+}));
+
+// Call/hangup go through callSession so the attached Call Host's PCM frames are
+// accepted (sockets/voice.js drops frames while the session is idle) and
+// transcript journaling stays in sync with the FaceTime window.
+router.post('/facetime/call', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  const result = await callSession.startCall({ origin: 'user' });
+  if (!result.ok) {
+    return res.status(409).json({ ok: false, command: 'call', reason: result.reason, message: result.message });
+  }
+  res.json({ ok: true, command: 'call', state: result.state });
+}));
+
+router.post('/facetime/hangup', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  if (callSession.isCallActive()) {
+    await callSession.endCall('user-hangup');
+    return res.json({ ok: true, command: 'hangup', state: callSession.getCallState() });
+  }
+  // Idle: still hang up so an orphaned FaceTime window can be closed.
+  res.json(await facetimeBridge.hangup());
+}));
 
 router.get('/voices', asyncHandler(async (req, res) => {
   res.json(await listVoices(validEngine(validateRequest(voiceEngineQuerySchema, req.query).engine)));
