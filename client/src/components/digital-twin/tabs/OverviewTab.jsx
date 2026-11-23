@@ -72,12 +72,15 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
   }, [settings, showSettings]);
 
   // The bottom CoS status "Enable" opens a panel far above it; bring it into view.
-  useEffect(() => {
-    if (!showSettings || !revealSettingsRef.current) return;
-    revealSettingsRef.current = false;
+  const revealSettings = () => {
     const panel = settingsRef.current;
     panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
     panel?.querySelector('input[type="checkbox"]')?.focus({ preventScroll: true });
+  };
+  useEffect(() => {
+    if (!showSettings || !revealSettingsRef.current) return;
+    revealSettingsRef.current = false;
+    revealSettings();
   }, [showSettings]);
 
   useEffect(() => {
@@ -653,8 +656,12 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               <span className="text-white">Soul context injection is disabled</span>
               <button
                 onClick={() => {
-                  revealSettingsRef.current = true;
-                  setShowSettings(true);
+                  if (showSettings) {
+                    revealSettings();
+                  } else {
+                    revealSettingsRef.current = true;
+                    setShowSettings(true);
+                  }
                 }}
                 className="ml-auto text-sm text-port-accent hover:text-white"
               >

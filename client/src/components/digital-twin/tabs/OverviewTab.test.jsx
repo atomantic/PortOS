@@ -97,3 +97,27 @@ describe('OverviewTab CoS status Enable', () => {
     }
   });
 });
+
+describe('OverviewTab CoS status Enable with Settings already open', () => {
+  it('still scrolls the open Settings panel into view', async () => {
+    vi.clearAllMocks();
+    getDigitalTwinTraits.mockResolvedValue({ traits: { openness: 0.5 } });
+    getDigitalTwinConfidence.mockResolvedValue({ confidence: { overall: 0.5 } });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+    getDigitalTwinCompleteness.mockResolvedValue(null);
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true }] });
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      renderTab();
+      const enable = await screen.findByRole('button', { name: 'Enable' });
+      fireEvent.click(enable);
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
+      expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});
