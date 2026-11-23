@@ -145,7 +145,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   includeClaudeTrees = true,
   appId = null
 } = {}) {
-  const { getDefaultBranch, hasBranchMergeEvidence, readBranchLineage, readBranchPublished } = await import('../git.js');
+  const { getDefaultBranch, hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished } = await import('../git.js');
   const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('../cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('../branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
@@ -189,6 +189,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       published: () => readBranchPublished(sourceWorkspace, scannedBranch),
       claimReserved: async () => (await import('../claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
       checkoutPresent: () => readCheckoutPresence(wt.path),
+      branchAgeMs: () => readBranchAgeMs(sourceWorkspace, scannedBranch),
       checkoutProcess: () => probeProcessCwdInside(wt.path),
       idleMs: async () => (await import('../branchReconcile/checkoutIdle.js')).checkoutIdleMs(wt.path),
     });

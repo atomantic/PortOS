@@ -14,7 +14,7 @@ import {
 } from '../branchRetirementDecision.js';
 import { readClaimIssueReservation, readRepoClaimIssueReservation } from '../claimIssueReservation.js';
 import { readClaimOwnershipAgents, withClaimOwnershipLock } from '../cos/cosClaimOwnership.js';
-import { getDefaultBranch, hasBranchMergeEvidence, readBranchLineage, readBranchPublished } from '../git.js';
+import { getDefaultBranch, hasBranchMergeEvidence, readBranchAgeMs, readBranchLineage, readBranchPublished } from '../git.js';
 import { recordVerdict, sameDirtyPaths } from '../supersededLedger.js';
 import {
   classifyWorktreeDirt, deleteCompletedLocalBranch, forceRemoveWorktreeDir, listWorktrees, readCheckoutPresence,
@@ -338,7 +338,7 @@ async function retireBranch(repoPath, b, opts) {
       opts = { ...opts, shippedHead: head, ...(dirty && { disposableHead: head }) };
     }
     const issue = claimIssueOfBranch(b.branch);
-    if (issue && lineage === 'ancestry') {
+    if (issue && (lineage === 'ancestry' || lineage === 'new')) {
       // Reconcile's per-cycle gh credential when it has one; otherwise (the Git
       // page passes none, a GitLab origin has none) read the origin's tracker.
       const claimReserved = opts.forgeExec
@@ -397,6 +397,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     published: () => b.published === true || readBranchPublished(repoPath, b.branch),
     claimReserved: () => claimReserved,
     checkoutPresent: (facts, path) => readCheckoutPresence(path),
+    branchAgeMs: () => readBranchAgeMs(repoPath, b.branch),
     checkoutProcess: (facts, path) => probeProcessCwdInside(path),
     mergedPrAtHead: facts => Boolean(shippedHead) && shippedHead === facts.head,
   };

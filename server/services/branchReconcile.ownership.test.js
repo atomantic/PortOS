@@ -406,12 +406,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     log.mockRestore();
 
     expect(result.cleaned).toEqual([]);
-    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'next/issue-7', reason: 'branch-has-no-own-commits' }));
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'next/issue-7', reason: 'published-claim-unmerged' }));
     expect(existsSync(sibling)).toBe(true);
     expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain(`branch refs/heads/next/issue-7`);
     expect(await branches()).toContain('next/issue-7');
     // The hold is named on stdout: a deliberate keep, not a failure.
-    expect(kept).toContainEqual(expect.stringMatching(/^⏭️ branch-reconcile: kept next\/issue-7 and .*next-issue-7: branch-has-no-own-commits$/));
+    expect(kept).toContainEqual(expect.stringMatching(/^⏭️ branch-reconcile: kept next\/issue-7 and .*next-issue-7: published-claim-unmerged$/));
   });
 
   it('retires a new published branch once a PR merged exactly its head', async () => {
@@ -436,6 +436,35 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
     expect(existsSync(path)).toBe(false);
     expect(await branches()).not.toContain(branch);
+  });
+
+  // `git worktree add -b x path origin/main` records origin/main as the upstream.
+  // That is not publishing the branch, and reading it as published held every
+  // squash-merged claim checkout as `published-claim-unmerged` forever.
+  it('retires a squash-merged branch whose upstream is only the remote default branch', async () => {
+    await attachBareOrigin(scratch, repo);
+    await execGit(['remote', 'set-head', 'origin', 'main'], repo);
+    const path = await addMergedTree(join(external, 'tracking'), 'claim/issue-9', 'squash');
+    await execGit(['branch', '--set-upstream-to=origin/main', 'claim/issue-9'], repo);
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'claim/issue-9' }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: ['claim/issue-9'], skipped: [] });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  // A failed claim checkout left a branch at main with no checkout; holding a
+  // branch with no commits of its own forever stranded it.
+  it('retires a day-old branch with no commits of its own and no checkout', async () => {
+    const dayAgo = `${Math.floor(Date.now() / 1000) - 25 * 60 * 60} +0000`;
+    await execGit(['branch', 'feat/empty-old', 'main'], repo, { env: { ...process.env, GIT_COMMITTER_DATE: dayAgo } });
+    await execGit(['branch', 'feat/empty-new', 'main'], repo);
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'feat/empty-old' }, { branch: 'feat/empty-new' }], { activeAgentIds: new Set() });
+
+    expect(result.cleaned, JSON.stringify(result.skipped)).toEqual(['feat/empty-old']);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'feat/empty-new', reason: 'branch-has-no-own-commits' }));
+    expect(await branches()).toContain('feat/empty-new');
   });
 
   it('retires a no-ff merged branch from an idle checkout outside the managed roots', async () => {
