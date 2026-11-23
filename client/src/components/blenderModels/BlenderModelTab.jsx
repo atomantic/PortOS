@@ -150,7 +150,7 @@ export default function BlenderModelTab({ model, reportRead, build, part, onPart
           </div>
           {hasGlb ? (
             <Suspense fallback={<BrailleSpinner text="Loading 3D viewer" />}>
-              <GlbViewer src={glb} downloadHref={published ? blenderModelAssetUrl(state.id) : undefined} isolateNode={isolated} />
+              <GlbViewer src={glb} downloadHref={published ? blenderModelAssetUrl(state.id) : undefined} isolateNode={isolated} className="mx-auto w-full max-w-[max(20rem,calc(100dvh-16rem))]" />
             </Suspense>
           ) : <p className="rounded-xl border border-dashed border-port-border p-4 text-sm">This build wrote no model.glb, so there is nothing to show.</p>}
         </div>

@@ -10,7 +10,7 @@ export default function BlenderModelReadiness({ tool, quiet = false }) {
   }
   return (
     <div role="status" className="flex min-w-0 flex-wrap items-center gap-2 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs">
-      <span className="min-w-0 flex-1 break-words">Blender cannot build models yet{tool.reason ? `: ${tool.reason}` : '.'}</span>
+      <span className="min-w-0 flex-1 basis-40 break-words">Blender cannot build models yet{tool.reason ? `: ${tool.reason}` : '.'}</span>
       <Link to={BLENDER_EXECUTION_PATH} className={buttonCls}>Open Blender execution</Link>
     </div>
   );
