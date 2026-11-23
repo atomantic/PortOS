@@ -60,6 +60,14 @@ export async function listPrimitiveUsages(ingredientId, refs) {
   if (!universes.length) return [];
   const scope = universes.map((universe) => universe.id);
   const canonIds = universes.flatMap((universe) => universe.entries.map((entry) => entry.id));
+  // SQL pre-filter: only issues whose prose contains a candidate name/alias as a
+  // case-insensitive substring leave Postgres; the exact Unicode word-boundary
+  // matcher below still decides. Substring is a superset of that match.
+  const escapeLike = (value) => value.replace(/[\\%_]/g, '\\$&');
+  const patterns = [...new Set(universes.flatMap((universe) => universe.entries.flatMap((entry) => [
+    entry.name, ...(entry.kind === 'place' ? [] : (Array.isArray(entry.aliases) ? entry.aliases : [])),
+  ])).filter((name) => typeof name === 'string').map((name) => name.trim()).filter(Boolean))].map((name) => `%${escapeLike(name)}%`);
+  const emptyIssues = { rows: [] };
   const [stories, voices, issues] = await Promise.all([
     query(`SELECT id, name, universe_id,
       jsonb_path_query_array(data, '$.**.characterId') || jsonb_path_query_array(data, '$.**.protagonistCharacterId')
@@ -68,15 +76,20 @@ export async function listPrimitiveUsages(ingredientId, refs) {
       FROM fableloom_stories WHERE universe_id = ANY($1) AND deleted = false`, [scope]),
     query(`SELECT id, data->>'name' AS name, universe_id, character_id, approval_status FROM voice_profiles
       WHERE universe_id = ANY($1) AND character_id = ANY($2) AND approval_status <> 'retired'`, [scope, canonIds]),
-    query(`SELECT i.id, i.series_id, s.name AS series_name, s.universe_id,
+    patterns.length === 0 ? emptyIssues : query(`SELECT i.id, i.series_id, s.name AS series_name, s.universe_id,
       COALESCE(NULLIF(i.data->>'title', ''), 'Issue ' || COALESCE(i.number::text, i.id)) AS name,
       concat_ws(E'\n\n', i.data#>>'{stages,prose,output}', i.data#>>'{stages,prose,input}',
         i.data#>>'{stages,idea,output}', i.data#>>'{stages,idea,input}',
         i.data#>>'{stages,comicScript,output}', i.data#>>'{stages,teleplay,output}') AS corpus
       FROM pipeline_series s JOIN pipeline_issues i ON i.series_id = s.id AND i.deleted = false
-      WHERE s.universe_id = ANY($1) AND s.deleted = false`, [scope]),
+      WHERE s.universe_id = ANY($1) AND s.deleted = false
+        AND concat_ws(E'\n\n', i.data#>>'{stages,prose,output}', i.data#>>'{stages,prose,input}',
+          i.data#>>'{stages,idea,output}', i.data#>>'{stages,idea,input}',
+          i.data#>>'{stages,comicScript,output}', i.data#>>'{stages,teleplay,output}') ILIKE ANY($2::text[])`, [scope, patterns]),
   ]);
   const byUniverse = new Map(universes.map((universe) => [universe.id, universe.entries]));
+  const kindEntries = new Map(universes.map((universe) => [universe.id,
+    Object.fromEntries(['character', 'place', 'object'].map((kind) => [kind, universe.entries.filter((entry) => entry.kind === kind)]))]));
   const uses = [];
   for (const story of stories.rows) {
     if ((byUniverse.get(story.universe_id) || []).some((entry) => story.canon_ids.includes(entry.id)))
@@ -88,8 +101,8 @@ export async function listPrimitiveUsages(ingredientId, refs) {
   }
   const matchers = { character: matchCharactersInText, place: matchPlacesInText, object: matchObjectsInText };
   for (const issue of issues.rows) {
-    const entries = byUniverse.get(issue.universe_id) || [];
-    if (!Object.entries(matchers).some(([kind, match]) => match(issue.corpus, entries.filter((entry) => entry.kind === kind)).length)) continue;
+    const entries = kindEntries.get(issue.universe_id) || {};
+    if (!Object.entries(matchers).some(([kind, match]) => match(issue.corpus, entries[kind] || []).length)) continue;
     uses.push({ refKind: 'series', refId: issue.series_id, refName: issue.series_name || issue.series_id, role: 'prose-mention', resolved: true, derived: true });
     uses.push({ refKind: 'issue', refId: issue.id, refName: issue.name || issue.id, role: 'prose-mention', resolved: true, derived: true });
   }
