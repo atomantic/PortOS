@@ -30,7 +30,20 @@ describe('computeThreadTrust', () => {
 
     expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User', trustInstanceUsers: true })).toBe('trusted');
     expect(computeThreadTrust({ ...base, actorLogin: 'alice', actorType: 'User' })).toBe('outside');
-    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceUsers: true })).toBe('outside');
+    // Under "trust everyone", bots count too unless the account turns that off.
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceUsers: true })).toBe('trusted');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceUsers: true, trustInstanceBots: false })).toBe('outside');
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustInstanceBots: true })).toBe('outside');
+  });
+
+  it('trusts a bot named in the explicit list, only as a forge-reported Bot', () => {
+    const listed = { ...base, trustInstanceUsers: true, trustInstanceBots: false, trustedBots: ['example-app[bot]'] };
+    expect(computeThreadTrust({ ...listed, actorLogin: 'Example-App[bot]', actorType: 'Bot' })).toBe('trusted');
+    expect(computeThreadTrust({ ...listed, actorLogin: 'other-app[bot]', actorType: 'Bot' })).toBe('outside');
+    // A human cannot borrow a listed login.
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'User', trustedBots: ['example-app[bot]'] })).toBe('outside');
+    // The list is honored without instance trust.
+    expect(computeThreadTrust({ ...base, actorLogin: 'example-app[bot]', actorType: 'Bot', trustedBots: ['example-app[bot]'] })).toBe('trusted');
   });
 
   it('ignores any claim of authority carried in content', () => {

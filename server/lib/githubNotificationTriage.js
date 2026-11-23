@@ -29,8 +29,10 @@ export const notificationAgentAccountBinding = (account, origin = 'user') => ({
 // Bump when a rule change should re-decide threads that have no new activity;
 // open threads triaged under an older version are triaged again. Version 10
 // records whether a reply on your own upstream PR came from the repo's owner
-// and whether you can push to (and so merge in) the PR's repo.
-export const TRIAGE_RULES_VERSION = 10;
+// and whether you can push to (and so merge in) the PR's repo. Version 11
+// adds bot trust: instance-wide (the default under "trust everyone") or by an
+// explicit per-account list.
+export const TRIAGE_RULES_VERSION = 11;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. Every sync that may act marks
@@ -55,11 +57,13 @@ const GITHUB_NATIVE_BOTS = new Set(['dependabot[bot]', 'github-actions[bot]']);
  * `yours` for one of the operator's own logins on the host, `trusted` for an
  * actor the forge reports with write access to an owned repo, a GitHub-native
  * bot (Dependabot, a repo's own Actions workflow), a member of the repo's org
- * on a Private account, or any human on an Enterprise instance whose account
- * trusts its own users; `outside` otherwise, `unknown` when the thread has no
- * human actor (CI, releases). `actorType` is the forge's `user.type`.
+ * on a Private account, any human on an Enterprise instance whose account
+ * trusts its own users, a Bot on such an instance unless `trustInstanceBots`
+ * is off, or a Bot named in the account's `trustedBots` list; `outside`
+ * otherwise, `unknown` when the thread has no human actor (CI, releases).
+ * `actorType` is the forge's `user.type`.
  */
-export function computeThreadTrust({ actorLogin, actorType = null, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public', trustInstanceUsers = false }) {
+export function computeThreadTrust({ actorLogin, actorType = null, ownLogins = [], repoOwned = false, actorHasWriteAccess = false, actorIsOrgMember = false, accountTrust = 'public', trustInstanceUsers = false, trustInstanceBots = true, trustedBots = [] }) {
   const actor = lower(actorLogin);
   if (!actor) return 'unknown';
   if (ownLogins.some((login) => lower(login) === actor)) return 'yours';
@@ -67,6 +71,12 @@ export function computeThreadTrust({ actorLogin, actorType = null, ownLogins = [
   if (repoOwned && actorHasWriteAccess === true) return 'trusted';
   if (accountTrust === 'private' && actorIsOrgMember === true) return 'trusted';
   if (trustInstanceUsers === true && actorType === 'User') return 'trusted';
+  // The `[bot]` suffix is reserved for GitHub Apps and the forge must report
+  // the actor as a Bot, so a human cannot borrow a listed login.
+  if (actorType === 'Bot') {
+    if (trustInstanceUsers === true && trustInstanceBots !== false) return 'trusted';
+    if (Array.isArray(trustedBots) && trustedBots.some((login) => lower(login) === actor)) return 'trusted';
+  }
   return 'outside';
 }
 

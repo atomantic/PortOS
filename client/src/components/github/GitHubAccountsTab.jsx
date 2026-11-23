@@ -37,7 +37,7 @@ const STATUS_VIEW = {
 
 const defaultTrustForHost = (host) => (host.trim().toLowerCase() === GITHUB_DOT_COM ? 'public' : 'private');
 const isEnterpriseHost = (host) => Boolean(host.trim()) && host.trim().toLowerCase() !== GITHUB_DOT_COM;
-const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [], allowAgents: false, trustInstanceUsers: false });
+const emptyForm = () => ({ host: GITHUB_DOT_COM, login: '', label: '', trust: 'public', trustTouched: false, allowedProviders: [], allowAgents: false, trustInstanceUsers: false, trustInstanceBots: true, trustedBotsText: '' });
 const formFromAccount = (account) => ({
   host: account.host,
   login: account.login || '',
@@ -47,7 +47,12 @@ const formFromAccount = (account) => ({
   allowedProviders: account.allowedProviders || [],
   allowAgents: account.allowAgents === true,
   trustInstanceUsers: account.trustInstanceUsers === true,
+  trustInstanceBots: account.trustInstanceBots !== false,
+  trustedBotsText: (account.trustedBots || []).join('\n'),
 });
+const parseBotList = (text) => text.split(/[\s,]+/).filter(Boolean);
+// Wholesale trust makes the explicit list redundant; otherwise it is the only way a bot counts.
+const trustsAllBots = (form) => isEnterpriseHost(form.host) && form.trustInstanceUsers && form.trustInstanceBots;
 // No provider ticked = the Private default, local providers only (null).
 const payloadFromForm = (form) => ({
   host: form.host.trim(),
@@ -57,6 +62,8 @@ const payloadFromForm = (form) => ({
   allowedProviders: form.allowedProviders.length ? form.allowedProviders : null,
   allowAgents: form.allowAgents,
   trustInstanceUsers: isEnterpriseHost(form.host) && form.trustInstanceUsers,
+  trustInstanceBots: form.trustInstanceBots,
+  trustedBots: parseBotList(form.trustedBotsText),
 });
 
 const fetchApiProviders = () => getProviders({ silent: true })
@@ -137,7 +144,18 @@ function AccountForm({ form, setForm, onSubmit, onCancel, saving, submitLabel })
             <label htmlFor="github-trust-instance" className="text-sm text-gray-300">Trust everyone on this instance</label>
           </div>
           <p className="text-xs text-gray-500">Every person signed in to this Enterprise host counts as trusted, as a collaborator would: no spam checks, and their pull requests and issues go to the trusted agent lanes. Turn it off for an instance strangers can join.</p>
+          {form.trustInstanceUsers && (
+            <div className="flex items-center gap-2 pt-1">
+              <input id="github-trust-bots" type="checkbox" checked={form.trustInstanceBots} onChange={(event) => setForm((prev) => ({ ...prev, trustInstanceBots: event.target.checked }))} />
+              <label htmlFor="github-trust-bots" className="text-sm text-gray-300">Trust every bot on this instance too</label>
+            </div>
+          )}
         </div>
+      )}
+      {!trustsAllBots(form) && (
+        <FormField label="Trusted bots" hint="One bot login per line, such as example-app[bot]. Only these GitHub Apps count as trusted; every other bot's comments are treated as outside content.">
+          <textarea value={form.trustedBotsText} onChange={setField('trustedBotsText')} rows={3} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="example-app[bot]" className={`${inputClass} font-mono`} />
+        </FormField>
       )}
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving || !form.host.trim()} className="px-4 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50">
@@ -282,6 +300,7 @@ export default function GitHubAccountsTab() {
                   </div>
                   <Pill tone={account.trust === 'private' ? 'accent' : 'muted'}>{account.trust === 'private' ? 'Private' : 'Public'}</Pill>
                   {account.trustInstanceUsers && <Pill tone="success">Trusts its instance</Pill>}
+                  {account.trustInstanceUsers && account.trustInstanceBots === false && <Pill tone="muted">Listed bots only</Pill>}
                   <Pill tone="muted">{MODE_LABELS[account.mode] || account.mode}</Pill>
                 </div>
                 <AccountStatus status={statuses[account.id]} onRecheck={() => checkStatus(account.id)} />

@@ -114,6 +114,27 @@ describe('GitHub accounts API', () => {
     expect(retriageOpenThreads).toHaveBeenCalledWith(created.body.id);
   });
 
+  it('trusts instance bots by default, stores a normalized explicit bot list, and re-decides threads when either changes', async () => {
+    const created = await request(app).post('/api/github/accounts').send({ host: 'github.example.com', trustInstanceUsers: true });
+    expect(created.body.trustInstanceBots).toBe(true);
+    expect(created.body.trustedBots).toEqual([]);
+
+    vi.mocked(retriageOpenThreads).mockClear();
+    const listed = await request(app).put(`/api/github/accounts/${created.body.id}`)
+      .send({ trustInstanceBots: false, trustedBots: ['Example-App[bot]', 'example-app[bot]'] });
+    expect(listed.status).toBe(200);
+    expect(listed.body).toMatchObject({ trustInstanceBots: false, trustedBots: ['example-app[bot]'] });
+    expect(retriageOpenThreads).toHaveBeenCalledTimes(1);
+
+    vi.mocked(retriageOpenThreads).mockClear();
+    await request(app).put(`/api/github/accounts/${created.body.id}`).send({ trustedBots: ['other-app[bot]'] });
+    expect(retriageOpenThreads).toHaveBeenCalledTimes(1);
+
+    for (const trustedBots of [['octocat'], ['-x[bot]'], ['a b[bot]'], 'example-app[bot]']) {
+      expect((await request(app).put(`/api/github/accounts/${created.body.id}`).send({ trustedBots })).status).toBe(400);
+    }
+  });
+
   it('rejects hosts and logins that are not plain identifiers', async () => {
     for (const body of [
       { host: '--hostname=evil' },
