@@ -1,6 +1,9 @@
-import { it, expect, vi } from 'vitest';
+import { beforeEach, it, expect, vi } from 'vitest';
 import { mockNoPeers } from '../lib/mockPathsDataRoot.js';
-import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES } from './appQualityFederation.js';
+import { exportPortosQuality, collectPortosQuality, collectAppQuality, buildQualitySnapshot, readReleaseQuality, FEDERATION_LEGACY_CATEGORIES, resetQualityPeerPullState } from './appQualityFederation.js';
+import { instanceEvents } from './instanceEvents.js';
+
+beforeEach(() => resetQualityPeerPullState());
 import { enrichAppsWithQuality, getAppQualityHistory } from './appQuality.js';
 import { qualityFileFromWireSnapshot } from './appQualitySnapshotFormat.js';
 vi.mock('./instances.js', () => mockNoPeers());
@@ -49,7 +52,7 @@ it('combines newest categories in app view and UTC history without changing othe
   expect(apps[0].quality).toMatchObject({ score: 55, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
   expect(apps[0].quality.categories.find(c => c.id === 'security')).toMatchObject({ sourcePeerId: 'peer-a', agentId: null });
   expect(apps[1].quality.score).toBeNull();
-  expect(local.peerFetch.mock.calls[0]).toEqual([expect.stringMatching(/^http:\/\/192\.0\.2\.1:5555\/api\/apps\/quality-federation\?days=30&categories=security%2C/),
+  expect(local.peerFetch.mock.calls[0]).toEqual([expect.stringMatching(/^http:\/\/192\.0\.2\.1:5555\/api\/apps\/quality-federation\?days=30&repositories=[a-f0-9]{64}&categories=security%2C/),
     expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'error', maxBytes: 4194304 }), peer]);
   const history = await getAppQualityHistory({ id: 'portos-default' }, 30, local);
   expect(history.points.find(p => p.date === '2026-09-09').score).toBe(20);
@@ -109,6 +112,7 @@ it('keeps local scores on old, offline, malformed, oversize or mismatched peers 
     [async () => response({ ...payload, repository: '0'.repeat(64) }), 'different-repository'],
     [async () => new Response('too large', { headers: { 'content-length': '4194305' } }), 'too-large'],
   ]) {
+    resetQualityPeerPullState();
     const [app] = await enrichAppsWithQuality([{ id: 'portos-default' }], { ...local, peerFetch: fetch });
     expect(app.quality).toMatchObject({ score: 20, federation: { available: 0, unavailable: 1 } });
     expect(app.quality.federation.unavailablePeers).toEqual([{ id: 'peer-a', name: 'peer-a', reason }]);
@@ -152,7 +156,7 @@ it('matches managed repositories with different local ids and excludes other ori
     getAppById: async id => ({ id, repoPath: '/local/app' }) };
   const [app] = await enrichAppsWithQuality([{ id: 'local-id', repoPath: '/local/app' }], local);
   expect(app.quality).toMatchObject({ score: 88, federation: { available: 1 } });
-  expect(local.peerFetch.mock.calls[0][0]).toContain(`&repository=${payload.repository}`);
+  expect(local.peerFetch.mock.calls[0][0]).toContain(`repositories=${payload.repository}`);
   expect((await getAppQualityHistory({ id: 'local-id', repoPath: '/local/app' }, 30, local)).points.at(-1).score).toBe(88);
   expect((await collectAppQuality({ id: 'other', repoPath: '/unrelated' }, 30, local)).records).toEqual([]);
   source.getAllApps = async () => [{ id: 'remote-id', repoPath: '/remote/app' }];
@@ -287,4 +291,119 @@ it('keeps one broken checkout from failing the whole list or its own history rea
   expect(apps[0].quality.score).toBe(64);
   expect(apps[1].quality.score).toBeNull();
   expect((await getAppQualityHistory(broken, 30, local)).points.at(-1).score).toBeNull();
+});
+
+it('exports a repository batch without changing the single-repository payload', async () => {
+  const getOriginInfo = async path => ({ host: 'github.com', fullName: path === '/other' ? 'owner/other' : 'atomantic/PortOS' });
+  const source = { ...deps([row('security', 80)]), getOriginInfo, getAllApps: async () => [
+    { id: 'portos-default', repoPath: '/portos' },
+    { id: 'other', repoPath: '/other' },
+  ] };
+  const portos = await buildQualitySnapshot({ id: 'portos-default', repoPath: '/portos' }, 30, source);
+  const missing = 'ab'.repeat(32);
+  const batch = await exportPortosQuality(peer.instanceId, 30, source, undefined, ['security'], [portos.repository, missing]);
+  expect(batch).toMatchObject({ schemaVersion: 1, repositories: { [missing]: null } });
+  expect(batch.repositories[portos.repository].map(item => item.report)).toEqual([{ category: 'security', score: 80, worstSeverity: 5, coverage: 'broad', confidence: 'high', scannedFiles: 12, totalFiles: 12, version: 1 }]);
+  expect(batch.measurements).toBeUndefined();
+  expect(JSON.stringify(batch)).not.toMatch(/Private|Users|agent-security|summary|github/);
+  const single = await exportPortosQuality(peer.instanceId, 30, source);
+  expect(single).toMatchObject({ schemaVersion: 1, repository: portos.repository });
+  expect(single.repositories).toBeUndefined();
+  expect(await exportPortosQuality('unknown', 30, source, undefined, undefined, [portos.repository])).toBeNull();
+});
+
+it('pulls each peer once for the list and falls back per repository for an older peer', async () => {
+  const getOriginInfo = async path => ({ host: 'github.com', fullName: path });
+  const apps = [{ id: 'one', repoPath: '/repo/one' }, { id: 'two', repoPath: '/repo/two' }];
+  const source = { ...deps([]), getOriginInfo };
+  const repositoryOf = async path => (await buildQualitySnapshot({ id: path, repoPath: path }, 30, source)).repository;
+  const [hashOne, hashTwo] = await Promise.all([repositoryOf('/repo/one'), repositoryOf('/repo/two')]);
+  const sample = (await exportPortosQuality(peer.instanceId, 30, deps([row('security', 70)]))).measurements[0];
+  const peerFetch = vi.fn(async url => (url.includes('repositories=')
+    ? response({ schemaVersion: 1, repositories: { [hashOne]: [sample], [hashTwo]: null } })
+    : new Response('', { status: 500 })));
+  const enriched = await enrichAppsWithQuality(apps, { ...deps([]), getOriginInfo, peerFetch });
+  expect(peerFetch).toHaveBeenCalledTimes(1);
+  expect(enriched[0].quality).toMatchObject({ score: 70, federation: { peers: 1, available: 1, unavailable: 0 } });
+  expect(enriched[1].quality.federation.unavailablePeers).toEqual([{ id: 'peer-a', name: 'peer-a', reason: 'refused' }]);
+
+  resetQualityPeerPullState();
+  const legacyFetch = vi.fn(async url => {
+    if (url.includes('repositories=')) return new Response('', { status: 404 });
+    if (url.includes(`repository=${hashOne}`)) return response({ schemaVersion: 1, repository: hashOne, measurements: [sample] });
+    return response({ schemaVersion: 1, repository: hashTwo, measurements: [] });
+  });
+  const legacyDeps = { ...deps([]), getOriginInfo, peerFetch: legacyFetch };
+  const legacy = await enrichAppsWithQuality(apps, legacyDeps);
+  expect(legacy[0].quality.score).toBe(70);
+  expect(legacy[1].quality.federation).toMatchObject({ available: 1, unavailable: 0 });
+  expect(legacyFetch.mock.calls.filter(call => call[0].includes('repositories='))).toHaveLength(1);
+  expect(legacyFetch.mock.calls.filter(call => call[0].includes('&repository='))).toHaveLength(2);
+  legacyFetch.mockClear();
+  await enrichAppsWithQuality(apps, legacyDeps);
+  expect(legacyFetch.mock.calls.some(call => call[0].includes('repositories='))).toBe(false);
+  expect(legacyFetch).toHaveBeenCalledTimes(2);
+});
+
+it('does not wait on a sleeping peer again until the backoff passes or the peer recovers', async () => {
+  const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+  const apps = [{ id: 'one', repoPath: '/repo/one' }, { id: 'two', repoPath: '/repo/two' }];
+  const asleep = { ...peer, id: 'peer-b', instanceId: 'instance-b', address: '192.0.2.2' };
+  let calls = 0;
+  const peerFetch = async () => { calls += 1; throw new Error('offline'); };
+  const local = { ...deps([]), getOriginInfo, peerFetch, getPeers: async () => [peer, asleep] };
+  const first = await enrichAppsWithQuality(apps, local);
+  expect(calls).toBe(2);
+  expect(first[0].quality.federation).toMatchObject({ peers: 2, available: 0, unavailable: 2 });
+  expect(first[0].quality.federation.unavailablePeers).toEqual([
+    { id: 'peer-a', name: 'peer-a', reason: 'unreachable' },
+    { id: 'peer-b', name: 'peer-b', reason: 'unreachable' },
+  ]);
+  expect(first[1].quality.federation.unavailablePeers).toEqual(first[0].quality.federation.unavailablePeers);
+  const started = Date.now();
+  await enrichAppsWithQuality(apps, local);
+  expect(Date.now() - started).toBeLessThan(1000);
+  expect(calls).toBe(2);
+
+  await enrichAppsWithQuality(apps, { ...local, now: now + 30_000 });
+  expect(calls).toBe(4);
+
+  await enrichAppsWithQuality([apps[0]], { ...local, freshPeerPull: true });
+  expect(calls).toBe(6);
+  await enrichAppsWithQuality(apps, local);
+  expect(calls).toBe(6);
+  instanceEvents.emit('peer:online', peer);
+  const recovered = await enrichAppsWithQuality(apps, local);
+  expect(calls).toBe(7);
+  expect(recovered[0].quality.federation.unavailablePeers.map(item => item.id)).toEqual(['peer-a', 'peer-b']);
+  instanceEvents.emit('sync:progress', { phase: 'complete', peerId: 'peer-b' });
+  await enrichAppsWithQuality(apps, local);
+  expect(calls).toBe(8);
+});
+
+it('shares one in-flight batch across overlapping list reads', async () => {
+  const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const peerFetch = vi.fn(async () => {
+    await gate;
+    return response({ schemaVersion: 1, repositories: {} });
+  });
+  const local = { ...deps([]), getOriginInfo, peerFetch };
+  const apps = [{ id: 'one', repoPath: '/repo/one' }];
+  const pending = Promise.all([enrichAppsWithQuality(apps, local), enrichAppsWithQuality(apps, local)]);
+  await vi.waitFor(() => expect(peerFetch).toHaveBeenCalledTimes(1));
+  release();
+  await pending;
+  expect(peerFetch).toHaveBeenCalledTimes(1);
+});
+
+it('splits a batch above the repository cap', async () => {
+  const getOriginInfo = async path => ({ host: 'github.com', fullName: path });
+  const apps = Array.from({ length: 101 }, (_, index) => ({ id: `app-${index}`, repoPath: `/repo/${index}` }));
+  const peerFetch = vi.fn(async () => response({ schemaVersion: 1, repositories: {} }));
+  await enrichAppsWithQuality(apps, { ...deps([]), getOriginInfo, peerFetch });
+  expect(peerFetch).toHaveBeenCalledTimes(2);
+  const counts = peerFetch.mock.calls.map(call => new URL(call[0]).searchParams.get('repositories').split(',').length);
+  expect(counts).toEqual([100, 1]);
 });
