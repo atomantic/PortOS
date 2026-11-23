@@ -47,7 +47,7 @@ import { resolveTestChrome } from './testChrome.js';
 import { TOOLING_TESTS, getAlwaysRunTests } from './ciPlanRules.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
-import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
+import { pruneMemoStore, readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
 
 const uniqueSorted = (values) => [...new Set(values)].sort();
@@ -161,6 +161,10 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   for (const test of slice) {
     const info = verdicts.get(test);
     if (unmemoizable.has(test)) unanalyzed += 1;
+    // The recorded key first: `info.floor` walks the whole static closure on
+    // first read (`analyzeTest`), so a recorded hit never pays for it. Every
+    // file that runs has had its floor read here, before Vitest starts, which
+    // `recordTestMemo`'s changed-during-the-run check relies on.
     const recorded = memoDir && info ? hit(test, info.recorded) : null;
     const floor = memoDir && info && !recorded ? hit(test, info.floor) : null;
     if (recorded || floor) { skipped.push({ test, via: recorded ? 'recorded' : 'floor', ...(recorded ?? floor) }); continue; }
@@ -469,6 +473,37 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
     if (refused.length === 2) unrecorded.push({ test, reason: refused.join('; '), declared: info.floor.declared === true });
   }
   return { written, unrecorded };
+}
+
+/** How often the developer's shared store drops its expired entries (`pruneTestMemo`). */
+export const LOCAL_PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Bound the store at the end of a run that may publish it (`pruneMemoStore`).
+ * A trusted CI job owns its store outright: drop expired entries, keep the
+ * newest few per test and forget test files this checkout no longer has, so
+ * the cache it saves stays the size of the suite rather than of its history.
+ * The developer's store is shared by every worktree and branch, so only
+ * expired entries go, and at most once per `LOCAL_PRUNE_INTERVAL_MS`
+ * (a `pruned-at` stamp in the store). Returns the prune counts, or null
+ * when nothing was pruned.
+ */
+export function pruneTestMemo({ memoDir, repoRoot, trustedCi, now = Date.now(), prune = pruneMemoStore }) {
+  if (!memoDir) return null;
+  if (trustedCi) {
+    return prune(memoDir, { now, testExists: (_workspace, test) => nodeFs.existsSync(join(repoRoot, ...test.split('/'))) });
+  }
+  const [root] = Array.isArray(memoDir) ? memoDir : [memoDir];
+  const stampPath = join(root, 'pruned-at');
+  let last = Number.NaN;
+  try { last = Date.parse(readFileSync(stampPath, 'utf8').trim()); } catch { /* never pruned */ }
+  if (Number.isFinite(last) && last <= now && now - last < LOCAL_PRUNE_INTERVAL_MS) return null;
+  const counts = prune(root, { now, maxEntriesPerTest: Number.POSITIVE_INFINITY });
+  try {
+    nodeFs.mkdirSync(root, { recursive: true });
+    writeFileSync(stampPath, new Date(now).toISOString());
+  } catch { /* the next run prunes again */ }
+  return counts;
 }
 
 /** How many unrecorded files `memoUnrecordedLines` names before it counts the rest. */

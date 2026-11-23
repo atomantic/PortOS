@@ -33,6 +33,12 @@ share) and without the Apple-only `mlx`/`mlx-lm`. A different
 validating both locks. Model snapshots install separately through Music, never
 during install.
 
+The set is inference-only: upstream's training, TensorBoard, plotting and
+ModelScope packages (`tensorboard`, `lightning`, `lycoris-lora`, `toml`,
+`matplotlib`, `modelscope`) are not imported by `acestep.handler` /
+`acestep.inference` at the pinned commit and are not in the locks. Re-walk the
+import graph before bumping `ACESTEP15_PIN`.
+
 ## Regenerating locks
 
 Edit `scripts/ml/requirements/requirements-acestep15-cuda.txt`, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks)

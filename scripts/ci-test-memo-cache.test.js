@@ -136,7 +136,18 @@ describe('trusted CI test-memo cache reuse', () => {
 
     expect(memoPath(initial)).toBe(memoPath(save));
     expect(step(job, 'Park the job\'s own restore')).toContain('portos-test-memo-shards/0');
-    expect(step(job, 'Merge the full-run shard lineages')).toContain('node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*');
+    const merge = step(job, 'Merge the full-run shard lineages');
+    expect(merge).toContain('node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*');
+    // Only a trusted run, which records into and saves the store, pays for the merge.
+    expect(merge).toContain("if: fromJSON(inputs.merge-shards) >= 1 && github.event_name != 'pull_request'");
+    // A pull request reads the parked lineages in place (#17617), in park order, own restore first.
+    const inPlace = step(job, 'Read the full-run shard lineages in place');
+    expect(inPlace).toContain("if: fromJSON(inputs.merge-shards) >= 1 && github.event_name == 'pull_request'");
+    expect(inPlace).toContain('for dir in "$RUNNER_TEMP"/portos-test-memo-shards/*; do');
+    expect(inPlace).toContain('echo "PORTOS_TEST_MEMO_READ_DIRS=$dirs" >> "$GITHUB_ENV"');
+    expect(inPlace).not.toContain('merge-test-memo');
+    expect(step(noMergeJob, 'Read the full-run shard lineages in place')).toContain("if: fromJSON('0') >= 1");
+    expect(job.indexOf(`- name: Park full-run shard ${count}\n`)).toBeLessThan(job.indexOf('- name: Read the full-run shard lineages in place\n'));
   });
 
   it('keeps the database consumer on its unsharded restore and save path', () => {

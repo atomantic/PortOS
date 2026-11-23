@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   mergeObjectLWW,
-  mergeDeepUnion,
   unionByKey,
   mergeTaste,
   mergeMeta,
@@ -118,22 +117,6 @@ describe('mergeChronotypeObserved (#2156 — signal-aware LWW)', () => {
     const local = rec('2026-07-01T00:00:00Z', 40, 'morning');
     const remoteEmpty = rec('2026-07-09T00:00:00Z', 0, null);
     expect(mergeChronotypeObserved(local, remoteEmpty).merged.observedType).toBe('morning');
-  });
-});
-
-describe('mergeDeepUnion', () => {
-  it('unions nested marker objects, local wins per-key', () => {
-    const local = { markers: { a: 1 }, derivedAt: '2026-01-01' };
-    const remote = { markers: { a: 9, b: 2 }, derivedAt: '2026-01-02' };
-    const { merged, changed } = mergeDeepUnion(local, remote, 'derivedAt');
-    expect(merged.markers).toEqual({ a: 1, b: 2 });
-    expect(merged.derivedAt).toBe('2026-01-02');
-    expect(changed).toBe(true);
-  });
-  it('fills locally-missing/default scalars from remote', () => {
-    const { merged } = mergeDeepUnion({ score: 0, derivedAt: '' }, { score: 5, age: 40, derivedAt: '' }, 'derivedAt');
-    expect(merged.score).toBe(5);
-    expect(merged.age).toBe(40);
   });
 });
 
@@ -446,9 +429,95 @@ describe('mergeMeta', () => {
     const local = { enrichment: { completedCategories: ['core'], lastSession: '2026-01-01', questionsAnswered: { core: 3 } } };
     const remote = { enrichment: { completedCategories: ['social'], lastSession: '2026-02-01', questionsAnswered: { core: 5, social: 2 } } };
     const { merged } = mergeMeta(local, remote);
-    expect(merged.enrichment.completedCategories.sort()).toEqual(['core', 'social']);
+    expect(merged.enrichment.completedCategories).toEqual(['core', 'social']);
     expect(merged.enrichment.lastSession).toBe('2026-02-01');
     expect(merged.enrichment.questionsAnswered).toEqual({ core: 5, social: 2 });
+  });
+
+  it('converges on the same ordered traits and enrichment in both directions', () => {
+    const older = {
+      traits: {
+        lastAnalyzed: '2026-01-01T00:00:00Z',
+        bigFive: { O: 0.8 },
+        valuesHierarchy: [{ value: 'Curiosity', priority: 3 }],
+      },
+      enrichment: {
+        completedCategories: ['favorite_movies'],
+        lastSession: '2026-01-03',
+        scaleQuestionsAnswered: { 'bf-o-2': 2, 'bf-o-1': 5 },
+        listItems: { favorite_movies: [{ title: 'Example movie' }], favorite_books: [{ title: 'Old book' }] },
+      },
+    };
+    const newer = {
+      traits: {
+        communicationProfile: { verbosity: 7, formality: 4 },
+        bigFive: { O: 0.4 },
+        lastAnalyzed: '2026-01-02T00:00:00Z',
+      },
+      enrichment: {
+        listItems: { favorite_books: [{ title: 'New book' }] },
+        lastSession: '2026-01-04',
+        completedCategories: ['favorite_books'],
+        scaleQuestionsAnswered: { 'bf-o-3': 3, 'bf-o-1': 1 },
+      },
+    };
+    const a = mergeMeta(older, newer);
+    const b = mergeMeta(newer, older);
+    expect(a.changed).toBe(true);
+    expect(b.changed).toBe(true);
+    expect(JSON.stringify(a.merged.traits)).toBe(JSON.stringify(b.merged.traits));
+    expect(JSON.stringify(a.merged.enrichment)).toBe(JSON.stringify(b.merged.enrichment));
+    expect(a.merged.traits).toEqual({ ...newer.traits, valuesHierarchy: older.traits.valuesHierarchy });
+    expect(a.merged.enrichment).toEqual({
+      completedCategories: ['favorite_books', 'favorite_movies'],
+      lastSession: newer.enrichment.lastSession,
+      listItems: { ...older.enrichment.listItems, ...newer.enrichment.listItems },
+      scaleQuestionsAnswered: { 'bf-o-1': 1, 'bf-o-2': 2, 'bf-o-3': 3 },
+    });
+    expect(mergeMeta(a.merged, b.merged).changed).toBe(false);
+  });
+
+  it('keeps the local list on a session tie and retains explicit empty values', () => {
+    const local = {
+      traits: { lastAnalyzed: '2026-01-02', valuesHierarchy: [] },
+      enrichment: { completedCategories: [], lastSession: null, listItems: { favorite_books: [] } },
+    };
+    const remote = {
+      traits: { lastAnalyzed: '2026-01-01', valuesHierarchy: [{ value: 'Curiosity', priority: 3 }] },
+      enrichment: { listItems: { favorite_books: [{ title: 'Example book' }] } },
+    };
+    expect(mergeMeta(local, remote)).toEqual({ merged: local, changed: false });
+  });
+
+  it('converges for conflicting traits and scale answers without timestamps', () => {
+    const a = {
+      traits: { bigFive: { O: 0.4 } },
+      enrichment: { scaleQuestionsAnswered: { 'bf-o-1': 5 } },
+    };
+    const b = {
+      traits: { bigFive: { O: 0.7 } },
+      enrichment: { scaleQuestionsAnswered: { 'bf-o-1': 2 } },
+    };
+    const merged = mergeMeta(a, b).merged;
+    expect(mergeMeta(b, a).merged).toEqual(merged);
+    expect(merged.traits).toEqual(b.traits);
+    expect(merged.enrichment.scaleQuestionsAnswered).toEqual(a.enrichment.scaleQuestionsAnswered);
+  });
+
+  it('preserves traits, scale answers, and lists when an older peer omits them', () => {
+    const local = {
+      traits: { bigFive: { O: 0.5 } },
+      enrichment: {
+        completedCategories: [],
+        lastSession: '2026-01-01',
+        scaleQuestionsAnswered: { 'bf-o-1': 4 },
+        listItems: { favorite_books: [{ title: 'Example book' }] },
+      },
+    };
+    const legacy = { enrichment: { lastSession: '2026-01-02', completedCategories: [] } };
+    const expected = { ...local, enrichment: { ...local.enrichment, ...legacy.enrichment } };
+    expect(mergeMeta(local, legacy)).toEqual({ merged: expected, changed: true });
+    expect(mergeMeta(legacy, local)).toEqual({ merged: expected, changed: true });
   });
 
   it('fills missing settings keys but keeps local values', () => {

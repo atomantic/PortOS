@@ -812,7 +812,7 @@ async function relaunchWithTuning(normalized, knobs) {
  * Pages bench) has to relaunch between them. When `model` is already serving, `fn` runs with no
  * relaunch. Otherwise the daemon is stopped and started on `model`, and once `fn` settles the
  * previous launch line goes back up, or MTPLX is stopped again when it was not running before.
- * Refuses (throws) rather than stopping a server PortOS cannot prove it owns.
+ * Refuses to stop a server unless PortOS owns it and can name its checkpoint.
  *
  * `fn` receives the served model id as `/v1/models` reports it, which is what a request names.
  *
@@ -845,6 +845,12 @@ async function switchToCheckpoint(model) {
       : 'MTPLX was started outside PortOS, so PortOS will not stop it to switch checkpoints';
     throw new ServerError(why, { status: 409, code: 'MTPLX_SWITCH_REFUSED' });
   }
+  if (status.running && !status.config?.model) {
+    throw new ServerError('MTPLX is serving its own default checkpoint, which PortOS cannot name — restart it on a chosen checkpoint from the LLMs page before switching checkpoints', {
+      status: 409,
+      code: 'MTPLX_SWITCH_REFUSED',
+    });
+  }
   // `null` previous = MTPLX was not running, so it is stopped again afterwards. Every launch persists
   // its line as the saved launch, so the saved one is kept to write back: otherwise the next on-demand
   // start would serve the bench pack instead of the operator's choice.
@@ -861,7 +867,9 @@ async function switchToCheckpoint(model) {
     : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint);
   if (!ready.ready) {
     if (!started.failure) await stopMtplxServer().catch(() => {});
-    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true });
+    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
+      console.error(`❌ MTPLX: could not put the previous checkpoint back after failed switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
+    });
     throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
   }
   return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };

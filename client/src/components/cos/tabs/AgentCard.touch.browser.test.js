@@ -95,7 +95,7 @@ describe.skipIf(!chrome)('AgentCard touch targets in Chromium', () => {
       await page.getByRole('button', { name: 'Hide' }).first().waitFor({ state: 'visible' });
       await page.getByRole('button', { name: "Relaunch this agent's task on a different provider or model" }).click();
       await page.getByRole('button', { name: 'Force kill agent (SIGKILL)' }).click();
-      for (const label of ['Confirm', 'Cancel']) {
+      for (const label of ['Kill', 'Cancel']) {
         const box = await page.getByRole('button', { name: label }).boundingBox();
         expect(box?.width).toBeGreaterThanOrEqual(44);
         expect(box?.height).toBeGreaterThanOrEqual(44);

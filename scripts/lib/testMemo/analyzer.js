@@ -994,23 +994,35 @@ function recordedReach(a, testRel, record) {
  * record) is what a real-browser run's fixture served from each root; it
  * narrows the recorded key and reach of a handed root (`servedTree`).
  *
+ * The recorded verdict and the narrowing are computed first and eagerly.
+ * The floor verdict and the static closure (`closure`, `inputs`,
+ * `edgesResolved`, `hasOpenReads`) are getters computed on first read:
+ * most tests of a warm memo hit their recorded key or are left out by
+ * their narrowed reach, and walking a multi-thousand-module closure for
+ * them only to discard it cost CI most of its planning time (#17617). The
+ * analyzer's caches are pure memoization of working-tree reads, so the
+ * order of evaluation cannot change a verdict; a caller that compares
+ * against a later re-read (`recordTestMemo`) reads the floor before the
+ * run, as the runner's hit check already does for every file it runs.
+ *
  * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, inputs: Set<string>, edgesResolved: boolean, hasOpenReads: boolean, narrowed: object|null }}
  */
 function analyzeTest(a, testRel, { baseClosure, recorded = null, digests = null, served = null }) {
-  const closure = closureOf(a, testRel);
   const fixtures = fixtureInputs(a, testRel);
-  const floor = verdict(a, testRel, closure, fixtures, baseClosure, { requireEdges: true });
   const recordedVerdict = recorded === null ? null : recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure, served);
   const narrowed = recordedVerdict?.memoizable && Array.isArray(digests) && digests.length === recorded.length
     ? recordedReach(a, testRel, { modules: recorded, digests, served })
     : null;
+  let closure = null;
+  let floor = null;
+  const walked = () => (closure ??= closureOf(a, testRel));
   return {
-    floor,
+    get floor() { return (floor ??= verdict(a, testRel, walked(), fixtures, baseClosure, { requireEdges: true })); },
     recorded: recordedVerdict,
-    closure: closure.members,
-    inputs: closure.inputs,
-    edgesResolved: closure.unresolvedEdges.length === 0,
-    hasOpenReads: closure.hasOpenReads,
+    get closure() { return walked().members; },
+    get inputs() { return walked().inputs; },
+    get edgesResolved() { return walked().unresolvedEdges.length === 0; },
+    get hasOpenReads() { return walked().hasOpenReads; },
     narrowed,
   };
 }

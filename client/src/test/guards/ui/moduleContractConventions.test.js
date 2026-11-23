@@ -2,7 +2,7 @@
  * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`).
  * Fix: Fix the missing export/member name, or update the mock factory.
  * What this guard cannot see:
- *   - Scoped to git-tracked sources under `client/src` (comments masked); non-literal `vi.mock` factories are not checked.
+ *   - Scoped to git-tracked sources under `client/src` (comments masked); `vi.mock` factories that are not object literals (`() => makeMocks()`) are not read.
  */
 
 import { describe, it, expect } from 'vitest';

@@ -63,6 +63,25 @@ describe('durable graceful maintenance', () => {
     expect(admission.status()).toMatchObject({ state: 'ready', hold });
   });
 
+  it('reads a hold-free journal through a live writer lock but fails closed once the lock outlives the grace', () => {
+    const { root, admission } = gate();
+    const work = admission.admit('agent', 'running-example');
+    const lock = join(admission.directory, 'transaction');
+    // Another process (runner vs server) is mid-publication: lock held, file committed.
+    mkdirSync(lock);
+    const peer = createMaintenanceAdmission(root);
+    expect(peer.held()).toBe(false);
+    expect(peer.status()).toMatchObject({ state: 'normal', blockers: [expect.objectContaining({ resource: 'running-example' })] });
+    // Admission stays authoritative: it still waits on the lock and refuses.
+    expect(createMaintenanceAdmission(root, { lockRetryAttempts: 1 }).tryAdmit('agent', 'queued')).toBeNull();
+    const crashedAt = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, crashedAt, crashedAt);
+    expect(peer.held()).toBe(true);
+    expect(peer.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction', since: crashedAt.toISOString() });
+    rmSync(lock, { recursive: true });
+    return work.finish();
+  });
+
   it('logs a failed ENOSPC publication once and remains uncertain even after lock removal', () => {
     const { root } = gate();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -247,7 +266,11 @@ describe('durable graceful maintenance', () => {
     const before = fs.readFileSync(file, 'utf8');
     // The older writer acquired its lock before parsing. A parse failure kept
     // the lock, just as an uncertain publication did; do not repair it by age.
-    fs.mkdirSync(join(admission.directory, 'transaction'));
+    // Backdated: a fresh lock is indistinguishable from a live writer.
+    const staleLock = join(admission.directory, 'transaction');
+    fs.mkdirSync(staleLock);
+    const crashedAt = new Date(Date.now() - 60_000);
+    fs.utimesSync(staleLock, crashedAt, crashedAt);
     expect(() => legacyOperation.parse(JSON.parse(before).operations[0])).toThrow();
     const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
@@ -425,5 +448,20 @@ describe('durable graceful maintenance', () => {
     expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'unreadable-journal' });
     expect(restarted.tryAdmit('agent', 'new')).toBeNull();
     expect(() => restarted.resume({ id: '00000000-0000-4000-8000-000000000000', revision: 1 })).toThrow();
+  });
+
+  it("adds no settlement row for publications under a long-lived agent operation but still reserves under others", async () => {
+    const { admission } = gate();
+    const kinds = () => admission.operations().filter(op => op.kind === "settlement").length;
+    const agent = admission.admit("agent", "streaming");
+    const revision = admission.status().revision;
+    await agent.run(async () => {
+      for (let i = 0; i < 20; i++) await admission.continueSettlement(async () => { expect(kinds()).toBe(0); }, { lazyWhenOwnedBy: ["agent", "runner"] });
+    });
+    expect(admission.status().revision).toBe(revision);
+    const media = admission.admit("media", "render");
+    await media.run(() => admission.continueSettlement(async () => { expect(kinds()).toBe(1); }, { lazyWhenOwnedBy: ["agent", "runner"] }));
+    await media.finish();
+    await agent.finish();
   });
 });

@@ -29,7 +29,7 @@ export async function getPersonaById(id) {
 export const createPersona = (...args) => withMetaLock(() => createPersonaLocked(...args));
 
 async function createPersonaLocked({ name, description, instructions, traitAdjustments }) {
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   if (!Array.isArray(meta.personas)) meta.personas = [];
 
   const timestamp = now();
@@ -52,7 +52,7 @@ async function createPersonaLocked({ name, description, instructions, traitAdjus
 export const updatePersona = (...args) => withMetaLock(() => updatePersonaLocked(...args));
 
 async function updatePersonaLocked(id, updates) {
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   const persona = (meta.personas || []).find(p => p.id === id);
   if (!persona) {
     throw new Error(`Persona ${id} not found`);
@@ -81,7 +81,7 @@ async function updatePersonaLocked(id, updates) {
 export const deletePersona = (...args) => withMetaLock(() => deletePersonaLocked(...args));
 
 async function deletePersonaLocked(id) {
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   const before = (meta.personas || []).length;
   meta.personas = (meta.personas || []).filter(p => p.id !== id);
   const deleted = before !== meta.personas.length;
@@ -112,7 +112,7 @@ async function deletePersonaLocked(id) {
 export const setActivePersona = (...args) => withMetaLock(() => setActivePersonaLocked(...args));
 
 async function setActivePersonaLocked(personaId) {
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   if (personaId !== null && !(meta.personas || []).some(p => p.id === personaId)) {
     throw new Error(`Persona ${personaId} not found`);
   }

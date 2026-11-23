@@ -1921,3 +1921,41 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
     expect(edited.floor.key).not.toBe(first.floor.key);
   });
 });
+
+// A warm memo answers most tests from the recorded key or the narrowed reach.
+// Walking their static closure first cost CI most of its planning time (#17617).
+describe('lazy floor analysis', () => {
+  const test = 'server/lib/a.test.js';
+  const loaded = [test, 'server/lib/a.js', 'server/lib/b.js', 'server/vitest.setup.js'];
+  const digestOf = (rel) => createHash('sha256').update(TREE[rel]).digest('hex').slice(0, 16);
+  const counting = (files) => {
+    const fs = memoryFs(files);
+    const reads = [];
+    return { reads, fs: { ...fs, read: (rel) => { reads.push(rel); return fs.read(rel); } } };
+  };
+  const analyzeWith = (fs, extra = {}) => computeTestMemoKeys([test], { ...options(TREE), fs, ...extra }).get(test);
+
+  it('computes the recorded verdict and narrowing without walking the static closure', () => {
+    const { reads, fs } = counting(TREE);
+    const info = analyzeWith(fs, { records: new Map([[test, loaded]]), digests: new Map([[test, loaded.map(digestOf)]]) });
+    expect(info.recorded.memoizable).toBe(true);
+    expect(info.narrowed.failClosed).toBeNull();
+    // lazy.js sits only behind b.js's `import()`: the record vouches for that edge, the floor would walk it.
+    expect(relatedTests(new Map([[test, info]]), ['server/lib/unrelated.js'])).toEqual([]);
+    expect(reads).not.toContain('server/lib/lazy.js');
+    expect(info.floor.memoizable).toBe(true);
+    expect(reads).toContain('server/lib/lazy.js');
+  });
+
+  it('gives the same keys and closure in whichever order they are read', () => {
+    const records = new Map([[test, loaded]]);
+    const eager = analyzeWith(memoryFs(TREE), { records });
+    const floorFirst = { floor: eager.floor.key, closure: [...eager.closure].sort(), inputs: [...eager.inputs].sort(), edgesResolved: eager.edgesResolved, hasOpenReads: eager.hasOpenReads, recorded: eager.recorded.key };
+    const later = analyzeWith(memoryFs(TREE), { records });
+    const recordedFirst = { recorded: later.recorded.key, hasOpenReads: later.hasOpenReads, edgesResolved: later.edgesResolved, inputs: [...later.inputs].sort(), closure: [...later.closure].sort(), floor: later.floor.key };
+    expect(recordedFirst).toEqual(floorFirst);
+    expect(floorFirst.closure).toContain('server/lib/lazy.js');
+    // A test with no record still exposes a full floor verdict on demand.
+    expect(analyzeWith(memoryFs(TREE)).floor.key).toBe(eager.floor.key);
+  });
+});

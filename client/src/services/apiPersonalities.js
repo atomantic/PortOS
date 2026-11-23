@@ -9,7 +9,7 @@ export const getAgentPersonalities = (userId = null, options = {}) => {
   const params = userId ? `?userId=${encodeURIComponent(userId)}` : '';
   return request(`/agents/personalities${params}`, options);
 };
-export const getAgentPersonality = (id) => request(`/agents/personalities/${id}`);
+export const getAgentPersonality = (id, options = {}) => request(`/agents/personalities/${id}`, options);
 export const createAgentPersonality = (data) => request('/agents/personalities', {
   method: 'POST',
   body: JSON.stringify(data)

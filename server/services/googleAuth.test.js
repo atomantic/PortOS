@@ -11,9 +11,18 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async () => {}),
 }));
 
+vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn(async () => ({ ok: true, status: 200 })) }));
+vi.mock('../lib/secureAuthStore.js', () => ({
+  ensureSecureDir: vi.fn(async () => {}),
+  writeSecureJson: (...args) => atomicWriteMock(...args),
+}));
+
 import * as googleOAuthClient from '../lib/googleOAuthClient.js';
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { clearAuth, getAuthenticatedClient, handleCallback } from './googleAuth.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { clearAuth, getAuthenticatedClient, handleCallback, saveCredentials } from './googleAuth.js';
+
+function atomicWriteMock(...args) { return atomicWrite(...args); }
 
 const { createGoogleOAuthClient } = googleOAuthClient;
 
@@ -200,5 +209,38 @@ describe('googleAuth callback', () => {
 
     stubFiles({ tokens: { access_token: 'fresh-access', refresh_token: 'fresh-refresh', expiry_date: Date.now() + 3_600_000 } });
     expect((await getAuthenticatedClient()).credentials.access_token).toBe('fresh-access');
+  });
+});
+
+describe('googleAuth credentials and disconnect', () => {
+  it('saveCredentials never returns the client secret', async () => {
+    const result = await saveCredentials({ clientId: 'cid', clientSecret: 'shh' });
+    expect(result).toEqual({ hasCredentials: true, redirectUri: expect.any(String) });
+    expect(JSON.stringify(result)).not.toContain('shh');
+  });
+
+  it('clearAuth revokes the refresh token upstream before clearing local tokens', async () => {
+    stubFiles({ tokens: { access_token: 'a', refresh_token: 'durable-refresh' } });
+    await clearAuth();
+    const [url, options, timeout] = fetchWithTimeout.mock.calls[0];
+    expect(url).toBe('https://oauth2.googleapis.com/revoke');
+    expect(options.method).toBe('POST');
+    expect(options.body).toBe('token=durable-refresh');
+    expect(timeout).toBeGreaterThan(0);
+    expect(lastTokenWrite()).toEqual({});
+  });
+
+  it('clearAuth still clears locally when revocation fails', async () => {
+    stubFiles({ tokens: { access_token: 'only-access' } });
+    fetchWithTimeout.mockRejectedValueOnce(new Error('offline'));
+    await clearAuth();
+    expect(fetchWithTimeout.mock.calls[0][1].body).toBe('token=only-access');
+    expect(lastTokenWrite()).toEqual({});
+  });
+
+  it('clearAuth skips revocation when no token is stored', async () => {
+    stubFiles({ tokens: null });
+    await clearAuth();
+    expect(fetchWithTimeout).not.toHaveBeenCalled();
   });
 });

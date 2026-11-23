@@ -11,12 +11,12 @@ import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies,
+  LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
+  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   recordTestMemo, seedVitestDependencies, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { vitestCaptureProjects } from '../vitestCiPool.js';
-import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
+import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
@@ -629,6 +629,78 @@ describe('planTestMemo and recordTestMemo', () => {
     const after = plan({ shard: { index: 1, count: 1 } });
     expect(after.run).toContain(changed);
     expect(after.skipped.map(({ test }) => test).sort()).toEqual(seed.slice.filter(test => test !== changed).sort());
+  });
+
+  // A pull request reads every parked shard lineage in place instead of merging them (#17617).
+  it('plans from several read-only shard directories as it did from their merge, consulting the floor only on a recorded miss', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-dirs-'));
+    writeRepo(root, FILES);
+    const [own, shard1, shard2] = ['own', '1', '2'].map((name) => join(memoDir, name));
+    const dependencies = new Map([
+      ['server/lib/a.test.js', ['server/lib/a.js', 'server/lib/a.test.js']],
+      ['server/lib/b.test.js', ['server/lib/b.js', 'server/lib/b.test.js']],
+      ['server/lib/c.test.js', ['server/lib/c.test.js']],
+    ]);
+    for (const [index, dir] of [[1, shard1], [2, shard2]]) {
+      const seed = plan({ memoDir: dir, shard: { index, count: 2 } });
+      recordTestMemo({ scope: 'server', repoRoot: root, memoDir: dir, plan: seed, passed: seed.slice, dependencies, source: 'ci' });
+    }
+    const all = TESTS.map((t) => `server/${t}`);
+    const store = [own, shard1, shard2];
+    const looked = [];
+    const readEntry = (dir, key, meta) => { looked.push(key); return readMemoEntry(dir, key, meta); };
+    const warm = plan({ memoDir: store, readEntry });
+    expect(warm.skipped).toEqual(all.map((test) => ({ test, via: 'recorded' })));
+    // Every file hit its recorded key, so no floor key was computed or looked up.
+    expect(looked).toEqual(all.map((test) => warm.verdicts.get(test).recorded.key));
+    expect(plan({ memoDir: own }).skipped).toEqual([]);
+
+    // Related selection narrows through records found in any directory: b.js's lazy import of
+    // lazy.js is vouched for by b.test.js's record, which only one shard holds.
+    const related = (dir) => plan({ memoDir: dir, mode: 'related', repoFiles: [], repoSources: ['server/lib/lazy.js'] });
+    expect(related(own).selected).toEqual(['server/lib/b.test.js']);
+    expect(related(store).selected).toEqual([]);
+    expect(related(store).narrowed).toBe(3);
+
+    // The newest record wins across directories. Here it names a module set no entry was
+    // written under, so the recorded key misses and the floor key, computed now, still hits.
+    writeMemoRecord(own, 'server', 'server/lib/a.test.js', ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/lazy.js']);
+    expect(plan({ memoDir: store }).skipped.find(({ test }) => test === 'server/lib/a.test.js')).toEqual({ test: 'server/lib/a.test.js', via: 'floor' });
+  });
+
+  it('prunes a trusted CI store to live tests and recent entries, and the shared local store only of expired entries, daily', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-prune-'));
+    writeRepo(root, FILES);
+    const calls = [];
+    const prune = (dir, options) => { calls.push({ dir, options }); return { entries: 0, records: 0, removedEntries: 0, removedRecords: 0 }; };
+    const now = Date.parse('2026-11-23T12:00:00.000Z');
+
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: true, now, prune })).not.toBeNull();
+    const [trusted] = calls;
+    expect(trusted.dir).toBe(memoDir);
+    expect(trusted.options.maxEntriesPerTest).toBeUndefined();
+    expect(trusted.options.testExists('server', 'server/lib/a.test.js')).toBe(true);
+    expect(trusted.options.testExists('server', 'server/lib/deleted.test.js')).toBe(false);
+
+    // Local: age only, never the existence check (another worktree may own the test), then throttled.
+    calls.length = 0;
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now, prune })).not.toBeNull();
+    expect(calls).toEqual([{ dir: memoDir, options: { now, maxEntriesPerTest: Number.POSITIVE_INFINITY } }]);
+    expect(readFileSync(join(memoDir, 'pruned-at'), 'utf8')).toBe(new Date(now).toISOString());
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now + LOCAL_PRUNE_INTERVAL_MS - 1, prune })).toBeNull();
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now + LOCAL_PRUNE_INTERVAL_MS, prune })).not.toBeNull();
+    // A stamp from the future (a clock that moved back) does not stop pruning forever.
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now - 1000, prune })).not.toBeNull();
+    expect(calls).toHaveLength(3);
+    expect(pruneTestMemo({ memoDir: null, repoRoot: root, trustedCi: true, now, prune })).toBeNull();
+
+    // The real prune: a trusted run forgets an entry for a test file this checkout no longer has.
+    writeMemoEntry(memoDir, 'd'.repeat(64), { test: 'server/lib/deleted.test.js', workspace: 'server', source: 'ci' });
+    writeMemoEntry(memoDir, 'e'.repeat(64), { test: 'server/lib/a.test.js', workspace: 'server', source: 'ci' });
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: true })).toMatchObject({ entries: 1, removedEntries: 1 });
+    expect(readMemoEntry(memoDir, 'e'.repeat(64), { test: 'server/lib/a.test.js', workspace: 'server' })).not.toBeNull();
   });
 
   it('hashes the forward-slashed root-relative path on every platform, like Vitest', () => {

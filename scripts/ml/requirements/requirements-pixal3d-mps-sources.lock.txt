@@ -4,7 +4,7 @@
 # Re-download each immutable archive and verify metadata/build code before updating
 # its SHA-256. natten 0.21.0 was uploaded 2025-07-14; Git revisions predate the
 # fork's 2026-06-12 commit. No unconstrained source/build dependency is installed.
-# Included in the complete 106-distribution OSV/MAL audit, 2026-11-10: 0 matches.
+# Included with the wheel lock in the 2026-11-23 OSV/MAL audit: 0 matches.
 natten==0.21.0 \
     --hash=sha256:810aaf179e1a6fdb0a9279d7858d00412a0d3f045e546cada415205215ccd539
 moge @ https://codeload.github.com/microsoft/MoGe/tar.gz/07444410f1e33f402353b99d6ccd26bd31e469e8 \

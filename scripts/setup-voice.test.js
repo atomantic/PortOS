@@ -29,13 +29,13 @@ if [[ $head == 1 ]]; then
   printf 'HTTP/2 200\\r\\ncontent-length: %s\\r\\n\\r\\n' "$CURL_REMOTE_SIZE"
   exit 0
 fi
+if [[ -n "\${CURL_FAIL_MATCH:-}" && "$url" == *"\${CURL_FAIL_MATCH}"* ]]; then
+  [[ -n "$dest" ]] && printf 'partial' > "$dest"
+  exit 18
+fi
 if [[ -z "$dest" ]]; then
   printf 'archive'
   exit 0
-fi
-if [[ -n "\${CURL_FAIL_MATCH:-}" && "$url" == *"\${CURL_FAIL_MATCH}"* ]]; then
-  printf 'partial' > "$dest"
-  exit 18
 fi
 case "$url" in
   *.onnx.json) printf '{"audio":{"sample_rate":22050}}' > "$dest" ;;
@@ -53,6 +53,18 @@ esac
 const SYSCTL_STUB = `#!/usr/bin/env bash
 [[ "$*" == "-n hw.optional.arm64" ]] || exit 2
 printf '%s\\n' "\${FAKE_HW_ARM64:-0}"
+`;
+const UNZIP_STUB = `#!/usr/bin/env bash
+dest=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d) dest="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+mkdir -p "$dest/ggml-test-encoder.mlmodelc"
+if [[ -n "\${UNZIP_FAIL:-}" ]]; then exit 9; fi
+: > "$dest/ggml-test-encoder.mlmodelc/model.mil"
 `;
 const TAR_STUB = `#!/usr/bin/env bash
 dest=""
@@ -112,6 +124,8 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     chmodSync(join(stubDir, 'tar'), 0o755);
     writeFileSync(join(stubDir, 'sysctl'), SYSCTL_STUB);
     chmodSync(join(stubDir, 'sysctl'), 0o755);
+    writeFileSync(join(stubDir, 'unzip'), UNZIP_STUB);
+    chmodSync(join(stubDir, 'unzip'), 0o755);
     log = join(home, 'curl.log');
     // Pretend the Piper binary and its libs are already installed.
     const piper = join(home, '.portos/voice/piper');
@@ -202,6 +216,40 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     expect(downloads()).toEqual([]);
     expect(readFileSync(onnx(), 'utf8')).toBe('legacy-onnx');
     expect(inspectVoiceAsset('piper', onnx()).state).toBe('verified');
+  });
+
+  describe('temporary staging', () => {
+    it('removes the Piper phonemize temp dir when its download fails', () => {
+      const tmp = join(home, 'tmp');
+      mkdirSync(tmp);
+      rmSync(join(home, '.portos/voice/piper/lib/libpiper_phonemize.1.dylib'));
+      const failed = run({ TMPDIR: tmp, CURL_FAIL_MATCH: 'piper-phonemize' });
+      expect(failed.status).toBe(18);
+      expect(readdirSync(tmp)).toEqual([]);
+    });
+
+    describe('CoreML encoder', () => {
+      const encoder = () => join(models, 'ggml-test-encoder.mlmodelc');
+      const coremlEnv = () => {
+        writeFileSync(join(stubDir, 'whisper-server'), '#!/bin/sh\n');
+        chmodSync(join(stubDir, 'whisper-server'), 0o755);
+        return { STT_ENGINE: 'whisper', TTS_ENGINE: 'qwen3-tts', INSTALL_COREML: '1', FAKE_UNAME_S: 'Darwin' };
+      };
+      const residue = () => readdirSync(models).filter((f) => f.includes('.part.') || f.includes('.coreml.') || f.endsWith('.zip'));
+
+      it.each([
+        ['download', { CURL_FAIL_MATCH: 'encoder.mlmodelc.zip' }, 18],
+        ['unzip', { UNZIP_FAIL: '1' }, 9],
+      ])('leaves no zip, stage dir or encoder dir when the %s fails, then recovers', (_label, fail, status) => {
+        const env = coremlEnv();
+        expect(run({ ...env, ...fail }).status).toBe(status);
+        expect(existsSync(encoder())).toBe(false);
+        expect(residue()).toEqual([]);
+        expect(run(env).status).toBe(0);
+        expect(existsSync(join(encoder(), 'model.mil'))).toBe(true);
+        expect(residue()).toEqual([]);
+      });
+    });
   });
 
   describe('Whisper model', () => {

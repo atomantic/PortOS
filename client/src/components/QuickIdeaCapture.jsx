@@ -19,6 +19,7 @@ import TagPicker from './TagPicker';
 import { createCatalogIngredient } from '../services/apiCatalog';
 import { CATALOG_TYPES, getCatalogType } from '../lib/catalogTypes';
 import { ingredientPath } from '../lib/creativeLibraries';
+import { onRadioGroupKeyDown } from '../lib/a11yKeyboard.js';
 
 const TYPES = CATALOG_TYPES;
 
@@ -92,15 +93,17 @@ export default function QuickIdeaCapture() {
       </div>
       <form onSubmit={handleSubmit} className="space-y-2">
         {/* Type chip row — wraps on narrow widths so the widget stays usable on phones. */}
-        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Ingredient type">
-          {TYPES.map((t) => {
+        <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Ingredient type" onKeyDown={onRadioGroupKeyDown}>
+          {TYPES.map((t, index) => {
             const active = t.id === type;
+            const selectedIndex = Math.max(0, TYPES.findIndex((candidate) => candidate.id === type));
             return (
               <button
                 key={t.id}
                 type="button"
                 role="radio"
                 aria-checked={active}
+                tabIndex={index === selectedIndex ? 0 : -1}
                 onClick={() => setType(t.id)}
                 className={`px-2 py-1 rounded-full text-xs border transition-colors ${
                   active ? t.badgeColor : 'border-port-border text-gray-400 hover:text-white'

@@ -33,7 +33,7 @@ vi.mock('../scriptVerify.js', () => h.scriptVerifyFactory());
 vi.mock('../canonReadiness.js', () => h.canonReadinessFactory());
 vi.mock('../../universeCanon.js', () => h.universeCanonFactory());
 vi.mock('../foundationJudge.js', (importOriginal) => h.foundationJudgeFactory(importOriginal));
-vi.mock('./modelPerformance.js', () => h.modelPerformanceFactory());
+vi.mock('../seriesAutopilot/modelPerformance.js', () => h.modelPerformanceFactory());
 vi.mock('../../notifications.js', () => h.notificationsFactory());
 
 // Mocked bindings, so a test can drive the budget and persisted settings per call.

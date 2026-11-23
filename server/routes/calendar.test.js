@@ -246,6 +246,16 @@ describe('Calendar Routes — normalized error handling', () => {
     });
   });
 
+  describe('POST /google/auth/credentials', () => {
+    it('responds no-store without echoing the client secret', async () => {
+      googleAuth.saveCredentials.mockResolvedValue({ hasCredentials: true, redirectUri: 'http://localhost/cb' });
+      const res = await request(app).post('/api/calendar/google/auth/credentials').send({ clientId: 'cid', clientSecret: 'shh' });
+      expect(res.status).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).toEqual({ hasCredentials: true, redirectUri: 'http://localhost/cb' });
+    });
+  });
+
   describe('GET /agenda — today\'s events for the dashboard widget', () => {
     it('reports zero accounts without touching events when none are enabled', async () => {
       calendarAccounts.listAccounts.mockResolvedValue([{ id: ACCOUNT_ID, enabled: false }]);

@@ -26,7 +26,7 @@ vi.mock('../services/settings.js', () => ({
 vi.mock('../services/instanceIdentity.js', () => ({ loadData: vi.fn(async () => ({ peers: [] })) }));
 vi.mock('../services/review.js', () => ({ reviewEvents: { emit: vi.fn() } }));
 vi.mock('../services/reviewQueue.js', () => ({
-  buildQueue: vi.fn(), claimQueueDelivery: vi.fn(), MAX_REVIEW_QUEUE_SNOOZE_MS: 30 * 24 * 60 * 60 * 1000, ...effects,
+  buildQueue: vi.fn(), MAX_REVIEW_QUEUE_SNOOZE_MS: 30 * 24 * 60 * 60 * 1000, ...effects,
 }));
 const mounts = [['/api/review', (await import('./review.js')).default]];
 

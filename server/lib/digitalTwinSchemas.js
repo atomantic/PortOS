@@ -65,7 +65,7 @@ export const documentMetaSchema = z.object({
   filename: z.string().min(1),
   title: z.string().min(1).max(200),
   category: documentCategoryEnum,
-  version: z.string().optional(),
+  version: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
   priority: z.number().int().min(0).default(0),
   weight: z.number().int().min(1).max(10).default(5),
@@ -151,13 +151,20 @@ export const multiTurnTestHistoryEntrySchema = z.object({
   timestamp: z.string().datetime()
 });
 
+// Shared by list-based enrichment requests and persisted progress.
+export const listItemSchema = z.object({
+  title: z.string().min(1).max(500),
+  note: z.string().max(2000).optional()
+});
+
 // Enrichment progress schema
 export const enrichmentProgressSchema = z.object({
   completedCategories: z.array(enrichmentCategoryEnum).default([]),
   lastSession: z.string().datetime().nullable().optional(),
-  questionsAnswered: z.record(enrichmentCategoryEnum, z.number().int().min(0)).optional(),
-  scaleQuestionsAnswered: z.record(z.string(), z.number().int().min(1).max(5)).optional()
-});
+  questionsAnswered: z.partialRecord(enrichmentCategoryEnum, z.number().int().min(0)).optional(),
+  scaleQuestionsAnswered: z.record(z.string(), z.number().int().min(1).max(5)).optional(),
+  listItems: z.partialRecord(enrichmentCategoryEnum, z.array(listItemSchema)).optional()
+}).passthrough();
 
 // Digital Twin settings schema
 export const digitalTwinSettingsSchema = z.object({
@@ -272,12 +279,12 @@ export const valuedTraitSchema = z.object({
 
 // Full traits schema
 export const traitsSchema = z.object({
-  bigFive: bigFiveSchema.optional(),
+  bigFive: bigFiveSchema.partial().optional(),
   valuesHierarchy: z.array(valuedTraitSchema).max(20).optional(),
-  communicationProfile: communicationProfileSchema.optional(),
+  communicationProfile: communicationProfileSchema.partial().optional(),
   lastAnalyzed: z.string().datetime().optional(),
   analysisVersion: z.string().optional()
-});
+}).passthrough();
 
 // --- Phase 2: Confidence Scoring Schemas ---
 
@@ -300,7 +307,7 @@ export const gapRecommendationSchema = z.object({
 // Full confidence schema
 export const confidenceSchema = z.object({
   overall: z.number().min(0).max(1),
-  dimensions: z.record(confidenceDimensionEnum, z.number().min(0).max(1)),
+  dimensions: z.partialRecord(confidenceDimensionEnum, z.number().min(0).max(1)),
   gaps: z.array(gapRecommendationSchema),
   lastCalculated: z.string().datetime().optional()
 });
@@ -320,5 +327,5 @@ export const digitalTwinMetaSchema = z.object({
   deletedPersonas: z.array(deletedPersonaSchema).default([]),
   traits: traitsSchema.optional(),
   confidence: confidenceSchema.optional()
-});
+}).passthrough();
 

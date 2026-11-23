@@ -6,6 +6,8 @@ vi.mock('../../../services/apiAccounts.js', () => ({
   getPlatformAccounts: vi.fn(),
   getAgentRateLimits: vi.fn(),
   testPlatformAccount: vi.fn(),
+  deletePlatformAccount: vi.fn(),
+  registerPlatformAccount: vi.fn(),
 }));
 vi.mock('../../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
@@ -17,7 +19,7 @@ vi.mock('../../../services/apiPersonalities.js', () => ({
   updateAgentPersonality: vi.fn(),
 }));
 
-import { getPlatformAccounts, getAgentRateLimits, testPlatformAccount } from '../../../services/apiAccounts.js';
+import { getPlatformAccounts, getAgentRateLimits, testPlatformAccount, deletePlatformAccount, registerPlatformAccount } from '../../../services/apiAccounts.js';
 import { getProviders } from '../../../services/apiProviders.js';
 import { getAgentActivityStats } from '../../../services/apiAgents.js';
 import OverviewTab from './OverviewTab';
@@ -124,4 +126,50 @@ it('shows a failed account test inline and releases the Test button for retry', 
   expect(await screen.findByText('Platform unavailable')).toBeInTheDocument();
   expect(testButton).toBeEnabled();
   expect(testPlatformAccount).toHaveBeenCalledWith('account-1', { silent: true });
+  expect(testButton.className).toContain('pointer-coarse:min-h-11');
+  expect(testButton.parentElement.className).toContain('flex-wrap');
+});
+
+it('stacks personality fields below sm and wraps the tone row', async () => {
+  render(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ id: 'agent-1', name: 'Example Agent', enabled: true, personality: {}, avatar: {} }} /></MemoryRouter>);
+  const nameGrid = (await screen.findByText('Name')).closest('.grid');
+  expect(nameGrid.className).toContain('grid-cols-1');
+  expect(nameGrid.className).toContain('sm:grid-cols-2');
+  const tone = screen.getByText('Tone').closest('.flex');
+  expect(tone.className).toContain('flex-wrap');
+  expect(screen.getByText('Tone').parentElement.className).toContain('min-w-0');
+});
+
+it('confirms account deletion and drops the row locally without refetching', async () => {
+  getPlatformAccounts.mockResolvedValue([{
+    id: 'account-1', platform: 'moltbook', status: 'active', credentials: { username: 'example-user' },
+  }]);
+  deletePlatformAccount.mockResolvedValue({ success: true });
+
+  render(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ id: 'agent-1', name: 'Example Agent', enabled: true, aiConfig: {} }} /></MemoryRouter>);
+  await screen.findByText('example-user');
+  const loads = getPlatformAccounts.mock.calls.length;
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  expect(deletePlatformAccount).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel account deletion' }));
+  expect(screen.getByText('example-user')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm delete example-user' })); });
+  expect(deletePlatformAccount).toHaveBeenCalledWith('account-1');
+  expect(screen.queryByText('example-user')).toBeNull();
+  expect(getPlatformAccounts).toHaveBeenCalledTimes(loads);
+});
+
+it('keeps the register form when account creation fails', async () => {
+  registerPlatformAccount.mockRejectedValue(new Error('register failed'));
+  render(<MemoryRouter><OverviewTab agentId="agent-1" agent={{ id: 'agent-1', name: 'Example Agent', enabled: true, aiConfig: {} }} /></MemoryRouter>);
+  await screen.findByText('No platform accounts linked to this agent');
+  fireEvent.click(screen.getByRole('button', { name: '+ Link Account' }));
+  fireEvent.change(screen.getByPlaceholderText('Display name on platform'), { target: { value: 'Example Name' } });
+  const submit = screen.getByRole('button', { name: 'Register Account' });
+  await act(async () => { fireEvent.click(submit); });
+  expect(submit).toBeEnabled();
+  expect(screen.getByPlaceholderText('Display name on platform')).toHaveValue('Example Name');
 });

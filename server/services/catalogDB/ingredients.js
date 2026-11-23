@@ -722,8 +722,8 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
   const RRF_K = 60;
   const fetchLimit = limit * 2;
 
-  let ftsRows = [];
-  if (queryText) {
+  const searchFts = async () => {
+    if (!queryText) return [];
     const conds = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', `search_tsv @@ websearch_to_tsquery('english', $1)`];
     const params = [queryText, fetchLimit];
     let idx = 3;
@@ -734,11 +734,11 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
          ORDER BY rank DESC LIMIT $2`,
       params,
     );
-    ftsRows = r.rows;
-  }
+    return r.rows;
+  };
 
-  let vecRows = [];
-  if (queryEmbedding) {
+  const searchVector = async () => {
+    if (!queryEmbedding) return [];
     const conds = ['deleted = false', 'id = catalog_canonical_ingredient_id(id)', 'embedding IS NOT NULL', '1 - (embedding <=> $1) >= $2'];
     const params = [arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit];
     let idx = 4;
@@ -749,8 +749,11 @@ export async function hybridSearchIngredients(queryText, queryEmbedding, options
          ORDER BY embedding <=> $1 LIMIT $3`,
       params,
     );
-    vecRows = r.rows;
-  }
+    return r.rows;
+  };
+
+  // Independent queries — run concurrently.
+  const [ftsRows, vecRows] = await Promise.all([searchFts(), searchVector()]);
 
   const rrf = reciprocalRankFusion(ftsRows, vecRows, { k: RRF_K, ftsWeight, vectorWeight });
 

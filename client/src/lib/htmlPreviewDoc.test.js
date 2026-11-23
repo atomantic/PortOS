@@ -12,9 +12,20 @@ describe('previewDocument', () => {
     expect(out.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '')).toBe(page);
   });
 
-  it('adds a head when the page has none, and wraps a bare fragment', () => {
-    expect(previewDocument('<html><body>hi</body></html>')).toMatch(/<html><head><meta [^>]*><\/head><body>hi<\/body><\/html>/);
-    expect(previewDocument('<div>hi</div>')).toMatch(/^<!doctype html><html><head><meta [^>]*><\/head><body><div>hi<\/div><\/body><\/html>$/);
+  it('adds a standards-mode head and preserves the page or fragment', () => {
+    expect(previewDocument('<html><body>hi</body></html>')).toMatch(/^<!doctype html><head><meta [^>]*><\/head><html><body>hi<\/body><\/html>$/);
+    expect(previewDocument('<div>hi</div>')).toMatch(/^<!doctype html><head><meta [^>]*><\/head><div>hi<\/div>$/);
+  });
+
+  it.each([
+    '<!-- <head> --><p>Preview</p>',
+    '<html data-example="<head>"><body>Preview</body></html>',
+    `<script>const label = '<head>';</script><p>Preview</p>`,
+    '<img src="preview.png"><head></head><p>Preview</p>',
+  ])('places the policy in a complete head before %s', (page) => {
+    const output = previewDocument(`<!DOCTYPE html>${page}`);
+    expect(output).toMatch(/^<!DOCTYPE html><head><meta http-equiv="Content-Security-Policy" content="[^"]+"><\/head>/);
+    expect(output.slice(output.indexOf('</head>') + '</head>'.length)).toBe(page);
   });
 
   it('refuses network access while still allowing inline script and style', () => {
@@ -22,6 +33,9 @@ describe('previewDocument', () => {
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).toContain("style-src 'unsafe-inline'");
+    for (const directive of ['base-uri', 'object-src', 'frame-src', 'worker-src', 'form-action']) {
+      expect(csp.split('; ')).toContain(`${directive} 'none'`);
+    }
     expect(csp).not.toMatch(/connect-src|https?:/);
   });
 });

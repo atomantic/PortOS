@@ -242,7 +242,10 @@ const mergeCategoriesWithLocks = (originalCategories, llmCategories) => {
       if (!label || lockedLabels.has(normalizeLabelKey(label))) continue;
       out.push({ label, prompt: typeof v.prompt === "string" ? v.prompt : "" });
     }
-    merged[key] = { variations: out };
+    // Preserve the bucket's tab assignment; sanitizeCategories would otherwise
+    // reset every non-built-in key to DEFAULT_CATEGORY_KIND ('other').
+    const kind = origByNorm[key]?.kind ?? freshByNorm[key]?.kind;
+    merged[key] = { ...(kind ? { kind } : {}), variations: out };
   }
 
   return sanitizeCategories(merged);
