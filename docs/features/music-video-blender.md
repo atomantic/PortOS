@@ -80,6 +80,19 @@ Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. T
 and only listed. A file sits at most five folders below `src/`, and symbolic links are not followed.
 A workspace with more than 5,000 supported source files is refused explicitly; it is never partially hashed or copied.
 
+### 3D models from the library
+
+**Add 3D model** on the Files tab picks an image-to-3D model (its animated, rigged or plain GLB, richest published asset first) or a Three.js model. The server copies a snapshot to `src/models/<slug>.glb` (or the generated factory module `src/models/<slug>.js`) beside `<slug>.json` (source kind and id, variant, source timestamp, SHA-256, size). Adding the same model twice gives a second slug; an explicit taken slug is `409 MUSIC_VIDEO_BLENDER_MODEL_EXISTS` unless `replace` is true. A model with no mesh yet is `409 MODEL_NOT_READY`.
+
+The copy is self-contained: deleting or re-rendering the source never changes it. When the library holds a different asset the Files tab shows **Update copy**; nothing updates by itself. In a Blender shot:
+
+```python
+from portos_film import models
+root, actions = models.load(ctx, "robot-dog", height=1.8)  # one empty, scaled to meters, standing on z = 0
+```
+
+The driver reports each loaded `models/<slug>.glb` with the shot's imports, so a shot goes out of date when that file changes without listing it in `deps`; renders from before this have no model hashes and stay current. A Three.js module is for `"space": "three"` code shots. Forking and promoting a film copy `src/models/` with the rest of `src/`.
+
 **Create starter workspace** copies a small complete film into `src/`: a stage, three figures and lights that follow
 the song's beats and loudness, in three shots. Use it as a template.
 
@@ -400,6 +413,9 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `GET /api/music-video/:id/blender/file` | Read one text file (`?path=shots/s010.py`) |
 | `PUT /api/music-video/:id/blender/file` | Write one text file `{ path, content }` |
 | `DELETE /api/music-video/:id/blender/file` | Delete one file (`?path=`) |
+| `GET /api/music-video/:id/blender/models` | The film's library copies, with `updateAvailable` and `sourceMissing` |
+| `POST /api/music-video/:id/blender/models` | Copy a library model in `{ kind: 'image-to-3d' \| 'threejs', id, variant?, slug?, replace? }` → `201 { model, snippet }` |
+| `POST /api/music-video/:id/blender/models/:slug/update` | Re-copy one model from its source |
 | `POST /api/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }` |
 | `GET /api/music-video/:id/blender/usage` | What the workspace takes on disk |
 | `POST /api/music-video/:id/blender/frames/clear` | Clear rendered frames → `{ freedBytes, usage }` |

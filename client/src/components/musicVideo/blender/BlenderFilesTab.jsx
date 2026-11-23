@@ -4,6 +4,7 @@ import { FilePlus, Save, Trash2 } from 'lucide-react';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource.js';
+import BlenderModelsPanel from './BlenderModelsPanel.jsx';
 import { useFilmApi } from './FilmApiContext.jsx';
 import { BLENDER_SOURCE_PATH as SOURCE_PATH, BLENDER_TEXT_EXTENSIONS as TEXT_EXTENSIONS } from '../../../lib/musicVideoBlender.js';
 import { formatBytes, formatCount } from '../../../utils/formatters.js';
@@ -16,6 +17,8 @@ const FILM_COPY = {
   binary: 'It is used by the film but cannot be edited here.',
   hint: 'Select a text file to read or edit it. Saving writes it to the workspace; nothing runs until you sync or render.',
   newFile: 'shots/s010.py',
+  // The library picker copies into a film's src/models/; a Blender model has no such library.
+  models: true,
 };
 const IDLE = { path: null, content: '', status: 'idle', error: null };
 // A new file is never empty, so the write is a real file the editor can open.
@@ -186,6 +189,10 @@ export default function BlenderFilesTab({ blender, copy = FILM_COPY }) {
             <button type="button" className={buttonCls} onClick={() => blender.discardFile(entry)}>Discard</button>
           </p>
         ))}
+        {copy.models && (
+          <BlenderModelsPanel projectId={projectId}
+            onChanged={() => listMusicVideoBlenderFiles(projectId, { silent: true }).then((answer) => { if (Array.isArray(answer?.files)) setItems(answer.files); }).catch(() => {})} />
+        )}
         <div className="min-w-0 space-y-1">
           <label htmlFor="mv-blender-new-file" className={labelCls}>New text file under src/</label>
           <div className="flex min-w-0 items-center gap-1.5">

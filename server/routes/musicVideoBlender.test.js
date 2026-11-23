@@ -375,7 +375,7 @@ describe('Blender film sync', () => {
     expect(stored.blender).toMatchObject({ sceneMap: { s010: stored.scenes[0].sceneId }, syncedAt: expect.any(String), manifestHash: expect.any(String) });
     // The driver, the helper kit and the song are staged for the job; the film itself is read from the workspace.
     expect(blender.fake.control.jobs[0]).toMatchObject({ mode: 'describe', fps: 24, src: join(workspace(), 'src'), out: join(workspace(), 'renders') });
-    expect(blender.fake.control.jobs[0].staged).toEqual(['job.json', 'portos_blender_driver.py', 'portos_film/music.py', 'portos_film/timing.py', 'song.json']);
+    expect(blender.fake.control.jobs[0].staged).toEqual(['job.json', 'portos_blender_driver.py', 'portos_film/models.py', 'portos_film/music.py', 'portos_film/timing.py', 'song.json']);
 
     // A later edit to the scripts shows until the next sync.
     await writeSource('film.py', '# edited\n');
