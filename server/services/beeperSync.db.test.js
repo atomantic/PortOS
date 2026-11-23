@@ -306,6 +306,48 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     }
   });
 
+  it('keeps observed_at monotonic when a newer edit arrives with an older observation', async () => {
+    const conversationId = (await query('SELECT conversation_id FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0].conversation_id;
+    try {
+      await withTransaction(async (client) => {
+        await upsertMirroredMessage(client, conversationId,
+          normalizeMessageRow(messageFixture(), '2026-09-10T00:00:00Z'));
+        const edited = { ...messageFixture({ text: 'Edited example' }), editedTimestamp: '2026-09-11T00:00:00Z' };
+        await upsertMirroredMessage(client, conversationId, normalizeMessageRow(edited, '2026-09-05T00:00:00Z'));
+      });
+      const row = (await query('SELECT body, observed_at FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0];
+      expect(row.body).toBe('Edited example');
+      expect(row.observed_at.toISOString()).toBe('2026-09-10T00:00:00.000Z');
+    } finally {
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+    }
+  });
+
+  it('stamps a swept tombstone at chat-fetch time, not at sweep start', async () => {
+    installFetch({
+      chats: { items: [chatFixture('2026-10-01T10:00:00.000Z')], hasMore: false },
+      messages: { items: [messageFixture({ isDeleted: true })], hasMore: false, newestCursor: 'cursor-fetch-time' },
+    });
+    const baseFetch = globalThis.fetch;
+    // Models a slow multi-account sweep: the chat is reached well after the
+    // sweep began, so a sweep-start stamp would predate the fetch.
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const { pathname } = new URL(url);
+      // Keep the stored-row reconcile out of this case: only the chat sweep may write the tombstone.
+      if (/\/messages\//.test(pathname)) return { ok: false, status: 404, text: async () => '{}' };
+      if (pathname === '/v1/accounts') await new Promise((resolve) => setTimeout(resolve, 60));
+      return baseFetch(url);
+    }));
+    const sweepStart = Date.now();
+    try {
+      await runBeeperSweep({ reason: 'db-test' });
+      const row = (await query('SELECT unsent_at FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0];
+      expect(row.unsent_at.getTime() - sweepStart).toBeGreaterThanOrEqual(50);
+    } finally {
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+    }
+  });
+
   it('keeps the body and stamps unsent_at when the source unsends the message', async () => {
     installFetch({
       chats: { items: [chatFixture('2026-09-03T10:00:00.000Z')], hasMore: false },
