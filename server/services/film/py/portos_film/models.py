@@ -47,13 +47,15 @@ def _world_bounds(objects):
     return (low, high) if found else None
 
 
-def load(ctx, slug, height=None):
+def load(ctx, slug, height=None, settle=None):
     """Import src/models/<slug>.glb under one empty and return `(root, actions)`.
 
     `height` (meters) scales the model uniformly so its bounding box is that
     tall; the model then sits on z = 0. Without it the file keeps its own size
     and is only grounded. `actions` maps each animation the file carried to its
-    Blender action. Raises RuntimeError when the model is not in src/models/.
+    Blender action. Blender's importer leaves the first one playing on the
+    scene's timeline; `settle()`, called before the model is measured, can stop
+    it and set the pose to stand on z = 0 in. Raises RuntimeError when the model is not in src/models/.
     """
     if not isinstance(slug, str) or not _SLUG.match(slug):
         raise RuntimeError("models.load: %r is not a model slug (letters, digits, - and _)" % (slug,))
@@ -76,6 +78,8 @@ def load(ctx, slug, height=None):
     for obj in imported:
         if obj.parent is None or obj.parent not in imported:
             obj.parent = root
+    if settle is not None:
+        settle()
     bpy.context.view_layer.update()
 
     bounds = _world_bounds(imported)

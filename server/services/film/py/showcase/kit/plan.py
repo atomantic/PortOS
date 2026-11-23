@@ -97,6 +97,11 @@ def controls_of(data):
     return [control for control in data.get("controls") or [] if isinstance(control, dict) and control.get("id")]
 
 
+def default_of(control):
+    """The control's 0-1 value in the model's rest pose."""
+    return float(control.get("default01", 0.0))
+
+
 def actions_of(data):
     return [action for action in data.get("actions") or [] if isinstance(action, dict) and action.get("id") and float(action.get("seconds") or 0) > 0]
 
@@ -253,7 +258,7 @@ def controls_pose(data, options, shot, t, aspect):
 
     Returns `{controls: {id: 0..1}, action: None | {id, seconds}, camera}`; a control not being shown holds its default.
     """
-    controls = {control["id"]: float(control.get("default01", 0.0)) for control in controls_of(data)}
+    controls = {control["id"]: default_of(control) for control in controls_of(data)}
     naturals = segments(data)
     total = sum(seconds for _, _, seconds in naturals) or 1.0
     now = progress(shot, t) * total
