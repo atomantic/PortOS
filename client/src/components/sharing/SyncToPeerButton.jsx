@@ -23,6 +23,8 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { KIND_TO_CATEGORY } from '../../../../server/lib/instanceSyncCategories.js';
+import { SYNC_CATEGORY_META } from '../instances/syncCategoryMeta.js';
 import { createPortal } from 'react-dom';
 import { Cloud, Circle, CheckCircle2, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -92,12 +94,11 @@ export default function SyncToPeerButton({
   // UI would let the user subscribe to a peer that silently rejects every
   // push (with peer-disabled, peer-disallows-outbound, or
   // category-disabled), leaving the row checked but no records ever landing.
+  const requiredCategory = KIND_TO_CATEGORY[recordKind] || recordKind;
   const categoryMeta = {
-    universe: { key: 'universe', label: 'Universe' },
-    series: { key: 'pipeline', label: 'Pipeline' },
-    fableLoom: { key: 'fableLoom', label: 'FableLoom' },
-  }[recordKind] || { key: recordKind, label: recordKind };
-  const requiredCategory = categoryMeta.key;
+    key: requiredCategory,
+    label: SYNC_CATEGORY_META.find((c) => c.key === requiredCategory)?.label || recordKind,
+  };
   const peerCanReceiveOutbound = (peer) => {
     if (!peer) return false;
     // Global sync flag off → server's pushRecordToPeer refuses.

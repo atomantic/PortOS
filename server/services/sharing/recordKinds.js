@@ -1,8 +1,8 @@
 /**
  * Federated peer-sync — per-kind record descriptor table.
  *
- * The 17 subscribable record kinds (`PEER_SUBSCRIBABLE_KINDS`,
- * `peerSyncShared.js`) each need the same four facts — how to load one by
+ * The subscribable record kinds (`PEER_SUBSCRIBABLE_KINDS`,
+ * `instanceSyncCategories.js`) each need the same four facts — how to load one by
  * id, how to merge an incoming batch, how to build its asset manifest, and
  * whether the kind has a local-only "ephemeral" opt-out flag. Before #6843
  * those facts were spelled out as six parallel `kind === '…'` ladders across

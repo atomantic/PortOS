@@ -88,7 +88,8 @@ import { listCommissionsForIntegrity } from '../creativeCommissions/store.js';
 import { listDecksForIntegrity } from '../decks.js';
 import { listStoryboardsForIntegrity } from '../storyboards/sync.js';
 import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
-import { buildLocalManifest, getPeerIntegrity } from './integrity.js';
+import { buildLocalManifest, getPeerIntegrity, INTEGRITY_RECORD_LISTERS } from './integrity.js';
+import { PEER_SUBSCRIBABLE_KINDS } from '../../lib/instanceSyncCategories.js';
 import { INTEGRITY_STATUS } from '../../lib/syncIntegrity.js';
 
 const makeCollection = (overrides = {}) => ({
@@ -562,5 +563,15 @@ describe('getPeerIntegrity', () => {
       available: true,
       records: [{ id: 'col-1', status: 'diverged', assessment: 'unknown', reason: 'timestamp-tie' }],
     });
+  });
+});
+
+describe('INTEGRITY_RECORD_LISTERS', () => {
+  it('has a lister for every subscribable kind and no extras', () => {
+    expect(Object.keys(INTEGRITY_RECORD_LISTERS).sort()).toEqual([...PEER_SUBSCRIBABLE_KINDS].sort());
+  });
+
+  it('does not resolve prototype members as kinds', () => {
+    expect(INTEGRITY_RECORD_LISTERS.constructor).toBeUndefined();
   });
 });
