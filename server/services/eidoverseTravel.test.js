@@ -21,6 +21,15 @@ let destination;
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
+  // Stand-in for authGate: x-test-auth selects the verified context; peerFetch
+  // (which has no pair secret in this harness) defaults to the origin peer.
+  app.use((req, _res, next) => {
+    const mode = req.get('x-test-auth') ?? 'peer:origin-peer';
+    if (mode.startsWith('peer:')) req.portosAuthContext = { enabled: false, authenticated: true, method: 'peer', peerId: mode.slice(5) };
+    else if (mode === 'basic') req.portosAuthContext = { enabled: true, authenticated: true, method: 'basic' };
+    else if (mode === 'session') req.portosAuthContext = { enabled: true, authenticated: true, method: 'session' };
+    next();
+  });
   app.use('/api/eidoverse/travel', router);
   app.use(errorMiddleware);
   server = app.listen(0, '127.0.0.1');
@@ -55,8 +64,8 @@ beforeEach(() => {
     return { identity, ...(agent ? { connection } : {}) };
   });
 });
-const post = (path, body, instanceId = 'origin-instance') => fetch(`${base}/federation${path}`, {
-  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PortOS-Instance-Id': instanceId }, body: JSON.stringify(body),
+const post = (path, body, instanceId = 'origin-instance', auth) => fetch(`${base}/federation${path}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PortOS-Instance-Id': instanceId, ...(auth ? { 'x-test-auth': auth } : {}) }, body: JSON.stringify(body),
 });
 
 describe('registered-peer Eidoverse guest workflow over HTTP', () => {
@@ -118,7 +127,7 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     expect((await post('/visit', { name: 'bad\nname' })).status).toBe(400);
     await expect(getEidoverseGuestDescriptor(admission.sessionId)).rejects.toMatchObject({ status: 404 });
     await expect(receiveEidoverseChat('destination-instance', { sessionId: admission.sessionId, text: 'Wrong peer' })).rejects.toMatchObject({ status: 404 });
-    expect((await post('/visit', { agent: true }, 'unregistered-instance')).status).toBe(403);
+    expect((await post('/visit', { agent: true }, 'origin-instance', 'peer:unregistered-peer')).status).toBe(403);
     expect((await post('/chat', { sessionId: admission.sessionId, text: 'x'.repeat(2001) })).status).toBe(400);
     await receiveEidoverseLeave('origin-instance', { sessionId: admission.sessionId });
     await receiveEidoverseLeave('origin-instance', { sessionId: ticket });
@@ -167,5 +176,41 @@ describe('registered-peer Eidoverse guest workflow over HTTP', () => {
     expect(await (await fetch(`${base}/federation/capabilities`)).json()).toEqual({ version: 1, available: false });
     expect((await post('/visit', { agent: true })).status).toBe(409);
     mocks.feature = true;
+  });
+
+  describe('verified peer authentication on federation writes', () => {
+    const paths = [['/visit', { agent: true }], ['/chat', { sessionId: 'x'.repeat(48) }], ['/leave', { sessionId: 'x'.repeat(48) }]];
+    it.each(['none', 'session'])('refuses a spoofed instance id without peer credentials (%s)', async (auth) => {
+      for (const [path, body] of paths) {
+        const response = await post(path, body, 'origin-instance', auth);
+        expect(response.status).toBe(403);
+        expect((await response.json()).code).toBe('EIDOVERSE_TRAVEL_PEER_AUTH_REQUIRED');
+      }
+      expect(mocks.admission).not.toHaveBeenCalled();
+    });
+
+    it('resolves the peer from the verified peer id, never from the header', async () => {
+      mocks.peers.push({ id: 'other-peer', instanceId: 'other-instance', enabled: true });
+      const admission = await (await post('/visit', { agent: true }, 'other-instance', 'peer:origin-peer')).json();
+      // The session is bound to origin-peer, so other-peer cannot drive it by header or credential.
+      expect((await post('/chat', { sessionId: admission.sessionId }, 'origin-instance', 'peer:other-peer')).status).toBe(404);
+      expect((await post('/leave', { sessionId: admission.sessionId }, 'origin-instance', 'peer:other-peer')).status).toBe(404);
+      expect((await post('/leave', { sessionId: admission.sessionId }, 'other-instance', 'peer:origin-peer')).status).toBe(200);
+    });
+
+    it('refuses a peer credential for a removed or disabled peer', async () => {
+      expect((await post('/visit', { agent: true }, 'origin-instance', 'peer:missing-peer')).status).toBe(403);
+      mocks.peers.find((peer) => peer.id === 'origin-peer').enabled = false;
+      expect((await post('/visit', { agent: true }, 'origin-instance', 'peer:origin-peer')).status).toBe(403);
+    });
+
+    it('lets legacy Basic act only as an unpaired registered peer', async () => {
+      expect((await post('/visit', { agent: true }, 'origin-instance', 'basic')).status).toBe(200);
+      expect((await post('/visit', { agent: true }, 'unregistered-instance', 'basic')).status).toBe(403);
+      mocks.peers.find((peer) => peer.id === 'origin-peer').syncSecret = 's'.repeat(32);
+      const response = await post('/visit', { agent: true }, 'origin-instance', 'basic');
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('EIDOVERSE_TRAVEL_PEER_AUTH_REQUIRED');
+    });
   });
 });
