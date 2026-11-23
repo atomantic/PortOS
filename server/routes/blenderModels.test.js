@@ -23,6 +23,8 @@ vi.mock('../services/codeAnimation/execution.js', () => ({
   resolveBlenderTool: (...args) => blender.fake.resolveBlenderTool(...args),
 }));
 vi.mock('../lib/launchDetached.js', () => ({ launchDetached: vi.fn(async () => {}) }));
+// Tiling needs ffmpeg; the sheets are optional.
+vi.mock('../services/film/encode.js', () => ({ encodeBlenderSheet: vi.fn(async ({ output }) => { const { writeFileSync: write } = await import('node:fs'); write(output, 'sheet'); }) }));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: vi.fn((work) => work()) }));
 vi.mock('../services/blenderModels/store.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -275,5 +277,139 @@ describe('Blender Models: workspace, build, report, publish', () => {
     expect(existsSync(join(workspace(id), 'renders'))).toBe(false);
     expect(existsSync(join(workspace(id), 'src', 'model.py'))).toBe(true);
     expect((await request(app).get(api(id))).status).toBe(404);
+  });
+});
+
+describe('Blender Models: comparing builds with references', () => {
+  const state = async (id) => (await request(app).get(api(id))).body;
+  const camera = { label: 'Shade', referenceId: 'overall', crop: { x: 0, y: 0, width: 0.5, height: 0.5 }, orbit: { azimuth: 40, elevation: 20, distance: 0.6, lens: 85, partId: 'shade' } };
+  const idle = (id) => vi.waitFor(async () => expect((await state(id)).jobs.some((job) => /queued|running/.test(job.status))).toBe(false), WAIT);
+
+  it('renders every view after a build, marks it out of date by a newer one, and frames both alike', async () => {
+    const id = await newModel();
+    const { buildId: first } = await build(id);
+    blender.fake.control.edit = (events) => events.map((event) => (event.event === 'scene' ? { ...event, max: [0.1, 0.1, 0.51] } : event));
+    const { buildId: second } = await build(id);
+    const [a, b] = blender.fake.control.reviews;
+    // Different bounds, one declared size: the same cameras.
+    expect(b.views).toEqual(a.views);
+    expect(a.blend).toBe(join(workspace(id), 'builds', first, 'model.blend'));
+    expect((await state(id)).reviews).toMatchObject([
+      { buildId: second, outOfDate: false, sheets: ['sheet-textured.jpg', 'sheet-clay.jpg'] }, { buildId: first, outOfDate: true },
+    ]);
+    const image = await request(app).get(api(id, `/builds/${second}/review/three-quarter-clay.png`));
+    expect([image.status, image.headers['content-type']]).toEqual([200, 'image/png']);
+    expect((await request(app).get(api(id, `/builds/${second}/review/..%2Fmodel.blend`))).status).toBe(404);
+    expect((await request(app).get(api(id, '/builds/not-a-build/review/front-clay.png'))).status).toBe(404);
+    // Nothing is written into the build's own folder.
+    expect(readdirSync(join(workspace(id), 'builds', second)).sort()).toEqual(['build.log', 'model.blend', 'model.glb', 'report.json']);
+  });
+
+  it('keeps the build when its review fails, and renders again on request without losing the last set', async () => {
+    const id = await newModel();
+    const { buildId } = await build(id);
+    let release;
+    blender.fake.control.reviewHold = new Promise((resolve) => { release = resolve; });
+    expect((await request(app).post(api(id, `/builds/${buildId}/review`)).send({})).status).toBe(202);
+    const again = await request(app).post(api(id, `/builds/${buildId}/review`)).send({});
+    expect([again.status, again.body.code]).toEqual([409, 'BLENDER_MODEL_REVIEW_RUNNING']);
+    // A running review keeps the system busy, and stops neither the record nor a build.
+    expect(listActiveRenders().map((render) => render.kind)).toContain('blender-model');
+    expect((await state(id)).status).toBe('draft');
+    expect((await request(app).post(api(id, `/builds/${buildId}/review/cancel`)).send({})).body).toEqual({ ok: true });
+    await idle(id);
+    release();
+    blender.fake.control.reviewHold = null;
+    expect((await state(id)).jobs.at(-1)).toMatchObject({ kind: 'review', status: 'canceled' });
+    expect((await state(id)).reviews).toHaveLength(1);
+    expect(readdirSync(join(workspace(id), 'renders', 'reviews')).sort()).toEqual([buildId, `${buildId}.log`]);
+
+    // A build without a declared size completes and is simply not rendered.
+    blender.fake.control.edit = (events) => events.map((event) => (event.event === 'described' ? { ...event, sizeMeters: null } : event));
+    const { buildId: unsized, record } = await build(id);
+    expect(record.status).toBe('complete');
+    const refused = await request(app).post(api(id, `/builds/${unsized}/review`)).send({});
+    expect([refused.status, refused.body.code]).toEqual([409, 'BLENDER_MODEL_REVIEW_NOT_READY']);
+    blender.fake.control.executionMode = 'contained';
+    expect((await request(app).post(api(id, `/builds/${buildId}/review`)).send({})).body.code).toBe('MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL');
+  });
+
+  it('cancels a running review when the model is deleted, and prunes reviews with their builds', async () => {
+    const id = await newModel();
+    const { buildId: first } = await build(id);
+    for (let index = 0; index < 5; index += 1) await build(id);
+    expect(readdirSync(join(workspace(id), 'renders', 'reviews')).some((name) => name.startsWith(first))).toBe(false);
+    blender.fake.control.reviewHold = new Promise(() => {});
+    const newest = blender.rows.get(id).builds.at(-1).id;
+    expect((await request(app).post(api(id, `/builds/${newest}/review`)).send({})).status).toBe(202);
+    expect((await request(app).delete(api(id))).body).toEqual({ ok: true });
+    expect(existsSync(join(workspace(id), 'renders'))).toBe(false);
+    expect(listActiveRenders().map((render) => render.kind)).not.toContain('blender-model');
+  });
+
+  it('aims a saved orbit at its part once, and says when its render is older than the camera', async () => {
+    const id = await newModel();
+    expect((await request(app).post(api(id, '/cameras')).send(camera)).body.code).toBe('BLENDER_MODEL_PART_NOT_MEASURED');
+    await build(id);
+    const added = await request(app).post(api(id, '/cameras')).send(camera);
+    expect(added.status).toBe(201);
+    const [saved] = added.body.cameras;
+    expect(saved).toMatchObject({ label: 'Shade', view: null, orbit: { partId: 'shade', target: [0, 0, 0.45] } });
+    expect(added.body.reviews[0].outdatedCameraIds).toEqual([saved.id]);
+
+    // The shade moves; the saved camera's frame does not.
+    blender.fake.control.edit = (events) => events.map((event) => (event.name === 'shade' ? { ...event, max: [0.11, 0.11, 0.9] } : event));
+    const { buildId } = await build(id);
+    expect((await state(id)).cameras[0].orbit.target).toEqual([0, 0, 0.45]);
+    expect((await state(id)).reviews[0]).toMatchObject({ buildId, outdatedCameraIds: [], views: expect.arrayContaining(['front', saved.id]) });
+
+    const moved = await request(app).patch(api(id, `/cameras/${saved.id}`)).send({ orbit: { ...saved.orbit, azimuth: 60 } });
+    expect(moved.body.reviews[0].outdatedCameraIds).toEqual([saved.id]);
+    // On a fixed view it shows that view's render, which is current.
+    const fixed = await request(app).patch(api(id, `/cameras/${saved.id}`)).send({ view: 'front' });
+    expect(fixed.body.cameras[0]).toMatchObject({ view: 'front', orbit: null, crop: camera.crop });
+    expect(fixed.body.reviews[0].outdatedCameraIds).toEqual([]);
+
+    for (const bad of [{ ...camera, view: 'front' }, { ...camera, orbit: undefined }, { ...camera, crop: { x: 0.8, y: 0, width: 0.5, height: 1 } }]) {
+      expect((await request(app).post(api(id, '/cameras')).send(bad)).status).toBe(400);
+    }
+    expect((await request(app).post(api(id, '/cameras')).send({ ...camera, referenceId: 'closeup-none' })).status).toBe(404);
+    expect((await request(app).delete(api(id, `/cameras/${saved.id}`))).body.cameras).toEqual([]);
+    expect((await request(app).delete(api(id, `/cameras/${saved.id}`))).status).toBe(404);
+  });
+
+  it('keeps differences across rebuilds and records the build each was closed on', async () => {
+    const id = await newModel();
+    const opened = await request(app).post(api(id, '/differences')).send({ text: 'No bolts on the base', partId: 'base', referenceId: 'overall' });
+    const [{ id: differenceId }] = opened.body.differences;
+    const patch = (body) => request(app).patch(api(id, `/differences/${differenceId}`)).send(body);
+    expect((await patch({ status: 'fixed' })).body.code).toBe('BLENDER_MODEL_NO_BUILD');
+    const { buildId: first } = await build(id);
+    const { buildId: second } = await build(id);
+    expect((await state(id)).differences).toMatchObject([{ id: differenceId, status: 'open', closedBuildId: null }]);
+    expect((await patch({ status: 'fixed' })).body.differences).toMatchObject([{ status: 'fixed', closedBuildId: second, closedAt: expect.any(String) }]);
+    expect((await patch({ status: 'open' })).body.differences).toMatchObject([{ status: 'open', closedBuildId: null, closedAt: null }]);
+    expect((await patch({ status: 'accepted' })).status).toBe(400);
+    expect((await patch({ status: 'accepted', reason: 'Glued', buildId: first })).body.differences).toMatchObject([{ status: 'accepted', reason: 'Glued', closedBuildId: first }]);
+    expect((await patch({ text: 'No base bolts' })).body.differences).toMatchObject([{ text: 'No base bolts', status: 'accepted', closedBuildId: first }]);
+    expect((await patch({ status: 'open', buildId: 'build-20200101T000000Z-0000abcd' })).body.differences[0].reason).toBe('');
+    expect((await patch({ status: 'fixed', buildId: 'build-20200101T000000Z-0000abcd' })).status).toBe(404);
+    expect((await request(app).delete(api(id, `/differences/${differenceId}`))).body.differences).toEqual([]);
+  });
+
+  it('drops a removed plate\'s cameras and unlinks its differences', async () => {
+    const id = await newModel();
+    const plate = (await request(app).post(api(id, '/references')).send({ mechanism: 'Hinge' })).body.references.at(-1).id;
+    expect((await request(app).post(api(id, '/cameras')).send({ label: 'Hinge', referenceId: plate, view: 'left' })).status).toBe(201);
+    await request(app).post(api(id, '/differences')).send({ text: 'No pin', referenceId: plate });
+    const { body } = await request(app).delete(api(id, `/references/${plate}`));
+    expect(body).toMatchObject({ cameras: [], differences: [{ text: 'No pin', referenceId: null }] });
+  });
+
+  it('warns when the model stands outside what its review views frame', async () => {
+    const id = await newModel();
+    blender.fake.control.edit = (events) => events.map((event) => (event.event === 'scene' ? { ...event, min: [-0.11, -0.11, -0.26], max: [0.11, 0.11, 0.26] } : event));
+    const { buildId } = await build(id);
+    expect((await report(id, buildId)).findings).toContainEqual(expect.objectContaining({ code: 'review-out-of-frame', severity: 'warning', subjects: ['z'] }));
   });
 });

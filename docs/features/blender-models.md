@@ -4,7 +4,7 @@ A **Blender model** is a reusable 3D asset made from Python you (or a coding age
 in Blender, measures what it built, exports a GLB, imports that GLB back into an empty scene and measures it again.
 Every build is kept with a report; you publish the build you want, and its GLB is what other parts of PortOS use.
 
-This page covers the engine (issue #17874) and its page (issue #17875), part of the Blender Models epic #17869.
+This page covers the engine (issue #17874), its page (issue #17875), references (issue #17876) and comparison (issue #17877), part of the Blender Models epic #17869.
 Joints and texture baking arrive in later phases.
 
 ## On the 3D page
@@ -17,6 +17,7 @@ Code Animation › Blender execution. A model opens at `/3d/blender/:id/:tab?`:
   by severity, and the part list. Choosing a part (`?part=`) shows it alone in the viewer. Build, Publish, Copy agent
   brief, Open in Blender and the GLB / .blend downloads are here.
 - **References**: sheets and the parts brief made before modeling (below).
+- **Compare**: a build beside its references, with the differences still open (below).
 - **Files**: the `src/` editor films use. Unsaved edits hold builds back until saved or discarded.
 - **Builds**: running and recent jobs with their logs, then every kept build with its log, review and Publish.
 - **Settings**: Blender readiness, the workspace path, the name and description, and Delete.
@@ -39,6 +40,26 @@ Your words are sent exactly as typed; everything PortOS adds is a labeled chip, 
 the code that sends it. More reference images than the renderer takes is refused, never cut. An image queues only when
 you press Render, and it attaches even if PortOS restarts meanwhile. Approved images are copied into `src/refs/`, so
 approving one counts as a source change, and the agent brief lists them.
+
+## Compare
+
+After each completed build PortOS opens its saved `model.blend` and renders six orthographic directions and a
+three-quarter view, each **textured** and **clay**, under flat light and at one scale. A failed or canceled review
+never changes the build; **Render again** repeats it. The **Compare** tab (issue #17877) shows:
+
+- **Reference beside render**, from the chosen camera (`?cam=`), textured or clay (`?look=`), against a reference
+  (`?ref=`), and a second build (`?vs=`) from the same camera.
+- **Cameras**: one per panel of a reference. A camera is a fixed direction, or an orbit (azimuth, elevation, distance,
+  lens, the part it aims at) for close-ups, plus the panel of the reference it matches. An aim point is fixed when
+  the camera is saved, so a part that moves does not move the frame.
+- **Staleness**: renders belong to one build and say when a newer one exists, or when the camera changed since.
+- **Differences**: `{ text, partId?, referenceId?, status }`, written by you or an agent. Closing one records the
+  build it was judged on. `accepted` is a deliberate departure and takes a reason. Open ones go into the agent
+  brief as the second pass. They belong to the model, so they survive rebuilds.
+
+Cameras frame the **declared** box (`describe().sizeMeters`), standing on Z = 0 and centered on X = Y = 0, never the
+mesh, so two builds of one declared size frame identically. A model built outside that frame gets the
+`review-out-of-frame` warning. A reference has no measured scale, so there is no similarity score.
 
 ## Trust and requirements
 
@@ -64,7 +85,8 @@ data/blender-models/<id>/
     model.glb            the export
     report.json          checks and findings
     build.log            everything Blender and the script printed
-  renders/             regenerable previews — excluded from backups
+  renders/             regenerable — excluded from backups
+    reviews/<buildId>/   <view>-textured.png, <view>-clay.png, sheet-textured.jpg, sheet-clay.jpg, review.json
 ```
 
 `src/` follows the same file rules as a film workspace: text sources (`.py`, `.js`, `.mjs`, `.json`, `.txt`, `.md`)
@@ -90,7 +112,7 @@ def build(ctx) -> None:
     ...  # one mesh object per declared part, named by its id
 ```
 
-- Build in **meters**, **Z up**, with the model's **front facing -Y**.
+- Build in **meters**, **Z up**, with the model's **front facing -Y**, standing on Z = 0 and centered on X = Y = 0.
 - A part id is 1–64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. `parent` names another part;
   set the Blender object's parent to match.
 - `ctx` carries `workspace`, `src`, `out_dir` (this build's folder), `quality` (`draft` or `full`) and `log(message)`.
@@ -108,7 +130,7 @@ error is kept and marked, and only a build without errors can be published.
 |---|---|
 | describe() shape | `describe-missing`, `describe-size-invalid`, `describe-budget-invalid`, `parts-none`, `part-id-invalid`, `part-duplicate`, `part-parent-unknown` (errors); `controls-invalid`, `parts-truncated` (warnings) |
 | Parts vs meshes | `part-missing`, `meshes-none` (errors); `mesh-undeclared`, `part-parent-mismatch`, `meshes-truncated` (warnings) |
-| Size, per axis against `sizeMeters` | `bounds-oversized`, `bounds-undersized` (over 10%, errors); `bounds-drift` (2–10%, warning) |
+| Size, per axis against `sizeMeters` | `bounds-oversized`, `bounds-undersized` (over 10%, errors); `bounds-drift` (2–10%), `review-out-of-frame` (warnings) |
 | Triangles (modifiers applied) against `triangleBudget` | `triangles-over-budget` (error) |
 | Transforms | `scale-negative` (error); `scale-unapplied` (warning) |
 | Materials and images | `materials` (note with both counts) |
@@ -146,6 +168,10 @@ action counts and bounds.
 | `POST /api/blender-models/:id/builds/:buildId/cancel` | Cancel a running build |
 | `GET /api/blender-models/:id/builds/:buildId/files/:name` | `model.glb`, `model.blend`, `report.json` or `build.log` |
 | `POST /api/blender-models/:id/builds/:buildId/open` | Open the build's `.blend` in Blender (embedded scripts stay off) |
+| `POST /api/blender-models/:id/builds/:buildId/review`, `…/review/cancel` | Render a completed build's review again (202, `{ job }`), or cancel it |
+| `GET /api/blender-models/:id/builds/:buildId/review/:name` | `<view>-<look>.png`, `sheet-<look>.jpg`, `review.json` or `review.log` |
+| `POST …/:id/cameras` `{ label, referenceId, crop?, view \| orbit }`, `PATCH` / `DELETE …/cameras/:cameraId` | Compare cameras; `crop` is 0–1 fractions, `orbit` is `{ azimuth, elevation, distance, lens, partId? }` |
+| `POST …/:id/differences` `{ text, partId?, referenceId? }`, `PATCH` / `DELETE …/differences/:differenceId` | Differences; `PATCH` takes `status` (`open`, `fixed`, `accepted`), `reason` and `buildId` |
 | `POST /api/blender-models/:id/publish` `{ buildId }` | Publish a completed build without errors |
 | `PATCH /api/blender-models/:id/reference-source` `{ ingredientId?, images?, size?, imageMode?, imageModelId? }` | What the reference images start from |
 | `POST /api/blender-models/:id/references` `{ mechanism }`, `DELETE …/references/:refId` | Add or remove a close-up plate (the overall sheet is `overall`) |
@@ -167,5 +193,7 @@ start and finish); the client re-reads the model. Nothing polls.
   publish, asset, open).
 - `references.js` holds the reference slots and review, `referenceImageHook.js` attaches finished renders, and
   `server/services/catalog/modelSheetPrompts.js` builds the prompts.
+- `review.js` renders a build's review and reads its manifest, `reviewCameras.js` derives every camera (pure),
+  `compare.js` holds cameras and differences, and `jobs.js` is the job list builds and reviews share.
 - `server/services/blenderWorkspace/` is shared with films: path containment, the `src/` tree, source hashing, the
   Trusted local gate and driver launch, the in-memory job registry and the per-job log.

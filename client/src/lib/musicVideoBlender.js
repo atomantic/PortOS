@@ -152,7 +152,7 @@ export function sortBlenderJobs(jobs) {
   }).map(({ job }) => job);
 }
 
-const JOB_KIND_LABELS = { sync: 'Sync shots', render: 'Render', cut: 'Assemble cut', build: 'Build' };
+const JOB_KIND_LABELS = { sync: 'Sync shots', render: 'Render', cut: 'Assemble cut', build: 'Build', review: 'Review renders' };
 const QUALITY_LABELS = { still: 'still', draft: 'draft', full: 'full', preview: 'preview', final: 'final' };
 
 /** "Render preview · s010", "Sync shots", "Assemble cut · final", "Build draft". */

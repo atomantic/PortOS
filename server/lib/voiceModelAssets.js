@@ -1,12 +1,14 @@
-// Completion contract for downloaded voice model assets (Whisper `.bin`, Piper `.onnx` +
-// `.onnx.json`).
+// Completion contract, pinned HuggingFace commits, and SHA-256 catalog for voice model assets
+// (Whisper `.bin`, CoreML `.mlmodelc.zip`, Piper `.onnx` + `.onnx.json`, and release archives).
 //
 // `inspectVoiceAsset(kind, path)` is the read-only readiness check (`verified` / `unverified` /
 // `incomplete` / `missing` — stat plus one small JSON read, no hashing or network);
 // `verifyVoiceAssetHashes` and `writeVoiceAssetReceipt` are the script-side halves that re-hash and
 // record the `.portos-complete.json` receipt after promotion. `isManagedVoiceAsset` separates
-// setup-script-owned files from user-supplied ones. Shared by `voice/bootstrap.js`, `voice/health.js`
-// and `scripts/voice-asset.js`.
+// setup-script-owned files from user-supplied ones. `whisperModelUrl`, `piperVoiceBaseUrl`, and
+// `verifyVoiceModelSha256` pin immutable 40-char HuggingFace commits and verify curated catalog
+// digests before promotion. Shared by `voice/bootstrap.js`, `voice/health.js`,
+// `musicVideo/lyricTranscriber.js`, and `scripts/voice-asset.js`.
 //
 // Completion contract for downloaded voice model assets (Whisper .bin, Piper
 // .onnx + .onnx.json pair). The setup scripts download into temp siblings,
@@ -200,4 +202,81 @@ export const verifyVoiceArchiveSha256 = async (archiveName, filePath, table = PI
   if (!expected) throw new Error(`no pinned sha256 for archive ${archiveName}`);
   const actual = await sha256File(filePath);
   if (actual !== expected) throw new Error(`sha256 mismatch for ${archiveName}: expected ${expected}, got ${actual}`);
+};
+
+// Pinned immutable HuggingFace commits for Whisper models/CoreML encoders and Piper voices.
+// Replacing mutable `/resolve/main/` prevents silent upstream weight or archive swaps across
+// installs while still allowing custom user-named models to fetch from the pinned commit.
+export const WHISPER_HF_REPO = 'ggerganov/whisper.cpp';
+export const WHISPER_HF_COMMIT = '5359861c739e955e79d9a303bcbc70fb988958b1';
+export const PIPER_VOICES_HF_REPO = 'rhasspy/piper-voices';
+export const PIPER_VOICES_HF_COMMIT = 'e5349433ed883a32f893a434dc43a6c66b95ef7c';
+
+const isSafeSegment = (value) => typeof value === 'string' && value.length > 0 && !value.includes('/') && !value.includes('\\') && !value.includes('..');
+
+export const whisperModelUrl = (fileName) => {
+  if (!isSafeSegment(fileName)) throw new Error(`invalid Whisper model filename: ${fileName ?? ''}`);
+  return `https://huggingface.co/${WHISPER_HF_REPO}/resolve/${WHISPER_HF_COMMIT}/${fileName}`;
+};
+
+// Voice names encode path: en_US-ryan-high → en/en_US/ryan/high
+export const piperVoiceBaseUrl = (voiceName) => {
+  if (!isSafeSegment(voiceName)) throw new Error(`invalid Piper voice name: ${voiceName ?? ''}`);
+  const firstDash = voiceName.indexOf('-');
+  const lastDash = voiceName.lastIndexOf('-');
+  if (firstDash <= 0 || lastDash <= firstDash + 1 || lastDash >= voiceName.length - 1) {
+    throw new Error(`invalid Piper voice name: ${voiceName}`);
+  }
+  const locale = voiceName.slice(0, firstDash);
+  const lang = locale.split('_')[0];
+  const speaker = voiceName.slice(firstDash + 1, lastDash);
+  const quality = voiceName.slice(lastDash + 1);
+  if (!lang || !speaker || !quality) throw new Error(`invalid Piper voice name: ${voiceName}`);
+  return `https://huggingface.co/${PIPER_VOICES_HF_REPO}/resolve/${PIPER_VOICES_HF_COMMIT}/${lang}/${locale}/${speaker}/${quality}`;
+};
+
+// Pinned SHA-256 digests (LFS OIDs) for curated catalog assets at the commits pinned above:
+// all Whisper models offered by Voice settings + lyric alignment, their matching CoreML encoder
+// zips, and every curated Piper voice in `server/services/voice/piper-voices.js`.
+// Bump digests together with `WHISPER_HF_COMMIT` / `PIPER_VOICES_HF_COMMIT`.
+export const VOICE_MODEL_SHA256 = Object.freeze({
+  // Whisper GGUF models (ggerganov/whisper.cpp @ WHISPER_HF_COMMIT)
+  'ggml-tiny.en.bin': '921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f',
+  'ggml-base.en.bin': 'a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002',
+  'ggml-small.en.bin': 'c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d',
+  'ggml-medium.en.bin': 'cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356',
+  'ggml-large-v3.bin': '64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2',
+  'ggml-large-v3-turbo.bin': '1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69',
+  // CoreML encoder companions (ggerganov/whisper.cpp @ WHISPER_HF_COMMIT)
+  'ggml-tiny.en-encoder.mlmodelc.zip': '82b32eef73c94bb0c432a776a047b757d9525c26d84038a15d8798d7c8d1ee58',
+  'ggml-base.en-encoder.mlmodelc.zip': '8cf860309e2449e2bdc8be834cf838ab2565747ecc8c0ef914ef5975115e192b',
+  'ggml-small.en-encoder.mlmodelc.zip': 'b2ef1c506378b825b4b4341979a93e1656b5d6c129f17114cfb8fb78aabc2f89',
+  'ggml-medium.en-encoder.mlmodelc.zip': 'cdc44fee3c62b5743913e3147ed75f4e8ecfb52dd7a0f0f7387094b406ff0ee6',
+  'ggml-large-v3-encoder.mlmodelc.zip': '47837be7594a29429ec08620043390c4d6d467f8bd362df09e9390ace76a55a4',
+  'ggml-large-v3-turbo-encoder.mlmodelc.zip': '84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a',
+  // Curated Piper voices (rhasspy/piper-voices @ PIPER_VOICES_HF_COMMIT)
+  'en_GB-jenny_dioco-medium.onnx': '62ba183a504cfcd8816ec1b50ee856ed318ccc9dd22fd0bedd7d839c95dfa20e',
+  'en_GB-southern_english_female-low.onnx': 'f2f37aed1b3a093476f719d1379ba0c0b1b1cf6f1ef99288e2ebf502971a07c3',
+  'en_GB-cori-high.onnx': '470b4dd634c98f8a4850d7626ffc3dfc90774628eeef6605a6dd8f88f30a5903',
+  'en_GB-alba-medium.onnx': '1f9da809b6da1ef4190bb5dd6cce4f4af803274539e9cf9e0693085150bac3d7',
+  'en_GB-vctk-medium.onnx': 'fc3d92d266b1a6c03af2a38215e0eee430ca7fb360f641d7c3dcb17c7670c0f3',
+  'en_US-amy-medium.onnx': 'cf9ccdec59f05adee47173f6fb4d89e8b0c5f30c178748d2572fe4efd1d2724c',
+});
+
+export const pinnedVoiceModelSha256 = (assetName, table = VOICE_MODEL_SHA256) => (
+  Object.hasOwn(table, assetName) ? table[assetName] : null
+);
+
+/**
+ * Verifies `filePath` against the pinned catalog SHA-256 when `assetName` is in the curated
+ * catalog. Custom user-named models outside the catalog skip digest verification (they still
+ * fetch from the pinned commit). Throws on any catalog digest mismatch.
+ * `table` exists for tests; production callers use the frozen default.
+ */
+export const verifyVoiceModelSha256 = async (assetName, filePath, table = VOICE_MODEL_SHA256) => {
+  const expected = pinnedVoiceModelSha256(assetName, table);
+  if (!expected) return { verified: false, skipped: true };
+  const actual = await sha256File(filePath);
+  if (actual !== expected) throw new Error(`sha256 mismatch for ${assetName}: expected ${expected}, got ${actual}`);
+  return { verified: true, expected, actual };
 };
