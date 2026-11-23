@@ -277,3 +277,33 @@ describe('VoiceTab LLM / code-agent pickers', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+describe('VoiceTab personality traits input', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue({
+      ...structuredClone(config),
+      llm: { ...structuredClone(config.llm), usePersonality: true },
+    });
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+    getProviders.mockResolvedValue({ providers: [] });
+  });
+
+  it('keeps typed commas and spaces and saves the normalized trait list', async () => {
+    voiceApi.updateVoiceConfig.mockImplementation(async (c) => ({ config: c, reconciliation: {} }));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const input = await screen.findByLabelText(/Traits/);
+    let typed = '';
+    for (const ch of 'concise, warm, very direct') {
+      typed += ch;
+      fireEvent.change(input, { target: { value: typed } });
+      expect(input).toHaveValue(typed);
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(voiceApi.updateVoiceConfig).toHaveBeenCalled());
+    expect(voiceApi.updateVoiceConfig.mock.calls[0][0].llm.personality.traits)
+      .toEqual(['concise', 'warm', 'very direct']);
+  });
+});
