@@ -25,7 +25,7 @@ import { assertProductionApproval, nameShots, productionReviewBasis } from './pr
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -46,7 +46,7 @@ import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/mu
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { sweepCompositionScratch } from './compositionRender.js';
-import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
+import { applyFilmLookFinish, filmLookFinishNeeded, sweepFilmLookScratch } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
 import { coldOpenScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
@@ -767,6 +767,14 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
 // instance stamped is left alone — that render may still be running on the
 // peer this record synced from. A list failure propagates to the bootstrap
 // caller's logBootstrapFailure rather than reporting zero recovered.
+// Post-encode passes write `<partial>.look.mp4`, `.outro*.mp4`, `.hold.mp4`,
+// `.segments.txt`, ... beside the partial; an interrupted pass leaves them behind.
+async function sweepPartialSiblings(partial) {
+  const names = await readdir(PATHS.videos).catch(() => []);
+  await Promise.all(names.filter((name) => name.startsWith(`${partial}.`))
+    .map((name) => unlink(join(PATHS.videos, name)).catch(() => {})));
+}
+
 export async function recoverStuckMusicVideoRenders() {
   // No overlay capture survives a restart either; drop any scratch it left.
   await sweepCompositionScratch().catch((err) => {
@@ -779,6 +787,14 @@ export async function recoverStuckMusicVideoRenders() {
   // Nor the outro scene's staged page.
   await sweepStatsOutroScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale outro scratch: ${err.message}`);
+  });
+  // Nor a film-look finishing pass's staged source copy.
+  await sweepFilmLookScratch().catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove stale film-look scratch: ${err.message}`);
+  });
+  // Nor a cinema package build that never reached publication.
+  await import('./dcp.js').then(({ sweepAbandonedDcpBuilds }) => sweepAbandonedDcpBuilds()).catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove abandoned cinema package builds: ${err.message}`);
   });
   // Nor a shot segment an interrupted render was writing (finished ones stay cached).
   await import('./shotSegmentPaths.js').then(({ sweepPartialSegments }) => sweepPartialSegments()).catch((err) => {
@@ -821,7 +837,10 @@ export async function recoverStuckMusicVideoRenders() {
       return false;
     });
     const partialPath = !finished || finished.has(partial) ? null : safeUnder(PATHS.videos, partial);
-    if (partialPath) await unlink(partialPath).catch(() => {});
+    if (partialPath) {
+      await unlink(partialPath).catch(() => {});
+      await sweepPartialSiblings(partial);
+    }
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
   const blenderProjectIds = projects.filter((project) => project.composition?.mode === 'blender').map((project) => project.id);

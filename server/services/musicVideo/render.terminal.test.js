@@ -39,7 +39,8 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   spawn: h.spawn,
 }));
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
-vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
+vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}), readdir: vi.fn(async () => []), rm: vi.fn(async () => {}) }));
+vi.mock('./dcp.js', () => ({ sweepAbandonedDcpBuilds: vi.fn(async () => {}) }));
 vi.mock('../../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(async () => {}),
   PATHS: { videos: '/data/videos', videoThumbnails: '/data/thumbs', music: '/data/music', images: '/data/images', data: '/data' },
@@ -99,7 +100,9 @@ import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/history.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
-import { unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
+import { sweepFilmLookScratch } from './filmLookFinish.js';
+import { sweepAbandonedDcpBuilds } from './dcp.js';
 import { musicVideoEvents } from './events.js';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -380,6 +383,26 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(store.get('peer-1')).toMatchObject({ renderingOn: 'inst-peer', renderPartialFilename: 'music-video-peer.mp4' });
     expect(unlink.mock.calls).toEqual([['/data/videos/music-video-mine.mp4']]);
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 3/4'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('sweeps film-look scratch, DCP builds and the recovered partial\'s sibling temp files', async () => {
+    const { recoverStuckMusicVideoRenders } = await import('./render.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    loadHistory.mockResolvedValue([]);
+    readdir.mockImplementation(async (dir) => dir !== '/data/videos' ? [] : ['music-video-mine.mp4.look.mp4', 'music-video-mine.mp4.segments.txt', 'music-video-mine.mp4', 'music-video-other.mp4.look.mp4']);
+    seedStore([{ id: 'mine-1', status: 'rendering', renderingOn: 'inst-self', renderPartialFilename: 'music-video-mine.mp4' }]);
+
+    await recoverStuckMusicVideoRenders();
+
+    expect(sweepFilmLookScratch).toHaveBeenCalled();
+    expect(sweepAbandonedDcpBuilds).toHaveBeenCalled();
+    expect(unlink.mock.calls.map(([p]) => p)).toEqual([
+      '/data/videos/music-video-mine.mp4',
+      '/data/videos/music-video-mine.mp4.look.mp4',
+      '/data/videos/music-video-mine.mp4.segments.txt',
+    ]);
+    readdir.mockImplementation(async () => []);
     logSpy.mockRestore();
   });
 
@@ -713,6 +736,7 @@ describe('layered sections (#8985)', () => {
 // settles the render like an encode failure.
 const look = vi.hoisted(() => ({ calls: [], resolve: null, reject: null }));
 vi.mock('./filmLookFinish.js', () => ({
+  sweepFilmLookScratch: vi.fn(async () => {}),
   filmLookFinishNeeded: (project) => !!project?.filmLook,
   applyFilmLookFinish: (options) => new Promise((resolve, reject) => {
     look.calls.push(options);
