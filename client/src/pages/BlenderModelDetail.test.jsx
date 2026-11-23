@@ -20,7 +20,7 @@ vi.mock('../lib/clipboard.js', () => ({ copyToClipboard: vi.fn() }));
 vi.mock('../services/apiBlenderModels.js', () => ({
   getBlenderModel: vi.fn(), createBlenderModel: vi.fn(), updateBlenderModel: vi.fn(), deleteBlenderModel: vi.fn(), scaffoldBlenderModel: vi.fn(),
   listBlenderModelFiles: vi.fn(), readBlenderModelFile: vi.fn(), writeBlenderModelFile: vi.fn(), deleteBlenderModelFile: vi.fn(),
-  buildBlenderModel: vi.fn(), cancelBlenderModelBuild: vi.fn(), openBlenderModelBuild: vi.fn(), publishBlenderModelBuild: vi.fn(),
+  buildBlenderModel: vi.fn(), cancelBlenderModelBuild: vi.fn(), cancelBlenderModelBake: vi.fn(), openBlenderModelBuild: vi.fn(), publishBlenderModelBuild: vi.fn(),
   getBlenderModelBuildReport: vi.fn(), getBlenderModelBuildLog: vi.fn(),
   updateBlenderModelReferenceSource: vi.fn(), addBlenderModelCloseup: vi.fn(), removeBlenderModelCloseup: vi.fn(), previewBlenderModelReference: vi.fn(),
   renderBlenderModelReference: vi.fn(), attachBlenderModelReferenceImage: vi.fn(), reviewBlenderModelReference: vi.fn(), createBlenderModelPartsBrief: vi.fn(),
@@ -236,6 +236,37 @@ describe('BlenderModelDetail', () => {
     expect(await screen.findByLabelText('Job log text')).toHaveTextContent('Building the lamp');
     await user.click(within(job).getByRole('button', { name: 'Cancel' }));
     expect(api.cancelBlenderModelBuild).toHaveBeenCalledWith(ID, A, { silent: true });
+  });
+
+  it('lists a running set bake beside its build, cancels it by set, and summarizes each build\'s bake', async () => {
+    const user = userEvent.setup();
+    const now = new Date().toISOString();
+    const baked = { size: 2048, samples: 32, skipped: null, sets: 2, reused: 1 };
+    serve(modelState({
+      status: 'building',
+      builds: [
+        build(A, { quality: 'full', bake: baked }),
+        build(B, { quality: 'draft', bake: { size: 2048, samples: 32, skipped: 'draft', sets: 0, reused: 0 } }),
+        build('build-20260103T000000Z-0000000c', { status: 'running', quality: 'full', finishedAt: null, counts: null }),
+      ],
+      jobs: [
+        { id: 'bj-1', kind: 'build', status: 'running', buildId: 'build-20260103T000000Z-0000000c', quality: 'full', startedAt: now },
+        { id: 'bj-2', kind: 'bake', status: 'running', buildId: 'build-20260103T000000Z-0000000c', setId: 'metal', size: 2048, samples: 32, startedAt: now },
+      ],
+    }));
+    api.cancelBlenderModelBake.mockResolvedValue({ ok: true });
+    renderAt(`/3d/blender/${ID}/builds`);
+    const jobs = within(await screen.findByRole('list', { name: 'Jobs' })).getAllByRole('listitem');
+    const bake = jobs.find((job) => job.textContent.includes('Bake'));
+    expect(bake).toHaveTextContent('Bake · metal');
+    expect(bake).toHaveTextContent('Baking');
+    await user.click(within(bake).getByRole('button', { name: 'Cancel' }));
+    expect(api.cancelBlenderModelBake).toHaveBeenCalledWith(ID, 'build-20260103T000000Z-0000000c', 'metal', { silent: true });
+    expect(api.cancelBlenderModelBuild).not.toHaveBeenCalled();
+
+    const history = screen.getByRole('region', { name: 'Build history' });
+    expect(history).toHaveTextContent('2 baked sets at 2,048 px (1 reused)');
+    expect(history).toHaveTextContent('baking skipped (draft)');
   });
 
   it('edits a source file; unsaved edits hold builds back until saved', async () => {

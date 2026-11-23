@@ -10,7 +10,7 @@
 export const BLENDER_MODEL_DRIVER_PREFIX = 'PORTOS_MODEL ';
 
 const EVENTS = new Set([
-  'start', 'part', 'described', 'mesh', 'scene', 'saved', 'reimport', 'view', 'done', 'error',
+  'start', 'part', 'described', 'mesh', 'scene', 'saved', 'reimport', 'view', 'bakeSet', 'bakeResult', 'done', 'error',
   'control', 'control-skipped', 'action', 'sweep-scope', 'sweep-rest', 'sweep-overlap', 'sweep', 'reimport-control',
 ]);
 const LIST_MAX_BYTES = 16 * 1024;
@@ -35,6 +35,20 @@ function rawList(value) {
   return Array.isArray(value) && JSON.stringify(value).length <= LIST_MAX_BYTES ? value : undefined;
 }
 
+// describe().bake as given, bounded; bake.js judges it. null: absent. `raw: true`: present but not an object.
+const BAKE_SETS_MAX = 64;
+const BAKE_PARTS_MAX = 200;
+function bake(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return { raw: true };
+  const sets = Array.isArray(value.sets) ? value.sets.slice(0, BAKE_SETS_MAX).map((entry) => (entry && typeof entry === 'object' && !Array.isArray(entry)
+    ? { id: text(entry.id, 64), partIds: Array.isArray(entry.partIds) ? entry.partIds.slice(0, BAKE_PARTS_MAX).map((part) => text(part, 200)) : null }
+    : null)) : null;
+  return { size: finite(value.size), samples: finite(value.samples), sets, setsTruncated: Array.isArray(value.sets) && value.sets.length > BAKE_SETS_MAX };
+}
+
+const HASH = /^[0-9a-f]{64}$/;
+const IMAGE_NAMES = new Set(['baseColor', 'normal', 'orm']);
 const names = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string').slice(0, NAMES_LISTED).map((item) => item.slice(0, 200)) : []);
 
 function pose(value) {
@@ -60,7 +74,7 @@ export function parseBlenderModelDriverLine(line) {
     case 'described':
       return {
         event: 'described', title: text(raw.title, 200), sizeMeters: size(raw.sizeMeters),
-        triangleBudget: count(raw.triangleBudget), partsTruncated: raw.partsTruncated === true,
+        triangleBudget: count(raw.triangleBudget), partsTruncated: raw.partsTruncated === true, bake: bake(raw.bake),
         controls: rawList(raw.controls), actions: rawList(raw.actions), allowContact: rawList(raw.allowContact),
       };
     case 'mesh':
@@ -74,7 +88,7 @@ export function parseBlenderModelDriverLine(line) {
         materials: count(raw.materials), images: count(raw.images), actions: count(raw.actions), ...bounds(raw), truncated: raw.truncated === true,
       };
     case 'saved':
-      return { event: 'saved', blend: text(raw.blend, 4096), glb: text(raw.glb, 4096), glbBytes: count(raw.glbBytes) };
+      return { event: 'saved', blend: text(raw.blend, 4096), glb: text(raw.glb, 4096), glbBytes: count(raw.glbBytes), deferred: raw.deferred === true };
     case 'reimport':
       return {
         event: 'reimport', objects: count(raw.objects), meshes: count(raw.meshes), triangles: count(raw.triangles),
@@ -101,6 +115,17 @@ export function parseBlenderModelDriverLine(line) {
       return { event: 'reimport-control', id: text(raw.id, 200), found: raw.found === true, error: seconds(raw.error) };
     case 'view':
       return { event: 'view', id: text(raw.id, 64), look: text(raw.look, 16) };
+    case 'bakeSet':
+      return {
+        event: 'bakeSet', id: text(raw.id, 64), partIds: Array.isArray(raw.partIds) ? raw.partIds.slice(0, BAKE_PARTS_MAX).map((part) => text(part, 200)) : [],
+        hash: typeof raw.hash === 'string' && HASH.test(raw.hash) ? raw.hash : null, uvOverlap: finite(raw.uvOverlap), unwrapped: raw.unwrapped === true,
+      };
+    case 'bakeResult':
+      return {
+        event: 'bakeResult', id: text(raw.id, 64), size: count(raw.size), samples: count(raw.samples), device: text(raw.device, 64),
+        images: Array.isArray(raw.images) ? raw.images.slice(0, 8).filter((image) => image && IMAGE_NAMES.has(image.name))
+          .map((image) => ({ name: image.name, file: text(image.file, 64), max: count(image.max) })) : [],
+      };
     case 'done':
       return { event: 'done', sec: seconds(raw.sec) };
     default:

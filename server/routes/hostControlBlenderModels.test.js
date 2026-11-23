@@ -35,6 +35,7 @@ const sink = vi.hoisted(() => ({
   reviewBlenderModelReference: vi.fn(async () => {}),
   startBlenderModelBuild: vi.fn(async () => ({ job: { id: 'bj-example' } })),
   cancelBlenderModelBuild: vi.fn(() => true),
+  cancelBlenderModelBake: vi.fn(() => true),
   startBlenderModelReview: vi.fn(async () => ({ job: { id: 'bj-example' } })),
   cancelBlenderModelReview: vi.fn(() => true),
   addBlenderModelCamera: vi.fn(async () => {}),
@@ -71,6 +72,9 @@ vi.mock('../services/blenderModels/build.js', () => ({
   cancelBlenderModelBuild: sink.cancelBlenderModelBuild,
 }));
 
+vi.mock('../services/blenderModels/bake.js', () => ({
+  cancelBlenderModelBake: sink.cancelBlenderModelBake,
+}));
 vi.mock('../services/blenderModels/review.js', () => ({
   startBlenderModelReview: sink.startBlenderModelReview,
   cancelBlenderModelReview: sink.cancelBlenderModelReview,
@@ -125,6 +129,7 @@ const workflows = [
   ['post', '/api/blender-models', { name: 'Example model' }, sink.createBlenderModel, 201],
   ['patch', MODEL, { name: 'Renamed example' }, sink.updateBlenderModel, 200],
   ['post', `${MODEL}/builds/${BUILD}/cancel`, {}, sink.cancelBlenderModelBuild, 200],
+  ['post', `${MODEL}/builds/${BUILD}/bakes/metal/cancel`, {}, sink.cancelBlenderModelBake, 200],
   ['delete', MODEL, undefined, sink.deleteBlenderModel, 200],
 ];
 

@@ -42,6 +42,10 @@ export const buildBlenderModel = (id, quality, options) =>
 export const cancelBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/builds/${encodeURIComponent(buildId)}/cancel`, json('POST', {}, options));
 
+// Cancel one set's bake while a full build runs; the build then ends canceled.
+export const cancelBlenderModelBake = (id, buildId, setId, options) =>
+  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/bakes/${encodeURIComponent(setId)}/cancel`, json('POST', {}, options));
+
 export const openBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/builds/${encodeURIComponent(buildId)}/open`, json('POST', {}, options));
 

@@ -4,8 +4,8 @@ A **Blender model** is a reusable 3D asset made from Python you (or a coding age
 in Blender, measures what it built, exports a GLB, imports that GLB back into an empty scene and measures it again.
 Every build is kept with a report; you publish the build you want, and its GLB is what other parts of PortOS use.
 
-This page covers the engine (issue #17874), its page (issue #17875), references (issue #17876), comparison (issue #17877) and moving parts (issue #17878), part of the Blender Models epic
-#17869. Texture baking arrives in a later phase.
+This page covers the engine (issue #17874), its page (issue #17875), references (issue #17876), comparison (issue #17877), moving parts (issue #17878)
+and texture baking (issue #17879), part of the Blender Models epic #17869.
 
 ## On the 3D page
 
@@ -81,10 +81,11 @@ A model script is the operator's own code and runs with this machine's privilege
 data/blender-models/<id>/
   src/                 your code; entry point src/model.py (plus any modules and assets you add) — backed up
   builds/<buildId>/    one build, never rewritten — backed up
-    model.blend          the built scene
+    model.blend          the built scene (a baked build's holds the baked materials, not the bake-only objects)
     model.glb            the export
     report.json          checks and findings
-    build.log            everything Blender and the script printed
+    build.log            everything Blender and the script printed, bakes included
+    bake/<setId>/        a full build's baked set: base_color.png, normal.png, orm.png, bake.json
   renders/             regenerable — excluded from backups
     reviews/<buildId>/   <view>-textured.png, <view>-clay.png, sheet-textured.jpg, sheet-clay.jpg, review.json
 ```
@@ -108,6 +109,11 @@ def describe(ctx) -> dict:
         "controls": [],       # optional: what moves (below)
         "actions": [],        # optional: choreographed moves, posed by pose(ctx, action, t)
         "allowContact": [],   # optional: pairs of part ids meant to touch
+        "bake": {             # optional: see "Baking textures"
+            "size": 2048,
+            "samples": 32,
+            "sets": [{"id": "metal", "partIds": ["base", "stem"]}],
+        },
     }
 
 def build(ctx) -> None:
@@ -161,6 +167,75 @@ On the **Model** tab, **Pose** sliders seek the GLB's own clips in the browser. 
 disabled with the reason, and returns to its default when what it depends on moves away. **Show pose** on an overlap sets
 the sliders to the first pose where it happens and tints the two parts. Nothing is saved.
 
+## Baking textures
+
+Blender procedural materials do not survive glTF export, and modeling every bolt head as exported geometry makes a
+model too heavy for the viewers. `describe()["bake"]` asks PortOS to bake them into plain textures:
+
+- `size` is 1024, 2048 or 4096, `samples` is Cycles' sample count (1–1024), and `sets` lists up to 16
+  `{ id, partIds }`: the parts of a set share one material and one set of three images. A part belongs to at most one
+  set; a part in no set keeps its own material.
+- **Draft builds skip baking** (their report says so with `bake-skipped-draft`, and the GLB carries only what glTF can
+  hold of the materials). A **Full** build bakes. The model page's header has **Build draft** and **Build full**, and
+  the Builds tab shows each build's bake (sets, size, reuse).
+- Mark detail geometry with `mark_bake_only(obj)` (below), or set the custom property `portos_bake_only` yourself.
+  Those objects shape the normal map, are left out of the GLB and out of every count and check, and stay in the
+  saved `model.blend` of a draft build. `portos_bake_sets` (`"metal,cloth"`) limits the sets one shapes; by default it
+  shapes all of them.
+- Parts without UVs are unwrapped (smart project) into one shared atlas per set. Parts that already have UVs keep
+  their active UV map (the others are dropped); two parts in one set must not overlap in it. A set whose UV overlap is
+  over 2% of its covered area is an error and is not baked.
+- Per set, Cycles bakes **base color**, a tangent-space **normal** map (from the set's parts and every bake-only
+  object that shapes it) and one packed **orm** image (R occlusion, G roughness, B metal). Base color, roughness and
+  metal are read from the material's Principled BSDF (a linked node or its value). The GPU is used when Cycles finds
+  one, otherwise the CPU; the first GPU bake on a machine compiles kernels, which can take several minutes. Set
+  `PORTOS_BLENDER_BAKE_DEVICE=cpu` to keep bakes on the CPU.
+- The export then gives each set's parts one plain glTF material built from its three images (the ORM image feeds
+  roughness, metal and occlusion), exports the GLB and re-imports it. The report's `reimport.images` shows three
+  images per set.
+
+Each set is **its own background job** (kind `bake`, shown on the Builds tab with its progress and a Cancel), run one
+after another inside the build's slot: it joins the build's limits (one Blender process per model at a time, the
+build's wall-clock, memory and disk caps) and the build keeps the system busy for the unattended updater. A set is
+written beside its folder and moved in whole, so a canceled or failed bake never leaves half a set. Canceling a bake
+(`POST …/builds/:buildId/bakes/:setId/cancel`) ends that build as canceled; an earlier build's baked set and the
+published build are untouched.
+
+A set is **reused** when its content hash, size and samples match the same set in one of the model's earlier builds:
+the hash covers its parts' geometry, UVs and materials (node settings and values) and the bake-only objects that
+shape it. Changing one part rebakes only its set. A reused set is copied into the new build's folder, so every build
+stays whole; the report marks it `reused` with `reusedFrom`.
+
+| Finding | Meaning |
+|---|---|
+| `bake-image-missing`, `bake-all-black`, `bake-uv-overlap`, `bake-set-unprepared`, `bake-not-run` | errors: an image was not written, an image has no pixel above black, a set's UVs overlap over 2%, a set names a part that is not a mesh, nothing baked |
+| `bake-invalid`, `bake-size-invalid`, `bake-samples-invalid`, `bake-sets-invalid`, `bake-set-invalid`, `bake-set-duplicate`, `bake-part-unknown`, `bake-part-shared` | errors in `describe()["bake"]` (nothing is baked; the GLB is still exported) |
+| `bake-glb-images` | warning: the re-imported GLB has fewer images than the baked sets |
+| `bake-sets`, `bake-skipped-draft` | notes: baked and reused counts with size and samples; a draft build did not bake |
+
+`checks.bake` records `{ size, samples, skipped, sets: [{ id, partIds, hash, size, samples, reused, reusedFrom,
+device, uvOverlap, unwrapped, skipped, images: [{ name, file, bytes, max }] }] }`; `max` is each image's brightest
+byte.
+
+### The `portos_model` kit
+
+The driver puts a small PortOS-written kit (standard `bpy` only) on the import path, so `src/model.py` can
+`from portos_model import …`:
+
+- `mark_bake_only(obj, sets=None)`: mark detail geometry (above).
+- `bolt_circle(name, radius, count, head_radius, head_height, location, sides=6)`, `hinge_barrel(name, length, radius,
+  knuckles=3, gap, axis="Y", location)`, `pipe(name, points, radius, bend_radius=None, sides=16, location)` (a round
+  pipe with rounded bends) and `lathe(name, profile, segments=32, location)` (a solid of revolution from
+  `(radius, z)` points): each returns one mesh object.
+- `edge_wear_group()`, `grime_group()`, `rust_group()`: shader node groups (Bevel and Ambient Occlusion based, so
+  they need Cycles, which a bake uses), and `worn_metal_material(name, base_color, worn_color, edge_wear, grime,
+  rust)`, a Principled material built from them. Use them only where they will be baked: a draft build exports a
+  material with a linked procedural node as a flat one.
+
+The starter (`py/starter/model.py`) shows the whole path: a bake-only bolt circle, a worn-metal set and a plain cloth
+set. The kit lives in `server/services/blenderModels/py/portos_model/` (its package file is `package.py`: the worker
+stages only file names that start with a letter or digit, so the driver registers it as `portos_model`).
+
 ## What a build checks
 
 `report.json` holds the numbers and a list of findings. Each finding is `error`, `warning` or `note`; a build with any
@@ -177,6 +252,7 @@ error is kept and marked, and only a build without errors can be published.
 | Declared motion | `controls-invalid`, `actions-invalid`, `allow-contact-invalid`, `control-invalid`, `control-dependency-invalid`, `action-invalid`, `actions-without-controls` (errors); `allow-contact-unknown` (warning) |
 | Each control and action | `control-not-rigged`, `control-clamp`, `control-mismatch`, `control-unreachable`, `action-failed`, `reimport-control` (errors); `action-dependency-unmet` (warning) |
 | Sweep | `sweep-overlap` (error, one per pair of parts, with its `pose`), `sweep-overlap-more` (error); `sweep-unmeasured` (warning); `sweep-allowed-contact`, `sweep-rest-overlap` (notes) |
+| Texture bake | see [Baking textures](#baking-textures) |
 | Export | `export-missing` (error) |
 | GLB re-imported into an empty scene | `reimport-missing`, `reimport-mesh-count`, `reimport-triangles`, `reimport-bounds` (errors); `reimport-materials`, `reimport-actions` (warnings) |
 
@@ -209,6 +285,7 @@ action counts and bounds.
 | `GET` / `PUT` / `DELETE /api/blender-models/:id/file?path=` | Read, write (`{ path, content }`) or delete one source file |
 | `POST /api/blender-models/:id/builds` `{ quality? }` | Start a build (202, `{ job, build }`) |
 | `POST /api/blender-models/:id/builds/:buildId/cancel` | Cancel a running build |
+| `POST /api/blender-models/:id/builds/:buildId/bakes/:setId/cancel` | Cancel one set's bake (the build ends canceled) |
 | `GET /api/blender-models/:id/builds/:buildId/files/:name` | `model.glb`, `model.blend`, `report.json` or `build.log` |
 | `POST /api/blender-models/:id/builds/:buildId/open` | Open the build's `.blend` in Blender (embedded scripts stay off) |
 | `POST /api/blender-models/:id/builds/:buildId/review`, `…/review/cancel` | Render a completed build's review again (202, `{ job }`), or cancel it |
@@ -234,6 +311,9 @@ start and finish); the client re-reads the model. Nothing polls.
   containment), `driver.js` + `py/portos_model_driver.py`, `protocol.js` (the driver's `PORTOS_MODEL ` stdout
   events), `report.js` (checks), `build.js` (the job, pruning, boot recovery) and `models.js` (records, source,
   publish, asset, open).
+- `bakePlan.js` judges `describe()["bake"]` (pure), `bake.js` runs and reuses each set's bake job, and
+  `py/portos_bake.py` (unwrap, overlap, hashing, Cycles bakes, the glTF materials) and `py/portos_model/` (the kit)
+  run inside Blender.
 - `references.js` holds the reference slots and review, `referenceImageHook.js` attaches finished renders, and
   `server/services/catalog/modelSheetPrompts.js` builds the prompts.
 - `review.js` renders a build's review and reads its manifest, `reviewCameras.js` derives every camera (pure),

@@ -72,9 +72,30 @@ Declare a control for every part that moves; never animate or add bones yourself
   only for real contact. Leave a hair of clearance between parts as built: a pair that touches as built is not checked
   (`sweep-rest-overlap`).
 
+- Optional `bake`: `{"size": 1024|2048|4096, "samples": N, "sets": [{"id", "partIds": [...]}]}` (see Baking below).
+
+## Baking worn materials and fine detail
+
+Blender procedural materials do not survive glTF export, and modeling every bolt head as exported geometry makes a model
+too heavy for the viewers. Ask for a bake in `describe()` and let the textures carry the detail:
+
+- A **full** build bakes each set (parts sharing one material and three images) with Cycles: base color, a tangent
+  normal map and a packed `orm` image (R occlusion, G roughness, B metal). A **draft** build skips it (the report says
+  `bake-skipped-draft`), so use procedural wear only when `ctx.quality == "full"`.
+- `from portos_model import mark_bake_only, bolt_circle, hinge_barrel, pipe, lathe, worn_metal_material`. Model the
+  fine detail (bolt heads, rivets, seams) as extra objects and call `mark_bake_only(obj)`: it shapes the normal map
+  and stays out of the GLB and the triangle count. `worn_metal_material(...)` (edge wear, grime, rust) is a Principled
+  material that bakes well; read base color, roughness and metal from a Principled BSDF in your own materials.
+- Parts with no UVs are unwrapped into one atlas per set. Primitives from `bpy.ops` come with overlapping UVs, so
+  remove their UV layers (the starter does) unless you laid them out yourself; more than 2% overlap in a set is an
+  error. Read `report.json` `checks.bake` and the `bake-*` findings (`bake-image-missing`, `bake-all-black`,
+  `bake-uv-overlap`, …).
+- Each set bakes as its own job; an unchanged set (same geometry, UVs, materials, size and samples) is reused from an
+  earlier build, so change one part and only its set rebakes. `POST …/builds/:buildId/bakes/:setId/cancel` cancels one.
+
 ## The loop
 
-1. `POST /api/blender-models/:id/builds` `{ "quality": "draft" }` answers `202 { job, build }`. Wait for the
+1. `POST /api/blender-models/:id/builds` `{ "quality": "draft" }` answers `202 { job, build }` (use `"full"` to bake). Wait for the
    `blender-model:changed` event or read the state until that build's `status` leaves `running`.
 2. Read `GET /api/blender-models/:id/builds/:buildId/files/report.json`. A failed build has `error` in the record and the
    traceback in `build.log`. Fix every `error` finding (`part-missing`, `bounds-oversized`, `triangles-over-budget`,
