@@ -52,6 +52,8 @@ registerProcessor('portos-call-tap', CallTapProcessor);
 
 const DEFAULT_INPUT_LABEL = 'BlackHole 16ch';
 const DEFAULT_OUTPUT_LABEL = 'BlackHole 2ch';
+const LEVEL_INTERVAL_MS = 100;
+const LEVEL_DEADBAND = 0.002;
 const MODES = ['call', 'capture'];
 
 // Shown when the re-attach after a socket reconnect is refused: the server
@@ -88,6 +90,10 @@ export default function VoiceCallHost() {
   const [callState, setCallState] = useState(null);
   const [captureState, setCaptureState] = useState(null);
   const [level, setLevel] = useState(0);
+  const [starting, setStarting] = useState(false);
+  // Synchronous twin of `starting`: a second click lands before React re-renders.
+  const startingRef = useRef(null);
+  const lastLevelRef = useRef({ at: 0, value: 0 });
   const [notice, setNotice] = useState(null);
   const audio = useRef({ context: null, stream: null, node: null, source: null, playing: new Set(), outputId: null, pending: [] });
   const testTones = useRef(new Set());
@@ -123,6 +129,7 @@ export default function VoiceCallHost() {
     audio.current = { context: null, stream: null, node: null, source: null, playing: new Set(), outputId: current.outputId, pending: [] };
     ownsSessionRef.current = false;
     linkRef.current = 'ok';
+    lastLevelRef.current = { at: 0, value: 0 };
     setLevel(0);
   }, []);
 
@@ -153,7 +160,7 @@ export default function VoiceCallHost() {
     }
   }, []);
 
-  const start = useCallback(async () => {
+  const runStart = useCallback(async () => {
     const generation = startGenRef.current;
     setNotice(null);
     const missing = missingCallHostApis(window);
@@ -284,7 +291,15 @@ export default function VoiceCallHost() {
     let carry = [];
     node.port.onmessage = (event) => {
       const mono = downmixToMono(event.data);
-      setLevel(rmsLevel(mono));
+      // 375 quanta/s would re-render the whole page each time: publish at most
+      // every 100 ms, and only when the level moved past a small deadband.
+      const now = performance.now();
+      const rms = rmsLevel(mono);
+      const last = lastLevelRef.current;
+      if (now - last.at >= LEVEL_INTERVAL_MS && Math.abs(rms - last.value) >= LEVEL_DEADBAND) {
+        lastLevelRef.current = { at: now, value: rms };
+        setLevel(rms);
+      }
       // Offline emits would pile up in socket.io's sendBuffer and be flushed
       // (then discarded by the server) on reconnect, so drop them instead.
       if (!socket.connected) {
@@ -314,6 +329,24 @@ export default function VoiceCallHost() {
     else socket.emit('voice:capture:start');
     setBlocked(null);
   }, []);
+
+  // Guards the whole async startup: the lock is taken early, so a second click
+  // while devices/worklet load would collide with this tab's own lock and
+  // report a false "another tab owns the call host".
+  const start = useCallback(async () => {
+    if (startingRef.current) return;
+    const token = {};
+    startingRef.current = token;
+    setStarting(true);
+    try {
+      await runStart();
+    } finally {
+      if (startingRef.current === token) {
+        startingRef.current = null;
+        setStarting(false);
+      }
+    }
+  }, [runStart]);
 
   const stop = useCallback(() => {
     startGenRef.current += 1;
@@ -492,8 +525,8 @@ export default function VoiceCallHost() {
       <TabPills
         variant="pills"
         tabs={[
-          { id: 'call', label: 'Call', icon: PhoneCall, disabled: attached },
-          { id: 'capture', label: 'Capture system audio', icon: Radio, disabled: attached },
+          { id: 'call', label: 'Call', icon: PhoneCall, disabled: attached || starting },
+          { id: 'capture', label: 'Capture system audio', icon: Radio, disabled: attached || starting },
         ]}
         activeTab={mode}
         onChange={setMode}
@@ -507,7 +540,7 @@ export default function VoiceCallHost() {
         <div className="flex flex-wrap items-center gap-2">
           {attached
             ? <button type="button" onClick={stop} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50"><MicOff size={16} />{isCall ? 'Detach call host' : 'Stop capture'}</button>
-            : <button type="button" onClick={start} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Mic size={16} />{isCall ? 'Attach call host' : 'Start capture'}</button>}
+            : <button type="button" onClick={start} disabled={starting} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30 disabled:opacity-50"><Mic size={16} />{isCall ? 'Attach call host' : 'Start capture'}</button>}
           {isCall && (
             <button type="button" onClick={playTestTone} disabled={!attached} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Volume2 size={16} />Test tone</button>
           )}
