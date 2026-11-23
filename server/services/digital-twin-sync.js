@@ -969,6 +969,14 @@ async function applyTaste(remoteTaste) {
   return (await applyTasteProfileMerge((local) => mergeTaste(local, remoteTaste))) ? 1 : 0;
 }
 
+// taste-observed.json is also written by twinEnrichment (aggregate + interpret);
+// merge inside its queue so a sync can't clobber a fresh interpretation.
+async function applyTasteObserved(remote) {
+  if (remote === undefined || remote === null) return 0;
+  const { applyTasteObservedMerge } = await import('./twinEnrichment.js');
+  return (await applyTasteObservedMerge((local) => mergeTasteObserved(local, remote))) ? 1 : 0;
+}
+
 // feedbackLoop keeps a never-invalidated cache and a write queue; merging through
 // it keeps a later local submit from overwriting synced entries.
 async function applyFeedback(remoteFeedback) {
@@ -1017,7 +1025,7 @@ export async function applyDigitalTwinRemote(remoteData) {
   count += await applyTaste(remoteData.taste);
   // Observed evidence (Phase 7): regenerated derived records — body is LWW on
   // derivedAt; taste also preserves the newest user-triggered AI interpretation.
-  count += await applyMerge(TASTE_OBSERVED_FILE, remoteData.tasteObserved, mergeTasteObserved);
+  count += await applyTasteObserved(remoteData.tasteObserved);
   count += await applyMerge(CHRONOTYPE_OBSERVED_FILE, remoteData.chronotypeObserved, mergeChronotypeObserved);
   const { loadMeta, withMetaLock } = await import('./digital-twin-meta.js');
   // The meta lock (inside the backup lease, the order document writes use) keeps
