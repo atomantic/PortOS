@@ -570,27 +570,7 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
 
             {/* Batch execution controls */}
             <div className="pt-1 flex items-center gap-2">
-              {activeBatchRun && ['failed', 'canceled'].includes(activeBatchRun.status) ? (
-                <button
-                  type="button"
-                  onClick={resumeBatch}
-                  disabled={resumingBatch}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-                >
-                  {resumingBatch ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                  Resume Batch Production
-                </button>
-              ) : !activeBatchRun || activeBatchRun.status !== 'in_progress' ? (
-                <button
-                  type="button"
-                  onClick={startBatch}
-                  disabled={startingBatch || savingRenderFormat || !canStart}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
-                >
-                  {startingBatch ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-                  {assetScope === 'images' ? 'Generate Storyboard Images' : 'Start Batch Production'}
-                </button>
-              ) : (
+              {activeBatchRun?.status === 'in_progress' ? (
                 <button
                   type="button"
                   onClick={cancelBatch}
@@ -600,6 +580,30 @@ export default function LoomProductionPanel({ loom, episode, onSelectNode, onLoo
                   {cancelingBatch ? <Loader2 size={12} className="animate-spin" /> : <StopCircle size={12} />}
                   Cancel Production Batch
                 </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={startBatch}
+                    disabled={startingBatch || resumingBatch || savingRenderFormat || !canStart}
+                    className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded bg-port-accent text-white hover:bg-port-accent/90 disabled:opacity-50"
+                  >
+                    {startingBatch ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                    {assetScope === 'images' ? 'Generate Storyboard Images' : 'Start Batch Production'}
+                  </button>
+                  {/* Resume replays the failed run's recorded settings verbatim; Start above uses the current controls. */}
+                  {activeBatchRun && ['failed', 'canceled'].includes(activeBatchRun.status) && (
+                    <button
+                      type="button"
+                      onClick={resumeBatch}
+                      disabled={resumingBatch || startingBatch || savingRenderFormat || !canStart}
+                      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded border border-port-border text-port-text hover:bg-port-card disabled:opacity-50"
+                    >
+                      {resumingBatch ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                      Resume Batch Production
+                    </button>
+                  )}
+                </>
               )}
 
               {activeBatchRun && (

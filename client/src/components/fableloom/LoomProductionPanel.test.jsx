@@ -233,6 +233,24 @@ describe('LoomProductionPanel', () => {
     expect(screen.getByText('Episode 2 asset')).toBeInTheDocument();
   });
 
+  it.each(['failed', 'canceled'])('offers a fresh Start alongside Resume after a %s run, both gated by !canStart', async status => {
+    getLoomEpisodeProductionBatchStatus.mockResolvedValue({
+      run: { id: 'batch-old', loomId: 'loom-1', episodeId: 'ep-1', status, revision: 1, summary: { total: 6, completed: 1 } },
+    });
+    render(<LoomProductionPanel loom={sampleLoom} episode={sampleEpisode} onSelectNode={vi.fn()} />);
+    const resume = await screen.findByText('Resume Batch Production');
+    expect(resume.closest('button')).not.toBeDisabled();
+    expect(screen.queryByText('Cancel Production Batch')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Generate Storyboard Images'));
+    await waitFor(() => {
+      expect(startLoomEpisodeProductionBatch).toHaveBeenCalledWith(
+        'loom-1', 'ep-1', { mode: 'current_canon', assetTypes: ['image'] }, { silent: true },
+      );
+      expect(screen.getByText('Cancel Production Batch')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Resume Batch Production')).not.toBeInTheDocument();
+  });
+
   it('reattaches and applies scoped batch events, refreshing once per terminal attempt without polling', async () => {
     const run = { id: 'batch-live', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress', revision: 1, attempt: 1, summary: { total: 6, completed: 1 } };
     getLoomEpisodeProductionBatchStatus.mockResolvedValue({ run });
