@@ -44,6 +44,16 @@ describe('scaffoldPortOS generated app', () => {
     expect(ci).toMatch(/working-directory: \.\/server\n\s+run: npm test/);
   });
 
+  it('publishes the generated release with the preinstalled gh CLI, pinned to the verified SHA', async () => {
+    const release = await readFile(join(appDir, '.github', 'workflows', 'release.yml'), 'utf8');
+    expect(release).not.toMatch(/softprops\/action-gh-release/);
+    expect(release).toMatch(/TARGET_SHA: \$\{\{ github\.sha \}\}/);
+    expect(release).toMatch(/gh release create "\$RELEASE_TAG"[\s\S]*?--target "\$TARGET_SHA"[\s\S]*?--notes-file "\$RUNNER_TEMP\/release-body\.md"/);
+    expect(release).toContain('printf \'%s\\n\' "$CHANGELOG" > "$RUNNER_TEMP/release-body.md"');
+    // The version step used to be a shell parse error (escaped quotes inside $()), failing the release job.
+    expect(release).toContain('echo "version=$(node -p "require(\'./package.json\').version")" >> "$GITHUB_OUTPUT"');
+  });
+
   it('runs dev servers through a zero-dependency runner instead of concurrently', async () => {
     const pkg = JSON.parse(await readFile(join(appDir, 'package.json'), 'utf8'));
     expect(JSON.stringify(pkg)).not.toMatch(/concurrently/);

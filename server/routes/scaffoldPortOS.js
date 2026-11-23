@@ -472,14 +472,14 @@ jobs:
       - name: Bump patch version
         run: |
           CURRENT_VERSION=\$(node -p "require('./package.json').version")
-          MAJOR=\$(echo \$CURRENT_VERSION | cut -d. -f1)
-          MINOR=\$(echo \$CURRENT_VERSION | cut -d. -f2)
-          PATCH=\$(echo \$CURRENT_VERSION | cut -d. -f3)
+          MAJOR=\$(echo "\$CURRENT_VERSION" | cut -d. -f1)
+          MINOR=\$(echo "\$CURRENT_VERSION" | cut -d. -f2)
+          PATCH=\$(echo "\$CURRENT_VERSION" | cut -d. -f3)
           NEW_PATCH=\$((PATCH + 1))
           NEW_VERSION="\$MAJOR.\$MINOR.\$NEW_PATCH"
-          npm version \$NEW_VERSION --no-git-tag-version
-          cd client && npm version \$NEW_VERSION --no-git-tag-version && cd ..
-          cd server && npm version \$NEW_VERSION --no-git-tag-version && cd ..
+          npm version "\$NEW_VERSION" --no-git-tag-version
+          cd client && npm version "\$NEW_VERSION" --no-git-tag-version && cd ..
+          cd server && npm version "\$NEW_VERSION" --no-git-tag-version && cd ..
           git add package.json package-lock.json client/package.json server/package.json
           git commit -m "build: bump version to \$NEW_VERSION [skip ci]"
           git push
@@ -518,15 +518,15 @@ jobs:
 
       - name: Get version from package.json
         id: package-version
-        run: echo "version=\$(node -p \\"require('./package.json').version\\")" >> \$GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Check if tag exists
         id: tag-check
         run: |
           if git rev-parse "v\${{ steps.package-version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> \$GITHUB_OUTPUT
+            echo "exists=true" >> "\$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> \$GITHUB_OUTPUT
+            echo "exists=false" >> "\$GITHUB_OUTPUT"
           fi
 
       - name: Generate changelog
@@ -534,39 +534,35 @@ jobs:
         if: steps.tag-check.outputs.exists == 'false'
         run: |
           PREV_TAG=\$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-          CHANGELOG=\$(git log \$PREV_TAG..HEAD --pretty=format:"- %s" --no-merges | grep -v "\\[skip ci\\]" | head -50)
-          echo "changelog<<EOF" >> \$GITHUB_OUTPUT
-          echo "\$CHANGELOG" >> \$GITHUB_OUTPUT
-          echo "EOF" >> \$GITHUB_OUTPUT
+          CHANGELOG=\$(git log "\$PREV_TAG"..HEAD --pretty=format:"- %s" --no-merges | grep -v "\\[skip ci\\]" | head -50)
+          printf '%s\\n' "\$CHANGELOG" > "\$RUNNER_TEMP/release-body.md"
 
       - name: Create Release
         if: steps.tag-check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v\${{ steps.package-version.outputs.version }}
-          name: v\${{ steps.package-version.outputs.version }}
-          body: |
-            ## Changes
-
-            \${{ steps.changelog.outputs.changelog }}
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: v\${{ steps.package-version.outputs.version }}
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          gh release create "\$RELEASE_TAG" \\
+            --repo "\$GITHUB_REPOSITORY" \\
+            --target "\$TARGET_SHA" \\
+            --title "\$RELEASE_TAG" \\
+            --notes-file "\$RUNNER_TEMP/release-body.md"
 
       - name: Prep dev branch for next release
         if: steps.tag-check.outputs.exists == 'false'
         run: |
           CURRENT_VERSION=\${{ steps.package-version.outputs.version }}
-          MAJOR=\$(echo \$CURRENT_VERSION | cut -d. -f1)
-          MINOR=\$(echo \$CURRENT_VERSION | cut -d. -f2)
+          MAJOR=\$(echo "\$CURRENT_VERSION" | cut -d. -f1)
+          MINOR=\$(echo "\$CURRENT_VERSION" | cut -d. -f2)
           NEW_MINOR=\$((MINOR + 1))
           NEW_VERSION="\$MAJOR.\$NEW_MINOR.0"
           git fetch origin dev
           git checkout dev
-          npm version \$NEW_VERSION --no-git-tag-version
-          cd client && npm version \$NEW_VERSION --no-git-tag-version && cd ..
-          cd server && npm version \$NEW_VERSION --no-git-tag-version && cd ..
+          npm version "\$NEW_VERSION" --no-git-tag-version
+          cd client && npm version "\$NEW_VERSION" --no-git-tag-version && cd ..
+          cd server && npm version "\$NEW_VERSION" --no-git-tag-version && cd ..
           git add package.json package-lock.json client/package.json server/package.json
           git commit -m "build: prep v\$NEW_VERSION for next release [skip ci]"
           git push origin dev

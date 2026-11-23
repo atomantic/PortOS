@@ -95,6 +95,15 @@ describe('importCaseMismatches', () => {
     ]);
   });
 
+  it('keeps the prefilter exact: a case-only literal in a comment or template is ignored, a real one still reported', () => {
+    const commentOnly = "// import a from './foo.js';\nconst t = `import('./foo.js')`;\nimport b from './Foo.js';";
+    expect(importCaseMismatches('src/entry.js', commentOnly, tracked)).toEqual([]);
+    const mixed = "// import a from './foo.js';\nimport b from './Foo.js';\nimport c from './util/helpers?raw';";
+    expect(importCaseMismatches('src/entry.js', mixed, tracked)).toEqual([
+      { file: 'src/entry.js', specifier: './util/helpers', resolved: 'src/util/helpers', tracked: 'src/util/Helpers.jsx' },
+    ]);
+  });
+
   it('passes exact spellings and ignores specifiers git does not track at all', () => {
     const source = "import a from './Foo.js';\nimport b from './lib';\nimport c from './util/Helpers';\nimport d from './generated/manifest.js';\nimport e from '../../outside.js';";
     expect(importCaseMismatches('src/entry.js', source, tracked)).toEqual([]);
