@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { decodeMessage } from '../lib/protobufWire.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { UNKNOWN_MODEL, codexServiceTier, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/provider/providerTranscriptUsage.js';
+import { UNKNOWN_MODEL, codexServiceTier, readGrokTurnsFromFile, billGrokTurnsByDay, parseJsonLines, decodeGrokSessionDir, totalTranscriptTokens } from '../lib/provider/providerTranscriptUsage.js';
 import { claudeNativeUsageStore } from './claudeCodeTranscriptUsage.js';
 import { readCodexAccountingSources } from './codexUsageSources.js';
 import { createNativeUsageStore } from './nativeUsageDayStore.js';
@@ -36,7 +36,6 @@ import { familyForProvider, familyLabel } from '../lib/provider/providerFamilies
  * Scans read local files only — no provider calls, no tokens spent.
  */
 
-const DAY_MS = 86_400_000;
 const BASE_FIELDS = ['messages', 'input', 'output', 'cacheRead', 'cacheWrite'];
 const LONG_FIELDS = ['longInput', 'longOutput', 'longCacheRead', 'longCacheWrite'];
 const SPEED_FIELDS = [
@@ -75,25 +74,6 @@ function addBuckets(days, day, model, buckets) {
     add('ultrafastOutput', buckets.ultrafastTokensOut);
     add('ultrafastCacheRead', buckets.ultrafastCacheReadTokens);
     add('ultrafastCacheWrite', buckets.ultrafastCacheWriteTokens);
-  }
-}
-
-/** UTC days touched by `[firstMs, lastMs]`, starting no earlier than `from`. */
-function daysBetween(firstMs, lastMs, from) {
-  const out = [];
-  const start = Math.max(firstMs, from ? dayStartMs(from) : -Infinity);
-  for (let cursor = Math.floor(start / DAY_MS) * DAY_MS; cursor <= lastMs; cursor += DAY_MS) out.push(dayOf(cursor));
-  return out;
-}
-
-/** Split one parsed session into UTC days with a windowed parser `(entries, window) => { byModel }`. */
-function addSessionDays(days, entries, stamps, from, parse) {
-  if (!stamps.length) return;
-  for (const day of daysBetween(Math.min(...stamps), Math.max(...stamps), from)) {
-    const start = dayStartMs(day);
-    for (const [model, buckets] of Object.entries(parse(entries, { from: start, to: start + DAY_MS - 1 }).byModel || {})) {
-      addBuckets(days, day, model, buckets);
-    }
   }
 }
 
@@ -234,12 +214,12 @@ async function scanGrok({ from, home = homedir() }) {
       const path = join(root, dirName, sessionId, 'updates.jsonl');
       const info = await stat(path).catch(() => null);
       if (!info || (floor != null && info.mtimeMs < floor)) continue;
-      const text = await tryReadFile(path);
-      if (!text) continue;
+      const read = await readGrokTurnsFromFile(path);
+      if (!read) continue;
       filesScanned += 1;
-      const entries = parseJsonLines(text);
-      const stamps = entries.map(grokEventMs).filter((ms) => Number.isFinite(ms));
-      addSessionDays(days, entries, stamps, from, parseGrokTurns);
+      for (const [day, parsed] of billGrokTurnsByDay(read.turns, dayOf, floor)) {
+        for (const [model, buckets] of Object.entries(parsed.byModel || {})) addBuckets(days, day, model, buckets);
+      }
       await yieldToEventLoop();
     }
   }
