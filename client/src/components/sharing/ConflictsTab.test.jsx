@@ -73,6 +73,21 @@ describe('ConflictsTab', () => {
     expect(screen.getByText(/sync_base_hashes\.json/)).toBeInTheDocument();
     // The empty list still renders beneath the warning.
     expect(screen.getByText(/No pending conflicts/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/Conflict detection is degraded/);
+  });
+
+  it('announces loading as a status and exposes the row disclosure state', async () => {
+    const user = userEvent.setup();
+    render(<ConflictsTab />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading conflicts');
+    const toggle = await screen.findByRole('button', { name: /universe/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // The panel is unmounted while collapsed, so no IDREF may point at it.
+    expect(toggle).not.toHaveAttribute('aria-controls');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveAttribute('aria-controls', 'conflict-detail-entry-1');
+    expect(document.getElementById('conflict-detail-entry-1')).not.toBeNull();
   });
 
   it('lists pending conflicts', async () => {
