@@ -21,9 +21,12 @@ vi.mock('../services/apiBlenderModels.js', () => ({
   listBlenderModelFiles: vi.fn(), readBlenderModelFile: vi.fn(), writeBlenderModelFile: vi.fn(), deleteBlenderModelFile: vi.fn(),
   buildBlenderModel: vi.fn(), cancelBlenderModelBuild: vi.fn(), openBlenderModelBuild: vi.fn(), publishBlenderModelBuild: vi.fn(),
   getBlenderModelBuildReport: vi.fn(), getBlenderModelBuildLog: vi.fn(),
+  updateBlenderModelReferenceSource: vi.fn(), addBlenderModelCloseup: vi.fn(), removeBlenderModelCloseup: vi.fn(), previewBlenderModelReference: vi.fn(),
+  renderBlenderModelReference: vi.fn(), attachBlenderModelReferenceImage: vi.fn(), reviewBlenderModelReference: vi.fn(), createBlenderModelPartsBrief: vi.fn(),
   blenderModelBuildFileUrl: (id, buildId, name) => `/api/blender-models/${id}/builds/${buildId}/files/${name}`,
   blenderModelAssetUrl: (id) => `/api/blender-models/${id}/asset`,
 }));
+vi.mock('../services/apiMoodBoard.js', () => ({ listMoodBoardNames: vi.fn(async () => []), getMoodBoard: vi.fn() }));
 import * as api from '../services/apiBlenderModels.js';
 import { copyToClipboard } from '../lib/clipboard.js';
 import BlenderModelDetail from './BlenderModelDetail';
@@ -226,5 +229,71 @@ describe('BlenderModelDetail', () => {
     serve(modelState());
     await userEvent.click(retry);
     expect(await screen.findByRole('heading', { name: 'Example lamp' })).toBeInTheDocument();
+  });
+
+  describe('References', () => {
+    const slot = (extra = {}) => ({ id: 'overall', role: 'overall', words: '', approvedImageId: null, file: null, locked: false, outOfDate: false, images: [], ...extra });
+    const plate = (extra = {}) => slot({ id: 'closeup-1', role: 'closeup', mechanism: 'Hinge', locked: true, ...extra });
+    const withReferences = (references, extra = {}) => modelState({
+      referenceSource: { ingredientId: null, name: null, size: '1 m', images: [], imageMode: null, imageModelId: null }, references, ...extra,
+    });
+    const image = (status, extra = {}) => ({ id: 'img-1', filename: 'sheet.png', jobId: null, status, note: '', error: null, ...extra });
+
+    it('previews the words, renders only on a click, and keeps close-ups locked', async () => {
+      const user = userEvent.setup();
+      serve(withReferences([slot(), plate()]));
+      api.previewBlenderModelReference.mockImplementation(async (_id, _ref, { words }) => ({ sentPrompt: `SHEET ${words}`, promptAdditions: [{ id: 'model-overall-sheet', label: 'Six-view product sheet', text: 'SHEET' }], referenceImages: [], refusal: null }));
+      api.renderBlenderModelReference.mockResolvedValue({ jobId: 'job-1', imageId: 'img-1' });
+      renderAt(`/3d/blender/${ID}/references`);
+      const overall = await screen.findByRole('region', { name: 'Overall sheet' });
+      const hinge = screen.getByRole('region', { name: 'Hinge' });
+      expect(within(hinge).getByRole('button', { name: 'Render' })).toBeDisabled();
+      await user.type(within(overall).getByLabelText(/Your words/), 'Brass');
+      await user.click(await within(overall).findByRole('button', { name: 'Show full prompt' }));
+      expect(within(overall).getByText('SHEET Brass')).toBeInTheDocument();
+      expect(within(overall).getByRole('button', { name: '+ Six-view product sheet' })).toBeInTheDocument();
+      expect(api.renderBlenderModelReference).not.toHaveBeenCalled();
+      await user.click(within(overall).getByRole('button', { name: 'Render' }));
+      expect(api.renderBlenderModelReference).toHaveBeenCalledWith(ID, 'overall', 'Brass', { silent: true });
+      expect(api.previewBlenderModelReference.mock.calls.every(([, refId]) => refId === 'overall')).toBe(true);
+    });
+
+    it('shows why a render would be refused and holds Render back', async () => {
+      serve(withReferences([slot()]));
+      api.previewBlenderModelReference.mockResolvedValue({ sentPrompt: 'SHEET', promptAdditions: [], referenceImages: [], refusal: 'Remove 1 image.' });
+      renderAt(`/3d/blender/${ID}/references`);
+      expect(await screen.findByText('Remove 1 image.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Render' })).toBeDisabled();
+    });
+
+    it('approves an image, sends one back with a note, and marks out-of-date plates', async () => {
+      const user = userEvent.setup();
+      api.previewBlenderModelReference.mockResolvedValue({ sentPrompt: 'SHEET', promptAdditions: [], referenceImages: [], refusal: null });
+      serve(withReferences([slot({ images: [image('review')] })]));
+      renderAt(`/3d/blender/${ID}/references`);
+      await user.click(await screen.findByRole('button', { name: 'Redo…' }));
+      await user.type(screen.getByLabelText(/What should change/), 'thinner');
+      api.reviewBlenderModelReference.mockResolvedValue(withReferences([slot({ words: 'thinner', images: [image('superseded', { note: 'thinner' })] })]));
+      await user.click(screen.getByRole('button', { name: 'Send back' }));
+      expect(api.reviewBlenderModelReference).toHaveBeenLastCalledWith(ID, 'overall', 'img-1', { decision: 'redo', note: 'thinner' }, { silent: true });
+      expect(await screen.findByLabelText(/Your words/)).toHaveValue('thinner');
+      api.reviewBlenderModelReference.mockResolvedValue(withReferences([
+        slot({ approvedImageId: 'img-1', file: 'refs/overall.png', images: [image('approved')] }),
+        plate({ locked: false, outOfDate: true, approvedImageId: 'p', file: 'refs/hinge-1.png' }),
+      ]));
+      await user.click(screen.getByRole('button', { name: 'Approve' }));
+      expect(within(await screen.findByRole('region', { name: 'Hinge' })).getByText('Out of date')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Copy agent brief' }));
+      const brief = copyToClipboard.mock.lastCall[0];
+      for (const text of ['src/refs/overall.png', 'src/refs/hinge-1.png', 'out of date', 'Real size: 1 m']) expect(brief).toContain(text);
+    });
+
+    it('opens the parts brief in the file editor', async () => {
+      const user = userEvent.setup();
+      serve(withReferences([slot()], { workspace: { ...modelState().workspace, hasPartsBrief: true } }));
+      renderAt(`/3d/blender/${ID}/references`);
+      await user.click(await screen.findByRole('button', { name: 'Edit PARTS.md' }));
+      expect(screen.getByLabelText('Current location')).toHaveTextContent(`/3d/blender/${ID}/files?bfile=PARTS.md`);
+    });
   });
 });

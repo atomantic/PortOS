@@ -5,7 +5,7 @@ in Blender, measures what it built, exports a GLB, imports that GLB back into an
 Every build is kept with a report; you publish the build you want, and its GLB is what other parts of PortOS use.
 
 This page covers the engine (issue #17874) and its page (issue #17875), part of the Blender Models epic #17869.
-Reference sheets, joints and texture baking arrive in later phases.
+Joints and texture baking arrive in later phases.
 
 ## On the 3D page
 
@@ -16,9 +16,29 @@ Code Animation › Blender execution. A model opens at `/3d/blender/:id/:tab?`:
 - **Model**: the newest completed build (`?build=` picks another), its size and triangles against budget, its findings
   by severity, and the part list. Choosing a part (`?part=`) shows it alone in the viewer. Build, Publish, Copy agent
   brief, Open in Blender and the GLB / .blend downloads are here.
+- **References**: sheets and the parts brief made before modeling (below).
 - **Files**: the `src/` editor films use. Unsaved edits hold builds back until saved or discarded.
 - **Builds**: running and recent jobs with their logs, then every kept build with its log, review and Publish.
 - **Settings**: Blender readiness, the workspace path, the name and description, and Delete.
+
+## References
+
+The **References** tab (issue #17876) draws what the model is built from, in order:
+
+1. **Source**: a Casting object (its canonical image, product sheet and size come in), gallery images, uploads or
+   mood-board pins, the real size, and the renderer.
+2. **Overall sheet**: six directions at one scale with the real size stated. Render it, or use an existing image.
+3. **Close-up plates**: one per mechanism you name, square-on and from the side, conditioned on the approved overall
+   sheet and the source images. Locked until an overall sheet is approved.
+4. **Review**: Approve, or Redo with an optional note that joins your words for the next render. A new image never
+   replaces an approved one until you approve it; the old one is then superseded. A plate made from an earlier
+   overall sheet is marked **Out of date**.
+5. **Parts brief**: `src/PARTS.md`, created from a template and edited under Files.
+
+Your words are sent exactly as typed; everything PortOS adds is a labeled chip, and **Show full prompt** comes from
+the code that sends it. More reference images than the renderer takes is refused, never cut. An image queues only when
+you press Render, and it attaches even if PortOS restarts meanwhile. Approved images are copied into `src/refs/`, so
+approving one counts as a source change, and the agent brief lists them.
 
 ## Trust and requirements
 
@@ -127,6 +147,13 @@ action counts and bounds.
 | `GET /api/blender-models/:id/builds/:buildId/files/:name` | `model.glb`, `model.blend`, `report.json` or `build.log` |
 | `POST /api/blender-models/:id/builds/:buildId/open` | Open the build's `.blend` in Blender (embedded scripts stay off) |
 | `POST /api/blender-models/:id/publish` `{ buildId }` | Publish a completed build without errors |
+| `PATCH /api/blender-models/:id/reference-source` `{ ingredientId?, images?, size?, imageMode?, imageModelId? }` | What the reference images start from |
+| `POST /api/blender-models/:id/references` `{ mechanism }`, `DELETE …/references/:refId` | Add or remove a close-up plate (the overall sheet is `overall`) |
+| `POST …/references/:refId/preview` `{ words? }` | Exactly what a render would send; queues nothing |
+| `POST …/references/:refId/render` `{ words? }` | Queue one image (202, `{ jobId, imageId }`) |
+| `POST …/references/:refId/images` `{ filename }` | Put a library image up for review |
+| `POST …/references/:refId/images/:imageId/review` `{ decision, note? }` | `approve` or `redo` |
+| `POST /api/blender-models/:id/parts-brief` | Create `src/PARTS.md` (409 once it exists) |
 | `GET /api/blender-models/:id/asset` | The published GLB |
 
 Every change announces `blender-model:changed` `{ id }` over Socket.IO (record writes, source writes, build job
@@ -138,5 +165,7 @@ start and finish); the client re-reads the model. Nothing polls.
   containment), `driver.js` + `py/portos_model_driver.py`, `protocol.js` (the driver's `PORTOS_MODEL ` stdout
   events), `report.js` (checks), `build.js` (the job, pruning, boot recovery) and `models.js` (records, source,
   publish, asset, open).
+- `references.js` holds the reference slots and review, `referenceImageHook.js` attaches finished renders, and
+  `server/services/catalog/modelSheetPrompts.js` builds the prompts.
 - `server/services/blenderWorkspace/` is shared with films: path containment, the `src/` tree, source hashing, the
   Trusted local gate and driver launch, the in-memory job registry and the per-job log.

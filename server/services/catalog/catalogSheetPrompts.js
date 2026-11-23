@@ -77,8 +77,11 @@ export function buildEnvironmentSheetPrompt(universe, place) {
   };
 }
 
-/** Product sheet for an object: orthographic views on a plain backdrop, scale reference, macro detail. */
-export function buildProductSheetPrompt(universe, object) {
+/**
+ * Product sheet for an object: orthographic views on a plain backdrop, scale reference, macro detail.
+ * `sixViews` draws all six directions, for a sheet a 3D model is built from.
+ */
+export function buildProductSheetPrompt(universe, object, { sixViews = false } = {}) {
   requireEntry(object, 'buildProductSheetPrompt');
   const styleBits = universeAestheticLine(universe || {});
   const name = trim(object.name) || 'Unnamed object';
@@ -96,7 +99,7 @@ export function buildProductSheetPrompt(universe, object) {
     size ? `Real-world size: ${size}.` : '',
     significance ? `Significance: ${significance}` : '',
     visualPrompt ? `Visual notes: ${visualPrompt}` : '',
-    `Orthographic views (large top zone): four views of ${name} side by side at identical scale — FRONT, SIDE, BACK, TOP — each on the plain backdrop with a soft contact shadow and a caption strip reading "FRONT", "SIDE", "BACK", "TOP".`,
+    sixViews ? `Orthographic views (large top zone): six views of ${name} in a three-by-two grid, all at one identical scale with no perspective — FRONT, BACK, LEFT, RIGHT, TOP, BOTTOM — aligned so the same feature sits at the same height in every side view, each on the plain backdrop with a caption strip naming its direction.` : `Orthographic views (large top zone): four views of ${name} side by side at identical scale — FRONT, SIDE, BACK, TOP — each on the plain backdrop with a soft contact shadow and a caption strip reading "FRONT", "SIDE", "BACK", "TOP".`,
     size
       ? `Scale reference (lower left): ${name} with a measuring ruler marked in feet and centimeters and the plain outline of a standard 6 ft 8 in (203 cm) door frame, drawn at true relative size so it reads as ${size}, labeled "SCALE" with its dimensions. The ruler and outline stand apart with clear space around ${name}: no guide, ruler or dimension line touches or crosses it, and the orthographic views carry no guide lines at all.`
       : `Scale reference (lower left): ${name} beside a simple measuring ruler and a neutral reference object so its real-world size reads clearly, labeled "SCALE".`,

@@ -11,11 +11,13 @@ import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
   blenderModelBuildSchema, blenderModelFileQuerySchema, blenderModelFileWriteSchema, blenderModelPublishSchema,
-  blenderModelWorkspaceSchema, createBlenderModelSchema, patchBlenderModelSchema,
+  blenderModelCloseupSchema, blenderModelPartsBriefSchema, blenderModelReferenceImageSchema, blenderModelReferenceReviewSchema,
+  blenderModelReferenceSourceSchema, blenderModelReferenceWordsSchema, blenderModelWorkspaceSchema, createBlenderModelSchema, patchBlenderModelSchema,
 } from '../lib/blenderModelsValidation.js';
 
 const router = Router();
 const models = () => import('../services/blenderModels/models.js');
+const references = () => import('../services/blenderModels/references.js');
 const builds = () => import('../services/blenderModels/build.js');
 
 router.get('/', asyncHandler(async (_req, res) => {
@@ -120,6 +122,57 @@ router.get('/:id/asset', asyncHandler(async (req, res) => {
     failure: new ServerError('Model file not found', { status: 404, code: 'ASSET_MISSING' }),
     label: 'Blender model asset',
   });
+}));
+
+// Reference images and the parts brief (#17876). Only POST .../render queues an image job.
+const sendState = async (req, res, status = 200) => {
+  const { getBlenderModelState } = await models();
+  res.status(status).json(await getBlenderModelState(req.params.id));
+};
+
+router.patch('/:id/reference-source', asyncHandler(async (req, res) => {
+  const patch = validateRequest(blenderModelReferenceSourceSchema, req.body ?? {});
+  await (await references()).updateBlenderModelReferenceSource(req.params.id, patch);
+  await sendState(req, res);
+}));
+
+router.post('/:id/parts-brief', asyncHandler(async (req, res) => {
+  validateRequest(blenderModelPartsBriefSchema, req.body ?? {});
+  await (await references()).createBlenderModelPartsBrief(req.params.id);
+  await sendState(req, res, 201);
+}));
+
+router.post('/:id/references', asyncHandler(async (req, res) => {
+  const { mechanism } = validateRequest(blenderModelCloseupSchema, req.body ?? {});
+  await (await references()).addBlenderModelCloseup(req.params.id, mechanism);
+  await sendState(req, res, 201);
+}));
+
+router.delete('/:id/references/:referenceId', asyncHandler(async (req, res) => {
+  await (await references()).removeBlenderModelCloseup(req.params.id, req.params.referenceId);
+  await sendState(req, res);
+}));
+
+router.post('/:id/references/:referenceId/preview', asyncHandler(async (req, res) => {
+  const input = validateRequest(blenderModelReferenceWordsSchema, req.body ?? {});
+  res.json(await (await references()).previewBlenderModelReference(req.params.id, req.params.referenceId, input));
+}));
+
+router.post('/:id/references/:referenceId/render', asyncHandler(async (req, res) => {
+  const input = validateRequest(blenderModelReferenceWordsSchema, req.body ?? {});
+  res.status(202).json(await (await references()).renderBlenderModelReference(req.params.id, req.params.referenceId, input));
+}));
+
+router.post('/:id/references/:referenceId/images', asyncHandler(async (req, res) => {
+  const { filename } = validateRequest(blenderModelReferenceImageSchema, req.body ?? {});
+  await (await references()).useBlenderModelReferenceImage(req.params.id, req.params.referenceId, filename);
+  await sendState(req, res, 201);
+}));
+
+router.post('/:id/references/:referenceId/images/:imageId/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(blenderModelReferenceReviewSchema, req.body ?? {});
+  await (await references()).reviewBlenderModelReference(req.params.id, req.params.referenceId, req.params.imageId, input);
+  await sendState(req, res);
 }));
 
 export default router;

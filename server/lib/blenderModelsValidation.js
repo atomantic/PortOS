@@ -29,3 +29,24 @@ export const blenderModelFileWriteSchema = z.object({
 export const blenderModelBuildSchema = z.object({ quality: z.enum(['draft', 'full']).optional() }).strict();
 
 export const blenderModelPublishSchema = z.object({ buildId }).strict();
+
+const imageFilename = z.string().min(1).max(256).regex(/^(?![.])[^/\\]+\.(png|jpe?g|webp)$/i, 'must be an image filename');
+const referenceWords = z.string().max(4000);
+
+export const blenderModelReferenceSourceSchema = z.object({
+  ingredientId: z.string().min(1).max(128).nullable().optional(),
+  images: z.array(z.object({ filename: imageFilename, label: z.string().max(200).optional() }).strict()).max(32).optional(),
+  size: z.string().max(200).regex(/^[^\r\n]*$/, 'size must be one line').optional(),
+  imageMode: z.string().max(32).nullable().optional(),
+  imageModelId: z.string().max(64).nullable().optional(),
+}).strict().refine((patch) => Object.keys(patch).length > 0, 'nothing to change');
+
+export const blenderModelCloseupSchema = z.object({ mechanism: z.string().trim().min(1).max(80).regex(/^[^\r\n]*$/, 'mechanism must be one line') }).strict();
+
+export const blenderModelReferenceWordsSchema = z.object({ words: referenceWords.optional() }).strict();
+
+export const blenderModelReferenceImageSchema = z.object({ filename: imageFilename }).strict();
+
+export const blenderModelReferenceReviewSchema = z.object({ decision: z.enum(['approve', 'redo']), note: z.string().max(2000).optional() }).strict();
+
+export const blenderModelPartsBriefSchema = z.object({}).strict();

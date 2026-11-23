@@ -2,6 +2,8 @@ import { useState } from 'react';
 import toast from '../ui/Toast';
 import { useModelLifecycle } from '../../hooks/useModelLifecycle';
 import {
+  addBlenderModelCloseup, attachBlenderModelReferenceImage, createBlenderModelPartsBrief, removeBlenderModelCloseup,
+  renderBlenderModelReference, reviewBlenderModelReference, updateBlenderModelReferenceSource,
   buildBlenderModel, cancelBlenderModelBuild, deleteBlenderModelFile, getBlenderModel, getBlenderModelBuildLog, listBlenderModelFiles,
   openBlenderModelBuild, publishBlenderModelBuild, readBlenderModelFile, scaffoldBlenderModel, updateBlenderModel, writeBlenderModelFile,
 } from '../../services/apiBlenderModels.js';
@@ -86,5 +88,12 @@ export default function useBlenderModel(id) {
     publish: (buildId) => run('publish', () => publishBlenderModelBuild(id, buildId, { silent: true }), 'Could not publish the build'),
     openBuild: (buildId) => run(`open:${buildId}`, () => openBlenderModelBuild(id, buildId, { silent: true }), 'Could not open Blender'),
     update: (patch) => run('update', () => updateBlenderModel(id, patch, { silent: true }), 'Could not save the model'),
+    updateReferenceSource: (patch) => run('referenceSource', () => updateBlenderModelReferenceSource(id, patch, { silent: true }), 'Could not save the source'),
+    addCloseup: (mechanism) => run('closeup', () => addBlenderModelCloseup(id, mechanism, { silent: true }), 'Could not add the plate'),
+    removeCloseup: (referenceId) => run(`remove:${referenceId}`, () => removeBlenderModelCloseup(id, referenceId, { silent: true }), 'Could not remove the plate'),
+    renderReference: (referenceId, words) => run(`render:${referenceId}`, () => renderBlenderModelReference(id, referenceId, words, { silent: true }), 'Could not queue the render'),
+    attachReference: (referenceId, filename) => run(`attach:${referenceId}`, () => attachBlenderModelReferenceImage(id, referenceId, filename, { silent: true }), 'Could not use that image'),
+    reviewReference: (referenceId, imageId, body) => run(`review:${imageId}`, () => reviewBlenderModelReference(id, referenceId, imageId, body, { silent: true }), 'Could not save the review'),
+    createPartsBrief: () => run('partsBrief', () => createBlenderModelPartsBrief(id, { silent: true }), 'Could not create the parts brief'),
   };
 }
