@@ -92,7 +92,7 @@ Test at the highest practical public boundary (route, service workflow, store ad
 
 The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the client from Vite on `:5554`. **Ports**: PortOS owns 5553–5569 (`docs/PORTS.md`); with HTTPS on, local scripts use the loopback HTTP mirror on `:5553`. Define ports in the top-level `PORTS` object in `ecosystem.config.cjs`.
 
-**Never run `npm ci` or `npm install` inside an ordinary CoS worktree (`data/cos/worktrees/*`).** Its `node_modules` (root, `client/`, `server/`) symlink to the primary checkout, so npm empties the primary's dependencies and every agent spawn fails (`posix_spawn failed`). Use linked binaries (`server/node_modules/.bin/vitest run <files>`). A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` after `git worktree add`. Recovery: `docs/TROUBLESHOOTING.md` ("Every Agent Spawn Fails…").
+**Never run `npm ci` or `npm install` inside an ordinary CoS worktree (`data/cos/worktrees/*`).** Its `node_modules` (root, `client/`, `server/`) symlink to the primary checkout, so npm empties the primary's dependencies and every agent spawn fails (`posix_spawn failed`). Use linked binaries (`server/node_modules/.bin/vitest run --configLoader runner <files>`). A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` after `git worktree add`. Recovery: `docs/TROUBLESHOOTING.md` ("Every Agent Spawn Fails…").
 
 **Backup excludes.** Anchor every `DEFAULT_EXCLUDES` path in `server/services/backup/excludes.js` with a leading `/` or it silently drops user data .
 
