@@ -8,6 +8,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatDateTime } from '../../utils/formatters';
 import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
 import { getSignalStatus, checkSignalSetup, syncSignal } from '../../services/apiSignal.js';
+import { pluralize } from '../../lib/textUtils';
 
 const SIGNAL_DISABLED_MESSAGE = 'Enable Signal sync and save before checking setup or syncing.';
 
@@ -34,7 +35,7 @@ export function SignalTab() {
     const report = await checkSignalSetup({ silent: true }).catch(() => ({ ok: false, error: 'Setup check failed' }));
     setChecking(false);
     setSetup(report);
-    if (report?.ok) toast.success(`Signal DB reachable — ${report.messageCount ?? 0} message(s)`);
+    if (report?.ok) toast.success(`Signal DB reachable — ${pluralize(report.messageCount ?? 0, 'message')}`);
     else toast.error(report?.enabled === false ? SIGNAL_DISABLED_MESSAGE : report?.error || 'Signal DB not reachable');
   };
 
@@ -43,7 +44,7 @@ export function SignalTab() {
     const result = await syncSignal({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
     setSyncing(false);
     if (result?.ok) {
-      toast.success(`Synced: ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s)${result.hasMore ? ' — more history remains, run again' : ''}`);
+      toast.success(`Synced: ${pluralize(result.recorded, 'event')}, ${pluralize(result.touchpointsCreated, 'touchpoint')}${result.hasMore ? ' — more history remains, run again' : ''}`);
       setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), cursorRowid: result.cursorRowid, lastResult: result, lastRunAt: new Date().toISOString() } }));
     } else {
       toast.error(result?.error || 'Sync failed');
@@ -144,7 +145,7 @@ export function SignalTab() {
           </div>
           {setup.ok ? (
             <p className="text-sm text-gray-300">
-              Signal DB reachable — {setup.messageCount ?? 0} message(s){setup.keySource ? ` (key via ${setup.keySource})` : ''}.
+              Signal DB reachable — {pluralize(setup.messageCount ?? 0, 'message')}{setup.keySource ? ` (key via ${setup.keySource})` : ''}.
             </p>
           ) : (
             <div className="text-sm text-gray-300 space-y-2">

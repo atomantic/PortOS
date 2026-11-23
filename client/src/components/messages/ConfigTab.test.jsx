@@ -149,7 +149,7 @@ describe('Messages account deletion', () => {
     await screen.findByRole('button', { name: 'Enabled' });
 
     fireEvent.click(screen.getByTitle('Delete account'));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' }).at(-1));
     await waitFor(() => expect(api.deleteMessageAccount).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByTitle('Delete account')).not.toBeDisabled());
     expect(setAccounts).not.toHaveBeenCalled();
@@ -157,7 +157,7 @@ describe('Messages account deletion', () => {
     expect(screen.getByText('Personal')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTitle('Delete account'));
-    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete account' }).at(-1));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Account deleted'));
     expect(setAccounts.mock.calls[0][0]([gmailAccount])).toEqual([]);
   });

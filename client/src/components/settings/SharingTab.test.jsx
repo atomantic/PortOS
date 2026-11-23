@@ -338,7 +338,7 @@ describe('SharingTab — an absent federation slice is not a failed read', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save provider' }));
 
     await waitFor(() => expect(toast.error)
-      .toHaveBeenCalledWith('Could not read current settings — provider not saved'));
+      .toHaveBeenCalledWith('Could not read current settings — provider not saved: offline Check the connection and try again.'));
     expect(updateSettings).not.toHaveBeenCalled();
   });
 

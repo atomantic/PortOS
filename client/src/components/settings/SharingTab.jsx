@@ -8,6 +8,7 @@ import useListResource from '../../hooks/useListResource';
 import { getAuthStatus } from '../../services/apiAuth.js';
 import { getMediaShareCandidates, getSettings, updateSettings } from '../../services/apiSystem.js';
 import { listMusicEngines } from '../../services/apiMusic.js';
+import { failureMessage } from '../messages/failureMessage';
 
 // Engine health probes may spawn local Python checks on a cold cache, so this
 // loads independently of the sharing controls.
@@ -124,7 +125,7 @@ export function SharingTab() {
         setProviderSettings(provider);
         loadProvider({ enabled, maxQueuedJobs, models, visualModels: visual });
       })
-      .catch(() => toast.error('Failed to load settings'))
+.catch((err) => toast.error(failureMessage('Could not load sharing settings', err, 'Reload the page to retry.')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -144,10 +145,11 @@ export function SharingTab() {
   const handleStrictPullToggle = async (next) => {
     setStrictPullSaving(true);
     // Same reachability precheck as the provider save below.
-    const fresh = await getSettings({ silent: true }).catch(() => null);
+    let readFailure = null;
+    const fresh = await getSettings({ silent: true }).catch((err) => { readFailure = err; return null; });
     if (fresh === null) {
       setStrictPullSaving(false);
-      toast.error('Could not read current settings — not saved');
+      toast.error(failureMessage('Could not read current settings — not saved', readFailure));
       return;
     }
     const merged = await updateSettings({ federation: { strictPullAuthorization: next } }).catch(() => null);
@@ -220,16 +222,18 @@ export function SharingTab() {
     // The read stays as a reachability precheck: without it an unreachable
     // server would surface only as a generic save failure, and the user would
     // not know their earlier edits were never loaded. A failed read aborts.
-    const fresh = await getSettings({ silent: true }).catch(() => null);
+    let readFailure = null;
+    const fresh = await getSettings({ silent: true }).catch((err) => { readFailure = err; return null; });
     if (fresh === null) {
       setProviderSaving(false);
-      toast.error('Could not read current settings — provider not saved');
+      toast.error(failureMessage('Could not read current settings — provider not saved', readFailure));
       return;
     }
-    const merged = await updateSettings({ federation: { mediaProvider } }, { silent: true }).catch(() => null);
+    let failure = null;
+    const merged = await updateSettings({ federation: { mediaProvider } }, { silent: true }).catch((err) => { failure = err; return null; });
     setProviderSaving(false);
     if (!merged) {
-      toast.error('Failed to save media provider settings');
+      toast.error(failureMessage('Could not save media provider settings', failure));
       return;
     }
     setProviderSettings(mediaProvider);

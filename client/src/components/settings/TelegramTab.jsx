@@ -12,6 +12,7 @@ import {
   updateTelegramForwardTypes,
   updateTelegramMethod,
 } from '../../services/apiSystem.js';
+import { failureMessage } from '../messages/failureMessage';
 
 export function TelegramTab() {
   const botTokenId = useId();
@@ -124,7 +125,7 @@ export function TelegramTab() {
       ? tgForwardTypes.filter(t => t !== type)
       : [...tgForwardTypes, type];
     setTgForwardTypes(updated);
-    updateTelegramForwardTypes(updated, { silent: true }).catch(() => toast.error('Failed to update forward types'));
+    updateTelegramForwardTypes(updated, { silent: true }).catch((err) => toast.error(failureMessage('Could not update forward types', err)));
   };
 
   if (loading) {
