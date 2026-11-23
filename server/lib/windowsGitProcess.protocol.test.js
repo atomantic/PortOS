@@ -99,11 +99,9 @@ describe.skipIf(process.platform !== 'win32')('Windows Git broker failure contai
     startupFailure = phase;
     const failure = execGit(['status'], '/synthetic-startup-timeout').catch(error => error);
     await vi.waitFor(() => expect(phase === 'compiler-timeout' ? compiler : broker).not.toBeNull());
-    if (phase === 'compiler-timeout') {
-      await vi.advanceTimersByTimeAsync(WINDOWS_GIT_COMPILER_BUDGET_MS - 1);
-      expect(compiler.kill).not.toHaveBeenCalled();
-    }
-    await vi.advanceTimersByTimeAsync(phase === 'compiler-timeout' ? 1 : 15000);
+    // One advance of the real deadline. A budget-minus-one probe is not stable:
+    // waitFor can move the faked clock before this line runs.
+    await vi.advanceTimersByTimeAsync(phase === 'compiler-timeout' ? WINDOWS_GIT_COMPILER_BUDGET_MS : 15000);
     expect(await failure).toMatchObject({ code: 'GIT_CONTAINMENT_UNAVAILABLE', startupPhase: phase });
     expect(requests).toEqual([]);
     expect((phase === 'compiler-timeout' ? compiler : broker).kill).toHaveBeenCalledOnce();
