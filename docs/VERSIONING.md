@@ -54,9 +54,9 @@ base, as required by [`AGENTS.md`](../AGENTS.md).
 ### Regular Development
 
 ```bash
-# Work on main or feature branches
-git checkout main
-git pull
+# Work on a feature branch cut from origin/main (never directly on main)
+git fetch origin main
+git checkout -b <branch> origin/main
 
 # Make changes, commit with a human-readable message (this becomes the
 # release-note source — no changelog file or fragment to write)
@@ -66,7 +66,7 @@ git fetch origin main
 # Rebase only for conflicts, enforced branch policy, or evidenced integration risk
 # git rebase origin/main
 npm run pregate
-git push
+git push -u origin <branch>   # then open a PR into main
 ```
 
 The default pregate is lint/formatting, structural guards and focused tests.
