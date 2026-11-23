@@ -7,7 +7,7 @@
  *   - ffmpeg (required to encode MP4s and contact-sheet proofs), via the
  *     platform package manager.
  *   - Optional motion-design agent skills (HyperFrames, Remotion, Claude
- *     Animation) installed user-wide with the `skills` CLI, so a launch-video
+ *     Animation) installed user-wide from pinned, SHA-256-verified GitHub archives, so a launch-video
  *     run can ask its agent to consult them (the "Consult motion skills" option).
  *
  * The seek(t) renderer, motion kit and critique-loop proofs ship with PortOS and
@@ -26,10 +26,9 @@
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { platform as osPlatform } from 'node:os';
-import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../server/lib/motionSkills.js';
+import { MOTION_SKILL_PACKS, detectMotionSkills, installMotionSkillPack } from '../server/lib/motionSkills.js';
 import { whichFirstSync } from '../server/lib/processEnv.js';
 import { findFfmpeg } from '../server/lib/ffmpeg.js';
-export { skillInstallCommand };
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 export function parseMotionSetupArgs(argv) {
@@ -103,7 +102,7 @@ async function ensureFfmpeg({ yes }) {
   return true;
 }
 
-function installSkills(ids) {
+async function installSkills(ids) {
   let ok = true;
   const detected = detectMotionSkills();
   for (const id of ids) {
@@ -113,8 +112,10 @@ function installSkills(ids) {
       continue;
     }
     console.log(`🎬 Installing ${pack.label} skills from ${pack.source}...`);
-    if (!run(skillInstallCommand(pack))) {
-      console.error(`❌ ${pack.label} skill install failed`);
+    try {
+      await installMotionSkillPack(pack);
+    } catch (error) {
+      console.error(`❌ ${pack.label} skill install failed: ${error.message}`);
       ok = false;
     }
   }
@@ -131,7 +132,7 @@ async function main() {
   }
   console.log('🎬 Motion studio setup');
   const ffmpegReady = await ensureFfmpeg(options);
-  const skillsReady = options.skills.length ? installSkills(options.skills) : true;
+  const skillsReady = options.skills.length ? await installSkills(options.skills) : true;
   printStatus(await status());
   if (!options.skills.length) console.log('💡 Optional: npm run setup:motion -- --skills installs HyperFrames, Remotion and Claude Animation technique skills for launch-video agents.');
   if (!ffmpegReady || !skillsReady) process.exitCode = 1;

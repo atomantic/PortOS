@@ -1,10 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../lib/motionSkills.js';
+import { MOTION_SKILL_PACKS, detectMotionSkills, installMotionSkillPack } from '../lib/motionSkills.js';
 import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 
-import { execFile } from '../lib/childProcess.js';
 import { htmlCompositionRenderSchema } from '../lib/htmlCompositionValidation.js';
 const router = Router();
 
@@ -16,7 +15,7 @@ router.get('/toolkit', asyncHandler(async (req, res) => {
 }));
 
 // One-click equivalent of `npm run setup:motion -- --skills`: installs every
-// missing skill pack user-wide through the `skills` CLI. Explicit user action
+// missing skill pack user-wide from pinned, hash-verified GitHub archives (no npx). Explicit user action
 // (a button), never run on boot.
 let skillInstall = null;
 router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
@@ -26,12 +25,11 @@ router.post('/toolkit/skills/install', asyncHandler(async (req, res) => {
   const failed = [];
   skillInstall = (async () => {
     for (const { id, label } of packs) {
-      const [command, args] = skillInstallCommand(sources.get(id));
       console.log(`🎬 Installing ${label} motion skills`);
-      const ok = await new Promise(resolve => execFile(command, args, { timeout: 5 * 60 * 1000, shell: process.platform === 'win32' }, error => {
-        if (error) console.error(`❌ ${label} skill install failed: ${error.message.split('\n')[0]}`);
-        resolve(!error);
-      }));
+      const ok = await installMotionSkillPack(sources.get(id)).then(() => true, error => {
+        console.error(`❌ ${label} skill install failed: ${error.message.split('\n')[0]}`);
+        return false;
+      });
       if (!ok) failed.push(label);
     }
   })();

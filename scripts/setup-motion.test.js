@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { ffmpegInstallCommand, parseMotionSetupArgs, skillInstallCommand } from './setup-motion.js';
+import { ffmpegInstallCommand, parseMotionSetupArgs } from './setup-motion.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills } from '../server/lib/motionSkills.js';
 
 describe('motion studio setup', () => {
@@ -11,13 +11,11 @@ describe('motion studio setup', () => {
     expect(() => parseMotionSetupArgs(['--force'])).toThrow('Unknown option');
   });
 
-  it('installs each pack user-wide without prompts, for the agents CoS runs', () => {
-    const pack = MOTION_SKILL_PACKS.find(entry => entry.id === 'hyperframes');
-    const [command, args] = skillInstallCommand(pack);
-    expect(command).toBe('npx');
-    // --global/--yes keep an unattended setup from hanging on a scope prompt.
-    expect(args).toEqual(['-y', 'skills@latest', 'add', 'heygen-com/hyperframes', '--global', '--yes',
-      '--agent', 'claude-code', 'codex', '--skill', ...pack.skills]);
+  it('pins every pack to an immutable commit and archive digest instead of a floating npx CLI', () => {
+    for (const pack of MOTION_SKILL_PACKS) {
+      expect(pack.revision).toMatch(/^[0-9a-f]{40}$/);
+      expect(pack.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 
   it('uses the platform package manager for ffmpeg and reports none when unavailable', () => {

@@ -5,7 +5,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import router from './htmlComposition.js';
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { execFile } from '../lib/childProcess.js';
+import { installMotionSkillPack } from '../lib/motionSkills.js';
 import { derivePeerAuthToken } from '../lib/peerHttpClient.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 
@@ -30,13 +30,9 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 vi.mock('../services/pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async () => null) }));
 const skillState = vi.hoisted(() => ({ installed: false, existingPack: null }));
-vi.mock('../lib/childProcess.js', async importOriginal => ({
-  ...(await importOriginal()),
-  execFile: vi.fn((command, args, options, callback) => { skillState.installed = true; callback(null); }),
-}));
 vi.mock('../lib/motionSkills.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, detectMotionSkills: () => actual.MOTION_SKILL_PACKS.map(pack => ({ id: pack.id, label: pack.label, skills: [...pack.skills], found: skillState.installed || pack.id === skillState.existingPack ? [...pack.skills] : [], installed: skillState.installed || pack.id === skillState.existingPack })) };
+  return { ...actual, installMotionSkillPack: vi.fn(async () => { skillState.installed = true; }), detectMotionSkills: () => actual.MOTION_SKILL_PACKS.map(pack => ({ id: pack.id, label: pack.label, skills: [...pack.skills], found: skillState.installed || pack.id === skillState.existingPack ? [...pack.skills] : [], installed: skillState.installed || pack.id === skillState.existingPack })) };
 });
 vi.mock('../lib/beatGrid.js', () => ({ getBeatGrid: vi.fn(async () => null) }));
 
@@ -105,7 +101,7 @@ describe('motion skills install authority (#9439)', () => {
     authState.enabled = false;
     skillState.installed = false;
     skillState.existingPack = null;
-    execFile.mockClear();
+    installMotionSkillPack.mockClear();
   });
 
   it.each([
@@ -117,7 +113,7 @@ describe('motion skills install authority (#9439)', () => {
       .set(DEV_PROXY_CLIENT_ADDRESS_HEADER, proxyAddress);
     expect(response.status).toBe(403);
     expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
-    expect(execFile).not.toHaveBeenCalled();
+    expect(installMotionSkillPack).not.toHaveBeenCalled();
     expect(skillState.installed).toBe(false);
   });
 
@@ -132,25 +128,25 @@ describe('motion skills install authority (#9439)', () => {
       .set('X-PortOS-Peer-Auth', derivePeerAuthToken('example-pair-secret-0123456789-abcdef', 'example-instance'));
     expect(peer.status).toBe(403);
     expect(peer.body.code).toBe('PEER_SCOPE_FORBIDDEN');
-    expect(execFile).not.toHaveBeenCalled();
+    expect(installMotionSkillPack).not.toHaveBeenCalled();
     expect(skillState.installed).toBe(false);
   });
 
   it.each(['loopback', 'operator-session'])('allows %s authority and installs only missing packs', async mode => {
-    const { MOTION_SKILL_PACKS, skillInstallCommand } = await import('../lib/motionSkills.js');
+    const { MOTION_SKILL_PACKS } = await import('../lib/motionSkills.js');
     skillState.existingPack = MOTION_SKILL_PACKS[0].id;
     authState.enabled = mode === 'operator-session';
     const pending = request(buildApp(mode === 'loopback' ? '127.0.0.1' : '192.0.2.10')).post(installPath);
     if (authState.enabled) pending.set('Authorization', 'Bearer example-operator-session');
     const response = await pending;
     expect(response.status).toBe(200);
-    expect(execFile).toHaveBeenCalledTimes(MOTION_SKILL_PACKS.length - 1);
-    expect(execFile.mock.calls.map(([command, args]) => [command, args])).toEqual(MOTION_SKILL_PACKS.slice(1).map(skillInstallCommand));
+    expect(installMotionSkillPack).toHaveBeenCalledTimes(MOTION_SKILL_PACKS.length - 1);
+    expect(installMotionSkillPack.mock.calls.map(([pack]) => pack.id)).toEqual(MOTION_SKILL_PACKS.slice(1).map(pack => pack.id));
     expect(response.body.skillPacks.every(pack => pack.installed)).toBe(true);
-    execFile.mockClear();
+    installMotionSkillPack.mockClear();
     expect((await request(buildApp('127.0.0.1')).post(installPath)
       .set('Authorization', 'Bearer example-operator-session')).status).toBe(200);
-    expect(execFile).not.toHaveBeenCalled();
+    expect(installMotionSkillPack).not.toHaveBeenCalled();
   });
 
   it('keeps toolkit status available to a remote password-free caller and gates rendering', async () => {
@@ -159,6 +155,6 @@ describe('motion skills install authority (#9439)', () => {
     // Render runs the headless composition browser and ffmpeg (#13055).
     const render = await request(gatedApp).post('/api/html-composition/render').send({ directory: 'compositions/example' });
     expect([render.status, render.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(execFile).not.toHaveBeenCalled();
+    expect(installMotionSkillPack).not.toHaveBeenCalled();
   });
 });
