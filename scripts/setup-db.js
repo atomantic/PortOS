@@ -118,7 +118,10 @@ function hasCompose() {
 // PATH unless the user exported it. Probed per call (not cached at load) so a
 // keg installed by `db.sh setup-native` is found by the verification step that
 // runs right after it. Mirrors scripts/db.sh and server/services/dbAdmin.js.
-const PSQL_KEG_PATHS = ['/opt/homebrew/opt/postgresql@17/bin/psql', '/usr/local/opt/postgresql@17/bin/psql'];
+// PORTOS_BREW_PG_PREFIXES (space-separated, same override as db.sh) lets tests
+// hide the host's real keg so a stubbed PATH psql is the one probed.
+const PSQL_KEG_PATHS = (process.env.PORTOS_BREW_PG_PREFIXES?.trim().split(/\s+/).filter(Boolean)
+  ?? ['/opt/homebrew/opt/postgresql@17', '/usr/local/opt/postgresql@17']).map((prefix) => `${prefix}/bin/psql`);
 function resolvePsqlBinary() {
   if (process.platform !== 'darwin') return 'psql';
   return PSQL_KEG_PATHS.find((candidate) => existsSync(candidate)) ?? 'psql';
