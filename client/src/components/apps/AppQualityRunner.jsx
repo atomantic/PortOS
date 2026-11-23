@@ -105,7 +105,7 @@ export default function AppQualityRunner({ app, children }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
       <label htmlFor="quality-checks">Checks
         <select id="quality-checks" className="block w-full bg-port-bg border border-port-border rounded p-2" value={selection} disabled={busy} onChange={event => setSelection(event.target.value)}>
-          <option value="missing">Missing or outdated evidence</option><option value={BELOW_COMPOSITE}>Below target (&lt; 85)</option><option value="all">All applicable categories</option>
+          <option value="missing">Missing or outdated evidence</option><option value={BELOW_COMPOSITE}>Below composite and target (&lt; {QUALITY_HEALTHY_THRESHOLD})</option><option value="all">All applicable categories</option>
           {categories.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
         </select>
       </label>
