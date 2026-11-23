@@ -14,7 +14,7 @@ Brain provides a capture-classify-store-surface workflow:
 ## Features
 
 1. **Chat-like Inbox**: Single input for capturing thoughts
-2. **AI Classification**: LM Studio classifies with confidence scores
+2. **AI Classification**: A configured PortOS AI provider classifies with confidence scores
 3. **Four Databases**: People, Projects, Ideas, Admin
 4. **Needs Review Queue**: Low-confidence items await user decision
 5. **Fix/Correct Flow**: Reclassify misrouted thoughts
@@ -96,22 +96,23 @@ stores every record at `<id>/index.json`.
 
 ## AI Classification
 
-The classifier uses LM Studio to analyze captured thoughts and:
+The classifier runs on any configured PortOS AI provider (`defaultProvider` / `defaultModel` in `data/brain/meta.json`, falling back to the active provider; LM Studio / `gptoss-20b` is only the initial default). Unattended runs over stored records (scheduled digests and reviews) are pinned to a provider that can run without host tools, with no fallback to one that cannot. It analyzes captured thoughts and:
 
 - Determine the appropriate database (People, Projects, Ideas, Admin)
 - Extract structured data (names, dates, priorities, etc.)
 - Calculate confidence score (0.0-1.0)
 - Provide reasoning for classification decision
 
-### Confidence Levels
+### Confidence and gating
 
-- **High (≥0.8)**: Auto-routed to database
-- **Medium (0.5-0.8)**: Suggested route, user can confirm or change
-- **Low (<0.5)**: Marked "needs review", user must choose
+- **Confidence threshold**: a single `confidenceThreshold` (default `0.6`). A classification at or above it, with a known destination, is auto-filed.
+- **Needs review**: confidence below the threshold, or a destination of `unknown`, lands in the Needs Review queue for the user to resolve.
+- **Domain autonomy**: the `brain` domain mode `off` captures the thought but skips auto-classify (it goes straight to needs review); `dry-run` classifies and surfaces the suggestion without filing it.
+- **Daily budget**: once the day's auto-classify actions/minutes hit the cap, the rest of the day behaves like `off`. Manual retries are never gated or counted.
 
 ## Daily Digest
 
-Generated daily (configurable schedule):
+Generated daily when scheduled reviews are enabled (opt-in, off by default):
 
 - Summary of captured thoughts
 - Actions taken
@@ -122,7 +123,7 @@ Generated daily (configurable schedule):
 
 ## Weekly Review
 
-Generated weekly (GTD-style):
+Generated weekly (GTD-style) when scheduled reviews are enabled:
 
 - Open loops by database
 - Accomplishments
@@ -213,10 +214,16 @@ video/audio switches (a transcript-only ingest works without it).
 
 ## UI Tabs
 
+The Brain page ships 16 tabs (`client/src/components/brain/constants.js`):
+
 - **Inbox**: Chat-like capture interface with classification results
-- **Memory**: CRUD views for People, Projects, Ideas, Admin
+- **Threads**, **Ideas** (`/brain/ideas`, native ideas plus IdeaLoom lists), **Daily Log**, **Links**, **Meditation**
+- **Memory**: sub-tabs Admin, Memories, People, Projects
+- **Notes**, **Graph**
 - **Digest**: Daily and weekly summaries with run buttons
+- **Feeds**
 - **Trust**: Audit trail with classification confidence and reasoning
+- **Import**, **Spotify**, **YouTube**, **Config**
 
 ## IdeaLoom Obsidian exchange
 
@@ -304,30 +311,32 @@ not export itself back.
 | `server/routes/brain.js` | Aggregator router mounting brainCapture, brainIdeaLoom, brainCrud, brainDigest, brainSettings, brainLinks, brainGraph, brainSync, brainDailyLog, brainSongbook, and brainYoutube |
 | `client/src/pages/Brain.jsx` | Main page with tabs |
 | `client/src/components/brain/tabs/*.jsx` | Tab components |
-| `data/prompts/stages/brain-*.md` | Prompt templates |
+| `data.reference/prompts/stages/brain-*.md` | Shipped prompt template defaults (user overrides live in `data/prompts/stages/brain-*.md`) |
 
 ## Setup Requirements
 
-**LM Studio** must be running with a capable chat model:
-
-1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Load a chat model (e.g., gptoss-20b, qwen-2.5, etc.)
-3. Start the local server on port 1234 (default)
-4. Configure the Brain system to use the model
+Brain needs at least one enabled PortOS AI provider. [LM Studio](https://lmstudio.ai/) is an optional local provider and the initial `defaultProvider` (`lmstudio` / `gptoss-20b`); to use it, load a chat model and start its local server on port 1234. Otherwise set `defaultProvider` / `defaultModel` to any configured provider. Scheduled digests and reviews additionally need a provider that can run without host tools.
 
 ## Configuration
 
-```javascript
-brain: {
-  enabled: true,
-  provider: 'lmstudio',
-  endpoint: 'http://localhost:1234/v1/chat/completions',
-  model: 'gptoss-20b',
-  minConfidence: 0.5,
-  digestSchedule: '0 18 * * *',  // Daily at 6pm
-  reviewSchedule: '0 9 * * 0'    // Weekly on Sunday at 9am
+Settings live in `data/brain/meta.json` (edited via `GET/PUT /api/brain/settings`). Defaults from `DEFAULT_META` in `server/services/brainStorage.js`:
+
+```json
+{
+  "version": 1,
+  "confidenceThreshold": 0.6,
+  "dailyDigestTime": "00:00",
+  "weeklyReviewTime": "00:00",
+  "weeklyReviewDay": "sunday",
+  "defaultProvider": "lmstudio",
+  "defaultModel": "gptoss-20b",
+  "scheduledReviewsEnabled": false,
+  "lastDailyDigest": null,
+  "lastWeeklyReview": null
 }
 ```
+
+Scheduled digests and reviews call an AI provider, so they are opt-in: nothing runs until `scheduledReviewsEnabled` is `true`.
 
 ## Workflow Example
 
