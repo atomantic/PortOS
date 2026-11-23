@@ -198,7 +198,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
 function CharacterDescriptionField({ character, universeId, onUniverseUpdate }) {
   const id = useId();
   const draft = useFieldDraft(character.physicalDescription, async (text) => {
-    const result = await patchUniverseCanonEntry(universeId, 'characters', character.id, { physicalDescription: text.trim() }, { silent: true })
+    const result = await patchUniverseCanonEntry(universeId, 'character', character.id, { physicalDescription: text.trim() }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Save failed'); return null; });
     if (result?.universe) onUniverseUpdate?.(result.universe);
   });

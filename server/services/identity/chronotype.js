@@ -1,5 +1,5 @@
 import { getGenomeSummary } from '../genome.js';
-import { CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, loadJSON, saveJSON } from './store.js';
+import { CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, loadJSON, saveJSON, queueDerivedIdentityWrite } from './store.js';
 import { MARKER_WEIGHTS, extractSleepMarkers, extractCaffeineMarkers } from './markers.js';
 
 const SCHEDULE_TEMPLATES = {
@@ -152,20 +152,33 @@ export function computeRecommendations(type, caffeineMarkers, mtnr1bStatus) {
 export async function getChronotype() {
   const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE);
   if (existing.derivedAt) return existing;
-  return deriveChronotype();
+  return writeChronotype({ initialize: true });
 }
 
-export async function deriveChronotype({ withoutGenetics = false } = {}) {
-  const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
-  const savedMarkers = genomeSummary?.savedMarkers || {};
+export function deriveChronotype({ withoutGenetics = false } = {}) {
+  return writeChronotype({ withoutGenetics });
+}
 
-  const geneticMarkers = extractSleepMarkers(savedMarkers);
-  const caffeineMarkers = extractCaffeineMarkers(savedMarkers);
+function writeChronotype({ withoutGenetics, initialize, overrides }) {
+  return queueDerivedIdentityWrite(CHRONOTYPE_FILE, async () => {
+    const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, { strict: true });
+    if (initialize && existing.derivedAt) return existing;
 
-  // Load existing behavioral data if present
-  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE, { strict: true });
-  const behavioralData = existing.behavioralData;
+    const genomeSummary = withoutGenetics ? null : await getGenomeSummary();
+    const savedMarkers = genomeSummary?.savedMarkers || {};
+    const behavioralData = overrides
+      ? { ...existing.behavioralData, ...overrides }
+      : existing.behavioralData;
 
+    // Behavioral edits on a peer without a local genome still use its synced markers.
+    const useSyncedMarkers = overrides && !genomeSummary?.uploaded;
+    const geneticMarkers = useSyncedMarkers ? existing.geneticMarkers ?? {} : extractSleepMarkers(savedMarkers);
+    const caffeineMarkers = useSyncedMarkers ? existing.caffeineMarkers ?? {} : extractCaffeineMarkers(savedMarkers);
+    return saveChronotype(geneticMarkers, caffeineMarkers, behavioralData);
+  });
+}
+
+async function saveChronotype(geneticMarkers, caffeineMarkers, behavioralData) {
   const { type, confidence, scores } = computeChronotype(geneticMarkers, behavioralData);
 
   const mtnr1bStatus = geneticMarkers.mtnr1b?.status ?? null;
@@ -188,15 +201,8 @@ export async function deriveChronotype({ withoutGenetics = false } = {}) {
   return chronotype;
 }
 
-export async function updateChronotypeBehavioral(overrides) {
-  const existing = await loadJSON(CHRONOTYPE_FILE, DEFAULT_CHRONOTYPE);
-  const behavioralData = { ...(existing.behavioralData || {}), ...overrides };
-
-  // Save behavioral data then re-derive
-  existing.behavioralData = behavioralData;
-  await saveJSON(CHRONOTYPE_FILE, existing);
-
-  return deriveChronotype();
+export function updateChronotypeBehavioral(overrides) {
+  return writeChronotype({ overrides });
 }
 
 /**

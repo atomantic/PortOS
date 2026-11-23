@@ -53,11 +53,14 @@ describe('PlaygroundOutput rendering', () => {
     expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
     expect(iframe.getAttribute('referrerpolicy')).toBe('no-referrer');
     const srcDoc = iframe.getAttribute('srcdoc');
-    const csp = srcDoc.match(/^<!doctype html><meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
+    const csp = srcDoc.match(/^<!doctype html><head><meta http-equiv="Content-Security-Policy" content="([^"]+)"><\/head>/)?.[1];
     expect(csp?.split('; ')).toEqual(expect.arrayContaining([
       "default-src 'none'",
       "form-action 'none'",
       "base-uri 'none'",
+      "object-src 'none'",
+      "frame-src 'none'",
+      "worker-src 'none'",
       "script-src 'unsafe-inline'",
       "style-src 'unsafe-inline'",
       'img-src data: blob:',

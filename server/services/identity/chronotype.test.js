@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const h = vi.hoisted(() => ({ chronotypeData: null }));
 
 vi.mock('./store.js', () => ({
+  queueDerivedIdentityWrite: (_file, work) => work(),
   CHRONOTYPE_FILE: 'chronotype.json',
   DEFAULT_CHRONOTYPE: { type: null, confidence: 0, behavioralData: {} },
   loadJSON: vi.fn(async () => structuredClone(h.chronotypeData)),
@@ -13,7 +14,8 @@ vi.mock('../genome.js', () => ({
   getGenomeSummary: vi.fn(async () => ({ savedMarkers: {} }))
 }));
 
-const { deriveChronotype } = await import('./chronotype.js');
+const { deriveChronotype, updateChronotypeBehavioral } = await import('./chronotype.js');
+const { saveJSON } = await import('./store.js');
 
 describe('deriveChronotype log line', () => {
   let logs;
@@ -32,4 +34,17 @@ describe('deriveChronotype log line', () => {
     expect(line).not.toMatch(/morning|intermediate|evening/);
     expect(line).not.toContain(String(result.confidence));
   });
+});
+
+it('writes a behavioral edit and its derived values in one save', async () => {
+  h.chronotypeData = { behavioralData: { preferredSleepTime: '01:00' } };
+  saveJSON.mockClear();
+  const updated = await updateChronotypeBehavioral({ preferredWakeTime: '10:00' });
+
+  expect(updated).toMatchObject({
+    behavioralData: { preferredSleepTime: '01:00', preferredWakeTime: '10:00' },
+    type: 'evening',
+    scores: { behavioral: 1, composite: 1 },
+  });
+  expect(saveJSON).toHaveBeenCalledExactlyOnceWith('chronotype.json', updated);
 });

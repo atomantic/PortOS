@@ -1,6 +1,8 @@
 <!doctype html>
 <html lang="en">
 <head>
+  <!-- Classic script so the token leaves the URL during parsing, before the module graph loads (and even if it fails). The token is embedded in the module below. -->
+  <script>if (location.search) history.replaceState(null, '', location.pathname);</script><!-- portos-allow-hidden-content -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
   <meta name="referrer" content="no-referrer">

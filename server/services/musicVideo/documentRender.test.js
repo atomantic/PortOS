@@ -85,6 +85,29 @@ const { buildDocumentPreview } = await import('./documentPreview.js');
 afterAll(() => cleanupTempDataRoots());
 beforeEach(() => { runFfmpegProcess.mockClear(); probeVideoGeometry.mockReset(); probeVideoGeometry.mockResolvedValue(null); browser.seen = null; browser.contract = null; browser.visibility = null; browser.lyricUnfit = []; browser.sampleTimes = []; browser.send = null; browser.closed = []; browser.frameCallbacks = true; browser.capabilityProbes = 0; browser.version = 'Chrome/155.0.8059.41'; browser.versionCalls = []; browser.authoredContext = null; browser.authoredInspections = 0; });
 
+describe('buildDocumentPreview policy and bootstrap', () => {
+  it.each([
+    ['comment', '', '<!-- <head> --><p>Preview</p>'],
+    ['attribute', '', '<html data-example="<head>"><body>Preview</body></html>'],
+    ['script', '', `<script>const label = '<head>';</script>`],
+    ['element before head', '', '<img src="preview.png"><head></head>'],
+    ['genuine head', '<html lang="en"><head>', '<title>Preview</title></head><body>Preview</body></html>'],
+  ])('places trusted content before document content for %s', async (_name, prologue, content) => {
+    const project = { id: 'mv-preview', scenes: [], audioAnalysis: { durationSec: 1 } };
+    const abs = join(PATHS.data, 'preview.html');
+    await mkdir(PATHS.data, { recursive: true });
+    await writeFile(abs, `<!DOCTYPE html>${prologue}${content}`);
+    const { html } = await buildDocumentPreview(project, { files: new Map([['index.html', { abs }]]) });
+
+    const opening = `<!DOCTYPE html>${prologue || '<head>'}<meta http-equiv="Content-Security-Policy"`;
+    expect(html.startsWith(opening)).toBe(true);
+    const injected = html.slice(opening.length, -content.length);
+    expect(injected).toContain('Object.defineProperty(globalThis, key');
+    expect(injected).toContain('window.PORTOS_MV = ');
+    expect(html.endsWith(`${prologue ? '' : '</head>'}${content}`)).toBe(true);
+  });
+});
+
 const performanceTake = (assetId) => ({ takeId: 'mvt-p', kind: 'video', assetId, status: 'candidate', shotInstruction: { shotMode: 'performance', edit: { inSec: 0.5, outSec: 3.5 } } });
 
 async function fixture({ shipped = {} } = {}) {

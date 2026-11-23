@@ -21,7 +21,7 @@ vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () 
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));
 vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 
-const { processEnrichmentAnswer, saveEnrichmentListDocument } = await import('./digital-twin-enrichment.js');
+const { processEnrichmentAnswer, saveEnrichmentListDocument, getEnrichmentListItems } = await import('./digital-twin-enrichment.js');
 const { DEFAULT_META, cache, loadMeta, saveMeta, updateSettings } = await import('./digital-twin-meta.js');
 const { ENRICHMENT_CATEGORIES } = await import('./digital-twin-constants.js');
 const { createPersona, updatePersona, deletePersona, setActivePersona } = await import('./digital-twin-personas.js');
@@ -71,7 +71,7 @@ describe('enrichment write serialization (#14159)', () => {
     };
     const first = answer('Q1', 'Answer one');
     await turn();
-    await saveEnrichmentListDocument(category, '# Saved list\n', ['a', 'b']);
+    await saveEnrichmentListDocument(category, '# Saved list\n', [{ title: 'A' }, { title: 'B' }]);
     await first;
 
     expect(await readDoc()).toBe('# Saved list\n');
@@ -119,11 +119,15 @@ describe('enrichment metadata write failures (#17597)', () => {
     },
     {
       name: 'list document',
-      category,
-      write: () => saveEnrichmentListDocument(category, '# Saved list\n', ['Example item']),
+      category: 'favorite_books',
+      write: () => saveEnrichmentListDocument('favorite_books', '# Saved list\n', [{ title: 'Example book' }]),
       content: '# Saved list\n',
       metadata: {
-        enrichment: { questionsAnswered: { values: 1 }, completedCategories: ['values'], listItems: { values: ['Example item'] } },
+        enrichment: {
+          questionsAnswered: { favorite_books: 1 },
+          completedCategories: ['favorite_books'],
+          listItems: { favorite_books: [{ title: 'Example book' }] },
+        },
       },
     },
   ];
@@ -171,4 +175,24 @@ describe('persona and settings metadata write failures (#17597)', () => {
     await setActivePersona(id);
     await expectMetaWriteFailure(() => write(id));
   });
+});
+
+it('preserves saved list items through a cold metadata load and settings save', async () => {
+  const items = [{ title: 'First book', note: 'A favorite' }, { title: 'Second book' }];
+  await saveEnrichmentListDocument('favorite_books', '# Favorite books\n', items);
+
+  const saved = await readMeta();
+  expect(saved.enrichment.listItems).toEqual({ favorite_books: items });
+  // A nested default distinguishes a successful parse from the raw fallback.
+  delete saved.settings.includePrivacyContext;
+  await writeFile(join(root, 'meta.json'), JSON.stringify(saved));
+  cache.meta.data = null;
+
+  expect((await loadMeta()).settings.includePrivacyContext).toBe(false);
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
+  await updateSettings({ maxContextTokens: 6000 });
+  expect((await readMeta()).enrichment.listItems).toEqual(saved.enrichment.listItems);
+
+  cache.meta.data = null;
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
 });

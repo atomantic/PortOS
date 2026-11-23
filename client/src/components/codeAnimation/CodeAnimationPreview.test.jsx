@@ -85,6 +85,25 @@ describe('prepareAnimationHtml', () => {
     expect(prepareAnimationHtml(HTML, 'G', null)).toContain('<head><meta http-equiv="Content-Security-Policy"');
   });
 
+  it.each([
+    '<!-- <head> --><canvas></canvas>',
+    '<html data-example="<head>"><body><canvas></canvas></body></html>',
+    `<script>const label = '<head>';</script>`,
+    '<img src="preview.png"><head></head>',
+  ])('places the policy and audio global in a head before %s', (page) => {
+    const output = prepareAnimationHtml(`<!DOCTYPE html>${page}`, 'G', 'data:x');
+    expect(output).toMatch(/^<!DOCTYPE html><head><meta http-equiv="Content-Security-Policy" content="[^"]+"><script>window\["G"\] = "data:x";<\/script><\/head>/);
+    expect(output.slice(output.indexOf('</head>') + '</head>'.length)).toBe(page);
+  });
+
+  it('keeps the vendored import map active after the policy and before the document', () => {
+    const page = '<!-- <head> --><script type="module">import "three";</script>';
+    const output = prepareAnimationHtml(`<!doctype html>${page}`, 'G', null, [{ path: 'three.module.js', text: 'export {};' }]);
+    expect(output).toMatch(/^<!doctype html><head><meta http-equiv="Content-Security-Policy" [^>]+><script type="importmap">/);
+    expect(output).toContain("script-src 'unsafe-inline' data:");
+    expect(output.endsWith(`</head>${page}`)).toBe(true);
+  });
+
   it('cannot break out of the script tag through the data URL', () => {
     const out = prepareAnimationHtml(HTML, 'G', 'data:x"</script><script>alert(1)//');
     expect(out).not.toContain('</script><script>alert');
