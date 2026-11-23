@@ -531,7 +531,12 @@ describe('Apps Task-Type Routes', () => {
       const response = await request(app).get('/api/apps/app-001/quality-schedule');
       expect(response.status).toBe(200);
       expect(response.body).toEqual(payload);
-      expect(buildQualitySchedulePlan).toHaveBeenCalledWith({ id: 'app-001', name: 'App' });
+      expect(buildQualitySchedulePlan).toHaveBeenCalledWith({ id: 'app-001', name: 'App' }, {}, { hydrate: true });
+    });
+
+    it('skips hydration for the explicit reset-to-defaults read', async () => {
+      await request(app).get('/api/apps/app-001/quality-schedule?defaults=1');
+      expect(buildQualitySchedulePlan).toHaveBeenCalledWith({ id: 'app-001', name: 'App' }, {}, { hydrate: false });
     });
 
     it('routes a preview to the planner, never to the writer', async () => {

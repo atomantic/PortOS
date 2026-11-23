@@ -332,6 +332,50 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
   return sources;
 }
 
+const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
+
+/**
+ * Read the form state back out of the overrides a previous Apply wrote.
+ *
+ * Pure inverse of `applyQualitySchedulePlan`: any saved audit override means the
+ * app has a schedule, so reopening the form must show it instead of the factory
+ * layout. Fields the overrides cannot answer fall back to the planner defaults.
+ *
+ * @param {object} existingOverrides - `getAppTaskTypeOverrides(app.id)`
+ * @param {string[]} [auditTypes] - The audit task types the planner owns
+ * @returns {{ hasExistingSchedule: boolean, taskTypes?: string[], fileIssuesByType?: object, options?: object }}
+ */
+export function inferSavedQualitySchedule(existingOverrides = {}, auditTypes = AUDIT_TASK_TYPE_LIST) {
+  const saved = auditTypes.filter(type => existingOverrides[type]);
+  if (!saved.length) return { hasExistingSchedule: false };
+
+  const enabled = saved.filter(type => existingOverrides[type].enabled === true);
+  const fileIssuesByType = {};
+  const checkHours = [];
+  for (const type of enabled) {
+    const { fileIssues } = existingOverrides[type].taskMetadata || {};
+    if (typeof fileIssues === 'boolean') fileIssuesByType[type] = fileIssues;
+    checkHours.push(...(cronWeekdayHours(existingOverrides[type].interval)?.hours || []));
+  }
+
+  const options = {};
+  if (checkHours.length) {
+    options.windowStartHour = Math.min(...checkHours);
+    options.windowEndHour = Math.max(...checkHours);
+  }
+  const claimType = CLAIM_DRAIN_TASK_TYPES.find(type => existingOverrides[type]?.enabled === true && isPlannedClaimCron(existingOverrides[type].interval));
+  options.claimBetween = Boolean(claimType);
+  if (claimType) {
+    options.claimTaskType = claimType;
+    const claimStart = Math.min(...cronWeekdayHours(existingOverrides[claimType].interval).hours);
+    // The drain starts `offset` hours after a check, so the nearest preceding
+    // check hour gives the requested offset back (when it is a choice the form offers).
+    const gaps = checkHours.map(hour => claimStart - hour).filter(gap => CLAIM_OFFSET_CHOICES.includes(gap));
+    if (gaps.length) options.claimOffsetHours = Math.min(...gaps);
+  }
+  return { hasExistingSchedule: true, taskTypes: enabled, fileIssuesByType, options };
+}
+
 /**
  * Plan the week for one app without writing anything.
  *
@@ -339,10 +383,15 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
  * route layer adds nothing of its own and cannot drift from the service.
  *
  * @param {object} app - The managed app record
- * @param {object} [options] - Form options; `taskTypes` defaults to every applicable check
- * @returns {Promise<object>} `{ appId, appName, plan, checks, capabilities, scanned, busySources, claimTaskTypes }`
+ * @param {object} [formOptions] - Form options; `taskTypes` defaults to every applicable check
+ * @param {{ hydrate?: boolean }} [flags] - `hydrate` seeds the form from the app's saved overrides (the initial GET only; preview and apply carry the form's own state)
+ * @returns {Promise<object>} `{ appId, hasExistingSchedule, appName, plan, checks, capabilities, scanned, busySources, claimTaskTypes }`
  */
-export async function buildQualitySchedulePlan(app, options = {}) {
+export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate = false } = {}) {
+  const saved = hydrate ? inferSavedQualitySchedule(await getAppTaskTypeOverrides(app.id)) : { hasExistingSchedule: false };
+  const options = saved.hasExistingSchedule
+    ? { ...saved.options, ...formOptions, taskTypes: saved.taskTypes, fileIssuesByType: saved.fileIssuesByType }
+    : formOptions;
   const settings = resolveQualityScheduleOptions(options);
   // Explicit requests from older clients still select their original task profile.
   // A domain plan must leave all other legacy cadences in place and avoid their slots.
@@ -365,6 +414,7 @@ export async function buildQualitySchedulePlan(app, options = {}) {
   return {
     appId: app.id,
     appName: app.name,
+    hasExistingSchedule: saved.hasExistingSchedule,
     plan,
     checks,
     capabilities,
@@ -429,5 +479,5 @@ export async function applyQualitySchedulePlan(app, options = {}) {
   const applied = Object.values(patches).filter(patch => patch.enabled).length;
   const disabled = Object.values(patches).length - applied;
   console.log(`📅 Planned ${applied} quality schedule entries for ${app.name} (${disabled} checks disabled)`);
-  return { ...built, applied, disabled };
+  return { ...built, hasExistingSchedule: true, applied, disabled };
 }
