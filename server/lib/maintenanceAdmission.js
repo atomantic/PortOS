@@ -43,6 +43,9 @@ export const isOperatorDisposableReservation = op => ['media', 'runner', 'api-ru
   || (op.kind === 'settlement' && op.resource === 'Output publication');
 
 const AGENT_DISK_HEADROOM_BYTES = 1024 ** 3;
+// Well past a writer's own lock patience (~500 ms of retries), so an older lock
+// is a crashed or wedged writer rather than one mid-publication.
+const LIVE_TRANSACTION_GRACE_MS = 2000;
 
 export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, assertWrite = assertNotRealDataWrite,
   makeId = randomUUID, now = Date.now, verifyExclusiveReceipt = () => false, harnessAbsent, harnessOwnerPresent, harnessParentPid,
@@ -73,7 +76,18 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     try {
       if (exists(lock)) {
         cause = 'interrupted-transaction';
-        since = io.lstatSync(lock).mtime.toISOString();
+        const lockedAt = io.lstatSync(lock).mtime;
+        since = lockedAt.toISOString();
+        // A young lock is usually the other process (server vs runner) mid-write;
+        // calling it interrupted made held() flicker true and silently skipped
+        // CoS dequeues. Writers publish by atomic rename, so the committed file
+        // is authoritative for a hold-free journal, and admit() still re-reads
+        // under the lock. A hold, a failed local write, or an aged lock stays
+        // fail-closed.
+        if (!isUncertain() && Math.abs(now() - lockedAt.getTime()) < LIVE_TRANSACTION_GRACE_MS) {
+          const committed = readForStatus();
+          if (!committed.hold) return project(committed);
+        }
         throw unavailable();
       }
       if (isUncertain()) { cause = 'process-uncertain'; throw unavailable(); }
