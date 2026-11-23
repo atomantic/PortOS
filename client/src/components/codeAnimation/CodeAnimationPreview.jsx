@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, Clapperboard, Download, FileCode2, LoaderCircle } from 'lucide-react';
 import { Link } from 'react-router';
+import { injectPreviewHead } from '../../../../server/lib/htmlPreviewHead.js';
 import toast from '../ui/Toast';
 import {
   cancelCodeAnimationExport,
@@ -24,9 +25,8 @@ const BUTTON_SECONDARY = 'inline-flex items-center gap-2 rounded-lg border borde
 
 const slug = (text) => (text || 'code-animation').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'code-animation';
 
-// Set the audio global BEFORE any page script runs: right after <head>, or at
-// the very top when the document has none. `<` is escaped so no value can
-// close the script element early.
+// The audio global is installed before page scripts. Escape `<` so no value
+// can close the script element early.
 const scriptLiteral = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 const ANIMATION_CSP = [
   "default-src 'none'",
@@ -65,10 +65,7 @@ export function prepareAnimationHtml(html, globalName, audioDataUrl, vendorFiles
   const audio = audioDataUrl
     ? `<script>window[${scriptLiteral(globalName)}] = ${scriptLiteral(audioDataUrl)};</script>`
     : '';
-  const head = page.match(/<head[^>]*>/i);
-  if (!head) return `${policy}${audio}${page}`;
-  const at = head.index + head[0].length;
-  return `${page.slice(0, at)}${policy}${audio}${page.slice(at)}`;
+  return injectPreviewHead(page, policy + audio);
 }
 
 /**
