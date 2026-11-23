@@ -185,11 +185,11 @@ fi
 ensure_whisper_model() {
   local path="${MODELS_DIR}/${MODEL_NAME}"
   local url state want have
-  url="$(asset url whisper "$MODEL_NAME")"
   state="$(asset state whisper "$path")"
   if [[ "$state" == "verified" ]]; then
     return 0
   fi
+  url="$(asset url whisper "$MODEL_NAME")"
   if [[ "$state" == "unverified" ]]; then
     # Installed before completion receipts (or user-supplied). A partial transfer
     # looks identical to a complete file here, so compare against the remote

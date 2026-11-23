@@ -88,9 +88,9 @@ function Download-Staged($url, $final) {
 
 function Ensure-WhisperModel {
     $path = Join-Path $MODELS_DIR $MODEL_NAME
-    $url = Get-VoiceAssetUrl 'whisper' $MODEL_NAME
     $state = Get-AssetState 'whisper' $path
     if ($state -eq 'verified') { return }
+    $url = Get-VoiceAssetUrl 'whisper' $MODEL_NAME
     if ($state -eq 'unverified') {
         # Installed before completion receipts (or user-supplied). A partial
         # transfer looks identical to a complete file, so compare against the
