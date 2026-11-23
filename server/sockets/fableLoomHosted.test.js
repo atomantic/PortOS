@@ -908,6 +908,67 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       expect(roomEvent('hosted:turn:phase')?.data.turnId).toEqual(expect.any(String));
     });
 
+    const expectIdleAbort = (reason) => {
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      expect(roomEvent('hosted:turn:phase')?.data).toMatchObject({ phase: 'idle', reason });
+    };
+
+    it('returns to idle when buffered mic frames overflow the utterance cap', async () => {
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+      const frame = Buffer.alloc(MAX_MIC_FRAME_BYTES, 0x61);
+      for (let i = 0; i <= MAX_UTTERANCE_BYTES / MAX_MIC_FRAME_BYTES; i += 1) {
+        audience.listeners['hosted:mic:frame'](frame);
+      }
+      expectIdleAbort('mic_overflow');
+    });
+
+    it('returns to idle when mic:stop carries an invalid or oversized buffer', async () => {
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+      await audience.listeners['hosted:mic:stop']({ length: 2 ** 32 });
+      expectIdleAbort('invalid_audio');
+
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+      await audience.listeners['hosted:mic:stop'](Buffer.alloc(MAX_UTTERANCE_BYTES + 1, 0x61));
+      expectIdleAbort('invalid_audio');
+    });
+
+    it('returns to idle when mic:stop follows a latched overflow', async () => {
+      await audience.listeners['hosted:mic:start']();
+      const frame = Buffer.alloc(MAX_MIC_FRAME_BYTES, 0x61);
+      for (let i = 0; i <= MAX_UTTERANCE_BYTES / MAX_MIC_FRAME_BYTES; i += 1) {
+        audience.listeners['hosted:mic:frame'](frame);
+      }
+      // The frame overflow already aborted; a later mic:stop is a no-op, not a wedge.
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      await audience.listeners['hosted:mic:stop']();
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+    });
+
+    it('returns to idle when the audience disconnects while listening', async () => {
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+      audience.listeners.disconnect();
+      expectIdleAbort('audience_disconnected');
+    });
+
+    it('returns to idle and notifies the old phone when a second audience device replaces it mid-listen', async () => {
+      const oldSocket = { ...audience, disconnect: vi.fn() };
+      mockNamespace.sockets.set(audience.id, oldSocket);
+      await audience.listeners['hosted:mic:start']();
+      roomEvents.length = 0;
+
+      connectionHandler(makeSocket({ role: 'audience', sessionId: session.id, id: 'audience-sock-2' }));
+
+      expect(audience.emitted.find((e) => e.event === 'hosted:session:replaced')).toBeDefined();
+      expect(oldSocket.disconnect).toHaveBeenCalledWith(true);
+      expect(getHostedSession(session.id).turnPhase).toBe('idle');
+      expect(roomEvents.find((e) => e.event === 'hosted:turn:phase')?.data)
+        .toMatchObject({ phase: 'idle', reason: 'audience_replaced' });
+    });
+
     it('releases the audience slot and tears down listeners on disconnect', () => {
       audience.listeners.disconnect();
 

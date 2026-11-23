@@ -147,6 +147,14 @@ export default function FableLoomHostedJoin() {
       setAuthError(data?.reason === 'host_ended' ? 'The host has ended this play session.' : 'Session ended.');
     });
 
+    s.on('hosted:session:replaced', (data) => {
+      abortHostedSpeech(speechPlaybackRef.current);
+      speechPlaybackRef.current = null;
+      discardRecordingRef.current?.();
+      setTurnPhase('ended');
+      setAuthError(data?.reason || 'Another audience device joined this session.');
+    });
+
     setSocket(s);
 
     return () => {
