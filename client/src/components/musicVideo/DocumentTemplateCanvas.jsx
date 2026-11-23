@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import '../../../../server/lib/musicVideo/cameraRig.js';
 import { createDocumentTemplateDrawing } from './documentTemplateDrawing.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
+import { CLIP_PRELOAD_SHOTS, shotStillIds } from './animaticTiming.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { sceneImageEffect, scenePhotoSequence, photoSequenceLayers, photoSequenceIndex } from '../../lib/musicVideoImageEffects.js';
 import { blockBox, edgeGlows, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
@@ -10,6 +11,8 @@ import { compileWipeNode, createMusicVideoWipePainter, wipeDefinition } from '..
 import './documentTemplateFonts.css';
 
 const rig = globalThis.PORTOS_CAMERA_RIG;
+// Decoded images kept: the shot on screen (a photo stack draws several) plus the next shots' preloads.
+const IMAGE_CACHE = 16 + 3 * CLIP_PRELOAD_SHOTS;
 const glitch = createMusicVideoGlitchPainter({ blockBox, edgeGlows });
 const wipe = createMusicVideoWipePainter({ definitions: wipeDefinition, compile: compileWipeNode });
 
@@ -57,17 +60,27 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       if (!img) {
         img = new Image(); img.onload = () => { if (active) paint(); };
         img.src = `/data/images/${encodeURIComponent(id)}`;
+        img.decode?.().catch(() => {});
       }
       images.delete(id); images.set(id, img);
-      while (images.size > 16) { const oldest = images.keys().next().value; images.get(oldest).onload = null; images.delete(oldest); }
+      while (images.size > IMAGE_CACHE) { const oldest = images.keys().next().value; images.get(oldest).onload = null; images.delete(oldest); }
       return img.complete && img.naturalWidth ? img : null;
     };
     const stack = document.createElement('canvas'); stack.width = canvas.width; stack.height = canvas.height;
     const stackCtx = stack.getContext('2d');
-    const sourceFor = (scene, t) => {
+    const shotFor = (scene) => {
       const original = byId.get(scene.sceneId);
       const selected = resolveSourceTake(original, project.scenes || []);
-      const shot = selected ? { ...original, videoHistoryId: selected.videoHistoryId, referenceImageId: selected.referenceImageId || original?.referenceImageId } : original;
+      return selected ? { ...original, videoHistoryId: selected.videoHistoryId, referenceImageId: selected.referenceImageId || original?.referenceImageId } : original;
+    };
+    // The next shots' stills load before their cut: fetched at the cut, a phone's slower
+    // link left the frame black, and its effects undrawn, until the image arrived.
+    const preloadAfter = (scene) => {
+      const at = scenes.indexOf(scene);
+      for (const next of scenes.slice(at + 1, at + 1 + CLIP_PRELOAD_SHOTS)) for (const id of shotStillIds(shotFor(next))) image(id);
+    };
+    const sourceFor = (scene, t) => {
+      const shot = shotFor(scene);
       const footage = sceneVisualLayer(shot, { layered: true }) === 'footage' && !!shot?.videoHistoryId;
       const video = [...(figureRef.current?.querySelectorAll('video[data-document-scene]') || [])].find(v => v.dataset.documentScene === scene.sceneId);
       if (footage) watchVideo(video);
@@ -110,6 +123,8 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       const t = drawing.state(songTime).t;
       const scene = scenes.filter(s => s.startSec <= t && t < s.endSec).at(-1) || null;
       const frame = Math.floor(t * fps + 1e-6);
+      // Before the shot's own images, so the cache keeps those most recent.
+      if (scene) preloadAfter(scene);
       const cut = scene?.wipe;
       if (cut && frame >= cut.cutFrame && frame < cut.cutFrame + cut.frames) {
         const outgoing = scenes.find(s => s.sceneId === cut.fromSceneId);

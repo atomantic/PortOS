@@ -29,6 +29,24 @@ describe('StoryboardAnimatic', () => {
     expect(screen.getByText('Shot 2 / 2')).toBeTruthy();
   });
 
+  // Uniquely catches a shot's still first fetched at its cut, which a slow phone link shows as black.
+  it('loads the next shots\' stills before their cuts', () => {
+    const requested = [];
+    vi.stubGlobal('Image', function Loader() { return { set src(url) { requested.push(url); }, decode: () => Promise.resolve() }; });
+    try {
+      const shots = Array.from({ length: 5 }, (_, i) => ({ sceneId: `s${i}`, order: i, startSec: i * 2, endSec: (i + 1) * 2, referenceImageId: `still-${i}.png` }));
+      render(<StoryboardAnimatic project={{ id: 'p', scenes: shots }} audioUrl="/song.mp3" />);
+      expect(requested).toEqual(expect.arrayContaining(['/data/images/still-1.png', '/data/images/still-2.png']));
+      expect(requested).not.toContain('/data/images/still-3.png');
+      const audio = screen.getByLabelText('Song for the storyboard animatic');
+      Object.defineProperty(audio, 'currentTime', { value: 2.5, configurable: true });
+      fireEvent.timeUpdate(audio);
+      expect(requested).toContain('/data/images/still-3.png');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // Uniquely catches the moving previous still surviving a cut between audio timeupdates.
   it('shows each still on the playback frame that crosses its cut, and after seeks', () => {
     const frames = new Map();
