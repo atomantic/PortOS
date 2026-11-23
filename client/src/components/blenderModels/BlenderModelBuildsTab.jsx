@@ -75,7 +75,7 @@ export default function BlenderModelBuildsTab({ model, openBuildId, onOpenLog, o
                       <ScrollText size={14} aria-hidden="true" /> {open ? 'Hide build log' : 'Build log'}
                     </button>
                   </div>
-                  {build.error && <p className="break-words text-xs text-port-error">{build.error}</p>}
+                  {build.error && <p role="status" className="break-words text-xs text-port-error">{build.error}</p>}
                   {open && <BuildLog modelId={state.id} build={build} />}
                 </li>
               );
