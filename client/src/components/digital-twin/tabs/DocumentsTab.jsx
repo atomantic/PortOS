@@ -268,8 +268,8 @@ export default function DocumentsTab({ onRefresh }) {
             {/* Editor Header */}
             <div className="p-3 border-b border-port-border">
               {/* Top row with back button and actions */}
-              <div className="flex items-center justify-between gap-2 mb-2 lg:mb-0">
-                <div className="flex items-center gap-2 min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2 lg:mb-0">
+                <div className="flex items-center gap-2 min-w-[140px] flex-1">
                   {/* Back button for mobile */}
                   <button
                     onClick={() => requestSelect(null)}
@@ -286,7 +286,7 @@ export default function DocumentsTab({ onRefresh }) {
                     <span className="hidden sm:inline text-xs text-gray-500 shrink-0">v{selectedDoc.version}</span>
                   )}
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-1 sm:gap-2 min-w-0">
                   {/* Weight Control - hidden on mobile */}
                   <div className="hidden md:flex items-center gap-2 px-2 py-1 bg-port-bg rounded border border-port-border" title="Document weight (1-10): Higher weight = included first when truncating">
                     <Scale size={14} className="text-gray-500" />

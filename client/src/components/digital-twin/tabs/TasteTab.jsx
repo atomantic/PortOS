@@ -419,7 +419,7 @@ export default function TasteTab({ onRefresh }) {
                 {/* Behavioral Feedback */}
                 <div className="pt-3 border-t border-port-border">
                   <p className="text-xs text-gray-500 mb-2">Does this summary capture your taste accurately?</p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {[
                       { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, active: 'bg-port-success/20 text-port-success border border-port-success/30', inactive: 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30' },
                       { key: 'not_quite', label: 'Not quite', icon: Minus, active: 'bg-port-warning/20 text-port-warning border border-port-warning/30', inactive: 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30' },
@@ -429,7 +429,7 @@ export default function TasteTab({ onRefresh }) {
                         key={key}
                         onClick={() => submitSummaryFeedback(reviewSection, section.summary, key)}
                         disabled={!!summaryFeedback[reviewSection]}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                           summaryFeedback[reviewSection] === key ? active : inactive
                         }`}
                       >
@@ -701,7 +701,7 @@ export default function TasteTab({ onRefresh }) {
     <div className="space-y-6">
       {/* Overall Progress */}
       <div className="bg-port-card rounded-lg border border-port-border p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-3">
             <Palette className="w-6 h-6 text-port-accent-2" />
             <h2 className="text-lg font-semibold text-white">Aesthetic Taste Profile</h2>
@@ -785,7 +785,7 @@ export default function TasteTab({ onRefresh }) {
                 <div className="px-4 pb-3 flex gap-2">
                   <button
                     onClick={() => handleReviewSection(section.id)}
-                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 py-1"
+                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
                   >
                     <Eye size={12} />
                     Review
@@ -798,7 +798,7 @@ export default function TasteTab({ onRefresh }) {
                 <div className="px-4 pb-3">
                   <button
                     onClick={() => setExpandedSummary(expandedSummary === section.id ? null : section.id)}
-                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1"
+                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
                   >
                     <Sparkles size={12} />
                     Summary
