@@ -145,7 +145,6 @@ import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
-import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
@@ -1029,7 +1028,9 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
       initSyncOrchestrator: () => {
-        initSyncOrchestrator();
+        void import('./syncOrchestrator.js')
+          .then(({ initSyncOrchestrator }) => initSyncOrchestrator())
+          .catch((err) => logBootstrapFailure('❌ Sync orchestrator init failed', err));
         // Queued remote media deletes drain when their owner comes online.
         void import('./mediaRemoteDelete.js')
           .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())

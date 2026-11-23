@@ -18,7 +18,14 @@ vi.mock('../services/usageRetentionTips.js', () => ({
 
 vi.mock('../services/peerUsage.js', () => ({
   getFleetUsage: vi.fn(),
-  getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
+  getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] })),
+  getFleetClaudeCodeModels: vi.fn(async () => ({ models: [], totals: {} }))
+}));
+
+vi.mock('../services/claudeCodeTranscriptUsage.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  readLocalTranscriptUsage: vi.fn(),
+  refreshLocalTranscriptUsage: vi.fn()
 }));
 
 vi.mock('../services/usageFleetBilling.js', () => ({
@@ -64,6 +71,8 @@ import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subsc
 import { savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
+import { readLocalTranscriptUsage, refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
+import { nativeUsageEvents } from '../services/nativeUsageEvents.js';
 import usageRoutes from './usage.js';
 
 const buildApp = () => {
@@ -94,6 +103,32 @@ describe('usage routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getFleetUsage.mockResolvedValue(fleetResult());
+  });
+
+  it('GET /claude-code/models answers from the stored history without waiting on the transcript scan, then announces the refresh', async () => {
+    readLocalTranscriptUsage.mockResolvedValue({ updatedAt: '2026-09-01T00:00:00Z', days: {} });
+    let finishScan;
+    refreshLocalTranscriptUsage.mockReturnValue(new Promise((resolve) => { finishScan = resolve; }));
+    const updated = vi.fn();
+    nativeUsageEvents.on('updated', updated);
+    try {
+      const res = await request(buildApp()).get('/api/usage/claude-code/models');
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ transcriptRefreshed: false, transcriptUpdatedAt: '2026-09-01T00:00:00Z' });
+      expect(updated).not.toHaveBeenCalled();
+      finishScan({ refreshed: true, updatedAt: '2026-09-02T00:00:00Z' });
+      await vi.waitFor(() => expect(updated).toHaveBeenCalledTimes(1));
+    } finally {
+      nativeUsageEvents.off('updated', updated);
+    }
+  });
+
+  it('GET /claude-code/models still answers when the stored history is unreadable and the scan fails', async () => {
+    readLocalTranscriptUsage.mockRejectedValue(new Error('corrupt'));
+    refreshLocalTranscriptUsage.mockRejectedValue(new Error('scan failed'));
+    const res = await request(buildApp()).get('/api/usage/claude-code/models');
+    expect(res.status).toBe(200);
+    expect(res.body.transcriptUpdatedAt).toBeNull();
   });
 
   it('GET /api/usage includes local image activity in the selected range without changing the text cost report', async () => {
