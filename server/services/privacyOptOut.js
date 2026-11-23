@@ -50,7 +50,7 @@ import {
   listBrokers, getBroker, listBrokerCases, transitionCase,
 } from './privacyBrokers.js';
 import { listScanEligibleValues } from './privacyVault.js';
-import { buildSearchVectors, probeBroker } from './privacyScan.js';
+import { buildSearchVectors, parseCityState, probeBroker } from './privacyScan.js';
 import { createDraft, approveDraft } from './messageDrafts.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';
@@ -75,6 +75,17 @@ export const DISCLOSURE_ALLOWLIST = Object.freeze([
  * per-case, added from the case evidence at send time).
  */
 export function buildDisclosurePayload(scanValues = []) {
+  return buildDisclosureSelection(scanValues).payload;
+}
+
+const hasText = (v) => typeof v?.value === 'string' && v.value.trim();
+
+/**
+ * Same payload as buildDisclosurePayload plus `sources`: allowlist field ->
+ * id of the vault record the value came from (city/state both name the chosen
+ * address record). Draft erasure keys on these ids. Pure.
+ */
+export function buildDisclosureSelection(scanValues = []) {
   const vectors = buildSearchVectors(scanValues);
   const payload = {};
   if (vectors.names[0]?.full) payload.full_name = vectors.names[0].full;
@@ -87,7 +98,29 @@ export function buildDisclosurePayload(scanValues = []) {
   // DOB is scan-eligible only if the user opted it in; parse from the raw values.
   const dob = scanValues.find((v) => v.type === 'dob' && typeof v.value === 'string' && v.value.trim());
   if (dob) payload.dob = dob.value.trim();
-  return payload;
+
+  // Mirror buildSearchVectors' ordering so each chosen value maps to its record.
+  const firstOf = (type) => scanValues.find((v) => v?.type === type && hasText(v));
+  const addrs = scanValues.filter((v) => {
+    if (v?.type !== 'address' || !hasText(v)) return false;
+    const { city, state } = parseCityState(v.value);
+    return city || state;
+  });
+  const addr = addrs.find((v) => (v.status ?? 'current') === 'current') || addrs[0];
+  const sources = {};
+  const set = (field, rec) => { if (rec?.id) sources[field] = rec.id; };
+  if (payload.full_name) set('full_name', firstOf('legal_name'));
+  if (payload.email) set('email', firstOf('email'));
+  if (payload.phone) set('phone', firstOf('phone'));
+  if (payload.dob) set('dob', dob);
+  if (payload.city) set('city', addr);
+  if (payload.state) set('state', addr);
+  return { payload, sources };
+}
+
+/** Deduplicated vault record ids behind the disclosed fields. Pure. */
+export function vaultRecordIdsForDisclosure(sources = {}, disclosedFields = []) {
+  return [...new Set(disclosedFields.map((f) => sources[f]).filter(Boolean))];
 }
 
 /**
@@ -309,7 +342,7 @@ export async function webFormLane(broker, kase, { disclosedFields, now = new Dat
  * Deps injectable.
  */
 export async function emailLane(broker, kase, {
-  disclosedFields, payload, listingUrls = [], autoApprove = false, now = new Date(),
+  disclosedFields, payload, vaultRecordIds = [], listingUrls = [], autoApprove = false, now = new Date(),
   accountsProvider = listAccounts, draftCreator = createDraft, draftApprover = approveDraft,
 }) {
   const to = broker?.optout?.email;
@@ -330,7 +363,7 @@ export async function emailLane(broker, kase, {
     subject,
     body,
     generatedBy: 'privacy-optout',
-    privacyMeta: { subjectId: kase.subjectId, vaultRecordIds: [], caseId: kase.id },
+    privacyMeta: { subjectId: kase.subjectId, vaultRecordIds, caseId: kase.id },
     sendVia: sendViaForAccountType(account.type), // the account's real transport, not an assumed Gmail API
   });
 
@@ -500,7 +533,7 @@ export async function runOptOutPass({
   const autoApprove = recheck.autoApproveOptOutEmails === true;
 
   const scanValues = await listScanEligibleValues({ subjectId: resolvedSubjectId });
-  const payload = buildDisclosurePayload(scanValues);
+  const { payload, sources } = buildDisclosureSelection(scanValues);
   if (!payload.full_name) {
     console.log('📋 Opt-out pass aborted: no scan-eligible name in the vault');
     return { submitted: [], skipped: 0, verification: null, subjectId: resolvedSubjectId, reason: 'no_disclosure_identity' };
@@ -532,7 +565,7 @@ export async function runOptOutPass({
       continue;
     }
     const result = lane === 'email'
-      ? await emailLane(broker, kase, { disclosedFields, payload, listingUrls, autoApprove, now })
+      ? await emailLane(broker, kase, { disclosedFields, payload, vaultRecordIds: vaultRecordIdsForDisclosure(sources, disclosedFields), listingUrls, autoApprove, now })
       : await webFormLane(broker, kase, { disclosedFields, now });
     if (result.outcome === 'account_required') {
       skipped += 1;
