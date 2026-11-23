@@ -19,6 +19,7 @@ const accounts = vi.hoisted(() => ({
   getAccountStatus: vi.fn(async () => ({ ok: true })),
 }));
 const inbox = vi.hoisted(() => ({
+  setNotificationMute: vi.fn(async (body) => body),
   listNotifications: vi.fn(async () => ({ notifications: [] })),
   syncAccountNotifications: vi.fn(async (accountId) => ({ accountId })),
   syncAllNotifications: vi.fn(async () => []),
@@ -59,6 +60,7 @@ const mounts = [['/api/github', githubRoutes]];
 
 // [method, path, body, the service the request must not reach when refused]
 const writes = [
+  ['put', '/api/github/notifications/mutes', { accountId: 'example-account', repoFullName: 'example/repo', reason: 'review_requested', muted: true }, inbox.setNotificationMute],
   ['post', '/api/github/notifications/example-account/123', { action: 'unsubscribe' }, inbox.applyNotificationAction],
   ['post', '/api/github/notifications/example-account/123/agent', { provider: 'example-provider', effort: 'high' }, inbox.resolveWithAgent],
   ['post', '/api/github/notifications/example-account/123/pull-request', { action: 'merge', method: 'squash' }, inbox.actOnPullRequest],
@@ -82,6 +84,15 @@ describe('GitHub inbox writes behind the default-deny gate (#12952, #16114)', ()
   it('refuses a remote caller before any gh write, CoS job or account change', async () => {
     const [method, path, body, effect] = writes[0];
     await expectRemoteRefusal(mounts, [method, path, body, effect]);
+  });
+
+  it('validates that a mute targets one ordinary notification reason in one repository', async () => {
+    const [method, path, body] = writes[0];
+    for (const invalid of [{ repoFullName: 'example/*' }, { reason: 'security_alert' }, { muted: 'yes' }]) {
+      const response = await send(localApp(), [method, path, { ...body, ...invalid }]);
+      expect(response.status).toBe(400);
+    }
+    expect(inbox.setNotificationMute).not.toHaveBeenCalled();
   });
 
   it('keeps every write, deletion, audit and refresh working for local callers and agent sessions', async () => {

@@ -41,6 +41,10 @@ export const getGitHubNotifications = ({ accountId, view } = {}, options = {}) =
   const qs = params.toString();
   return request(`/github/notifications${qs ? `?${qs}` : ''}`, options);
 };
+export const setGitHubNotificationMute = ({ accountId, repoFullName, reason, muted }, options = {}) =>
+  request('/github/notifications/mutes', {
+    method: 'PUT', body: JSON.stringify({ accountId, repoFullName, reason, muted }), ...options,
+  });
 export const syncGitHubNotifications = (accountId = null, options = {}) =>
   request('/github/notifications/sync', { method: 'POST', body: JSON.stringify(accountId ? { accountId } : {}), ...options });
 export const clearFinishedGitHubNotifications = (accountId = null, options = {}) =>

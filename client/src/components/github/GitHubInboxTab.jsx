@@ -3,6 +3,7 @@ import { useParams } from 'react-router';
 import { Bot, CheckCheck, CheckCircle2, Inbox, Layers, RefreshCw, ShieldAlert } from 'lucide-react';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubNotificationCard from './GitHubNotificationCard';
+import GitHubNotificationMutes from './GitHubNotificationMutes';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -24,7 +25,7 @@ const VIEW_MATCHERS = {
   handled: (row) => row.state !== 'open' || !row.unread || row.readOnGithub,
   all: () => true,
 };
-const belongsInView = (row, view) => VIEW_MATCHERS[view](row);
+const belongsInView = (row, view) => (view === 'all' || !row.mutedInPortOS) && VIEW_MATCHERS[view](row);
 
 // Summary tiles double as the view picker. Counts come from the server for
 // every view at once; tone follows meaning, and every tile also has a label.
@@ -141,6 +142,7 @@ export default function GitHubInboxTab() {
   useEffect(() => { refresh(); }, [refresh]);
 
   const applyUpdate = (row, updated) => {
+    if (Boolean(row.mutedInPortOS) !== Boolean(updated.mutedInPortOS)) loadList();
     const key = keyOf(row);
     if (belongsInView(updated, view)) {
       setData((prev) => ({ ...prev, notifications: prev.notifications.map((entry) => (keyOf(entry) === key ? updated : entry)) }));
@@ -211,6 +213,7 @@ export default function GitHubInboxTab() {
       </div>
 
       <SummaryTiles view={view} counts={data.counts} onSelect={setView} />
+      {data.mutes?.length > 0 && <GitHubNotificationMutes mutes={data.mutes} onChanged={loadList} />}
       {(data.counts?.['with-agents'] > 0 || (view === 'needs-you' && data.counts?.clearable > 0)) && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {data.counts['with-agents'] > 0 && (

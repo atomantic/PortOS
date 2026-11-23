@@ -18,6 +18,7 @@ const mock = vi.hoisted(() => ({
   deleteGitHubAccount: vi.fn(),
   getGitHubAccountStatus: vi.fn(),
   getGitHubNotifications: vi.fn(),
+  setGitHubNotificationMute: vi.fn(),
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
@@ -56,6 +57,7 @@ vi.mock('../services/apiGithub.js', () => ({
   deleteGitHubAccount: mock.deleteGitHubAccount,
   getGitHubAccountStatus: mock.getGitHubAccountStatus,
   getGitHubNotifications: mock.getGitHubNotifications,
+  setGitHubNotificationMute: mock.setGitHubNotificationMute,
   syncGitHubNotifications: mock.syncGitHubNotifications,
   applyGitHubNotificationAction: mock.applyGitHubNotificationAction,
   resolveGitHubNotificationWithAgent: mock.resolveGitHubNotificationWithAgent,
@@ -502,7 +504,8 @@ describe('GitHub inbox tab', () => {
     mock.getGitHubNotifications.mockResolvedValue({ notifications: [{ ...NOTIFICATION,
       subjectStatus: { state: 'open', draft: false, mergeState: 'blocked' } }], sync: {} });
     await renderInbox();
-    expect(screen.getByText('Your review was requested')).toBeTruthy();
+    expect(screen.getByText('Review requested')).toBeTruthy();
+    expect(screen.getByText('Review recipient unknown')).toBeTruthy();
     expect(screen.getByText('Blocked: needs review or checks')).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Open pull request' })).toBeTruthy();
   });
@@ -699,6 +702,54 @@ describe('GitHub inbox tab', () => {
     await renderInbox();
     fireEvent.click(await screen.findByRole('button', { name: 'Do:Review' }));
     expect(await screen.findByRole('button', { name: 'Start agent' })).toBeTruthy();
+  });
+
+  it('mutes a repo-and-reason from the row and restores it even when that row is hidden', async () => {
+    let muted = false;
+    const repoMute = { accountId: 'github-com', repoFullName: NOTIFICATION.repoFullName, reason: 'review_requested' };
+    const review = { ...NOTIFICATION, ...repoMute, audience: 'team' };
+    const comment = { ...NOTIFICATION, title: 'Same repo comment', threadId: '102', reason: 'comment' };
+    mock.setGitHubNotificationMute.mockImplementation(async ({ muted: next }) => {
+      muted = next;
+      return { ...repoMute, muted };
+    });
+    mock.getGitHubNotifications.mockImplementation(async ({ view }) => ({
+      notifications: [...(!muted || view === 'all' ? [{ ...review, mutedInPortOS: muted }] : []), comment],
+      mutes: muted ? [{ ...repoMute, accountLabel: 'github.com' }] : [],
+      sync: {},
+    }));
+    await renderInbox();
+    expect(await screen.findByText('Current review request: your team')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Example change' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: `Mute "Review requested" for ${repoMute.repoFullName} in PortOS` }));
+    await waitFor(() => expect(screen.queryByText('Example change')).toBeNull());
+    expect(screen.getByText('Same repo comment')).toBeTruthy();
+    expect(mock.applyGitHubNotificationAction).not.toHaveBeenCalled();
+    expect(mock.setGitHubNotificationMute).toHaveBeenCalledWith(expect.objectContaining({ ...repoMute, muted: true }));
+
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }));
+    expect(await screen.findByText('Muted in PortOS')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Inbox/ }));
+    fireEvent.click(screen.getByText('Muted notification types (1)'));
+    fireEvent.click(screen.getByRole('button', { name: `Unmute Review requested for ${repoMute.repoFullName} (github.com)` }));
+    expect(await screen.findByText('Example change')).toBeTruthy();
+    expect(mock.setGitHubNotificationMute).toHaveBeenLastCalledWith(expect.objectContaining({ ...repoMute, muted: false }));
+  });
+
+  it('can create a type mute from a previously handled row', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({
+      notifications: [{ ...NOTIFICATION, state: 'done', unread: false }],
+      sync: {},
+    });
+    mock.setGitHubNotificationMute.mockResolvedValue({ muted: true });
+    await renderInbox();
+    fireEvent.click(screen.getByRole('button', { name: /^Handled/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions for Example change' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Mute "Review requested"/ }));
+    await waitFor(() => expect(mock.setGitHubNotificationMute).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'github-com', repoFullName: NOTIFICATION.repoFullName, reason: 'review_requested', muted: true,
+    })));
+    expect(mock.applyGitHubNotificationAction).not.toHaveBeenCalled();
   });
 
   it('marks a thread done and takes it out of the inbox', async () => {

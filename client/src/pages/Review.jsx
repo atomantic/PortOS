@@ -146,9 +146,10 @@ export default function Review() {
   };
 
   const handleGitHubUpdated = (item, notification) => {
-    if (notification.state !== 'open' || !notification.unread || notification.readOnGithub) {
-      handleQueueDismiss(item);
-      if (actionId === item.id) navigate(`/review?view=${actionView}`, { replace: true });
+    const handled = notification.state !== 'open' || !notification.unread || notification.readOnGithub;
+    if (handled) handleQueueDismiss(item);
+    if ((notification.mutedInPortOS || handled) && actionId === item.id) {
+      navigate(`/review?view=${actionView}`, { replace: true });
     }
     void fetchQueue();
   };

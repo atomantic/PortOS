@@ -2,7 +2,7 @@ import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationMuteSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
   githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema, githubNotificationPullRequestActionSchema } from '../lib/githubValidation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
@@ -143,6 +143,12 @@ router.get('/accounts/:id/status', asyncHandler(async (req, res) => {
 router.get('/notifications', asyncHandler(async (req, res) => {
   const { accountId, view } = validateRequest(githubNotificationsQuerySchema, req.query);
   res.json(await githubNotifications.listNotifications({ accountId, view }));
+}));
+
+// Local per-account repository/reason preferences. This never talks to GitHub.
+router.put('/notifications/mutes', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubNotificationMuteSchema, req.body ?? {});
+  res.json(await githubNotifications.setNotificationMute(body));
 }));
 
 /**

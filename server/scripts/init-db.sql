@@ -2629,6 +2629,13 @@ CREATE TABLE IF NOT EXISTS github_notification_rules (
     UNIQUE (account_id, repo_full_name, reason, actor)
   );
 
+CREATE TABLE IF NOT EXISTS github_notification_mutes (
+    account_id TEXT NOT NULL,
+    repo_full_name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (account_id, repo_full_name, reason)
+  );
+
 CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
     id BIGSERIAL PRIMARY KEY,
     account_id TEXT NOT NULL,

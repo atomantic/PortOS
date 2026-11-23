@@ -173,7 +173,7 @@ export const REASON_WHY = {
   invitation: { tone: 'warning', text: 'You were invited to a repository' },
   manual: { tone: 'muted', text: 'You subscribed to this thread' },
   mention: { tone: 'warning', text: 'You were mentioned' },
-  review_requested: { tone: 'accent', text: 'Your review was requested' },
+  review_requested: { tone: 'accent' },
   security_alert: { tone: 'error', text: 'A security alert on your dependencies' },
   state_change: { tone: 'muted', text: 'It was opened, closed or merged' },
   subscribed: { tone: 'muted', text: 'You are watching this repository' },
@@ -221,4 +221,30 @@ export function subjectStatusChip(subjectType, status) {
     return merge ? { ...merge, key: status.mergeState } : { tone: 'success', label: 'Open', key: 'open' };
   }
   return status.state === 'open' ? { tone: 'success', label: 'Open', key: 'open' } : null;
+}
+
+// GitHub's `reason` vocabulary, phrased for a glance.
+export const REASON_LABELS = {
+  approval_requested: 'Deploy approval',
+  assign: 'Assigned',
+  author: 'You opened',
+  ci_activity: 'CI',
+  comment: 'Comment',
+  invitation: 'Invitation',
+  manual: 'Subscribed',
+  mention: 'Mention',
+  review_requested: 'Review requested',
+  security_alert: 'Security alert',
+  state_change: 'State change',
+  subscribed: 'Watching',
+  team_mention: 'Team mention',
+};
+
+export function notificationAudienceLabel({ reason, audience }) {
+  if (reason === 'review_requested') return {
+    direct: 'Current review request: you',
+    team: 'Current review request: your team',
+    'direct-and-team': 'Current review request: you and your team',
+  }[audience] || 'Review recipient unknown';
+  return { direct: 'To you', team: 'To your team' }[audience] || null;
 }
