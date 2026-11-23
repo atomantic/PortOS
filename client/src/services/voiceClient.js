@@ -627,6 +627,10 @@ export const onVoiceEvent = (event, handler) => {
 // the VoiceWidget wires to a button), we keep that stream alive, and
 // captureScreenForVision grabs a frame from it on demand without re-prompting.
 let visionStream = null;
+// Bumped by every enable/disable/dispose so a getDisplayMedia() picker that
+// resolves AFTER teardown can detect it was superseded and release its stream
+// (visionStream is still null while the picker is open, so clear can't see it).
+let visionGeneration = 0;
 // Optional callback invoked whenever the authorized stream ends — either via
 // disableVisionCapture() or because the user clicked "Stop sharing" in the
 // browser's own chrome (track 'ended'). Lets the UI sync its toggle state
@@ -634,6 +638,7 @@ let visionStream = null;
 let onVisionEndedCb = null;
 
 const clearVisionStream = ({ notify = true } = {}) => {
+  visionGeneration += 1;
   const stream = visionStream;
   // Null the global BEFORE stopping tracks: t.stop() synchronously fires the
   // track 'ended' handler, and that handler no-ops unless `visionStream === its
@@ -664,11 +669,16 @@ export const onVisionCaptureEnded = (cb) => {
 export const enableVisionCapture = async () => {
   if (!navigator.mediaDevices?.getDisplayMedia) return false;
   if (isVisionCaptureEnabled()) return true;
+  const generation = ++visionGeneration;
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: { displaySurface: 'browser' },
     audio: false,
   }).catch(() => null);
   if (!stream) return false;
+  if (generation !== visionGeneration) {
+    stream.getTracks().forEach((t) => t.stop());
+    return false;
+  }
   visionStream = stream;
   // User-stopped (browser chrome) → clear + notify the UI so the toggle flips.
   // Guard on `visionStream === stream` so a late 'ended' from a SUPERSEDED
@@ -1281,6 +1291,7 @@ export const isWebSpeechCapturing = () => webSpeechShouldListen;
  */
 export const disposeCaptureOwner = () => {
   captureOwnerGeneration += 1;
+  visionGeneration += 1;
 
   const activeRecorder = recorder;
   recorder = null;

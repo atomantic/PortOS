@@ -112,6 +112,8 @@ vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
 
 import VoiceWidgetGate from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
+import * as voiceClientMock from '../../services/voiceClient';
+import { ENGAGE_EVENT, DISENGAGE_EVENT } from '../../services/voiceVisibility';
 
 const HIDDEN_KEY = 'portos.voice.hidden';
 const settle = () => act(async () => {});
@@ -183,5 +185,43 @@ describe('VoiceWidget accessibility', () => {
     fireEvent.click(within(widget).getAllByRole('button', { name: 'Hide voice widget' })[0]);
     await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Engage voice agent controls' }));
+  });
+});
+
+describe('VoiceWidget async lifecycle', () => {
+  it('does not send typed text when it unmounts during the fast path', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({ ...ENABLED_CONFIG, llm: { fastPath: { enabled: true } } });
+    let finish;
+    mocks.resolveTurn.mockReturnValue(new Promise((r) => { finish = r; }));
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const { unmount } = render(<VoiceWidgetGate><VoiceToggleButton /></VoiceWidgetGate>);
+    await settle();
+    const widget = await screen.findByRole('complementary', { name: 'Voice assistant' });
+    fireEvent.change(within(widget).getByLabelText('Message to the voice assistant'), { target: { value: 'hello' } });
+    fireEvent.click(within(widget).getByRole('button', { name: 'Send text' }));
+    await settle();
+    expect(mocks.resolveTurn).toHaveBeenCalled();
+    unmount();
+    await act(async () => { finish(null); });
+    expect(voiceClientMock.sendText).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen the mic when disengage lands while engage awaits the in-flight cancel', async () => {
+    await renderWidget();
+    let releaseStop;
+    mocks.isContinuous.mockReturnValue(true);
+    mocks.stopContinuous.mockReturnValue(new Promise((r) => { releaseStop = r; }));
+    mocks.startContinuous.mockClear();
+    voiceClientMock.startCapture.mockClear();
+    mocks.startWebSpeechCapture.mockClear();
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    act(() => { window.dispatchEvent(new Event(ENGAGE_EVENT)); });
+    act(() => { window.dispatchEvent(new Event(DISENGAGE_EVENT)); });
+    mocks.isContinuous.mockReturnValue(false);
+    await act(async () => { releaseStop(); });
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+    expect(voiceClientMock.startCapture).not.toHaveBeenCalled();
+    expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
   });
 });
