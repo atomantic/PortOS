@@ -323,6 +323,40 @@ describe('LoomSeriesPlan', () => {
       { silent: true },
     ));
   });
+
+  it('persists typing into a voicemail boundary added after overnight voicemails were enabled', async () => {
+    const user = userEvent.setup();
+    renderPlan({
+      loom: loom({
+        episodes: [
+          { id: 'ep-1', number: 1, title: 'Pilot' },
+          { id: 'ep-2', number: 2, title: 'The Turn' },
+          { id: 'ep-3', number: 3, title: 'Finale' },
+        ],
+        seriesPlan: {
+          storyArc: 'An old arc.', plotPoints: [], sideQuests: [],
+          deliveryOptions: { overnightVoicemails: true, nextSeasonTeaser: false },
+          interEpisodeVoicemails: [
+            { id: 'voicemail-1', fromEpisodeId: 'ep-1', toEpisodeId: 'ep-2', title: 'First', transcript: 'Keep going.' },
+          ],
+        },
+      }),
+      onLoomUpdate: vi.fn(),
+    });
+
+    await user.click(screen.getByRole('tab', { name: 'Viewer handoffs' }));
+    const transcripts = screen.getAllByRole('textbox', { name: 'Voicemail transcript' });
+    await user.type(transcripts[1], 'Almost there.');
+    expect(screen.getAllByRole('textbox', { name: 'Voicemail transcript' })[1]).toHaveValue('Almost there.');
+    await user.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(updateLoom).toHaveBeenCalled());
+    const voicemails = updateLoom.mock.calls[0][1].seriesPlan.interEpisodeVoicemails;
+    expect(voicemails).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'voicemail-1', transcript: 'Keep going.' }),
+      expect.objectContaining({ fromEpisodeId: 'ep-2', toEpisodeId: 'ep-3', transcript: 'Almost there.' }),
+    ]));
+  });
 });
 
 // The OPTIONAL five-stage character evolution lens (#6441). Its own fixture so
