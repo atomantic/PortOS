@@ -44,6 +44,44 @@ describe('SyncToPeerButton', () => {
     expect(screen.queryByText(/Subscribe to peer/i)).toBeNull();
   });
 
+  it('moves focus into a labelled dialog, traps Tab, and restores focus on Escape', async () => {
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    const trigger = screen.getByRole('button', { name: /Sync/i });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Subscribe to peer' });
+    const rowA = await screen.findByRole('button', { name: /Peer A/i });
+    const rowB = screen.getByRole('button', { name: /Peer B/i });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    rowB.focus();
+    await user.tab();
+    expect(document.activeElement).toBe(rowA);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(rowB);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('uses the label as the accessible name in compact mode', () => {
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" compact label="Sync universe" />);
+    expect(screen.getByRole('button', { name: 'Sync universe' })).toBeTruthy();
+  });
+
+  it('exposes subscribed state through aria-pressed on peer rows', async () => {
+    listPeerSubscriptions.mockResolvedValue({ subscriptions: [{ id: 's-a', peerId: 'peer-a' }] });
+    subscribeToPeer.mockResolvedValue({ subscription: { id: 's-b', peerId: 'peer-b' } });
+    const user = userEvent.setup();
+    render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
+    await user.click(screen.getByRole('button', { name: /Sync/i }));
+    const rowA = await screen.findByRole('button', { name: /Peer A/i });
+    expect(rowA).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /Peer B/i })).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', { name: /Peer B/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Peer B/i })).toHaveAttribute('aria-pressed', 'true'));
+  });
+
   it('lists only enabled peers with an instanceId on open', async () => {
     const user = userEvent.setup();
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
@@ -183,7 +221,7 @@ describe('SyncToPeerButton', () => {
     render(<SyncToPeerButton recordKind="universe" recordId="u1" />);
     const trigger = screen.getByRole('button', { name: /Sync/i });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(trigger).toHaveAttribute('aria-haspopup', 'true');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
     await user.click(trigger);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await user.click(trigger);

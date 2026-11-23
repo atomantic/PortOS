@@ -50,7 +50,7 @@ describe('ShareToButton', () => {
     render(<ShareToButton kind="series" ids={['s1']} />);
     const trigger = screen.getByRole('button', { name: /Share/i });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(trigger).toHaveAttribute('aria-haspopup', 'true');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
     await user.click(trigger);
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await user.click(trigger);
@@ -67,6 +67,53 @@ describe('ShareToButton', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     // Focus returns to the trigger after Escape.
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('moves focus into a labelled dialog, traps Tab, and restores focus on Escape', async () => {
+    const user = userEvent.setup();
+    render(<ShareToButton kind="series" ids={['s1']} />);
+    const trigger = screen.getByRole('button', { name: /Share/i });
+    await user.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Subscribe to bucket' });
+    const rowA = await screen.findByRole('button', { name: /Bucket A/i });
+    const rowB = screen.getByRole('button', { name: /Bucket B/i });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+    rowB.focus();
+    await user.tab();
+    expect(document.activeElement).toBe(rowA);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(rowB);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('labels the dialog "Share to bucket" for one-shot media and restores focus after sharing', async () => {
+    exportToShareBucket.mockResolvedValue({ exports: [{ recordCount: 1, assetCount: 1 }] });
+    const user = userEvent.setup();
+    render(<ShareToButton kind="media" items={[{ kind: 'image', ref: 'a.png' }]} compact label="Share" />);
+    const trigger = screen.getByRole('button', { name: 'Share' });
+    await user.click(trigger);
+    await screen.findByRole('dialog', { name: 'Share to bucket' });
+    const row = await screen.findByRole('button', { name: /Bucket A/i });
+    expect(row).not.toHaveAttribute('aria-pressed');
+    await user.click(row);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('exposes subscribed state through aria-pressed on bucket rows', async () => {
+    listShareSubscriptions.mockResolvedValue({ subscriptions: [{ id: 'sub-1', bucketId: 'bkt-a' }] });
+    subscribeToShareBucket.mockResolvedValue({ subscription: { id: 'sub-2', bucketId: 'bkt-b' } });
+    const user = userEvent.setup();
+    render(<ShareToButton kind="series" ids={['s1']} />);
+    await user.click(screen.getByRole('button', { name: /Share/i }));
+    const rowA = await screen.findByRole('button', { name: /Bucket A/i });
+    const rowB = screen.getByRole('button', { name: /Bucket B/i });
+    expect(rowA).toHaveAttribute('aria-pressed', 'true');
+    expect(rowB).toHaveAttribute('aria-pressed', 'false');
+    await user.click(rowB);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Bucket B/i })).toHaveAttribute('aria-pressed', 'true'));
   });
 
   it('subscribes a series record to a bucket on click', async () => {
