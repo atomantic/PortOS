@@ -339,7 +339,9 @@ describe('Apps CRUD Routes', () => {
       const laneHealth = await request(app).get('/api/apps/portos-default/lane-health');
       expect(laneHealth.status).toBe(200);
       expect(laneHealth.body).toEqual({ available: true, windowDays: 60, lanes: [] });
-      expect(getAppLaneHealth).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
+      expect(getAppLaneHealth).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' }, { refresh: false });
+      await request(app).get('/api/apps/portos-default/lane-health?refresh=1');
+      expect(getAppLaneHealth).toHaveBeenLastCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' }, { refresh: true });
       appsService.getAppById.mockResolvedValueOnce(null);
       expect((await request(app).get('/api/apps/missing/lane-health')).status).toBe(404);
     });

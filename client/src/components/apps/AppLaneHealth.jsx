@@ -26,7 +26,8 @@ export default function AppLaneHealth({ appId }) {
   useEffect(() => {
     let active = true;
     setState({ loading: true });
-    getAppLaneHealth(appId).then((data) => {
+    // Refresh (not the first load) bypasses the server's short-lived cache.
+    (refresh > 0 ? getAppLaneHealth(appId, { refresh: true }) : getAppLaneHealth(appId)).then((data) => {
       if (active) setState({ data });
     }).catch(() => {
       if (active) setState({ error: true });
