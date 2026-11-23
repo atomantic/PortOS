@@ -233,7 +233,7 @@ describe('LoomProductionPanel', () => {
     expect(screen.getByText('Episode 2 asset')).toBeInTheDocument();
   });
 
-  it.each(['failed', 'canceled'])('offers a fresh Start alongside Resume after a %s run, both gated by !canStart', async status => {
+  it.each(['failed', 'canceled'])('offers a fresh Start alongside Resume after a %s run', async status => {
     getLoomEpisodeProductionBatchStatus.mockResolvedValue({
       run: { id: 'batch-old', loomId: 'loom-1', episodeId: 'ep-1', status, revision: 1, summary: { total: 6, completed: 1 } },
     });
@@ -249,6 +249,21 @@ describe('LoomProductionPanel', () => {
       expect(screen.getByText('Cancel Production Batch')).toBeInTheDocument();
     });
     expect(screen.queryByText('Resume Batch Production')).not.toBeInTheDocument();
+  });
+
+  it('disables both Start and Resume after a failed run while readiness blockers exist', async () => {
+    getLoomEpisodeProductionBatchStatus.mockResolvedValue({
+      run: { id: 'batch-old', loomId: 'loom-1', episodeId: 'ep-1', status: 'failed', revision: 1, summary: { total: 6, completed: 1 } },
+    });
+    render(
+      <LoomProductionPanel
+        loom={{ ...sampleLoom, episodes: [{ id: 'ep-1', number: 1 }] }}
+        episode={{ ...sampleEpisode, nodes: [{ id: 'node-1' }] }}
+        onSelectNode={vi.fn()}
+      />,
+    );
+    expect((await screen.findByText('Resume Batch Production')).closest('button')).toBeDisabled();
+    expect(screen.getByText('Generate Storyboard Images').closest('button')).toBeDisabled();
   });
 
   it('reattaches and applies scoped batch events, refreshing once per terminal attempt without polling', async () => {
