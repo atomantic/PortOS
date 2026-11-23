@@ -224,6 +224,7 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
   const finish = (id, owner = localOwners.get(id), { observed = false } = {}) => {
     const existing = finishing.get(id);
     if (existing?.owner === owner) return existing.pending;
+    materializeInflight(id, owner);
     // A runner and server can finish in the same millisecond. Contention is
     // retried; never lose a completion solely because another writer owns mkdir.
     const settle = async () => {
@@ -311,8 +312,53 @@ export function createMaintenanceAdmission(dataDir = PATHS.data, { io = fs, asse
     const { id, owner } = context.getStore() ?? {};
     return Boolean(id) && read().operations.some(op => op.id === id && sameOwner(op, owner));
   };
-  const continueSettlement = (fn, { hasStarted } = {}) => ambientOperationLive()
-    ? run('settlement', 'Output publication', fn, { continuation: true, hasStarted }) : fn();
+  // `lazyWhenOwnedBy` lists long-lived ambient kinds (agent, runner) whose own live row
+  // already fences maintenance for everything they run. High-frequency publications under
+  // them would otherwise pay two fsynced journal transactions each (#17649), so no row is
+  // written up front. The reservation is materialized only when it is needed: if the owner
+  // finishes while a publication is still in flight (the row then outlives it), or when a
+  // started write fails (the unsettled marker needs a row of its own).
+  const inflightLazy = new Map();
+  const lazyKey = (id, owner) => `${id}:${owner?.pid}:${owner?.startedAt}`;
+  const ambientOperationKind = () => {
+    const { id, owner } = context.getStore() ?? {};
+    return read().operations.find(op => op.id === id && sameOwner(op, owner))?.kind;
+  };
+  const materializeInflight = (id, owner) => {
+    const entry = inflightLazy.get(lazyKey(id, owner));
+    if (!entry || entry.permit || entry.count === 0) return;
+    try { entry.permit = admit('settlement', 'Output publication', { parentId: id }); }
+    catch (err) { console.log(`⚠️ Deferred output publication could not reserve a settlement row: ${err.message}`); markCurrentUnsettled(); }
+  };
+  const runLazy = async (fn, hasStarted) => {
+    const { id, owner } = context.getStore();
+    const key = lazyKey(id, owner);
+    const entry = inflightLazy.get(key) ?? { count: 0, permit: null };
+    inflightLazy.set(key, entry);
+    entry.count += 1;
+    try { return await fn(); }
+    catch (err) {
+      let started = true;
+      try { started = hasStarted?.() !== false; } catch { /* Missing proof remains uncertain. */ }
+      if (started) {
+        try {
+          const permit = admit('settlement', 'Output publication', { continuation: true });
+          permit.markUnsettled();
+          await permit.finish();
+        } catch { markCurrentUnsettled(); }
+      }
+      throw err;
+    } finally {
+      entry.count -= 1;
+      if (entry.count === 0) {
+        if (inflightLazy.get(key) === entry) inflightLazy.delete(key);
+        if (entry.permit) await entry.permit.finish();
+      }
+    }
+  };
+  const continueSettlement = (fn, { hasStarted, lazyWhenOwnedBy } = {}) => !ambientOperationLive() ? fn()
+    : lazyWhenOwnedBy?.includes(ambientOperationKind()) ? runLazy(fn, hasStarted)
+      : run('settlement', 'Output publication', fn, { continuation: true, hasStarted });
   const run = async (kind, resource, fn, options) => {
     const permit = admit(kind, resource, options);
     try { return await permit.run(fn); }
