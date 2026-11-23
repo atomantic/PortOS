@@ -921,6 +921,27 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     ));
   });
 
+  it('submits a model override for one new frame take without saving it as the shot default', async () => {
+    await openProject({ ...SPEC_PROJECT, imageMode: 'grok', scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
+    await showFrames();
+    fireEvent.click(screen.getByRole('button', { name: /Image model for this (start )?frame take/ }));
+    const override = within(screen.getByRole('group', { name: 'One-take image model' }));
+    expect(override.getByLabelText('Render on').textContent).toContain('Current frame setting · Grok');
+    fireEvent.change(override.getByLabelText('Render on'), { target: { value: 'codex' } });
+    fireEvent.change(override.getByLabelText('Model'), { target: { value: 'gpt-image-test' } });
+    fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenLastCalledWith(
+      'mv-spec', 's1', { slot: 'start', imageTarget: { mode: 'codex', cloudModel: 'gpt-image-test' } }, { silent: true },
+    ));
+    expect(screen.queryByRole('group', { name: 'One-take image model' })).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^New frame take$/ }).disabled).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenLastCalledWith(
+      'mv-spec', 's1', { slot: 'start' }, { silent: true },
+    ));
+    expect(updateMusicVideoScene).not.toHaveBeenCalled();
+  });
+
   // Uniquely catches Refine sending the shot prompt instead of the instruction, the frame not leading, or the shot's picked references not riding along.
   it('refines the start frame by a short instruction, sending the references picked on the shot after that frame', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');

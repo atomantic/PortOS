@@ -29,7 +29,7 @@ const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
 const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validateRequest.js');
-const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
+const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideo/musicVideoRouteValidation.js');
 const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));
@@ -183,6 +183,19 @@ describe('draft and final clip renders (#16136)', () => {
 });
 
 describe('shot-card frame references (#15583)', () => {
+  it('keeps a validated one-take image model through preparation without changing the project pin', async () => {
+    const scene = { sceneId: 's1', framePrompt: 'A rider at dawn', referenceImageId: 'selected.png' };
+    const project = { id: 'mv-card', imageMode: 'codex', imageModelId: 'project-model', scenes: [scene] };
+    const input = validateRequest(musicVideoSceneFrameRenderSchema, {
+      slot: 'start', imageTarget: { mode: 'codex', cloudModel: 'one-take-model' },
+    });
+    const once = await prepared(project, await buildSceneFrameGenerateBody(project, scene, input));
+    expect(once.data).toMatchObject({ mode: 'codex', cloudModel: 'one-take-model' });
+    expect(once.data.musicVideo.replaceSelection).not.toBe(true);
+    const later = await prepared(project, await buildSceneFrameGenerateBody(project, scene, { slot: 'start' }));
+    expect(later.data.cloudModel).toBe('project-model');
+  });
+
   it('uses an explicitly supplied start-frame source as the leading conditioning reference without requiring fromFrame', async () => {
     const project = { id: 'mv-card', scenes: [{ sceneId: 's1', framePrompt: 'A rider at dawn', referenceImageId: 'selected.png' }] };
     const body = await buildSceneFrameGenerateBody(project, project.scenes[0], { referenceImageId: 'source-take.png' });
