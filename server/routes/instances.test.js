@@ -53,6 +53,7 @@ import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
+import { provisionTailscaleCert } from '../services/certProvisioner.js';
 vi.mock('../services/tailcatPeer.js', async (original) => ({
   ...(await original()),
   addPeerViaTailcat: vi.fn(),
@@ -96,6 +97,25 @@ const buildApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('POST /api/instances/provision-cert', () => {
+  beforeEach(() => { provisionTailscaleCert.mockReset(); });
+
+  it('passes a successful result through as 200 JSON', async () => {
+    const result = { ok: true, mode: 'tailscale', hostname: 'h.ts.net', wroteNew: true, requiresRestart: true, message: 'Cert installed' };
+    provisionTailscaleCert.mockResolvedValue(result);
+    const res = await request(buildApp()).post('/api/instances/provision-cert');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(result);
+  });
+
+  it('maps a structured failure to 400 with code equal to result.reason', async () => {
+    provisionTailscaleCert.mockResolvedValue({ ok: false, reason: 'no-magic-dns', message: 'No MagicDNS hostname' });
+    const res = await request(buildApp()).post('/api/instances/provision-cert');
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'no-magic-dns', error: 'No MagicDNS hostname' });
+  });
+});
 
 describe('GET /api/instances/tailnet-suffix', () => {
   beforeEach(() => vi.clearAllMocks());
