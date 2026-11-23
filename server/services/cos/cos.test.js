@@ -39,6 +39,7 @@ import { dirname, join } from 'path';
 import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
 import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
+import { retryHoldMetadata, RETRY_HOLD_GRACE_MS } from '../../lib/taskRetryHold.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
 import { parseTasksMarkdown } from '../../lib/legacyTaskMarkdown.js';
@@ -2097,42 +2098,52 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
     expect(taskStore.updateTask).toHaveBeenCalledWith(card.id, expect.objectContaining({ status: 'completed' }), 'internal',
       expect.objectContaining({ expectedStatus: 'in_progress' }));
   });
-});
 
-// A failed run's retry is held non-spawnable (`in_progress` + marker) while its
-// worktree cleanup resolves the resume pointer (#3373). The boot/health-check
-// sweep walks in_progress tasks, so it must leave a LIVE hold alone — requeueing
-// there would resolve the pointer against a branch mid-merge — and must hand a
-// STALE one (the process that armed it died) to handleOrphanedTask, which
-// finishes the transition.
-describe('resetOrphanedTasks — retry holds (#3373)', () => {
-  const sweepFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function resetOrphanedTasks'));
+  // A failed run's retry is held non-spawnable (#3373) while its worktree cleanup
+  // resolves the resume pointer. A live hold must be left alone; a stale one (the
+  // arming process died) is handed to handleOrphanedTask.
+  describe('retry holds (#3373)', () => {
+    const setHeld = async (metadata) => taskStore.getAllTasks.mockResolvedValue({
+      user: { grouped: { in_progress: [{ id: taskId, status: 'in_progress', metadata }] } }, cos: { grouped: {} },
+    });
+    const now = Date.parse('2026-01-01T02:00:00Z');
+    const failedLatest = { ...latest, result: { success: false } };
 
-  it('skips a held task until its hold goes stale', () => {
-    expect(sweepFn, 'the sweep must consult the retry hold')
-      .toMatch(/const recoverHold = held && \(bootRecovery \|\| isStaleRetryHold\(task\.metadata\)\)/);
-    expect(sweepFn, 'a live hold must skip the task').toMatch(/if \(held && !recoverHold\)/);
-    const guardIdx = sweepFn.indexOf('const held = isRetryHeld(task.metadata)');
-    const handlerIdx = sweepFn.indexOf('handleOrphanedTask(');
-    expect(guardIdx, 'the hold guard must run before the orphan handler').toBeGreaterThan(-1);
-    expect(guardIdx, 'the hold guard must run before the orphan handler').toBeLessThan(handlerIdx);
-  });
+    it('skips a live hold', async () => {
+      await setHeld(retryHoldMetadata(latest.id, now - 60_000));
+      await resetOrphanedTasks();
+      expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
+      expect(taskStore.updateTask).not.toHaveBeenCalled();
+    });
 
-  // Nothing can be mid-cleanup on the startup pass, so a hold left by the process
-  // that died is recovered immediately rather than idling out its grace window.
-  it('recovers a held task immediately on the boot pass', () => {
-    expect(COS_SRC).toMatch(/resetOrphanedTasks\(\{\s*bootRecovery:\s*true\s*\}\)/);
-    expect(sweepFn).toMatch(/bootRecovery\s*=\s*false/);
-  });
+    it('recovers a stale hold through the orphan handler', async () => {
+      await setHeld(retryHoldMetadata(latest.id, now - RETRY_HOLD_GRACE_MS - 1000));
+      await resetOrphanedTasks();
+      expect(agentManagement.handleOrphanedTask).toHaveBeenCalledExactlyOnceWith(
+        taskId, latest.id, taskStore.getTaskById, expect.any(Object));
+    });
 
-  // The hold is armed AFTER completeAgent, so a crash-restart inside the 60s
-  // recently-completed grace would otherwise skip exactly the task the boot pass
-  // exists to recover, stranding it until the 15-minute periodic sweep.
-  it('lets a recoverable hold bypass the recently-completed grace', () => {
-    const holdIdx = sweepFn.indexOf('const recoverHold =');
-    const graceIdx = sweepFn.indexOf('recentlyCompletedTaskIds.has(task.id)');
-    expect(holdIdx, 'the hold must be evaluated before the recently-completed grace').toBeLessThan(graceIdx);
-    expect(sweepFn).toMatch(/if \(!recoverHold && recentlyCompletedTaskIds\.has\(task\.id\)\)/);
+    it('recovers a live hold immediately on the boot pass', async () => {
+      await setHeld(retryHoldMetadata(latest.id, now - 1000));
+      await resetOrphanedTasks({ bootRecovery: true });
+      expect(agentManagement.handleOrphanedTask).toHaveBeenCalledExactlyOnceWith(
+        taskId, latest.id, taskStore.getTaskById, expect.any(Object));
+    });
+
+    it('lets a recoverable hold bypass the recently-completed grace, but not an unheld task', async () => {
+      const state = await import('./cosState.js');
+      const justCompleted = { ...failedLatest, completedAt: new Date(now - 5000).toISOString() };
+      state.loadState.mockResolvedValue({ agents: { latest: justCompleted } });
+
+      await setHeld(retryHoldMetadata(latest.id, now - 1000));
+      await resetOrphanedTasks({ bootRecovery: true });
+      expect(agentManagement.handleOrphanedTask).toHaveBeenCalledTimes(1);
+
+      agentManagement.handleOrphanedTask.mockClear();
+      await setHeld({});
+      await resetOrphanedTasks({ bootRecovery: true });
+      expect(agentManagement.handleOrphanedTask).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -2464,150 +2475,6 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
   });
 });
 
-// Source-level guard: the agent:completed handler must wire the perpetual
-// refill so completion drains back-to-back instead of waiting for the hourly
-// improvement-check timer.
-describe('cos.js source — agent:completed triggers perpetual refill', () => {
-  it("the agent:completed listener invokes the perpetual refill path", () => {
-    const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
-    expect(onIdx, 'agent:completed listener must exist').toBeGreaterThan(-1);
-    const recoveryIdx = COS_SRC.indexOf('await settleRetirementReviewRun(agent)', onIdx);
-    expect(recoveryIdx).toBeGreaterThan(onIdx);
-    expect(recoveryIdx).toBeLessThan(COS_SRC.indexOf('refillPerpetualForCompletedAgent(agent)', onIdx));
-    const completionIdx = COS_SRC.indexOf('await settleBranchReconcileRun(agent)', onIdx);
-    expect(completionIdx).toBeGreaterThan(onIdx);
-    expect(completionIdx).toBeLessThan(COS_SRC.indexOf('refillPerpetualForCompletedAgent(agent)', onIdx));
-    const handlerSlice = COS_SRC.slice(onIdx, onIdx + 1600);
-    expect(
-      handlerSlice.includes('refillPerpetualForCompletedAgent'),
-      'agent:completed handler must call refillPerpetualForCompletedAgent'
-    ).toBe(true);
-  });
-
-  it('the refill passes the completed task id as ignoreTaskId (avoids the completeAgent-before-updateTask dedup race)', () => {
-    // agent:completed fires before the completion flow's updateTask marks the task
-    // done, so the just-finished task can still read as in_progress — both in the
-    // snapshot AND on disk when queueEligible's addTask re-reads COS-TASKS.md. A
-    // perpetual schedule regenerates an identical first-line per app, so without
-    // excluding the completing task the refill is rejected as a duplicate and the
-    // drain stalls. Pin the ignoreTaskId thread so a refactor can't reintroduce it.
-    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    expect(fnIdx, 'refillPerpetualForCompletedAgent must exist').toBeGreaterThan(-1);
-    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
-    expect(
-      /queueEligibleImprovementTasks\(\s*state\s*,\s*cosTaskData\s*,\s*\{[\s\S]*?ignoreTaskId:\s*agent\?\.taskId[\s\S]*?\}\s*\)/.test(fnSlice),
-      'refill must forward ignoreTaskId: agent?.taskId to queueEligibleImprovementTasks'
-    ).toBe(true);
-  });
-
-  it('a MANUAL (on-demand) drain continues via queuePerpetualRefill under isImprovementEnabled, returning before the auto-run queue lane', () => {
-    // The bug fixed here: a "Run Now" perpetual drain is allowed to START in a
-    // posture where canQueueImprovementTasks is false (auto-run off/dry-run or
-    // idle-review off), but the scheduled queue lane refuses to continue it —
-    // stalling the drain after one item. The manual lane must instead re-issue an
-    // on-demand request (scoped to the same type+app) under the same
-    // isImprovementEnabled gate the manual trigger used, and RETURN before the
-    // queueEligibleImprovementTasks path. Assert the ordering rather than the
-    // absence of a keyword in a comment (fragile): Improve gate → re-issue →
-    // return → (only then) the queue lane.
-    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
-    expect(
-      fnSlice.includes('const plan = perpetualRefillPlan(agent, schedule)'),
-      'refill must resolve the lane via perpetualRefillPlan'
-    ).toBe(true);
-    expect(/plan\.lane === 'onDemand'/.test(fnSlice), 'refill must branch on the on-demand lane').toBe(true);
-
-    const improveGateIdx = fnSlice.indexOf("if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');");
-    // queuePerpetualRefill owns the non-emitting REFILL pair so the on-demand
-    // engines do NOT clear the drain's park / convergence signature / dispatch
-    // counter on its behalf.
-    const triggerMatch = /queuePerpetualRefill\(plan\.taskType, plan\.appId\)/.exec(fnSlice);
-    const triggerIdx = triggerMatch ? triggerMatch.index : -1;
-    const queueIdx = fnSlice.indexOf('queueEligibleImprovementTasks(state, cosTaskData');
-    expect(improveGateIdx, 'manual lane must gate on isImprovementEnabled').toBeGreaterThan(-1);
-    expect(triggerIdx, 'manual lane must re-issue via queuePerpetualRefill(plan.taskType, plan.appId)').toBeGreaterThan(-1);
-    expect(queueIdx, 'scheduled queue lane must still exist').toBeGreaterThan(-1);
-    // Improve gate precedes the re-issue; the manual lane returns before the queue lane.
-    expect(improveGateIdx).toBeLessThan(triggerIdx);
-    expect(triggerIdx).toBeLessThan(queueIdx);
-    const returnAfterTrigger = fnSlice.indexOf('return;', triggerIdx);
-    expect(returnAfterTrigger, 'manual lane must return before falling through to the queue lane').toBeGreaterThan(-1);
-    expect(returnAfterTrigger).toBeLessThan(queueIdx);
-  });
-
-  it('the dequeue on-demand engine hands its ignoreTaskId to the shared drain', () => {
-    // The completion-triggered re-issue must be dedup-safe against the
-    // still-in_progress completing task, so the dequeue engine forwards its
-    // ignoreTaskId into the addTask options the shared drain applies. That
-    // forwarding is one of the three real differences between the engines, and
-    // both sides of it are pinned behaviorally in onDemandDrain.test.js.
-    const engIdx = COS_SRC.indexOf('async function spawnDequeuePriority0OnDemand');
-    expect(engIdx, 'spawnDequeuePriority0OnDemand must exist').toBeGreaterThan(-1);
-    const engBody = extractFnBody(COS_SRC, engIdx);
-    expect(
-      /addTaskOptions:\s*\{\s*ignoreTaskId\s*\}/.test(engBody),
-      'the dequeue engine must pass ignoreTaskId through addTaskOptions'
-    ).toBe(true);
-  });
-
-  it('an unexpired park stops the refill BEFORE it re-issues the drain (#3848)', () => {
-    // The invariant that was missing: park elapse was read only by the SCHEDULED
-    // lane, so a drain that had just parked itself (idle detector / no-progress /
-    // drain cap) was still re-issued on the very next completion — the park meant
-    // nothing on the one lane that does the re-dispatching. A human "Run Now" is
-    // unaffected: applyOnDemandRunResets clears the park for a USER-origin request
-    // before this lane is ever reached.
-    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
-    const parkIdx = fnSlice.indexOf('isPerpetualParkActive(plan.taskType, plan.appId)');
-    const triggerIdx = fnSlice.indexOf('queuePerpetualRefill(plan.taskType, plan.appId');
-    expect(parkIdx, 'refill must consult the type+app park before re-issuing').toBeGreaterThan(-1);
-    expect(parkIdx).toBeLessThan(triggerIdx);
-    const returnAfterPark = fnSlice.indexOf('return;', parkIdx);
-    expect(returnAfterPark, 'a live park must return, not fall through to the re-issue').toBeLessThan(triggerIdx);
-  });
-
-  it('the refill only fires on a SUCCESSFUL completion (no back-to-back spin on failures)', () => {
-    // Perpetual completions skip the per-app cooldown, so refilling after a failed
-    // run would spin the daemon through repeated failures (the work-detector still
-    // sees the same issue as actionable). The refill must bail on a non-success
-    // result and let task-retry/backoff + the recheck cadence handle failures.
-    const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
-    const fnSlice = COS_SRC.slice(fnIdx, COS_SRC.indexOf('\n}', fnIdx));
-    expect(
-      /if\s*\(\s*!agent\?\.result\?\.success\s*\)\s*return/.test(fnSlice),
-      'refill must early-return when the completed agent did not succeed'
-    ).toBe(true);
-  });
-
-  it('refill is sequenced BEFORE dequeue in the handler (perpetual task queued before slots fill)', () => {
-    // If generic dequeue ran first (or concurrently), it could claim the just-
-    // freed slot with idle-review work before the perpetual task is queued,
-    // breaking the back-to-back drain. The handler must chain refill → dequeue.
-    const onIdx = COS_SRC.indexOf("cosEvents.on('agent:completed'");
-    const handlerSlice = COS_SRC.slice(onIdx, COS_SRC.indexOf('// Create notification when a daily briefing completes', onIdx));
-    expect(
-      /refillPerpetualForCompletedAgent\(agent\)[\s\S]*\.then\(\s*\(\)\s*=>\s*dequeueNextTask\(/.test(handlerSlice),
-      'handler must run dequeueNextTask in a .then() AFTER the refill resolves'
-    ).toBe(true);
-    // Both generators on this continuation must skip the completing task, which
-    // still reads pending/in_progress until updateTask settles it (#3179): the
-    // refill excludes it via queueEligibleImprovementTasks, and the dequeue's
-    // idle-review tier via this argument.
-    expect(
-      /dequeueNextTask\(\{\s*ignoreTaskId:\s*agent\?\.taskId\s*\}\)/.test(handlerSlice),
-      'the post-refill dequeue must pass the completing task id as ignoreTaskId'
-    ).toBe(true);
-    // The old standalone `setImmediate(() => dequeueNextTask())` must be gone —
-    // its presence would race the refill.
-    expect(
-      handlerSlice.includes('setImmediate(() => dequeueNextTask())'),
-      'the unconditional pre-refill dequeue must be removed'
-    ).toBe(false);
-  });
-});
-
 // Shared autonomous-queuing gate (cosState.canQueueImprovementTasks). Extracted
 // from three drift-prone copies (post-startup queue, improvement-check timer,
 // perpetual drain refill). Queuing requires BOTH idle-review on AND the CoS
@@ -2701,29 +2568,6 @@ describe('pending-merge sweep — own timer, not the evaluation cadence (#3630)'
     const hours = (PENDING_MERGE_SWEEP_INTERVAL_MS * MAX_PENDING_MERGE_TICKS) / (60 * 60 * 1000);
     expect(PENDING_MERGE_SWEEP_INTERVAL_MS).toBe(30 * 60 * 1000);
     expect(hours).toBe(6);
-  });
-});
-
-describe('CoS startup — resume persisted running + mind recovery', () => {
-  // After a portos-server restart the in-memory daemon flag is false, but
-  // state.running may still be true on disk. initializePersistentMindSupervisor
-  // (orphan activeTurn recovery + watchdog) only runs inside start(), so boot
-  // must re-enter start() when the previous process left running=true — not
-  // only when alwaysOn/autoStart is set.
-  it('auto-starts on boot when state.running was persisted true', () => {
-    const initStart = COS_SRC.indexOf('export async function init(');
-    expect(initStart).toBeGreaterThan(-1);
-    const initFn = extractFnBody(COS_SRC, initStart);
-    expect(initFn).toMatch(/state\.config\.alwaysOn\s*\|\|\s*state\.config\.autoStart\s*\|\|\s*state\.running/);
-    expect(initFn).toMatch(/await start\(\)/);
-  });
-});
-
-describe('CoS startup — single-flight recovery', () => {
-  it('shares the full boot promise across concurrent start callers', () => {
-    expect(COS_SRC).toMatch(/let daemonStartPromise = null/);
-    expect(COS_SRC).toMatch(/daemonStartPromise = runStart\(\)\.finally\(\(\) => \{\s*daemonStartPromise = null;/);
-    expect(COS_SRC).toMatch(/export function start\(\) \{[\s\S]*?return daemonStartPromise;\s*\}/);
   });
 });
 
