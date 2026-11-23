@@ -26,7 +26,8 @@ const MAX_PR_SHA_LOOKUPS = 10;
 const CACHE_TTL_MS = 5 * 60_000;
 const PR_JSON_FIELDS = 'number,mergeCommit,commits,closingIssuesReferences,body';
 const REVERT_SUBJECT = /^\s*revert\b/i;
-const PR_NUMBER_REFERENCE = /(?<![\w#])#(\d+)(?!\d)/g;
+// GitLab names a merge request `!N` and an issue `#N`; either may sit in a revert message.
+const PR_NUMBER_REFERENCE = { gh: /(?<![\w#])#(\d+)(?!\d)/g, glab: /(?<![\w#!])[#!](\d+)(?!\d)/g };
 const SHA_REFERENCE = /\b[0-9a-f]{7,40}\b/g;
 // A `#N` in a revert message may be an issue; the forge answers that lookup with a not-found, which is not a failed read.
 const NOT_FOUND = /could not resolve|not found|404|no pull requests? match/i;
@@ -115,7 +116,7 @@ async function listForgePullRequestsForReverts({ cli, cwd, env, reverts, exec = 
   const shas = new Set();
   for (const { subject, body } of reverts) {
     const text = `${subject}\n${body}`;
-    for (const match of text.matchAll(PR_NUMBER_REFERENCE)) numbers.add(match[1]);
+    for (const match of text.matchAll(PR_NUMBER_REFERENCE[cli])) numbers.add(match[1]);
     for (const match of text.toLowerCase().matchAll(SHA_REFERENCE)) shas.add(match[0]);
   }
   const lookups = [
@@ -186,10 +187,11 @@ export function collectLaneHealth(app, options = {}) {
   if (!refresh && hit && Date.now() - hit.at < CACHE_TTL_MS) return Promise.resolve(hit.result);
   const pending = inflight.get(key);
   if (pending) return pending;
+  // A clear while this read runs must not let it repopulate the cache or evict a newer in-flight read.
   const read = readLaneHealth(app, options).then((result) => {
-    if (result.ok) cache.set(key, { at: Date.now(), result });
+    if (result.ok && inflight.get(key) === read) cache.set(key, { at: Date.now(), result });
     return result;
-  }).finally(() => { inflight.delete(key); });
+  }).finally(() => { if (inflight.get(key) === read) inflight.delete(key); });
   inflight.set(key, read);
   return read;
 }

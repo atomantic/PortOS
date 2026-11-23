@@ -70,7 +70,7 @@ describe('appLaneHealth', () => {
       ],
       pullRequests: [{ iid: 70, merge_commit_sha: 'abc1234567', sha: 'def1234567', description: 'Closes #7' }],
     });
-    const runGit = gitLog([{ sha: 'cccc333', subject: 'Revert "drift" (#70)', body: 'This reverts commit abc1234567.' }]);
+    const runGit = gitLog([{ sha: 'cccc333', subject: 'Revert "drift" (!70)', body: 'This reverts commit abc1234567.' }]);
     const result = await collectLaneHealth(APP, { forge: GLAB, now: NOW, deps: { exec, runGit } });
     expect(exec).toHaveBeenCalledWith('glab', ['issue', 'list', '--all', '-P', '1000'], expect.any(Object));
     expect(exec).toHaveBeenCalledWith('glab', ['mr', 'view', '70', '--output', 'json'], expect.any(Object));
@@ -156,6 +156,20 @@ describe('appLaneHealth', () => {
     expect(result.partial).toEqual([]);
     expect(result.lanes[0]).toMatchObject({ filed: 1, reverted: 1 });
     expect(exec.mock.calls.filter(([, args]) => args[0] === 'pr').map(([, args]) => args[2])).toEqual(expect.arrayContaining(['12', '999']));
+  });
+
+  it('does not let a read that was in flight across a cache clear repopulate the cache', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const slow = vi.fn(async () => { await gate; return { code: 0, stdout: '[]' }; });
+    const deps = { exec: slow, runGit: gitLog([]) };
+    const stale = collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps });
+    clearLaneHealthCache();
+    release();
+    await stale;
+    const fresh = forgeExec();
+    await collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps: { exec: fresh, runGit: gitLog([]) } });
+    expect(fresh).toHaveBeenCalled();
   });
 
   it('names a failed targeted PR lookup as a partial read', async () => {
