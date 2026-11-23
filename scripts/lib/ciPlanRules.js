@@ -257,6 +257,7 @@ export const getAlwaysRunTests = (trackedFiles) => trackedFiles
 // other tracked files stays out (runCiTestsClientFixture.test.js is that half of
 // run-ci-tests.test.js, split off so the rest can be listed).
 export const TOOLING_TESTS = [
+  'scripts/ci-test-plan.test.js',
   'scripts/lib/testMemo.test.js',
   'scripts/lib/testMemoRunner.test.js',
   'scripts/pregate.test.js',

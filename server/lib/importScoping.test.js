@@ -116,6 +116,9 @@ describe('instance identity stays a leaf (#6836)', () => {
 // static closure above but not CI selection. Each row is an edge cut from the
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
+// The project store and the modules above it that it must never load (#17577).
+const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
+const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
     'classifies observed facts without importing reconciliation or CoS orchestration'],
@@ -142,12 +145,60 @@ const SELECTION_CUTS = [
     'reads the merged PR through the prView.js leaf'],
   ['services/git.js', 'services/branchReconcile.js',
     'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
+  // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
+  ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
+    'recovers stuck renders through loaders registerBootHooks() registers in bootHookRegistry.js'],
   ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
     'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
   ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',
     'reads owner decisions from branchRetirementDecision.js and forge shipment from branchReconcile/forgeShipment.js'],
   ['services/apps.js', 'services/taskSchedule.js',
     'resets watcher cooldowns through taskScheduleStore.js'],
+  // #17578: music video modules that resolve the master or plan a cut, not render it.
+  ...[
+    'services/musicVideo/performanceShot.js', 'services/musicVideo/vocalStem.js', 'services/federatedMedia/sourceAudio.js',
+    'services/musicVideo/audioTiming.js', 'services/musicVideo/lyricAlign.js', 'services/musicVideo/lyricAlignCore.js',
+    'services/musicVideo/lyricVerify.js', 'services/musicVideo/performanceRepair.js', 'services/musicVideo/revisionService.js',
+    'services/musicVideo/vocalSeparation.js', 'services/musicVideo/renderPlan.js', 'services/musicVideo/renderCleanup.js',
+    'services/musicVideo/masterAudioPath.js', 'services/musicVideo/renderActivityState.js', 'services/musicVideo/blender/song.js',
+  ].map(entry => [entry, 'services/musicVideo/render.js', 'resolves the master through masterAudioPath.js and render activity through renderActivityState.js']),
+  ['services/musicVideo/shotSegments.js', 'services/musicVideo/render.js',
+    'plans through renderPlan.js, builds args with renderFfmpegArgs.js and reads render activity from renderActivityState.js'],
+  // #17577: the Music Video project store and the siblings it imports never import back up.
+  ['services/musicVideo/projects.js', MUSIC_VIDEO_STORE_UPWARD,
+    'is the low-level store; board edits and film workflows import it from projectBoardEdits.js and projectFilmActions.js'],
+  ['services/musicVideo/mediaPool.js', MUSIC_VIDEO_STORE,
+    'keeps cross-project deletion in mediaPoolDelete.js'],
+  ['services/musicVideo/catalogLinks.js', MUSIC_VIDEO_STORE,
+    'reads the project through the getProject the store hands in'],
+  ['services/musicVideo/referenceLabels.js', MUSIC_VIDEO_STORE,
+    'reads and writes the project through the accessors the store hands in'],
+  ['services/musicVideo/shotSegmentPaths.js', /^services\/musicVideo\/(?:shotSegments|projects)\.js$/,
+    'is the leaf the store removes a deleted project\'s segments through'],
+  // #17619: getIo / command broadcast / film emit lived on the socket composition root.
+  ['services/backup.js', 'services/socket.js',
+    'reads the live io through the socketIo.js leaf'],
+  ['services/moodBoard/analyzeJob.js', 'services/socket.js',
+    'publishes analyze progress through the socketIo.js leaf'],
+  ['services/moodBoard/generateMore.js', 'services/socket.js',
+    'publishes generate progress through the socketIo.js leaf'],
+  ['services/moodBoard/renderItem.js', 'services/socket.js',
+    'publishes item-render progress through the socketIo.js leaf'],
+  ['services/storyboards/make.js', 'services/socket.js',
+    'publishes make progress through the socketIo.js leaf'],
+  ['services/stackerNewsScheduler.js', 'services/socket.js',
+    'publishes sync invalidation through the socketIo.js leaf'],
+  ['routes/commands.js', 'services/socket.js',
+    'broadcasts command output through the socketIo.js leaf'],
+  ['services/codeAnimation/films.js', 'services/socket.js',
+    'emits film frames through codeAnimation/events.js'],
+  // #17576: a project read presents process pins without the stage orchestrators.
+  ['services/musicVideo/projectPresentation.js', 'services/musicVideo/castAndSetsService.js',
+    'presents Cast & Sets through the processPins.js leaf'],
+  ['services/musicVideo/projectPresentation.js', /^services\/musicVideo\/(?:autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'presents an autonomous run through the processPins.js leaf'],
+  ['services/musicVideo/processPins.js', /^services\/musicVideo\/(?:projects\.js|castAndSetsService\.js|autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
+    'owns the process pins without the stage orchestrators or the project store'],
 ];
 
 // Runtimes that import the queue back load through bootHookRegistry.js (#17499).
@@ -184,17 +235,44 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     }
   });
 
+  // Positive control for the Music Video cuts: the workflows above the store still import what it no longer does.
+  it('sees the upward imports the Music Video workflow modules own', () => {
+    expect(importTargets('services/musicVideo/projectBoardEdits.js').filter(target => MUSIC_VIDEO_STORE_UPWARD.test(target)))
+      .toEqual(expect.arrayContaining(['services/storyboards/followShots.js', 'services/musicVideo/editResult.js', 'services/musicVideo/plateReview.js']));
+    expect(importTargets('services/musicVideo/projectFilmActions.js').filter(target => MUSIC_VIDEO_STORE_UPWARD.test(target)))
+      .toEqual(expect.arrayContaining(['services/musicVideo/blender/fork.js', 'services/film/fork.js', 'services/trackSunoImport.js']));
+    expect(importTargets('services/musicVideo/mediaPoolDelete.js')).toContainEqual(expect.stringMatching(MUSIC_VIDEO_STORE));
+  });
+
   it('the leaves the cut entries import stay import-free', () => {
     for (const leaf of [
       'services/readinessSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
+      'services/socketIo.js',
     ]) expect(importTargets(leaf), leaf).toEqual([]);
+  });
+
+  // Positive control: the cut callers still name the leaf, so an empty scan cannot pass.
+  it('still sees the socketIo.js and film-event edges the cut callers keep (#17619)', () => {
+    expect(importTargets('services/backup.js')).toContain('services/socketIo.js');
+    expect(importTargets('routes/commands.js')).toContain('services/socketIo.js');
+    expect(importTargets('services/codeAnimation/films.js')).toContain('services/codeAnimation/events.js');
+    expect(importTargets('services/socket.js')).toContain('services/socketIo.js');
+  });
+
+  it('still sees the processPins.js edge a project read keeps (#17576)', () => {
+    expect(importTargets('services/musicVideo/projectPresentation.js')).toContain('services/musicVideo/processPins.js');
+    expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
   // Positive control for the media scan: the boot owner still names every runtime.
   it('still sees the runtime loaders bootHooks.js registers', () => {
     expect(importTargets('services/bootHooks.js').filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(importTargets('services/bootHooks.js')).toEqual(expect.arrayContaining([
+      'services/musicVideo/render.js',
+      'services/musicVideo/excerptRender.js',
+    ]));
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
@@ -407,8 +485,15 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  it('loads at most half of the original 3,023 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1511);
+  // Measured at 1,433 after boot recovery of the music-video render pipeline
+  // moved behind registerBootHooks() (#17692). The cap keeps 40 modules of
+  // headroom so a few independent PRs can each add a boot-reachable leaf and
+  // still merge. A boot-reachable addition that would cross this cap has to
+  // defer or offset that import in the same change; do not raise the cap to
+  // absorb it.
+  it('loads at most 1,473 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1473);
+    expect(closure.files.size).toBeLessThanOrEqual(1473 - 25);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);

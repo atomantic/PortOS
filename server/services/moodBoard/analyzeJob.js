@@ -65,7 +65,7 @@ function pendingItems(board) {
 }
 
 function publish(job) {
-  import('../socket.js')
+  import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('mood-board:analyze', { ...job }))
     .catch((err) => console.error(`❌ mood-board analyze emit failed: ${err.message}`));
 }

@@ -109,7 +109,7 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
   const d = {
     getProject,
     attachVocalStem: async (...args) => (await import('./vocalStem.js')).attachVocalStem(...args),
-    resolveMaster: async (project) => (await import('./render.js')).resolveMasterAudioPath(project),
+    resolveMaster: async (project) => (await import('./masterAudioPath.js')).resolveMasterAudioPath(project),
     run: runStreamingCommand,
     cudaAvailable: defaultCudaAvailable,
     ...deps,

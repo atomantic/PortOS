@@ -71,8 +71,11 @@ vi.mock('../services/musicVideo/projects.js', async (importOriginal) => ({
   ...await importOriginal(),
   createProject: effects.createProject,
   updateProject: effects.updateProject,
-  refreshSongStyleFromSuno: effects.refreshSongStyleFromSuno,
   setProjectAnalysis: vi.fn(async () => ({ id: 'example-project' })),
+}));
+vi.mock('../services/musicVideo/projectFilmActions.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  refreshSongStyleFromSuno: effects.refreshSongStyleFromSuno,
 }));
 vi.mock('../services/musicVideo/requireProject.js', async (importOriginal) => ({
   ...await importOriginal(),

@@ -43,6 +43,9 @@ beforeEach(() => {
 
 const buildProps = (draft) => ({
   selectedId: null,
+  selectedIdRef: { current: null },
+  mountedRef: { current: true },
+  draftRef: { current: draft },
   draft,
   setDraft: vi.fn(),
   setSaving: vi.fn(),
@@ -57,6 +60,19 @@ const buildProps = (draft) => ({
 });
 
 describe('useUniverseExpand', () => {
+  it('drops an expand result when the user switched universes mid-flight', async () => {
+    const props = { ...buildProps(namedDraft()), selectedId: 'u1', selectedIdRef: { current: 'u1' } };
+    apiMocks.expandUniverse.mockImplementation(async () => {
+      props.selectedIdRef.current = 'u2';
+      return { logline: 'late' };
+    });
+    const { result } = renderHook(() => useUniverseExpand(props));
+    await act(async () => { await result.current.handleExpand(); });
+    expect(props.setDraft).not.toHaveBeenCalled();
+    expect(props.markDraftSaved).not.toHaveBeenCalled();
+    expect(props.goToWorld).not.toHaveBeenCalled();
+  });
+
   it('forwards locked rows and records only newly merged canon additions', async () => {
     const props = buildProps({
       name: '',
@@ -103,5 +119,52 @@ describe('useUniverseExpand', () => {
 
     expect(apiMocks.expandUniverse).not.toHaveBeenCalled();
     expect(toastMock.error).toHaveBeenCalledWith('Add a starter prompt to expand');
+  });
+
+  const namedDraft = (extra = {}) => ({
+    name: 'Factual World',
+    starterPrompt: 'A test world',
+    logline: '', premise: '', styleNotes: '',
+    categories: {}, compositeSheets: [],
+    characters: [], places: [], objects: [],
+    influences: { embrace: [], avoid: [] },
+    locked: {}, llm: {},
+    factual: true,
+    visualProfile: { palette: 'teal' },
+    imageMode: 'local',
+    imageModelId: 'model-a',
+    ...extra,
+  });
+
+  it('create-path auto-save after expand ships factual, visualProfile and render pins', async () => {
+    const props = buildProps(namedDraft());
+    apiMocks.createUniverse.mockResolvedValue({ id: 'u1', updatedAt: 't1' });
+    const { result } = renderHook(() => useUniverseExpand(props));
+    await act(async () => { await result.current.handleExpand(); });
+
+    expect(apiMocks.createUniverse).toHaveBeenCalledWith(expect.objectContaining({
+      factual: true,
+      visualProfile: { palette: 'teal' },
+      imageMode: 'local',
+      imageModelId: 'model-a',
+    }), { silent: true });
+    expect(props.markDraftSaved).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'u1', updatedAt: 't1', factual: true, visualProfile: { palette: 'teal' },
+    }));
+  });
+
+  it('existing-universe auto-save after expand syncs the baseline with id and updatedAt', async () => {
+    const props = { ...buildProps(namedDraft()), selectedId: 'u2', selectedIdRef: { current: 'u2' } };
+    apiMocks.getUniverse.mockResolvedValue({ characters: [], places: [], objects: [] });
+    apiMocks.updateUniverse.mockResolvedValue({ id: 'u2', updatedAt: 't2' });
+    const { result } = renderHook(() => useUniverseExpand(props));
+    await act(async () => { await result.current.handleExpand(); });
+
+    expect(apiMocks.updateUniverse).toHaveBeenCalledWith('u2', expect.objectContaining({
+      factual: true, visualProfile: { palette: 'teal' },
+    }), { silent: true });
+    expect(props.markDraftSaved).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'u2', updatedAt: 't2', factual: true, visualProfile: { palette: 'teal' },
+    }));
   });
 });

@@ -48,7 +48,8 @@ import { mergePersistentMindThinkingPresets } from '../../lib/persistent/persist
 import { useRunner, spawningTasks, hasActiveTaskOwner } from '../agent/agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning, DEFAULT_CONFIG } from './cosState.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 // Events and logging
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -262,6 +263,31 @@ export async function updateConfig(updates) {
         priorPersistentMindPlaybook,
         updates.persistentMindPlaybook,
       );
+    }
+    // A PATCH names one approval field at a time. Spreading `updates` would
+    // replace the whole gate and drop the siblings the client did not send.
+    if (updates.confidenceAutoApproval !== undefined) {
+      next.confidenceAutoApproval = {
+        ...DEFAULT_CONFIG.confidenceAutoApproval,
+        ...(current.confidenceAutoApproval || {}),
+        ...updates.confidenceAutoApproval,
+      };
+      const { lowThreshold, highThreshold } = next.confidenceAutoApproval;
+      const touchesThreshold = updates.confidenceAutoApproval.lowThreshold != null
+        || updates.confidenceAutoApproval.highThreshold != null;
+      if (touchesThreshold && lowThreshold > highThreshold) {
+        throw new ServerError('confidenceAutoApproval.lowThreshold must be less than or equal to highThreshold', {
+          status: 400,
+          code: 'VALIDATION_ERROR',
+        });
+      }
+    }
+    if (updates.safetyKindApproval !== undefined) {
+      next.safetyKindApproval = {
+        ...DEFAULT_CONFIG.safetyKindApproval,
+        ...(current.safetyKindApproval || {}),
+        ...updates.safetyKindApproval,
+      };
     }
     return saveConfig(next);
   });

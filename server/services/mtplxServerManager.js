@@ -818,13 +818,16 @@ async function relaunchWithTuning(normalized, knobs) {
  *
  * @param {string} model a cached MTPLX repo id
  * @param {(servedModelId: string|null) => Promise<*>} fn
+ * @param {{ signal?: AbortSignal }} [options] abort the switch while the new checkpoint is still loading
  */
-export async function runOnMtplxCheckpoint(model, fn) {
-  const switched = await onDemand.runStart(() => switchToCheckpoint(model));
+export async function runOnMtplxCheckpoint(model, fn, { signal } = {}) {
+  if (signal?.aborted) throw checkpointAborted();
+  const switched = await onDemand.runStart(() => switchToCheckpoint(model, signal));
   try {
+    if (signal?.aborted) throw checkpointAborted();
     return await fn(switched.servedModelId);
   } finally {
-    if (switched.previous !== undefined) {
+    if (switched?.previous !== undefined) {
       await onDemand.runStart(() => restoreAfterCheckpoint(switched)).catch((err) => {
         console.error(`❌ MTPLX: could not put the previous checkpoint back after ${model}: ${err.message}`);
       });
@@ -832,9 +835,16 @@ export async function runOnMtplxCheckpoint(model, fn) {
   }
 }
 
+const checkpointAborted = () => {
+  const err = new Error('The MTPLX checkpoint switch was aborted');
+  err.name = 'AbortError';
+  return err;
+};
+
 const servedModelIdAt = async (endpoint) => (await probeOpenAiModels(endpoint, { timeoutMs: PROBE_TIMEOUT_MS })).models?.[0] ?? null;
 
-async function switchToCheckpoint(model) {
+async function switchToCheckpoint(model, signal) {
+  if (signal?.aborted) throw checkpointAborted();
   const status = await getMtplxServerStatus();
   if (status.running && status.config?.model === model) {
     return { servedModelId: await servedModelIdAt(endpointFor(status.config)), previous: undefined };
@@ -863,13 +873,21 @@ async function switchToCheckpoint(model) {
     await waitForPortRelease(port);
   }
   const started = await launchMtplxServer({ port, model }).catch((failure) => ({ failure }));
+  if (signal?.aborted && !started.failure) {
+    await stopMtplxServer().catch(() => {});
+    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
+      console.error(`❌ MTPLX: could not put the previous checkpoint back after an aborted switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
+    });
+    throw checkpointAborted();
+  }
   const ready = started.failure ? { ready: false, reason: started.failure.message }
-    : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint);
+    : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint, { signal });
   if (!ready.ready) {
     if (!started.failure) await stopMtplxServer().catch(() => {});
     await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true }).catch((restoreErr) => {
       console.error(`❌ MTPLX: could not put the previous checkpoint back after failed switch to ${model}: ${restoreErr?.message ?? restoreErr}`);
     });
+    if (ready.aborted || signal?.aborted) throw checkpointAborted();
     throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
   }
   return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };

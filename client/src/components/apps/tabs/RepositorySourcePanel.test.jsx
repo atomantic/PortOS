@@ -446,7 +446,32 @@ describe('managed app repository sources', () => {
     const primary = await screen.findByTestId('repository-source-primary');
     expect(primary).toHaveTextContent('Upstream check unavailable');
     expect(primary).toHaveTextContent('fork freshness is unknown');
-    expect(screen.getByText('Remote freshness is unknown; a managed update can retry the source checkouts.')).toBeInTheDocument();
+    expect(screen.getByText('Origin is current; the canonical upstream check is retried on the next refresh.')).toBeInTheDocument();
+  });
+
+  it('keeps an unanswered upstream lookup apart from origin freshness', async () => {
+    const status = canonicalStatus();
+    status.updateAvailable = false;
+    status.sources = [{
+      ...source({
+        id: 'primary',
+        label: 'Example App',
+        branch: 'main',
+        head: '1'.repeat(40),
+        origin: { fullName: 'example-owner/example-app', isUpstream: null, isFork: false },
+      }),
+      upstream: null,
+      upstreamError: 'GitHub API rate limit reached, so the canonical upstream repository is not known yet',
+    }];
+    getAppRepositorySources.mockResolvedValue(status);
+    render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+
+    const primary = await screen.findByTestId('repository-source-primary');
+    expect(primary).toHaveTextContent('Upstream check unavailable');
+    expect(primary).toHaveTextContent('rate limit reached, so the canonical upstream repository is not known yet; it is checked again on the next refresh.');
+    expect(primary).not.toHaveTextContent('may be stale');
+    expect(screen.getByText('Origin is current; the canonical upstream check is retried on the next refresh.')).toBeInTheDocument();
+    expect(screen.queryByText(/Remote freshness is unknown/)).toBeNull();
   });
 
   it('offers to update from a fork as-is after a FORK_SYNC_REQUIRED refusal', async () => {

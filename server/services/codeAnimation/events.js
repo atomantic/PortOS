@@ -8,6 +8,7 @@ import { EventEmitter } from 'node:events';
  *
  * Events:
  *   - 'changed' -> { id, kind? }
+ *   - 'film' -> { projectId, ...event }  (Production film jobs; subscriber-only)
  */
 export const codeAnimationEvents = new EventEmitter();
 
@@ -19,4 +20,15 @@ export const codeAnimationEvents = new EventEmitter();
  */
 export function emitCodeAnimationChanged(id, kind) {
   codeAnimationEvents.emit('changed', kind ? { id, kind } : { id });
+}
+
+/**
+ * Film jobs share the Production subscription, with their own event shape.
+ * `socket.js` forwards `'film'` to `code-animation` subscribers only.
+ *
+ * @param {string} projectId
+ * @param {object} event
+ */
+export function emitCodeAnimationFilm(projectId, event) {
+  codeAnimationEvents.emit('film', { projectId, ...event });
 }

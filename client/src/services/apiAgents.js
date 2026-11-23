@@ -447,7 +447,6 @@ export const triggerCosJob = (id, { formValues = null, ...options } = {}) => req
   ...(formValues ? { body: JSON.stringify({ formValues }) } : {}),
   ...options
 });
-export const getCosJobIncidents = (options = {}) => request('/cos/jobs/incidents', options);
 export const acknowledgeCosJobIncident = (id, options = {}) => request(`/cos/jobs/incidents/${id}/ack`, { method: 'POST', ...options });
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 

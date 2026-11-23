@@ -3,7 +3,6 @@
  * the workspace for authors and staged into every job, so a film reads beats,
  * sections, loudness envelopes and timed lyrics without ever calling PortOS.
  */
-import { existsSync } from 'node:fs';
 
 const numbers = (list) => (Array.isArray(list) ? list.filter((value) => Number.isFinite(value)) : []);
 const timeOrNull = (value) => (Number.isFinite(value) ? value : null);
@@ -52,8 +51,8 @@ function buildBlenderSong(project, { fps, audio = { master: null, vocalStem: nul
 // A film can render without the audio files (it reads the analysis); a missing
 // master or stem is a null path, never a failed job.
 async function songAudioPaths(project) {
-  const [{ resolveProjectAudioPath }, { resolveVocalStemPath }] = await Promise.all([import('../projectAudio.js'), import('../vocalStem.js')]);
-  const master = await resolveProjectAudioPath(project).then((path) => (existsSync(path) ? path : null), () => null);
+  const [{ resolveMasterAudioPath }, { resolveVocalStemPath }] = await Promise.all([import('../masterAudioPath.js'), import('../vocalStem.js')]);
+  const master = await resolveMasterAudioPath(project).catch(() => null);
   const vocalStem = await Promise.resolve().then(() => resolveVocalStemPath(project)).catch(() => null);
   return { master, vocalStem };
 }

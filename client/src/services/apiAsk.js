@@ -2,7 +2,7 @@
  * Ask page (chat-like).
  */
 
-import { request, API_BASE } from './apiCore.js';
+import { request, API_BASE, throwStreamApiError } from './apiCore.js';
 
 export const listAskConversations = () => request('/ask');
 export const getAskConversation = (id) => request(`/ask/${encodeURIComponent(id)}`);
@@ -52,27 +52,8 @@ export async function streamAskTurn(payload, { onEvent, signal } = {}) {
   if (!response) {
     throw new Error('Server unreachable — check your connection and try again');
   }
-  if (!response.ok || !response.body) {
-    const text = await response.text().catch(() => '');
-    let message = `HTTP ${response.status}`;
-    // Server includes `{ error, context: { details: [{ path, message }] } }`
-    // for zod validation failures — surface the first few field-level
-    // messages so users see "question: required" instead of a flat "HTTP 400".
-    if (text) {
-      try {
-        const parsed = JSON.parse(text);
-        const baseError = parsed?.error || message;
-        const details = parsed?.context?.details;
-        if (Array.isArray(details) && details.length) {
-          const fieldNotes = details.slice(0, 3).map((d) => d.path ? `${d.path}: ${d.message}` : d.message).filter(Boolean);
-          message = fieldNotes.length ? `${baseError} — ${fieldNotes.join('; ')}` : baseError;
-        } else {
-          message = baseError;
-        }
-      } catch { /* response body wasn't JSON; keep the HTTP status message */ }
-    }
-    throw new Error(message);
-  }
+  if (!response.ok) await throwStreamApiError(response);
+  if (!response.body) throw new Error(`HTTP ${response.status}`);
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

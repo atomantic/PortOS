@@ -78,6 +78,7 @@ vi.mock('./devArtifactStore.js', async (original) => {
   return { ...store, writeDevArtifactFile: vi.fn(store.writeDevArtifactFile) };
 });
 const projects = await import('./projects.js');
+const filmActions = await import('./projectFilmActions.js');
 const { importDocumentDirectory } = await import('./compositionDocument.js');
 const { PATHS } = await import('../../lib/paths.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
@@ -111,7 +112,7 @@ describe('whole-workflow media modes', () => {
     await projects.updateScene(project.id, scene.sceneId, { referenceImageId: null });
     await projects.updateProject(project.id, { mediaMode: 'code-only' });
     await expect(projects.selectSceneTake(project.id, scene.sceneId, (await projects.getProject(project.id)).scenes[0].takes[0].takeId)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });
-    const fork = await projects.cloneProject(project.id);
+    const fork = await filmActions.cloneProject(project.id);
     expect(fork.mediaMode).toBe('code-only');
     expect(fork.scenes[0].takes).toHaveLength(1); // retained history is never destroyed by narrowing/forking
     await expect(projects.createProject({ name: 'Invalid', mediaMode: 'code-only', visualSpec: { references: [{ imageId: 'example.png' }] } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_MEDIA_POLICY' });

@@ -17,8 +17,7 @@ import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { createFilmSchema, patchFilmSchema, filmAudioSchema } from '../../lib/codeAnimationFilms.js';
 import { blenderRefusal, assertInsideWithoutSymlinks } from '../film/workspace.js';
-import { emitCodeAnimationFilm } from '../socket.js';
-import { emitCodeAnimationChanged } from './events.js';
+import { emitCodeAnimationChanged, emitCodeAnimationFilm } from './events.js';
 import * as store from './projectStore.js';
 
 const audioIn = (source, filename) => makePathResolver(() => source === 'upload' ? PATHS.uploads : PATHS.music,

@@ -88,37 +88,36 @@ const LOCAL_PARALLEL_BOUNDS = Object.freeze({
   description: 'Local model lanes stay at their memory-governed limit (1 render at a time).',
 });
 
+// Backends whose settings slice carries a render-lane parallelLimitBounds
+// decoration. imageGen.codex is always decorated (even when absent); the rest
+// only when the stored slice exists. `local` uses the memory-governed bounds.
+const IMAGE_GEN_BOUNDED_BACKENDS = ['grok', 'agy', 'fal', 'runway', 'higgsfield', 'google', 'gemini'];
+const VIDEO_GEN_BOUNDED_BACKENDS = ['grok', 'gemini', 'fal', 'runway', 'higgsfield', 'google', 'reactor'];
+
+// Backends whose `videoGen.<backend>.apiKey` is write-only (#8997): redacted on
+// read and re-injected on write when the incoming slice omits it.
+const VIDEO_GEN_API_KEY_BACKENDS = ['fal', 'reactor', 'runway', 'higgsfield', 'google', 'topaz'];
+
+const withParallelBounds = (parent, backends) => {
+  const out = { ...parent };
+  for (const backend of backends) {
+    if (parent?.[backend]) out[backend] = { ...parent[backend], parallelLimitBounds: PARALLEL_BOUNDS };
+  }
+  if (parent?.local) out.local = { ...parent.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS };
+  return out;
+};
+
 const decorateBounds = (settings) => ({
   ...settings,
   untrustedContent: { scopeAdherenceEnabled: settings.untrustedContent?.scopeAdherenceEnabled !== false, defaults: { ...DEFAULT_UNTRUSTED_CONTENT_POLICY, ...settings.untrustedContent?.defaults }, sources: settings.untrustedContent?.sources || {} },
   imageGen: {
-    ...(settings.imageGen || {}),
+    ...withParallelBounds(settings.imageGen, IMAGE_GEN_BOUNDED_BACKENDS),
     codex: {
       ...(settings.imageGen?.codex || {}),
       parallelLimitBounds: PARALLEL_BOUNDS,
     },
-    ...(settings.imageGen?.grok ? { grok: { ...settings.imageGen.grok, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.agy ? { agy: { ...settings.imageGen.agy, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.fal ? { fal: { ...settings.imageGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.runway ? { runway: { ...settings.imageGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.higgsfield ? { higgsfield: { ...settings.imageGen.higgsfield, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.google ? { google: { ...settings.imageGen.google, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.gemini ? { gemini: { ...settings.imageGen.gemini, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-    ...(settings.imageGen?.local ? { local: { ...settings.imageGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
   },
-  ...(settings.videoGen ? {
-    videoGen: {
-      ...settings.videoGen,
-      ...(settings.videoGen.grok ? { grok: { ...settings.videoGen.grok, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.gemini ? { gemini: { ...settings.videoGen.gemini, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.fal ? { fal: { ...settings.videoGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.runway ? { runway: { ...settings.videoGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.higgsfield ? { higgsfield: { ...settings.videoGen.higgsfield, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.google ? { google: { ...settings.videoGen.google, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.reactor ? { reactor: { ...settings.videoGen.reactor, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
-      ...(settings.videoGen.local ? { local: { ...settings.videoGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
-    },
-  } : {}),
+  ...(settings.videoGen ? { videoGen: withParallelBounds(settings.videoGen, VIDEO_GEN_BOUNDED_BACKENDS) } : {}),
 });
 
 // Third-party API tokens that live OUTSIDE the `secrets.*` hierarchy but must
@@ -155,29 +154,11 @@ const redactExternalTokens = (settings) => {
   // GET /api/settings/credentials.
   if (isPlainObject(next.videoGen)) {
     const videoGen = { ...next.videoGen };
-    if (isPlainObject(videoGen.fal)) {
-      const { apiKey, ...rest } = videoGen.fal;
-      videoGen.fal = rest;
-    }
-    if (isPlainObject(videoGen.reactor)) {
-      const { apiKey, ...rest } = videoGen.reactor;
-      videoGen.reactor = rest;
-    }
-    if (isPlainObject(videoGen.runway)) {
-      const { apiKey, ...rest } = videoGen.runway;
-      videoGen.runway = rest;
-    }
-    if (isPlainObject(videoGen.higgsfield)) {
-      const { apiKey, ...rest } = videoGen.higgsfield;
-      videoGen.higgsfield = rest;
-    }
-    if (isPlainObject(videoGen.google)) {
-      const { apiKey, ...rest } = videoGen.google;
-      videoGen.google = rest;
-    }
-    if (isPlainObject(videoGen.topaz)) {
-      const { apiKey, ...rest } = videoGen.topaz;
-      videoGen.topaz = rest;
+    for (const backend of VIDEO_GEN_API_KEY_BACKENDS) {
+      if (isPlainObject(videoGen[backend])) {
+        const { apiKey, ...rest } = videoGen[backend];
+        videoGen[backend] = rest;
+      }
     }
     next.videoGen = videoGen;
   }
@@ -216,12 +197,7 @@ const preserveExternallyOwnedKeys = (next, current) => {
   };
   carryOver('imageGen', 'hfToken');
   carryOver('civitai', 'apiKey');
-  carryOverNested('videoGen', 'fal', 'apiKey');
-  carryOverNested('videoGen', 'reactor', 'apiKey');
-  carryOverNested('videoGen', 'runway', 'apiKey');
-  carryOverNested('videoGen', 'higgsfield', 'apiKey');
-  carryOverNested('videoGen', 'google', 'apiKey');
-  carryOverNested('videoGen', 'topaz', 'apiKey');
+  for (const backend of VIDEO_GEN_API_KEY_BACKENDS) carryOverNested('videoGen', backend, 'apiKey');
   // beeperSettingsSchema is `.strict()` with no `token`/`tokenExpiresAt`
   // field, so a valid `beeper` PUT through this route can never carry either
   // — without this, the generic top-level shallow merge (`{ ...current,
@@ -483,68 +459,73 @@ router.delete('/orchestration-profiles/:id', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Declarative slice → schema table. Each slice is validated only when present
+// (`!== undefined`), so null/false/'' payloads are checked like any other value.
+// Dotted paths reach nested slices (the imageGen parent stays polymorphic; only
+// its per-backend sub-slices have schemas). Slices needing custom logic
+// (sharing pair, federation routing, imageGen.local.pythonPath) stay explicit below.
+const SETTINGS_SLICE_VALIDATORS = [
+  ['orchestrationProfiles', orchestrationProfilesSettingsSchema],
+  ['filmLookPresets', filmLookSavedPresetsSchema],
+  ['untrustedContent', untrustedContentSettingsSchema],
+  ['skills', skillsSettingsSchema],
+  ['harnesses', harnessSettingsSchema],
+  ['credentialBootstraps', credentialBootstrapsSettingsSchema],
+  ['backup', backupConfigSchema.partial()],
+  ['autoUpdate', autoUpdateSettingsSchema],
+  ['autofixer', autofixerSettingsSchema.partial()],
+  ['calendarSync', featureProviderConfigSchema.partial()],
+  ['codeReview', codeReviewSettingsSchema.partial()],
+  ['creativeDirector', creativeDirectorSettingsSchema.partial()],
+  ['music', musicSettingsSchema.partial()],
+  ['location', locationSettingsSchema],
+  ['networkSetupPreference', networkSetupPreferenceSchema],
+  ['hideFirstRunCard', hideFirstRunCardSchema],
+  ['embeddings', settingsEmbeddingsSchema.partial()],
+  ['localLlm', localLlmSettingsSchema],
+  ['imessage', imessageConfigSchema.partial()],
+  ['signal', signalConfigSchema.partial()],
+  ['beeperSavedScopes', beeperSavedScopesSchema],
+  ['beeper', beeperSettingsSchema],
+  ['spotify', spotifyConfigSchema.partial()],
+  ['youtube', youtubeConfigSchema.partial()],
+  ['apiAccess', apiAccessSettingsSchema.partial()],
+  ['dockerContainment', dockerContainmentSettingsSchema],
+  ['codeAnimationExecutionArmed', codeAnimationExecutionArmedSchema.nullable()],
+  ['instanceFeatures', instanceFeatureSettingsSchema],
+  ['instanceFeatureGroups', instanceFeatureGroupSettingsSchema],
+  ['agentContext', agentContextSettingsSchema],
+  ['pipelineEditorialChecks', pipelineEditorialChecksSettingsSchema.partial()],
+  ['privacy', privacySettingsSchema.partial()],
+  ['seriesAutopilot', seriesAutopilotSettingsSchema.partial()],
+  ['imageGen.grok', imageGenGrokSettingsSchema.partial()],
+  ['imageGen.agy', imageGenAgySettingsSchema.partial()],
+  ['imageGen.runway', imageGenRunwaySettingsSchema.partial()],
+  ['imageGen.fal', imageGenFalSettingsSchema.partial()],
+  ['imageGen.higgsfield', imageGenHiggsfieldSettingsSchema.partial()],
+  ['imageGen.google', imageGenGoogleSettingsSchema.partial()],
+  ['imageGen.gemini', imageGenGeminiSettingsSchema.partial()],
+  ['renderDefaults', renderDefaultsSettingsSchema],
+  ['videoGen', videoGenSettingsSchema],
+  ['layeredIntelligence', layeredIntelligenceSettingsSchema.partial()],
+  ['subscriptionCosts', subscriptionCostsMapSchema],
+  ['subscriptionPlanTiers', subscriptionPlanTiersMapSchema],
+  ['usageApiBilledInstanceIds', usageApiBilledInstanceIdsSchema],
+];
+
+const readSlicePath = (body, path) => path.split('.').reduce((node, key) => (node == null ? undefined : node[key]), body);
+
 // Shared validation keeps PATCH and legacy PUT on the same configuration contracts.
 const validateSettingsPatch = async (body) => {
-  if (body?.orchestrationProfiles !== undefined) {
-    validateRequest(orchestrationProfilesSettingsSchema, body.orchestrationProfiles);
-  }
-  // Settings is a polymorphic store but the backup sub-object has a known
-  // schema. Validate that slice when it's present so a malformed Backup-tab
-  // save doesn't reach disk (the runtime guards downstream are belt-and-
-  // suspenders, but per project convention all inputs are validated).
-  if (body?.filmLookPresets !== undefined) {
-    validateRequest(filmLookSavedPresetsSchema, body.filmLookPresets);
-  }
-  if (body?.untrustedContent !== undefined) {
-    validateRequest(untrustedContentSettingsSchema, body.untrustedContent);
-  }
-  // External skill directories are read from disk and fed to agents; the
-  // dedicated PUT /api/skills/config owns them, but a whole-form save must not
-  // be a way around their absolute-path validation.
-  if (body?.skills !== undefined) {
-    validateRequest(skillsSettingsSchema, body.skills);
-  }
-  // Per-harness enablement and the credential-bootstrap app table (#7564):
-  // both are read at composite-provider resolve time, so a malformed entry
-  // would surface as a run that cannot spawn rather than a 400 here.
-  if (body?.harnesses !== undefined) {
-    validateRequest(harnessSettingsSchema, body.harnesses);
-  }
-  if (body?.credentialBootstraps !== undefined) {
-    validateRequest(credentialBootstrapsSettingsSchema, body.credentialBootstraps);
-  }
-  if (body?.backup !== undefined) {
-    validateRequest(backupConfigSchema.partial(), body.backup);
-  }
-  if (body?.autoUpdate !== undefined) {
-    validateRequest(autoUpdateSettingsSchema, body.autoUpdate);
+  for (const [path, schema] of SETTINGS_SLICE_VALIDATORS) {
+    const slice = readSlicePath(body, path);
+    if (slice !== undefined) validateRequest(schema, slice);
   }
   if (body?.sharingDisplayName !== undefined || body?.sharingBio !== undefined) {
     validateRequest(sharingSettingsPatchSchema.partial(), {
       sharingDisplayName: body.sharingDisplayName,
       sharingBio: body.sharingBio,
     });
-  }
-  // Per-feature AI provider assignments — validate each slice when present so
-  // a malformed picker save can't write a non-string providerId/model to disk.
-  if (body?.autofixer !== undefined) {
-    validateRequest(autofixerSettingsSchema.partial(), body.autofixer);
-  }
-  if (body?.calendarSync !== undefined) {
-    validateRequest(featureProviderConfigSchema.partial(), body.calendarSync);
-  }
-  if (body?.codeReview !== undefined) {
-    validateRequest(codeReviewSettingsSchema.partial(), body.codeReview);
-  }
-  // Creative Director's treatment, plan, and scene-evaluation provider/model
-  // pins — validate the slice when present so a malformed picker save can't
-  // write a bad provider config.
-  if (body?.creativeDirector !== undefined) {
-    validateRequest(creativeDirectorSettingsSchema.partial(), body.creativeDirector);
-  }
-  // Music studio slice (#2911) — the chiptune provider pin + publish prefs.
-  if (body?.music !== undefined) {
-    validateRequest(musicSettingsSchema.partial(), body.music);
   }
   if (body?.federation !== undefined) {
     validateRequest(federationSettingsSchema, body.federation);
@@ -556,133 +537,6 @@ const validateSettingsPatch = async (body) => {
     // Refuse it here, where there IS a human. See routingPolicy.js.
     await assertMediaRoutingConfig(body.federation.mediaRouting);
   }
-  // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
-  // already makes both fields optional + nullable (clearing falls back to the
-  // tool default), and the refine enforces both-or-neither — so validate the
-  // whole slice rather than .partial()ing away that pairing rule.
-  if (body?.location !== undefined) {
-    validateRequest(locationSettingsSchema, body.location);
-  }
-  if (body?.networkSetupPreference !== undefined) {
-    validateRequest(networkSetupPreferenceSchema, body.networkSetupPreference);
-  }
-  if (body?.hideFirstRunCard !== undefined) {
-    validateRequest(hideFirstRunCardSchema, body.hideFirstRunCard);
-  }
-  if (body?.embeddings !== undefined) {
-    validateRequest(settingsEmbeddingsSchema.partial(), body.embeddings);
-  }
-  if (body?.localLlm !== undefined) {
-    validateRequest(localLlmSettingsSchema, body.localLlm);
-  }
-  // iMessage ingestion config (#2151) — validate the slice when present so a
-  // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (body?.imessage !== undefined) {
-    validateRequest(imessageConfigSchema.partial(), body.imessage);
-  }
-  // Signal ingestion config (#2154) — validate the slice when present so a
-  // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (body?.signal !== undefined) {
-    validateRequest(signalConfigSchema.partial(), body.signal);
-  }
-  // Beeper Desktop bridge ingestion + connection config (#30) — validate the
-  // slice when present so a malformed enabled/interval/baseUrl/budget can't
-  // reach disk. `beeperSettingsSchema` is `.strict()` and deliberately has no
-  // `token`/`tokenExpiresAt` field, so a client attempting to smuggle a token
-  // through this generic route 400s instead of it silently reaching disk —
-  // the credential's own write path is POST/DELETE /api/beeper/token (#31),
-  // which stores it AES-256-GCM encrypted in Postgres. Used directly, NOT
-  // `.partial()`: every field is already individually `.optional()` (so
-  // `.partial()` was a no-op), and the schema's `superRefine` (SEC-2's
-  // loopback-only `baseUrl` gate) returns a `ZodEffects`, which has no
-  // `.partial()` method at all.
-  if (body?.beeperSavedScopes !== undefined) {
-    validateRequest(beeperSavedScopesSchema, body.beeperSavedScopes);
-  }
-  if (body?.beeper !== undefined) {
-    validateRequest(beeperSettingsSchema, body.beeper);
-  }
-  // Spotify ingestion config (#2152) — validate the slice when present so a
-  // malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (body?.spotify !== undefined) {
-    validateRequest(spotifyConfigSchema.partial(), body.spotify);
-  }
-  // YouTube watch-history scrape config (#2153) — validate the slice when present
-  // so a malformed enabled/interval can't reach disk and break the sync scheduler.
-  if (body?.youtube !== undefined) {
-    validateRequest(youtubeConfigSchema.partial(), body.youtube);
-  }
-  // Per-API external-access flags (voice/sdapi). Validate the slice when present
-  // so a malformed toggle save can't write a non-boolean exposed/requireAuth to
-  // disk (the registry would then silently treat it as its default).
-  if (body?.apiAccess !== undefined) {
-    validateRequest(apiAccessSettingsSchema.partial(), body.apiAccess);
-  }
-  if (body?.dockerContainment !== undefined) {
-    validateRequest(dockerContainmentSettingsSchema, body.dockerContainment);
-  }
-  // Normally written only by a passing Code Animation execution check. A direct
-  // save must be that exact record, or null to require an explicit check again.
-  if (body?.codeAnimationExecutionArmed !== undefined) {
-    validateRequest(codeAnimationExecutionArmedSchema.nullable(), body.codeAnimationExecutionArmed);
-  }
-  if (body?.instanceFeatures !== undefined) {
-    validateRequest(instanceFeatureSettingsSchema, body.instanceFeatures);
-  }
-  // Instance feature GROUP participation (#40) — same shape guard as the
-  // per-feature slice above, keyed on the separate group id list.
-  if (body?.instanceFeatureGroups !== undefined) {
-    validateRequest(instanceFeatureGroupSettingsSchema, body.instanceFeatureGroups);
-  }
-  // Local MCP agent-context opt-in. Validate the whole strict slice so an
-  // unknown scope/profile cannot silently broaden what the server exposes.
-  if (body?.agentContext !== undefined) {
-    validateRequest(agentContextSettingsSchema, body.agentContext);
-  }
-  // Editorial-check enable/config slice (#1284) — validate when present so a
-  // malformed save can't write a non-boolean enabled / non-object config the
-  // registry would then choke on.
-  if (body?.pipelineEditorialChecks !== undefined) {
-    validateRequest(pipelineEditorialChecksSettingsSchema.partial(), body.pipelineEditorialChecks);
-  }
-  // Privacy Center opt-out recheck config (#2145) — validate the slice when
-  // present so a malformed cron / non-boolean autonomy toggle can't reach disk
-  // and break the recheck scheduler. Both autonomy toggles default OFF.
-  if (body?.privacy !== undefined) {
-    validateRequest(privacySettingsSchema.partial(), body.privacy);
-  }
-  // Scheduled Series Autopilot config (#2174) — validate the slice when present
-  // so an invalid cron (rejected by the schema's isValidCronExpression refine) or
-  // bad seriesId can't reach disk and leave an "enabled" schedule that never fires.
-  // `.partial()` so a PUT that only carries { schedules } still validates.
-  if (body?.seriesAutopilot !== undefined) {
-    validateRequest(seriesAutopilotSettingsSchema.partial(), body.seriesAutopilot);
-  }
-  // Grok Imagegen settings slice (#2859) — validate when present so a malformed
-  // save can't write a bad aspect ratio (which lands verbatim in the grok
-  // prompt) or a non-boolean enabled gate to disk. The imageGen parent stays
-  // polymorphic; only the grok sub-slice has a schema here.
-  if (body?.imageGen?.grok !== undefined) {
-    validateRequest(imageGenGrokSettingsSchema.partial(), body.imageGen.grok);
-  }
-  if (body?.imageGen?.agy !== undefined) {
-    validateRequest(imageGenAgySettingsSchema.partial(), body.imageGen.agy);
-  }
-  if (body?.imageGen?.runway !== undefined) {
-    validateRequest(imageGenRunwaySettingsSchema.partial(), body.imageGen.runway);
-  }
-  if (body?.imageGen?.fal !== undefined) {
-    validateRequest(imageGenFalSettingsSchema.partial(), body.imageGen.fal);
-  }
-  if (body?.imageGen?.higgsfield !== undefined) {
-    validateRequest(imageGenHiggsfieldSettingsSchema.partial(), body.imageGen.higgsfield);
-  }
-  if (body?.imageGen?.google !== undefined) {
-    validateRequest(imageGenGoogleSettingsSchema.partial(), body.imageGen.google);
-  }
-  if (body?.imageGen?.gemini !== undefined) {
-    validateRequest(imageGenGeminiSettingsSchema.partial(), body.imageGen.gemini);
-  }
   // Every local media lane spawns this interpreter (and image gen spawns the
   // `mflux-generate` beside it), so hold it to the guard the setup routes use:
   // a python basename, never an arbitrary binary (#8751). A cleared value
@@ -692,43 +546,6 @@ const validateSettingsPatch = async (body) => {
     throw new ServerError('imageGen.local.pythonPath must be a python interpreter (basename python/python3/python3.NN)', {
       status: 400, code: 'INVALID_PYTHON_PATH',
     });
-  }
-  // Per-surface render defaults (#3231) — validate when present so a typo'd
-  // target key or a non-enum backend can't persist a slice the render-target
-  // resolver would then silently ignore (or worse, hand an invalid model id
-  // to a cloud CLI's argv).
-  if (body?.renderDefaults !== undefined) {
-    validateRequest(renderDefaultsSettingsSchema, body.renderDefaults);
-  }
-  // Install-wide video render pin (#3231 Phase 4) — validate when present so a
-  // non-enum backend can't persist a mode resolveVideoMode would choke on.
-  if (body?.videoGen !== undefined) {
-    validateRequest(videoGenSettingsSchema, body.videoGen);
-  }
-  // Install-level Layered Intelligence settings (#2515) — validate the slice when
-  // present so a malformed `trustShellSources` can't persist and silently unlock
-  // full-shell custom `cmd` sources install-wide.
-  if (body.layeredIntelligence) {
-    validateRequest(layeredIntelligenceSettingsSchema.partial(), body.layeredIntelligence);
-  }
-  // Subscription plan prices — the same schema PUT /api/usage/subscriptions
-  // enforces, so a legacy client or restore bundle can't write a junk family
-  // key or an over-cap price through the generic settings endpoint. Without it
-  // the value persists, reads back as "not priced", and is silently deleted by
-  // the next save from the usage page.
-  if (body?.subscriptionCosts !== undefined) {
-    validateRequest(subscriptionCostsMapSchema, body.subscriptionCosts);
-  }
-  // Plan tiers ride the same rails as the prices beside them, for the same
-  // reason: an unvalidated key here would persist, read back as "no tier", and
-  // be dropped by the next save from the Subscriptions page.
-  if (body?.subscriptionPlanTiers !== undefined) {
-    validateRequest(subscriptionPlanTiersMapSchema, body.subscriptionPlanTiers);
-  }
-  // Same schema PUT /api/usage/fleet-billing's store uses, so a restore dump
-  // can't write an unbounded or non-string list through the generic endpoint.
-  if (body?.usageApiBilledInstanceIds !== undefined) {
-    validateRequest(usageApiBilledInstanceIdsSchema, body.usageApiBilledInstanceIds);
   }
 };
 

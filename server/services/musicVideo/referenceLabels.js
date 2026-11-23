@@ -5,6 +5,8 @@
 // the cast/sets pass find a cast member's sheet by its reference label
 // (musicVideoConditioning.js, catalogCast.js): a video's linked cast member is
 // named as the video names it, any other record by its catalog name.
+// The caller hands in the project store's `getProject` and `mutateProjectRecord`,
+// so this module, which the store imports, never imports it back.
 
 import { isFileBackend } from '../../lib/pgFileFacade.js';
 
@@ -40,10 +42,10 @@ const hasApproval = (project) => Object.values(project?.productionReview?.approv
  * `backfill` (no edit by the director behind it) leaves a project with a
  * recorded approval alone rather than staling it. Never throws: the save that
  * triggered it already succeeded, and an unnamed reference stays editable.
+ * `getProject` and `mutateProjectRecord` are the project store's (projects.js).
  */
-export async function labelProjectReferences(id, { backfill = false, findOwners = findCatalogOwners } = {}) {
+export async function labelProjectReferences(id, { backfill = false, findOwners = findCatalogOwners, getProject, mutateProjectRecord }) {
   try {
-    const { getProject, mutateProjectRecord } = await import('./projects.js');
     const project = await getProject(id);
     if (!project || (backfill && hasApproval(project))) return null;
     const keys = (project.visualSpec?.references || []).filter(unlabeled).map((ref) => ref.imageId);

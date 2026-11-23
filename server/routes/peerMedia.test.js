@@ -19,7 +19,7 @@ vi.mock('../services/instances.js', async () => {
 });
 vi.mock('../services/instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('../services/mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {} }));
-vi.mock('../services/musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
+vi.mock('../services/musicVideo/mediaPoolDelete.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');

@@ -66,19 +66,47 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     const calls = f.calls();
     expect(calls[1]).toEqual(['-m', 'venv', '--clear', '.venv']);
     const installs = calls.filter(args => args[0] === '-m' && args[1] === 'pip');
-    expect(installs).toHaveLength(8);
+    expect(installs).toHaveLength(11);
     expect(installs[0]).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--only-binary', ':all:']));
     expect(installs[0].at(-1)).toMatch(/requirements-pixal3d-mps\.lock\.txt$/);
     expect(installs[1]).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--no-build-isolation']));
-    expect(installs[1].at(-1)).toMatch(/requirements-pixal3d-mps-sources\.lock\.txt$/);
-    expect(installs.slice(2).map(args => args.at(-1))).toEqual(
+    expect(installs[1].at(-1)).toMatch(/sources-without-moge\.txt$/);
+    expect(installs[2]).toEqual(expect.arrayContaining(['download', '--require-hashes', '--no-deps']));
+    expect(installs[2]).toEqual(expect.arrayContaining([expect.stringMatching(/moge-requirement\.txt$/)]));
+    expect(installs[3]).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
+    expect(installs[3].at(-1)).toBe('.venv/moge-src/pkg');
+    expect(installs.slice(4, 10).map(args => args.at(-1))).toEqual(
       ['mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel', 'natten-mps']
         .map(name => `.venv/portos-source/extern/${name}`),
     );
-    for (const args of installs.slice(2)) expect(args).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
+    for (const args of installs.slice(4, 10)) expect(args).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
+    expect(installs[10]).toEqual(['-m', 'pip', 'check']);
     expect(existsSync(join(f.root, '.venv', 'old-python-3.10'))).toBe(false);
     expect(readFileSync(join(f.root, 'extern', 'mtlmesh', 'setup.py'), 'utf8')).toBe('stale native source');
     expect(readFileSync(join(f.root, 'model.safetensors'), 'utf8')).toBe('synthetic retained asset');
+  });
+
+  it('patches MoGe metadata off Gradio and the duplicate OpenCV wheel', () => {
+    const root = mkdtempSync(join(tmpdir(), 'moge meta '));
+    roots.push(root);
+    const source = [
+      'utils3d @ git+https://github.com/EasternJournalist/utils3d.git@3fab839f0be9931dac7c8488eb0e1600c236e183',
+      'pipeline @ git+https://github.com/EasternJournalist/pipeline.git@866f059d2a05cde05e4a52211ec5051fd5f276d6',
+      '    "gradio",',
+      '"opencv-python"',
+      '',
+    ].join('\n');
+    writeFileSync(join(root, 'pyproject.toml'), source);
+    const python = ['python3.13', 'python3'].find((name) => {
+      try { execFileSync(name, ['-c', 'print(1)'], { stdio: 'pipe' }); return true; } catch { return false; }
+    });
+    execFileSync(python, [fileURLToPath(new URL('./ml/patch-moge-metadata.py', import.meta.url)), root], { stdio: 'pipe' });
+    const patched = readFileSync(join(root, 'pyproject.toml'), 'utf8');
+    expect(patched).toContain('utils3d==0.0.2');
+    expect(patched).toContain('pipeline==1.0.0');
+    expect(patched).toContain('"opencv-python-headless"');
+    expect(patched).not.toContain('gradio');
+    expect(patched).not.toContain('"opencv-python"');
   });
 
   it('does not build sources or native packages after a failed wheel lock install', () => {

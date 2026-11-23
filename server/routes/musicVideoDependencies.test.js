@@ -16,6 +16,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: vi.fn(() => [])
 vi.mock('../services/musicVideo/excerptRender.js', () => ({ startExcerptRender: vi.fn(async () => ({ jobId: 'example-render', excerptId: 'example-excerpt' })), cancelExcerptRender: vi.fn(), attachExcerptRenderSseClient: vi.fn() }));
 const { default: router } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const { assertRevisionOpen } = await import('../services/musicVideo/revisionService.js');
 const app = express();
 app.use(express.json());
@@ -124,7 +125,7 @@ describe('public dependency save / repair / review workflow', () => {
   });
 
   it('keeps reused take provenance current when cloning a project', async () => {
-    const clone = await projects.cloneProject(project.id);
+    const clone = await filmActions.cloneProject(project.id);
     expect(clone.scenes[0].sceneId).not.toBe('a');
     const result = await request(app).get(`/api/music-video/${clone.id}/dependency-impact`);
     expect(result.status).toBe(200);

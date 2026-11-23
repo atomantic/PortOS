@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
@@ -104,6 +105,7 @@ export default function WorldTab({ agentId }) {
   const [accountName, setAccountName] = useState('');
   const [rateLimits, setRateLimits] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [accountError, setAccountError] = useState(null);
 
   // Status state
   const [status, setStatus] = useState(null);
@@ -175,20 +177,34 @@ export default function WorldTab({ agentId }) {
 
   const wsConnected = connectionStatus === 'connected';
 
-  // Auto-resolve the moltworld account for this agent
-  useEffect(() => {
-    let live = true;
-    getPlatformAccounts(agentId, 'moltworld').then(data => {
-      if (!live) return;
-      const active = data.filter(a => a.status === 'active');
+  // Auto-resolve the moltworld account for this agent. A failed read sets
+  // accountError so it never falls through into the "no account" onboarding copy.
+  const accountRequestRef = useRef(0);
+  const loadAccount = useCallback(async () => {
+    const requestId = ++accountRequestRef.current;
+    setLoading(true);
+    setAccountError(null);
+    setAccountId(null);
+    setAccountName('');
+    const result = await getPlatformAccounts(agentId, 'moltworld', { silent: true })
+      .then(data => ({ data }), error => ({ error }));
+    if (requestId !== accountRequestRef.current) return;
+    if (result.error) {
+      setAccountError(result.error);
+    } else {
+      const active = result.data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
-      setLoading(false);
-    }).catch(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+    }
+    setLoading(false);
   }, [agentId]);
+
+  useEffect(() => {
+    loadAccount();
+    return () => { accountRequestRef.current += 1; };
+  }, [loadAccount]);
 
   const fetchStatus = useCallback(async () => {
     if (!accountId) return;
@@ -288,7 +304,13 @@ export default function WorldTab({ agentId }) {
     const y = random ? undefined : (moveY !== '' ? parseInt(moveY, 10) : undefined);
 
     if (wsConnected && !random && x != null && y != null) {
-      await moltworldWsMove({ x, y, thought: moveThinking || undefined }).catch(() => null);
+      try {
+        await moltworldWsMove({ x, y, thought: moveThinking || undefined });
+      } catch {
+        setMoving(false);
+        fetchRateLimits();
+        return;
+      }
       setMoving(false);
       toast.success(`Move sent via WS to (${x}, ${y})`);
       refreshAfterAction();
@@ -311,7 +333,13 @@ export default function WorldTab({ agentId }) {
     setThinking(true);
 
     if (wsConnected) {
-      await moltworldWsThink(thought).catch(() => null);
+      try {
+        await moltworldWsThink(thought);
+      } catch {
+        setThinking(false);
+        fetchRateLimits();
+        return;
+      }
       setThinking(false);
       toast.success('Thought sent via WS');
       setThought('');
@@ -346,7 +374,13 @@ export default function WorldTab({ agentId }) {
     setSaying(true);
 
     if (wsConnected && sayTo) {
-      await moltworldWsInteract(sayTo, { message: sayMessage }).catch(() => null);
+      try {
+        await moltworldWsInteract(sayTo, { message: sayMessage });
+      } catch {
+        setSaying(false);
+        fetchRateLimits();
+        return;
+      }
       setSaying(false);
       toast.success('DM sent via WS');
       setSayMessage('');
@@ -380,7 +414,11 @@ export default function WorldTab({ agentId }) {
     if (params.y != null) params.y = parseInt(params.y, 10);
     if (params.z != null) params.z = parseInt(params.z, 10);
 
-    await moltworldAddToQueue({ agentId, actionType: newActionType, params }).catch(() => null);
+    try {
+      await moltworldAddToQueue({ agentId, actionType: newActionType, params });
+    } catch {
+      return;
+    }
     setShowAddForm(false);
     setNewActionParams({});
     toast.success('Action queued');
@@ -397,6 +435,10 @@ export default function WorldTab({ agentId }) {
 
   if (loading) {
     return <div className="p-4"><BrailleSpinner text="Loading world tools" /></div>;
+  }
+
+  if (accountError) {
+    return <div className="p-4"><ListLoadError what="Moltworld account" error={accountError} onRetry={loadAccount} /></div>;
   }
 
   if (!accountId) {
@@ -490,7 +532,7 @@ export default function WorldTab({ agentId }) {
       <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
         <span className="text-sm text-gray-400">Account: <span className="text-white font-medium">{accountName}</span></span>
         {rateLimits && (
-          <div className="flex gap-3 ml-auto">
+          <div className="flex flex-wrap gap-2 ml-auto min-w-0">
             {Object.entries(rateLimits).map(([action, rl]) => {
               if (!rl?.cooldownMs) return null;
               const cooldownMs = getCooldownMs(action);
@@ -513,12 +555,12 @@ export default function WorldTab({ agentId }) {
         <div className="space-y-4">
           {/* Status Card */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">World Status</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">World Status</h3>
               <button
                 onClick={fetchStatus}
                 disabled={statusLoading}
-                className="px-3 py-1 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
+                className="shrink-0 pointer-coarse:min-h-11 px-3 py-1 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
               >
                 {statusLoading ? <BrailleSpinner text="Loading" /> : 'Refresh'}
               </button>
@@ -634,8 +676,8 @@ export default function WorldTab({ agentId }) {
             ) : (
               <div className="space-y-2 max-h-[300px] overflow-y-auto">
                 {displayNearby.slice(0, 20).map((agent, i) => (
-                  <div key={agent.id || i} className="flex items-center justify-between p-2 bg-port-bg rounded text-sm">
-                    <div className="flex items-center gap-2">
+                  <div key={agent.id || i} className="flex flex-wrap items-center justify-between gap-2 p-2 bg-port-bg rounded text-sm">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span>{agent.appearance?.emoji || '🤖'}</span>
                       <span className="text-white">{agent.name || 'Unknown'}</span>
                       {agent.thinking && <span className="text-gray-500 text-xs truncate max-w-[150px]">"{agent.thinking}"</span>}
@@ -675,14 +717,14 @@ export default function WorldTab({ agentId }) {
 
           {/* Activity History */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">Activity History</h3>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">Activity History</h3>
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 <select
                   aria-label="Filter history"
                   value={historyFilter}
                   onChange={e => setHistoryFilter(e.target.value)}
-                  className="px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
+                  className="min-w-0 pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white"
                 >
                   {HISTORY_FILTERS.map(f => (
                     <option key={f.value} value={f.value}>{f.label}</option>
@@ -691,7 +733,7 @@ export default function WorldTab({ agentId }) {
                 <button
                   onClick={() => fetchHistory()}
                   disabled={historyLoading}
-                  className="px-2 py-1 text-xs bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
+                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-border text-gray-300 rounded hover:bg-port-border/80 disabled:opacity-50"
                 >
                   {historyLoading ? '...' : 'Refresh'}
                 </button>
@@ -750,15 +792,15 @@ export default function WorldTab({ agentId }) {
         <div className="space-y-4">
           {/* Action Queue */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-white">Action Queue</h3>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h3 className="font-semibold text-white min-w-0">Action Queue</h3>
+              <div className="flex flex-wrap items-center gap-2">
                 {queue.length > 0 && (
                   <span className="text-xs text-gray-500">{queue.length} item{queue.length !== 1 ? 's' : ''}</span>
                 )}
                 <button
                   onClick={() => { setShowAddForm(!showAddForm); setNewActionParams({}); }}
-                  className="px-2 py-1 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80"
+                  className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-accent text-white rounded hover:bg-port-accent/80"
                 >
                   {showAddForm ? 'Cancel' : '+ Add'}
                 </button>
@@ -810,11 +852,12 @@ export default function WorldTab({ agentId }) {
                     </div>
                     {item.status === 'pending' && (
                       <button
+                        type="button"
+                        aria-label={`Cancel pending ${item.actionType?.replace('mw_', '') || 'action'}`}
                         onClick={() => handleRemoveFromQueue(item.id)}
-                        className="shrink-0 text-gray-500 hover:text-port-error text-sm"
-                        title="Cancel"
+                        className="inline-flex items-center justify-center shrink-0 text-gray-500 hover:text-port-error pointer-coarse:min-h-11 pointer-coarse:min-w-11"
                       >
-                        x
+                        <X size={14} aria-hidden="true" />
                       </button>
                     )}
                   </div>

@@ -3,7 +3,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { decodeSourceToWav } from './lyricAlign.js';
 import { compareLyricPlacement, detectVocalPhrases, extendVoicedWordEnds, findSilentWords, mergeTranscripts, vocalPcm, wavDurationSec } from './lyricAlignCore.js';
 import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
-import { resolveMasterAudioPath } from './render.js';
+import { resolveMasterAudioPath } from './masterAudioPath.js';
 import { lyricTokens } from './timedText.js';
 
 const validWords = cue => (cue.words || []).filter(word => Number.isFinite(word.startSec) && Number.isFinite(word.endSec) && word.endSec > word.startSec);

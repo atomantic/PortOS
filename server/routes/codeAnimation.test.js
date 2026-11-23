@@ -60,6 +60,7 @@ vi.mock('../services/codeAnimation/events.js', () => ({
   emitCodeAnimationChanged: vi.fn((id) => ({
     id, status: codeAnimationRecords.get(id)?.status, html: codeAnimationHtml.get(id),
   })),
+  emitCodeAnimationFilm: vi.fn(),
 }));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));

@@ -23,6 +23,7 @@ vi.mock('./musicVideo/productionDispatch.js', () => ({ dispatchStoryboardStillCl
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const { musicVideoEvents } = await import('./musicVideo/events.js');
 const projects = await import('./musicVideo/projects.js');
+const boardEdits = await import('./musicVideo/projectBoardEdits.js');
 const imageHook = await import('./musicVideoSceneImageHook.js');
 const videoHook = await import('./musicVideoSceneVideoHook.js');
 
@@ -336,7 +337,7 @@ describe('music-video scene completion hooks → takes', () => {
 
   it('a late completion cannot resurrect a deleted scene or a deleted project', async () => {
     const other = await projects.addProjectScene(project.id, { prompt: 'second scene' });
-    await projects.deleteScene(project.id, scene.sceneId);
+    await boardEdits.deleteScene(project.id, scene.sceneId);
     mediaJobEvents.emit('completed', imageJob(project.id, scene.sceneId, 'late.png'));
     // A render for the surviving scene proves the hook ran past the failed one.
     mediaJobEvents.emit('completed', imageJob(project.id, other.sceneId, 'kept.png'));
@@ -417,7 +418,7 @@ describe('music-video scene completion hooks → takes', () => {
 
     it('a failure for a deleted scene is dropped without resurrecting it', async () => {
       const other = await projects.addProjectScene(project.id, { prompt: 'second' });
-      await projects.deleteScene(project.id, scene.sceneId);
+      await boardEdits.deleteScene(project.id, scene.sceneId);
       mediaJobEvents.emit('failed', { ...imageJob(project.id, scene.sceneId, 'late.png'), status: 'failed', error: 'late' });
       mediaJobEvents.emit('failed', { ...imageJob(project.id, other.sceneId, 'kept.png'), status: 'failed', error: 'kept' });
       await waitFor(() => emitted.some((e) => e.event === 'scene-failure'));

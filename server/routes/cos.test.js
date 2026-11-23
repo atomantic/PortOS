@@ -231,6 +231,29 @@ describe('CoS Routes', () => {
   });
 
   describe('PUT /api/cos/config', () => {
+    it('accepts and validates confidence and safety approval gates', async () => {
+      const updates = {
+        confidenceAutoApproval: { enabled: false, highThreshold: 90, lowThreshold: 40, minSamples: 3 },
+        safetyKindApproval: { enabled: true, alwaysApproveKinds: ['publish', 'federation'] },
+      };
+      updateConfig.mockResolvedValue(updates);
+
+      const accepted = await request(app).put('/api/cos/config').send(updates);
+      expect(accepted.status).toBe(200);
+      expect(updateConfig).toHaveBeenCalledWith(updates);
+
+      const inverted = await request(app).put('/api/cos/config').send({
+        confidenceAutoApproval: { lowThreshold: 90, highThreshold: 40 },
+      });
+      expect(inverted.status).toBe(400);
+
+      const unknownKind = await request(app).put('/api/cos/config').send({
+        safetyKindApproval: { alwaysApproveKinds: ['release'] },
+      });
+      expect(unknownKind.status).toBe(400);
+      expect(updateConfig).toHaveBeenCalledTimes(1);
+    });
+
     it('accepts the investigation auto-approval setting', async () => {
       const updates = { autoApproveInvestigations: true };
       updateConfig.mockResolvedValue(updates);

@@ -19,6 +19,8 @@ vi.mock('../instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getIn
 vi.mock('../videoGen/history.js', () => ({ getHistoryItem: vi.fn(async (id) => (['clip-a', 'clip-30'].includes(id) ? { id, filename: `${id}.mp4` } : null)) }));
 vi.mock('./projects.js', () => ({
   getProject: vi.fn(async () => mocks.project),
+}));
+vi.mock('./projectBoardEdits.js', () => ({
   // The take and selection writes (one edit-result write) are covered in routes/musicVideoEditResult.test.js.
   startSceneFromFrame: vi.fn(async (_id, sceneId, input) => { mocks.started.push(input); return { scene: { sceneId }, edit: { sceneIds: [sceneId] } }; }),
 }));

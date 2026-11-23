@@ -70,6 +70,9 @@ import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
+import { broadcastToCommandSubscribers, commandSubscribers, getIo, setIo } from './socketIo.js';
+
+export { broadcastToCommandSubscribers, getIo };
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
@@ -90,31 +93,10 @@ const codeAnimationSubscribers = new Set();
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
 const mediaQueueSubscribers = new Set();
-// Operator command-runner output (#12019). Never a global emit: the stream
-// carries host command output, and a peer relay socket (restricted to
-// `cos:subscribe`) must not receive it.
-const commandSubscribers = new Set();
-// Store io instance for broadcasting
-let ioInstance = null;
-
-/**
- * Return the module-level Socket.IO instance (null before initSocket runs).
- * Lets services emit to clients from unattended paths (cron handlers) that
- * don't receive an `io` argument.
- */
-export function getIo() {
-  return ioInstance;
-}
-
 const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
 
 export function emitCodeAnimationChanged(id, kind) {
   emitCodeAnimationChangedToBus(id, kind);
-}
-
-/** Emit a `command:<id>:*` frame to sockets that sent `command:subscribe`. */
-export function broadcastToCommandSubscribers(event, data) {
-  broadcastToSet(commandSubscribers, event, data);
 }
 
 function broadcastToSet(set, event, data) {
@@ -387,14 +369,14 @@ const SIMPLE_BRIDGES = [
 let forwardingRegistered = false;
 
 // Registers every process-wide emitter → Socket.IO bridge exactly once, however
-// many times initSocket runs. Forwarders read the module-level `ioInstance` at
-// emit time (never capture `io`), so a re-init forwards through the latest io.
+// many times initSocket runs. Forwarders read `getIo()` at emit time (never
+// capture `io`), so a re-init forwards through the latest server.
 // A bridge only goes live by being listed here or in SIMPLE_BRIDGES.
 function setupEventForwarding() {
   if (forwardingRegistered) return;
   forwardingRegistered = true;
   for (const { emitter, event, channel, payload } of SIMPLE_BRIDGES) {
-    emitter.on(event, (...args) => ioInstance?.emit(channel, payload ? payload(...args) : args[0]));
+    emitter.on(event, (...args) => getIo()?.emit(channel, payload ? payload(...args) : args[0]));
   }
   runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
   setupCosEventForwarding();
@@ -422,15 +404,15 @@ function setupEventForwarding() {
 // Sync frames go only to the peer-sync room (filtered per peer + category);
 // the history invalidation goes to every socket EXCEPT that room.
 function setupPeerSyncEventForwarding() {
-  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(ioInstance, event); });
+  peerSyncBus.on('event', (event) => { void deliverPeerSyncEvent(getIo(), event); });
   peerSyncBus.on('media-history-changed', (payload) => {
-    ioInstance?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
+    getIo()?.except(PEER_SYNC_ROOM).emit('media:history:changed', payload);
   });
   peerSyncBus.on('collection-primary-changed', (payload) => {
-    ioInstance?.except(PEER_SYNC_ROOM).emit('media:collection-primary:changed', payload);
+    getIo()?.except(PEER_SYNC_ROOM).emit('media:collection-primary:changed', payload);
   });
   peerSyncBus.on('media-holders-changed', () => {
-    ioInstance?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
+    getIo()?.except(PEER_SYNC_ROOM).emit('media:holders:changed', {});
   });
 }
 
@@ -438,18 +420,18 @@ function setupPeerSyncEventForwarding() {
 function setupRecordEventForwarding() {
   const forward = ({ recordKind, recordId, origin }) => {
     if (recordKind === 'creativeDirectorProject') {
-      ioInstance?.emit('creative-director:project:changed', { id: recordId });
+      getIo()?.emit('creative-director:project:changed', { id: recordId });
     } else if (recordKind === 'creativeCommission') {
-      ioInstance?.emit('commission:changed', { id: recordId });
+      getIo()?.emit('commission:changed', { id: recordId });
     } else if (recordKind === 'storyboard') {
-      ioInstance?.emit('storyboard:changed', { id: recordId });
+      getIo()?.emit('storyboard:changed', { id: recordId });
     } else if (recordKind === 'series') {
-      ioInstance?.emit('pipeline-series:changed', { id: recordId });
+      getIo()?.emit('pipeline-series:changed', { id: recordId });
     } else if (recordKind === 'universe') {
-      ioInstance?.emit('universe:changed', { id: recordId });
+      getIo()?.emit('universe:changed', { id: recordId });
     } else if (recordKind === 'musicVideoProject') {
       // `origin`: the socket whose own write this was; that tab already applied the reply.
-      ioInstance?.emit('music-video:project:changed', { id: recordId, ...(origin ? { origin } : {}) });
+      getIo()?.emit('music-video:project:changed', { id: recordId, ...(origin ? { origin } : {}) });
     }
   };
   recordEvents.on('updated', forward);
@@ -471,7 +453,7 @@ export function initSocket(io) {
     }
   });
 
-  ioInstance = io;
+  setIo(io);
   setupEventForwarding();
   // Invalidation only. Clients coalesce the frame into one bounded activity
   // read; a missed frame is repaired by the reconnect read, not by polling.
@@ -485,7 +467,7 @@ export function initSocket(io) {
 }
 
 function setupProactiveSpeechForwarding() {
-  wireProactiveTriggers({ io: ioInstance });
+  wireProactiveTriggers({ io: getIo() });
 }
 
 // Broadcast to all connected clients
@@ -538,20 +520,20 @@ function invalidateMindVisibility() {
 function setupCosEventForwarding() {
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
   for (const event of ['goals:changed', 'backup:changed']) {
-    dashboardEvents.on(event, () => ioInstance?.emit(event, {}));
+    dashboardEvents.on(event, () => getIo()?.emit(event, {}));
   }
   for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
-  nativeUsageEvents.on('updated', () => ioInstance?.emit('usage:native-history-updated', {}));
+  nativeUsageEvents.on('updated', () => getIo()?.emit('usage:native-history-updated', {}));
   settingsEvents.on('settings:updated', () => {
-    ioInstance?.emit('backup:changed', {});
-    ioInstance?.emit('jev:policy', {});
+    getIo()?.emit('backup:changed', {});
+    getIo()?.emit('jev:policy', {});
   });
   // A failed restore also invalidates policy: clients must show the strict
   // read failure instead of continuing to offer stale safety settings.
   settingsEvents.on('settings:invalidated', () => {
-    ioInstance?.emit('jev:policy', {});
+    getIo()?.emit('jev:policy', {});
   });
   for (const [source, target] of [
     ['scheduler:scheduled', 'cos:scheduler:changed'],
@@ -564,7 +546,7 @@ function setupCosEventForwarding() {
     cosEvents.on(source, data => {
       broadcastToCos(target, target === 'cos:scheduler:changed' && typeof data?.id === 'string' ? { id: data.id } : {});
       if (target === 'cos:scheduler:changed' && data?.id === 'backup-daily') {
-        ioInstance?.emit('backup:changed', {});
+        getIo()?.emit('backup:changed', {});
       }
     });
   }
@@ -583,6 +565,8 @@ function setupCosEventForwarding() {
   // transition. Forward the task itself so focused views can update one row
   // without waiting for the file watcher to rebuild the entire task list.
   cosEvents.on('tasks:changed', (data) => broadcastToCos('cos:tasks:changed', data));
+
+  cosEvents.on('jobs:incidents-changed', (data) => broadcastToCos('cos:jobs:incidents-changed', { jobId: data?.jobId }));
 
   cosEvents.on('maintenance:updated', (data) => broadcastToCos('cos:maintenance:updated', data));
 
@@ -667,8 +651,8 @@ function setupErrorEventForwarding() {
 function setupAppsEventForwarding() {
   appsEvents.on('changed', (data) => {
     invalidateMindVisibility();
-    if (ioInstance) {
-      ioInstance.emit('apps:changed', data);
+    if (getIo()) {
+      getIo().emit('apps:changed', data);
     }
   });
 }
@@ -692,7 +676,7 @@ function broadcastToAgents(event, data) { broadcastToSet(agentSubscribers, event
 // All status/settings writers save meta; sync also signals after document I/O.
 function setupDigitalTwinEventForwarding() {
   for (const event of ['meta:changed', 'sync:completed', 'traits:updated', 'taste:profile-updated', 'interview:analyzed']) {
-    digitalTwinEvents.on(event, () => ioInstance?.emit('digital-twin:changed', {}));
+    digitalTwinEvents.on(event, () => getIo()?.emit('digital-twin:changed', {}));
   }
 }
 
@@ -700,8 +684,8 @@ function setupDigitalTwinEventForwarding() {
 function setupBrainEventForwarding() {
   // Invalidation only: record bodies, local paths and settings stay behind HTTP.
   const changed = (type, id) => {
-    ioInstance?.emit('brain:changed', { type, id });
-    if (type === 'links') ioInstance?.emit('brain:links:changed', { id });
+    getIo()?.emit('brain:changed', { type, id });
+    if (type === 'links') getIo()?.emit('brain:links:changed', { id });
   };
   for (const type of BRAIN_ENTITY_TYPES) {
     brainEvents.on(`${type}:upserted`, ({ id }) => changed(type, id));
@@ -711,15 +695,15 @@ function setupBrainEventForwarding() {
   brainEvents.on('meta:changed', () => changed('meta'));
 
   brainEvents.on('classified', (data) => {
-    if (ioInstance) {
-      ioInstance.emit('brain:classified', data);
+    if (getIo()) {
+      getIo().emit('brain:classified', data);
     }
   });
   brainEvents.on('threads:upserted', (data) => {
-    if (ioInstance) ioInstance.emit('brain:threads:changed', data);
+    if (getIo()) getIo().emit('brain:threads:changed', data);
   });
   brainEvents.on('threads:deleted', (data) => {
-    if (ioInstance) ioInstance.emit('brain:threads:changed', data);
+    if (getIo()) getIo().emit('brain:threads:changed', data);
   });
 }
 
@@ -748,7 +732,7 @@ function broadcastToInstances(event, data) { broadcastToSet(instanceSubscribers,
 function setupInstanceEventForwarding() {
   let peerUpdateSequence = 0;
   // Invalidation only: the copyable serve capability stays behind the status API.
-  instanceEvents.on('tailcat:serve:changed', () => ioInstance?.emit('tailcat:serve:changed', {}));
+  instanceEvents.on('tailcat:serve:changed', () => getIo()?.emit('tailcat:serve:changed', {}));
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
@@ -785,38 +769,38 @@ function setupReviewEventForwarding() {
   // subscription. They carry no record payload and are never peer-forwarded.
   for (const event of ['tasks:changed', 'agent:completed', 'agent:feedback', 'memory:approved', 'memory:rejected']) {
     cosEvents.on(event, () => {
-      if (ioInstance) ioInstance.emit('review:queue:changed');
+      if (getIo()) getIo().emit('review:queue:changed');
     });
   }
   reviewEvents.on('queue:changed', () => {
-    if (ioInstance) ioInstance.emit('review:queue:changed');
+    if (getIo()) getIo().emit('review:queue:changed');
   });
   reviewEvents.on('item:created', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    if (getIo()) getIo().emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:updated', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    if (getIo()) getIo().emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:deleted', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    if (getIo()) getIo().emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   // Bulk status changes ("Mark all read" / "Complete all") carry only ids, a
   // status and a timestamp — nothing to redact.
   reviewEvents.on('items:bulk-updated', (data) => {
-    if (ioInstance) ioInstance.emit('review:items:bulk-updated', data);
+    if (getIo()) getIo().emit('review:items:bulk-updated', data);
   });
 }
 
 // Set up update event forwarding
 function setupUpdateEventForwarding() {
   updateEvents.on('update:available', (data) => {
-    if (ioInstance) {
-      ioInstance.emit('portos:update:available', data);
+    if (getIo()) {
+      getIo().emit('portos:update:available', data);
     }
   });
   updateEvents.on('update:checked', (data) => {
-    if (ioInstance) {
-      ioInstance.emit('portos:update:checked', data);
+    if (getIo()) {
+      getIo().emit('portos:update:checked', data);
     }
   });
 }
@@ -829,7 +813,7 @@ function broadcastToBeeper(event, data) { broadcastToSet(beeperSubscribers, even
 
 // Bridge the server's Beeper WebSocket onto Socket.IO (#33, decided on #12).
 //
-// THIS MUST NEVER BE `ioInstance.emit`. `peerSocketRelay.js` opens a Socket.IO
+// THIS MUST NEVER BE `getIo().emit`. `peerSocketRelay.js` opens a Socket.IO
 // CLIENT to every online peer, so a global emit crosses the wire to other
 // installs — the boundary pinned at socket.test.js (#4694). Beeper message
 // content is PII and machine-local (#7's ADR), so the frames here carry
@@ -843,6 +827,11 @@ function setupBeeperEventForwarding() {
 function setupCodeAnimationEventForwarding() {
   codeAnimationEvents.on('changed', (payload) => {
     broadcastToSet(codeAnimationSubscribers, 'code-animation:changed', payload);
+  });
+  // Film frames stay on the subscriber set. A global emit would cross the peer
+  // relay, the same boundary `code-animation:changed` already respects.
+  codeAnimationEvents.on('film', (payload) => {
+    broadcastToSet(codeAnimationSubscribers, 'code-animation:film', payload);
   });
 }
 
@@ -865,29 +854,29 @@ function broadcastToMediaQueue(event, data) { broadcastToSet(mediaQueueSubscribe
 // onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
 function setupMediaGenEventForwarding() {
   imageGenEvents.on('started', (data) => {
-    if (ioInstance) ioInstance.emit('image-gen:started', data);
+    if (getIo()) getIo().emit('image-gen:started', data);
   });
   imageGenEvents.on('progress', (data) => {
-    if (ioInstance) ioInstance.emit('image-gen:progress', data);
+    if (getIo()) getIo().emit('image-gen:progress', data);
   });
   imageGenEvents.on('completed', (data) => {
-    if (ioInstance) ioInstance.emit('image-gen:completed', data);
+    if (getIo()) getIo().emit('image-gen:completed', data);
   });
   imageGenEvents.on('failed', (data) => {
-    if (ioInstance) ioInstance.emit('image-gen:failed', data);
+    if (getIo()) getIo().emit('image-gen:failed', data);
   });
 
   videoGenEvents.on('started', (data) => {
-    if (ioInstance) ioInstance.emit('video-gen:started', data);
+    if (getIo()) getIo().emit('video-gen:started', data);
   });
   videoGenEvents.on('progress', (data) => {
-    if (ioInstance) ioInstance.emit('video-gen:progress', data);
+    if (getIo()) getIo().emit('video-gen:progress', data);
   });
   videoGenEvents.on('completed', (data) => {
-    if (ioInstance) ioInstance.emit('video-gen:completed', data);
+    if (getIo()) getIo().emit('video-gen:completed', data);
   });
   videoGenEvents.on('failed', (data) => {
-    if (ioInstance) ioInstance.emit('video-gen:failed', data);
+    if (getIo()) getIo().emit('video-gen:failed', data);
   });
 
   // Audio (first-pass music-bed, #1928/#1933) rides the same gen-event contract
@@ -896,16 +885,16 @@ function setupMediaGenEventForwarding() {
   // populating `project.musicBed` silently (or silently failing) with the user
   // left to poll the Render Queue to notice a crash/OOM/sidecar error.
   audioGenEvents.on('started', (data) => {
-    if (ioInstance) ioInstance.emit('audio-gen:started', data);
+    if (getIo()) getIo().emit('audio-gen:started', data);
   });
   audioGenEvents.on('progress', (data) => {
-    if (ioInstance) ioInstance.emit('audio-gen:progress', data);
+    if (getIo()) getIo().emit('audio-gen:progress', data);
   });
   audioGenEvents.on('completed', (data) => {
-    if (ioInstance) ioInstance.emit('audio-gen:completed', data);
+    if (getIo()) getIo().emit('audio-gen:completed', data);
   });
   audioGenEvents.on('failed', (data) => {
-    if (ioInstance) ioInstance.emit('audio-gen:failed', data);
+    if (getIo()) getIo().emit('audio-gen:failed', data);
   });
 
   // Map a media-job kind to its gen-event namespace prefix. image/video/audio
@@ -920,7 +909,7 @@ function setupMediaGenEventForwarding() {
           : null;
 
   spriteEvents.on('changed', ({ recordId }) => {
-    ioInstance?.emit('sprites:changed', { recordId });
+    getIo()?.emit('sprites:changed', { recordId });
   });
   // Queue lifecycle events carry the persisted job's routing tags. Generation
   // transport events can precede the queue's terminal state, so do not use them.
@@ -928,22 +917,22 @@ function setupMediaGenEventForwarding() {
     mediaJobEvents.on(event, (job) => {
       for (const tagKey of ['spriteRef', 'spriteWalk', 'spriteAnimation']) {
         const recordId = job.params?.[tagKey]?.recordId;
-        if (recordId) ioInstance?.emit('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
+        if (recordId) getIo()?.emit('sprites:jobs-changed', { recordId, kind: job.kind, tagKey });
       }
     });
   }
 
   mediaJobEvents.on('reference-sheet:changed', ({ universeId, entryId, jobId, variant, status }) => {
-    ioInstance?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
+    getIo()?.emit('reference-sheet:changed', { universeId, entryId, jobId, variant, status });
   });
   mediaJobEvents.on('progress', ({ id, startedAt, progress, statusMsg, etaMs }) => {
     broadcastToMediaQueue('media-jobs:progress', { id, startedAt, progress, statusMsg, etaMs });
   });
   mediaJobEvents.on('changed', () => {
-    ioInstance?.emit('media-jobs:changed', {});
+    getIo()?.emit('media-jobs:changed', {});
   });
   trainingEvents.on('checkpoints:changed', ({ runId }) => {
-    ioInstance?.emit('training:checkpoints:changed', { runId });
+    getIo()?.emit('training:checkpoints:changed', { runId });
   });
 
   // Bridge media-job cancellation onto a `*-gen:canceled` socket event keyed by
@@ -957,13 +946,13 @@ function setupMediaGenEventForwarding() {
   // consumers (catalog et al.) uniformly — no per-domain event needed. For a
   // job canceled *while running* this fires alongside the gen module's `failed`;
   // both clear the spinner and the handlers are idempotent.
-  mediaPromptHistoryEvents.on('changed', () => { ioInstance?.emit('media-prompt-history:changed', {}); });
+  mediaPromptHistoryEvents.on('changed', () => { getIo()?.emit('media-prompt-history:changed', {}); });
 
   mediaJobEvents.on('canceled', (job) => {
-    if (!ioInstance || !job?.id) return;
+    if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    ioInstance.emit(`${prefix}:canceled`, { generationId: job.id });
+    getIo().emit(`${prefix}:canceled`, { generationId: job.id });
   });
 
   // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
@@ -977,10 +966,10 @@ function setupMediaGenEventForwarding() {
   // *while running* this fires alongside the gen module's own `failed`; both
   // settle the spinner to 'failed' and the handler is idempotent.
   mediaJobEvents.on('failed', (job) => {
-    if (!ioInstance || !job?.id) return;
+    if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    ioInstance.emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
+    getIo().emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }
 
@@ -999,7 +988,4 @@ function setupFableLoomRunForwarding() {
   });
 }
 
-/** Film jobs share the Production subscription, with their own event shape. */
-export function emitCodeAnimationFilm(projectId, event) {
-  broadcastToSet(codeAnimationSubscribers, 'code-animation:film', { projectId, ...event });
-}
+

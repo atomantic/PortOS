@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
 vi.mock('../../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('animation-sound-') }));
-vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
+vi.mock('./events.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
 vi.mock('./stageRender.js', () => ({
   sampleFilm: vi.fn(async (_, { times, captureTimes = [], signal }) => {
     signal.throwIfAborted();

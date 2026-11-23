@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames } from '../services/musicVideo/projects.js';
+import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames } from '../services/musicVideo/projectBoardEdits.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
@@ -58,14 +58,14 @@ router.post('/:id/upgrade', asyncHandler(async (req, res) => {
 router.post('/:id/scenes', asyncHandler(async (req, res) => {
   const data = validateRequest(musicVideoSceneCreateSchema, req.body);
   // The reply is the new scene, as before, with the edit result beside its fields.
-  const { scene, edit } = await addProjectScene(req.params.id, data, { edit: true });
+  const { scene, edit } = await addProjectScene(req.params.id, data);
   res.status(201).json({ ...scene, edit });
 }));
 
 router.patch('/:id/scenes/:sceneId', asyncHandler(async (req, res) => {
   const data = validateRequest(musicVideoSceneUpdateSchema, req.body);
   // The reply is the saved scene, as before, with the edit result beside its fields.
-  const { scene, edit } = await updateScene(req.params.id, req.params.sceneId, data, { edit: true });
+  const { scene, edit } = await updateScene(req.params.id, req.params.sceneId, data);
   res.json({ ...scene, edit });
 }));
 
@@ -171,7 +171,7 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   const { scene, appended, edit } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
     ...(await renderedTakeCost(req.params.id, kind, assetId)),
-  }], { edit: true });
+  }]);
   res.status(201).json({ scene, take: appended[0], edit });
 }));
 
@@ -196,24 +196,24 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoTakeSelectSchema, req.body ?? {});
   // The saved scene with the edit result beside its fields (see the scene PATCH).
-  const { scene, edit } = await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options, { edit: true });
+  const { scene, edit } = await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options);
   res.json({ ...scene, edit });
 }));
 
 // No body: marks the shot's unselected takes rejected, keeping their files.
 router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req, res) => {
-  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId, { edit: true }));
+  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId));
 }));
 
 // No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
 router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
-  const { scene, edit } = await swapProjectSceneFrames(req.params.id, req.params.sceneId, { edit: true });
+  const { scene, edit } = await swapProjectSceneFrames(req.params.id, req.params.sceneId);
   res.json({ ...scene, edit });
 }));
 
 // No body: a vision model checks this frame take against its shot (user-started) → the scene.
 router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
-  const { scene, edit } = await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId, { edit: true });
+  const { scene, edit } = await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId);
   res.json({ ...scene, edit });
 }));
 
@@ -226,7 +226,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(asyn
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
   if (review.acknowledgeRenderQuality || review.confirmFrame || review.acceptCharacterReferences) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
-  const { scene, edit } = await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review, { edit: true });
+  const { scene, edit } = await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review);
   res.json({ ...scene, edit });
 }));
 

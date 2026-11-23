@@ -141,6 +141,11 @@ function RepositoryCard({ source }) {
               {source.remoteError}; the displayed remote revision may be stale.
             </p>
           )}
+          {source.upstreamError && (
+            <p role="status" className="text-xs text-gray-400">
+              {source.upstreamError}; it is checked again on the next refresh.
+            </p>
+          )}
           {fork?.error && (
             <p role="status" className="flex items-start gap-1.5 text-xs text-port-warning">
               <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -237,11 +242,12 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   const companions = sources.filter((source) => source !== primary);
   const forkDiverged = repositoryForkDiverged(primary);
   const forkNeedsSync = repositoryForkNeedsSync(primary);
-  const remoteUnknown = sources.some((source) => (
-    !source.remoteFresh
-    || (source.origin?.hasOrigin && source.origin.isUpstream == null)
+  const remoteStale = sources.some((source) => !source.remoteFresh);
+  const upstreamUnknown = sources.some((source) => (
+    (source.origin?.hasOrigin && source.origin.isUpstream == null)
     || (source.origin?.isFork && source.forkVsUpstream?.available === false)
   ));
+  const remoteUnknown = remoteStale || upstreamUnknown;
   const canUpdate = sources.every((source) => source.present) && status?.updatePullsAll;
   const needsRecovery = (hasLocalChanges && !primary?.submodulesOnly)
     || sources.some(source => (source.clean === false && !source.submodulesOnly) || source.localVsOrigin?.state === 'diverged');
@@ -253,9 +259,10 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   const updateSummary = useMemo(() => {
     if (!status) return '';
     if (status.updateAvailable) return 'One managed update will bring the source stack forward.';
-    if (remoteUnknown) return 'Remote freshness is unknown; a managed update can retry the source checkouts.';
+    if (remoteStale) return 'Remote freshness is unknown; a managed update can retry the source checkouts.';
+    if (upstreamUnknown) return 'Origin is current; the canonical upstream check is retried on the next refresh.';
     return sources.length > 1 ? 'All checkouts are current.' : 'The checkout is current.';
-  }, [remoteUnknown, status]);
+  }, [remoteStale, upstreamUnknown, status]);
 
   const handleSyncOnly = async () => {
     setSyncingFork(true);

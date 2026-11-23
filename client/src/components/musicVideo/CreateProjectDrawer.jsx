@@ -13,6 +13,7 @@ import { formatDurationSec } from '../../utils/formatters.js';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 import { universeStyleRefusal } from '../../../../server/lib/universeVisualStyle.js';
 import { getUniverse } from '../../services/apiUniverseBuilder.js';
+import { onRadioGroupKeyDown } from '../../lib/a11yKeyboard.js';
 
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
 const MODES = [
@@ -181,20 +182,24 @@ export default function CreateProjectDrawer({
         </div>
 
         {/* 3. Mode Selection */}
-        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Mode">
-          {MODES.map(({ id, label, icon: Icon, hint }) => (
+        <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Mode" onKeyDown={onRadioGroupKeyDown}>
+          {MODES.map(({ id, label, icon: Icon, hint }, index) => {
+            const selectedIndex = Math.max(0, MODES.findIndex((mode) => mode.id === form.mode));
+            return (
             <button
               key={id}
               type="button"
               role="radio"
               aria-checked={form.mode === id}
+              tabIndex={index === selectedIndex ? 0 : -1}
               onClick={() => onFormChange({ mode: id })}
               className={`text-left rounded border px-3 py-2 min-h-[44px] ${form.mode === id ? 'border-port-accent bg-port-accent/10' : 'border-port-border'}`}
             >
               <span className="flex items-center gap-1.5 text-sm font-medium"><Icon size={15} /> {label}</span>
               <span className="block text-xs text-port-text-muted">{hint}</span>
             </button>
-          ))}
+            );
+          })}
         </div>
 
         {/* 4. Character style, Universe & Mood Board */}
