@@ -29,7 +29,8 @@ vi.mock('../lib/childProcess.js', async (importOriginal) => {
 
 vi.mock('./memoryBackend.js', () => ({
   hybridSearchMemories: vi.fn(),
-  getMemory: vi.fn(),
+  peekMemories: vi.fn(),
+  recordMemoryAccess: vi.fn(),
 }));
 
 vi.mock('./memoryEmbeddings.js', () => ({
@@ -99,7 +100,8 @@ beforeEach(() => {
   // Sensible defaults — each test overrides what it cares about.
   memoryEmbeddings.generateQueryEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   memoryBackend.hybridSearchMemories.mockResolvedValue({ memories: [] });
-  memoryBackend.getMemory.mockResolvedValue(null);
+  memoryBackend.peekMemories.mockResolvedValue([]);
+  memoryBackend.recordMemoryAccess.mockResolvedValue([]);
   brainStorage.getInboxLog.mockResolvedValue([]);
   brainStorage.getProjects.mockResolvedValue([]);
   brainStorage.getIdeas.mockResolvedValue([]);
@@ -134,17 +136,21 @@ describe('gatherSources', () => {
     memoryBackend.hybridSearchMemories.mockResolvedValue({
       memories: [{ id: 'mem-1', rrfScore: 0.9 }, { id: 'mem-2', rrfScore: 0.7 }],
     });
-    memoryBackend.getMemory.mockImplementation((id) => Promise.resolve({
+    memoryBackend.peekMemories.mockImplementation((ids) => Promise.resolve(ids.map((id) => ({
       id,
       content: `body of ${id}`,
       summary: `summary ${id}`,
       type: 'fact',
-    }));
+    }))));
 
     const sources = await askService.gatherSources('what did i decide about X');
     expect(sources).toHaveLength(2);
     expect(sources[0].kind).toBe('memory');
     expect(sources[0].id).toBe('memory:mem-1');
+    expect(memoryBackend.peekMemories).toHaveBeenCalledTimes(1);
+    expect(memoryBackend.peekMemories).toHaveBeenCalledWith(['mem-1', 'mem-2']);
+    expect(memoryBackend.recordMemoryAccess).toHaveBeenCalledTimes(1);
+    expect(memoryBackend.recordMemoryAccess).toHaveBeenCalledWith(['mem-1', 'mem-2']);
   });
 
   it('surfaces catalog ingredients with kind/id/href shape and the type primary-content snippet', async () => {
@@ -173,7 +179,7 @@ describe('gatherSources', () => {
   it('still answers when the catalog retriever throws (isolated by allSettled)', async () => {
     catalogDB.hybridSearchIngredients.mockRejectedValue(new Error('catalog down'));
     memoryBackend.hybridSearchMemories.mockResolvedValue({ memories: [{ id: 'mem-1', rrfScore: 0.9 }] });
-    memoryBackend.getMemory.mockResolvedValue({ id: 'mem-1', content: 'x', summary: 's', type: 'fact' });
+    memoryBackend.peekMemories.mockResolvedValue([{ id: 'mem-1', content: 'x', summary: 's', type: 'fact' }]);
 
     const sources = await askService.gatherSources('anything');
     expect(sources.some((s) => s.kind === 'memory')).toBe(true);
@@ -202,11 +208,11 @@ describe('gatherSources', () => {
         { id: 'mem-dup', rrfScore: 0.8 },
       ],
     });
-    memoryBackend.getMemory.mockResolvedValue({
+    memoryBackend.peekMemories.mockResolvedValue([{
       id: 'mem-dup',
       content: 'workout decision',
       summary: 'workout',
-    });
+    }]);
 
     const sources = await askService.gatherSources('workout');
     const memorySources = sources.filter((s) => s.id === 'memory:mem-dup');

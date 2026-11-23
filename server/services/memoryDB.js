@@ -80,6 +80,16 @@ function rowToMeta(row) {
   };
 }
 
+// Batch retrieval never reads the 768-dim vector or the link graph. Leaving
+// both off this column list keeps a multi-id peek to one narrow query.
+const MEMORY_PEEK_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary,
+  category, tags, source_task_id, source_agent_id, source_app_id, confidence, importance,
+  access_count, last_accessed, created_at, updated_at, expires_at, status, origin_instance_id`;
+
+function distinctIds(ids) {
+  return [...new Set((ids || []).filter(id => typeof id === 'string' && id.length > 0))];
+}
+
 // =============================================================================
 // CRUD Operations
 // =============================================================================
@@ -279,6 +289,37 @@ export async function peekMemory(id) {
   return rowToMemory(result.rows[0]);
 }
 
+// One round trip for many ids. Missing ids are omitted. Embedding and
+// memory_links stay unloaded; callers that need them use getMemory(id).
+export async function peekMemories(ids) {
+  const unique = distinctIds(ids);
+  if (unique.length === 0) return [];
+  const result = await query(
+    `SELECT ${MEMORY_PEEK_COLUMNS} FROM memories WHERE id = ANY($1)`,
+    [unique]
+  );
+  return result.rows.map(row => ({ ...rowToMemory(row), embedding: null, embeddingModel: null }));
+}
+
+// One UPDATE for every id that was actually injected. Ids that no longer
+// exist are skipped. Returns the persisted counters so callers can mirror
+// the accessCount/lastAccessed bump getMemory applies to a single row.
+export async function recordMemoryAccess(ids) {
+  const unique = distinctIds(ids);
+  if (unique.length === 0) return [];
+  const result = await query(
+    `UPDATE memories SET access_count = access_count + 1, last_accessed = NOW()
+     WHERE id = ANY($1)
+     RETURNING id, access_count, last_accessed`,
+    [unique]
+  );
+  return result.rows.map(row => ({
+    id: row.id,
+    accessCount: row.access_count,
+    lastAccessed: row.last_accessed?.toISOString() ?? null,
+  }));
+}
+
 export async function getMemory(id) {
   const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
   if (result.rows.length === 0) return null;
@@ -390,9 +431,14 @@ export async function getMemories(options = {}) {
   const { where, params } = buildMemoryFilterWhere(options);
   let paramIdx = params.length + 1;
 
-  // Count total
-  const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
-  const total = parseInt(countResult.rows[0].total, 10);
+  // Retrievers already cap `limit` and never read `total`. Skip the COUNT(*)
+  // scan in that case. `total: null` means "not counted", not "zero rows".
+  const includeCount = options.includeCount !== false;
+  let total = null;
+  if (includeCount) {
+    const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
+    total = parseInt(countResult.rows[0].total, 10);
+  }
 
   // Sort and paginate
   const sortBy = {
@@ -673,16 +719,17 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
 
   const filterWhere = filterConditions.join(' AND ');
   const fetchLimit = limit * 2;
+  const searches = [];
 
-  // Get full-text search results (replaces BM25)
-  let ftsResults = [];
+  // Full-text and vector rankers do not depend on each other. When both
+  // inputs are present they run in one Promise.all so neither waits on the other.
   if (queryText) {
     // websearch syntax ANDs every term, so conversational text rarely matches.
     // 'any' ORs the same lexemes; ts_rank already favors covering more of them.
     const tsQuery = lexicalMatch === 'any'
       ? `replace(plainto_tsquery('english', $${paramIdx})::text, ' & ', ' | ')::tsquery`
       : `websearch_to_tsquery('english', $${paramIdx})`;
-    const ftsResult = await query(
+    searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               ts_rank(search_tsv, ${tsQuery}) AS fts_score
        FROM memories
@@ -691,15 +738,12 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        ORDER BY fts_score DESC
        LIMIT $${paramIdx + 1}`,
       [...filterParams, queryText, fetchLimit]
-    );
-    ftsResults = ftsResult.rows;
+    ).then(result => ({ kind: 'fts', rows: result.rows })));
   }
 
-  // Get vector similarity results
-  let vectorResults = [];
   if (queryEmbedding) {
     const vecParamStart = filterParams.length + 1;
-    const vectorResult = await query(
+    searches.push(query(
       `SELECT id, type, category, tags, summary, importance, created_at, status, source_app_id, source_agent_id,
               1 - (embedding <=> $${vecParamStart}) AS similarity
        FROM memories
@@ -708,9 +752,12 @@ export async function hybridSearchMemories(queryText, queryEmbedding, options = 
        ORDER BY embedding <=> $${vecParamStart}
        LIMIT $${vecParamStart + 2}`,
       [...filterParams, arrayToPgvector(queryEmbedding), minRelevance * 0.5, fetchLimit]
-    );
-    vectorResults = vectorResult.rows;
+    ).then(result => ({ kind: 'vector', rows: result.rows })));
   }
+
+  const settled = searches.length > 0 ? await Promise.all(searches) : [];
+  const ftsResults = settled.find(part => part.kind === 'fts')?.rows ?? [];
+  const vectorResults = settled.find(part => part.kind === 'vector')?.rows ?? [];
 
   // Apply Reciprocal Rank Fusion
   const rrfScores = new Map();

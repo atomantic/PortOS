@@ -121,6 +121,50 @@ export async function peekMemory(id) {
   return withMemoryLock(() => loadMemory(id));
 }
 
+function distinctIds(ids) {
+  return [...new Set((ids || []).filter(id => typeof id === 'string' && id.length > 0))];
+}
+
+// File-backend twin of memoryDB.peekMemories: no access bump, no embedding,
+// no link fields. The saved record is left unchanged.
+function memoryForRetrieval(memory) {
+  const copy = { ...memory, embedding: null };
+  delete copy.relatedMemories;
+  delete copy.supersededBy;
+  return copy;
+}
+
+export async function peekMemories(ids) {
+  const unique = distinctIds(ids);
+  if (unique.length === 0) return [];
+  return withMemoryLock(async () => {
+    const memories = [];
+    for (const id of unique) {
+      const memory = await loadMemory(id);
+      if (memory) memories.push(memoryForRetrieval(memory));
+    }
+    return memories;
+  });
+}
+
+export async function recordMemoryAccess(ids) {
+  const unique = distinctIds(ids);
+  if (unique.length === 0) return [];
+  return withMemoryLock(async () => {
+    const now = new Date().toISOString();
+    const recorded = [];
+    for (const id of unique) {
+      const memory = await loadMemory(id);
+      if (!memory) continue;
+      memory.accessCount = (memory.accessCount || 0) + 1;
+      memory.lastAccessed = now;
+      await saveMemory(memory);
+      recorded.push({ id, accessCount: memory.accessCount, lastAccessed: now });
+    }
+    return recorded;
+  });
+}
+
 /**
  * Get a memory by ID (updates access stats)
  */

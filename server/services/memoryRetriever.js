@@ -5,10 +5,9 @@
  * Combines semantic search with importance scoring.
  */
 
-import { getMemories, searchMemories, hybridSearchMemories, getMemory } from './memoryBackend.js';
-import { generateQueryEmbedding, estimateTokens, } from './memoryEmbeddings.js';
+import { getMemories, searchMemories, hybridSearchMemories, peekMemories, recordMemoryAccess, DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
+import { generateQueryEmbedding, estimateTokens } from './memoryEmbeddings.js';
 import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../lib/promptFencing.js';
-import { DEFAULT_MEMORY_CONFIG } from './memoryBackend.js';
 
 // Search mode preference: 'hybrid' (FTS + vector) or 'vector' (embedding-only)
 const SEARCH_MODE = 'hybrid';
@@ -30,111 +29,119 @@ export async function getRelevantMemories(task, options = {}) {
   // (prior behavior) when unset; the token budget still applies on top.
   const searchLimit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 20;
 
-  const memories = [];
-  let tokenCount = 0;
-
-  // 1. Search based on task description (hybrid BM25 + vector or vector-only)
-  if (task.description) {
-    const queryEmbedding = await generateQueryEmbedding(task.description);
-    let searchResults = { memories: [] };
-
-    if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
-      // Use hybrid FTS + vector search with reciprocal rank fusion
-      searchResults = await hybridSearchMemories(task.description, queryEmbedding, {
-        limit: searchLimit,
-        minRelevance,
-        ftsWeight: 0.4,
-        vectorWeight: 0.6
-      });
-    } else if (queryEmbedding) {
-      // Fallback to vector-only search
-      searchResults = await searchMemories(queryEmbedding, {
-        minRelevance,
-        limit: searchLimit
-      });
-    }
-
-    // allSettled: a single failed getMemory() shouldn't abort the whole retrieval.
-    const fetchedMems = await Promise.allSettled(searchResults.memories.map(r => getMemory(r.id)));
-    for (let i = 0; i < searchResults.memories.length; i++) {
-      const result = searchResults.memories[i];
-      const settled = fetchedMems[i];
-      const mem = settled.status === 'fulfilled' ? settled.value : null;
-      if (mem) {
-        const tokens = estimateTokens(mem.content);
-        if (tokenCount + tokens <= maxTokens) {
-          memories.push({
-            ...mem,
-            relevance: result.rrfScore || result.similarity || 0.5,
-            source: result.searchMethod || 'semantic'
-          });
-          tokenCount += tokens;
-        }
-      }
-    }
-  }
-
-  // 2. Add high-importance preferences (always include user preferences)
-  const preferences = await getMemories({
+  // Preference and codebase lists do not depend on the semantic search, and
+  // none of them needs a total count. Start them together so the three
+  // stages overlap instead of stacking.
+  const searchPromise = task.description
+    ? retrieveSearchHits(task.description, { searchLimit, minRelevance })
+    : Promise.resolve([]);
+  const preferencePromise = getMemories({
     types: ['preference'],
     status: 'active',
     sortBy: 'importance',
     sortOrder: 'desc',
-    limit: 5
+    limit: 5,
+    includeCount: false,
   });
-
-  const prefIds = preferences.memories.filter(p => !memories.some(m => m.id === p.id)).map(p => p.id);
-  const prefMems = await Promise.allSettled(prefIds.map(id => getMemory(id)));
-  for (let i = 0; i < prefIds.length; i++) {
-    const settled = prefMems[i];
-    const mem = settled.status === 'fulfilled' ? settled.value : null;
-    if (mem) {
-      const tokens = estimateTokens(mem.content);
-      if (tokenCount + tokens <= maxTokens) {
-        memories.push({
-          ...mem,
-          relevance: mem.importance,
-          source: 'preference'
-        });
-        tokenCount += tokens;
-      }
-    }
-  }
-
-  // 3. Add recent high-importance facts about the codebase
-  if (task.metadata?.app) {
-    const appMemories = await getMemories({
+  const codebasePromise = task.metadata?.app
+    ? getMemories({
       types: ['fact', 'observation'],
       categories: ['codebase', 'architecture', 'patterns'],
       status: 'active',
       sortBy: 'importance',
       sortOrder: 'desc',
-      limit: 5
-    });
+      limit: 5,
+      includeCount: false,
+    })
+    : Promise.resolve({ memories: [] });
 
-    const appIds = appMemories.memories.filter(a => !memories.some(m => m.id === a.id)).map(a => a.id);
-    const appMems = await Promise.allSettled(appIds.map(id => getMemory(id)));
-    for (let i = 0; i < appIds.length; i++) {
-      const settled = appMems[i];
-      const mem = settled.status === 'fulfilled' ? settled.value : null;
-      if (mem) {
-        const tokens = estimateTokens(mem.content);
-        if (tokenCount + tokens <= maxTokens) {
-          memories.push({
-            ...mem,
-            relevance: mem.importance * 0.8,
-            source: 'codebase'
-          });
-          tokenCount += tokens;
-        }
-      }
+  const [searchHits, preferences, codebase] = await Promise.all([
+    searchPromise,
+    preferencePromise,
+    codebasePromise,
+  ]);
+  const preferenceHits = preferences.memories || [];
+  const codebaseHits = codebase.memories || [];
+
+  const candidateIds = [];
+  const seen = new Set();
+  const pushId = (id) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    candidateIds.push(id);
+  };
+  for (const hit of searchHits) pushId(hit.id);
+  for (const hit of preferenceHits) pushId(hit.id);
+  for (const hit of codebaseHits) pushId(hit.id);
+
+  // One hydration for every candidate. Rows the token budget later drops
+  // were still read, but they are not written: access bumps happen below,
+  // only for memories that fit.
+  const hydrated = candidateIds.length > 0 ? await peekMemories(candidateIds) : [];
+  const byId = new Map(hydrated.filter(Boolean).map(memory => [memory.id, memory]));
+
+  const memories = [];
+  let tokenCount = 0;
+  const consider = (id, relevance, source) => {
+    if (memories.some(memory => memory.id === id)) return;
+    const memory = byId.get(id);
+    if (!memory) return;
+    const tokens = estimateTokens(memory.content);
+    if (tokenCount + tokens <= maxTokens) {
+      memories.push({ ...memory, relevance, source });
+      tokenCount += tokens;
+    }
+  };
+
+  // Precedence is unchanged: search hits, then preferences, then codebase
+  // facts. The budget is applied in that order before the relevance sort.
+  for (const hit of searchHits) {
+    consider(hit.id, hit.rrfScore || hit.similarity || 0.5, hit.searchMethod || 'semantic');
+  }
+  for (const hit of preferenceHits) {
+    const memory = byId.get(hit.id);
+    if (memory) consider(hit.id, memory.importance, 'preference');
+  }
+  for (const hit of codebaseHits) {
+    const memory = byId.get(hit.id);
+    if (memory) consider(hit.id, memory.importance * 0.8, 'codebase');
+  }
+
+  memories.sort((a, b) => b.relevance - a.relevance);
+
+  if (memories.length > 0) {
+    const recorded = await recordMemoryAccess(memories.map(memory => memory.id));
+    const recordedById = new Map(recorded.map(row => [row.id, row]));
+    for (const memory of memories) {
+      const row = recordedById.get(memory.id);
+      if (!row) continue;
+      memory.accessCount = row.accessCount;
+      memory.lastAccessed = row.lastAccessed;
     }
   }
 
-  // Sort by relevance
-  memories.sort((a, b) => b.relevance - a.relevance);
-
   return memories;
+}
+
+async function retrieveSearchHits(description, { searchLimit, minRelevance }) {
+  const queryEmbedding = await generateQueryEmbedding(description);
+  if (SEARCH_MODE === 'hybrid' && queryEmbedding) {
+    const searchResults = await hybridSearchMemories(description, queryEmbedding, {
+      limit: searchLimit,
+      minRelevance,
+      ftsWeight: 0.4,
+      vectorWeight: 0.6
+    });
+    return searchResults.memories || [];
+  }
+  if (queryEmbedding) {
+    const searchResults = await searchMemories(queryEmbedding, {
+      minRelevance,
+      limit: searchLimit
+    });
+    return searchResults.memories || [];
+  }
+  return [];
 }
 
 /**
