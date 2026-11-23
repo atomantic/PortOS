@@ -34,7 +34,20 @@ const PUBLISH_SKIPPED = {
   'repository-mismatch': 'The quality file belongs to a different repository. Publish left it in place.',
   'unsupported-format': 'The committed quality file is in an unsupported format. Publish left it in place.',
   'invalid-evidence': 'The current measurements could not be written as a snapshot. Publish left the file in place.',
+  'publish-pr-unreadable': 'Could not read the state of the quality snapshot pull request; publication was deferred',
+  'ownership-unreadable': 'Could not confirm who owns the quality snapshot branch; publication was deferred',
+  'publish-branch-unreadable': 'Could not read the quality snapshot branch; publication was deferred',
+  'non-snapshot-changes': 'The quality snapshot branch has changes beyond the snapshot file; publication was deferred',
 };
+const PUBLISH_DEFERRED = 'Quality snapshot publication deferred while another task owns the publish branch';
+
+// Success wording follows what the server actually did with the pull request.
+function publishedMessage(result) {
+  if (!result.prUrl) return 'Quality snapshot published to .quality.json';
+  if (result.merged) return 'Quality snapshot pull request merged';
+  if (result.queuedMerge) return 'Quality snapshot pull request opened; queued to merge when checks pass';
+  return 'Quality snapshot pull request opened; review or merge manually';
+}
 
 export default function AppQuality({ app, detail = false }) {
   const [params] = useSearchParams();
@@ -49,11 +62,11 @@ export default function AppQuality({ app, detail = false }) {
     setPublishing(false);
     if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
     if (result?.published) {
-      return toast.success(result.prUrl
-        ? 'Quality snapshot pull request opened; it merges immediately'
-        : 'Quality snapshot published to .quality.json');
+      return toast.success(publishedMessage(result));
     }
-    toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
+    toast(PUBLISH_SKIPPED[result?.reason]
+      || (result?.deferredPublication === true ? PUBLISH_DEFERRED : null)
+      || 'Nothing to publish to .quality.json');
   };
   const quality = app.quality;
   const score = quality?.score;
