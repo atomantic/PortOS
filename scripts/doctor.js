@@ -299,7 +299,10 @@ function loadDbState(root = ROOT) {
     // not after it. `??=` keeps any explicit shell override.
     const settings = resolveDbSettings(root);
     process.env.PGHOST ??= settings.host;
-    process.env.PGPORT ??= String(resolvePgPort(root));
+    // Unconditional: resolvePgPort already keeps a valid shell PGPORT, and an
+    // empty/unparseable one must not reach the pool while the report names the
+    // resolved port.
+    process.env.PGPORT = String(resolvePgPort(root));
     process.env.PGUSER ??= settings.user;
     process.env.PGDATABASE ??= settings.database;
     process.env.PGPASSWORD ??= settings.password;
