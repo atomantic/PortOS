@@ -7,7 +7,8 @@ import { getVoiceConfig, expandPath, voiceHome, PIPER_BIN_NAME } from './config.
 import { which } from './bootstrap.js';
 import { resolveLlmEndpoint, authHeaders } from './llm.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { checkSetup as checkFaceTimeSetup } from './facetimeBridge.js';
+import { checkSetup as checkFaceTimeSetup, blockingSetupFailure } from './facetimeBridge.js';
+import { isInstanceFeatureEnabled } from '../instanceFeatures.js';
 import { inspectVoiceAsset, isVoiceAssetUsable } from '../../lib/voiceModelAssets.js';
 
 const PROBE_TIMEOUT_MS = 1500;
@@ -70,7 +71,12 @@ export const checkAll = async (cfg) => {
   if (sttEngine === 'web-speech') {
     out['web-speech'] = { ok: true, state: 'browser-native' };
   }
-  out.facetime = await checkFaceTimeSetup(voice);
+  // The raw setup checklist lives on GET /api/voice/facetime/status; here it is
+  // summarized into the standard probe shape, and only when the feature is on.
+  if (await isInstanceFeatureEnabled('facetime')) {
+    const failure = blockingSetupFailure(await checkFaceTimeSetup(voice));
+    out.facetime = { ok: !failure, state: failure || 'ready' };
+  }
 
   cache = { key: cacheKey, ts: Date.now(), value: out };
   return out;

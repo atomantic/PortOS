@@ -96,6 +96,13 @@ describe('VoiceTab TTS engine registry', () => {
     await waitFor(() => expect(voiceApi.updateVoiceConfig).toHaveBeenCalled());
   });
 
+  it('labels a facetime service probe and omits it when absent', async () => {
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: { facetime: { ok: true, state: 'ready' } } });
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    expect(await screen.findByText(/FaceTime Audio/)).toBeTruthy();
+    expect(screen.queryByText(/facetime down/i)).toBeNull();
+  });
+
   it('loads engine options and patches the registry configuration key for Qwen3 voices', async () => {
     render(<MemoryRouter><VoiceTab /></MemoryRouter>);
 
