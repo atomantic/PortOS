@@ -19,7 +19,7 @@ import {
   SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_PATH_RE, browserSuitesIn, featureDirectory, fixtureOwnerFor,
   fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGeneratedData,
   isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isSharedClientDependency, isTestFile,
-  pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
+  TOOLING_TESTS, pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
   uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
@@ -330,9 +330,12 @@ function buildSuitePlan(changedFiles, {
   // additively: unlike python, a JS/TS source is already reachable through the
   // import graph or a feature directory, so an empty hit list here is not an
   // error — it just means nothing reads this file as text.
+  // Gate-tooling suites name many paths while proving the planner. Basename
+  // selection would run them on those diffs; toolingTestsFor and the memo
+  // closure are the selectors that actually own them.
   for (const source of jsSources) {
     const namedTests = (pathContractTests[source] || [])
-      .filter((path) => trackedSet.has(path) && runnerForTest(path));
+      .filter((path) => trackedSet.has(path) && runnerForTest(path) && !TOOLING_TESTS.includes(path));
     selectedTests.push(...namedTests);
   }
 

@@ -28,9 +28,10 @@
  * at all (`seedVitestDependencies`).
  *
  * Sharding: the runner partitions the memo-independent candidate inventory
- * (using Vitest's algorithm by default), then evaluates related reach and
- * memo hits within the owned slice. Each file has one owner across shards
- * even when their memo records differ. Vitest itself never receives `--shard`.
+ * (`serverShardSlice` for the server's two shards, Vitest's hash otherwise),
+ * then evaluates related reach and memo hits within the owned slice. Each
+ * file has one owner across shards even when their memo records differ.
+ * Vitest itself never receives `--shard`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -83,7 +84,7 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
  *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const candidates = mode === 'files' ? uniqueSorted(repoFiles)
     : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
@@ -215,6 +216,48 @@ export function vitestShardSlice(files, { repoRoot, scope, index, count, path = 
   })).sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
   const [start, end] = vitestShardRange(hashed.length, index, count);
   return hashed.slice(start, end).map(({ rel }) => rel);
+}
+
+// Hosted durations from #17618. Two server shards pin only these files so the
+// rest keep today's SHA-1 owner (memo cache keys stay put). Shard 1 also runs
+// the 7s Smoke-boot step, so its pinned seconds sit just under shard 2.
+// Structural guards: 9.1s / 9.6s / 10.0s. Serial capture: 33.1s and 7.0s.
+// Parallel unmemoizable suites fill the remainder (33.2, 27, 25.1, 20.2, 19.5,
+// 15, 14, 13.8, 12.3, 11.4, 11.4, 11.1).
+export const SERVER_HEAVY_SHARD_OWNERS = {
+  'server/test/guards/repo.guard.test.js': 1,
+  'server/scripts/run-local-code-review.test.js': 1,
+  'scripts/pregate.test.js': 1,
+  'scripts/setup-image-video.test.js': 1,
+  'scripts/lib/testMemo.test.js': 1,
+  'scripts/vitestTempRoot.test.js': 1,
+  'scripts/generate_ltx2.test.js': 1,
+  'scripts/vitestSiblingSweep.test.js': 1,
+  'scripts/update-headless-recovery.test.js': 1,
+  'server/services/updateExecutor.deferred.test.js': 1,
+  'server/test/guards/modules.guard.test.js': 2,
+  'server/test/guards/runtime.guard.test.js': 2,
+  'scripts/ci-test-plan.test.js': 2,
+  'scripts/run-ci-tests.test.js': 2,
+  'server/services/repoRepairCompletion.test.js': 2,
+  'scripts/runCiTestsClientFixture.test.js': 2,
+  'scripts/lib/testMemoRunner.test.js': 2,
+};
+
+/**
+ * Server shard `index` of `count`. Two shards move `SERVER_HEAVY_SHARD_OWNERS`
+ * off the hash and leave every other file where `vitestShardSlice` of the
+ * full list put it. Any other count is that hash alone, so a 4-way client
+ * matrix and Vitest's own sequencer stay aligned.
+ */
+export function serverShardSlice(files, options) {
+  const { index, count } = options;
+  if (count !== 2) return vitestShardSlice(files, options);
+  const pinned = new Set(files.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === 1 || SERVER_HEAVY_SHARD_OWNERS[file] === 2));
+  if (pinned.size === 0) return vitestShardSlice(files, options);
+  const hashed = vitestShardSlice(files, options).filter((file) => !pinned.has(file));
+  const owned = files.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === index).sort();
+  return [...hashed, ...owned];
 }
 
 /**
