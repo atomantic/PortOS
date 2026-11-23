@@ -590,6 +590,29 @@ export async function getFableLoomExport(loomId, jobId) {
   return publicJob(job);
 }
 
+/**
+ * Latest non-expired export for a loom so a reloaded or second tab can reattach.
+ * An active job wins over any newer terminal one; unreadable cache entries are skipped.
+ */
+export async function getLatestFableLoomExport(loomId) {
+  if (!await getLoom(loomId)) throw error('NOT_FOUND', 'Loom not found.', 404);
+  await ensureDir(root());
+  const entries = await readdir(root(), { withFileTypes: true });
+  let latest = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !uuid.test(entry.name)) continue;
+    const job = await readJob(entry.name).catch(err => {
+      if (err?.code === 'EXPORT_STATE_INVALID') return null;
+      throw err;
+    });
+    if (!job || job.loomId !== loomId || Date.now() - job.createdAt >= FABLELOOM_EXPORT_LIMITS.maxAgeMs) continue;
+    const running = !['completed', 'failed'].includes(job.status);
+    const latestRunning = latest && !['completed', 'failed'].includes(latest.status);
+    if (!latest || (running && !latestRunning) || (running === latestRunning && job.createdAt > latest.createdAt)) latest = job;
+  }
+  return latest ? publicJob(latest) : null;
+}
+
 export async function getFableLoomExportDownload(loomId, jobId) {
   return serializeAdmission(async () => {
     const job = await getFableLoomExport(loomId, jobId);
