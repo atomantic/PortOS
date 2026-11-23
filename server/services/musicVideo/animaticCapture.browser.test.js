@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
 import { createTestPhaseDiagnostics } from '../../../lib/testPhaseDiagnostics.js';
+import { buildRecordedViteFixture, createRecordedStaticServer } from '../../../scripts/lib/browserServedFiles.js';
 import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
@@ -93,7 +94,12 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       const { build } = await import(bundlers[0]);
       const { default: react } = await import(bundlers[1]);
       const { default: tailwind } = await import(bundlers[2]);
-      await build({ configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' });
+      await buildRecordedViteFixture({
+        build,
+        recordedRoot: client,
+        temp: dir,
+        config: { configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
+      });
     });
     await phase('still-images', async () => {
       const grid = '<svg width="1200" height="400" xmlns="http://www.w3.org/2000/svg"><rect width="1200" height="400" fill="#164080"/><rect width="200" height="400" fill="#ff3010"/><rect x="400" width="200" height="400" fill="#20dd50"/><rect x="1000" width="200" height="400" fill="#f5cf10"/><circle cx="650" cy="100" r="50" fill="white"/></svg>';
@@ -128,6 +134,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await phase('audio-encode', timeout => execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=8', join(dir, 'song.wav')], { timeout, killSignal: 'SIGKILL' }));
     await phase('http-server', async () => {
       const app = express();
+      const staticFiles = createRecordedStaticServer(express);
       app.get('/data/images/:id', (req, res) => res.sendFile(join(dir, req.params.id)));
       app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: colorReferences.has(req.params.id) ? `${req.params.id}.webm` : 'clip.webm', fps: 24, numFrames: 96, width: 120, height: 240 }));
       app.get('/api/music-video/:id/stats-outro', (req, res) => res.json({ stats: { shots: 2, stills: { made: 3, kept: 1 }, clips: { made: 2, kept: 1 }, floorImages: [] } }));
@@ -137,11 +144,8 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       });
       app.get('/data/videos/:name', (req, res) => res.sendFile(join(dir, req.params.name)));
       app.get('/song.wav', (req, res) => res.sendFile(join(dir, 'song.wav')));
-      app.use(express.static(join(dir, 'dist')));
-      await new Promise((done, reject) => {
-        server = app.listen(0, '127.0.0.1', done);
-        server.once('error', reject);
-      });
+      app.use(staticFiles.serve(join(dir, 'dist')));
+      server = await staticFiles.start(app);
     });
     await phase('browser-acquire', async () => {
       fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });
