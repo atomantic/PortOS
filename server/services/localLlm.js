@@ -56,7 +56,6 @@ import { commandExists } from '../lib/commandExists.js'
 import { whichFirst } from '../lib/processEnv.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
-import { importModelFromHfSafetensors } from './ollamaSafetensorsImport.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { localModelInventoryRow } from '../lib/modelInventory.js'
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js'
@@ -1335,7 +1334,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
   if (backend === 'ollama') {
     const importSpec = getOllamaImportSpec(modelId)
     const result = importSpec
-      ? await importModelFromHfSafetensors(importSpec, onProgress)
+      ? await (await import('./ollamaSafetensorsImport.js')).importModelFromHfSafetensors(importSpec, onProgress)
       : await ollamaManager.pullModel(modelId, onProgress, { signal })
     if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
