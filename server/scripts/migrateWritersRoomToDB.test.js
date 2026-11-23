@@ -66,13 +66,13 @@ const query = vi.fn(async (sql, params) => {
   if (/INSERT INTO writers_room_folders/.test(sql)) {
     const id = params[0];
     if (folders.has(id)) return { rowCount: 0, rows: [] };
-    folders.set(id, { id, parentId: params[1], name: params[2], sortOrder: params[3], data: JSON.parse(params[4]) });
+    folders.set(id, { id, parentId: params[1], name: params[2], sortOrder: params[3], data: JSON.parse(params[4]), deleted: params[7], deletedAt: params[8] });
     return { rowCount: 1, rows: [] };
   }
   if (/INSERT INTO writers_room_works/.test(sql)) {
     const id = params[0];
     if (works.has(id)) return { rowCount: 0, rows: [] };
-    works.set(id, { id, folderId: params[1], title: params[2], pipelineSeriesId: params[6], data: JSON.parse(params[10]) });
+    works.set(id, { id, folderId: params[1], title: params[2], pipelineSeriesId: params[6], data: JSON.parse(params[10]), deleted: params[13], deletedAt: params[14] });
     return { rowCount: 1, rows: [] };
   }
   if (/INSERT INTO writers_room_draft_versions/.test(sql)) {
@@ -84,12 +84,15 @@ const query = vi.fn(async (sql, params) => {
   if (/INSERT INTO writers_room_exercises/.test(sql)) {
     const id = params[0];
     if (exercises.has(id)) return { rowCount: 0, rows: [] };
-    exercises.set(id, { id, workId: params[1], status: params[2], data: JSON.parse(params[3]) });
+    exercises.set(id, { id, workId: params[1], status: params[2], data: JSON.parse(params[3]), deleted: params[6], deletedAt: params[7] });
     return { rowCount: 1, rows: [] };
   }
   return { rowCount: 0, rows: [] };
 });
-vi.mock('../lib/db.js', () => ({ query: (...a) => query(...a) }));
+vi.mock('../lib/db.js', () => ({
+  query: (...a) => query(...a),
+  withTransaction: async (fn) => fn({ query: (...a) => query(...a) }),
+}));
 
 const draft = (id) => ({ id, label: 'D', contentFile: `drafts/${id}.md`, contentHash: 'h', wordCount: 1, segmentIndex: [], createdAt: '2026-01-01T00:00:00.000Z' });
 const manifest = (id, extra = {}) => ({ id, title: id, kind: 'short-story', status: 'drafting', activeDraftVersionId: 'wr-draft-a', drafts: [draft('wr-draft-a')], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z', ...extra });
@@ -187,5 +190,35 @@ describe('migrateWritersRoomToDB', () => {
     files[`${WORKS}/wr-work-1/manifest.json`] = JSON.stringify(manifest('wr-work-1'));
     const result = await importer();
     expect(result.works).toBe(0); // conflict → not counted as newly imported
+  });
+
+  it('preserves tombstones in columns and data JSONB for folders, exercises and works', async () => {
+    const deletedAt = '2026-02-01T00:00:00.000Z';
+    existingDirs.add(ROOT);
+    existingDirs.add(WORKS);
+    jsonByPath[`${ROOT}/folders.json`] = [{ id: 'wr-folder-1', name: 'X', deleted: true, deletedAt }, { id: 'wr-folder-2', name: 'Y' }];
+    jsonByPath[`${ROOT}/exercises.json`] = [{ id: 'wr-ex-1', status: 'finished', deleted: true, deletedAt }];
+    files[`${ROOT}/folders.json`] = '[]';
+    files[`${ROOT}/exercises.json`] = '[]';
+    workDirs = [{ name: 'wr-work-1', isDirectory: () => true }];
+    files[`${WORKS}/wr-work-1/manifest.json`] = JSON.stringify(manifest('wr-work-1', { deleted: true, deletedAt }));
+    await importer();
+    for (const row of [folders.get('wr-folder-1'), exercises.get('wr-ex-1'), works.get('wr-work-1')]) {
+      expect(row.deleted).toBe(true);
+      expect(new Date(row.deletedAt).toISOString()).toBe(deletedAt);
+      expect(row.data.deleted).toBe(true);
+    }
+    expect(folders.get('wr-folder-2')).toMatchObject({ deleted: false, deletedAt: null });
+    expect(folders.get('wr-folder-2').data).toMatchObject({ deleted: false, deletedAt: null });
+  });
+
+  it('a retried import of an existing work does not re-insert its drafts', async () => {
+    works.set('wr-work-1', { id: 'wr-work-1' });
+    existingDirs.add(ROOT);
+    existingDirs.add(WORKS);
+    workDirs = [{ name: 'wr-work-1', isDirectory: () => true }];
+    files[`${WORKS}/wr-work-1/manifest.json`] = JSON.stringify(manifest('wr-work-1'));
+    await importer();
+    expect(drafts.size).toBe(0);
   });
 });
