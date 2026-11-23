@@ -1,7 +1,6 @@
 /**
- * Wrap a model-generated HTML page for display in a sandboxed iframe, with a Content-Security-Policy that restricts resource loads.
- *
- * The policy preserves authored markup and lets inline scripts and styles run. It denies fetches, remote scripts, remote fonts, remote images and form posts.
+ * Add a Content-Security-Policy to a sandboxed model HTML preview.
+ * The policy allows inline scripts and styles while blocking fetches, remote resources and form submissions.
  */
 
 import { injectPreviewHead } from '../../../server/lib/htmlPreviewHead.js';
