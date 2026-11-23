@@ -232,8 +232,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/voice/config',
     '/api/voice/public/synthesize',
     '/api/voice/status',
-    '/api/voice/tts/status',
-    '/api/voice/tts/unload',
     '/api/voice/voices',
     '/api/voice/whisper',
     '/api/writers-room/works/:id/polish/progress',
@@ -354,5 +352,7 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/image-to-3d/trellis2/install',
     '/api/providers/opencode/install',
     '/api/providers/opencode/installation',
+    '/api/voice/tts/status',
+    '/api/voice/tts/unload',
   ]),
 });
