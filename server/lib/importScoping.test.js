@@ -145,12 +145,25 @@ const SELECTION_CUTS = [
     'reads the merged PR through the prView.js leaf'],
   ['services/git.js', 'services/branchReconcile.js',
     'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
+  // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
+  ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
+    'recovers stuck renders through loaders registerBootHooks() registers in bootHookRegistry.js'],
   ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
     'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
   ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',
     'reads owner decisions from branchRetirementDecision.js and forge shipment from branchReconcile/forgeShipment.js'],
   ['services/apps.js', 'services/taskSchedule.js',
     'resets watcher cooldowns through taskScheduleStore.js'],
+  // #17578: music video modules that resolve the master or plan a cut, not render it.
+  ...[
+    'services/musicVideo/performanceShot.js', 'services/musicVideo/vocalStem.js', 'services/federatedMedia/sourceAudio.js',
+    'services/musicVideo/audioTiming.js', 'services/musicVideo/lyricAlign.js', 'services/musicVideo/lyricAlignCore.js',
+    'services/musicVideo/lyricVerify.js', 'services/musicVideo/performanceRepair.js', 'services/musicVideo/revisionService.js',
+    'services/musicVideo/vocalSeparation.js', 'services/musicVideo/renderPlan.js', 'services/musicVideo/renderCleanup.js',
+    'services/musicVideo/masterAudioPath.js', 'services/musicVideo/renderActivityState.js', 'services/musicVideo/blender/song.js',
+  ].map(entry => [entry, 'services/musicVideo/render.js', 'resolves the master through masterAudioPath.js and render activity through renderActivityState.js']),
+  ['services/musicVideo/shotSegments.js', 'services/musicVideo/render.js',
+    'plans through renderPlan.js, builds args with renderFfmpegArgs.js and reads render activity from renderActivityState.js'],
   // #17577: the Music Video project store and the siblings it imports never import back up.
   ['services/musicVideo/projects.js', MUSIC_VIDEO_STORE_UPWARD,
     'is the low-level store; board edits and film workflows import it from projectBoardEdits.js and projectFilmActions.js'],
@@ -256,6 +269,10 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   // Positive control for the media scan: the boot owner still names every runtime.
   it('still sees the runtime loaders bootHooks.js registers', () => {
     expect(importTargets('services/bootHooks.js').filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(importTargets('services/bootHooks.js')).toEqual(expect.arrayContaining([
+      'services/musicVideo/render.js',
+      'services/musicVideo/excerptRender.js',
+    ]));
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
@@ -468,12 +485,15 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  // Half of the original 3,023-module boot closure is 1,511. socket.js publishes
-  // the import-free socketIo.js handle (#17619), so the composition root carries
-  // that one extra module; lib/usageReport.js (#17583) is the pure report
-  // builder split out of services/usage.js and adds the second.
-  it('loads at most 1,513 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1513);
+  // Measured at 1,433 after boot recovery of the music-video render pipeline
+  // moved behind registerBootHooks() (#17692). The cap keeps 40 modules of
+  // headroom so a few independent PRs can each add a boot-reachable leaf and
+  // still merge. A boot-reachable addition that would cross this cap has to
+  // defer or offset that import in the same change; do not raise the cap to
+  // absorb it.
+  it('loads at most 1,473 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1473);
+    expect(closure.files.size).toBeLessThanOrEqual(1473 - 25);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);

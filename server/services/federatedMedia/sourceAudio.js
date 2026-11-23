@@ -82,7 +82,7 @@ export const prepareSourceAudioWindow = (args) => maintenance.run('media-input',
 
 /** A linked track can select another recording without changing project fields. */
 export async function assertCurrentSourceAudioWindow(project, audioConditioning) {
-  const { resolveMasterAudioPath } = await import('../musicVideo/render.js');
+  const { resolveMasterAudioPath } = await import('../musicVideo/masterAudioPath.js');
   if (await sha256File(await resolveMasterAudioPath(project)) !== audioConditioning.sourceSha256) {
     throw new ServerError('The selected recording changed while supplied audio was prepared', { status: 409, code: 'MUSIC_VIDEO_AUDIO_SOURCE_CHANGED' });
   }
@@ -97,7 +97,7 @@ async function prepareWindow({ project, scene, numFrames, fps }) {
     throw new ServerError('Supply a timed scene and a video window of at most 60 seconds', { status: 400, code: 'MUSIC_VIDEO_AUDIO_WINDOW_INVALID' });
   }
   const [{ resolveMasterAudioPath }, { findFfmpeg, runFfmpegProcess }] = await Promise.all([
-    import('../musicVideo/render.js'), import('../../lib/ffmpeg.js'),
+    import('../musicVideo/masterAudioPath.js'), import('../../lib/ffmpeg.js'),
   ]);
   const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
   const audioDependencies = captureMusicVideoEvidence(project, { sceneIds: [], composition: false });

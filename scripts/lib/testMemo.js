@@ -26,7 +26,8 @@
  * `DIRECTORY_INPUT_LIMIT`; past it, a tree that is only read as data is taken
  * from the repository listing instead, `dataTree`); for a real-browser test,
  * every directory the test file hands to a dev server, bundler or static
- * server (`handedDirs`); the installed version of every package the
+ * server (`handedDirs`), or for the recorded key only what its fixture's
+ * Vite server served from it (`servedTree`, #17616); the installed version of every package the
  * members reach; the sibling imports of a Python sidecar; the version of an
  * external program a member reaches (`TEST_MEMO_TOOLS`); the workspace's
  * Vitest configuration closure and manifest, less the test-selection modules

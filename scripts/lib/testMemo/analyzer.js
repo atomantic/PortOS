@@ -9,10 +9,11 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { FIXTURE_OWNERS, getAlwaysRunTests } from '../ciPlanRules.js';
+import { BROWSER_SERVED_SHARED_INPUTS } from '../browserServedFiles.js';
 import { isGuardTest } from '../guardScanners.js';
 import {
-  DIRECTORY_INPUT_LIMIT, GIT_PACKAGE, GUARD_SUFFIX_REASON, IGNORED_INPUT_PREFIXES, JS_EXT, RECORD_DIGEST_LENGTH, SKIP_TREE_DIRS,
-  TEST_MEMO_ENV, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SELECTION_MODULES, WORKSPACE_SETUP_ENTRIES,
+  DIRECTORY_INPUT_LIMIT, GIT_PACKAGE, GUARD_SUFFIX_REASON, IGNORED_INPUT_PREFIXES, JS_EXT, RECORD_DIGEST_LENGTH,
+  SKIP_TREE_DIRS, TEST_MEMO_ENV, TEST_MEMO_NEVER, UNRECORDED_SERVER_CALL, WORKSPACE_BASE_INPUTS, WORKSPACE_SELECTION_MODULES, WORKSPACE_SETUP_ENTRIES,
 } from './constants.js';
 import { collectBindings, evaluate, literalExports } from './evaluator.js';
 import { extractFileFacts } from './fileFacts.js';
@@ -29,6 +30,7 @@ const sha256 = (data) => createHash('sha256').update(data).digest('hex');
  */
 const gitRuleApplies = (rel, testRel) => rel === testRel || rel.startsWith('scripts/');
 
+const outsideRepository = (rel) => rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel);
 const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix));
 const localState = (target) => target === 'data' || target.startsWith('data/');
 const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
@@ -224,6 +226,90 @@ function foldDataTree(into, dir, data) {
   for (const file of data.files) into.inputs.add(file);
   for (const missing of data.absent) into.absent.add(missing);
   for (const [name, version] of data.packages) if (!into.dataPackages.has(name)) into.dataPackages.set(name, version);
+}
+
+const SERVED_ROOT_MANIFESTS = ['package.json', 'package-lock.json', 'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs'];
+const CSS_REFERENCE = /@(?:import|plugin|config|reference)\s+(?:url\(\s*(['"]?)([^'")\s]+)\1\s*\)|(['"])([^'"]+)\3)/g;
+
+/** The files a CSS file pulls in by a relative `@import`/`@plugin`/`@config`/`@reference`, which no request names. */
+function cssReferences(a, rel) {
+  const text = a.fs.read(rel)?.toString('utf8') ?? '';
+  const out = [];
+  for (const [, , unquoted, , quoted] of text.matchAll(CSS_REFERENCE)) {
+    const spec = unquoted ?? quoted;
+    if (!spec.startsWith('.')) continue;
+    const target = normalizeRel(posix.join(posix.dirname(rel), spec.replace(/[?#].*$/, '')));
+    if (!target.startsWith('..') && a.fs.kind(target) === 'file') out.push(target);
+  }
+  return out;
+}
+
+/**
+ * What a handed directory contributes when the green run recorded what the
+ * browser fixture's Vite server actually served from it (#17616), in place
+ * of `dataTree`'s whole tree: every served file (also outside the root: a
+ * client module's `server/lib` import is served through `/@fs/`), what the
+ * served CSS references, the shared inputs no request names
+ * (`BROWSER_SERVED_SHARED_INPUTS`), the root's own direct non-dot files
+ * (configuration a dev server reads from its root), and the manifests and
+ * PostCSS configs of the root and every directory above it (installed
+ * packages are served from outside the repository, so the lockfile stands
+ * for them). Served modules are not walked: as with the recorded key, a
+ * module the run never served cannot change what Chrome rendered, and the
+ * importer that gains an edge to it is itself served, so its bytes move the
+ * key. Their unresolved names and installed versions are kept. The other
+ * inputs (a PostCSS config, theme modules) were never served, so nothing
+ * vouches for what they import: their relative imports are followed whole.
+ */
+function servedTree(a, dir, servedFiles) {
+  const files = new Set();
+  const absent = new Set();
+  const packages = new Map();
+  const served = new Set(servedFiles);
+  const rootFiles = tree(a, dir, /^[^.]/);
+  if (rootFiles === null) return null;
+  const pending = [...served, ...rootFiles];
+  for (const input of BROWSER_SERVED_SHARED_INPUTS[dir] ?? []) {
+    const kind = a.fs.kind(input);
+    if (kind === 'file') pending.push(input);
+    else if (kind === 'dir') pending.push(...(tree(a, input) ?? listedTree(a, input) ?? []));
+  }
+  for (let at = dir; ; at = posix.dirname(at)) {
+    const base = at === '.' ? '' : at;
+    for (const name of SERVED_ROOT_MANIFESTS) {
+      const rel = base === '' ? name : `${base}/${name}`;
+      if (a.fs.kind(rel) === 'file') pending.push(rel);
+    }
+    if (base === '') break;
+  }
+  while (pending.length) {
+    const rel = pending.pop();
+    if (files.has(rel)) continue;
+    files.add(rel);
+    if (rel.endsWith('.css')) { pending.push(...cssReferences(a, rel)); continue; }
+    if (!JS_EXT.test(rel)) continue;
+    const f = factsFor(a, rel);
+    if (!served.has(rel)) pending.push(...f.edgeTargets);
+    for (const missing of f.absent) absent.add(missing);
+    for (const [name, version] of f.packages) packages.set(name, version);
+  }
+  return { files, absent, packages };
+}
+
+const IMPORT_GLOB = /\bimport\.meta\.glob/;
+
+/**
+ * The served files a record vouches for under `dir`, or null when `dir` must
+ * be keyed whole: no record names it, the test serves or bundles through a
+ * call of its own (`UNRECORDED_SERVER_CALL`) the fixture's recorder never
+ * saw, or a served module expands `import.meta.glob`, whose matches a new
+ * file joins without changing any served byte.
+ */
+function servedFilesFor(a, testRel, served, dir) {
+  if (!served || !served.roots.includes(dir) || served.files.some(outsideRepository)) return null;
+  if (UNRECORDED_SERVER_CALL.test(a.fs.read(testRel)?.toString('utf8') ?? '')) return null;
+  const globs = served.files.some((rel) => JS_EXT.test(rel) && IMPORT_GLOB.test(a.fs.read(rel)?.toString('utf8') ?? ''));
+  return globs ? null : served.files;
 }
 
 /** Every file named `name` anywhere in the repository (one cached walk, same skips as `tree`). */
@@ -536,8 +622,10 @@ function addPath(r, target, walk, read = false) {
  * An install directory stands for its manifest and lockfile. Build output
  * and caches are never inputs, so a suite that serves one fails closed:
  * what it renders was made from sources this key would not see.
+ * `servedFiles` (`servedFilesFor`) narrows the tree to what the recorded
+ * run served (`servedTree`); without it the whole tree is keyed.
  */
-function addHandedDir(a, dir, own, into) {
+function addHandedDir(a, dir, own, into, servedFiles = null) {
   if (dir === '') return 'hands the repository root to a tool';
   if (underGit(dir)) return 'reads repository state under .git';
   if (localState(dir)) return `reads machine-local state (${dir})`;
@@ -551,9 +639,10 @@ function addHandedDir(a, dir, own, into) {
   }
   if (ignoredInput(dir)) return `hands build output or a cache to a tool: ${dir}`;
   if (own.nativeUnresolved) return `hands ${dir} to a tool and has a non-literal require()`;
-  const data = dataTree(a, dir);
+  const data = servedFiles ? servedTree(a, dir, servedFiles) : dataTree(a, dir);
   if (data === null) return `directory input too large: ${dir}`;
   foldDataTree(into, dir, data);
+  if (servedFiles) into.servedRoots?.add(dir);
   return null;
 }
 
@@ -580,14 +669,15 @@ function reachesChrome(a, roots, walk) {
 }
 
 /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
-function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = true }) {
+function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = true, served = null }) {
   const g = {
     members: new Set(),
     inputs: new Set(),
     absent: new Set(),
     packageVersions: new Map(),
     dataPackages: new Map(),
-    trees: new Set(), // directories keyed whole (`dataTree`)
+    trees: new Set(), // directories keyed whole (`dataTree`) or by what a recorded run served (`servedTree`)
+    servedRoots: new Set(), // the handed directories keyed by `servedTree`
     tools: new Set(),
     unresolvedEdges: [],
     unresolvedInputs: [],
@@ -621,10 +711,10 @@ function gather(a, roots, { walk, testRel = null, stop = null, followMockOnly = 
   // reads for it, none of which the module runner records. Every directory
   // the test file hands to such a tool is therefore an input, whole. Every
   // other test keeps the older reading (a directory passed along is a value).
-  if (testRel !== null && g.members.has(testRel) && reachesChrome(a, roots, walk)) addBrowserInputs(a, g, testRel);
+  if (testRel !== null && g.members.has(testRel) && reachesChrome(a, roots, walk)) addBrowserInputs(a, g, testRel, served);
   for (const [name, version] of g.dataPackages) if (!g.packageVersions.has(name)) g.packageVersions.set(name, version);
-  const { members, inputs, absent, packageVersions: packages, tools, trees, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git } = g;
-  return { members, inputs, absent, packages, tools, trees, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git };
+  const { members, inputs, absent, packageVersions: packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git } = g;
+  return { members, inputs, absent, packages, tools, trees, servedRoots, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git };
 }
 
 /** Fold one closure member's own facts into the gathering `g`. */
@@ -707,11 +797,11 @@ function reportVoidedTrusts(a, g) {
   }
 }
 
-function addBrowserInputs(a, g, testRel) {
+function addBrowserInputs(a, g, testRel, served) {
   const own = factsFor(a, testRel);
   for (const problem of own.handedProblems) g.unresolvedInputs.push(`${testRel}: ${problem}`);
   for (const dir of own.handedDirs) {
-    const problem = addHandedDir(a, dir, own, g);
+    const problem = addHandedDir(a, dir, own, g, servedFilesFor(a, testRel, served, dir));
     if (problem) g.unresolvedInputs.push(`${testRel}: ${problem}`);
   }
 }
@@ -803,6 +893,8 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   // Suites that key the same tree from inside it hash the same file set, and an
   // entry names one test: without this line they would overwrite each other's entry.
   if (gathered.trees.size) lines.push(`test ${testRel}`);
+  // A served-narrowed key never equals the whole-tree key of the same inputs.
+  for (const dir of [...(gathered.servedRoots ?? [])].sort()) lines.push(`served ${dir}`);
   const files = new Set([...gathered.members, ...gathered.inputs, ...extra.inputs, ...snapshotInputs(a, testRel), ...baseClosure.files]);
   for (const rel of [...files].sort()) {
     const digest = fileHash(a, rel);
@@ -844,7 +936,11 @@ const FULL = 2;
  * import that could evaluate it. Only a record whose members all still exist gets here (the
  * recorded key fails closed on a missing one).
  *
- * @param {{ modules: string[], digests: string[] }} record
+ * A handed directory the record's served files vouch for counts by those
+ * files (`servedTree`), so an edit to a page the fixture never served does
+ * not select it; any other handed directory counts whole.
+ *
+ * @param {{ modules: string[], digests: string[], served?: { roots: string[], files: string[] }|null }} record
  * @returns {{ reach: Set<string>, failClosed: string|null }}
  */
 function recordedReach(a, testRel, record) {
@@ -853,7 +949,9 @@ function recordedReach(a, testRel, record) {
   // The directories a real-browser test hands to a tool (`gather`); a problem there already failed the recorded key.
   const own = factsFor(a, testRel);
   if (reachesChrome(a, [testRel, ...record.modules], false)) {
-    for (const dir of own.handedDirs) addHandedDir(a, dir, own, { inputs: reach, absent: new Set(), dataPackages: new Map() });
+    for (const dir of own.handedDirs) {
+      addHandedDir(a, dir, own, { inputs: reach, absent: new Set(), dataPackages: new Map() }, servedFilesFor(a, testRel, record.served, dir));
+    }
   }
   const walked = new Map(); // rel -> highest mode walked; a wider later visit re-walks it
   const stack = [testRel, ...record.modules].map((rel) => ({ rel, mode: NARROW }));
@@ -893,7 +991,9 @@ function recordedReach(a, testRel, record) {
  * (aligned with `recorded`, from a v2 record) also narrows related
  * selection to `recordedReach` when the recorded key is memoizable — the
  * gate the record was written under, so selection never trusts a record
- * the memo itself would not.
+ * the memo itself would not. `served` (`{ roots, files }`, from the same
+ * record) is what a real-browser run's fixture served from each root; it
+ * narrows the recorded key and reach of a handed root (`servedTree`).
  *
  * The recorded verdict and the narrowing are computed first and eagerly.
  * The floor verdict and the static closure (`closure`, `inputs`,
@@ -908,11 +1008,11 @@ function recordedReach(a, testRel, record) {
  *
  * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, inputs: Set<string>, edgesResolved: boolean, hasOpenReads: boolean, narrowed: object|null }}
  */
-function analyzeTest(a, testRel, { baseClosure, recorded = null, digests = null }) {
+function analyzeTest(a, testRel, { baseClosure, recorded = null, digests = null, served = null }) {
   const fixtures = fixtureInputs(a, testRel);
-  const recordedVerdict = recorded === null ? null : recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure);
+  const recordedVerdict = recorded === null ? null : recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure, served);
   const narrowed = recordedVerdict?.memoizable && Array.isArray(digests) && digests.length === recorded.length
-    ? recordedReach(a, testRel, { modules: recorded, digests })
+    ? recordedReach(a, testRel, { modules: recorded, digests, served })
     : null;
   let closure = null;
   let floor = null;
@@ -928,10 +1028,10 @@ function analyzeTest(a, testRel, { baseClosure, recorded = null, digests = null 
   };
 }
 
-function recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure) {
-  const outside = recorded.find((rel) => rel.startsWith('../') || rel.startsWith('/') || /^[A-Za-z]:/.test(rel));
+function recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure, served) {
+  const outside = recorded.find(outsideRepository);
   if (outside !== undefined) return { key: null, memoizable: false, reason: `loaded a module outside the repository: ${outside}`, reasons: [] };
-  const gathered = gather(a, new Set([testRel, ...recorded]), { walk: false, testRel });
+  const gathered = gather(a, new Set([testRel, ...recorded]), { walk: false, testRel, served });
   // A record missing a setup entry (a per-file environment pragma, a
   // Vitest that stopped recording them) keeps the full static base.
   const base = baseClosure.recorded?.entries.every((rel) => gathered.members.has(rel)) ? baseClosure.recorded : baseClosure;
@@ -942,13 +1042,16 @@ function recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure) {
  * Keys for `testFiles` (repo-relative posix paths) in one workspace.
  * `records` maps a test to the module list its last green run loaded.
  * `digests` maps a test to that record's per-module digests (a v2 record),
- * which lets related selection narrow it.
+ * which lets related selection narrow it. `served` maps a test to the files
+ * its real-browser fixture served (`analyzeTest`).
  */
-export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map() }) {
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map(), served = new Map() }) {
   const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles });
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
-  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null, digests: digests.get(test) ?? null }));
+  for (const test of testFiles) {
+    out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null, digests: digests.get(test) ?? null, served: served.get(test) ?? null }));
+  }
   return out;
 }
 

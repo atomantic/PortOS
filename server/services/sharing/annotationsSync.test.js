@@ -43,7 +43,7 @@ vi.mock('./annotationIdentity.js', () => ({
 }));
 
 vi.mock('../mediaAnnotations.js', () => ({
-  onLocalAnnotationChange: vi.fn(),
+  onLocalAnnotationChange: vi.fn(() => vi.fn()),
   listLocalAuthorAnnotations: vi.fn(async () => ({})),
 }));
 
@@ -397,6 +397,31 @@ describe('sharing/annotationsSync.listBucketAssetKeys cache', () => {
   });
 });
 
+
+describe('sharing/annotationsSync lifecycle', () => {
+  it('detaches the annotation listener and cancels the debounce on shutdown', async () => {
+    const { onLocalAnnotationChange, listLocalAuthorAnnotations } = await import('../mediaAnnotations.js');
+    vi.useFakeTimers();
+    try {
+      svc.__resetAnnotationsSyncForTests();
+      const callsBefore = onLocalAnnotationChange.mock.calls.length;
+      svc.initAnnotationsSync();
+      svc.initAnnotationsSync();
+      expect(onLocalAnnotationChange.mock.calls.length).toBe(callsBefore + 1);
+      const unsub = onLocalAnnotationChange.mock.results.at(-1).value;
+      listLocalAuthorAnnotations.mockClear();
+      svc.shutdownAnnotationsSync();
+      expect(unsub).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(listLocalAuthorAnnotations).not.toHaveBeenCalled();
+      svc.initAnnotationsSync();
+      expect(onLocalAnnotationChange.mock.calls.length).toBe(callsBefore + 2);
+    } finally {
+      svc.__resetAnnotationsSyncForTests();
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('sharing/annotationsSync event flush', () => {
   it('contains a failed annotation read without publishing tombstones, then retries on the next event', async () => {

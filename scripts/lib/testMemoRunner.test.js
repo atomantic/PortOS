@@ -54,6 +54,43 @@ describe('planTestMemo and recordTestMemo', () => {
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
   });
 
+  // #17616: a real-Chromium suite's record carries what its fixture served, so an
+  // unrelated client page neither selects it nor misses its memo entry.
+  it('records what a browser fixture served and narrows the suite to it', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-served-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-served-memo-store-'));
+    const view = 'server/lib/view.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+      'client/package.json': '{"name":"client"}',
+      'client/src/index.css': '@import "tailwindcss";\n',
+      'client/src/Panel.jsx': 'export const Panel = 1;\n',
+      'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 1;\n',
+      [view]: ["import { it } from 'vitest';", "import { chromium } from 'playwright-core';",
+        "const client = join(import.meta.dirname, '../../client');",
+        'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: () => ({ configFile: false, root: client }) });',
+        "it('renders', () => {});"].join('\n'),
+    });
+    const tests = () => ['lib/view.test.js'];
+    const full = plan({ listTests: tests, repoFiles: [view] });
+    const served = new Map([[view, { roots: ['client'], files: ['client/src/Panel.jsx'] }]]);
+    const { written } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed: [view],
+      dependencies: new Map([[view, [view]]]), served, source: 'ci', commit: 'abc' });
+    expect(written).toBeGreaterThanOrEqual(1);
+    expect(readMemoRecord(memoDir, 'server', view).served).toEqual(served.get(view));
+
+    const related = (source) => plan({ mode: 'related', listTests: tests, repoFiles: [], repoSources: [source] });
+    writeFileSync(join(root, 'client/src/pages/HtmlPages.jsx'), 'export const HtmlPages = 2;\n');
+    expect(related('client/src/pages/HtmlPages.jsx').selected).toEqual([]);
+    expect(plan({ listTests: tests, repoFiles: [view] }).skipped).toEqual([{ test: view, via: 'recorded' }]);
+    for (const [rel, text] of [['client/src/Panel.jsx', 'export const Panel = 2;\n'], ['client/src/index.css', '@import "tailwindcss";\n.x {}\n']]) {
+      writeFileSync(join(root, rel), text);
+      expect(related(rel).selected, rel).toEqual([view]);
+      expect(plan({ listTests: tests, repoFiles: [view] }).run, rel).toEqual([view]);
+    }
+  });
+
   it('keeps the layering guard selected and executable after a cached pass when an unrelated lib file gains an upward import', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-layering-memo-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-layering-memo-store-'));
@@ -159,7 +196,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(written).toBe(2);
     // A v2 record: each loaded module's digest, so related selection can narrow it.
     expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual({ modules: ['server/lib/a.js', 'server/lib/a.test.js'],
-      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)) });
+      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)), served: null });
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/a.test.js').floor.key, { test: 'server/lib/a.test.js', workspace: 'server' })).toMatchObject({ source: 'local', commit: 'abc' });
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/b.test.js').floor.key, { test: 'server/lib/b.test.js', workspace: 'server' })).toBeNull();
@@ -470,7 +507,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(dependencies.has(idle)).toBe(false);
     expect(record(seeded)).toEqual({ written: 2, unrecorded: [] });
     // Stored without digests: a filtered record must never narrow related selection for a run that skips nothing.
-    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null });
+    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null, served: null });
     expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
 
     // The entry vouches for this filter only: no filter, or another one, runs the file.

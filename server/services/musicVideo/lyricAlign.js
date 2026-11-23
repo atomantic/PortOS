@@ -95,7 +95,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     separateVocals: async (...args) => (await import('./vocalSeparation.js')).separateProjectVocals(...args),
     stemOfOldSong: async (record) => {
       if (!record.vocalStemFilename || !record.vocalStemMasterFilename) return false;
-      const { resolveMasterAudioPath } = await import('./render.js');
+      const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
       const { vocalStemMasterChanged } = await import('./vocalStem.js');
       return vocalStemMasterChanged(record, await resolveMasterAudioPath(record));
     },

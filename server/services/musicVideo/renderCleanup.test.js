@@ -37,7 +37,7 @@ vi.mock('../moodBoard/db.js', () => {
   return { listBoards, withBoardMediaReferences: async work => work(await listBoards()) };
 });
 vi.mock('../mediaAssetIndex/index.js', () => ({ unindexVideo: vi.fn(async () => {}) }));
-vi.mock('./render.js', () => ({ isProjectRenderActive: () => state.active }));
+vi.mock('./renderActivityState.js', () => ({ isProjectRenderActive: () => state.active }));
 vi.mock('./shotSegments.js', () => ({
   assertSegmentCleanupIdle: vi.fn(), cleanupShotSegments: vi.fn(async () => {}),
   getSegmentCleanup: async () => ({ stale: [], unusedLooks: [] }),

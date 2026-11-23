@@ -7,7 +7,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('mv-vocal-backup-'),
 }));
-vi.mock('./render.js', () => ({ resolveMasterAudioPath: async () => '/synthetic/master.wav' }));
+vi.mock('./masterAudioPath.js', () => ({ resolveMasterAudioPath: async () => '/synthetic/master.wav' }));
 vi.mock('../../lib/ffmpeg.js', async original => ({ ...await original(), probeVideoDuration: vi.fn(async () => 10) }));
 
 const { PATHS } = await import('../../lib/paths.js');

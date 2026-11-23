@@ -11,6 +11,8 @@
  * - Merged-branch cleanup: branch reconciliation imports `git.js`.
  * - Media runtimes: Topaz/LTX upscale, stitch, vertical reframe and LoRA
  *   training import `mediaJobQueue/index.js` to enqueue or read their jobs.
+ * - Music Video boot recovery: `render.js` and `excerptRender.js` are the
+ *   render pipeline. Boot calls them only to resume interrupted jobs (#17692).
  *
  * This leaf must import nothing. Every reader fails loudly when its slot is
  * empty: a process that reaches these consumers without boot registration is a
@@ -62,4 +64,23 @@ export function loadMediaRuntimeModule(name) {
   const load = mediaRuntimes?.[name];
   if (!load) return Promise.reject(notRegistered(`Media runtime "${name}"`));
   return load();
+}
+
+let musicVideoRecovery = null;
+
+/**
+ * @param {{ recoverRenders: () => Promise<void>, recoverExcerpts: () => Promise<void> }} loaders
+ * Each loader imports its pipeline module and runs that module's boot recovery.
+ */
+export function registerMusicVideoRecovery(loaders) {
+  if (typeof loaders?.recoverRenders !== 'function' || typeof loaders?.recoverExcerpts !== 'function') {
+    throw new Error('Music Video recovery loaders missing: recoverRenders, recoverExcerpts');
+  }
+  musicVideoRecovery = loaders;
+}
+
+/** Interrupted renders must be marked, so an empty slot throws. */
+export function requireMusicVideoRecovery() {
+  if (!musicVideoRecovery) throw notRegistered('Music Video recovery');
+  return musicVideoRecovery;
 }

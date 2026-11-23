@@ -5,9 +5,7 @@
  * same way.
  */
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS } from '../../lib/fileUtils.js';
-import { safeUnder } from '../../lib/ffmpeg.js';
-import { getTrack } from '../tracks/index.js';
+import { resolveMasterAudioPath } from './masterAudioPath.js';
 import { setProjectAnalysis, setProjectSections } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { analyzeAudioFile } from './audioAnalysis.js';
@@ -15,26 +13,13 @@ import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 import { sectionsFromLyricSpans } from '../../lib/musicVideo/musicVideoSections.js';
 
 /**
- * Resolve a project's source audio to an absolute path under data/music/. The
- * filename comes from the linked track or the uploaded-audio field; both are
- * validated as safe basenames so a tampered record can't escape the directory.
+ * Resolve a project's source audio to an absolute path under data/music/
+ * without requiring it on disk: the analyzer reports an unreadable file itself.
  */
-export async function resolveProjectAudioPath(project) {
-  let filename = null;
-  if (project.trackId) {
-    const track = await getTrack(project.trackId);
-    if (!track) throw new ServerError('Linked track not found', { status: 404, code: 'NOT_FOUND' });
-    filename = track.audioFilename;
-  } else if (project.uploadedAudioFilename) {
-    filename = project.uploadedAudioFilename;
-  }
-  if (!filename) {
-    throw new ServerError('Project has no audio to analyze — set a track or upload audio first', { status: 400, code: 'NO_AUDIO' });
-  }
-  const safe = safeUnder(PATHS.music, filename);
-  if (!safe) throw new ServerError('Invalid audio filename', { status: 400, code: 'VALIDATION_ERROR' });
-  return safe;
-}
+export const resolveProjectAudioPath = (project) => resolveMasterAudioPath(project, {
+  requireExists: false,
+  noAudioMessage: 'Project has no audio to analyze — set a track or upload audio first',
+});
 
 /**
  * Analyze the project's audio and cache the result on it. Timed lyrics with

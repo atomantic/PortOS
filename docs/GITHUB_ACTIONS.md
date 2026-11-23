@@ -695,6 +695,7 @@ when its measured import reach (`serverReach.selected` / `clientReach.selected`,
 the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
 runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
 (a shared module such as `client/src/services/apiCore.js`, #17456).
+4 Chrome client suites do too ([why](./TEST_MEMO.md#shards)).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.

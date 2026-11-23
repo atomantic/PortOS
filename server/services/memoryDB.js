@@ -30,6 +30,24 @@ import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
+// Every column rowToMemory reads except `embedding`. Batch peeks omit that
+// pgvector value unless a caller asks for it; parsing 768 floats per row is
+// the cost these reads exist to avoid.
+const MEMORY_READ_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary, category, tags,
+  source_task_id, source_agent_id, source_app_id, embedding_model, confidence, importance, access_count, last_accessed,
+  created_at, updated_at, expires_at, status, origin_instance_id`;
+
+function memoryIdList(ids) {
+  const unique = [];
+  const seen = new Set();
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !UUID_RE.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
 /**
  * Convert a database row to the memory object format matching the file-based API
  */
@@ -279,6 +297,27 @@ export async function peekMemory(id) {
   return rowToMemory(result.rows[0]);
 }
 
+/** One SELECT for many ids. Embedding stays out unless includeEmbedding is set. */
+export async function peekMemories(ids, { includeEmbedding = false } = {}) {
+  const unique = memoryIdList(ids);
+  if (unique.length === 0) return [];
+  const columns = includeEmbedding ? `${MEMORY_READ_COLUMNS}, embedding` : MEMORY_READ_COLUMNS;
+  const result = await query(`SELECT ${columns} FROM memories WHERE id = ANY($1::uuid[])`, [unique]);
+  const byId = new Map(result.rows.map((row) => [row.id, rowToMemory(row)]));
+  return unique.flatMap((id) => byId.has(id) ? [byId.get(id)] : []);
+}
+
+/** One UPDATE that increments access stats. Missing ids are skipped. */
+export async function recordMemoryAccess(ids) {
+  const unique = memoryIdList(ids);
+  if (unique.length === 0) return 0;
+  const result = await query(
+    'UPDATE memories SET access_count = access_count + 1, last_accessed = NOW() WHERE id = ANY($1::uuid[])',
+    [unique]
+  );
+  return result.rowCount ?? 0;
+}
+
 export async function getMemory(id) {
   const result = await query('SELECT * FROM memories WHERE id = $1', [id]);
   if (result.rows.length === 0) return null;
@@ -373,6 +412,14 @@ function buildMemoryFilterWhere(options = {}) {
     params.push(options.sourceAgentId);
   }
 
+  if (options.sourceTaskId !== undefined) {
+    if (options.sourceTaskId === null) conditions.push('source_task_id IS NULL');
+    else {
+      conditions.push(`source_task_id = $${paramIdx++}`);
+      params.push(options.sourceTaskId);
+    }
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
 }
@@ -390,9 +437,14 @@ export async function getMemories(options = {}) {
   const { where, params } = buildMemoryFilterWhere(options);
   let paramIdx = params.length + 1;
 
-  // Count total
-  const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
-  const total = parseInt(countResult.rows[0].total, 10);
+  // Callers that only need the page (mind wakes) pass includeCount: false so
+  // the list does not scan the table a second time for COUNT(*).
+  const includeCount = options.includeCount !== false;
+  let total = null;
+  if (includeCount) {
+    const countResult = await query(`SELECT COUNT(*) as total FROM memories ${where}`, params);
+    total = parseInt(countResult.rows[0].total, 10);
+  }
 
   // Sort and paginate
   const sortBy = {

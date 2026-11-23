@@ -109,27 +109,8 @@
  *   flow may offer (`['tui']` for a shell launcher, `['api']` for a streaming
  *   caller). Defaults to `selectionPolicy.modes`; omit both for no restriction.
  */
-import { request } from '../services/apiCore.js';
-import { saveExecutionOptionSelection } from '../services/apiProviders.js';
-import { useAsyncAction } from '../hooks/useAsyncAction.js';
-import useMounted from '../hooks/useMounted.js';
-import { useEffect, useId, useRef, useState } from 'react';
-import {
-  COMPOSE_OPTION_VALUE,
-  effectiveModelFor,
-  effortLevelsForProvider,
-  effortSurvivingModel,
-  filterHardwareCompatibleProviderModels,
-  filterSelectableModels,
-  isProviderHardwareCompatible,
-  isProviderModelHardwareCompatible,
-  providerModelList,
-  selectableProviders,
-  sortProviderModels,
-  localToolUseHint,
-  withModelCapabilityOptionLabel,
-} from '../utils/providers.js';
-import { groupProvidersByHarness } from '../utils/providerHarnesses.js';
+import { useId, useState } from 'react';
+import { COMPOSE_OPTION_VALUE, effectiveModelFor, localToolUseHint, withModelCapabilityOptionLabel } from '../utils/providers.js';
 import { isCompositeProviderId } from '../utils/providerRef.js';
 import useToolUseModelIds from '../hooks/useToolUseModelIds.js';
 import useVisionModelIds from '../hooks/useVisionModelIds.js';
@@ -138,306 +119,114 @@ import ExecutionOptionsSelect from './providers/ExecutionOptionsSelect.jsx';
 import EffortSelect from './cos/EffortSelect.jsx';
 import ProviderComposePopover from './providers/ProviderComposePopover.jsx';
 import ToolUseWarning from './ui/ToolUseWarning.jsx';
+import {
+  capabilityOptions,
+  deriveProviderSelectorModel,
+  emptyProviderLabel,
+  effortAfterModelChange,
+  modelOption,
+  modelOptionState,
+  providerOptionState,
+} from './providers/providerSelectorModel.js';
+import { useProviderSelectorRouting, useSelectablePresets } from './providers/useProviderSelectorRouting.js';
 
 const SELECT_CLASS =
   'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
 
-// Normalize a model entry (string or `{ id, name }`) to `{ value, label }`,
-// or null for a nullish entry so the caller can skip it (a provider with an
-// empty/sparse model list shouldn't render a blank option or crash).
-function modelOption(m) {
-  if (m == null) return null;
-  if (typeof m === 'string') return { value: m, label: m };
-  return { value: m.id, label: m.name || m.id };
+function ProviderOption({ provider, providerAllowed }) {
+  const { unavailable, suffix } = providerOptionState(provider, providerAllowed);
+  return <option value={provider.id} disabled={unavailable}>{provider.name}{suffix}</option>;
 }
 
-export default function ProviderModelSelector({
-  providers,
-  selectedProviderId,
-  effectiveProviderId,
-  selectedModel = '',
-  availableModels = [],
-  onProviderChange,
-  onModelChange,
-  id: idProp,
-  'aria-describedby': describedBy,
-  label = 'Provider',
-  modelLabel = 'Model',
-  disabled = false,
-  loading = false,
-  modelDisabled = false,
-  compact = false,
-  dense = false,
-  emptyProviderOption,
-  emptyModelOption,
-  alwaysShowModel = false,
-  includeDefaultModel = false,
-  layout = 'row',
-  highlightToolUse = false,
-  highlightVision = false,
-  effort,
-  onEffortChange,
-  executionOptions,
-  onExecutionOptionsChange,
-  selectionPolicy,
-  compose = true,
-  composeMethods,
-}) {
+function ModelOption({ model, provider, modelAllowed, capability }) {
+  const opt = modelOption(model);
+  if (!opt) return null;
+  const { unavailable, suffix } = modelOptionState(provider, model, opt.value, modelAllowed);
+  const label = capability ? withModelCapabilityOptionLabel(opt.value, opt.label, provider, capability) : opt.label;
+  return <option value={opt.value} disabled={unavailable}>{label}{suffix}</option>;
+}
+
+export default function ProviderModelSelector(props) {
+  const {
+    selectedProviderId, effectiveProviderId, selectedModel = '', availableModels = [],
+    onProviderChange, onModelChange, id: idProp, 'aria-describedby': describedBy,
+    label = 'Provider', modelLabel = 'Model', disabled = false, loading = false, modelDisabled = false,
+    compact = false, dense = false, emptyProviderOption, emptyModelOption,
+    alwaysShowModel = false, includeDefaultModel = false, compose = true, composeMethods,
+    layout = 'row', highlightToolUse = false, highlightVision = false,
+    effort, onEffortChange, executionOptions, onExecutionOptionsChange, selectionPolicy,
+  } = props;
   const generatedProviderSelectId = useId();
   const providerSelectId = idProp || generatedProviderSelectId;
   const modelSelectId = useId();
   const effortSelectId = useId();
   const [composeOpen, setComposeOpen] = useState(false);
-  // Presets minted through the popover's "Save as preset" this session. The
-  // caller's `providers` list predates them, so they are carried here until
-  // the caller refetches — otherwise the freshly selected id would render as
-  // an unknown value the moment the popover closed.
-  const [savedPresets, setSavedPresets] = useState([]);
-  // A composed/minted route's model and effort, waiting for the caller to
-  // reflect its provider id (see `selectRoute`).
-  const [pendingRoute, setPendingRoute] = useState(null);
-  const callbacksRef = useRef({ onProviderChange, onModelChange, onEffortChange, onExecutionOptionsChange });
-  callbacksRef.current = { onProviderChange, onModelChange, onEffortChange, onExecutionOptionsChange };
   const providerAllowed = selectionPolicy?.provider;
   const modelAllowed = selectionPolicy?.model;
   const effortAllowed = selectionPolicy?.effort;
-  const callerProviders = Array.isArray(providers) ? providers : [];
-  const localProviderList = [
-    ...callerProviders,
-    ...savedPresets.filter((preset) => !callerProviders.some((p) => p?.id === preset.id)),
-  ];
-  // Resolve against the effective provider (the pin, or what a blank selection
-  // falls back to) — everything below describes what a run would actually use.
-  const lookupId = effectiveProviderId ?? selectedProviderId;
-  const [resolvedPreset, setResolvedPreset] = useState(null);
-  const needsPreset = typeof lookupId === 'string' && lookupId.startsWith('selection-') && !isCompositeProviderId(lookupId) && !localProviderList.some((provider) => provider.id === lookupId);
-  useEffect(() => {
-    let active = true;
-    if (needsPreset) request(`/providers/${encodeURIComponent(lookupId)}`, { silent: true })
-      .then((provider) => { if (active) setResolvedPreset({ id: lookupId, provider }); })
-      .catch(() => { if (active) setResolvedPreset({ id: lookupId, provider: { id: lookupId, name: lookupId, enabled: false, unavailableReason: 'not available on this install' } }); });
-    return () => { active = false; };
-  }, [lookupId, needsPreset]);
-  const providerList = needsPreset && resolvedPreset?.id === lookupId
-    ? [...localProviderList, resolvedPreset.provider] : localProviderList;
+
+  const { providerList, lookupId, rememberPreset } = useSelectablePresets(props);
   const listedProvider = providerList.find((p) => p.id === lookupId);
   // A composite the caller's list cannot name is looked up in the shared
-  // catalog — fetched only in that case, so the many preset-only pickers never
-  // pay for it. `resolveRef` is a pure lookup over the fetched catalog.
+  // catalog — fetched only in that case, so preset-only pickers never pay for it.
   const needsCatalog = !listedProvider && isCompositeProviderId(lookupId);
   const catalog = useProviderCatalog(needsCatalog);
   const selectedProvider = listedProvider || (needsCatalog ? catalog.resolveRef(lookupId) : undefined) || undefined;
-  const providerFromCatalog = Boolean(selectedProvider) && !listedProvider;
-  // The record behind the select's own value (the pin itself, not what a blank
-  // one resolves to), for the Custom group below.
-  const selectedRecord = providerList.find((p) => p.id === selectedProviderId)
-    ?? (selectedProvider?.id === selectedProviderId ? selectedProvider : null);
-  // A blank model ("Default model") isn't a no-op: the agent resolver then runs
-  // the provider's own defaultModel — which for an Ollama-backed provider can be
-  // a non-tool model that silently wedges the stage. So evaluate the EFFECTIVE
-  // model (explicit selection, else the provider default) for the warning — and
-  // for the effort ladder, which is per-model on Antigravity.
+  // A blank model ("Default model") runs the provider's own defaultModel, which
+  // can be a non-tool model, so warnings and the effort ladder use the EFFECTIVE model.
   const effectiveModel = effectiveModelFor(selectedProvider, selectedModel);
-  const mounted = useMounted();
-  // Saving a derived selection must not retarget a newer controlled value,
-  // including a model/effort edit that keeps the same provider. Retain a new
-  // scope for every change so switching away and back cannot revive a save.
-  const selectionKey = JSON.stringify([selectedProviderId, lookupId, selectedModel, effectiveModel, effort, executionOptions, Boolean(onExecutionOptionsChange)]);
-  const selectionScope = useRef({ key: selectionKey });
-  if (selectionScope.current.key !== selectionKey) selectionScope.current = { key: selectionKey };
-  const beginSelection = () => {
-    const scope = { key: selectionKey };
-    selectionScope.current = scope;
-    setPendingRoute(null);
-    return scope;
-  };
-  const selectionStillCurrent = (scope) => mounted.current && selectionScope.current === scope;
-  // Authoritative tool-use capability from the backends themselves, unioned into
-  // the id regex so a tool-capable family the regex predates isn't mislabelled.
-  // Gated on `highlightToolUse`, so the many non-agent pickers never pay for the
-  // capability scan; the fetch is module-shared, so a list page rendering one
-  // selector per row still issues a single request.
+  const { beginSelection, handleCompose, composingSelection, handlePresetSaved, changeExecutionOptions, executionOptionsSaving } =
+    useProviderSelectorRouting({
+      selectedProviderId, lookupId, selectedModel, effectiveModel, effort, executionOptions, selectedProvider, rememberPreset,
+      onProviderChange, onModelChange, onEffortChange, onExecutionOptionsChange,
+    });
+
+  // Authoritative capability ids from the backends, gated so non-agent pickers
+  // never pay for the scan. Nothing is asserted until the scan settles
+  // (success or failure) to avoid a flash of false "no known tool use".
   const { idsByProvider: toolUseIdsByProvider, loaded: toolUseLoaded } = useToolUseModelIds(highlightToolUse);
   const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds(highlightVision);
-  // Nothing is asserted until the scan settles (success OR failure). Annotating
-  // mid-fetch would show the exact false "⚠ no known tool use" this union exists
-  // to remove, only for it to vanish a beat later; a failed fetch settles too, so
-  // an unreachable backend degrades to the regex-only labels rather than muting
-  // the annotation forever.
   const annotateToolUse = highlightToolUse && toolUseLoaded;
   const annotateVision = highlightVision && visionLoaded;
   const toolHint = annotateToolUse ? localToolUseHint(effectiveModel, selectedProvider, toolUseIdsByProvider) : null;
-  const toolIncapable = toolHint?.toolCapable === false;
-  // Only offer enabled, hardware-compatible, policy-allowed providers; the
-  // currently-selected provider stays visible whatever its state, so a record
-  // pinned to a now-disabled provider still renders its value instead of
-  // silently blanking the select (`selectableProviders` is the one rule).
-  const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
-  // Presets are grouped by harness; a composite in the list (a hook that
-  // appended the resolved pin) belongs to the "Custom" group instead.
-  const presetGroups = groupProvidersByHarness(visibleProviders.filter((p) => !isCompositeProviderId(p.id)));
-  const selectedComposite = isCompositeProviderId(selectedProviderId)
-    // Unresolvable (catalog unknown, or still loading): keep the raw id on
-    // screen rather than blanking a stored selection.
-    ? selectedRecord ?? { id: selectedProviderId, name: selectedProviderId, unavailableReason: catalog.loading ? null : catalog.error ? 'catalog unavailable' : 'not available on this install' }
-    : null;
-  const allowedComposeMethods = composeMethods ?? selectionPolicy?.modes;
-  // Fail closed under a provider policy the compose flow cannot honor: a
-  // posture/allowlist predicate judges PRESET records, and a composed route
-  // has no such record to judge until the server materializes it. Only a
-  // policy that publishes its execution `modes` (or an explicit
-  // `composeMethods`) says what compose may build.
-  const composePolicyKnown = !providerAllowed || Array.isArray(allowedComposeMethods);
-  const composeEnabled = compose && !loading && composePolicyKnown
-    && (!allowedComposeMethods || allowedComposeMethods.length > 0);
-  // Defaults may be omitted from a provider's browsable catalog. Offer a real
-  // pin as well as the blank inheritance option, including on required forms.
-  const callerModels = Array.isArray(availableModels) ? availableModels : [];
-  // A provider the caller's list doesn't carry brings its own catalog (a
-  // composite's service models, a just-saved preset's list).
-  const catalogModels = callerModels.length === 0 && providerFromCatalog
-    ? filterSelectableModels(providerModelList(selectedProvider).filter(Boolean))
-    : callerModels;
-  const defaultModel = selectedProvider?.defaultModel;
-  const selectableModels = includeDefaultModel && defaultModel
-    && !catalogModels.some((model) => modelOption(model)?.value === defaultModel)
-    ? [defaultModel, ...catalogModels]
-    : catalogModels;
-  const compatibleModels = filterHardwareCompatibleProviderModels(selectableModels, selectedProvider)
-    .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
-  // Keep a configured default visible even when it is a CLI-default sentinel
-  // omitted from the browsable catalog, alongside unavailable saved pins.
-  const preserveSelectedModel = selectedModel && (
-    selectedModel === selectedProvider?.defaultModel
-    || !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
-    || (modelAllowed && !modelAllowed(selectedModel, selectedProvider))
-  );
-  const modelOptions = sortProviderModels(preserveSelectedModel
-    && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
-    ? [selectedModel, ...compatibleModels]
-    : compatibleModels);
-  // A model select with no `onModelChange` is a dead control: its `onChange`
-  // reaches nobody. Provider-only callers keep their own model field (a table
-  // cell, a free-text pin), and a composite's catalog models would otherwise
-  // conjure a second select beside it — so the callback, not the list, is what
-  // decides the select exists at all.
-  const showModel = !!onModelChange && (alwaysShowModel || modelOptions.length > 0);
-  // The effort select is opt-in (`onEffortChange`) AND self-hiding: EffortSelect
-  // renders null for a provider with no effort control, so gate the label+wrapper
-  // on the same predicate or a non-effort provider gets an orphaned label.
-  const effortLevels = effortLevelsForProvider(selectedProvider, effectiveModel);
-  const visibleEffortLevels = effortLevels?.filter(
-    (level) => !effortAllowed || effortAllowed(level, selectedProvider, effectiveModel)
-  );
-  const selectedEffortIsDisallowed = Boolean(
-    effort
-    && effortAllowed
-    && !effortAllowed(effort, selectedProvider, effectiveModel)
-  );
-  const showEffort = !!onEffortChange && Boolean(visibleEffortLevels?.length || selectedEffortIsDisallowed);
-  // Picking a model with NO effort tiers (Antigravity's ladder is per-model) makes
-  // the select above disappear — so clear the effort with it, or the value stays in
-  // state with no UI left to change it and every submit still sends it. Owned here
-  // rather than by each caller so the rule can't be forgotten by the next picker.
+  const capability = capabilityOptions({ annotateToolUse, annotateVision, toolUseIdsByProvider, visionIdsByProvider });
+
+  const derived = deriveProviderSelectorModel({
+    providerList, selectedProviderId, selectedProvider, selectedModel, effectiveModel, availableModels, catalog,
+    providerFromCatalog: Boolean(selectedProvider) && !listedProvider,
+    includeDefaultModel, selectionPolicy, effort, onModelChange, onEffortChange, alwaysShowModel,
+    compose, loading, composeMethods,
+  });
+  const { presetGroups, selectedComposite, composeEnabled, allowedComposeMethods, modelOptions, showModel, showEffort } = derived;
+
   const handleModelChange = (value) => {
     beginSelection();
     onModelChange?.(value);
     if (!onEffortChange || !effort) return;
-    const surviving = effortSurvivingModel(selectedProvider, value, effort);
-    const filteredSurviving = surviving && effortAllowed
-      && !effortAllowed(surviving, selectedProvider, effectiveModelFor(selectedProvider, value))
-      ? ''
-      : surviving;
-    if (filteredSurviving !== effort) onEffortChange(filteredSurviving);
+    const next = effortAfterModelChange({ selectedProvider, model: value, effort, effortAllowed });
+    if (next !== effort) onEffortChange(next);
   };
   // The compose entry is an ACTION, not a value: opening the popover leaves the
-  // controlled value untouched, so cancelling restores the previous selection
-  // for free and no caller ever receives the sentinel.
+  // controlled value untouched, so cancelling restores the previous selection.
   const handleProviderSelect = (value) => {
-    if (value === COMPOSE_OPTION_VALUE) {
-      setComposeOpen(true);
-      return;
-    }
+    if (value === COMPOSE_OPTION_VALUE) { setComposeOpen(true); return; }
     beginSelection();
     onProviderChange(value);
   };
-  // A composed route lands in the caller's existing provider field through
-  // `onProviderChange`; its model and effort follow through the same
-  // callbacks a pick in the sibling selects would use — but only AFTER the
-  // caller reflects the new id. Firing all three in one tick would hand
-  // `onModelChange` to a handler that merges over the caller's CURRENT
-  // provider (`onChange({ ...draft, model })`, `persist(providerId, m)`),
-  // which is still the old one until it re-renders, silently putting the
-  // previous provider back. Waiting for `selectedProviderId` to catch up also
-  // lets the caller's own clearing rule (a provider change resetting the
-  // model) run first and then be overridden by the explicit choice. A caller
-  // that never reflects the id simply never gets the model/effort.
-  const selectRoute = (id, model, routeEffort, options) => {
-    beginSelection();
-    setPendingRoute({ id, model: model || '', effort: routeEffort || '', options });
-    callbacksRef.current.onProviderChange(id);
-  };
-  useEffect(() => {
-    if (!pendingRoute || pendingRoute.id !== selectedProviderId) return;
-    callbacksRef.current.onModelChange?.(pendingRoute.model);
-    callbacksRef.current.onEffortChange?.(pendingRoute.effort);
-    if (pendingRoute.options !== undefined) callbacksRef.current.onExecutionOptionsChange?.(pendingRoute.options);
-    setPendingRoute(null);
-  }, [pendingRoute, selectedProviderId]);
-  // "Use once" passes the composite id; "Save as preset" passes the minted
-  // preset (whose defaults are the composed model and effort) after carrying
-  // it locally until the caller's list catches up.
-  const [handleCompose, composingSelection] = useAsyncAction(async (compositeId, { model, effort: composedEffort, executionOptions: options }) => {
-    const scope = beginSelection();
-    if (!onExecutionOptionsChange && Object.keys(options || {}).length) {
-      const preset = await saveExecutionOptionSelection(compositeId, model, options, { silent: true });
-      if (!selectionStillCurrent(scope)) return;
-      setSavedPresets((previous) => [...previous.filter((entry) => entry.id !== preset.id), preset]);
-      selectRoute(preset.id, model, composedEffort);
-    } else selectRoute(compositeId, model, composedEffort, options);
-  }, { errorMessage: 'Could not save execution selection' });
-  const handlePresetSaved = (preset) => {
-    setSavedPresets((prev) => [...prev.filter((p) => p.id !== preset.id), preset]);
-    selectRoute(preset.id, preset.defaultModel, preset.effort);
-  };
-  const [changeExecutionOptions, executionOptionsSaving] = useAsyncAction(async (options) => {
-    const scope = beginSelection();
-    if (onExecutionOptionsChange) return onExecutionOptionsChange(options);
-    if (!selectedProvider) return;
-    const selection = await saveExecutionOptionSelection(selectedProvider.id, effectiveModel, options, { silent: true });
-    if (!selectionStillCurrent(scope)) return;
-    setSavedPresets((previous) => [...previous.filter((preset) => preset.id !== selection.id), selection]);
-    selectRoute(selection.id, selectedModel, effort);
-  }, { errorMessage: 'Could not save execution options' });
-  const optionFor = (p) => {
-    const hardwareUnavailable = !isProviderHardwareCompatible(p);
-    const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
-    const unavailable = hardwareUnavailable || policyDisallowed || Boolean(p.unavailableReason);
-    const reason = hardwareUnavailable
-      ? ' (unavailable on this machine)'
-      : policyDisallowed ? ' (not permitted here)'
-        : p.unavailableReason ? ` (${p.unavailableReason})` : '';
-    return (
-      <option key={p.id} value={p.id} disabled={unavailable}>
-        {p.name}{reason}
-      </option>
-    );
-  };
-  // Use available container space, including narrow drawers on desktop. Bound
-  // labeled fields so a lone provider does not stretch across the whole page.
+
   // Compact selects wrap by their own container's width, never the viewport: a
-  // field keeps at least 9rem (clamped to the row) so a narrow card puts each
-  // select on its own line instead of clipping the selected label (#11894).
+  // field keeps at least 9rem so a narrow card puts each select on its own line (#11894).
   const rowClass = compact
     ? 'flex flex-wrap items-center gap-2'
     : 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),24rem))] items-start gap-2';
   const fieldClass = compact ? 'flex-1 min-w-[min(100%,9rem)]' : 'flex-1 min-w-0';
-  const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : rowClass;
   const selectClass = dense ? `${SELECT_CLASS} sm:min-h-8 sm:py-1 sm:text-xs` : SELECT_CLASS;
+  const fieldLabel = (htmlFor, text) => !compact && <label htmlFor={htmlFor} className="block text-xs text-gray-500 mb-1">{text}</label>;
+  const optionFor = (p) => <ProviderOption key={p.id} provider={p} providerAllowed={providerAllowed} />;
   return (
-    <div className={wrapperClass}>
+    <div className={layout === 'stacked' ? 'flex flex-col gap-1' : rowClass}>
       <div className={fieldClass}>
-        {!compact && <label htmlFor={providerSelectId} className="block text-xs text-gray-500 mb-1">{label}</label>}
+        {fieldLabel(providerSelectId, label)}
         <select
           id={providerSelectId}
           value={selectedProviderId}
@@ -449,15 +238,12 @@ export default function ProviderModelSelector({
           className={selectClass}
         >
           {/* Rendered even when the caller forces a selection: mid-fetch there
-              is nothing else to offer, and a genuinely empty select reads as the
-              same broken control. */}
+              is nothing else to offer, and a genuinely empty select reads as broken. */}
           {loading
             ? <option value="">Loading providers…</option>
-            : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider?.name && typeof emptyProviderOption === 'string' && !emptyProviderOption.includes(selectedProvider.name) ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
+            : emptyProviderOption != null && <option value="">{emptyProviderLabel({ emptyProviderOption, effectiveProviderId, selectedProvider })}</option>}
           {presetGroups.map((group) => (
-            <optgroup key={group.harnessId} label={group.label}>
-              {group.providers.map(optionFor)}
-            </optgroup>
+            <optgroup key={group.harnessId} label={group.label}>{group.providers.map(optionFor)}</optgroup>
           ))}
           {(selectedComposite || composeEnabled) && (
             <optgroup label="Custom">
@@ -469,7 +255,7 @@ export default function ProviderModelSelector({
       </div>
       {showModel && (
         <div className={fieldClass}>
-          {!compact && <label htmlFor={modelSelectId} className="block text-xs text-gray-500 mb-1">{modelLabel}</label>}
+          {fieldLabel(modelSelectId, modelLabel)}
           <select
             id={modelSelectId}
             value={selectedModel}
@@ -480,43 +266,20 @@ export default function ProviderModelSelector({
             className={selectClass}
           >
             {emptyModelOption != null && <option value="">{selectedProvider?.defaultModel ? `${emptyModelOption} — ${selectedProvider.defaultModel}` : emptyModelOption}</option>}
-            {modelOptions.map(m => {
-              const opt = modelOption(m);
-              if (!opt) return null;
-              const hardwareUnavailable = !isProviderModelHardwareCompatible(selectedProvider, opt.value);
-              const policyDisallowed = Boolean(modelAllowed && !modelAllowed(m, selectedProvider));
-              const unavailable = hardwareUnavailable || policyDisallowed;
-              const label = annotateToolUse || annotateVision
-                ? withModelCapabilityOptionLabel(opt.value, opt.label, selectedProvider, {
-                  toolUseIdsByProvider: annotateToolUse ? toolUseIdsByProvider : null,
-                  visionIdsByProvider: annotateVision ? visionIdsByProvider : null,
-                  includeToolUse: annotateToolUse,
-                  includeVision: annotateVision,
-                })
-                : opt.label;
-              return (
-                <option key={opt.value} value={opt.value} disabled={unavailable}>
-                  {hardwareUnavailable
-                    ? `${label} (unavailable on this machine)`
-                    : policyDisallowed ? `${label} (not permitted here)` : label}
-                </option>
-              );
-            })}
+            {modelOptions.map((m, i) => (
+              <ModelOption key={modelOption(m)?.value ?? i} model={m} provider={selectedProvider} modelAllowed={modelAllowed} capability={capability} />
+            ))}
           </select>
           {/* No remediation link: this selector renders in hosts that aren't
               wrapped in a Router, so the shared warning stays link-free here. */}
-          {toolIncapable && (
+          {toolHint?.toolCapable === false && (
             <ToolUseWarning model={effectiveModel} isProviderDefault={!selectedModel} className="mt-1" />
           )}
         </div>
       )}
       {showEffort && (
         <div className={fieldClass}>
-          {!compact && (
-            <label htmlFor={effortSelectId} className="block text-xs text-gray-500 mb-1">
-              Thinking effort
-            </label>
-          )}
+          {fieldLabel(effortSelectId, 'Thinking effort')}
           <EffortSelect
             id={effortSelectId}
             provider={selectedProvider}
@@ -530,9 +293,9 @@ export default function ProviderModelSelector({
         </div>
       )}
       {selectedProvider && (
-          <ExecutionOptionsSelect fieldClassName={fieldClass} provider={selectedProvider} model={effectiveModel}
-            value={onExecutionOptionsChange ? executionOptions : selectedProvider.executionSourceProviderId ? selectedProvider.executionSelectionOptions ?? selectedProvider.executionOptions : undefined} onChange={changeExecutionOptions}
-            disabled={disabled || loading || executionOptionsSaving || composingSelection || selectedProvider.enabled === false || Boolean(providerAllowed && !providerAllowed(selectedProvider))} className={selectClass} />
+        <ExecutionOptionsSelect fieldClassName={fieldClass} provider={selectedProvider} model={effectiveModel}
+          value={onExecutionOptionsChange ? executionOptions : selectedProvider.executionSourceProviderId ? selectedProvider.executionSelectionOptions ?? selectedProvider.executionOptions : undefined} onChange={changeExecutionOptions}
+          disabled={disabled || loading || executionOptionsSaving || composingSelection || selectedProvider.enabled === false || Boolean(providerAllowed && !providerAllowed(selectedProvider))} className={selectClass} />
       )}
       {composeEnabled && (
         <ProviderComposePopover

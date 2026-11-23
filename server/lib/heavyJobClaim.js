@@ -420,17 +420,54 @@ async function resolveExistingClaim({ claimPath, now, deadline, pidIsAlive, unli
   };
 }
 
+const abortedClaim = () => ({
+  ok: false,
+  aborted: true,
+  holder: null,
+  message: 'The heavy local job was cancelled before it claimed the accelerator.',
+  release: async () => {},
+});
+
+// Wake a retry sleep when the caller aborts. The stock sleeper is a bare timer,
+// so that path clears it; an injected wait (tests) is raced and may run out.
+function waitForInterval(wait, ms, signal) {
+  if (!signal) return wait(ms);
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    let timer;
+    const finish = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    if (wait === sleep) {
+      timer = setTimeout(finish, ms);
+      signal.addEventListener('abort', finish);
+      if (signal.aborted) finish();
+      return;
+    }
+    signal.addEventListener('abort', finish);
+    Promise.resolve(wait(ms)).then(finish, finish);
+  });
+}
+
 /**
  * Claim the machine-local accelerator.
  *
  * A zero timeout refuses immediately, suitable for an interactive Generate
  * action. Background callers may provide a bounded timeout to wait for a
  * currently-running job without silently waiting forever.
+ *
+ * `signal` aborts that wait. An abort before the claim is published returns
+ * `{ ok: false, aborted: true }` and finishes the admission permit. A claim
+ * already published is returned so the caller can release it; the wait itself
+ * never keeps the permit after it gives up.
  */
 export async function claimHeavyLocalJob({
   kind,
   id,
   timeoutMs = 0,
+  signal,
   claimPath = HEAVY_LOCAL_JOB_CLAIM_PATH,
   pid = process.pid,
   now = () => Date.now(),
@@ -447,6 +484,7 @@ export async function claimHeavyLocalJob({
   if (typeof kind !== 'string' || !kind.trim() || typeof id !== 'string' || !id.trim()) {
     throw new Error('A heavy local job claim requires non-empty kind and id.');
   }
+  if (signal?.aborted) return abortedClaim();
   if (continuationOwned) admission.assertCurrent();
   const permit = continuationOwned ? null : admission.admit('heavy-job', id.slice(0, 256), { continuation: true });
   const handleState = { retained: false };
@@ -456,13 +494,15 @@ export async function claimHeavyLocalJob({
     const ours = { kind, id, pid, startedAt: now(), token };
     const ctx = { id, pid, claimPath, token, ours, now, deadline, wait, pidIsAlive, unlinkClaim, writeClaim, createClaim, writeCompletion, survivorCheck, permit };
     // Sleep at most `intervalMs`, never past the caller's deadline.
-    const waitRemaining = intervalMs => wait(Math.min(intervalMs, Math.max(1, deadline - now())));
+    const waitRemaining = intervalMs => waitForInterval(wait, Math.min(intervalMs, Math.max(1, deadline - now())), signal);
     await mkdir(dirname(claimPath), { recursive: true });
 
     for (;;) {
+      if (signal?.aborted) return abortedClaim();
       const step = await nextClaimStep(ctx, handleState);
       if ('result' in step) return step.result;
       if (step.again) continue;
+      if (signal?.aborted) return abortedClaim();
       if (now() >= deadline) return step.onDeadline();
       await waitRemaining(step.retryMs);
     }

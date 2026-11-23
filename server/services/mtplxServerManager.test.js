@@ -528,6 +528,44 @@ describe('mtplxServerManager', () => {
       expect(run).not.toHaveBeenCalled();
     });
 
+    it('aborts a checkpoint that is still loading, stops it, and puts the previous pack back', async () => {
+      await startMtplxServer({ port: 8010 });
+      const controller = new AbortController();
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => {
+        const args = pm2State?.args || [];
+        const model = args[args.indexOf('--model') + 1];
+        if (model === 'Example/Other-MTP') {
+          controller.abort();
+          return { reachable: false, models: null };
+        }
+        return { reachable: pm2State?.status === 'online', models: model ? [`served-${model}`] : null };
+      });
+      const run = vi.fn();
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', run, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      expect(run).not.toHaveBeenCalled();
+      expect(servedModel()).toBe('Example/Qwen-MTP');
+      expect(pm2State?.status).toBe('online');
+    });
+
+    it('aborts a checkpoint switch while MTPLX is still loading and keeps the saved launch line', async () => {
+      const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
+      settingsStore = { localLlm: { mtplx: { launch: saved } } };
+      const controller = new AbortController();
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => {
+        const args = pm2State?.args || [];
+        if (args.includes('Example/Other-MTP')) {
+          controller.abort();
+          return { reachable: false, models: null };
+        }
+        return { reachable: false, models: null };
+      });
+      const run = vi.fn();
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', run, { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      expect(run).not.toHaveBeenCalled();
+      expect(pm2State?.status).not.toBe('online');
+      expect(settingsStore.localLlm.mtplx.launch).toEqual(saved);
+    });
+
     it('stops MTPLX again afterwards when it was not running before, even when fn throws, and keeps the saved launch line', async () => {
       const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
       settingsStore = { localLlm: { mtplx: { launch: saved } } };

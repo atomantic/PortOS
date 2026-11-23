@@ -46,7 +46,7 @@ const browser = vi.hoisted(() => {
 vi.mock('../htmlComposition/browser.js', () => ({ openComposition: browser.openComposition }));
 
 const fixture = { clips: [], audioPath: null };
-vi.mock('./render.js', async (importOriginal) => {
+vi.mock('./renderPlan.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
