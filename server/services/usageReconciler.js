@@ -540,6 +540,63 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
   }
 }
 
+// Append-only index files (agy history, kimi session index) grow for the life
+// of the install and are re-read on every run completion; parse once per
+// (mtimeMs, size). Callers receive the cached array and must not mutate it.
+const indexParseCache = new Map();
+const INDEX_CACHE_MAX = 16;
+
+async function parseIndexMemoized(path, parse) {
+  const info = await stat(path).catch(() => null);
+  if (!info) return [];
+  const cached = indexParseCache.get(path);
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.parsed;
+  const text = await tryReadFile(path);
+  const parsed = text ? parse(text) : [];
+  indexParseCache.delete(path);
+  indexParseCache.set(path, { mtimeMs: info.mtimeMs, size: info.size, parsed });
+  if (indexParseCache.size > INDEX_CACHE_MAX) indexParseCache.delete(indexParseCache.keys().next().value);
+  return parsed;
+}
+
+export function __resetUsageIndexCache() { indexParseCache.clear(); }
+
+const STAT_CONCURRENCY = 32;
+
+// Sequential lstat of every historical transcript dominates reconcile latency;
+// stat in bounded batches instead. Result order matches `paths`.
+async function transcriptStats(paths, from) {
+  const out = new Array(paths.length);
+  for (let i = 0; i < paths.length; i += STAT_CONCURRENCY) {
+    const batch = paths.slice(i, i + STAT_CONCURRENCY);
+    const results = await Promise.all(batch.map((path) => transcriptStat(path, from)));
+    results.forEach((result, j) => { out[i + j] = result; });
+  }
+  return out;
+}
+
+// Streams a JSONL file into parsed objects (the parser accepts pre-parsed
+// arrays) so the raw transcript text is never held whole. `needle`, when given,
+// reports whether any raw line contained it. Returns null when unreadable.
+async function streamJsonLines(path, needle = null) {
+  const entries = [];
+  let hasNeedle = false;
+  const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (needle && !hasNeedle && trimmed.includes(needle)) hasNeedle = true;
+      // A truncated mid-write line is expected; skip it.
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object') entries.push(parsed);
+      } catch { continue; }
+    }
+  } catch { return null; }
+  return { entries, hasNeedle };
+}
+
 /**
  * Every conversation `agy` recorded. `history.jsonl` names only the ones with a
  * logged workspace (a small minority — most conversations never get a line
@@ -547,8 +604,7 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
  * list; a conversation absent from history has `workspace: null`.
  */
 export async function listAgyConversations(root) {
-  const historyText = await tryReadFile(join(root, 'history.jsonl'));
-  const conversations = historyText ? parseAgyHistory(historyText) : [];
+  const conversations = [...await parseIndexMemoized(join(root, 'history.jsonl'), parseAgyHistory)];
   const known = new Set(conversations.map((c) => c.conversationId));
   for (const conversationId of await listSubdirs(join(root, 'brain'))) {
     if (!known.has(conversationId)) conversations.push({ conversationId, workspace: null, timestamp: null });
@@ -562,17 +618,24 @@ async function readAgySessions({ home, workspacePath, from, to, fold, reserveFro
   // the brain transcript it points at carries the per-step timestamps that
   // place the work inside a run's window.
   const root = join(home, '.gemini', 'antigravity-cli');
-  for (const conversation of await listAgyConversations(root)) {
+  const conversations = await listAgyConversations(root);
+  const transcriptPaths = conversations.map((c) => join(root, 'brain', c.conversationId, '.system_generated', 'logs', 'transcript.jsonl'));
+  // Only conversations that can match this workspace need a stat at all.
+  const relevant = conversations.map((c) => !c.workspace || cwdMatches(c.workspace, workspacePath));
+  const stats = await transcriptStats(transcriptPaths.filter((_, i) => relevant[i]), from);
+  let statIndex = 0;
+  for (const [index, conversation] of conversations.entries()) {
+    if (!relevant[index]) continue;
+    const { stale } = stats[statIndex++];
     // A conversation history never logged has no workspace; its transcript
     // names the files it touched, so a worktree path appearing in it is the
     // match (worktree paths are unique per run).
-    if (conversation.workspace && !cwdMatches(conversation.workspace, workspacePath)) continue;
-    const transcriptPath = join(root, 'brain', conversation.conversationId, '.system_generated', 'logs', 'transcript.jsonl');
-    if ((await transcriptStat(transcriptPath, from)).stale) continue;
-    const text = await tryReadFile(transcriptPath);
-    if (!text) continue;
-    if (!conversation.workspace && !text.includes(workspacePath)) continue;
-    const parsed = parseAgyTranscript(text, { from, to, exclude: excludeFor(transcriptPath) });
+    const transcriptPath = transcriptPaths[index];
+    if (stale) continue;
+    const streamed = await streamJsonLines(transcriptPath, conversation.workspace ? null : workspacePath);
+    if (!streamed?.entries.length) continue;
+    if (!conversation.workspace && !streamed.hasNeedle) continue;
+    const parsed = parseAgyTranscript(streamed.entries, { from, to, exclude: excludeFor(transcriptPath) });
     const estimated = agyEstimatedBuckets(parsed);
     if (totalTranscriptTokens(estimated) === 0) continue;
     reserveFrom(transcriptPath, parsed);
@@ -587,8 +650,7 @@ async function readKimiSessions({ home, workspacePath, from, to, fold, reserveFr
   // of every session ever created on this machine — filter by exact `workDir`
   // rather than trying to decode `sessions/wd_<basename>_<hash>/`, whose hash
   // suffix is undocumented.
-  const indexText = await tryReadFile(join(home, '.kimi-code', 'session_index.jsonl'));
-  for (const session of indexText ? parseKimiSessionIndex(indexText) : []) {
+  for (const session of await parseIndexMemoized(join(home, '.kimi-code', 'session_index.jsonl'), parseKimiSessionIndex)) {
     if (!cwdMatches(session.workDir, workspacePath)) continue;
     // Real usage lives per-AGENT, not per-session: a subagent's own spend is
     // in its own `agents/<subAgentId>/wire.jsonl`, never the parent's (see the
