@@ -3,6 +3,8 @@
  *
  * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a provider route (`route`: any configured provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
  *
+ * A llama.cpp model can also be picked with one of the LoRA adapters its server has loaded (`lora: { id, scale }`), so the same weights run with and without the adapter side by side. Every request to a server with adapters names each adapter's scale, so a pick without one is the true base model whatever the server's global scale is.
+ *
  * Runs are queued and executed one at a time under the machine-wide heavy-job claim, each page a separate request. Nothing here runs from boot or a read path: `startRuns` is the only way a model is reached, from an explicit request that named the models and page count. Queued and generating runs are tracked live work (Live activity, the idle verdict and the update preflight see them), so the updater waits for them. A run a restart still cut off is reported as failed and never resumed on its own; `resumeRun` re-queues it from its first unfinished page when the person asks.
  */
 
@@ -14,7 +16,8 @@ import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
-import { listRuntimeModels } from '../localModelAssessments.js';
+import { listLoraAdapters, loraRequestField } from '../../lib/llamaLoraAdapters.js';
+import { listRuntimeModels, runtimeEndpoint } from '../localModelAssessments.js';
 import { generate } from '../modelCapabilityTests.js';
 import { trackedRenderMap } from '../renderActivity.js';
 import { createRun, deleteRun as deleteStoredRun, getRun, listRuns as listStoredRuns, mutateRun } from './db.js';
@@ -54,18 +57,26 @@ const liveRuns = trackedRenderMap('html-pages', { noun: 'HTML pages run', link: 
 let draining = false;
 const isCutOff = (run) => ACTIVE.has(run.status) && !liveRuns.has(run.id);
 
+/** The LoRA adapters the llama.cpp server has loaded; empty when it runs none or is not answering. */
+const llamaLoraAdapters = async () => listLoraAdapters(await runtimeEndpoint('llama').catch(() => null));
+
 /** Every installed, chat-capable model across the assessable runtimes, for the picker. Disk/loopback only; no model is called. */
 export async function listSelectableModels() {
   const listed = await Promise.all(ASSESSABLE_RUNTIMES.map(async (runtime) => [runtime, await listRuntimeModels(runtime)]));
   const models = [];
   const listErrors = [];
+  const llamaListed = listed.find(([runtime]) => runtime === 'llama')?.[1];
+  const loraAdapters = llamaListed?.models?.length && !llamaListed.offline ? await llamaLoraAdapters() : [];
   for (const [runtime, result] of listed) {
     if (result.error) listErrors.push({ id: runtime, label: runtimeLabel(runtime), error: result.error, offline: Boolean(result.offline) });
     // An offline MTPLX lists its downloaded packs, which mtplxCheckpointModels offers as runnable instead.
     if (runtime === 'mtplx' && result.offline) continue;
     for (const model of result.models || []) {
       if (!model?.id || isEmbeddingModel(model.id)) continue;
-      models.push({ backend: runtime, runtimeLabel: runtimeLabel(runtime), modelId: model.id, offline: Boolean(result.offline) });
+      models.push({
+        backend: runtime, runtimeLabel: runtimeLabel(runtime), modelId: model.id, offline: Boolean(result.offline),
+        ...(runtime === 'llama' && loraAdapters.length ? { loraAdapters } : {}),
+      });
     }
   }
   if (ASSESSABLE_RUNTIMES.includes('mtplx')) models.push(...await mtplxCheckpointModels());
@@ -122,12 +133,22 @@ export async function startRuns({ models = [], routes = [], pages }) {
       status: 409, code: 'HTML_PAGES_MODEL_UNAVAILABLE', context: { missing: missing.length },
     });
   }
+  // The adapter is named on the run (and its gallery column) by what the server reported loading.
+  const withLora = (m) => {
+    if (!m.lora) return null;
+    const adapter = installed.find((i) => i.backend === m.backend && i.modelId === m.modelId)?.loraAdapters?.find((a) => a.id === m.lora.id);
+    if (!adapter) {
+      throw new ServerError(`LoRA adapter ${m.lora.id} is not loaded on ${runtimeLabel(m.backend)}`, { status: 409, code: 'HTML_PAGES_LORA_UNAVAILABLE' });
+    }
+    return { id: adapter.id, name: adapter.name, scale: m.lora.scale };
+  };
+  const modelTargets = models.map((m) => ({ backend: m.backend, modelId: m.modelId, lora: withLora(m), route: null }));
   const resolvedRoutes = await Promise.all(routes.map(resolveRoute));
   // The exact prompt each page sends is recorded on the run, so a later change to the fixed text never rewrites what an old run was asked.
   const prompts = pages.map(htmlPagePrompt);
   const runs = [];
   const targets = [
-    ...models.map((m) => ({ backend: m.backend, modelId: m.modelId, route: null })),
+    ...modelTargets,
     ...resolvedRoutes.map((route) => ({ backend: 'provider', modelId: route.model || route.providerName, route })),
   ];
   for (const target of targets) {
@@ -239,8 +260,14 @@ async function processRun(id) {
         await mutateRun(id, (c) => ({ ...c, pages: [...c.pages, page], progress: { done: c.pages.length + 1, total: c.pageCount } }));
       }
     };
+    // Fixed for the whole run: the adapter scales are read once, so every page of a run is the same model.
+    const adapters = run.backend === 'llama' ? await llamaLoraAdapters() : [];
+    if (run.lora && !adapters.some((a) => a.id === run.lora.id)) {
+      throw new ServerError(`LoRA adapter ${run.lora.name} is no longer loaded on ${runtimeLabel(run.backend)}`, { status: 409, code: 'HTML_PAGES_LORA_UNAVAILABLE' });
+    }
+    const extraBody = adapters.length ? { lora: loraRequestField(adapters, run.lora?.id ?? null, run.lora?.scale ?? 0) } : undefined;
     const local = (modelId) => (prompt) => generate({
-      backend: run.backend, modelId, prompt, maxTokens: PAGE_MAX_TOKENS,
+      backend: run.backend, modelId, prompt, maxTokens: PAGE_MAX_TOKENS, extraBody,
       temperature: PAGE_TEMPERATURE, timeoutMs: PAGE_TIMEOUT_MS, signal: controller.signal,
     });
     if (run.route) {

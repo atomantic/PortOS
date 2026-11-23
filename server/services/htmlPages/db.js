@@ -42,7 +42,7 @@ export async function getRun(id, { includeDeleted = false } = {}) {
   return run;
 }
 
-export async function createRun({ backend, modelId, route = null, pageCount, themes, prompts }) {
+export async function createRun({ backend, modelId, lora = null, route = null, pageCount, themes, prompts }) {
   const now = new Date().toISOString();
   const run = {
     id: `htmlpages-${randomUUID()}`,
@@ -51,6 +51,8 @@ export async function createRun({ backend, modelId, route = null, pageCount, the
     modelId,
     // A provider route ({ providerId, providerName, model, effort }) when `backend` is 'provider'; null for a local model.
     route,
+    // The llama.cpp LoRA adapter the run applied ({ id, name, scale }); null for the base model or a runtime without adapters.
+    lora,
     pageCount,
     // The person's brief for each page, and the full prompt each one sent (the brief inside PortOS's fixed text).
     themes,

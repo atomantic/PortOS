@@ -158,6 +158,35 @@ describe('HtmlPages', () => {
     expect(await screen.findByText(/Example CLI · high/)).toBeInTheDocument();
   });
 
+  it('runs a llama.cpp model with and without its loaded LoRA adapter, offering the choice only where the server has one', async () => {
+    const adapter = { id: 0, name: 'example-lora-F16', path: 'models/example-lora-F16.gguf' };
+    listHtmlPageModels.mockResolvedValue({ ...CATALOG, models: [...CATALOG.models, { backend: 'llama', runtimeLabel: 'llama.cpp', modelId: 'example-27b', offline: false, loraAdapters: [adapter] }] });
+    startHtmlPageRuns.mockImplementation(async (body) => body.models.map((m, i) => run(`l-${i}`, m.modelId, {
+      status: 'queued', backend: m.backend, lora: m.lora ? { ...m.lora, name: adapter.name } : null,
+    })));
+    renderPage();
+    await screen.findByText('Models');
+    fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'installed:ollama' } });
+    expect(screen.queryByLabelText('LoRA adapter 1')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Provider 1'), { target: { value: 'installed:llama' } });
+    expect(screen.getByLabelText('LoRA adapter 1')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: 'Add a model' }));
+    fireEvent.change(screen.getByLabelText('Provider 2'), { target: { value: 'installed:llama' } });
+    // The same weights twice is one run until one row turns the adapter on.
+    expect(screen.getByText('Already picked above.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('LoRA adapter 2'), { target: { value: '0@1' } });
+    expect(screen.queryByText('Already picked above.')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run 2 models × 3 pages' }));
+    await waitFor(() => expect(startHtmlPageRuns).toHaveBeenCalledTimes(1));
+    expect(startHtmlPageRuns.mock.calls[0][0].models).toEqual([
+      { backend: 'llama', modelId: 'example-27b' },
+      { backend: 'llama', modelId: 'example-27b', lora: { id: 0, scale: 1 } },
+    ]);
+    expect(await screen.findByText(/llama · LoRA example-lora-F16 ×1/)).toBeInTheDocument();
+  });
+
   it('shows the fixed PortOS text and the full prompt built from the brief being typed', async () => {
     renderPage();
     await screen.findByText('Models');

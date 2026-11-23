@@ -208,6 +208,35 @@ Vision Projector / --mmproj**. Notes:
 - **A path that isn't on disk fails before the process spawns**, the same way a
   missing base model or drafter does.
 
+### 2f. A LoRA adapter, on or off per request
+
+A llama.cpp LoRA adapter is a small GGUF (a few hundred MB for a 27B model at
+rank 32) trained against one base model. PortOS loads it at **scale 0**, so the
+server keeps answering as the base model and a single request turns the adapter
+on with the chat-completions `lora` field:
+
+```bash
+llama-server -m models/Qwen3.8-27B-Q8_0.gguf \
+  --lora-scaled models/Qwen3.8-27B-example-lora-F16.gguf:0 \
+  --port 5568 --host 127.0.0.1 --alias dflash --parallel 1
+# per request: "lora": [{"id": 0, "scale": 1.0}]   (0.0 = base)
+```
+
+Set the path under **Advanced options → LoRA Adapter (Optional)**. Notes:
+
+- **Not `--lora-init-without-apply`.** On current llama.cpp builds a request
+  that names no `lora` still runs an adapter loaded that way at scale 1.0, so
+  every other caller of the server would silently get the adapter.
+  `--lora-scaled <path>:0` keeps the default the base model.
+- **HTML Pages compares the two.** When the server reports an adapter on
+  `GET /lora-adapters`, each llama.cpp row in the HTML Pages picker gets a
+  **LoRA adapter** select (None, ×1, ×0.5), so one comparison can run the same
+  weights with and without it. Those requests always name every adapter's
+  scale, so "None" is the base model even on a server started outside PortOS
+  at a non-zero scale.
+- **Use the base quant the adapter was trained for.** An adapter applied to a
+  lower quant than its card recommends drifts further from what it learned.
+
 ### 3. Use in PortOS
 1. Navigate to **AI Providers** (`/ai`) or **Models → Runtimes**.
 2. Verify **OpenCode llama TUI** is enabled.

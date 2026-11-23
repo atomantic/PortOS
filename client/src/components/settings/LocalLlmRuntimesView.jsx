@@ -142,6 +142,8 @@ export default function LocalLlmRuntimesView({ view } = {}) {
     // llama.cpp's `--mmproj` vision sidecar. Empty = text-only, which is what a
     // preset with no projector launches.
     projector: '',
+    // A LoRA adapter GGUF, loaded at scale 0; HTML Pages turns it on per run.
+    loraAdapter: '',
     specType: 'draft-dspark',
     port: LLAMA_NUMBER_DEFAULTS.port,
     host: '127.0.0.1',
@@ -984,6 +986,9 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                 {llamaStatus.config?.projector && (
                   <p><span className="text-gray-500">Vision projector:</span> <code className="text-port-accent">{llamaStatus.config.projector}</code></p>
                 )}
+                {llamaStatus.config?.loraAdapter && (
+                  <p><span className="text-gray-500">LoRA adapter (off unless a request applies it):</span> <code className="text-port-accent">{llamaStatus.config.loraAdapter}</code></p>
+                )}
                 {llamaStatus.config && (
                   <p>
                     <span className="text-gray-500">Model id:</span>{' '}
@@ -1184,6 +1189,21 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                   <p className="text-[11px] text-gray-500 mt-1">
                     A multimodal model&apos;s vision tower ships as a separate <code className="text-gray-400">mmproj</code> GGUF.
                     Leave this empty to launch text-only — the model still loads and answers, it just cannot see images.
+                  </p>
+                </FormField>
+                <FormField label="LoRA Adapter (Optional)" labelClassName="text-[11px] text-gray-400 block mb-1" className="col-span-2 sm:col-span-4">
+                  <input
+                    id="llama-lora"
+                    aria-label="LoRA Adapter (Optional)"
+                    type="text"
+                    value={llamaForm.loraAdapter}
+                    onChange={(e) => setLlamaField('loraAdapter', e.target.value)}
+                    placeholder="models/your-adapter-lora-F16.gguf"
+                    className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-white placeholder-gray-600"
+                  />
+                  <p className="text-[11px] text-gray-500 mt-1">
+                    Loaded at scale 0 (<code className="text-gray-400">--lora-scaled &lt;path&gt;:0</code>): requests run the base model unless they
+                    turn the adapter on, so HTML Pages can compare the same weights with and without it. Use an adapter trained for this base model.
                   </p>
                 </FormField>
                 <FormField label="Model id (alias)" labelClassName="text-[11px] text-gray-400 block mb-1">

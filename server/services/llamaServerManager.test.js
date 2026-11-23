@@ -76,6 +76,7 @@ describe('llamaServerManager', () => {
   let modelPath;
   let draftPath;
   let projectorPath;
+  let loraPath;
   let homebrewBinaryPath;
   let homebrewPrefix;
   let pm2State = null;
@@ -92,7 +93,9 @@ describe('llamaServerManager', () => {
     modelPath = join(modelDir, 'model.gguf');
     draftPath = join(modelDir, 'draft.gguf');
     projectorPath = join(modelDir, 'mmproj.gguf');
+    loraPath = join(modelDir, 'adapter-lora-F16.gguf');
     await writeFile(modelPath, 'gguf');
+    await writeFile(loraPath, 'gguf');
     await writeFile(draftPath, 'gguf');
     await writeFile(projectorPath, 'gguf');
     const homebrewRoot = join(modelDir, 'homebrew');
@@ -382,6 +385,28 @@ describe('llamaServerManager', () => {
     expect((await getLlamaServerStatus()).config.projector).toBeNull();
   });
 
+  // Loaded at scale 0: a request that names no adapter still runs the base
+  // model, which is what lets HTML Pages run the same weights both ways.
+  it('loads a LoRA adapter without applying it, refuses a missing one, and leaves the line alone without one', async () => {
+    vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue('/usr/local/bin/llama-server');
+
+    await startLlamaServer({ model: modelPath, specType: 'none', loraAdapter: loraPath });
+    const withLora = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    expect(withLora.slice(0, 4)).toEqual(['-m', modelPath, '--lora-scaled', `${loraPath}:0`]);
+    expect((await getLlamaServerStatus()).config.loraAdapter).toBe(loraPath);
+
+    await stopLlamaServer();
+    execPm2Calls = [];
+    await expect(startLlamaServer({ model: modelPath, specType: 'none', loraAdapter: join(modelDir, 'absent-lora.gguf') }))
+      .rejects.toMatchObject({ status: 400, code: 'LLAMA_MODEL_FILE_MISSING' });
+    expect(execPm2Calls.find((c) => c[0] === 'start')).toBeUndefined();
+
+    await startLlamaServer({ model: modelPath, specType: 'none', loraAdapter: '  ' });
+    const withoutLora = execPm2Calls.find((c) => c[0] === 'start').slice(8);
+    expect(withoutLora).toEqual(withLora.filter((a) => a !== '--lora-scaled' && a !== `${loraPath}:0`));
+    expect((await getLlamaServerStatus()).config.loraAdapter).toBeNull();
+  });
+
   // Vision is orthogonal to speculative decoding — no spec type turns it on or
   // off — so the projector survives the resolution that drops an unused drafter.
   it('keeps the projector when an ngram spec type drops the drafter', async () => {
@@ -550,7 +575,7 @@ describe('llamaServerManager', () => {
       name: LLAMA_APP,
       status: 'online',
       pid: 98765,
-      args: ['-m', modelPath, '--model-draft', draftPath, '--mmproj', projectorPath, '--port', '8090', '--host', '127.0.0.1', '--parallel', '4'],
+      args: ['-m', modelPath, '--model-draft', draftPath, '--mmproj', projectorPath, '--lora-scaled', `${loraPath}:0`, '--port', '8090', '--host', '127.0.0.1', '--parallel', '4'],
     };
 
     const status = await getLlamaServerStatus();
@@ -564,6 +589,7 @@ describe('llamaServerManager', () => {
     // launch correctly — and so a relaunch replays the same line rather than
     // silently demoting the daemon to text-only.
     expect(status.config?.projector).toBe(projectorPath);
+    expect(status.config?.loraAdapter).toBe(loraPath);
     expect(status.config?.parallel).toBe(4);
   });
 

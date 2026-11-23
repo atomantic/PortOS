@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const store = new Map();
 vi.mock('./db.js', () => ({
   listRuns: vi.fn(async () => [...store.values()].filter((r) => !r.deleted)),
   getRun: vi.fn(async (id) => store.get(id) ?? null),
-  createRun: vi.fn(async ({ backend, modelId, route = null, pageCount, themes, prompts }) => {
+  createRun: vi.fn(async ({ backend, modelId, lora = null, route = null, pageCount, themes, prompts }) => {
     const run = {
-      id: `run-${store.size + 1}`, backend, modelId, route, pageCount, themes, prompts, status: 'queued',
+      id: `run-${store.size + 1}`, backend, modelId, lora, route, pageCount, themes, prompts, status: 'queued',
       progress: { done: 0, total: pageCount }, pages: [], detail: null, error: null, deleted: false,
     };
     store.set(run.id, run);
@@ -22,10 +22,15 @@ vi.mock('./db.js', () => ({
     return { id, deleted: true };
   }),
 }));
+// llama.cpp is offline unless a test serves a model on it (and, through `fetch`, its loaded LoRA adapters).
+const llama = { models: null };
 vi.mock('../localModelAssessments.js', () => ({
-  listRuntimeModels: vi.fn(async (runtime) => (runtime === 'ollama'
-    ? { models: [{ id: 'example-coder:7b' }, { id: 'nomic-embed-text' }], error: null }
-    : { models: null, error: 'not reachable', offline: true })),
+  listRuntimeModels: vi.fn(async (runtime) => {
+    if (runtime === 'ollama') return { models: [{ id: 'example-coder:7b' }, { id: 'nomic-embed-text' }], error: null };
+    if (runtime === 'llama' && llama.models) return { models: llama.models, error: null };
+    return { models: null, error: 'not reachable', offline: true };
+  }),
+  runtimeEndpoint: vi.fn(async (runtime) => (runtime === 'llama' ? 'http://127.0.0.1:5568/v1' : null)),
 }));
 vi.mock('../modelCapabilityTests.js', () => ({ generate: vi.fn() }));
 vi.mock('../../lib/heavyJobClaim.js', () => ({
@@ -43,6 +48,7 @@ vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
 
 import { generate } from '../modelCapabilityTests.js';
+import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { listActiveRenders } from '../renderActivity.js';
 import { runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
@@ -60,6 +66,7 @@ const settled = (id) => vi.waitFor(async () => {
 beforeEach(() => {
   store.clear();
   vi.clearAllMocks();
+  llama.models = null;
 });
 
 describe('listSelectableModels', () => {
@@ -170,6 +177,72 @@ describe('other targets', () => {
   it('refuses a provider that is not configured before queueing anything', async () => {
     await expect(startRuns({ routes: [{ providerId: 'gone' }], pages: PAGES })).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
     expect(store.size).toBe(0);
+  });
+});
+
+describe('llama.cpp LoRA adapters', () => {
+  const llamaModel = { backend: 'llama', modelId: 'example-27b' };
+  const adapters = [{ id: 0, path: 'models/example-lora-F16.gguf', scale: 0 }];
+  const serveAdapters = (list) => vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+    expect(String(url)).toBe('http://127.0.0.1:5568/lora-adapters');
+    return new Response(JSON.stringify(list), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  beforeEach(() => { llama.models = [{ id: 'example-27b' }]; });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('offers the adapters the server loaded on its model, and none when it reports none', async () => {
+    serveAdapters(adapters);
+    const listed = (await listSelectableModels()).models.find((m) => m.backend === 'llama');
+    expect(listed.loraAdapters).toEqual([{ id: 0, name: 'example-lora-F16', path: 'models/example-lora-F16.gguf' }]);
+
+    serveAdapters([]);
+    expect((await listSelectableModels()).models.find((m) => m.backend === 'llama')).not.toHaveProperty('loraAdapters');
+  });
+
+  it('runs the same model with and without the adapter, naming every adapter scale on each request', async () => {
+    serveAdapters(adapters);
+    generate.mockResolvedValue({ text: goodPage, timings: null });
+    const [withAdapter, base] = await startRuns({ models: [{ ...llamaModel, lora: { id: 0, scale: 1 } }, llamaModel], pages: [PAGES[0]] });
+    expect(withAdapter.lora).toEqual({ id: 0, name: 'example-lora-F16', scale: 1 });
+    expect(base.lora).toBeNull();
+    await settled(withAdapter.id);
+    await settled(base.id);
+    expect(generate.mock.calls.map(([args]) => args.extraBody)).toEqual([
+      { lora: [{ id: 0, scale: 1 }] },
+      // The base pick turns the adapter off explicitly rather than trusting the server's global scale.
+      { lora: [{ id: 0, scale: 0 }] },
+    ]);
+  });
+
+  it('refuses an adapter the server has not loaded before queueing anything', async () => {
+    serveAdapters([]);
+    await expect(startRuns({ models: [{ ...llamaModel, lora: { id: 0, scale: 1 } }], pages: PAGES }))
+      .rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_LORA_UNAVAILABLE' });
+    expect(store.size).toBe(0);
+  });
+
+  it('fails a queued adapter run whose adapter is gone by the time it starts, instead of running the base model under its name', async () => {
+    serveAdapters(adapters);
+    // Held at the heavy-job claim, which comes before the run reads the adapters.
+    let admit;
+    claimHeavyLocalJob.mockImplementationOnce(() => new Promise((resolve) => { admit = () => resolve({ ok: true, release: vi.fn(async () => {}) }); }));
+    const [queued] = await startRuns({ models: [{ ...llamaModel, lora: { id: 0, scale: 1 } }], pages: PAGES });
+    await vi.waitFor(() => expect(admit).toBeTypeOf('function'));
+    serveAdapters([]);
+    admit();
+    const run = await settled(queued.id);
+    expect(run.status).toBe('failed');
+    expect(run.error).toMatch(/no longer loaded/);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('sends no lora field to a llama.cpp server with no adapters, or to another runtime', async () => {
+    serveAdapters([]);
+    generate.mockResolvedValue({ text: goodPage, timings: null });
+    const [run] = await startRuns({ models: [llamaModel, model], pages: [PAGES[0]] });
+    await settled(run.id);
+    await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
+    expect(generate.mock.calls.map(([args]) => args.extraBody)).toEqual([undefined, undefined]);
   });
 });
 

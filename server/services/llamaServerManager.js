@@ -373,6 +373,8 @@ function parseConfigFromArgs(args) {
   // PortOS could not emit this flag at all, so every launch line it left behind
   // reads back as no projector, which is the truth about that process.
   const projector = getArg('--mmproj');
+  // Written as `--lora-scaled <path>:0`; the scale suffix is PortOS's, not part of the path.
+  const loraAdapter = getArg('--lora-scaled')?.replace(/:[\d.]+$/, '') ?? getArg('--lora');
   // Absent means the process is running WITHOUT speculative decoding — don't
   // invent a type the launch line never carried.
   const specType = getArg('--spec-type');
@@ -391,6 +393,7 @@ function parseConfigFromArgs(args) {
     model,
     draftModel,
     projector,
+    loraAdapter,
     specType,
     port,
     host,
@@ -562,6 +565,8 @@ function normalizeLaunchOptions({
   // llama.cpp's multimodal projector (`--mmproj`). Independent of speculative
   // decoding: a vision-capable GGUF loads text-only without it.
   projector,
+  // A LoRA adapter GGUF, loaded at scale 0 (`--lora-scaled <path>:0`).
+  loraAdapter,
   specType = 'draft-dflash',
   port = PORTS.LLAMA_SERVER,
   host = '127.0.0.1',
@@ -582,7 +587,7 @@ function normalizeLaunchOptions({
   sleepIdleMinutes = undefined,
 }) {
   return {
-    model, draftModel, projector, specType, port, host, ctxSize, nGpuLayers, alias, parallel,
+    model, draftModel, projector, loraAdapter, specType, port, host, ctxSize, nGpuLayers, alias, parallel,
     batchSize, ubatchSize, threads, flashAttn, cacheTypeK, cacheTypeV, draftMax, sleepIdleMinutes,
   };
 }
@@ -675,6 +680,8 @@ async function resolveLaunch(options, binaryPath) {
   // turns vision on or off, so what the caller set is what goes on the line.
   const projectorPath = trimmedOrNull(opts.projector);
   if (projectorPath) await assertModelFileExists('The vision projector', projectorPath);
+  const loraPath = trimmedOrNull(opts.loraAdapter);
+  if (loraPath) await assertModelFileExists('The LoRA adapter', loraPath);
   const drafter = resolveSpecDrafter(opts);
   if (drafter.draftPath) await assertModelFileExists('The drafter model', drafter.draftPath);
   // Resolved AFTER the rest so a relaunch that carried an explicit value replays
@@ -684,7 +691,7 @@ async function resolveLaunch(options, binaryPath) {
   // default, which is the VRAM tax this pin exists to avoid. `null` from a
   // recovered pre-flag launch still means 1, not "daemon default".
   const parallelSlots = Number.isFinite(opts.parallel) && opts.parallel >= 1 ? opts.parallel : 1;
-  return { ...opts, ...drafter, projectorPath, parallelSlots, idle };
+  return { ...opts, ...drafter, projectorPath, loraPath, parallelSlots, idle };
 }
 
 /** The llama-server argv, in a stable order. Pure over the resolved launch. */
@@ -692,6 +699,11 @@ function buildLaunchArgs(r) {
   const args = ['-m', expandHome(r.model.trim())];
   if (r.draftPath) args.push('--model-draft', expandHome(r.draftPath));
   if (r.projectorPath) args.push('--mmproj', expandHome(r.projectorPath));
+  // Loaded at scale 0, so every caller that names no `lora` keeps getting the
+  // base model and a request opts in per generation (`lib/llamaLoraAdapters.js`).
+  // Not `--lora-init-without-apply`: on current llama.cpp a request without a
+  // `lora` field still runs the adapter at its 1.0 scale under that flag.
+  if (r.loraPath) args.push('--lora-scaled', `${expandHome(r.loraPath)}:0`);
   if (r.effectiveSpecTypes.length > 0) args.push('--spec-type', r.effectiveSpecTypes.join(','));
   if (r.port) args.push('--port', String(r.port));
   if (r.host) args.push('--host', r.host);
@@ -722,6 +734,7 @@ function buildCurrentConfig(r) {
     model: r.model,
     draftModel: r.draftPath,
     projector: r.projectorPath,
+    loraAdapter: r.loraPath,
     specType: r.effectiveSpecTypes.join(','),
     port: r.port,
     host: r.host,

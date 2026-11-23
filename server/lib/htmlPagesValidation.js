@@ -19,11 +19,22 @@ const htmlPagesRouteSchema = z.object({
   effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional()),
 });
 
+// A llama.cpp LoRA adapter the server has loaded, by its `/lora-adapters` id, and how strongly to apply it. Absent or null runs the base model.
+const loraPickSchema = z.object({
+  id: z.number().int().min(0).max(64),
+  scale: z.number().min(0).max(2).default(1),
+}).nullable().optional();
+
+// The same weights with and without an adapter are two different picks.
+const modelKey = (m) => `${m.backend}:${m.modelId}:${m.lora ? `${m.lora.id}@${m.lora.scale}` : ''}`;
+
 const routeKey = (r) => `${r.providerId}:${r.model ?? ''}:${r.effort ?? ''}`;
 
 export const htmlPagesRunSchema = z.object({
-  models: z.array(z.object({ backend: localLlmRuntimeSchema, modelId: localLlmModelIdSchema })).max(HTML_PAGES_MAX_MODELS).default([])
-    .refine((models) => new Set(models.map((m) => `${m.backend}:${m.modelId}`)).size === models.length, {
+  models: z.array(z.object({ backend: localLlmRuntimeSchema, modelId: localLlmModelIdSchema, lora: loraPickSchema })
+    .refine((m) => !m.lora || m.backend === 'llama', { message: 'a LoRA adapter applies only to a llama.cpp model', path: ['lora'] }))
+    .max(HTML_PAGES_MAX_MODELS).default([])
+    .refine((models) => new Set(models.map(modelKey)).size === models.length, {
       message: 'each model may appear only once',
     }),
   routes: z.array(htmlPagesRouteSchema).max(HTML_PAGES_MAX_MODELS).default([])

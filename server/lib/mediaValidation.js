@@ -251,6 +251,9 @@ export const localLlmLlamaServerStartSchema = z.object({
   // like the drafter path: empty/absent means the launch is text-only, which is
   // exactly the line every pre-#7611 PortOS produced.
   projector: z.string().trim().max(500).optional().nullable(),
+  // A LoRA adapter GGUF, loaded at scale 0 (`--lora-scaled <path>:0`), so each request
+  // chooses base or adapter. Empty/absent launches without one.
+  loraAdapter: z.string().trim().max(500).optional().nullable(),
   // A comma-separated list of llama.cpp `--spec-type` implementations
   // (`ngram-map-k`, `draft-dflash,ngram-map-k`). Free vocabulary on purpose —
   // fork builds ship their own — but shaped, since it lands in the launch argv.

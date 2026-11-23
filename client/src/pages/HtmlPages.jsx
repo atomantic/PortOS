@@ -53,8 +53,18 @@ const briefLabel = (brief) => {
   return clause.length > 40 ? `${clause.slice(0, 40).trimEnd()}…` : clause;
 };
 
-/** Where a run's pages came from, for card and column subtitles: the provider and effort for a route, else the runtime. */
-const runSource = (run) => (run.route ? [run.route.providerName, run.route.effort].filter(Boolean).join(' · ') : run.backend);
+/** Where a run's pages came from, for card and column subtitles: the provider and effort for a route, else the runtime and any LoRA adapter it applied. */
+const runSource = (run) => (run.route
+  ? [run.route.providerName, run.route.effort].filter(Boolean).join(' · ')
+  : [run.backend, run.lora && `LoRA ${run.lora.name} ×${run.lora.scale}`].filter(Boolean).join(' · '));
+
+// The strengths offered for an adapter. 1 is the scale it was trained at; 0.5 shows whether a partial dose moves the output.
+const LORA_SCALES = [1, 0.5];
+const loraValue = (lora) => (lora ? `${lora.id}@${lora.scale}` : '');
+const parseLoraValue = (value) => {
+  const [id, scale] = String(value).split('@').map(Number);
+  return Number.isInteger(id) && Number.isFinite(scale) ? { id, scale } : null;
+};
 
 // Installed local models join the picker as one entry per runtime, grouped apart from the configured providers. They run straight on the runtime (with tok/s, and a downloaded MTPLX pack switched in for its run), which a provider route cannot do. ProviderModelSelector names a harness id it does not know verbatim, so the group id is its label.
 const INSTALLED_GROUP = 'Installed on this machine';
@@ -64,37 +74,43 @@ const INSTALLED_PREFIX = 'installed:';
 const installedProviders = (models) => {
   const byBackend = new Map();
   for (const m of models) {
-    const entry = byBackend.get(m.backend) || { id: `${INSTALLED_PREFIX}${m.backend}`, name: m.runtimeLabel, harnessId: INSTALLED_GROUP, enabled: true, backend: m.backend, models: [] };
+    const entry = byBackend.get(m.backend) || { id: `${INSTALLED_PREFIX}${m.backend}`, name: m.runtimeLabel, harnessId: INSTALLED_GROUP, enabled: true, backend: m.backend, models: [], loraAdapters: [] };
     entry.models.push(m.modelId);
+    // A llama.cpp server's adapters apply to whatever it serves, so they are the runtime's, not one model's.
+    if (m.loraAdapters?.length && !entry.loraAdapters.length) entry.loraAdapters = m.loraAdapters;
     byBackend.set(m.backend, entry);
   }
   return [...byBackend.values()];
 };
 
 /** What a row would run, as a comparable key: two rows naming the same target are one run, which the server refuses. */
-const targetKey = (t) => (t.backend ? `m:${t.backend}:${t.modelId}` : `r:${t.providerId}:${t.model ?? ''}:${t.effort ?? ''}`);
+const targetKey = (t) => (t.backend ? `m:${t.backend}:${t.modelId}:${loraValue(t.lora)}` : `r:${t.providerId}:${t.model ?? ''}:${t.effort ?? ''}`);
 
 /**
- * One model to run: the shared provider > model > effort picker, with the installed local models as extra providers. Reports `{ backend, modelId }` for an installed model, `{ providerId, model, effort }` for a provider route, or null until something is picked.
+ * One model to run: the shared provider > model > effort picker, with the installed local models as extra providers, plus a LoRA choice when the llama.cpp server has adapters loaded. Reports `{ backend, modelId, lora }` for an installed model, `{ providerId, model, effort }` for a provider route, or null until something is picked.
  */
 function TargetRow({ rowKey, index, installed, duplicate, onChange, onRemove }) {
   const { providers, loading, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel } = useProviderModels({ withEffort: true, silent: true, preselectDefaults: true });
   // An installed pick lives here; the hook only knows configured providers.
   const [local, setLocal] = useState(null);
   const [effort, setEffort] = useState('');
+  const [lora, setLora] = useState(null);
   const localEntry = local ? installed.find((p) => p.id === local.providerId) : null;
   const providerId = localEntry ? local.providerId : selectedProviderId;
   const model = localEntry ? local.model : selectedModel;
+  const adapters = localEntry?.loraAdapters || [];
+  const loraPick = adapters.some((a) => a.id === lora?.id) ? lora : null;
 
   useEffect(() => {
     let target = null;
-    if (localEntry) target = local.model ? { backend: localEntry.backend, modelId: local.model } : null;
+    if (localEntry) target = local.model ? { backend: localEntry.backend, modelId: local.model, lora: loraPick } : null;
     else if (selectedProviderId) target = { providerId: selectedProviderId, model: selectedModel || null, effort: effort || null };
     onChange(rowKey, target);
-  }, [rowKey, onChange, localEntry, local, selectedProviderId, selectedModel, effort]);
+  }, [rowKey, onChange, localEntry, local, loraPick, selectedProviderId, selectedModel, effort]);
 
   const pickProvider = (id) => {
     setEffort('');
+    setLora(null);
     const entry = installed.find((p) => p.id === id);
     if (entry) { setLocal({ providerId: id, model: entry.models[0] || '' }); return; }
     setLocal(null);
@@ -119,6 +135,22 @@ function TargetRow({ rowKey, index, installed, duplicate, onChange, onRemove }) 
           modelLabel={`Model ${index + 1}`}
           dense
         />
+        {adapters.length > 0 && (
+          <div className="mt-1">
+            <label htmlFor={`html-pages-lora-${rowKey}`} className="mb-1 block text-xs text-gray-500">LoRA adapter {index + 1}</label>
+            <select
+              id={`html-pages-lora-${rowKey}`}
+              value={loraValue(loraPick)}
+              onChange={(e) => setLora(parseLoraValue(e.target.value))}
+              className="min-h-[36px] w-full rounded-lg border border-port-border bg-port-bg px-3 py-1.5 text-sm text-white sm:min-h-8 sm:py-1 sm:text-xs"
+            >
+              <option value="">None (base model)</option>
+              {adapters.flatMap((a) => LORA_SCALES.map((scale) => (
+                <option key={`${a.id}@${scale}`} value={`${a.id}@${scale}`}>{a.name} ×{scale}</option>
+              )))}
+            </select>
+          </div>
+        )}
         {duplicate && <p role="alert" className="mt-1 text-[11px] text-port-error">Already picked above.</p>}
       </div>
       <button type="button" onClick={() => onRemove(rowKey)} aria-label={`Remove model ${index + 1}`} className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-gray-500 hover:text-port-error"><X size={14} /></button>
@@ -162,7 +194,7 @@ function RunForm({ catalog, onStarted }) {
     setStarting(true);
     const runs = await startHtmlPageRuns(
       {
-        models: targets.filter((t) => t.backend).map(({ backend, modelId }) => ({ backend, modelId })),
+        models: targets.filter((t) => t.backend).map(({ backend, modelId, lora: pick }) => ({ backend, modelId, ...(pick ? { lora: pick } : {}) })),
         routes: targets.filter((t) => !t.backend),
         pages,
       },

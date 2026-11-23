@@ -53,10 +53,21 @@ describe('POST /api/html-pages/runs', () => {
     ['too many models and routes together', { models: Array.from({ length: 5 }, (_, i) => ({ backend: 'ollama', modelId: `m${i}` })), routes: Array.from({ length: 4 }, (_, i) => ({ providerId: `p${i}` })), pages: ['A'] }],
     ['a repeated route', { routes: [{ providerId: 'p' }, { providerId: 'p' }], pages: ['A'] }],
     ['an unknown effort', { routes: [{ providerId: 'p', effort: 'turbo' }], pages: ['A'] }],
+    ['a LoRA adapter on a runtime other than llama.cpp', { models: [{ ...model, lora: { id: 0, scale: 1 } }], pages: ['A'] }],
+    ['a LoRA scale past the bound', { models: [{ backend: 'llama', modelId: 'example-27b', lora: { id: 0, scale: 5 } }], pages: ['A'] }],
+    ['the same adapter pick twice', { models: [1, 2].map(() => ({ backend: 'llama', modelId: 'example-27b', lora: { id: 0, scale: 1 } })), pages: ['A'] }],
   ])('refuses %s before reaching any model', async (_label, body) => {
     const res = await request(app).post('/api/html-pages/runs').send(body);
     expect(res.status).toBe(400);
     expect(mocks.startRuns).not.toHaveBeenCalled();
+  });
+
+  it('accepts one llama.cpp model with and without its adapter as two picks, scale defaulting to 1', async () => {
+    mocks.startRuns.mockResolvedValue([]);
+    const llama = { backend: 'llama', modelId: 'example-27b' };
+    const res = await request(app).post('/api/html-pages/runs').send({ models: [llama, { ...llama, lora: { id: 0 } }], pages: ['A'] });
+    expect(res.status).toBe(202);
+    expect(mocks.startRuns).toHaveBeenCalledWith({ models: [llama, { ...llama, lora: { id: 0, scale: 1 } }], routes: [], pages: ['A'] });
   });
 
   it('maps a model that is not installed to the 409 the service raises', async () => {
