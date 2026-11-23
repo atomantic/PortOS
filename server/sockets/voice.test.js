@@ -684,6 +684,31 @@ describe('voice:capture socket handlers (meeting capture)', () => {
     expect(state.payload).toMatchObject({ error: 'call-active' });
   });
 
+  it('passes persisted voice.vad thresholds to the capture and call endpointers', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: true, vad: { endOfSpeechMs: 1500, minUtteranceMs: 400 } });
+    createCallEndpointer.mockClear();
+    const capture = makeFakeSocket();
+    registerVoiceHandlers(capture);
+    await capture.fire('voice:capture:start');
+    expect(createCallEndpointer).toHaveBeenLastCalledWith({ silenceMs: 1500, minUtteranceMs: 400 });
+    __resetCaptureSession();
+
+    createCallEndpointer.mockClear();
+    const call = makeFakeSocket();
+    registerVoiceHandlers(call);
+    await call.fire('voice:call:attach');
+    expect(createCallEndpointer).toHaveBeenLastCalledWith({ silenceMs: 1500, minUtteranceMs: 400 });
+  });
+
+  it('falls back to endpointer defaults when voice.vad is absent', async () => {
+    getVoiceConfig.mockResolvedValue({ enabled: true });
+    createCallEndpointer.mockClear();
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:capture:start');
+    expect(createCallEndpointer).toHaveBeenLastCalledWith({});
+  });
+
   it('refuses to attach a call host on a tab already capturing', async () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);

@@ -47,6 +47,7 @@ const hydrate = (previous, cfg, updated) => {
     sttLanguage: !updated.has('sttLanguage') && cfg?.stt?.language ? cfg.stt.language : previous.sttLanguage,
     fastPath: updated.has('fastPath') ? previous.fastPath : cfg?.llm?.fastPath || null,
     personality: cfg?.llm?.personality || null,
+    vad: updated.has('vad') ? previous.vad : cfg?.vad || null,
     tts: updated.has('tts')
       ? previous.tts
       : { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate },
@@ -62,6 +63,7 @@ const changedFields = (cfg) => {
   if (cfg?.sttEngine) patch.sttEngine = cfg.sttEngine;
   if (cfg?.sttLanguage) patch.sttLanguage = cfg.sttLanguage;
   if ('fastPath' in (cfg || {})) patch.fastPath = cfg.fastPath || null;
+  if (cfg?.vad) patch.vad = cfg.vad;
   if (cfg?.ttsEngine) patch.tts = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
   return patch;
 };

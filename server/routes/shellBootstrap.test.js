@@ -61,7 +61,7 @@ it('gates the private snapshot and projects only the fields needed to boot the s
     settings: { theme: 'classic-midnight', timezone: 'UTC' },
     selfInstance: { name: 'Example' },
     features: { features: [], groups: [] },
-    voiceConfig: { enabled: true, hotkey: 'Space', stt: { engine: 'whisper' }, llm: {}, tts: {} },
+    voiceConfig: { enabled: true, hotkey: 'Space', vad: {}, stt: { engine: 'whisper' }, llm: {}, tts: {} },
     maintenance: { state: 'normal', blockerCount: 0 },
     passwordRisk: { enabled: true, revision: 'protected' },
     updateStatus: { updateAvailable: false },

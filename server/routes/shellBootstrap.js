@@ -20,10 +20,11 @@ const reads = {
   selfInstance: async () => ({ name: (await getSelf())?.name }),
   features: getInstanceFeatures,
   voiceConfig: async () => {
-    const { enabled, hotkey, stt, llm, tts } = await getVoiceConfig();
+    const { enabled, hotkey, stt, llm, tts, vad } = await getVoiceConfig();
     const engine = tts?.engine;
     return {
       enabled, hotkey,
+      vad: { endOfSpeechMs: vad?.endOfSpeechMs, minUtteranceMs: vad?.minUtteranceMs },
       stt: { engine: stt?.engine, language: stt?.language },
       llm: { fastPath: llm?.fastPath, personality: llm?.personality },
       tts: { engine, rate: tts?.rate, ...(engine && { [engine]: { voice: tts[engine]?.voice } }) },
