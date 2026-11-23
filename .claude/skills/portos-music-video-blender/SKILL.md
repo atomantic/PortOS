@@ -23,6 +23,8 @@ source you did not write or review, and never fetch code at render time.
 <workspace>/renders/        PortOS output: frames, shot videos, stills, cuts, logs
 ```
 
+3D models from the library: `POST .../blender/models` with `{ kind: "image-to-3d" | "threejs", id }` copies a snapshot into `src/models/<slug>.glb` (or `.js`). In a shot, `from portos_film import models; root, actions = models.load(ctx, "<slug>", height=1.8)` imports it under one empty, scales to a height in meters, stands it on z = 0 and returns the named actions. Loaded models make the shot stale when the file changes; no `deps` entry needed.
+
 Call the API with `node scripts/portos-api.js` (see the `portos-api` skill). Edit files in `src/` directly, or with
 `PUT /api/music-video/:id/blender/file`. No workspace yet: `POST /api/music-video/:id/blender/workspace` copies a
 working three-shot starter. Read it before writing your own.

@@ -20,6 +20,12 @@ export const getMusicVideoBlenderFile = (id, path, options = {}) => request(`${b
 export const saveMusicVideoBlenderFile = (id, { path, content }, options = {}) => request(`${blenderPath(id)}/file`, blenderJson('PUT', { path, content }, options));
 export const deleteMusicVideoBlenderFile = (id, path, options = {}) =>
   request(`${blenderPath(id)}/file?path=${encodeURIComponent(path)}`, blenderJson('DELETE', null, options));
+// 3D models copied from the library into src/models/: { models: [{ slug, kind, name, updateAvailable, sourceMissing, snippet }] }.
+export const listMusicVideoBlenderModels = (id, options = {}) => request(`${blenderPath(id)}/models`, options);
+// Body: { kind: 'image-to-3d' | 'threejs', id, variant?, slug?, replace? } → 201 { model, snippet }; a taken slug is 409 unless replace.
+export const addMusicVideoBlenderModel = (id, body, options = {}) => request(`${blenderPath(id)}/models`, blenderJson('POST', body, options));
+// Re-copies one model from its library source → { model, snippet }; never runs by itself.
+export const updateMusicVideoBlenderModel = (id, slug, options = {}) => request(`${blenderPath(id)}/models/${encodeURIComponent(slug)}/update`, blenderJson('POST', {}, options));
 // Starts the film's describe step as a background job → 202 { job }; when it ends the shots are
 // mirrored to storyboard scenes. 409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT asks for `replaceScenes: true`.
 export const syncMusicVideoBlender = (id, body = {}, options = {}) => request(`${blenderPath(id)}/sync`, blenderJson('POST', body, options));

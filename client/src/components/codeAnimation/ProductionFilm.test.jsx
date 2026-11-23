@@ -6,7 +6,7 @@ import { blenderFilmState } from '../../test/blenderFilmFixture.js';
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../services/apiCodeAnimation', () => ({ getCodeAnimationProject: vi.fn() }));
 vi.mock('../../services/apiCodeAnimationFilm.js', async load => ({ ...await load(),
-  getMusicVideoBlender: vi.fn(), listMusicVideoBlenderFiles: vi.fn(), getMusicVideoBlenderFile: vi.fn(),
+  getMusicVideoBlender: vi.fn(), listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })), listMusicVideoBlenderFiles: vi.fn(), getMusicVideoBlenderFile: vi.fn(),
   assembleMusicVideoBlenderCut: vi.fn(), patchFilm: vi.fn(),
   promoteFilm: vi.fn(),
 }));
