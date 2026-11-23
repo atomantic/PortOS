@@ -129,7 +129,13 @@ vi.mock('../components/fableloom/LoomNodeEditor', () => ({
 vi.mock('../components/fableloom/LoomPlayPanel', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSettingsDrawer', () => ({ default: () => <div /> }));
 vi.mock('../components/fableloom/LoomSeriesPlan', () => ({ default: () => <div>Series planning workspace</div> }));
-vi.mock('../components/fableloom/LoomValidationPanel', () => ({ default: () => <div>Episode validation</div> }));
+const validationPanel = vi.hoisted(() => ({ onLoomUpdate: null }));
+vi.mock('../components/fableloom/LoomValidationPanel', () => ({
+  default: ({ onLoomUpdate }) => {
+    validationPanel.onLoomUpdate = onLoomUpdate;
+    return <div>Episode validation</div>;
+  },
+}));
 
 import { addLoomNode, getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo } from '../services/apiFableLoom.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
@@ -460,6 +466,81 @@ describe('FableLoomStory node moves', () => {
     await user.click(await screen.findByRole('button', { name: 'Canvas move node' }));
     await waitFor(() => expect(updateLoomNode).toHaveBeenCalledWith('loom-1', 'ep-1', 'node-1', { pos: { x: 500, y: 600 } }));
     expect(screen.getByTestId('canvas-node-pos')).toHaveTextContent('{"x":500,"y":600}');
+  });
+});
+
+describe('FableLoomStory async lifecycle safety', () => {
+  it('shows a retryable error, not "no longer exists", when the load fails with a non-404 error', async () => {
+    getLoom
+      .mockRejectedValueOnce(Object.assign(new Error('Server exploded'), { status: 500 }))
+      .mockResolvedValueOnce(loom({ episodes: [episode()] }));
+    const user = userEvent.setup();
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Server exploded');
+    expect(screen.queryByText('This loom no longer exists.')).not.toBeInTheDocument();
+    expect(getLoom).toHaveBeenCalledWith('loom-1', { silent: true });
+
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('tab', { name: '1. The First Door' })).toBeInTheDocument();
+    expect(getLoom).toHaveBeenCalledTimes(2);
+  });
+
+  it('still reports a 404 as a missing loom', async () => {
+    getLoom.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }));
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    expect(await screen.findByText('This loom no longer exists.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  function RouteControls() {
+    const navigate = useNavigate();
+    return <button type="button" onClick={() => navigate('/fableloom/loom-b/ep-b')}>Open loom B</button>;
+  }
+  const renderTwoLooms = () => render(
+    <MemoryRouter initialEntries={['/fableloom/loom-a/ep-a']}>
+      <RouteControls />
+      <Routes>
+        <Route path="/fableloom/:loomId/:episodeId" element={<FableLoomStory />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const loomA = () => loom({ id: 'loom-a', episodes: [episode({ id: 'ep-a', title: 'Alpha Door', nodes: [{ id: 'node-1', title: 'Threshold', prose: 'x', transitions: [], pos: { x: 1, y: 2 } }] })] });
+  const loomB = () => loom({ id: 'loom-b', episodes: [episode({ id: 'ep-b', title: 'Beta Door' })] });
+
+  it('survives a failed move rolling back after navigating to another loom', async () => {
+    let rejectMove;
+    updateLoomNode.mockImplementation(() => new Promise((_, reject) => { rejectMove = reject; }));
+    getLoom.mockResolvedValueOnce(loomA()).mockResolvedValueOnce(loomB());
+    const user = userEvent.setup();
+    renderTwoLooms();
+
+    await user.click(await screen.findByRole('button', { name: 'Canvas move node' }));
+    await user.click(screen.getByRole('button', { name: 'Open loom B' }));
+    expect(await screen.findByRole('tab', { name: '1. Beta Door' })).toBeInTheDocument();
+
+    rejectMove(new Error('late failure'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByRole('tab', { name: '1. Beta Door' })).toBeInTheDocument();
+    expect(screen.getByTestId('canvas-node-pos')).toHaveTextContent('null');
+  });
+
+  it('ignores a late loom update from the previously open loom', async () => {
+    getLoom.mockResolvedValueOnce(loomA()).mockResolvedValueOnce(loomB());
+    const user = userEvent.setup();
+    renderTwoLooms();
+
+    await screen.findByText('Episode validation');
+    const staleUpdate = validationPanel.onLoomUpdate;
+    await user.click(screen.getByRole('button', { name: 'Open loom B' }));
+    expect(await screen.findByRole('tab', { name: '1. Beta Door' })).toBeInTheDocument();
+
+    const { act } = await import('@testing-library/react');
+    act(() => { staleUpdate(loomA()); });
+    expect(screen.getByRole('tab', { name: '1. Beta Door' })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading loom' })).not.toBeInTheDocument();
   });
 });
 
