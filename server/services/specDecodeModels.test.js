@@ -9,16 +9,15 @@ import {
   removeSpecDecodeModel,
   getSpecDecodePresetStatus,
   pickGgufSibling,
-  resolveSpecModelPath,
   _resetSpecDecodeDownloadsForTests,
 } from './specDecodeModels.js';
 import * as specDecodePresets from '../lib/specDecodePresets.js';
+import { resolveSpecModelPath } from '../lib/specDecodePresets.js';
 import * as hfToken from './hfToken.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
 
-// removeSpecDecodeModel reaches this lazily (a static import would cycle back
-// here — llamaServerManager.js imports resolveSpecModelPath from this module)
-// to refuse deleting a weight llama-server is actively running.
+// removeSpecDecodeModel asks llama-server whether it is running a weight
+// before deleting it; stub that status.
 vi.mock('./llamaServerManager.js', () => ({
   getLlamaServerStatus: vi.fn(async () => ({ running: false, config: null })),
 }));

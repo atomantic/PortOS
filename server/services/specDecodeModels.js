@@ -19,9 +19,8 @@
  */
 
 import { readdir, stat, unlink } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join } from 'path';
 import { getHfCacheRoot, repoToDirName } from '../lib/hfCache.js';
-import { expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
@@ -36,12 +35,14 @@ import {
 } from '../lib/downloadPreflight.js';
 import { buildHfAuthHeaders, buildHfResolveUrl, fetchHuggingfaceModel, modelSiblingFilenames } from '../lib/huggingfaceLora.js';
 import { getHfToken } from './hfToken.js';
+import { getLlamaServerStatus } from './llamaServerManager.js';
 import {
   SPEC_DECODE_PRESETS,
   SPEC_MODEL_ROLES,
   SPEC_ROLE_LABELS,
   findSpecDecodePreset,
   hfSearchUrl,
+  resolveSpecModelPath,
   specDecodeSource,
 } from '../lib/specDecodePresets.js';
 
@@ -56,13 +57,6 @@ const downloadSlot = createDownloadSlot({
     `Download stalled — no bytes received for ${minutes} minute${minutes === 1 ? '' : 's'}; cancelled so another model can download`
   ),
 });
-
-/**
- * Absolute path a launcher field refers to. Relative paths resolve against the
- * server's cwd — the cwd llama-server inherits — and `~` is expanded here
- * because `spawn` performs no shell expansion.
- */
-export const resolveSpecModelPath = (path) => resolve(expandHome(String(path || '').trim()));
 
 /**
  * True for a shipped preset path (`models/<file>`). Those are the downloads
@@ -518,7 +512,6 @@ export async function removeSpecDecodeModel({ presetId, role }) {
     );
   }
   const located = await locatePresetWeight(entry, role);
-  const { getLlamaServerStatus } = await import('./llamaServerManager.js');
   const status = await getLlamaServerStatus();
   const runningPath = status?.config?.[role];
   if (status?.running && runningPath && resolveSpecModelPath(runningPath) === located.abs) {

@@ -26,6 +26,9 @@
  * offering a Download button that cannot work. Pairs are the ones documented in
  * docs/features/dflash2.md; see also docs/research/2026-08-19-dspark-vs-dflash2.md.
  */
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
+
 
 // llama.cpp exposes one `--spec-type` per drafter family. `draft-dspark` merged
 // upstream on 2026-07-28 (ggml-org/llama.cpp#25173) and works on a stock
@@ -268,3 +271,16 @@ export const specDecodeSource = (presetId, role) => {
 // repos are named after the file, not the target model.
 export const hfSearchUrl = (path) =>
   `https://huggingface.co/models?search=${encodeURIComponent(String(path).split('/').pop().replace(/\.gguf$/i, ''))}`;
+
+/**
+ * Absolute path a launcher field refers to. Relative paths resolve against the
+ * server's cwd — the cwd llama-server inherits — and a leading `~` is expanded
+ * here because `spawn` performs no shell expansion. Built-ins only: this lives
+ * in a leaf module so llamaServerManager.js never pulls in the download stack.
+ */
+const expandLeadingHome = (p) => {
+  if (p === '~') return homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(homedir(), p.slice(2));
+  return p;
+};
+export const resolveSpecModelPath = (path) => resolve(expandLeadingHome(String(path || '').trim()));
