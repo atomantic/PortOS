@@ -35,7 +35,7 @@ describe('three vendor import map', () => {
     expect(page).not.toContain('cdn.example.com');
     expect(page.match(/<script type="importmap">/g)).toHaveLength(1);
     expect(page.match(/<\/script>/g)).toHaveLength(1);
-    expect(page.startsWith('<html><head><script type="importmap">')).toBe(true);
+    expect(page.startsWith('<!doctype html><html><head><script type="importmap">')).toBe(true);
   });
 
   it('detects bare three imports only', () => {
