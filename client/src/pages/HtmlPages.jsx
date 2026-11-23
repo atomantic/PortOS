@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { GalleryVertical, LoaderCircle, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react';
+import { GalleryVertical, LayoutGrid, List, LoaderCircle, Play, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { useSocketResource } from '../hooks/useSocketResource';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
@@ -8,16 +8,24 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import ListLoadError from '../components/ui/ListLoadError';
 import EmptyState from '../components/EmptyState';
 import HtmlPreviewFrame from '../components/htmlPages/HtmlPreviewFrame';
+import HtmlPageGallery from '../components/htmlPages/HtmlPageGallery';
+import PageFileActions from '../components/htmlPages/PageFileActions';
+import TabPills from '../components/ui/TabPills';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import toast from '../components/ui/Toast';
 import { deleteHtmlPageRun, getHtmlPageRun, listHtmlPageModels, listHtmlPageRuns, resumeHtmlPageRun, startHtmlPageRuns } from '../services/apiHtmlPages.js';
-import { formatDurationMs, timeAgo } from '../utils/formatters';
+import { formatCount, formatDurationMs, timeAgo } from '../utils/formatters';
 
 const RUN_EVENTS = ['html-page-run:changed'];
 // The installed-model list changes when the user installs a model, not when a run changes.
 const NO_EVENTS = [];
 const MAX_COMPARE = 4;
+// The stored work as run cards or as one gallery of every page; `?view=gallery` deep-links the gallery.
+const VIEWS = [
+  { id: 'runs', label: 'Runs', icon: List },
+  { id: 'gallery', label: 'Gallery', icon: LayoutGrid },
+];
 // Mirrors HTML_PAGES_MAX_MODELS on the server: local models and provider routes together.
 const MAX_TARGETS = 8;
 
@@ -371,10 +379,14 @@ function Comparison({ ids, onRemove }) {
                     : <div className="flex aspect-[16/10] items-center justify-center rounded-lg border border-dashed border-port-border text-xs text-gray-500">{isActive(run) ? 'Not generated yet' : 'No page'}</div>}
                   {page && (
                     <div className="space-y-0.5 text-[11px] text-gray-500">
-                      <p>
-                        {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs)}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
-                        {page.error ? <span className="text-port-warning"> · {page.error}</span> : ''}
-                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="min-w-0">
+                          {page.passed}/{page.total} checks · {formatDurationMs(page.elapsedMs)}{page.tokensPerSecond ? ` · ${Math.round(page.tokensPerSecond)} tok/s` : ''}
+                          {Number.isFinite(page.completionTokens) ? ` · ${formatCount(page.completionTokens)} tokens` : ''}
+                          {page.error ? <span className="text-port-warning"> · {page.error}</span> : ''}
+                        </p>
+                        {page.html && <PageFileActions runId={run.id} index={row} label={`${run.modelId} — ${label}`} />}
+                      </div>
                       {page.hitTokenLimit && <p className="text-port-warning">Stopped at the token limit — the model was cut off before it finished.</p>}
                       {page.checks?.some((c) => !c.ok) && <p>Failed: {page.checks.filter((c) => !c.ok).map((c) => c.label).join('; ')}</p>}
                     </div>
@@ -392,6 +404,12 @@ function Comparison({ ids, onRemove }) {
 export default function HtmlPages() {
   const [searchParams, setSearchParams] = useSearchParams();
   const compareIds = useMemo(() => (searchParams.get('compare') || '').split(',').filter(Boolean).slice(0, MAX_COMPARE), [searchParams]);
+  const view = searchParams.get('view') === 'gallery' ? 'gallery' : 'runs';
+  const setView = (id) => {
+    const next = new URLSearchParams(searchParams);
+    if (id === 'gallery') next.set('view', 'gallery'); else next.delete('view');
+    setSearchParams(next, { replace: true });
+  };
 
   const { data: catalog, error: catalogError, refetch: refetchCatalog } = useSocketResource(
     ({ signal }) => listHtmlPageModels({ silent: true, signal }),
@@ -445,14 +463,17 @@ export default function HtmlPages() {
 
         {compareIds.length > 0 && <Comparison ids={compareIds} onRemove={(id) => toggle(id)} />}
 
-        <section>
-          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Runs</h2>
+        <section className="space-y-3">
+          <TabPills tabs={VIEWS} activeTab={view} onChange={setView} mobileCompact ariaLabel="Stored runs or every page" />
           {error && <ListLoadError what="runs" error={error} onRetry={refetch} />}
           {!error && loading && <PageSkeleton label="Loading runs" />}
           {!error && !loading && runs && runs.length === 0 && (
             <EmptyState icon={GalleryVertical} title="No runs yet" message="Pick a model above and run the pages." />
           )}
-          {!error && runs && runs.length > 0 && (
+          {!error && runs && runs.length > 0 && view === 'gallery' && (
+            <HtmlPageGallery runs={runs} compareIds={compareIds} compareFull={compareIds.length >= MAX_COMPARE} onCompare={toggle} />
+          )}
+          {!error && runs && runs.length > 0 && view === 'runs' && (
             <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {runs.map((run) => (
                 <RunCard key={run.id} run={run} selected={compareIds.includes(run.id)} compareFull={compareIds.length >= MAX_COMPARE} onToggle={toggle} onDelete={remove} onResume={resume} />
