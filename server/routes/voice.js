@@ -403,7 +403,7 @@ router.post('/profiles/clone', asyncHandler(async (req, res) => {
   const body = validateRequest(voiceCloneCandidateSchema, req.body || {});
   const audioBuffer = Buffer.from(body.audioBase64, 'base64');
   if (audioBuffer.length > MAX_BASE64_UPLOAD_BYTES) {
-    throw new ServerError('FILE_TOO_LARGE', `Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`);
+    throw new ServerError(`Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`, { status: 413, code: 'FILE_TOO_LARGE' });
   }
   const profile = await createClonedVoiceCandidate({
     ...body,
