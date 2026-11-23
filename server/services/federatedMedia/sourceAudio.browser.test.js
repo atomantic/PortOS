@@ -9,7 +9,7 @@ import { pcmAudioInfo, prepareSourceAudioWindow } from './sourceAudio.js';
 
 const mocks = vi.hoisted(() => ({ master: '' }));
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
-vi.mock('../musicVideo/render.js', () => ({ resolveMasterAudioPath: async () => mocks.master }));
+vi.mock('../musicVideo/masterAudioPath.js', () => ({ resolveMasterAudioPath: async () => mocks.master }));
 const bin = await findFfmpeg();
 const canRun = browserSuiteCanRun('Source audio ffmpeg integration', { ffmpeg: bin });
 

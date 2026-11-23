@@ -26,7 +26,6 @@ vi.mock('../services/codeAnimation/events.js', () => ({
   emitCodeAnimationFilm: vi.fn(),
 }));
 vi.mock('../services/musicVideo/catalogLinks.js', () => ({ queueProjectCatalogLinkSync: vi.fn() }));
-vi.mock('../services/musicVideo/shotSegments.js', () => ({ removeProjectSegments: vi.fn(async () => {}) }));
 vi.mock('../services/sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(), autoSubscribeRecordToAllPeers: vi.fn(async () => {}) }));
 vi.mock('../services/videoGen/history.js', () => ({ mutateVideoHistory: vi.fn(async change => { state.history = change(state.history); }) }));
 vi.mock('../services/codeAnimation/execution.js', () => ({

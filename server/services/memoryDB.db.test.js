@@ -387,6 +387,45 @@ describe.skipIf(!runDb)('memoryDB listing filters (#3447)', () => {
     expect((await memoryDB.getMemories({ sourceAgentId: 'persistent-mind' })).memories.map((m) => m.id)).toEqual([brainFact.id]);
   });
 
+  it('filters by source task, skips the count, and batches peek and access', async () => {
+    const matched = await memoryDB.createMemory({
+      type: 'fact', content: 'Turn fact.', category: 'science', sourceTaskId: 'turn-batch', sourceAgentId: 'persistent-mind',
+    }, VEC_A);
+    const other = await memoryDB.createMemory({
+      type: 'fact', content: 'Other turn.', category: 'science', sourceTaskId: 'turn-other',
+    });
+    const original = pg.Client.prototype.query;
+    const sqls = [];
+    const spy = vi.spyOn(pg.Client.prototype, 'query').mockImplementation(function queryObserver(...args) {
+      if (typeof args[0] === 'string') sqls.push(args[0]);
+      return original.apply(this, args);
+    });
+    try {
+      const page = await memoryDB.getMemories({ sourceTaskId: 'turn-batch', includeCount: false, limit: 10 });
+      expect(page.total).toBeNull();
+      expect(page.memories.map((memory) => memory.id)).toEqual([matched.id]);
+      expect(await memoryDB.peekMemories([])).toEqual([]);
+      const peeked = await memoryDB.peekMemories([other.id, matched.id, matched.id, 'not-a-uuid']);
+      expect(peeked.map((memory) => memory.id)).toEqual([other.id, matched.id]);
+      expect(peeked.every((memory) => memory.embedding == null)).toBe(true);
+      expect(peeked[1].content).toBe('Turn fact.');
+      const withEmbedding = await memoryDB.peekMemories([matched.id], { includeEmbedding: true });
+      expect(withEmbedding[0].embedding).toEqual(VEC_A);
+      expect(await memoryDB.recordMemoryAccess([matched.id, other.id, 'not-a-uuid'])).toBe(2);
+      expect((await memoryDB.peekMemory(matched.id)).accessCount).toBe(1);
+      expect((await memoryDB.peekMemory(other.id)).accessCount).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sqls.some((sql) => sql.includes('COUNT(*)') && sql.includes('source_task_id'))).toBe(false);
+    const peeks = sqls.filter((sql) => sql.includes('ANY($1::uuid[])') && sql.startsWith('SELECT'));
+    expect(peeks).toHaveLength(2);
+    expect(peeks[0]).not.toMatch(/(?<![_])embedding(?![_])/);
+    expect(peeks[1]).toMatch(/(?<![_])embedding(?![_])/);
+    expect(sqls.filter((sql) => sql.startsWith('UPDATE memories SET access_count'))).toHaveLength(1);
+    await query('DELETE FROM memories WHERE id = ANY($1::uuid[])', [[matched.id, other.id]]);
+  });
+
   it('sorts and paginates while reporting the unpaginated total', async () => {
     const page = await memoryDB.getMemories({ sortBy: 'importance', sortOrder: 'desc', limit: 1 });
     expect(page.total).toBe(2);
@@ -717,7 +756,7 @@ describe.skipIf(!runDb)('getRelevantMemories query budget (#17602)', () => {
       expect(sql.filter(text => text.includes('access_count = access_count + 1'))).toHaveLength(1);
       const peekSql = sql.find(text => text.includes('FROM memories WHERE id = ANY'));
       expect(peekSql).toBeTruthy();
-      expect(peekSql).not.toContain('embedding');
+      expect(peekSql).not.toMatch(/(?<![_])embedding(?![_])/);
       expect(maxInflight).toBe(2);
       const update = spy.mock.calls.find(([text]) => String(text).includes('access_count = access_count + 1'));
       expect(update[1][0]).toEqual([kept.id]);
@@ -735,7 +774,7 @@ describe.skipIf(!runDb)('getRelevantMemories query budget (#17602)', () => {
     expect(peeked).toHaveLength(2);
     expect(peeked.every(memory => memory.embedding === null && memory.relatedMemories === undefined)).toBe(true);
     expect(await memoryDB.peekMemories([])).toEqual([]);
-    expect(await memoryDB.recordMemoryAccess([])).toEqual([]);
+    expect(await memoryDB.recordMemoryAccess([])).toBe(0);
   });
 });
 

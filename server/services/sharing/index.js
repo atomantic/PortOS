@@ -11,10 +11,10 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, quiesceAllWatchersForExit, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
-import { installSubscriptionListener } from './subscriptions.js';
+import { installSubscriptionListener, uninstallSubscriptionListener } from './subscriptions.js';
 import { installPeerSyncListener, uninstallPeerSyncListener, peerSyncEvents, syncMediaLibraryWithAllPeers, syncCosHistoryWithAllPeers, syncCosTasksWithAllPeers, syncEidoverseFoundationsWithAllPeers } from './peerSync.js';
 import { hasSubscriptionAdapter } from './recordEvents.js';
-import { initAnnotationsSync } from './annotationsSync.js';
+import { initAnnotationsSync, shutdownAnnotationsSync } from './annotationsSync.js';
 import { installShareRefusalNotifier } from './shareRefusalNotifier.js';
 
 export { sharingEvents } from './importer.js';
@@ -193,6 +193,11 @@ function releaseSharingRuntime() {
   // listeners stay attached after shutdown and pollute any subsequent
   // re-init or test teardown.
   uninstallPeerSyncListener();
+  // Share-bucket re-export and annotation debounce are separate listeners
+  // from peer sync. Leaving them attached re-fires exports after shutdown
+  // and stacks a second handler on the next initSharing().
+  uninstallSubscriptionListener();
+  shutdownAnnotationsSync();
   peerSyncEvents.removeAllListeners();
   initialized = false;
   io = null;

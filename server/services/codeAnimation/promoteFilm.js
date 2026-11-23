@@ -31,7 +31,7 @@ export async function promoteFilm(id, input) {
   const { settings } = normalizeBlenderRecord(source.film);
   const coverageProblems = manifest ? blenderFilmProblems(manifest, { fps: settings.fps, durationSec })
     : ['Sync shots from scripts after analyzing the song: no shot manifest has been saved yet.'];
-  const { createProjectFromFilm, deleteProject } = await import('../musicVideo/projects.js');
+  const [{ createProjectFromFilm }, { deleteProject }] = await Promise.all([import('../musicVideo/projectFilmActions.js'), import('../musicVideo/projects.js')]);
   const project = await createProjectFromFilm({ ...selection, name: selection.name || source.title,
     composition: { mode: 'blender' } }, owner, settings);
   // Merge only lineage under the source row lock; preserve concurrent source edits.

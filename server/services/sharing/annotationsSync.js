@@ -26,6 +26,9 @@ let pendingTimer = null;
 let retryTimer = null;
 let retryAttempt = 0;
 let installed = false;
+// Unsubscribe from mediaAnnotations. `onLocalAnnotationChange` returns it;
+// discarding it left the listener attached across shutdown and test reset.
+let unsubscribeLocalChange = null;
 
 /**
  * Cache of manifest-derived asset keys per bucket, invalidated by the
@@ -115,12 +118,25 @@ async function listBucketAssetKeys(bucketPath) {
   return new Set([...manifestKeys, ...legacyKeys]);
 }
 
-/** Test hook — drop listener-installed state and pending timers. */
-export function __resetAnnotationsSyncForTests() {
+/**
+ * Detach the local-annotation listener and cancel the debounce plus any
+ * retry backoff. A flush already inside `flushAll` is not aborted; nothing
+ * new is scheduled after this returns.
+ */
+export function shutdownAnnotationsSync() {
+  if (unsubscribeLocalChange) {
+    unsubscribeLocalChange();
+    unsubscribeLocalChange = null;
+  }
   installed = false;
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = null;
   clearRetry();
+}
+
+/** Test hook — same teardown as process shutdown, so resets cannot leak the listener. */
+export function __resetAnnotationsSyncForTests() {
+  shutdownAnnotationsSync();
 }
 
 /** Test hook — reset the per-bucket manifest-keys cache between cases. */
@@ -319,7 +335,7 @@ function scheduleFlush() {
 export function initAnnotationsSync() {
   if (installed) return;
   installed = true;
-  onLocalAnnotationChange(() => scheduleFlush());
+  unsubscribeLocalChange = onLocalAnnotationChange(() => scheduleFlush()) || null;
   // An edit made just before a restart (or during a failed export) never
   // reached the bucket; the export is idempotent so a boot flush is cheap.
   scheduleFlush();

@@ -333,12 +333,12 @@ export async function sendMedia(attachment) {
   if (!bot || !authorizedChatId) return { success: false, error: !bot ? 'Bot not initialized' : 'No chatId configured' };
 
   if (!rateLimiter.consume()) {
-    console.log(`📱 Telegram: rate limit reached, skipping attachment ${attachment.filename}`);
+    console.log(`📱 Telegram: rate limit reached, skipping attachment`);
     return { success: false, error: 'Rate limit exceeded' };
   }
 
   const result = await bot.sendMedia(authorizedChatId, attachment).catch((err) => {
-    console.error(`📱 Telegram: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
+    console.error(`📱 Telegram: ${attachment.method} failed — ${err.message}`);
     return null;
   });
   return result ? { success: true } : { success: false, error: 'Send failed' };
@@ -653,7 +653,7 @@ export async function sendCheckin(goalId) {
 async function loadCheckins() {
   const { ok, value } = await readJSONFileStrict(CHECKINS_FILE, { checkins: [] });
   if (!ok || !Array.isArray(value?.checkins)) {
-    console.error(`📱 Telegram: check-in log at ${CHECKINS_FILE} is unreadable — refusing to overwrite it`);
+    console.error(`📱 Telegram: check-in log at data/telegram/checkins.json is unreadable — refusing to overwrite it`);
     return null;
   }
   return value;

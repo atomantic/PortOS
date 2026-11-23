@@ -204,7 +204,7 @@ export async function createAccount(accountData) {
   await store.mutate((data) => { data.accounts[id] = account; });
   notifyChanged('create', id);
 
-  console.log(`🔗 Added social account: ${account.platform}/${account.username} (${id})`);
+  console.log(`🔗 Added social account: ${account.platform} (${id})`);
   return { id, ...account };
 }
 
@@ -235,7 +235,7 @@ export async function updateAccount(id, updates) {
   if (!account) return null;
   notifyChanged('update', id);
 
-  console.log(`📝 Updated social account: ${account.platform}/${account.username} (${id})`);
+  console.log(`📝 Updated social account: ${account.platform} (${id})`);
   return { id, ...account };
 }
 
@@ -261,7 +261,7 @@ export async function deleteAccount(id) {
   if (!account) return false;
   notifyChanged('delete', id);
 
-  console.log(`🗑️ Removed social account: ${account.platform}/${account.username} (${id})`);
+  console.log(`🗑️ Removed social account: ${account.platform} (${id})`);
   return true;
 }
 

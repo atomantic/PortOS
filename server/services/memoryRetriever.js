@@ -109,16 +109,9 @@ export async function getRelevantMemories(task, options = {}) {
 
   memories.sort((a, b) => b.relevance - a.relevance);
 
-  if (memories.length > 0) {
-    const recorded = await recordMemoryAccess(memories.map(memory => memory.id));
-    const recordedById = new Map(recorded.map(row => [row.id, row]));
-    for (const memory of memories) {
-      const row = recordedById.get(memory.id);
-      if (!row) continue;
-      memory.accessCount = row.accessCount;
-      memory.lastAccessed = row.lastAccessed;
-    }
-  }
+  // recordMemoryAccess returns how many rows changed. The prompt uses the
+  // peeked text, so a missing counter on the returned object is fine.
+  if (memories.length > 0) await recordMemoryAccess(memories.map(memory => memory.id));
 
   return memories;
 }

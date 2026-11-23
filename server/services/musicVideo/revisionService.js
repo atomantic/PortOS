@@ -37,7 +37,7 @@ import {
 } from './revision.js';
 import { chargeAutoReviewGeneration, refundAutoReviewGeneration, runOwningRevision } from './autoReview.js';
 
-import { resolveMasterAudioPath } from './render.js';
+import { resolveMasterAudioPath } from './masterAudioPath.js';
 import { findStalePerformanceTakes } from './performanceShot.js';
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {

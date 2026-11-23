@@ -133,9 +133,9 @@ export async function peekMemory(id) {
   return b.peekMemory(id);
 }
 
-export async function peekMemories(ids) {
+export async function peekMemories(ids, options) {
   const b = await getBackend();
-  return b.peekMemories(ids);
+  return b.peekMemories(ids, options);
 }
 
 export async function recordMemoryAccess(ids) {

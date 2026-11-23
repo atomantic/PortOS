@@ -15,7 +15,7 @@
 import { TAKE_SLOT } from './takes.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
-const KIND_OF_SLOT = { image: 'image', endImage: 'image', video: 'video' };
+export const KIND_OF_SLOT = { image: 'image', endImage: 'image', video: 'video' };
 
 /** The still a video take was rendered from, when it recorded one. */
 function takeSourceImageId(take) {
@@ -335,7 +335,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
  * use them now, and their marks. A shot still using one keeps it, so its
  * missing media is reported where the shot is, not silently cleared.
  */
-function forgetPoolAssets(project, keys) {
+export function forgetPoolAssets(project, keys) {
   const gone = new Set(keys);
   const used = usedKeys(project);
   let removed = 0;
@@ -353,7 +353,7 @@ function forgetPoolAssets(project, keys) {
   return { project: { ...project, scenes, assetMarks }, removed };
 }
 
-const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
+export const usedKeys = (project) => new Set((project?.scenes || []).flatMap((scene) => Object.entries(TAKE_SLOT)
   .map(([slot, field]) => (scene[field] ? `${KIND_OF_SLOT[slot]}:${scene[field]}` : null)).filter(Boolean)));
 
 /** Revalidate newly selected local media while project mutation admission is held.
@@ -461,6 +461,12 @@ export async function fileMusicVideoMedia(project, assets) {
   } catch (err) {
     console.error(`❌ music-video media pool: filing for ${project.id} failed: ${err.message}`);
   }
+}
+
+/** File takes that just landed on shots (`{ sceneId, take }`) into the project's collection. */
+export function fileAppendedTakes(project, placed) {
+  return fileMusicVideoMedia(project, placed.filter(({ take }) => take?.assetId)
+    .map(({ sceneId, take }) => ({ kind: take.kind === 'video' ? 'video' : 'image', ref: take.assetId, sceneId, take })));
 }
 
 async function stampClipProvenance(clips) {
@@ -586,80 +592,4 @@ export async function searchMusicVideoMediaPool(project, query) {
     item.kind === 'video' ? history.get(item.assetId)?.prompt || '' : await sidecarPrompt(item.assetId)].join('\n').toLowerCase()));
   return items.filter((_, index) => words.every((word) => texts[index].includes(word)))
     .map(({ kind, assetId }) => ({ kind, assetId }));
-}
-
-/**
- * After stills or clips (`<image|video>:<ref>` keys) are deleted from the
- * media library: forget them on every music video that held them (unused
- * takes, marks, collection rows), in one pass per project, so nothing points
- * at a file that is gone. Best-effort, like the other filing.
- */
-export async function forgetDeletedMusicVideoAssets(keys, { mutateProjectRecord: admittedMutation } = {}) {
-  const gone = new Set(keys);
-  try {
-    const [{ listProjects, mutateProjectRecord }, { getCollection, musicVideoCollectionId, bulkUpdateCollectionItems }] = await Promise.all([
-      import('./projects.js'), import('../mediaCollections.js'),
-    ]);
-    for (const project of await listProjects()) {
-      const held = Object.keys(project.assetMarks || {}).some((key) => gone.has(key))
-        || (project.scenes || []).some((scene) => (scene.takes || []).some((take) => gone.has(`${KIND_OF_SLOT[take?.kind]}:${take?.assetId}`)));
-      // The take removal files dropped takes into the collection, so the rows go after it.
-      if (held) await (admittedMutation || mutateProjectRecord)(project.id, (current) => forgetPoolAssets(current, keys));
-      const collection = await getCollection(musicVideoCollectionId(project.id)).catch(() => null);
-      const rows = (collection?.items || []).map((item) => `${item.kind}:${item.ref}`).filter((key) => gone.has(key));
-      if (rows.length) await bulkUpdateCollectionItems(collection.id, { remove: rows });
-    }
-  } catch (err) {
-    console.error(`❌ music-video media pool: forgetting ${keys.length} deleted asset(s) failed: ${err.message}`);
-  }
-}
-
-// Whether the copy on this machine is gone (or hidden) after a deleteMediaAnywhere result.
-const poolCopyGone = (result) => result.status === 'deleted'
-  || (result.status === 'deleted-remote' && result.hiddenHere === true)
-  || (result.status === 'pending' && result.removedHere === true);
-
-/**
- * Delete unused stills and clips of a video from the media library (the asset
- * manager's "Delete"): only assets in the video's pool, so a shot's still or
- * clip and media this video never made are refused. Each delete goes to the
- * machine that owns the asset (deleteMediaAnywhere), then the batch is forgotten
- * on every music video (forgetDeletedMusicVideoAssets). Resolves `{ deleted, items }`,
- * one result per item with its delete status.
- */
-export async function deleteMusicVideoPoolAssets(project, items) {
-  const { withProjectMediaMutation, listProjects } = await import('./projects.js');
-  const { requireProject } = await import('./requireProject.js');
-  const { withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
-  // Backup admission precedes the project boundary, matching gallery/history
-  // deletion; one lease covers physical deletion and project cleanup.
-  return withBackupAssetPublication(() => withProjectMediaMutation(async (admitted) => {
-    const current = await requireProject(project.id);
-    const pool = new Set((await getMusicVideoMediaPool(current)).items.map((item) => `${item.kind}:${item.assetId}`));
-    // A shot on any music video using it keeps it, not only this video's shots.
-    const usedAnywhere = new Set((await listProjects()).flatMap((other) => [...usedKeys(other)]));
-    const keys = items.map((item) => `${item.kind}:${item.assetId}`);
-    const refused = keys.filter((key) => !pool.has(key) || usedAnywhere.has(key));
-    if (refused.length) {
-      throw new ServerError(`${refused.length} of these ${refused.length === 1 ? 'is' : 'are'} on a shot or not made for this video`, { status: 409, code: 'POOL_ASSET_IN_USE' });
-    }
-    const { deleteMediaAnywhere } = await import('../mediaRemoteDelete.js');
-    const results = [];
-    const forget = [];
-    try {
-      for (const item of items) {
-        // The owner deletes first; a peer-owned asset is never tombstoned here ahead of it.
-        // A delete that finished since the pool was read already removed the asset.
-        const result = await deleteMediaAnywhere(item.kind, item.assetId, { forgetInMusicVideos: false })
-          .catch((err) => { if (err?.code === 'NOT_FOUND') return { status: 'deleted' }; throw err; });
-        results.push({ kind: item.kind, assetId: item.assetId, ...result });
-        if (poolCopyGone(result)) forget.push(`${item.kind}:${item.assetId}`);
-      }
-    } finally {
-      // Even when a later deletion fails, forget the completed prefix. Keep the
-      // failed item's evidence, and let the original error reach the caller.
-      if (forget.length) await forgetDeletedMusicVideoAssets(forget, admitted);
-    }
-    return { deleted: forget.length, items: results };
-  }));
 }

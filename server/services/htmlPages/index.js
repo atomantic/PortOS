@@ -91,8 +91,17 @@ const summarize = (run) => ({ ...run, pages: (run.pages || []).map(({ html, ...p
 /** Stored run summaries, newest first. A run still marked active that this process is not working on was cut off by a restart. */
 export async function listRuns() {
   const runs = await listStoredRuns();
-  const current = await Promise.all(runs.map((run) => (isCutOff(run) ? markInterrupted(run.id) : run)));
-  return current.map(summarize);
+  const current = await Promise.all(runs.map(async (run) => {
+    if (!isCutOff(run)) return run;
+    try {
+      return await markInterrupted(run.id);
+    } catch (err) {
+      // Soft-deleted between the list and the reconcile. Omit it; a 404 here must not fail the whole page.
+      if (err?.status === 404 || err?.code === 'NOT_FOUND') return null;
+      throw err;
+    }
+  }));
+  return current.filter(Boolean).map(summarize);
 }
 
 const markInterrupted = (id) => mutateRun(id, (current) => (ACTIVE.has(current.status)
@@ -135,13 +144,17 @@ export async function startRuns({ models = [], routes = [], pages }) {
     ...models.map((m) => ({ backend: m.backend, modelId: m.modelId, route: null })),
     ...resolvedRoutes.map((route) => ({ backend: 'provider', modelId: route.model || route.providerName, route })),
   ];
-  for (const target of targets) {
-    const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
-    enqueue(run.id);
-    runs.push(run);
+  try {
+    for (const target of targets) {
+      const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
+      enqueue(run.id);
+      runs.push(run);
+    }
+  } finally {
+    // A later createRun can reject after earlier runs are already in queue and liveRuns. Drain those or they stay stuck (409 on resume, Live activity never clears).
+    if (runs.length) void drain();
   }
   console.log(`🧩 HTML pages: queued ${runs.length} run${runs.length === 1 ? '' : 's'} of ${pages.length} page${pages.length === 1 ? '' : 's'}`);
-  void drain();
   return runs;
 }
 
@@ -226,7 +239,14 @@ async function processRun(id) {
   const { controller } = liveRuns.get(id);
   let claim = null;
   try {
-    claim = await claimHeavyLocalJob({ kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS });
+    // Delete aborts this controller. Leave before taking the accelerator, and
+    // again as soon as the wait returns, so a deleted run does not hold the
+    // machine lock or the serial queue for the rest of the claim budget.
+    if (controller.signal.aborted) return;
+    claim = await claimHeavyLocalJob({
+      kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS, signal: controller.signal,
+    });
+    if (controller.signal.aborted || claim.aborted) return;
     if (!claim.ok) throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
     console.log(`🧩 HTML pages: ${run.modelId} on ${run.route?.providerName || runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
@@ -267,7 +287,7 @@ async function processRun(id) {
       await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
-      await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)));
+      await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
     } else {
       await generatePages(local(run.modelId));
     }
@@ -285,6 +305,7 @@ async function processRun(id) {
       };
     });
   } catch (err) {
+    if (controller.signal.aborted) return;
     console.log(`🧩 HTML pages: ${run.modelId} failed: ${err.message}`);
     await mutateRun(id, (c) => (c.deleted ? null : { ...c, status: 'failed', error: err.message, finishedAt: new Date().toISOString() })).catch(() => null);
   } finally {

@@ -71,6 +71,7 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
+const boardEdits = await import('../services/musicVideo/projectBoardEdits.js');
 const { productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 
 // The approvals a project saved before lock removal still carries (a covering board approval and a
@@ -1102,7 +1103,7 @@ describe('pool deletion and selection admission', () => {
       const direct = await request(app).patch(fixture.path).send({ [fixture.field]: fixture.assetId });
       expect(direct.status).toBe(400);
       expect(direct.body.code).toBe('TAKE_ASSET_NOT_FOUND');
-      await expect(projects.placeMediaPoolItem(fixture.owner.id, fixture.shot.sceneId, { kind, assetId: fixture.assetId }))
+      await expect(boardEdits.placeMediaPoolItem(fixture.owner.id, fixture.shot.sceneId, { kind, assetId: fixture.assetId }))
         .rejects.toMatchObject({ code: 'TAKE_ASSET_NOT_FOUND' });
       await projects.updateScene(fixture.owner.id, fixture.shot.sceneId, { [fixture.field]: null });
       for (const source of ['generated', 'imported']) {

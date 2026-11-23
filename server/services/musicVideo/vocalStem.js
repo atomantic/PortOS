@@ -119,8 +119,7 @@ export async function attachVocalStem(projectId, { tempPath, originalName, sourc
     const project = await requireProject(projectId);
     // Before the probe: ffmpeg would follow a playlist posing as audio.
     await assertFileNotMediaManifest(tempPath);
-    // Lazy: render.js pulls the whole render pipeline.
-    const { resolveMasterAudioPath } = await import('./render.js');
+    const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
     const masterPath = await resolveMasterAudioPath(project);
     if (derived && basename(sourcePath) !== basename(masterPath)) throw songChanged();
     if (!derived) {

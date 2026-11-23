@@ -103,8 +103,6 @@ describe('getRelevantMemories batching (#17602)', () => {
       { id: 'pref', type: 'preference', content: 'pppp', importance: 0.9 },
       { id: 'code', type: 'fact', content: 'cccc', importance: 1 },
     ]);
-    vi.mocked(recordMemoryAccess).mockImplementation(async (ids) => ids.map(id => ({ id, accessCount: 3, lastAccessed: '2026-01-01T00:00:00.000Z' })));
-
     const result = await getRelevantMemories({ description: 'query', metadata: { app: 'demo' } }, { maxTokens: 1000 });
     expect(result.map(memory => [memory.id, memory.source, memory.relevance])).toEqual([
       ['pref', 'preference', 0.9],
@@ -115,7 +113,6 @@ describe('getRelevantMemories batching (#17602)', () => {
     expect(peekMemories).toHaveBeenCalledWith(['search', 'pref', 'code']);
     expect(recordMemoryAccess).toHaveBeenCalledTimes(1);
     expect(recordMemoryAccess).toHaveBeenCalledWith(['pref', 'code', 'search']);
-    expect(result[0].accessCount).toBe(3);
     expect(getMemory).not.toHaveBeenCalled();
   });
 

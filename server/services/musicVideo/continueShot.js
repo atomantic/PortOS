@@ -24,7 +24,7 @@ import { songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { startSceneFromFrame } from './projects.js';
+import { startSceneFromFrame } from './projectBoardEdits.js';
 import { requireProject } from './requireProject.js';
 
 const refuse = (message, code, status = 409) => new ServerError(message, { status, code });

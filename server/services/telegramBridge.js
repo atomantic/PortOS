@@ -117,7 +117,7 @@ export async function init() {
   botUsername = me.username;
   isActive = true;
   noteReadinessChanged();
-  console.log(`📱 TG Bridge: active as @${botUsername} → chat ${chatId}`);
+  console.log(`📱 TG Bridge: active as @${botUsername}`);
 
   // Subscribe to notification events
   initNotificationForwarding();
@@ -172,12 +172,12 @@ export async function sendMedia(attachment) {
   }
 
   if (!rateLimiter.consume()) {
-    console.log(`📱 TG Bridge: rate limit reached, skipping attachment ${attachment.filename}`);
+    console.log(`📱 TG Bridge: rate limit reached, skipping attachment`);
     return { success: false, error: 'Rate limit exceeded' };
   }
 
   const result = await uploadMedia(botToken, chatId, attachment).catch((err) => {
-    console.error(`📱 TG Bridge: ${attachment.method} failed for ${attachment.filename} — ${err.message}`);
+    console.error(`📱 TG Bridge: ${attachment.method} failed — ${err.message}`);
     return null;
   });
   return result ? { success: true } : { success: false, error: 'Send failed' };

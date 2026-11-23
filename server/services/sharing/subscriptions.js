@@ -384,6 +384,21 @@ export function installSubscriptionListener() {
 }
 
 /**
+ * Detach the recordEvents handlers installed by `installSubscriptionListener`
+ * and cancel debounced re-exports that have not started. In-flight exports
+ * already inside `enqueueExport` keep running; shutdown must not leave a
+ * timer that starts a new one afterwards.
+ */
+export function uninstallSubscriptionListener() {
+  for (const t of pendingTimers.values()) clearTimeout(t);
+  pendingTimers.clear();
+  if (onUpdated) recordEvents.off('updated', onUpdated);
+  if (onDeleted) recordEvents.off('deleted', onDeleted);
+  onUpdated = null;
+  onDeleted = null;
+}
+
+/**
  * Test-only: stop new re-exports (debounce timers, listeners) and wait for the
  * ones already running. A fixture must await this before removing its bucket,
  * or a late export recreates the directory after removal (#12288).
@@ -394,13 +409,8 @@ export async function __settleForTests() {
   await queueStateWrite(async () => {});
 }
 
-/** Test-only: clear pending debounces and detach our own listeners. */
+/** Test-only: clear pending debounces, detach our listeners, and drop suppression. */
 export function __resetForTests() {
-  for (const t of pendingTimers.values()) clearTimeout(t);
-  pendingTimers.clear();
+  uninstallSubscriptionListener();
   __resetReexportSuppression();
-  if (onUpdated) recordEvents.off('updated', onUpdated);
-  if (onDeleted) recordEvents.off('deleted', onDeleted);
-  onUpdated = null;
-  onDeleted = null;
 }

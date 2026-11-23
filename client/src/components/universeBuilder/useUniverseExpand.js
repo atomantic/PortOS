@@ -161,6 +161,10 @@ export default function useUniverseExpand({
         logline: expandedDraft.logline || '',
         premise: expandedDraft.premise || '',
         styleNotes: expandedDraft.styleNotes || '',
+        // Fields tracked by the draft baseline must ship too, or create-then-hydrate
+        // drops them and markDraftSaved records a baseline that never matches.
+        factual: expandedDraft.factual === true,
+        visualProfile: expandedDraft.visualProfile || null,
         // Linked mood board (#4188) — without it the create path lands the
         // new universe unlinked and hydration silently drops the pick.
         moodBoardId: expandedDraft.moodBoardId || null,
@@ -170,9 +174,11 @@ export default function useUniverseExpand({
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
+        ...(expandedDraft.imageMode ? { imageMode: expandedDraft.imageMode } : {}),
+        ...(expandedDraft.imageModelId ? { imageModelId: expandedDraft.imageModelId } : {}),
       };
       const saved = await (selectedId
-        ? updateUniverse(selectedId, payload, { silent: true })
+        ? updateUniverse(selectedId, { ...payload, replaceCategories: true }, { silent: true })
         : createUniverse(payload, { silent: true }))
         .catch((error) => { toast.error(`Auto-save after expand failed: ${error.message}`); return null; })
         .finally(() => setSaving(false));
@@ -180,7 +186,7 @@ export default function useUniverseExpand({
         setWorlds((previous) => upsertByIdPrepend(previous, saved));
         setCanonDirty(false);
         clearPendingCanonAdditions();
-        markDraftSaved(payload);
+        markDraftSaved({ ...payload, id: saved.id, updatedAt: saved.updatedAt });
         if (!selectedId) goToWorld(saved.id);
         toast.success(expandToast({
           variationCount,
@@ -217,6 +223,8 @@ export default function useUniverseExpand({
         logline: next.logline || '',
         premise: next.premise || '',
         styleNotes: next.styleNotes || '',
+        factual: next.factual === true,
+        visualProfile: next.visualProfile || null,
         moodBoardId: next.moodBoardId || null,
         categories: next.categories,
         compositeSheets: next.compositeSheets || [],
@@ -224,11 +232,11 @@ export default function useUniverseExpand({
         locked: next.locked || {},
         llm: next.llm || {},
       };
-      const updated = await updateUniverse(selectedId, refinePayload, { silent: true })
+      const updated = await updateUniverse(selectedId, { ...refinePayload, replaceCategories: true }, { silent: true })
         .catch((error) => { toast.error(`Auto-save after refine failed: ${error.message}`); return null; });
       if (updated) {
         setWorlds((previous) => upsertByIdPrepend(previous, updated));
-        markDraftSaved(refinePayload);
+        markDraftSaved({ ...refinePayload, id: updated.id, updatedAt: updated.updatedAt });
       }
     }
   };

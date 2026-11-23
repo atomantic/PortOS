@@ -31,7 +31,7 @@ export function deleteGalleryImage(filename, { forgetInMusicVideos = true, fromR
     });
     // Music videos forget it too (their unused takes, marks and collection rows);
     // a batch delete from a video's asset manager forgets its whole batch at once.
-    if (forgetInMusicVideos) await import('./musicVideo/mediaPool.js').then((m) => m.forgetDeletedMusicVideoAssets([`image:${filename}`]));
+    if (forgetInMusicVideos) await import('./musicVideo/mediaPoolDelete.js').then((m) => m.forgetDeletedMusicVideoAssets([`image:${filename}`]));
     return { ...result, canonRefsRemoved: universePurge.removed, collectionsPurged };
   });
 }

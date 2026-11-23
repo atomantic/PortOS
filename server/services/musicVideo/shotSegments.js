@@ -32,7 +32,7 @@ import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { availableParallelism, tmpdir, totalmem } from 'os';
 import { join, sep } from 'path';
-import { PATHS, safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
@@ -44,7 +44,9 @@ import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideo/musicV
 import { projectFrameHold } from './frameHold.js';
 import { endingParts } from '../../lib/musicVideo/musicVideoEnding.js';
 import { buildSongAudioMix } from './clipSoundMix.js';
-import { buildMusicVideoFfmpegArgs, planMusicVideoRender, isProjectRenderActive } from './render.js';
+import { buildMusicVideoFfmpegArgs } from './renderFfmpegArgs.js';
+import { planMusicVideoRender } from './renderPlan.js';
+import { isProjectRenderActive } from './renderActivityState.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays, typographyOverlayWindows } from './compositionRender.js';
 import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
@@ -52,7 +54,7 @@ import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
 import { nameShots } from './productionReview.js';
 import { coldOpenAudioShots, ensureColdOpenAudio } from './coldOpen.js';
-import { SHOT_SEGMENT_DIR, shotSegmentDir } from './shotSegmentPaths.js';
+import { SHOT_SEGMENT_DIR, shotSegmentDir, pendingShotCleanup } from './shotSegmentPaths.js';
 import { requireProject } from './requireProject.js';
 import { assertRenderCleanupIdle, withRenderCleanupReservation } from './renderCleanupActivity.js';
 import { musicVideoEvents } from './events.js';
@@ -64,7 +66,6 @@ export { SHOT_SEGMENT_DIR, shotSegmentDir };
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
 const segmentOwnerWrites = createKeyCachedQueue();
-const pendingShotCleanup = new Map();
 const shotCleanupWrites = createKeyCachedQueue();
 const segmentOwnersFile = dir => join(dir, 'segments.json');
 
@@ -647,21 +648,6 @@ export async function cleanupShotSegments(projectId, { unusedLooks = false, rese
   return reserved ? cleanup() : withRenderCleanupReservation(projectId, cleanup);
 }
 
-/** Remove a project's whole segment cache (the project was deleted). */
-export const removeProjectSegments = (projectId) => {
-  pendingShotCleanup.delete(projectId);
-  return rm(shotSegmentDir(projectId), { recursive: true, force: true });
-};
-
-/** Boot sweep: partial files from renders a restart interrupted. */
-export async function sweepPartialSegments() {
-  const root = join(PATHS.data, SHOT_SEGMENT_DIR);
-  for (const project of await readdir(root).catch(() => [])) {
-    for (const name of await readdir(join(root, project)).catch(() => [])) {
-      if (name.endsWith('.partial.mp4')) await rm(join(root, project, name), { force: true }).catch(() => {});
-    }
-  }
-}
 
 /**
  * The shot panel's view of the cache: per shot, whether every section it plays

@@ -414,13 +414,7 @@ export function buildFormData(fields) {
 // upload and no-upload paths is simpler than branching on Content-Type).
 export async function generateVideo(fields) {
   const res = await fetch('/api/video-gen', { method: 'POST', body: buildFormData(fields) });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    const err = new Error(body.error || `HTTP ${res.status}`);
-    err.code = body.code;
-    err.status = res.status;
-    throw err;
-  }
+  if (!res.ok) await throwApiError(res);
   return res.json();
 }
 

@@ -19,6 +19,8 @@ import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import TaskDataInputs from '../TaskDataInputs';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
+import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
+import socket from '../../../services/socket';
 
 const fetchApps = () => getApps({ silent: true }).then(data => data?.apps || data || []);
 
@@ -76,6 +78,13 @@ export default function JobsTab() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  // Incidents open, resolve and acknowledge server-side; refetch so the card badges stay live.
+  useSocketSubscription('cos', { onResubscribe: fetchJobs });
+  useEffect(() => {
+    socket.on('cos:jobs:incidents-changed', fetchJobs);
+    return () => socket.off('cos:jobs:incidents-changed', fetchJobs);
+  }, [fetchJobs]);
 
   // A failed read would otherwise hide every provider picker, leaving new and
   // edited agent jobs on the default provider with no sign anything went wrong.

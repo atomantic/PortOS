@@ -30,6 +30,24 @@ import { toPgJson } from '../lib/pgJson.js';
 
 const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
+// Every column rowToMemory reads except `embedding`. Batch peeks omit that
+// pgvector value unless a caller asks for it; parsing 768 floats per row is
+// the cost these reads exist to avoid.
+const MEMORY_READ_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary, category, tags,
+  source_task_id, source_agent_id, source_app_id, embedding_model, confidence, importance, access_count, last_accessed,
+  created_at, updated_at, expires_at, status, origin_instance_id`;
+
+function memoryIdList(ids) {
+  const unique = [];
+  const seen = new Set();
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (typeof id !== 'string' || !UUID_RE.test(id) || seen.has(id)) continue;
+    seen.add(id);
+    unique.push(id);
+  }
+  return unique;
+}
+
 /**
  * Convert a database row to the memory object format matching the file-based API
  */
@@ -78,16 +96,6 @@ function rowToMeta(row) {
     sourceAppId: row.source_app_id,
     sourceAgentId: row.source_agent_id,
   };
-}
-
-// Batch retrieval never reads the 768-dim vector or the link graph. Leaving
-// both off this column list keeps a multi-id peek to one narrow query.
-const MEMORY_PEEK_COLUMNS = `id, version, archive_reason, last_review, review_origin, type, content, summary,
-  category, tags, source_task_id, source_agent_id, source_app_id, confidence, importance,
-  access_count, last_accessed, created_at, updated_at, expires_at, status, origin_instance_id`;
-
-function distinctIds(ids) {
-  return [...new Set((ids || []).filter(id => typeof id === 'string' && id.length > 0))];
 }
 
 // =============================================================================
@@ -289,35 +297,25 @@ export async function peekMemory(id) {
   return rowToMemory(result.rows[0]);
 }
 
-// One round trip for many ids. Missing ids are omitted. Embedding and
-// memory_links stay unloaded; callers that need them use getMemory(id).
-export async function peekMemories(ids) {
-  const unique = distinctIds(ids);
+/** One SELECT for many ids. Embedding stays out unless includeEmbedding is set. */
+export async function peekMemories(ids, { includeEmbedding = false } = {}) {
+  const unique = memoryIdList(ids);
   if (unique.length === 0) return [];
-  const result = await query(
-    `SELECT ${MEMORY_PEEK_COLUMNS} FROM memories WHERE id = ANY($1)`,
-    [unique]
-  );
-  return result.rows.map(row => ({ ...rowToMemory(row), embedding: null, embeddingModel: null }));
+  const columns = includeEmbedding ? `${MEMORY_READ_COLUMNS}, embedding` : MEMORY_READ_COLUMNS;
+  const result = await query(`SELECT ${columns} FROM memories WHERE id = ANY($1::uuid[])`, [unique]);
+  const byId = new Map(result.rows.map((row) => [row.id, rowToMemory(row)]));
+  return unique.flatMap((id) => byId.has(id) ? [byId.get(id)] : []);
 }
 
-// One UPDATE for every id that was actually injected. Ids that no longer
-// exist are skipped. Returns the persisted counters so callers can mirror
-// the accessCount/lastAccessed bump getMemory applies to a single row.
+/** One UPDATE that increments access stats. Missing ids are skipped. */
 export async function recordMemoryAccess(ids) {
-  const unique = distinctIds(ids);
-  if (unique.length === 0) return [];
+  const unique = memoryIdList(ids);
+  if (unique.length === 0) return 0;
   const result = await query(
-    `UPDATE memories SET access_count = access_count + 1, last_accessed = NOW()
-     WHERE id = ANY($1)
-     RETURNING id, access_count, last_accessed`,
+    'UPDATE memories SET access_count = access_count + 1, last_accessed = NOW() WHERE id = ANY($1::uuid[])',
     [unique]
   );
-  return result.rows.map(row => ({
-    id: row.id,
-    accessCount: row.access_count,
-    lastAccessed: row.last_accessed?.toISOString() ?? null,
-  }));
+  return result.rowCount ?? 0;
 }
 
 export async function getMemory(id) {
@@ -414,6 +412,14 @@ function buildMemoryFilterWhere(options = {}) {
     params.push(options.sourceAgentId);
   }
 
+  if (options.sourceTaskId !== undefined) {
+    if (options.sourceTaskId === null) conditions.push('source_task_id IS NULL');
+    else {
+      conditions.push(`source_task_id = $${paramIdx++}`);
+      params.push(options.sourceTaskId);
+    }
+  }
+
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return { where, params };
 }
@@ -431,8 +437,9 @@ export async function getMemories(options = {}) {
   const { where, params } = buildMemoryFilterWhere(options);
   let paramIdx = params.length + 1;
 
-  // Retrievers already cap `limit` and never read `total`. Skip the COUNT(*)
-  // scan in that case. `total: null` means "not counted", not "zero rows".
+  // Callers that only need the page (mind wakes, retrieval) pass includeCount:
+  // false so the list does not scan the table a second time for COUNT(*).
+  // `total: null` means "not counted", not "zero rows".
   const includeCount = options.includeCount !== false;
   let total = null;
   if (includeCount) {

@@ -98,7 +98,7 @@ export async function deleteHistoryItem(id, { forgetInMusicVideos = true, fromRe
     // a batch delete from a video's asset manager forgets its whole batch at once.
     // Non-fatal like the index hook: the delete is committed and must still be announced.
     if (forgetInMusicVideos) {
-      await import('../musicVideo/mediaPool.js')
+      await import('../musicVideo/mediaPoolDelete.js')
         .then((m) => m.forgetDeletedMusicVideoAssets([`video:${id}`]))
         .catch((err) => console.error(`❌ Music video forget after video delete failed: ${err.message}`));
     }

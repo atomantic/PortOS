@@ -1909,3 +1909,22 @@ describe('Settings routes — saved film looks', () => {
     }
   });
 });
+
+describe('Settings routes — declarative slice validation', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+
+  it.each([null, false, ''])('rejects layeredIntelligence: %j with 400 instead of bypassing the schema', async (value) => {
+    const res = await request(buildApp()).put('/api/settings').send({ layeredIntelligence: value });
+    expect(res.status).toBe(400);
+  });
+
+  it('does not 500 on an empty body', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({});
+    expect(res.status).not.toBe(500);
+  });
+
+  it('still validates a nested imageGen backend slice', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({ imageGen: { grok: { enabled: 'nope' } } });
+    expect(res.status).toBe(400);
+  });
+});

@@ -113,6 +113,25 @@ import {
   flushBM25Index
 } from './memory.js';
 
+describe('batch memory reads', () => {
+  it('peeks without copying embeddings and increments access once per id', async () => {
+    const stored = { id: 'm1', content: 'kept', embedding: [1, 2, 3], accessCount: 0, status: 'active' };
+    readJSONFile.mockImplementation((path, def) => {
+      if (String(path).includes(`${'m1'}/memory.json`) || String(path).endsWith('m1/memory.json')) return Promise.resolve(stored);
+      return Promise.resolve(def);
+    });
+    const peeked = await peekMemories(['m1', 'missing', 'm1']);
+    expect(peeked).toEqual([{ id: 'm1', content: 'kept', accessCount: 0, status: 'active' }]);
+    expect(stored.embedding).toEqual([1, 2, 3]);
+    const withEmbedding = await peekMemories(['m1'], { includeEmbedding: true });
+    expect(withEmbedding[0].embedding).toEqual([1, 2, 3]);
+    expect(await recordMemoryAccess(['m1', 'missing', 'm1'])).toBe(1);
+    const saved = atomicWrite.mock.calls.find((call) => String(call[0]).includes('memory.json'));
+    expect(saved[1].accessCount).toBe(1);
+    expect(saved[1].embedding).toEqual([1, 2, 3]);
+  });
+});
+
 describe('memory service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -306,37 +325,6 @@ describe('memory service', () => {
     });
   });
 
-  describe('peekMemories and recordMemoryAccess', () => {
-    it('reads a batch without embeddings or access bumps, then bumps only the saved rows', async () => {
-      const stored = {
-        'mem-a': { id: 'mem-a', type: 'fact', content: 'A', embedding: [0.2], relatedMemories: ['mem-b'], accessCount: 1, lastAccessed: null },
-        'mem-b': { id: 'mem-b', type: 'preference', content: 'B', embedding: [0.3], accessCount: 4, lastAccessed: null },
-      };
-      readJSONFile.mockImplementation((path, def) => {
-        const id = Object.keys(stored).find(key => path.includes(`/${key}/`) || path.includes(`${key}/memory.json`));
-        if (path.includes('memory.json') && id) return Promise.resolve({ ...stored[id] });
-        return Promise.resolve(def);
-      });
-
-      const peeked = await peekMemories(['mem-a', 'mem-a', 'missing', 'mem-b']);
-      expect(peeked.map(memory => memory.id)).toEqual(['mem-a', 'mem-b']);
-      expect(peeked[0].embedding).toBeNull();
-      expect(peeked[0].relatedMemories).toBeUndefined();
-      expect(stored['mem-a'].embedding).toEqual([0.2]);
-      expect(stored['mem-a'].accessCount).toBe(1);
-      expect(atomicWrite).not.toHaveBeenCalled();
-
-      const recorded = await recordMemoryAccess(['mem-a', 'missing']);
-      expect(recorded).toEqual([expect.objectContaining({ id: 'mem-a', accessCount: 2 })]);
-      expect(atomicWrite).toHaveBeenCalledWith(
-        expect.stringContaining('mem-a'),
-        expect.objectContaining({ accessCount: 2, embedding: [0.2], relatedMemories: ['mem-b'] }),
-      );
-      expect(await peekMemories([])).toEqual([]);
-      expect(await recordMemoryAccess([])).toEqual([]);
-    });
-  });
-
   // ===========================================================================
   // getMemories
   // ===========================================================================
@@ -438,6 +426,17 @@ describe('memory service', () => {
       const result = await getMemories({ offset: 1, limit: 1 });
 
       expect(result.memories).toHaveLength(1);
+    });
+
+    it('filters by source task and can skip the in-memory total', async () => {
+      const withTask = { ...mem1, sourceTaskId: 'turn-1' };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve(makeIndex([withTask, mem2]));
+        return Promise.resolve(def);
+      });
+      const matched = await getMemories({ sourceTaskId: 'turn-1', includeCount: false });
+      expect(matched.total).toBeNull();
+      expect(matched.memories.map((memory) => memory.id)).toEqual(['m1']);
     });
 
     it('should return empty when no memories match filters', async () => {
