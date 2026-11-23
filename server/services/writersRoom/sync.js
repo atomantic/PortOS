@@ -17,6 +17,7 @@
 import { existsSync } from 'fs';
 import { sha256File, rmGuarded } from '../../lib/fileUtils.js';
 import { deleteSyncBaseHash, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
+import { backupSnapshotCutPending, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { writersRoomStore } from './store.js';
 import {
   WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_DRAFT_ASSET_KIND, draftAssetEntries,
@@ -25,6 +26,7 @@ import {
 } from './syncLogic.js';
 import {
   WORK_ID_RE, DRAFT_ID_RE, FOLDER_ID_RE, EXERCISE_ID_RE, wrWorkDir, wrDraftPath,
+  queueWorkWrite, queueFolderWrite, queueExerciseWrite,
 } from './_shared.js';
 
 const store = () => writersRoomStore();
@@ -65,17 +67,30 @@ export async function mergeWorksFromSync(remoteWorks, options = {}) {
 
 /**
  * Hard-remove tombstoned works older than the cutoff (called by tombstone GC).
- * The backend drops the rows (PG) / identifies the dirs (file); this facade then
- * rm's each work's on-disk dir (manifest + file-primary `.md` bodies) and evicts
- * its conflict-journal base hash — uniform across both backends. Returns `{ pruned }`.
+ * Each work is removed under its own write queue: the backend re-checks the
+ * tombstone and drops the rows (PG), then this facade rm's the on-disk dir
+ * (manifest + file-primary `.md` bodies) and evicts the conflict-journal base
+ * hash. Rows and dir go under one backup lease, so a snapshot never holds one
+ * without the other. Returns `{ pruned }`.
  */
 export async function pruneTombstonedWorks(olderThanMs) {
-  const { pruned, ids } = await store().pruneTombstonedWorks(olderThanMs);
+  const ids = await store().listPrunableWorkIds(olderThanMs);
+  let pruned = 0;
   await withBaseHashFlushBatch(async () => {
     for (const id of ids) {
       if (typeof id !== 'string' || !WORK_ID_RE.test(id)) continue;
-      await rmGuarded(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
-      await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
+      // Prune is housekeeping: never hold a work's queue through a whole backup.
+      if (backupSnapshotCutPending()) {
+        console.log('⏭️ wr: tombstone prune deferred, backup snapshot in progress');
+        break;
+      }
+      const removed = await queueWorkWrite(id, () => withBackupAssetPublication(async () => {
+        if (!(await store().pruneTombstonedWork(id, olderThanMs))) return false;
+        await rmGuarded(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
+        await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
+        return true;
+      }));
+      if (removed) pruned += 1;
     }
   });
   return { pruned };
@@ -92,16 +107,19 @@ export async function pruneTombstonedWorks(olderThanMs) {
 
 // Shared prune facade for a body-less kind: the backend drops the rows/entries,
 // then this evicts each pruned id's conflict-journal base hash (the only on-disk
-// cleanup — no work dir to rm). `idRe` rejects a junk id before the eviction.
-async function pruneTombstonedBodyless(storePruneFn, kind, idRe, olderThanMs) {
-  const { pruned, ids } = await storePruneFn(olderThanMs);
-  await withBaseHashFlushBatch(async () => {
-    for (const id of ids) {
-      if (typeof id !== 'string' || !idRe.test(id)) continue;
-      await deleteSyncBaseHash(kind, id);
-    }
+// cleanup — no work dir to rm), both in one turn of the kind's write queue so a
+// merge cannot re-seed a hash that is about to be evicted. `idRe` rejects a junk id before the eviction.
+async function pruneTombstonedBodyless(queue, storePruneFn, kind, idRe, olderThanMs) {
+  return queue(async () => {
+    const { pruned, ids } = await storePruneFn(olderThanMs);
+    await withBaseHashFlushBatch(async () => {
+      for (const id of ids) {
+        if (typeof id !== 'string' || !idRe.test(id)) continue;
+        await deleteSyncBaseHash(kind, id);
+      }
+    });
+    return { pruned };
   });
-  return { pruned };
 }
 
 /** One folder including a tombstone (for the LWW compare + the push). */
@@ -143,7 +161,7 @@ export async function mergeFoldersFromSync(remoteFolders, options = {}) {
  * conflict-journal base hash. Returns `{ pruned }`.
  */
 export async function pruneTombstonedFolders(olderThanMs) {
-  return pruneTombstonedBodyless((ms) => store().pruneTombstonedFolders(ms), WRITERS_ROOM_FOLDER_KIND, FOLDER_ID_RE, olderThanMs);
+  return pruneTombstonedBodyless(queueFolderWrite, (ms) => store().pruneTombstonedFolders(ms), WRITERS_ROOM_FOLDER_KIND, FOLDER_ID_RE, olderThanMs);
 }
 
 /** One exercise including a tombstone (for the LWW compare + the push). */
@@ -182,7 +200,7 @@ export async function mergeExercisesFromSync(remoteExercises, options = {}) {
 
 /** Hard-remove tombstoned exercises older than the cutoff (called by tombstone GC). */
 export async function pruneTombstonedExercises(olderThanMs) {
-  return pruneTombstonedBodyless((ms) => store().pruneTombstonedExercises(ms), WRITERS_ROOM_EXERCISE_KIND, EXERCISE_ID_RE, olderThanMs);
+  return pruneTombstonedBodyless(queueExerciseWrite, (ms) => store().pruneTombstonedExercises(ms), WRITERS_ROOM_EXERCISE_KIND, EXERCISE_ID_RE, olderThanMs);
 }
 
 /**
