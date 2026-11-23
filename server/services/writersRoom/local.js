@@ -27,21 +27,23 @@ import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { journalConflict, WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND } from '../../lib/conflictJournal.js';
 import { parseTsMs } from '../../lib/lwwTimestamp.js';
-import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
 import { sanitizeVoiceExemplars, renderVoiceExemplars } from '../../lib/styleGuide.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
-import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
+import {
+  nowIso, badRequest, notFound, wrWorkDir, wrDraftPath,
+  queueWorkWrite, queueFolderWrite, queueExerciseWrite,
+} from './_shared.js';
 import { writersRoomStore } from './store.js';
 import { WRITERS_ROOM_WORK_KIND, WRITERS_ROOM_FOLDER_KIND, WRITERS_ROOM_EXERCISE_KIND } from './syncLogic.js';
 
 const store = () => writersRoomStore();
 
-// Hold the entire read/body-write/manifest-write cycle, never just saveManifest.
-// Leaf writes stay unqueued so composite workflows cannot re-enter this queue.
-const queueWorkWrite = createRecordWriteQueue();
+// Hold queueWorkWrite for the entire read/body-write/manifest-write cycle, never
+// just saveManifest; saveManifest stays unqueued so composite workflows cannot
+// re-enter the queue.
 
 // ---------- text analysis ----------
 
@@ -170,39 +172,43 @@ export async function listFolders() {
 }
 
 export async function createFolder({ name, parentId = null, sortOrder = 0 }) {
-  if (!name || !name.trim()) throw badRequest('Folder name required');
-  const folders = await store().listFolders();
-  if (parentId && !folders.find((f) => f.id === parentId)) throw notFound('Parent folder');
-  const folder = {
-    id: `wr-folder-${randomUUID()}`,
-    parentId,
-    name: name.trim(),
-    sortOrder,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  };
-  await store().writeFolder(folder);
-  // Auto-subscribe every writersRoomFolders-enabled peer so brand-new folders
-  // (and their later tombstones) propagate without waiting for a reconnect (#1645).
-  autoSubscribeRecordToAllPeers(WRITERS_ROOM_FOLDER_KIND, folder.id).catch(() => {});
-  return folder;
+  return queueFolderWrite(async () => {
+    if (!name || !name.trim()) throw badRequest('Folder name required');
+    const folders = await store().listFolders();
+    if (parentId && !folders.find((f) => f.id === parentId)) throw notFound('Parent folder');
+    const folder = {
+      id: `wr-folder-${randomUUID()}`,
+      parentId,
+      name: name.trim(),
+      sortOrder,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    await store().writeFolder(folder);
+    // Auto-subscribe every writersRoomFolders-enabled peer so brand-new folders
+    // (and their later tombstones) propagate without waiting for a reconnect (#1645).
+    autoSubscribeRecordToAllPeers(WRITERS_ROOM_FOLDER_KIND, folder.id).catch(() => {});
+    return folder;
+  });
 }
 
 export async function deleteFolder(id) {
-  const folders = await store().listFolders();
-  if (!folders.find((f) => f.id === id)) throw notFound('Folder');
-  const works = await listWorks();
-  if (works.some((w) => w.folderId === id)) {
-    throw badRequest('Folder is not empty — move or delete its works first');
-  }
-  if (folders.some((f) => f.parentId === id)) {
-    throw badRequest('Folder has subfolders — delete or reparent them first');
-  }
-  await store().deleteFolder(id);
-  // Push the tombstone so subscribed peers learn of the deletion (the LWW merge
-  // never propagates a hard delete — an omitted record gets resurrected) (#1645).
-  emitRecordDeleted(WRITERS_ROOM_FOLDER_KIND, id);
-  return { ok: true };
+  return queueFolderWrite(async () => {
+    const folders = await store().listFolders();
+    if (!folders.find((f) => f.id === id)) throw notFound('Folder');
+    const works = await listWorks();
+    if (works.some((w) => w.folderId === id)) {
+      throw badRequest('Folder is not empty — move or delete its works first');
+    }
+    if (folders.some((f) => f.parentId === id)) {
+      throw badRequest('Folder has subfolders — delete or reparent them first');
+    }
+    await store().deleteFolder(id);
+    // Push the tombstone so subscribed peers learn of the deletion (the LWW merge
+    // never propagates a hard delete — an omitted record gets resurrected) (#1645).
+    emitRecordDeleted(WRITERS_ROOM_FOLDER_KIND, id);
+    return { ok: true };
+  });
 }
 
 // Conflict-restore entry point (#1645) for a body-less Writers Room record
@@ -213,22 +219,25 @@ export async function deleteFolder(id) {
 // key), and emits so subscribed peers converge. A missing/tombstoned record
 // throws notFound (→ translateGone → ERR_TARGET_GONE in the resolver). Mirrors
 // moodBoard's restoreBoard.
-async function restoreBodylessRecord(id, patch, { read, write, kind, fields, label }) {
-  const current = await read(id, { includeDeleted: false });
-  if (!current) throw notFound(label);
-  const next = { ...current };
-  for (const key of fields) {
-    if (patch[key] !== undefined) next[key] = patch[key];
-  }
-  next.updatedAt = nowIso();
-  await write(next);
-  emitRecordUpdated(kind, id);
-  return next;
+async function restoreBodylessRecord(id, patch, { queue, read, write, kind, fields, label }) {
+  return queue(async () => {
+    const current = await read(id, { includeDeleted: false });
+    if (!current) throw notFound(label);
+    const next = { ...current };
+    for (const key of fields) {
+      if (patch[key] !== undefined) next[key] = patch[key];
+    }
+    next.updatedAt = nowIso();
+    await write(next);
+    emitRecordUpdated(kind, id);
+    return next;
+  });
 }
 
 const FOLDER_RESTORABLE = ['name', 'parentId', 'sortOrder'];
 export async function restoreFolder(id, patch) {
   return restoreBodylessRecord(id, patch, {
+    queue: queueFolderWrite,
     read: (rid, opts) => store().readFolder(rid, opts),
     write: (f) => store().writeFolder(f),
     kind: WRITERS_ROOM_FOLDER_KIND, fields: FOLDER_RESTORABLE, label: 'Folder',
@@ -845,7 +854,7 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
     finishedAt: null,
     updatedAt: nowIso(),
   };
-  await store().writeExercise(exercise);
+  await queueExerciseWrite(() => store().writeExercise(exercise));
   // Auto-subscribe every writersRoomExercises-enabled peer so brand-new sprints
   // propagate; later finish/discard transitions ride emitRecordUpdated (#1645).
   autoSubscribeRecordToAllPeers(WRITERS_ROOM_EXERCISE_KIND, exercise.id).catch(() => {});
@@ -853,34 +862,36 @@ export async function createExercise({ workId = null, prompt = '', durationSecon
 }
 
 export async function finishExercise(id, { endingWords, appendedText = null } = {}) {
-  const all = await store().listExercises();
-  const existing = all.find((e) => e.id === id);
-  if (!existing) throw notFound('Exercise');
-  if (settled(existing)) throw badRequest('Exercise is already settled');
-  // Default missing endingWords to startingWords so wordsAdded never goes
-  // negative when the caller forgets to send it; clamp the delta as a final
-  // backstop for the case where the user backspaces past their starting count.
-  const startingWords = existing.startingWords || 0;
-  const resolvedEnding = endingWords ?? startingWords;
-  const wordsAdded = Math.max(0, resolvedEnding - startingWords);
-  const now = nowIso();
-  const finished = {
-    ...existing,
-    endingWords: resolvedEnding,
-    wordsAdded,
-    appendedText: appendedText ?? null,
-    status: 'finished',
-    finishedAt: now,
-    updatedAt: now,
-  };
-  await store().writeExercise(finished);
-  // The settle transition stamps a fresh updatedAt (the LWW key) — push it so
-  // subscribed peers converge on the finished state. updatedAt must be bumped
-  // explicitly (not left to the finishedAt-derived fallback): a sync-seeded
-  // exercise already carries a stored updatedAt the sanitizer would otherwise
-  // prefer over the new finishedAt, so the finish wouldn't advance the key (#1645).
-  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
-  return finished;
+  return queueExerciseWrite(async () => {
+    const all = await store().listExercises();
+    const existing = all.find((e) => e.id === id);
+    if (!existing) throw notFound('Exercise');
+    if (settled(existing)) throw badRequest('Exercise is already settled');
+    // Default missing endingWords to startingWords so wordsAdded never goes
+    // negative when the caller forgets to send it; clamp the delta as a final
+    // backstop for the case where the user backspaces past their starting count.
+    const startingWords = existing.startingWords || 0;
+    const resolvedEnding = endingWords ?? startingWords;
+    const wordsAdded = Math.max(0, resolvedEnding - startingWords);
+    const now = nowIso();
+    const finished = {
+      ...existing,
+      endingWords: resolvedEnding,
+      wordsAdded,
+      appendedText: appendedText ?? null,
+      status: 'finished',
+      finishedAt: now,
+      updatedAt: now,
+    };
+    await store().writeExercise(finished);
+    // The settle transition stamps a fresh updatedAt (the LWW key) — push it so
+    // subscribed peers converge on the finished state. updatedAt must be bumped
+    // explicitly (not left to the finishedAt-derived fallback): a sync-seeded
+    // exercise already carries a stored updatedAt the sanitizer would otherwise
+    // prefer over the new finishedAt, so the finish wouldn't advance the key (#1645).
+    emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
+    return finished;
+  });
 }
 
 async function requirePromotableExercise(id) {
@@ -900,7 +911,7 @@ export async function promoteExercise(id) {
   // Re-read the exercise after earlier work writes finish, and retain the turn
   // until its promotion marker is saved. A duplicate request must see that
   // marker before it can append the same sprint to the draft again.
-  return queueWorkWrite(initial.workId, async () => {
+  return queueWorkWrite(initial.workId, () => queueExerciseWrite(async () => {
     const { exercise: existing, text } = await requirePromotableExercise(id);
     if (existing.workId !== initial.workId) throw badRequest('Exercise work changed; retry promotion');
     const { body } = await getWorkWithBody(existing.workId);
@@ -915,25 +926,28 @@ export async function promoteExercise(id) {
     await store().writeExercise(promoted);
     emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
     return { exercise: promoted, work: { ...updatedManifest, activeDraftBody: nextBody } };
-  });
+  }));
 }
 
 export async function discardExercise(id) {
-  const all = await store().listExercises();
-  const existing = all.find((e) => e.id === id);
-  if (!existing) throw notFound('Exercise');
-  if (settled(existing)) throw badRequest('Exercise is already settled');
-  const now = nowIso();
-  const discarded = { ...existing, status: 'discarded', finishedAt: now, updatedAt: now };
-  await store().writeExercise(discarded);
-  emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
-  return discarded;
+  return queueExerciseWrite(async () => {
+    const all = await store().listExercises();
+    const existing = all.find((e) => e.id === id);
+    if (!existing) throw notFound('Exercise');
+    if (settled(existing)) throw badRequest('Exercise is already settled');
+    const now = nowIso();
+    const discarded = { ...existing, status: 'discarded', finishedAt: now, updatedAt: now };
+    await store().writeExercise(discarded);
+    emitRecordUpdated(WRITERS_ROOM_EXERCISE_KIND, id);
+    return discarded;
+  });
 }
 
 // Conflict-restore for an exercise sprint — see restoreBodylessRecord above.
 const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt', 'promotedAt', 'promotedDraftVersionId'];
 export async function restoreExercise(id, patch) {
   return restoreBodylessRecord(id, patch, {
+    queue: queueExerciseWrite,
     read: (rid, opts) => store().readExercise(rid, opts),
     write: (e) => store().writeExercise(e),
     kind: WRITERS_ROOM_EXERCISE_KIND, fields: EXERCISE_RESTORABLE, label: 'Exercise',

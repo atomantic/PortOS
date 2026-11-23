@@ -208,9 +208,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/writersRoom/local.js'],
   },
   {
-    // Tombstone GC drops the work rows first and removes their directories after.
+    // Tombstone GC drops one work's rows and then its directory under one lease.
     id: 'writers-room-tombstone-prune',
-    status: 'reference-only',
+    status: 'admitted',
     modules: ['services/writersRoom/sync.js'],
   },
   {

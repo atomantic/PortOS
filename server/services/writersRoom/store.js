@@ -19,7 +19,7 @@
  * Works FEDERATE across peers as of #1565 via the per-record peer-sync push
  * pipeline (not the 60s snapshot loop), so this dispatcher also routes the
  * federation primitives (readWork includeDeleted, listWorkIds includeDeleted,
- * mergeWorksFromSync, pruneTombstonedWorks) to whichever backend is active —
+ * mergeWorksFromSync, pruneTombstonedWork) to whichever backend is active —
  * both implement the same LWW/tombstone semantics from syncLogic.js. There is
  * still NO mutation epoch here: works ride per-record pushes, not the snapshot
  * checksum a storage swap would invalidate.
@@ -42,6 +42,7 @@ import {
 } from './syncLogic.js';
 import {
   WORK_ID_RE, wrRoot, wrFoldersFile, wrExercisesFile, wrWorksDir, wrManifestPath,
+  queueWorkWrite, queueFolderWrite, queueExerciseWrite,
 } from './_shared.js';
 
 // --- File backend (escape hatch / tests): the legacy on-disk JSON format ---
@@ -162,6 +163,11 @@ function makeFileBackend() {
     return { pruned: ids.length, ids };
   };
 
+  const isPrunable = (manifest, olderThanMs) => {
+    const deletedMs = manifest?.deleted === true ? Date.parse(manifest.deletedAt || '') : NaN;
+    return Number.isFinite(deletedMs) && deletedMs < olderThanMs;
+  };
+
   return {
     name: 'file',
     // folders. A soft-deleted folder (tombstone) stays in folders.json so its
@@ -193,7 +199,7 @@ function makeFileBackend() {
       await saveFolders(folders);
     },
     mergeFoldersFromSync: async (remoteFolders, { source = { via: 'sync', peerId: null } } = {}) =>
-      mergeBodylessArray(loadFolders, saveFolders, WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord, remoteFolders, source),
+      queueFolderWrite(() => mergeBodylessArray(loadFolders, saveFolders, WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord, remoteFolders, source)),
     pruneTombstonedFolders: async (olderThanMs) => pruneTombstonedArray(loadFolders, saveFolders, olderThanMs),
     // exercises (same body-less tombstone-aware contract as folders).
     listExercises: async ({ includeDeleted = false } = {}) => (await loadExercises()).filter((e) => includeDeleted || e.deleted !== true),
@@ -212,7 +218,7 @@ function makeFileBackend() {
       await saveExercises(all);
     },
     mergeExercisesFromSync: async (remoteExercises, { source = { via: 'sync', peerId: null } } = {}) =>
-      mergeBodylessArray(loadExercises, saveExercises, WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord, remoteExercises, source),
+      queueExerciseWrite(() => mergeBodylessArray(loadExercises, saveExercises, WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord, remoteExercises, source)),
     pruneTombstonedExercises: async (olderThanMs) => pruneTombstonedArray(loadExercises, saveExercises, olderThanMs),
     // works (manifest carries its own drafts[] in the file format). A
     // soft-deleted work (tombstone) stays on disk; readWork/listWorks/listWorkIds
@@ -257,33 +263,32 @@ function makeFileBackend() {
       if (!Array.isArray(remoteWorks)) return { applied: false, count: 0 };
       let changed = 0;
       for (const remote of remoteWorks) {
-        const local = await loadManifest(remote?.id).catch(() => null);
-        const { next, inserted, remoteWins, changed: didChange } = mergeWorkRecord(local, remote);
-        if (!next) continue;
-        if (!inserted && (!remoteWins || !didChange)) continue;
-        if (!inserted) {
-          await maybeJournalBeforeOverwrite({ kind: WRITERS_ROOM_WORK_KIND, id: next.id, local, remote: next, source });
-        }
-        await saveManifest(next.id, next);
-        await setSyncBaseHash(WRITERS_ROOM_WORK_KIND, next.id, contentHashForRecord(WRITERS_ROOM_WORK_KIND, next));
-        changed += 1;
+        const applied = await queueWorkWrite(remote?.id, async () => {
+          const local = await loadManifest(remote?.id).catch(() => null);
+          const { next, inserted, remoteWins, changed: didChange } = mergeWorkRecord(local, remote);
+          if (!next) return false;
+          if (!inserted && (!remoteWins || !didChange)) return false;
+          if (!inserted) {
+            await maybeJournalBeforeOverwrite({ kind: WRITERS_ROOM_WORK_KIND, id: next.id, local, remote: next, source });
+          }
+          await saveManifest(next.id, next);
+          await setSyncBaseHash(WRITERS_ROOM_WORK_KIND, next.id, contentHashForRecord(WRITERS_ROOM_WORK_KIND, next));
+          return true;
+        });
+        if (applied) changed += 1;
       }
       await flushBaseHashes();
       return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
     },
-    pruneTombstonedWorks: async (olderThanMs) => {
-      if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+    listPrunableWorkIds: async (olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return [];
       const ids = await listWorkIds();
       const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch(() => null)));
-      const out = ids.filter((_, i) => {
-        const m = manifests[i];
-        const deletedMs = m?.deleted === true ? Date.parse(m.deletedAt || '') : NaN;
-        return Number.isFinite(deletedMs) && deletedMs < olderThanMs;
-      });
-      // The facade (sync.js) rm's each id's dir (manifest + bodies) and evicts the
-      // base hash — uniform with the PG backend, whose rows are dropped here.
-      return { pruned: out.length, ids: out };
+      return ids.filter((_, i) => isPrunable(manifests[i], olderThanMs));
     },
+    // Re-checks the tombstone only: the facade (sync.js) rm's the dir, which on
+    // this backend holds the manifest too. Mirrors the PG row delete.
+    pruneTombstonedWork: async (id, olderThanMs) => isPrunable(await loadManifest(id), olderThanMs),
     listDraftVersionsForCoherence: async () => {
       const ids = await listWorkIds();
       const out = [];
@@ -353,7 +358,8 @@ export function writersRoomStore() {
     writeWork: async (manifest) => (await getBackend()).writeWork(manifest),
     deleteWork: async (id) => (await getBackend()).deleteWork(id),
     mergeWorksFromSync: async (remoteWorks, opts) => (await getBackend()).mergeWorksFromSync(remoteWorks, opts),
-    pruneTombstonedWorks: async (olderThanMs) => (await getBackend()).pruneTombstonedWorks(olderThanMs),
+    listPrunableWorkIds: async (olderThanMs) => (await getBackend()).listPrunableWorkIds(olderThanMs),
+    pruneTombstonedWork: async (id, olderThanMs) => (await getBackend()).pruneTombstonedWork(id, olderThanMs),
     listDraftVersionsForCoherence: async () => (await getBackend()).listDraftVersionsForCoherence(),
   };
 }

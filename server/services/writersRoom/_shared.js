@@ -6,6 +6,20 @@
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { createFileWriteQueue, createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
+
+// The one set of write queues for Writers Room records, shared by the local
+// mutators (local.js), the sync merges (both store backends) and tombstone
+// pruning (sync.js). A holder keeps its turn across the whole read/modify/write
+// cycle, body files included, so a merge cannot land between a mutator's read
+// and its whole-manifest write. The queues are not re-entrant: store leaf writes
+// (writeWork, deleteFolder, …) stay unqueued. Acquire in this order: work →
+// exercise/folder → backup publication lease.
+export const queueWorkWrite = createRecordWriteQueue();
+// One tail each, not per id: the file backend keeps every folder (and every
+// exercise) in one JSON array, so writes to different ids also overlap.
+export const queueFolderWrite = createFileWriteQueue();
+export const queueExerciseWrite = createFileWriteQueue();
 
 export const nowIso = () => new Date().toISOString();
 export const badRequest = (message) => new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
