@@ -342,11 +342,20 @@ export async function stripGenomeFromSnapshots() {
 
     const { ok: indexOk, value: indexValue } = await readJSONFileStrict(INDEX_FILE, null);
     if (indexOk && isUsableIndex(indexValue)) {
+      const metaById = new Map(allMetas.map(meta => [meta.id, meta]));
       let indexChanged = false;
       const nextSnapshots = indexValue.snapshots.map(entry => {
-        if (entry && updatedMetaById.has(entry.id)) {
-          indexChanged = true;
-          return updatedMetaById.get(entry.id);
+        if (entry && metaById.has(entry.id)) {
+          const diskMeta = metaById.get(entry.id);
+          const staleIndex = updatedMetaById.has(entry.id)
+            || entry.summary?.genomeMarkers !== diskMeta.summary?.genomeMarkers
+            || entry.dataHash !== diskMeta.dataHash
+            || entry.sizeBytes !== diskMeta.sizeBytes;
+          if (staleIndex) {
+            indexChanged = true;
+            return diskMeta;
+          }
+          return entry;
         }
         if (isPlainObject(entry?.summary) && entry.summary.genomeMarkers !== 0) {
           indexChanged = true;

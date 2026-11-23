@@ -16,7 +16,7 @@ vi.mock('./mortalLoomStore.js', () => ({
 
 const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
 const { PATHS, atomicWrite } = await import('../lib/fileUtils.js');
-const { holdsBackupAssetPublication } = await import('../lib/backupSnapshotBoundary.js');
+const { holdsBackupAssetPublication, acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
 const { deleteGenome, getGenomeSummary, getSnpIndex } = await import('./genome.js');
 const { deriveChronotype, getChronotype } = await import('./identity/chronotype.js');
 const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
@@ -256,5 +256,28 @@ describe('genome deletion erases derived identity', () => {
     await expect(deleteGenome()).rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
     expect((await getGenomeSummary()).uploaded).toBe(true);
     expect(await readFile(join(PATHS.meatspace, 'genome-raw.txt'), 'utf8')).toContain('rs4753426');
+  });
+
+  it('defers narrative removal and Time Capsule snapshot stripping while a backup cut is active', async () => {
+    await atomicWrite(narrativeFile(), { text: 'Narrative with rs4753426', previousText: null });
+    const snap = await createSnapshot('cut-guarded');
+    expect(snap.summary.genomeMarkers).toBe(4);
+
+    const release = await acquireBackupSnapshotCut();
+    let deletion;
+    try {
+      deletion = deleteGenome();
+      await new Promise(resolve => setTimeout(resolve, 30));
+      expect(existsSync(narrativeFile())).toBe(true);
+      expect((await getSnapshot(snap.id)).summary.genomeMarkers).toBe(4);
+      expect((await listSnapshots())[0].summary.genomeMarkers).toBe(4);
+    } finally {
+      release();
+    }
+
+    await expect(deletion).resolves.toEqual({ success: true });
+    expect(existsSync(narrativeFile())).toBe(false);
+    expect((await getSnapshot(snap.id)).summary.genomeMarkers).toBe(0);
+    expect((await listSnapshots())[0].summary.genomeMarkers).toBe(0);
   });
 });
