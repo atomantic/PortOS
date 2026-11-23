@@ -13,8 +13,8 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
 import { processAncestors, probeTestPid, readTestProcesses, testProcessRoot, testProcessSettlement } from './testOwnedProcesses.js';
-import { processAttribution, processIdentity } from './testProcessAttribution.js';
 import { killWithEscalation } from '../../server/lib/killWithEscalation.js';
 
 export const OWNER_FILE = '.owner.pid';
@@ -38,6 +38,8 @@ function readPending(root) {
     return { incomplete: false, processes: processes.map(({ pid, start }) => ({ pid, start })) };
   } catch (error) { return { incomplete: error.code !== 'ENOENT', processes: [] }; }
 }
+
+const processIdentity = ({ pid, start }) => createHash('sha256').update(`${pid}:${start}`).digest('hex');
 
 function markPending(root, record) {
   const pending = readPending(root);
@@ -217,7 +219,9 @@ export async function waitForVitestWatchdog(root, {
   const snapshot = ownedSnapshot(dirname(root), basename(root), read);
   const watchdogs = snapshot?.owned.filter(record =>
     record.root === root && record.kind === 'vitest-watchdog' && record.ppid === process.pid);
-  if (!watchdogs?.length) return;
+  // No watchdog to wait for: hand back this post-close inventory so the
+  // containment pass can reuse it instead of crawling the process table again.
+  if (!watchdogs?.length) return snapshot?.records;
   const pids = watchdogs.map(record => record.pid);
   const deadline = now() + graceMs;
   while (now() < deadline) {
@@ -233,7 +237,15 @@ export async function waitForVitestWatchdog(root, {
 export function killTestProcessesUnder(root, { read = readTestProcesses, probe = isOwnerAlive,
   kill = (pid, signal) => process.kill(pid, signal), onKilled = () => {}, onOutcome = () => {}, onInspection = () => {},
   probePid = probeTestPid, now = () => performance.now(), wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
-  settlementMs = 2000 } = {}) {
+  settlementMs = 2000, records: seed } = {}) {
+  // A caller that just inventoried the process table may seed the first full
+  // read; every later (pid-scoped) read stays live.
+  let seeded = seed;
+  const inventory = read;
+  read = pids => {
+    if (seeded && !pids) { const records = seeded; seeded = null; return records; }
+    return inventory(pids);
+  };
   let rootExists = true;
   try { const stat = lstatSync(root); if (!stat.isDirectory() || stat.isSymbolicLink()) return 0; } catch (error) {
     if (error.code !== 'ENOENT') return 0;
@@ -256,14 +268,11 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     if (record.root !== root) continue;
     const verified = stillOwned(record, snapshot, parent, prefix, read);
     if (!verified && testProcessSettlement(record, read([record.pid]), probePid) === 'terminated') continue;
-    // Read the bounded attribution before signaling; it cannot be reconstructed
-    // after the suite worker or run root disappears.
-    const attribution = processAttribution(root, record.identity);
     let signal = 'not-attempted';
     if (verified) {
       try { kill(record.pid, 'SIGKILL'); signal = 'delivered'; } catch { signal = 'failed'; }
     }
-    pending.push({ record, attribution, signal, settlement: 'unknown' });
+    pending.push({ record, signal, settlement: 'unknown' });
   }
   const deadline = now() + settlementMs;
   while (pending.some(item => item.settlement !== 'terminated')) {
@@ -283,8 +292,8 @@ export function killTestProcessesUnder(root, { read = readTestProcesses, probe =
     wait(Math.min(25, deadline - now()));
   }
   let killed = 0;
-  for (const { record, attribution, signal, settlement } of pending) {
-    const outcome = { kind: record.kind, parent: record.parent, ...attribution, signal,
+  for (const { record, signal, settlement } of pending) {
+    const outcome = { kind: record.kind, parent: record.parent, signal,
       settlement: settlement === 'running' ? 'unconfirmed' : settlement };
     onOutcome(outcome);
     if (settlement !== 'terminated') markPending(root, record);

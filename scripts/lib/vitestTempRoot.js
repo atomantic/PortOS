@@ -31,6 +31,8 @@ function restoreInheritedRootOwnership(root) {
 function killRootProcessesOnExit(root) {
   if (process.platform === 'win32') return;
   const sweep = () => {
+    // Clean teardown already removed the root and proved settlement; skip the host-wide process crawl.
+    if (!existsSync(root)) return;
     try { killTestProcessesUnder(root); } catch { /* best effort at exit */ }
   };
   process.once('exit', sweep);
