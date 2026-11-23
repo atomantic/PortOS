@@ -30,8 +30,8 @@ const unsupportedInput = (message) => new ServerError(message, { status: 400, co
 const hasOptions = (options) => Array.isArray(options) && options.length > 0;
 
 // First option wins a tie (the discrete frame options arrive sorted, so the shorter one).
-const nearestOption = (options, target, valueOf = Number) => options.reduce((closest, opt) =>
-  Math.abs(valueOf(opt) - target) < Math.abs(valueOf(closest) - target) ? opt : closest,
+const nearestOption = (options, target, toValue = Number) => options.reduce((closest, opt) =>
+  Math.abs(toValue(opt) - target) < Math.abs(toValue(closest) - target) ? opt : closest,
 options[0]);
 
 const isBoundedResolution = (opt) => Number.isInteger(Number(opt?.w)) && Number.isInteger(Number(opt?.h))

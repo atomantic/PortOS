@@ -32,7 +32,7 @@ describe('memory prompt reference boundary (#9040)', () => {
     expect(text.length).toBeLessThanOrEqual(8000);
     expect(text).toContain(UNTRUSTED_REFERENCE_NOTICE);
     expect(text).toContain('[truncated]');
-    expect(text.endsWith('\`\`\`')).toBe(true);
+    expect(text.endsWith('```')).toBe(true);
   });
   it('fences stored preferences and neutralizes a forged closing delimiter', async () => {
     const text = await getMemorySection({});

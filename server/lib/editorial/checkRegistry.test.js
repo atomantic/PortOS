@@ -3720,7 +3720,7 @@ describe('objects.unmotivated-interaction — LLM check (#1288)', () => {
     let sawObjectsContext = false;
     const objectsSeen = [];
     await getCheck('objects.unmotivated-interaction').run(baseCtx({
-      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.prototype.hasOwnProperty.call(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
+      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.hasOwn(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
       callStagedLLM: async (_stage, v) => { objectsSeen.push(v.objects); return { content: { findings: [] } }; },
     }));
     // The objects summary is passed as trimmable context (#1459), re-sent per chunk.
@@ -3776,7 +3776,7 @@ describe('objects.weight-proportionality — LLM check (#1624)', () => {
     let sawObjectsContext = false;
     const objectsSeen = [];
     await getCheck('objects.weight-proportionality').run(baseCtx({
-      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.prototype.hasOwnProperty.call(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
+      planManuscriptChunks: async (_stage, opts) => { sawObjectsContext = Object.hasOwn(opts.context || {}, 'objects'); return ['chunk a', 'chunk b']; },
       callStagedLLM: async (_stage, v) => { objectsSeen.push(v.objects); return { content: { findings: [] } }; },
     }));
     expect(sawObjectsContext).toBe(true);

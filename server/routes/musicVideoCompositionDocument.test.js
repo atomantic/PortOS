@@ -225,7 +225,7 @@ describe('music-video composition documents', () => {
 
   // Reconstruct older shipped bytes from the frozen outgoing fixture, never from today's engine.
   const withoutHandheld = (engine) => engine
-    .replace(/  \/\/ A person holding the camera: PortOS writes[\s\S]*?\n  }\n(?=  \/\/ The rig's camera state)/, '')
+    .replace(/ {2}\/\/ A person holding the camera: PortOS writes[\s\S]*?\n {2}}\n(?= {2}\/\/ The rig's camera state)/, '')
     .replace('handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt)', 'cameraView(scene, seg(t, scene.startSec, scene.endSec))');
 
   it('explicitly upgrades the shipped engine from before the handheld camera additions', async () => {

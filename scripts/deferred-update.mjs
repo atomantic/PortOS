@@ -278,6 +278,7 @@ export async function runDeferredUpdate({ admission = maintenance, launch = spaw
   } finally {
     try { await recovery?.close(); }
     catch (error) {
+      // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
       if (policy === 'automatic') throw error;
       emit('STEP:cleanup:warning:Temporary activity session cleanup could not be verified');
     }

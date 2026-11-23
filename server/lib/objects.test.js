@@ -185,7 +185,8 @@ describe('canonicalStringify', () => {
   });
 
   it('serializes SPARSE-array holes as null, not invalid JSON (matches JSON.stringify)', () => {
-    const sparse = [1, , 2];
+    const sparse = [1];
+    sparse[2] = 2;
     expect(canonicalStringify(sparse)).toBe('[1,null,2]');
     expect(canonicalStringify(sparse)).toBe(JSON.stringify(sparse));
   });

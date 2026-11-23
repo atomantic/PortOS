@@ -512,7 +512,7 @@ function getVariantConfig(variant = LEGACY_SHEET_VARIANT_ID) {
   // Own-property check so `variant=constructor` / `toString` / `hasOwnProperty`
   // from an unfiltered request body can't return an inherited Object.prototype
   // member and have downstream `.build()` / `.storage` access crash with a 500.
-  if (!Object.prototype.hasOwnProperty.call(SHEET_VARIANTS, variant)) {
+  if (!Object.hasOwn(SHEET_VARIANTS, variant)) {
     throw new ServerError(`Unknown character sheet variant "${variant}"`, {
       status: 400, code: 'VALIDATION_ERROR',
     });

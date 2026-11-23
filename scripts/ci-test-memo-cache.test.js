@@ -156,7 +156,7 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(invocation).toMatch(/suite: db\n\s+partition: db\n/);
     expect(invocation).not.toContain('merge-shards');
     const action = readFileSync(new URL('../.github/actions/test-memo/action.yml', import.meta.url), 'utf8');
-    expect(action).toMatch(/merge-shards:\n[^]*?default: '0'/);
+    expect(action).toMatch(/merge-shards:\n[\s\S]*?default: '0'/);
     expect(action).toContain('value: ${{ steps.restore.outputs.cache-primary-key }}');
     const restore = step(job, 'Restore from the trusted memo cache');
     const save = step(job, 'Save the test memo');

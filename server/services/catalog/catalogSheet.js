@@ -111,7 +111,7 @@ async function comparisonPartnerFor(ingredient, partnerId) {
 // `photographic` (a photoreal universe) lists the photographic character sheet first.
 function variantsForType(type, options = {}) {
   if (type === 'character') return characterVariants(options);
-  return Object.prototype.hasOwnProperty.call(CATALOG_SHEET_VARIANTS, type) ? CATALOG_SHEET_VARIANTS[type] : [];
+  return  Object.hasOwn(CATALOG_SHEET_VARIANTS, type) ? CATALOG_SHEET_VARIANTS[type] : [];
 }
 
 /** The sheet kinds a catalog type can render (empty for types without one). */

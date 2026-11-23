@@ -370,7 +370,7 @@ function parsePanelBody(lines) {
       const t = dl.trim();
       if (!t) continue;
       // Match: "- NAME: "line"" or "NAME: line" or "- NAME (whispered): "line""
-      const dm = t.match(/^[-*]?\s*([A-Z][A-Z0-9 '"&./()\-]*?):\s*"?(.+?)"?$/);
+      const dm = t.match(/^[-*]?\s*([A-Z][A-Z0-9 '"&./()-]*?):\s*"?(.+?)"?$/);
       if (dm) {
         dialogue.push({
           character: trimTo(dm[1], 100),

@@ -351,7 +351,7 @@ export const isNonSpeechMarker = (text) => /^\s*\[[A-Z_ ]+\]\s*$/i.test(text);
 
 // Recognize spoken phrases that should end dictation without going through the
 // LLM. Intentionally narrow — "I'm done writing" shouldn't match.
-const STOP_DICTATION_RE = /^(stop|end|exit|cancel|pause)\s+(dictation|dictating|logging|recording)[\.\!\s]*$/i;
+const STOP_DICTATION_RE = /^(stop|end|exit|cancel|pause)\s+(dictation|dictating|logging|recording)[.!\s]*$/i;
 
 // Detect the narrate-instead-of-call failure: the LLM replied with text that
 // claims it just performed an action ("I opened your daily log", "Navigating

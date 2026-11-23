@@ -31,7 +31,7 @@ const REGISTRY_FILE = join(PATHS.data, 'audio-models.json');
 
 // HF repo ids look like `org/name` (optionally with extra path segments). Keep
 // the guard permissive but reject path-traversal / whitespace / control chars.
-const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._\/-]+$/;
+const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+$/;
 
 export function isValidRepoId(repo) {
   return isNonBlankStr(repo) && REPO_RE.test(repo.trim()) && !repo.includes('..');

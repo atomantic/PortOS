@@ -70,7 +70,7 @@ async function loadOrEmpty(load, format, label, id) {
 const loadUniverse = async (id) => (await import('../universeBuilder/crud.js')).getUniverse(id);
 const loadBoard = async (id) => (await import('../moodBoard/index.js')).getBoard(id);
 
-const has = (obj, key) => obj != null && Object.prototype.hasOwnProperty.call(obj, key);
+const has = (obj, key) => obj != null && Object.hasOwn(obj, key);
 
 /**
  * Returns `input` with any missing snapshot derived from the ids it carries.

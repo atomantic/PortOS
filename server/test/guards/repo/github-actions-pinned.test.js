@@ -79,6 +79,6 @@ describe('GitHub Actions immutable pin contract', () => {
       const yaml = readText(filename);
       expect(yaml, relative(REPO_ROOT, filename)).not.toMatch(/^\s+contents: write\s*$/m);
     }
-    expect(release).toMatch(/^permissions:\n  contents: write$/m);
+    expect(release).toMatch(/^permissions:\n {2}contents: write$/m);
   });
 });

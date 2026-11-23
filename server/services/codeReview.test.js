@@ -1477,13 +1477,13 @@ describe('codeReview helpers', () => {
         "+    ollama: 'example-model-2',",
         '+  },',
       ].join('\n')
-      const noKeyDiff = diff.replace(/^\+    key:.*\n/m, '')
+      const noKeyDiff = diff.replace(/^\+ {4}key:.*\n/m, '')
 
       global.fetch = vi.fn(async (_url, init) => {
         const request = JSON.parse(init.body)
         const rubric = request.messages[0].content
-        const recognizes = rubric.includes('the entry\'s identifier is its \`key\` field')
-          && rubric.includes('an entry with no \`key\`')
+        const recognizes = rubric.includes('the entry\'s identifier is its `key` field')
+          && rubric.includes('an entry with no `key`')
         const hasKey = request.messages[1].content.includes('+    key:')
         return mockJsonResponse({
           choices: [{ message: { content: JSON.stringify(recognizes && hasKey

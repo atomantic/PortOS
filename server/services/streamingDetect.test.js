@@ -738,7 +738,7 @@ module.exports = { apps: [
     const content = `// { name: 'example-api', env: { PORT: 6100 } }
 /* { name: 'example-api', env: { PORT: 6100 } } */
 const example = "{ name: 'example-api', env: { PORT: 6100 } }";
-const pattern = /[}\"']/;
+const pattern = /[}"']/;
 const template = \`outer \${\`inner }\`}\`;
 const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
 module.exports = { apps: [
@@ -1646,7 +1646,7 @@ describe('streamDetection frame sequence', () => {
 // { name: 'example-old-api', env: { PORT: 6109 } },
 /* module.exports = { apps: [{ name: 'example-block-api', env: { PORT: 6108 } }] }; */
 const example = "apps: [{ name: 'example-string-api', env: { PORT: 6107 } }]";
-const pattern = /[}\"']/;
+const pattern = /[}"']/;
 const template = \`outer \${\`inner }\`}\`;
 const exampleObject = { apps: [{ name: 'example-api', env: { PORT: 6100 } }] };
 const exampleObject = { apps: [{ name: 'example-object-api', env: { PORT: 6106 } }] };

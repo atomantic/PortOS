@@ -69,7 +69,7 @@ describe('lyric timing playthrough', () => {
     const titleOnly = { ...project, lyricCues: [], composition: { mode: 'composed' }, titleCard: { enabled: true, title: 'Instrumental', startSec: 0, endSec: 4 } };
     const preview = await buildLyricPlaythroughPreview(titleOnly, { overlay: true });
     const data = portosData(preview.html);
-    expect(preview.html).toContain('\"title\":\"Instrumental\"');
+    expect(preview.html).toContain('"title":"Instrumental"');
     expect(data.lyrics).toEqual([]);
     await expect(buildLyricPlaythroughPreview(titleOnly)).rejects.toMatchObject({ status: 409, code: 'NO_TIMED_LYRICS' });
   });

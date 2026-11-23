@@ -109,7 +109,7 @@ export function insecureFetch(agent) {
               // "header is '0'" without branching on transport. Without this
               // the asset-pull `res.headers.has('content-length')` throws
               // TypeError on every HTTPS pull.
-              has: n => Object.prototype.hasOwnProperty.call(res.headers, n.toLowerCase()),
+              has: n => Object.hasOwn(res.headers, n.toLowerCase()),
             },
             text: () => Promise.resolve(buffer.toString('utf-8')),
             // Defer JSON.parse so a malformed body becomes a promise rejection

@@ -1571,7 +1571,7 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
   let ledger = approvals;
   const skipped = () => ({ reviewed: false, handedBack: false, landing: null, approvals: ledger });
   const eligibilityRequired = requireEligibilityFacts
-    || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
+    || Object.hasOwn(target, 'eligibilityFacts');
   const eligibilityStillCurrent = async () => {
     if (!await assessment.stillCurrent()) {
       drops.record(decision.number, 'the assessed contribution or CI changed before action');

@@ -56,7 +56,7 @@ function windowsShimMatches(file, suffix, prefix, target, env) {
     ? /(?:^|\s)&\s/.test(line) && /\$args\s*$/.test(line)
     : /^\s*exec\s/.test(line) && /"\$@"\s*$/.test(line));
   return lines.length > 0 && lines.every(line => {
-    const paths = [...line.matchAll(/"\$basedir\/([^\"]+)"/g)];
+    const paths = [...line.matchAll(/"\$basedir\/([^"]+)"/g)];
     const candidate = paths.at(-1)?.[1];
     return candidate && samePath(realpathSync(resolve(prefix, candidate)), target, true);
   });

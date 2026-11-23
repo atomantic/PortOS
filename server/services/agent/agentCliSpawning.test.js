@@ -709,8 +709,8 @@ describe('stream error containment', () => {
     const spawnPromise = spawnDirectly(minimalArgs);
     await new Promise((r) => setTimeout(r, 10));
 
-    fakeProcess.stdout.emit('data', Buffer.from('{\"type\":\"result\",\"result\":\"one\"}\n'));
-    fakeProcess.stdout.emit('data', Buffer.from('{\"type\":\"result\",\"result\":\"two\"}\n'));
+    fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"one"}\n'));
+    fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"two"}\n'));
     await new Promise((r) => setTimeout(r, 20));
 
     const outputs = appendRunEvent.mock.calls.map(([e]) => e).filter((e) => e.kind === 'run.output');

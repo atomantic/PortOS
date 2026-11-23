@@ -163,8 +163,8 @@ describe('local-tier management', () => {
 
     const wrote = await request(app).post('/api/skills/manage').send({ action: 'write_file', name: 'release', path: 'references/steps.md', content: '1. tag' });
     expect(wrote.status).toBe(200);
-    const escape = await request(app).post('/api/skills/manage').send({ action: 'write_file', name: 'release', path: '../../escape.md', content: 'x' });
-    expect(escape.body.code).toBe('SKILL_PATH_INVALID');
+    const escapeResponse = await request(app).post('/api/skills/manage').send({ action: 'write_file', name: 'release', path: '../../escape.md', content: 'x' });
+    expect(escapeResponse.body.code).toBe('SKILL_PATH_INVALID');
     const view = await request(app).get(`/api/skills/view?${new URLSearchParams({ ref: 'release', file: 'references/steps.md' })}`);
     expect(view.body.content).toBe('1. tag');
 

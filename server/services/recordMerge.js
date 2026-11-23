@@ -233,7 +233,7 @@ const resolveScalars = (fields, survivor, loser, fieldChoices = {}, fieldOverrid
     // an empty-string override (user cleared the AI-merged value to mean
     // "blank this field") is honored instead of falling through to the
     // survivor/loser picker.
-    if (Object.prototype.hasOwnProperty.call(fieldOverrides, field)) {
+    if (Object.hasOwn(fieldOverrides, field)) {
       values[field] = fieldOverrides[field];
       continue;
     }

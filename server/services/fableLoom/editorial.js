@@ -232,7 +232,7 @@ const assertEditorialDependenciesUnchanged = (current, fingerprint, { code, mess
 };
 
 const seriesPlanDigest = (loom) => JSON.stringify({
-  ...(Object.prototype.hasOwnProperty.call(loom.seriesPlan || {}, 'seriesDesign')
+  ...(Object.hasOwn(loom.seriesPlan || {}, 'seriesDesign')
     ? { seriesDesign: loom.seriesPlan.seriesDesign }
     : {}),
   storyArc: loom.seriesPlan?.storyArc || '',

@@ -82,9 +82,9 @@ it('rejects mismatches and symlink escapes before replacing any batch entry', as
   const targetPath = await weight(roots.external[0]);
   const original = (await fs.stat(targetPath)).ino;
   const outside = await weight(root, 'outside.safetensors');
-  const escape = join(roots.external[0], 'escape.safetensors');
-  await fs.symlink(outside, escape);
-  await expect(rectifyModelDuplicates([{ sourcePath, targetPath }, { sourcePath, targetPath: escape }], { roots })).rejects.toThrow('Unsafe');
+  const escapeLink = join(roots.external[0], 'escape.safetensors');
+  await fs.symlink(outside, escapeLink);
+  await expect(rectifyModelDuplicates([{ sourcePath, targetPath }, { sourcePath, targetPath: escapeLink }], { roots })).rejects.toThrow('Unsafe');
   expect((await fs.stat(targetPath)).ino).toBe(original);
   await fs.writeFile(targetPath, Buffer.alloc(bytes.length, 9));
   await expect(rectifyModelDuplicates([{ sourcePath, targetPath }], { roots })).rejects.toThrow('contents differ');

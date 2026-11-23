@@ -258,7 +258,7 @@
   globalThis.PORTOS_CAMERA_RIG = Object.freeze({
     version: 1,
     ids: Object.freeze(Object.keys(PATHS)),
-    has: (id) => Object.prototype.hasOwnProperty.call(PATHS, id),
+    has: (id) => Object.hasOwn(PATHS, id),
     sample, progress, flatView, applyToCamera, framingOf, defaultSpeed,
     GENTLE, GENTLE_CYCLE, STILL_AMOUNT,
   });

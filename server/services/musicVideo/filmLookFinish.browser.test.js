@@ -188,7 +188,7 @@ describe.skipIf(!canRun)('film look finishing pass with real Chrome and ffmpeg',
     try {
       const capabilities = await page.evaluate(`(async () => {
         const gpu = globalThis.__portosFilmLookFinish.gpuInfo().available;
-        if (!gpu || typeof VideoEncoder !== 'function' || !document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028\"')) return false;
+        if (!gpu || typeof VideoEncoder !== 'function' || !document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028"')) return false;
         const result = await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: ${CW}, height: ${CH}, framerate: 24,
           bitrateMode: 'quantizer', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' }, latencyMode: 'realtime' });
         return result.supported && result.config.bitrateMode === 'quantizer';
@@ -234,7 +234,7 @@ describe.skipIf(!canRun)('film look finishing pass with real Chrome and ffmpeg',
     try {
       const capabilities = await page.evaluate(`(async () => {
         const gpu = globalThis.__portosFilmLookFinish.gpuInfo().available;
-        if (!gpu || typeof VideoEncoder !== 'function' || !document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028\"')) return false;
+        if (!gpu || typeof VideoEncoder !== 'function' || !document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028"')) return false;
         const result = await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: ${W}, height: ${H}, framerate: 24,
           bitrateMode: 'quantizer', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' }, latencyMode: 'realtime' });
         return result.supported && result.config.bitrateMode === 'quantizer';

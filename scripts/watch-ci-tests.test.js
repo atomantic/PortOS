@@ -103,17 +103,21 @@ describe.skipIf(process.platform === 'win32')('independent browser test watchdog
       // Even an assertion or supervisor regression must retire this fixture's
       // positively recorded group, including a launcher stopped with SIGSTOP.
       const ownedPath = join(root, 'owned.json');
+      // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
       if (!existsSync(ownedPath)) throw Error('Synthetic watchdog ownership unavailable; scratch retained.');
       {
         const { launcher } = JSON.parse(readFileSync(ownedPath, 'utf8'));
         try { process.kill(-launcher, 'SIGKILL'); }
+        // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
         catch (error) { if (error.code !== 'ESRCH') throw error; }
         const until = Date.now() + 5000;
         while (true) {
           // macOS answers EPERM while a killed group leader is a not-yet-reaped
           // zombie; it settles to ESRCH, so keep polling inside the bounded wait.
           try { process.kill(-launcher, 0); }
+          // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
           catch (error) { if (error.code === 'ESRCH') break; if (error.code !== 'EPERM') throw error; }
+          // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
           if (Date.now() >= until) throw Error('Synthetic watchdog group settlement unverified; scratch retained.');
           await delay(25);
         }

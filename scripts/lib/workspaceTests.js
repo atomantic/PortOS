@@ -101,14 +101,14 @@ export function globToRegExp(glob) {
     else if (c === '?') out += '[^/]';
     else if (c === '{') {
       const close = glob.indexOf('}', i);
-      out += `(?:${glob.slice(i + 1, close).split(',').map(escape).join('|')})`;
+      out += `(?:${glob.slice(i + 1, close).split(',').map(escapeRegex).join('|')})`;
       i = close;
-    } else out += escape(c);
+    } else out += escapeRegex(c);
   }
   return new RegExp(`${out}$`);
 }
 
-const escape = (text) => text.replace(/[.+^$()|[\]\\]/g, '\\$&');
+const escapeRegex = (text) => text.replace(/[.+^$()|[\]\\]/g, '\\$&');
 
 /** Walk from the literal prefix of each include glob; a walk never leaves the repository. */
 function walkRoots(include) {

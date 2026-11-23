@@ -13,7 +13,7 @@ const parseDockerPort = (value) => databaseSettings.parsePort(value, 5561);
 const here = dirname(fileURLToPath(import.meta.url));
 const setupDbSrc = readFileSync(join(here, 'setup-db.js'), 'utf8');
 const dockerComposeSrc = readFileSync(join(here, '..', 'docker-compose.yml'), 'utf8');
-const dockerPortBindings = dockerComposeSrc.match(/^    ports:\r?\n((?:^      - .*(?:\r?\n|$))+)/m)?.[1]
+const dockerPortBindings = dockerComposeSrc.match(/^ {4}ports:\r?\n((?:^ {6}- .*(?:\r?\n|$))+)/m)?.[1]
   ?.trim()
   .split(/\r?\n/)
   .map((binding) => binding.trim());

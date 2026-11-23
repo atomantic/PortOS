@@ -192,7 +192,7 @@ export async function withSnapshotRead(snapshotDir, snapshotId, operation) {
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
-export const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+export const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.-]/g, '_') || 'unknown';
 const LEGACY_SNAPSHOT_SOURCE = '@legacy';
 const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;

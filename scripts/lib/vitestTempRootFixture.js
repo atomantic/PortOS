@@ -321,6 +321,7 @@ export async function runWatchConfigRestart(host, workspace, inspect, { signal }
           ? new AggregateError([failure, error], 'watch fixture failed and process close is unconfirmed', { cause: failure })
           : error;
         cleanupError.code = 'FIXTURE_CLOSE_UNCONFIRMED';
+        // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
         throw cleanupError;
       } finally {
         clearTimeout(closeTimer);

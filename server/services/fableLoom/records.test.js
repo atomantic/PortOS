@@ -1419,7 +1419,7 @@ describe('per-character evolution lens on the series plan (#6440)', () => {
 
   it('leaves a plan that never opted in byte-identical', async () => {
     const loom = await makeLoom({ name: 'A plain loom' });
-    expect(Object.prototype.hasOwnProperty.call(loom.seriesPlan, 'characterEvolutions')).toBe(false);
+    expect(Object.hasOwn(loom.seriesPlan, 'characterEvolutions')).toBe(false);
     expect(JSON.stringify(sanitizeLoom(loom).seriesPlan)).toBe(JSON.stringify(loom.seriesPlan));
   });
 
@@ -1527,7 +1527,7 @@ describe('author-owned series design on the series plan (#7204)', () => {
     getSeriesMock.mockResolvedValueOnce({ id: 'series-1', arc: { seriesDesign: renewableDesign } });
     const loom = await makeLoom({ name: 'Linked but independent', seriesId: 'series-1' });
 
-    expect(Object.prototype.hasOwnProperty.call(loom.seriesPlan, 'seriesDesign')).toBe(false);
+    expect(Object.hasOwn(loom.seriesPlan, 'seriesDesign')).toBe(false);
     expect(JSON.stringify(sanitizeLoom(loom).seriesPlan)).toBe(JSON.stringify(loom.seriesPlan));
   });
 
@@ -1537,7 +1537,7 @@ describe('author-owned series design on the series plan (#7204)', () => {
 
     const { seriesDesign: _cleared, ...planWithoutDesign } = saved.seriesPlan;
     const cleared = await updateLoom(saved.id, { seriesPlan: planWithoutDesign });
-    expect(Object.prototype.hasOwnProperty.call(cleared.seriesPlan, 'seriesDesign')).toBe(false);
+    expect(Object.hasOwn(cleared.seriesPlan, 'seriesDesign')).toBe(false);
 
     const explicitClear = await updateLoom(saved.id, {
       seriesPlan: { ...cleared.seriesPlan, seriesDesign: null },
@@ -1565,6 +1565,6 @@ describe('author-owned series design on the series plan (#7204)', () => {
     }], { senderSchemaVersions: { fableLoom: 9 } });
     const cleared = await getLoom(loom.id);
     expect(cleared.name).toBe('Cleared by v9 peer');
-    expect(Object.prototype.hasOwnProperty.call(cleared.seriesPlan, 'seriesDesign')).toBe(false);
+    expect(Object.hasOwn(cleared.seriesPlan, 'seriesDesign')).toBe(false);
   });
 });

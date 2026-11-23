@@ -11,7 +11,7 @@ export function developmentWorkIdentity(task) {
   const app = m.app || m.appId || m.taskApp;
   const url = m.reviewLoopPRUrl || m.prUrl;
   if (typeof url === 'string') {
-    const match = url.match(/^https?:\/\/([^/]+)\/(.+?)\/(?:pull|merge_requests|\-\/merge_requests)\/(\d+)(?:[/?#]|$)/);
+    const match = url.match(/^https?:\/\/([^/]+)\/(.+?)\/(?:pull|merge_requests|-\/merge_requests)\/(\d+)(?:[/?#]|$)/);
     if (match) return { app, key: `${match[1]}/${match[2]}/pr/${match[3]}`.toLowerCase(), kind: 'pr' };
   }
   if (isTruthyMeta(m.claimFlow) || ['claim-work', 'claim-issue', 'claim-issue-gitlab'].includes(m.taskAnalysisType)) {

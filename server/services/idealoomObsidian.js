@@ -61,13 +61,13 @@ const decodeScalar = (value) => {
         continue;
       }
       index += 1;
-      const escape = source[index];
+      const escapeChar = source[index];
       const escapes = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
-      if (escape === 'u' && /^[0-9a-f]{4}$/i.test(source.slice(index + 1, index + 5))) {
+      if (escapeChar === 'u' && /^[0-9a-f]{4}$/i.test(source.slice(index + 1, index + 5))) {
         decoded += String.fromCharCode(Number.parseInt(source.slice(index + 1, index + 5), 16));
         index += 4;
-      } else if (escape in escapes) {
-        decoded += escapes[escape];
+      } else if (escapeChar in escapes) {
+        decoded += escapes[escapeChar];
       } else {
         return null;
       }

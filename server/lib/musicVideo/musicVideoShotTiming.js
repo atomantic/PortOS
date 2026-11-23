@@ -232,12 +232,12 @@ export const SOURCE_AUDIO_MUSIC = Object.freeze({
  * music-driven scene gets the audio-to-video model `videoSettings` pins.
  */
 export function performanceCapability(backend, { scene = null, videoSettings = null } = {}) {
-  if (!Object.prototype.hasOwnProperty.call(SOURCE_AUDIO_LIPSYNC, backend || '')) return null;
+  if (!Object.hasOwn(SOURCE_AUDIO_LIPSYNC, backend || '')) return null;
   if (scene?.performanceStyle !== 'music') return SOURCE_AUDIO_LIPSYNC[backend];
   if (backend === 'local') return LOCAL_MUSIC_LANE;
   const lanes = SOURCE_AUDIO_MUSIC[backend];
   const pinned = videoSettings?.falMusicModelId;
-  return (pinned && Object.prototype.hasOwnProperty.call(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_MUSIC_VIDEO_DEFAULT_MODEL];
+  return (pinned && Object.hasOwn(lanes, pinned) ? lanes[pinned] : null) || lanes[FAL_MUSIC_VIDEO_DEFAULT_MODEL];
 }
 
 /**

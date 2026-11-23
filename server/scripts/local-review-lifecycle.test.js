@@ -174,6 +174,7 @@ async function exerciseDelivery() {
     expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toEqual(malformed);
 
   } finally {
+    // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
     if (cliHeld) throw new Error('Local review CLI settlement is unconfirmed; fixture retained');
     assertGitWorkSettled(cwd);
     await rm(cwd, { recursive: true, force: true });

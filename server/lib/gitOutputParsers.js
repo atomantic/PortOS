@@ -190,7 +190,7 @@ export function extractAgentSummary(output) {
       const diffHeader = /^(diff --git |index [0-9a-f]+\.\.|--- |\+\+\+ |@@ |\\ No newline)/.test(lines[i]);
       // Raw added/removed source has no space after its prefix. Markdown lists
       // (`+ item`, `- item`) are retained outside an identified unified diff.
-      const diffLine = /^[+-]\S/.test(lines[i]) || (inDiff && /^[ +\-]/.test(lines[i]));
+      const diffLine = /^[+-]\S/.test(lines[i]) || (inDiff && /^[ +-]/.test(lines[i]));
       if (diffHeader || diffLine) {
         inDiff = true;
         lastToolLine = i;

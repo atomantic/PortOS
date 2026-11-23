@@ -186,7 +186,7 @@ describe('persistent mind routes', () => {
     mocks.getPersistentMindState.mockResolvedValue({
       enabled: true, status: 'idle', started: false, queuedMessages: [{ id: 'private', text: 'must not leak' }],
       activeTurn: null, lastCompletedTurnId: null, lastCompletedAt: null, nextEligibleWakeAt: null,
-      failureCount: 0, pauseReason: null, lastError: 'provider failed with \"apiKey\": \"secret-value\"',
+      failureCount: 0, pauseReason: null, lastError: 'provider failed with "apiKey": "secret-value"',
     });
     mocks.loadState.mockResolvedValue({ config: {
       domainAutonomy: { cos: 'execute' },

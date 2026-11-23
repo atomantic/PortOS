@@ -277,13 +277,13 @@ export const toolingTestsFor = (changedFiles, trackedSet) => (
   changedFiles.some((path) => TOOLING_OWNER_RE.test(path)) ? TOOLING_TESTS.filter((path) => trackedSet.has(path)) : []);
 
 export const DB_RISK_RULES = [
-  /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
-  /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
-  /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
-  /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
+  /^scripts\/rehearsal-scratch-db(?:[./]|$)/i,
+  /^scripts\/generate-init-db-sql(?:[./]|$)/i,
+  /^scripts\/lib\/migrationFiles(?:[./]|$)/i,
+  /^scripts\/lib\/dbImage(?:[./]|$)/i,
   /^docker-compose\.yml$/i,
-  /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
-  /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
+  /^server\/lib\/databaseMaintenanceSchema(?:[./]|$)/i,
+  /^server\/services\/backupDatabaseDump(?:[./]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,
   /^server\/scripts\/.*db/i,
   /^server\/services\/(?:.*\/)?[^/]*DB(?:\/|\.|$)/i,

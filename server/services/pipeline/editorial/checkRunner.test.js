@@ -1247,7 +1247,7 @@ describe('runEditorialChecks — ctx.priorFindings injection (#1627)', () => {
   const captureCtxFor = async (id, { dependsOn } = {}) => {
     const check = getCheck(id);
     const originalRun = check.run;
-    const hadDeps = Object.prototype.hasOwnProperty.call(check, 'dependsOn');
+    const hadDeps = Object.hasOwn(check, 'dependsOn');
     const originalDeps = check.dependsOn;
     let ctx = null;
     if (dependsOn) check.dependsOn = dependsOn;
@@ -1323,7 +1323,7 @@ describe('runEditorialChecks — dependency-aware staleness (#1627)', () => {
   it('marks a dependency-consuming finding stale when the dependency\'s source drifts', async () => {
     const naming = getCheck('naming.dissimilar-names');     // deterministic, sources: ['canon']
     const _infoDump = getCheck('prose.info-dumping');        // LLM, sources: ['manuscript']
-    const hadDeps = Object.prototype.hasOwnProperty.call(naming, 'dependsOn');
+    const hadDeps = Object.hasOwn(naming, 'dependsOn');
     const originalDeps = naming.dependsOn;
     naming.dependsOn = ['prose.info-dumping'];              // naming now depends on a manuscript reader
     try {
