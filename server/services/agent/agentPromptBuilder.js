@@ -826,6 +826,7 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
     return { memorySection: null, injectedMemories: [], agentInstructionsSection: null, digitalTwinSection: null };
   }
   let injectedMemories = [];
+  const twinMaxTokens = config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens;
   const [memorySection, agentInstructionsSection, digitalTwinSection] = await Promise.all([
     getMemorySection(task, {
       maxTokens: config.memory?.maxContextTokens || 2000,
@@ -834,8 +835,8 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
     getAgentInstructionsContext(workspaceDir)
       .catch(err => { console.log(`⚠️ Agent instructions retrieval failed: ${err.message}`); return null; }),
-    // Empty when the Digital Twin 'auto-inject into CoS' setting is off.
-    getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000, personaId: 'active' })
+    // Empty when the Digital Twin 'auto-inject into CoS' setting is off. Omitting maxTokens lets the saved twin setting apply.
+    getDigitalTwinForPrompt({ ...(twinMaxTokens ? { maxTokens: twinMaxTokens } : {}), personaId: 'active' })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; }),
   ]);
   return { memorySection, injectedMemories, agentInstructionsSection, digitalTwinSection };

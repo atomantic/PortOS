@@ -58,8 +58,10 @@ export async function getDigitalTwinForPrompt(options = {}) {
   // respectAutoInject: the autoInjectToCoS setting gates CoS agent injection
   // only. User-triggered twin workflows (test suites, dynamic test generation,
   // enrichment) pass false so they keep seeing the twin when it is unchecked.
-  const { maxTokens = 4000, personaId, respectAutoInject = true } = options;
+  const { maxTokens: requestedMaxTokens, personaId, respectAutoInject = true } = options;
   const meta = await loadMeta();
+  // Explicit caller override wins; otherwise the saved Digital Twin setting governs.
+  const maxTokens = requestedMaxTokens ?? meta.settings?.maxContextTokens ?? 4000;
 
   if (respectAutoInject && !meta.settings.autoInjectToCoS) {
     return '';

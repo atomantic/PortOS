@@ -1475,6 +1475,23 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result.length).toBeLessThanOrEqual(4100); // Allow small overhead for truncation message
     });
 
+    it('uses meta.settings.maxContextTokens when no explicit maxTokens is passed, and an explicit override wins', async () => {
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'BIG.md', weight: 10 })],
+        settings: { autoInjectToCoS: true, maxContextTokens: 1000 }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        return 'x'.repeat(40000);
+      });
+
+      const byDefault = await getDigitalTwinForPrompt();
+      expect(byDefault.length).toBeLessThanOrEqual(4100);
+      const overridden = await getDigitalTwinForPrompt({ maxTokens: 5000 });
+      expect(overridden.length).toBeGreaterThan(10000);
+    });
+
     it('should sort by weight descending then priority ascending', async () => {
       const meta = makeMeta({
         documents: [

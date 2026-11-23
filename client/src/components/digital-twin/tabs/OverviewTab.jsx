@@ -313,8 +313,14 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               <FormField labelClassName="block text-sm text-gray-400 mb-2" label="Max context tokens">
                 <input
                   type="number"
-                  value={settingsForm.maxContextTokens || 4000}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, maxContextTokens: parseInt(e.target.value, 10) })}
+                  min={1000}
+                  max={100000}
+                  value={settingsForm.maxContextTokens ?? 4000}
+                  onChange={(e) => {
+                    const next = parseInt(e.target.value, 10);
+                    if (Number.isNaN(next)) return;
+                    setSettingsForm({ ...settingsForm, maxContextTokens: next });
+                  }}
                   className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
                 />
               </FormField>
