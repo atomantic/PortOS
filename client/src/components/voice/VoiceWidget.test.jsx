@@ -83,7 +83,7 @@ vi.mock('../../services/voiceClient', () => ({
   isVisionCaptureEnabled: vi.fn(() => false),
   onVisionCaptureEnded: vi.fn(() => vi.fn()),
   speakSynthesized: mocks.speakSynthesized,
-  onVoiceOutputPrimary: vi.fn((handler) => { handler(false); return vi.fn(); }),
+  onVoiceOutputPrimary: vi.fn((handler) => { handler(true); return vi.fn(); }),
   claimVoiceOutput: vi.fn(),
 }));
 
