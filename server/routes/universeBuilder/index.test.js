@@ -56,6 +56,7 @@ const applyCanonImageCorrectionMock = vi.fn(async (_universeId, kind, entryId, b
 const removeCanonEntryImageRefMock = vi.fn(async (universeId, kind, entryId) => ({
   universe: { id: universeId }, entry: { id: entryId, imageRefs: [] },
 }));
+const extractCanonFromProseMock = vi.fn(async () => ({ extracted: [] }));
 const removeCanonEntryMock = vi.fn(async (universeId, kind, entryId) => ({
   universe: { id: universeId, characters: [], places: [], objects: [] },
   entry: { id: entryId, name: 'Alex', imageRefs: ['alex.png'], ingredientId: 'ing-alex' },
@@ -65,6 +66,7 @@ vi.mock('../../services/universeCanon.js', async () => {
   return {
     ...actual,
     applyCanonImageCorrection: (...args) => applyCanonImageCorrectionMock(...args),
+    extractCanonFromProse: (...args) => extractCanonFromProseMock(...args),
     removeCanonEntry: (...args) => removeCanonEntryMock(...args),
     removeCanonEntryImageRef: (...args) => removeCanonEntryImageRefMock(...args),
   };
@@ -280,6 +282,7 @@ const buildApp = () => {
 describe('universe-builder routes', () => {
   beforeEach(() => {
     fileStore.clear();
+    extractCanonFromProseMock.mockClear();
     uuidCounter = 0;
     collectionsByName.clear();
     collectionsByUniverseId.clear();
@@ -1424,6 +1427,31 @@ describe('universe-builder routes', () => {
         .send({ description: tooLong, imageFilename: 'g.png' });
       expect(res.status).toBe(400);
       expect(applyCanonImageCorrectionMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /:id/extract-canon kinds validation', () => {
+    it('rejects unknown or oversized kinds with 400 before any LLM call', async () => {
+      const app = buildApp();
+      for (const kinds of [['characters'], ['invalid'], ['character', 'place', 'object', 'character']]) {
+        const res = await request(app)
+          .post('/api/universe-builder/uni-1/extract-canon')
+          .send({ corpus: 'Some prose', kinds });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('VALIDATION_ERROR');
+      }
+      expect(extractCanonFromProseMock).not.toHaveBeenCalled();
+    });
+
+    it('accepts valid, empty, and omitted kinds', async () => {
+      const app = buildApp();
+      for (const body of [{ kinds: ['character', 'place'] }, { kinds: [] }, {}]) {
+        const res = await request(app)
+          .post('/api/universe-builder/uni-1/extract-canon')
+          .send({ corpus: 'Some prose', ...body });
+        expect(res.status).toBe(200);
+      }
+      expect(extractCanonFromProseMock).toHaveBeenCalledTimes(3);
     });
   });
 

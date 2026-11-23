@@ -16,7 +16,7 @@ import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
@@ -550,8 +550,15 @@ async function main() {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
   }
+  // A run that may save its store bounds it first (the cache save follows a green step).
+  const pruneMemo = () => {
+    if (!memoDir || readOnlyMemo) return;
+    const pruned = pruneTestMemo({ memoDir, repoRoot, trustedCi: Boolean(process.env.CI) });
+    if (pruned) console.log(`🧠 Test memo: pruned ${pruned.removedEntries} entries and ${pruned.removedRecords} records; kept ${pruned.entries} entries and ${pruned.records} records.`);
+  };
   if (plan.run.length === 0) {
     console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
+    pruneMemo();
     process.exitCode = 0;
     return;
   }
@@ -607,7 +614,10 @@ async function main() {
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
   process.exitCode = status;
-  if (!memoDir || passed.length === 0) return;
+  if (!memoDir || passed.length === 0) {
+    if (status === 0) pruneMemo();
+    return;
+  }
   // PR jobs restore trusted memos, but ci.yml never saves their new entries.
   // Avoid expensive post-success closure hashing/writes that cannot be reused
   // and can consume the Windows step deadline after every test already passed.
@@ -623,6 +633,7 @@ async function main() {
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
   // A passed file that stores nothing re-runs on every trusted run; say which and why.
   for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
+  if (status === 0) pruneMemo();
 }
 
 if (isDirectlyInvoked(import.meta.url)) await main();

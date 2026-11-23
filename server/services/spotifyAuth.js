@@ -21,7 +21,8 @@
  * The pure helpers (`isTokenExpired`, `withExpiry`, `getRedirectUri`) are exported
  * and unit-tested without any network or filesystem access.
  */
-import { dataPath, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
+import { dataPath, tryReadFile } from '../lib/fileUtils.js';
+import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSelfHost } from '../lib/peerSelfHost.js';
@@ -101,7 +102,7 @@ export function isTokenExpired(tokens, now = Date.now(), skewMs = 60000) {
 // ---------------------------------------------------------------------------
 
 async function ensureAuthDir() {
-  await ensureDir(AUTH_DIR);
+  await ensureSecureDir(AUTH_DIR);
 }
 
 export async function getCredentials() {
@@ -114,7 +115,7 @@ export async function getCredentials() {
 export async function saveCredentials({ clientId, clientSecret }, options = {}) {
   await ensureAuthDir();
   const credentials = { clientId, clientSecret, redirectUri: getRedirectUri(options) };
-  await atomicWrite(CREDENTIALS_FILE, credentials);
+  await writeSecureJson(CREDENTIALS_FILE, credentials);
   console.log('🎧 Spotify OAuth credentials saved');
   return { hasCredentials: true, redirectUri: credentials.redirectUri };
 }
@@ -128,12 +129,12 @@ export async function getTokens() {
 
 async function saveTokens(tokens) {
   await ensureAuthDir();
-  await atomicWrite(TOKENS_FILE, tokens);
+  await writeSecureJson(TOKENS_FILE, tokens);
 }
 
 export async function clearAuth() {
   await ensureAuthDir();
-  await atomicWrite(TOKENS_FILE, {});
+  await writeSecureJson(TOKENS_FILE, {});
   console.log('🎧 Spotify OAuth tokens cleared');
   return { cleared: true };
 }

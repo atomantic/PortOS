@@ -15,8 +15,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFileStrict: vi.fn(async (path, fallback) => ({ ok: true, value: fileStore.has(path) ? fileStore.get(path) : fallback })),
   unreadableStoreError: (filePath) => Object.assign(new Error(`Unreadable JSON file: ${filePath}`), { status: 500, code: 'UNREADABLE_STORE' }),
 }));
-vi.mock('../instances.js', () => mockNoPeers());
-vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
+vi.mock('./instances.js', () => mockNoPeers());
+vi.mock('./sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('./stageRunner.js', () => ({ runStagedLLM: vi.fn(), extractJson: (raw) => JSON.parse(raw) }));
 vi.mock('./catalog/catalogDB.js', () => ({
   listIngredients: vi.fn().mockResolvedValue({ items: [] }),

@@ -93,8 +93,8 @@ export default function CatalogCard({
           variant="separator"
           className="pl-11"
           question={`Delete "${name}"?`}
-          confirmText="Yes"
-          cancelText="No"
+          confirmText="Delete"
+          cancelText="Cancel"
           onConfirm={() => onConfirmDelete(it)}
           onCancel={onCancelArm}
         />

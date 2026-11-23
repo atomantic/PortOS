@@ -317,6 +317,24 @@ describe('scheduled audit measurement workflow', () => {
 
   // The detail read feeds the repository scan into the summary; a failing scan
   // must cost only the applicability, never the whole quality read.
+  it('asks each federated peer once for the whole app list', async () => {
+    const peerFetch = vi.fn(async () => new Response(JSON.stringify({ schemaVersion: 1, repositories: {} }), { status: 200 }));
+    await enrichAppsWithQuality([
+      { id: 'one', repoPath: '/repo/one' },
+      { id: 'two', repoPath: '/repo/two' },
+    ], {
+      now: Date.parse('2026-09-10T12:00:00Z'),
+      query: async () => ({ rows: [] }),
+      readFile: async () => null,
+      getPeers: async () => [{ id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 }],
+      getOriginInfo: async (path) => ({ host: 'github.com', fullName: path }),
+      peerFetch,
+    });
+    expect(peerFetch).toHaveBeenCalledTimes(1);
+    expect(peerFetch.mock.calls[0][0]).toContain('repositories=');
+    expect(peerFetch.mock.calls[0][0]).not.toContain('&repository=');
+  });
+
   it('folds the repository-scan verdicts into the summary, and ignores a scan that fails', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const [scanned] = await enrichAppsWithQuality([{ id: 'app' }], {

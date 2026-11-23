@@ -34,7 +34,7 @@ export default function JiraTab({ app, onRefresh }) {
     setError(null);
     getMySprintTickets(app.jira.instanceId, app.jira.projectKey, { silent: true })
       .then(rows => { if (isCurrent()) setTickets(Array.isArray(rows) ? rows : []); })
-      .catch(err => { if (isCurrent()) setError(err?.message || 'Request failed'); })
+      .catch(err => { if (isCurrent()) setError(err?.message || 'Could not load JIRA sprint tickets. Check your JIRA configuration and retry.'); })
       .finally(() => { if (isCurrent()) setLoading(false); });
   }, [configured, app?.jira?.instanceId, app?.jira?.projectKey]);
 

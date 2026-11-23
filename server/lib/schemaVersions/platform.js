@@ -6,7 +6,9 @@
  */
 
 export const PLATFORM_SCHEMA_VERSIONS = Object.freeze({
-  // Numeric-only peer wire payload for app quality (GET /api/apps/quality-federation); the .quality.json file format is versioned separately.
+  // Numeric-only peer wire payload for app quality (GET /api/apps/quality-federation).
+  // `repository` stays `{ schemaVersion, repository, measurements }`. `repositories`
+  // is `{ schemaVersion, repositories }` at this same version. The .quality.json file format is versioned separately.
   appQuality: 1,
   // Memory pull capability; each receiver keeps its own monotonic history.
   memoryHistory: 1,

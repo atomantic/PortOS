@@ -9,6 +9,7 @@ import {
   documentCategoryEnum,
   exportFormatEnum,
   enrichmentCategoryEnum,
+  listItemSchema,
   documentFilenameSchema,
   soulSettingsSchema,
   bigFiveSchema,
@@ -189,12 +190,6 @@ export const identityImageInputSchema = z.object({
 export const identityImageSaveInputSchema = z.object({
   content: z.string().min(1).max(100000),
   title: z.string().min(1).max(200).optional()
-});
-
-// List-based enrichment item
-export const listItemSchema = z.object({
-  title: z.string().min(1).max(500),
-  note: z.string().max(2000).optional()
 });
 
 // Analyze list input

@@ -35,7 +35,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Unique temp siblings of the final path, removed on any exit so a failed or
 # interrupted transfer never leaves a partial file behind.
 STAGED_FILES=()
-cleanup_staged() { if ((${#STAGED_FILES[@]})); then rm -f "${STAGED_FILES[@]}"; fi; }
+STAGED_DIRS=()
+cleanup_staged() {
+  if ((${#STAGED_FILES[@]})); then rm -f "${STAGED_FILES[@]}"; fi
+  if ((${#STAGED_DIRS[@]})); then rm -rf "${STAGED_DIRS[@]}"; fi
+}
 trap cleanup_staged EXIT
 
 # Completion contract shared with the server and setup-voice.ps1.
@@ -125,12 +129,12 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
     PTURL="https://github.com/rhasspy/piper-phonemize/releases/download/${PHONEMIZE_VERSION}/${PTTAR}"
     echo "⬇️  Piper libs → ${PIPER_LIB}/"
     TMPDIR_PT="$(mktemp -d)"
+    STAGED_DIRS+=("$TMPDIR_PT")
     curl --fail --location --progress-bar "$PTURL" | tar xz -C "$TMPDIR_PT"
     mkdir -p "${PIPER_LIB}"
     # Copy whichever extension is present; let one pattern miss without aborting.
     cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "${PIPER_LIB}/" 2>/dev/null || true
     cp "$TMPDIR_PT"/piper-phonemize/lib/*.so "${PIPER_LIB}/" 2>/dev/null || true
-    rm -rf "$TMPDIR_PT"
   fi
 fi
 
@@ -175,13 +179,21 @@ fi
 if [[ "$STT_ENGINE" == "whisper" && "$INSTALL_COREML" == "1" ]] && is_macos; then
   ENCODER_BASE="${MODEL_NAME%.bin}"
   ENCODER_DIR="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc"
-  ENCODER_ZIP="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc.zip"
   if [[ ! -d "${ENCODER_DIR}" ]]; then
     echo "⬇️  CoreML encoder → ${ENCODER_DIR}"
-    curl --fail --location --progress-bar \
+    download_staged \
       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${ENCODER_BASE}-encoder.mlmodelc.zip" \
-      -o "${ENCODER_ZIP}"
-    (cd "${MODELS_DIR}" && unzip -q -o "${ENCODER_ZIP}" && rm -f "${ENCODER_ZIP}")
+      "${ENCODER_DIR}.zip"
+    # Extract beside the final path, then rename: the `-d` gate above must only
+    # ever see a complete directory, never a half-extracted one.
+    COREML_STAGE="$(mktemp -d "${MODELS_DIR}/.coreml.XXXXXX")"
+    STAGED_DIRS+=("$COREML_STAGE")
+    unzip -q -o "$STAGED_TMP" -d "$COREML_STAGE"
+    if [[ ! -d "${COREML_STAGE}/${ENCODER_BASE}-encoder.mlmodelc" ]]; then
+      echo "❌ CoreML archive did not contain ${ENCODER_BASE}-encoder.mlmodelc" >&2
+      exit 1
+    fi
+    mv "${COREML_STAGE}/${ENCODER_BASE}-encoder.mlmodelc" "${ENCODER_DIR}"
   fi
 fi
 

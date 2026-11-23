@@ -82,6 +82,13 @@ export default function PersistentMindContextBreakdown({ breakdown }) {
         <details className="mt-3 rounded border border-port-border p-3">
           <summary className="cursor-pointer text-xs font-semibold text-port-text">Per-family tool &amp; memory detail</summary>
           <table className="mt-2 w-full text-xs">
+            <thead>
+              <tr className="border-b border-port-border text-left font-medium text-port-text-muted">
+                <th scope="col" className="py-0.5 font-medium">Category</th>
+                <th scope="col" className="py-0.5 font-medium">Component</th>
+                <th scope="col" className="py-0.5 text-right font-medium">Tokens</th>
+              </tr>
+            </thead>
             <tbody>
               {detailed.flatMap((category) => category.detail.map((part) => (
                 <tr key={`${category.id}:${part.id}`}>

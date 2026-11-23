@@ -1018,7 +1018,7 @@ describe('StoryBuilder — detail stepper', () => {
     await userEvent.type(field, ' tall, scarred ');
     await userEvent.tab();
     await waitFor(() => expect(api.patchUniverseCanonEntry).toHaveBeenCalledWith(
-      'u1', 'characters', 'ch1', { physicalDescription: 'tall, scarred' }, expect.anything(),
+      'u1', 'character', 'ch1', { physicalDescription: 'tall, scarred' }, expect.anything(),
     ));
     await waitFor(() => expect(screen.getByLabelText('Description for Kessa').value).toBe('tall, scarred'));
     fireEvent.click(screen.getByTitle('Render image for this item'));

@@ -101,6 +101,9 @@ export function importedConstant(name, ctx, shadowed) {
   return value;
 }
 
+/** A string's text, or a template's without its holes: what a mock specifier can be, also inside `import('…')`. */
+const texts = (token) => (token.t === 's' ? [token.v] : token.t === 'tpl' ? [token.quasis.join('')] : []);
+
 /**
  * True when the file replaces a module `accepts(specifier)` names (`vi.mock`,
  * `vi.doMock`) or names one of `members` as a string (`vi.spyOn(fs,
@@ -108,14 +111,27 @@ export function importedConstant(name, ctx, shadowed) {
  * so nothing is inferred from a call to it.
  */
 export function mocksModule(tokens, match, accepts, members) {
-  // A string, a template without holes, or either inside `import('…')`.
-  const texts = (token) => (token.t === 's' ? [token.v] : token.t === 'tpl' ? [token.quasis.join('')] : []);
   return tokens.some((token, i) => {
     if (texts(token).some((text) => members.includes(text))) return true;
     if (!isWord(token, 'mock', 'doMock') || !isPunct(tokens[i - 1], '.') || !isPunct(tokens[i + 1], '(') || match[i + 1] === undefined) return false;
     const [first] = listRanges(tokens, match, i + 1);
     return first !== undefined && tokens.slice(first[0], first[1]).flatMap(texts).some(accepts);
   });
+}
+
+/**
+ * Every string or hole-free template inside the first argument of a
+ * `.mock(…)` / `.doMock(…)` call: `mocksModule(tokens, match, (text) => text
+ * === spec, [])` is `mockedSpecifiers(tokens, match).has(spec)`, from one scan.
+ */
+export function mockedSpecifiers(tokens, match) {
+  const out = new Set();
+  tokens.forEach((token, i) => {
+    if (!isWord(token, 'mock', 'doMock') || !isPunct(tokens[i - 1], '.') || !isPunct(tokens[i + 1], '(') || match[i + 1] === undefined) return;
+    const [first] = listRanges(tokens, match, i + 1);
+    if (first !== undefined) for (const text of tokens.slice(first[0], first[1]).flatMap(texts)) out.add(text);
+  });
+  return out;
 }
 
 /** True when `tokens[at]` is a plain name in an `import { … }` or `export { … }` list (not renamed with `as`). */
@@ -129,12 +145,16 @@ export function namedInImportList(tokens, match, at) {
  * Which of the three trusted sources a file replaces: node's `fs` (a
  * directory listing), `crypto` (`randomUUID`) and the `pathWithin` guard.
  * Pure; `createTestMemoAnalyzer` asks it of the workspace setup files too,
- * whose mocks apply to every test.
+ * whose mocks apply to every test. `tokenized` is the caller's own
+ * `tokenizeModule(src, fileRel)` and `matchBrackets` of it, so a file is not
+ * tokenized twice (`extractFileFacts`).
  */
-export function replacedSources(src, fileRel) {
-  let tokens;
-  try { tokens = tokenizeModule(src, fileRel); } catch { return { fs: true, crypto: true, guard: true }; }
-  const match = matchBrackets(tokens);
+export function replacedSources(src, fileRel, tokenized = null) {
+  let tokens = tokenized?.tokens;
+  if (!tokens) {
+    try { tokens = tokenizeModule(src, fileRel); } catch { return { fs: true, crypto: true, guard: true }; }
+  }
+  const match = tokenized?.match ?? matchBrackets(tokens);
   return {
     fs: mocksModule(tokens, match, (spec) => FS_MODULES.has(spec), [...READDIR_CALLEES]),
     crypto: mocksModule(tokens, match, isCryptoModule, ['randomUUID']),

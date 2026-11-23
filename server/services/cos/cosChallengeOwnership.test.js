@@ -18,10 +18,7 @@ vi.mock('./cosState.js', async (original) => {
     loadState: vi.fn(async () => fixture.state),
   };
 });
-vi.mock('./cos.js', async () => {
-  const store = await import('./cosTaskStore.js');
-  return { getTaskById: store.getTaskById, updateTask: store.updateTask, isRunning: () => false };
-});
+vi.mock('./cos.js', () => ({ isRunning: () => false }));
 vi.mock('../instances.js', async () => {
   const { mockNoPeers } = await import('../../lib/mockPathsDataRoot.js');
   return mockNoPeers();

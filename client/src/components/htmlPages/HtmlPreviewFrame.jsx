@@ -9,7 +9,7 @@ const VIEWPORT_W = 1280;
 const VIEWPORT_H = 800;
 
 /**
- * One generated page in a sandboxed frame. `allow-scripts` without `allow-same-origin` keeps the page's script off this app's origin, and the preview document's policy blocks its network access.
+ * One generated page in an opaque-origin sandbox with a policy restricting resource loads.
  */
 export default function HtmlPreviewFrame({ html, title }) {
   const wrapRef = useRef(null);

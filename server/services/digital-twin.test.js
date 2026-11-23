@@ -1107,9 +1107,9 @@ Forgets the budget and recommends lodging that exceeds it.
     it('should create target document if it does not exist', async () => {
       const meta = makeMeta();
       await setupMetaFile(meta);
-      existsSync.mockImplementation((path) => {
-        if (path.includes('MEMORIES.md')) return false;
-        return true;
+      readFile.mockImplementation(async (path) => {
+        if (path.endsWith('MEMORIES.md')) throw Object.assign(new Error('File missing'), { code: 'ENOENT' });
+        return JSON.stringify(meta);
       });
       getActiveProvider.mockResolvedValue(null);
 
@@ -1710,9 +1710,10 @@ Forgets the budget and recommends lodging that exceeds it.
     it('should detect found sections by keywords in content', async () => {
       const meta = makeMeta({
         documents: [
-          makeDocMeta({ id: 'doc-1', filename: 'IDENTITY.md', title: 'Identity', category: 'core' })
+          makeDocMeta({ filename: 'NOTES.md', title: 'Notes' })
         ]
       });
+      await setupMetaFile(meta);
       readFile.mockImplementation(async (filePath) => {
         if (filePath.includes('meta.json')) return JSON.stringify(meta);
         return '# Identity\n\nMy name is Test. My role is developer. I value honesty. Communication style is direct. Decision making is fast. Non-negotiable principles. Error intolerance for sloppy work.';

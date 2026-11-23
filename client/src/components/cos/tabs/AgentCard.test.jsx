@@ -604,7 +604,7 @@ describe('AgentCard responsive header', () => {
     }
 
     await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
-    for (const button of [screen.getByRole('button', { name: 'Confirm' }), screen.getByRole('button', { name: 'Cancel' })]) {
+    for (const button of [screen.getByRole('button', { name: 'Kill' }), screen.getByRole('button', { name: 'Cancel' })]) {
       expect(button).toHaveClass('min-h-[44px]', 'min-w-[44px]');
     }
   });
@@ -873,7 +873,7 @@ describe('AgentCard kill confirmation (#4034)', () => {
 
     // Re-arm and click Confirm
     await user.click(screen.getByRole('button', { name: 'Force kill agent (SIGKILL)' }));
-    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await user.click(screen.getByRole('button', { name: 'Kill' }));
     expect(onKill).toHaveBeenCalledWith(runningAgent.id);
   });
 });

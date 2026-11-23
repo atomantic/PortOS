@@ -1,17 +1,23 @@
 /**
- * Static scanner behind the server and client `mockContractConventions` guards:
- * a `vi.mock('<relative module>', () => ({ ... }))` factory must define only
- * members the real module exports.
+ * Static scanner behind the server and client `mockContractConventions` guards.
+ * Every live `vi.mock('<relative module>', factory)` is checked for three drifts:
  *
- * A key the target does not export is a dead stub: it intercepts nothing, so a
- * `.not.toHaveBeenCalled()` on it is vacuous, and a renamed export leaves its
- * mock silently watching a function production no longer calls (the
- * `peerAdministration` `pm2.restartProcess` shape).
+ * - the specifier must resolve to a file on disk; a dead path mocks nothing, so
+ *   the suite silently runs the real module;
+ * - a file registers each resolved module once; vitest keeps only the last
+ *   registration, so an earlier one is a silently discarded stub;
+ * - every explicit key a factory returns must be a real export of the target.
+ *   A key the target does not export is a dead stub: it intercepts nothing, so a
+ *   `.not.toHaveBeenCalled()` on it is vacuous, and a renamed export leaves its
+ *   mock silently watching a function production no longer calls (the
+ *   `peerAdministration` `pm2.restartProcess` shape).
  *
- * Only literal `() => ({ ... })` factories are read; a factory that spreads
- * `importOriginal()` / `vi.importActual()` inherits the real surface and is
- * skipped. Exports are collected statically (`export *` followed) so the module
- * under test is never evaluated. Pure Node, test-time only.
+ * Key checks read `() => ({ ... })`, `async (importOriginal) => ({ ...await
+ * importOriginal(), key })` and block-body `return { ... }` factories. Spread
+ * entries inherit the real surface and are skipped; only the explicit keys beside
+ * them are checked. A factory that is not an object literal is not read. Exports
+ * are collected statically (`export *` followed) so the module under test is never
+ * evaluated. Pure Node, test-time only.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -165,31 +171,29 @@ function closeOf(masked, open) {
   return -1;
 }
 
-/** Top-level keys of the object literal opening at `open`, or null when it spreads. */
+/** Explicit top-level `{ key, at }` entries of the object literal opening at `open` (`at` is the key's offset); spread entries are skipped. */
 function literalKeys(raw, masked, open) {
   const close = closeOf(masked, open);
-  if (close === -1) return null;
+  if (close === -1) return [];
   const keys = [];
   let depth = 0;
   let segStart = open + 1;
   const flush = (end) => {
     const seg = masked.slice(segStart, end).trim();
-    if (!seg) return true;
-    if (seg.startsWith('...')) return false;
+    if (!seg || seg.startsWith('...')) return;
     const offset = segStart + masked.slice(segStart, end).indexOf(seg);
     const quoted = /^(['"`])/.exec(seg);
     if (quoted) {
-      keys.push(raw.slice(offset + 1, raw.indexOf(quoted[1], offset + 1)));
-      return true;
+      keys.push({ key: raw.slice(offset + 1, raw.indexOf(quoted[1], offset + 1)), at: offset });
+      return;
     }
     const ident = /^(?:async\s+|get\s+|set\s+|\*\s*)?([\w$]+)/.exec(seg);
-    if (ident) keys.push(ident[1]);
-    return true;
+    if (ident) keys.push({ key: ident[1], at: offset });
   };
   for (let i = open + 1; i <= close; i += 1) {
     const ch = masked[i];
     if (i === close || (ch === ',' && depth === 0)) {
-      if (!flush(i)) return null;
+      flush(i);
       segStart = i + 1;
     } else if ('({['.includes(ch)) depth += 1;
     else if (')}]'.includes(ch)) depth -= 1;
@@ -197,42 +201,86 @@ function literalKeys(raw, masked, open) {
   return keys;
 }
 
-const FACTORY_RE = /\bvi\.mock\(\s*(['"])([^'"]+)\1\s*,\s*(?:async\s*)?\(\s*\)\s*=>\s*\(\s*\{/g;
+// The specifier is a string, so `masked` blanks it: match on raw and require the call to be live code.
+const MOCK_CALL_RE = /\bvi\.mock\(\s*(['"])([^'"\n]+)\1/g;
+const COMMA_RE = /\s*,\s*/y;
+const ARROW_RE = /\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>\s*/y;
+const PAREN_OBJECT_RE = /\(\s*\{/y;
+const RETURN_OBJECT_RE = /return\s*\(?\s*\{/y;
+
+const stickyAt = (re, text, at) => {
+  re.lastIndex = at;
+  return re.exec(text);
+};
+
+/** Object literals a factory hands back: the expression body, or each top-level `return { ... }` of a block body. */
+function factoryObjects(masked, afterSpecifier) {
+  const comma = stickyAt(COMMA_RE, masked, afterSpecifier);
+  if (!comma) return [];
+  const arrowAt = afterSpecifier + comma[0].length;
+  const arrow = stickyAt(ARROW_RE, masked, arrowAt);
+  if (!arrow) return [];
+  const body = arrowAt + arrow[0].length;
+  const wrapped = stickyAt(PAREN_OBJECT_RE, masked, body);
+  if (wrapped) return [body + wrapped[0].length - 1];
+  if (masked[body] !== '{') return [];
+  const close = closeOf(masked, body);
+  if (close === -1) return [];
+  const opens = [];
+  let depth = 0;
+  for (let i = body + 1; i < close; i += 1) {
+    const ch = masked[i];
+    if ('({['.includes(ch)) depth += 1;
+    else if (')}]'.includes(ch)) depth -= 1;
+    else if (depth === 0 && ch === 'r' && !WORD_CHAR.test(masked[i - 1])) {
+      const ret = stickyAt(RETURN_OBJECT_RE, masked, i);
+      if (ret) opens.push(i + ret[0].length - 1);
+    }
+  }
+  return opens;
+}
 
 const exportCache = new Map();
+const lineAt = (source, index) => source.slice(0, index).split('\n').length;
 
 /**
- * `file:line — spec mocks <key>` for each key the real module does not export.
- * Allowlist keys that excused a violation are added to `used`, so callers can
- * fail on entries the scan no longer needs (see `unusedAllowed`).
+ * One `file:line — message` per drifted `vi.mock`: a relative specifier that does
+ * not resolve, a module registered twice, or a factory key the real module does not
+ * export. Allowlist entries (`<test file>|<specifier>|<key>`, with `<unresolved>` or
+ * `<duplicate>` as the key for the first two) that excused a violation are added to
+ * `used`, so callers can fail on entries the scan no longer needs (see `unusedAllowed`).
  */
 export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set() }) {
-  // Most test files define no literal factory; masking one is the scan's whole cost.
-  const factories = [...rawSource.matchAll(FACTORY_RE)];
-  if (factories.length === 0) return [];
+  // Most test files mock nothing; masking one is the scan's whole cost.
+  if (!rawSource.includes('vi.mock(')) return [];
   const masked = mask(rawSource);
   const rel = relative(root, testFile).split(sep).join('/');
   const violations = [];
-  // The specifier is a string, so it is blanked in `masked`; match on raw and
-  // require the call itself to be live code (not inside a comment).
-  for (const m of factories) {
-    if (masked[m.index] !== 'v') continue;
+  const firstLine = new Map();
+  const report = (spec, key, line, message) => {
+    const allowKey = `${rel}|${spec}|${key}`;
+    if (allowed.has(allowKey)) used.add(allowKey);
+    else violations.push(`${rel}:${line} — ${spec} ${message}`);
+  };
+  for (const m of rawSource.matchAll(MOCK_CALL_RE)) {
+    if (masked[m.index] !== 'v' || !m[2].startsWith('.')) continue;
+    const line = lineAt(rawSource, m.index);
     const target = resolveModule(testFile, m[2]);
-    if (!target) continue;
-    const open = m.index + m[0].length - 1;
-    const keys = literalKeys(rawSource, masked, open);
-    if (!keys) continue;
+    if (!target) {
+      report(m[2], '<unresolved>', line, 'does not resolve');
+      continue;
+    }
+    if (firstLine.has(target)) {
+      report(m[2], '<duplicate>', line, `duplicates the vi.mock at line ${firstLine.get(target)}, which this one replaces`);
+    } else firstLine.set(target, line);
+    const opens = factoryObjects(masked, m.index + m[0].length);
+    if (opens.length === 0) continue;
     if (!exportCache.has(target)) exportCache.set(target, exportNames(target));
     const exported = exportCache.get(target);
-    for (const key of keys) {
-      if (key === '__esModule' || exported.has(key)) continue;
-      const allowKey = `${rel}|${m[2]}|${key}`;
-      if (allowed.has(allowKey)) {
-        used.add(allowKey);
-        continue;
+    for (const open of opens) {
+      for (const { key, at } of literalKeys(rawSource, masked, open)) {
+        if (key !== '__esModule' && !exported.has(key)) report(m[2], key, lineAt(rawSource, at), `mocks ${key}`);
       }
-      const line = rawSource.slice(0, m.index).split('\n').length;
-      violations.push(`${rel}:${line} — ${m[2]} mocks ${key}`);
     }
   }
   return violations;

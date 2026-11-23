@@ -13,6 +13,8 @@
 // the vendored files are rewritten to bare ids the same map resolves.
 // importsThree mirrors server/services/codeAnimation/threeVendor.js.
 
+import { injectPreviewHead } from '../../../server/lib/htmlPreviewHead.js';
+
 const BARE_THREE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*)['"]three(?:\/[^'"]*)?['"]/;
 const RELATIVE_SPECIFIER = /(\bfrom\s*|\bimport\s*)(['"])(\.{1,2}\/[^'"]+)\2/g;
 const ADDON_PREFIX = 'addons/';
@@ -62,8 +64,5 @@ const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
 export function inlineThreeVendor(html, files) {
   const stripped = String(html).replace(IMPORT_MAP_TAG, '');
   const tag = `<script type="importmap">${scriptJson(buildThreeImportMap(files))}</script>`;
-  const head = stripped.match(/<head[^>]*>/i);
-  if (!head) return `${tag}${stripped}`;
-  const at = head.index + head[0].length;
-  return `${stripped.slice(0, at)}${tag}${stripped.slice(at)}`;
+  return injectPreviewHead(stripped, tag);
 }

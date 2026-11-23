@@ -457,8 +457,8 @@ function DirectionCard({
               <ConfirmButtonPair
                 className="flex-wrap"
                 prompt="Approve?"
-                confirmText="Yes"
-                cancelText="No"
+                confirmText="Approve"
+                cancelText="Cancel"
                 confirmIcon={Check}
                 tone="success"
                 ariaLabel={`Confirm approve ${direction}`}
