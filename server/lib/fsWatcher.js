@@ -46,9 +46,11 @@ export function watchPaths(targets, options = {}) {
     : {};
   const emitter = new EventEmitter();
   const handles = [];
-  // path → size/mtime signature last reported. Native watchers re-fire for files
+  // path → inode/size/mtime last reported. Native watchers re-fire for files
   // written just before the watch started (macOS) and double-fire per write; an
-  // unchanged signature is not a change.
+  // unchanged signature is not a change. Git replaces HEAD and packed-refs by
+  // rename, often at the same length, and a coarse clock can keep mtimeMs
+  // identical — the new inode is what makes that replacement visible.
   const known = new Map();
   const pending = new Map(); // path → { timer }
   let closed = false;
@@ -73,7 +75,7 @@ export function watchPaths(targets, options = {}) {
     emitter.emit('all', event, path);
   };
 
-  const signature = (info) => `${info.size}:${info.mtimeMs}`;
+  const signature = (info) => `${info.ino}:${info.size}:${info.mtimeMs}`;
 
   const settle = (path, info) => {
     if (closed) return;
