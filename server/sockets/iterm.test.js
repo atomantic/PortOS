@@ -23,7 +23,10 @@ const setup = () => {
 
 const expectValidationError = (socket, id) => {
   expect(socket.emit).toHaveBeenCalledTimes(1);
-  expect(socket.emit).toHaveBeenCalledWith('iterm:error', expect.objectContaining({ code: 'VALIDATION_ERROR', id }));
+  const [channel, body] = socket.emit.mock.calls[0];
+  expect(channel).toBe('iterm:error');
+  expect(body.code).toBe('VALIDATION_ERROR');
+  expect(body.id).toBe(id);
 };
 
 describe('iterm socket handlers', () => {
