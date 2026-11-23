@@ -68,12 +68,16 @@ export const SPEAKING_MS = 2000;
 
 // Keep stable reference data until an explicit invalidation. A replaced read
 // cannot overwrite the newer cache or clear it when the old request fails.
-function readReference(cache, read, apply) {
+function readReference(cache, read, apply, onError) {
   if (cache.current) return cache.current;
   const pending = read().then(data => {
     if (cache.current === pending) apply(data);
     return data;
-  }).catch(() => { if (cache.current === pending) cache.current = null; });
+  }).catch(() => {
+    if (cache.current !== pending) return;
+    cache.current = null;
+    onError();
+  });
   cache.current = pending;
   return pending;
 }
@@ -118,6 +122,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // pickers below need the difference; see ProviderModelSelector's `loading`.
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [apps, setApps] = useState([]);
+  const [appsStatus, setAppsStatus] = useState('loading');
   const [loading, setLoading] = useState(true);
   const [agentState, setAgentState] = useState('sleeping');
   const [statusReadFailed, setStatusReadFailed] = useState(false);
@@ -239,10 +244,17 @@ export default function useCosPageData({ activeTab, selectedTask }) {
   // for seconds. `sameJsonShape` keeps the array identity stable on an unchanged
   // refresh payload so this doesn't cost a full-tree re-render each tick.
   const applyApps = useCallback((data) => {
-    const filtered = (Array.isArray(data) ? data : []).filter(a => a.id !== 'portos-autofixer');
+    if (!Array.isArray(data)) throw new Error('Invalid app list');
+    const filtered = data.filter(a => a.id !== 'portos-autofixer');
     setApps(prev => (sameJsonShape(prev, filtered) ? prev : filtered));
+    setAppsStatus('ready');
     return filtered;
   }, []);
+
+  const readApps = useCallback(() => {
+    if (!appsReadRef.current) setAppsStatus('loading');
+    return readReference(appsReadRef, getApps, applyApps, () => setAppsStatus('error'));
+  }, [applyApps]);
 
   // Derive agent state from system status
   const deriveAgentState = useCallback((statusData, agentsData, healthData) => {
@@ -315,7 +327,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       const providersRead = needsProviders ? getProviders().then(applyProviders).catch(() => {}) : Promise.resolve();
       // Same rationale as providersRead above: apps commits on its own settle
       // instead of waiting on the slower siblings in secondaryRead.
-      const appsRead = needsApps ? readReference(appsReadRef, getApps, applyApps) : Promise.resolve();
+      const appsRead = needsApps ? readApps() : Promise.resolve();
       const secondaryRead = Promise.all([
         getCosLearningSummary().catch(() => null),
         // Preserve the last good insights on a transient refresh failure.
@@ -379,7 +391,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       if (pending.dirty && !controller.signal.aborted && queryRef.current === queryKey) refreshPageData();
     });
     return pending.promise;
-  }, [activeTab, queryKey, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, applyApps, readAgents]);
+  }, [activeTab, queryKey, needsTasks, needsAgents, needsProviders, needsApps, deriveAgentState, applyHealth, markHealthUnavailable, applyProviders, readApps, readAgents]);
 
   // Coalesce event bursts into a read of the visible queue and scalar shell
   // status. Insights use persisted health; invalidation never runs PM2 repair.
@@ -611,7 +623,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     // Stable reference data has its own invalidation path, independent of the queue.
     const handleAppsChanged = coalesce(() => {
       appsReadRef.current = null;
-      if (needsApps) readReference(appsReadRef, getApps, applyApps);
+      if (needsApps) readApps();
     }, 400);
     const handleProvidersChanged = coalesce(() => {
       if (needsProviders) getProviders().then(applyProviders).catch(() => {});
@@ -643,7 +655,7 @@ export default function useCosPageData({ activeTab, selectedTask }) {
       socket.off('apps:changed', handleAppsChanged);
       refreshQueue.cancel();
     };
-  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, applyApps, applyProviders, setSpeakingFor]);
+  }, [socket, fetchData, fetchQueue, needsAgents, needsTasks, needsApps, needsProviders, readApps, applyProviders, setSpeakingFor]);
 
   const handleStart = async () => {
     const result = await startCos({ silent: true }).catch(err => {
@@ -908,6 +920,8 @@ export default function useCosPageData({ activeTab, selectedTask }) {
     providersLoaded,
     activeProviderId,
     apps,
+    appsStatus,
+    readApps,
     loading,
     agentState,
     speaking,
