@@ -1099,7 +1099,7 @@ export function resolveReviewerGroup(metadata, codeReviewDefaults, defaultReview
   return prioritizeToolFreeReviewers(activeGroup || taskGroup);
 }
 
-function normalizeReviewerList(list) {
+export function normalizeReviewerList(list) {
   const seen = new Set();
   const out = [];
   for (const raw of Array.isArray(list) ? list : []) {
