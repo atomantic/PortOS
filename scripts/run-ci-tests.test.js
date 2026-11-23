@@ -16,6 +16,7 @@ import {
   repoRelativeFromCrashPath,
   parseShard,
   requiresSourceFiles,
+  shouldWarmTestChrome,
   spawnNpm,
   toRunnerPath,
 } from './run-ci-tests.js';
@@ -1381,4 +1382,25 @@ describe('report launcher subprocess lifecycle (#9804)', () => {
     await waitFor(() => descendants.every(pid => !alive(pid)), 'fixture processes survived teardown');
     expect(existsSync(host)).toBe(false);
   }, 65000);
+});
+
+describe('shouldWarmTestChrome (#17750)', () => {
+  const browser = 'client/src/pages/PageLayout.browser.test.js';
+  const happy = 'client/src/lib/format.test.js';
+  it('skips the warm-up when no browser suite will launch', () => {
+    expect(shouldWarmTestChrome({ scope: 'client', run: [happy], env: { CI: 'true' } })).toBe(false);
+    expect(shouldWarmTestChrome({ scope: 'client', run: [], env: { CI: 'true' } })).toBe(false);
+    expect(shouldWarmTestChrome({ scope: 'server', run: ['server/a.test.js'], env: { CI: 'true' } })).toBe(false);
+  });
+  it('warms when a client shard runs at least one browser suite', () => {
+    expect(shouldWarmTestChrome({ scope: 'client', run: [happy, browser], env: { CI: 'true' } })).toBe(true);
+  });
+  it('warms for the cross-workspace browser owner only when it has files to run', () => {
+    const env = { CI: 'true', PORTOS_CI_BROWSER_OWNER: 'browser' };
+    expect(shouldWarmTestChrome({ scope: 'server', run: ['server/a.test.js'], env })).toBe(true);
+    expect(shouldWarmTestChrome({ scope: 'server', run: [], env })).toBe(false);
+  });
+  it('never warms outside CI', () => {
+    expect(shouldWarmTestChrome({ scope: 'client', run: [browser], env: {} })).toBe(false);
+  });
 });

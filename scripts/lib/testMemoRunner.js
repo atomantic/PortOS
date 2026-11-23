@@ -251,18 +251,64 @@ export const SERVER_HEAVY_SHARD_OWNERS = {
 };
 
 /**
- * Server shard `index` of `count`. Two shards move `SERVER_HEAVY_SHARD_OWNERS`
- * off the hash and leave every other file where `vitestShardSlice` of the
- * full list put it. Any other count is that hash alone, so a 4-way client
- * matrix and Vitest's own sequencer stay aligned.
+ * The 34 real-Chromium client suites, pinned so the 4-way client matrix gets 8-9
+ * each and the four slowest (SceneClipCoverageLayout, MoodBoardDetail,
+ * PageLayout, SceneCard) land on distinct shards (#17750). The raw hash had
+ * placed 6 / 9 / 9 / 10 with the two slowest together. A browser suite added
+ * later is simply not in the table and stays on the hash.
+ */
+export const CLIENT_BROWSER_SHARD_OWNERS = Object.freeze({
+  'client/src/components/Drawer.browser.test.js': 1,
+  'client/src/components/brain/tabs/InboxTab.browser.test.js': 1,
+  'client/src/components/catalog/GenerateImageControl.browser.test.js': 1,
+  'client/src/components/cos/tabs/AgentCard.touch.browser.test.js': 1,
+  'client/src/components/media/MediaLightbox.browser.test.js': 1,
+  'client/src/components/musicVideo/SceneClipCoverageLayout.browser.test.js': 1,
+  'client/src/components/ui/InfoTooltip.browser.test.js': 1,
+  'client/src/pages/Loras.browser.test.js': 1,
+  'client/src/components/ProviderModelSelector.browser.test.js': 2,
+  'client/src/components/catalog/CatalogCard.browser.test.js': 2,
+  'client/src/components/catalog/GreyboxGlb.browser.test.js': 2,
+  'client/src/components/cos/tabs/PreflightProgress.browser.test.js': 2,
+  'client/src/components/goals/GoalsOrganization.browser.test.js': 2,
+  'client/src/components/ui/OverflowMenu.browser.test.js': 2,
+  'client/src/pages/MoodBoardDetail.browser.test.js': 2,
+  'client/src/pages/PromptManager.browser.test.js': 2,
+  'client/src/components/catalog/CatalogMergePanel.browser.test.js': 3,
+  'client/src/components/catalog/GreyboxPanel.browser.test.js': 3,
+  'client/src/components/cos/tabs/RunsTab.browser.test.js': 3,
+  'client/src/components/goals/GoalsTreeView.browser.test.js': 3,
+  'client/src/components/musicVideo/CastAndSetsGreybox.browser.test.js': 3,
+  'client/src/components/settings/AiAssignmentsTab.layout.browser.test.js': 3,
+  'client/src/lib/musicVideoFlyer.browser.test.js': 3,
+  'client/src/pages/PageLayout.browser.test.js': 3,
+  'client/src/pages/Shell.browser.test.js': 3,
+  'client/src/components/CmdKSearch.browser.test.js': 4,
+  'client/src/components/DownloadManager.browser.test.js': 4,
+  'client/src/components/ThemeSwitcher.browser.test.js': 4,
+  'client/src/components/catalog/CatalogReferenceVideo.browser.test.js': 4,
+  'client/src/components/media/AssetReferences.browser.test.js': 4,
+  'client/src/components/musicVideo/BlenderFilmPanel.browser.test.js': 4,
+  'client/src/components/musicVideo/SceneCard.browser.test.js': 4,
+  'client/src/pages/FableLoomStory.browser.test.js': 4,
+  'client/src/pages/StoryBuilder.browser.test.js': 4,
+});
+
+/**
+ * Shard `index` of `count`. Server with two shards moves `SERVER_HEAVY_SHARD_OWNERS`
+ * and client with four moves `CLIENT_BROWSER_SHARD_OWNERS` off the hash; every
+ * other file stays where `vitestShardSlice` of the full list put it. Any other
+ * shape is that hash alone, so Vitest's own sequencer stays aligned.
  */
 export function serverShardSlice(files, options) {
-  const { index, count } = options;
-  if (count !== 2) return vitestShardSlice(files, options);
-  const pinned = new Set(files.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === 1 || SERVER_HEAVY_SHARD_OWNERS[file] === 2));
+  const { index, count, scope } = options;
+  const owners = scope === 'client' && count === 4 ? CLIENT_BROWSER_SHARD_OWNERS
+    : scope !== 'client' && count === 2 ? SERVER_HEAVY_SHARD_OWNERS : null;
+  if (!owners) return vitestShardSlice(files, options);
+  const pinned = new Set(files.filter((file) => Number.isInteger(owners[file])));
   if (pinned.size === 0) return vitestShardSlice(files, options);
   const hashed = vitestShardSlice(files, options).filter((file) => !pinned.has(file));
-  const owned = files.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === index).sort();
+  const owned = files.filter((file) => owners[file] === index).sort();
   return [...hashed, ...owned];
 }
 

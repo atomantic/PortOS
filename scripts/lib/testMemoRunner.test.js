@@ -6,12 +6,13 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
+  CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
   clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
@@ -43,6 +44,8 @@ function writeRepo(root, files) {
     writeFileSync(join(root, rel), content);
   }
 }
+
+const repoRootDir = fileURLToPath(new URL('../..', import.meta.url));
 
 describe('planTestMemo and recordTestMemo', () => {
   let root;
@@ -714,6 +717,26 @@ describe('planTestMemo and recordTestMemo', () => {
     const slices = (path, repoRoot) => [1, 2].map((index) => vitestShardSlice(files, { repoRoot, scope: 'server', index, count: 2, path }));
     expect(slices(win32, 'D:\\a\\repo')).toEqual(slices(posix, '/repo'));
     expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
+  });
+
+  it('spreads the real-Chromium client suites over four shards without moving other files (#17750)', () => {
+    const browser = Object.keys(CLIENT_BROWSER_SHARD_OWNERS);
+    const plain = Array.from({ length: 40 }, (_, i) => `client/src/lib/plain${i}.test.js`);
+    const files = [...browser, ...plain];
+    const slices = [1, 2, 3, 4].map((index) => serverShardSlice(files, { repoRoot: '/repo', scope: 'client', index, count: 4 }));
+    expect(slices.flat().sort()).toEqual([...files].sort());
+    expect(new Set(slices.flat()).size).toBe(files.length);
+    slices.forEach((slice, i) => {
+      const count = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
+      expect(count).toBeGreaterThanOrEqual(8);
+      expect(count).toBeLessThanOrEqual(9);
+      const hashed = vitestShardSlice(files, { repoRoot: '/repo', scope: 'client', index: i + 1, count: 4 }).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
+      expect(slice.filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file])).toEqual(hashed);
+    });
+    const heavy = ['SceneClipCoverageLayout', 'MoodBoardDetail', 'PageLayout', 'SceneCard']
+      .map((name) => CLIENT_BROWSER_SHARD_OWNERS[browser.find((file) => file.endsWith(`/${name}.browser.test.js`))]);
+    expect(new Set(heavy).size).toBe(4);
+    for (const file of browser) expect(existsSync(join(repoRootDir, file)), file).toBe(true);
   });
 
   it('pins heavy server suites onto two shards and leaves every other file on the hash slice', () => {
