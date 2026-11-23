@@ -54,6 +54,15 @@ function Test-PiperConfig($path) {
     return ($LASTEXITCODE -eq 0)
 }
 
+function Get-VoiceAssetUrl($kind, $name) {
+    [string](Invoke-VoiceAsset url $kind $name | Select-Object -Last 1).Trim()
+}
+
+function Verify-VoiceModel($assetName, $path) {
+    & node (Join-Path $PSScriptRoot 'voice-asset.js') verify-model $assetName $path
+    if ($LASTEXITCODE -ne 0) { throw "$assetName failed SHA-256 verification — refusing to promote" }
+}
+
 # Content-Length of a remote file, or $null when it cannot be determined.
 function Get-RemoteSize($url) {
     try {
@@ -79,7 +88,7 @@ function Download-Staged($url, $final) {
 
 function Ensure-WhisperModel {
     $path = Join-Path $MODELS_DIR $MODEL_NAME
-    $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL_NAME"
+    $url = Get-VoiceAssetUrl 'whisper' $MODEL_NAME
     $state = Get-AssetState 'whisper' $path
     if ($state -eq 'verified') { return }
     if ($state -eq 'unverified') {
@@ -101,6 +110,7 @@ function Ensure-WhisperModel {
     }
     Write-Host "⬇️  Whisper model → $path"
     $tmp = Download-Staged $url $path
+    Verify-VoiceModel $MODEL_NAME $tmp
     Move-Item -LiteralPath $tmp -Destination $path -Force
     Invoke-VoiceAsset receipt whisper $path | Out-Null
 }
@@ -119,16 +129,10 @@ function Ensure-PiperVoice {
         Invoke-VoiceAsset receipt piper $onnxPath | Out-Null
         return
     }
-    # en_US-ryan-high  →  en / en_US / ryan / high
-    $locale  = ($VOICE_NAME -split '-')[0]           # en_US
-    $lang    = ($locale -split '_')[0]               # en
-    $rest    = $VOICE_NAME.Substring($locale.Length + 1)  # ryan-high
-    $parts   = $rest -split '-'
-    $speaker = $parts[0]                             # ryan
-    $quality = $parts[1]                             # high
-    $base    = "https://huggingface.co/rhasspy/piper-voices/resolve/main/$lang/$locale/$speaker/$quality"
+    $base    = Get-VoiceAssetUrl 'piper' $VOICE_NAME
     Write-Host "⬇️  Piper voice → $onnxPath"
     $onnxTmp = Download-Staged "$base/$VOICE_NAME.onnx" $onnxPath
+    Verify-VoiceModel "$VOICE_NAME.onnx" $onnxTmp
     $jsonTmp = Download-Staged "$base/$VOICE_NAME.onnx.json" $jsonPath
     if (-not (Test-PiperConfig $jsonTmp)) {
         throw "Downloaded Piper config for $VOICE_NAME is not a valid voice config"
