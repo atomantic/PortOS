@@ -702,7 +702,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         loomId: { type: 'string' },
         episodeId: { type: 'string' },
         nodeId: { type: 'string' },
-        status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed'] },
+        status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed', 'canceled'] },
         statusMsg: { type: 'string' },
         progress: { type: 'number', minimum: 0, maximum: 1 },
         createdAt: { type: 'string' },

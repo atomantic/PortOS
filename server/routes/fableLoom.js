@@ -72,7 +72,9 @@ import {
   feedbackSeriesPlan,
   generateEpisodeOutline,
   generateSeriesPlan,
+  cancelFalVideoAutomation,
   getFalVideoAutomation,
+  listActiveFalVideoAutomations,
   getEpisodeProductionBatch,
   getLatestEpisodeProductionBatch,
   getHostedSession,
@@ -307,6 +309,20 @@ router.get('/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId', asyncHandl
     req.params.nodeId,
     req.params.jobId,
   ));
+}));
+
+router.post('/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId/cancel', asyncHandler(async (req, res) => {
+  res.json(cancelFalVideoAutomation(
+    req.params.id,
+    req.params.episodeId,
+    req.params.nodeId,
+    req.params.jobId,
+  ));
+}));
+
+// Reload recovery: lets the client reattach to renders the server still runs.
+router.get('/:id/episodes/:episodeId/fal-video', asyncHandler(async (req, res) => {
+  res.json(listActiveFalVideoAutomations(req.params.id, req.params.episodeId));
 }));
 
 // --- Transitions ------------------------------------------------------------

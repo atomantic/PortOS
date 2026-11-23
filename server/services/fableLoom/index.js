@@ -126,7 +126,9 @@ export {
 export {
   FAL_H3_MAX_FREE_URL,
   _resetFalVideoAutomations,
+  cancelFalVideoAutomation,
   getFalVideoAutomation,
+  listActiveFalVideoAutomations,
   startFalVideoAutomation,
 } from './falVideoAutomation.js';
 export { applyEpisodeShots, runEpisodeShotAutopilot } from './shots.js';

@@ -38,6 +38,8 @@ import { SOCKET_EVENT_CONTRACTS } from '../../lib/socketEventContracts.js';
 
 import {
   _resetFalVideoAutomations,
+  cancelFalVideoAutomation,
+  listActiveFalVideoAutomations,
   FAL_H3_MAX_FREE_URL,
   getFalVideoAutomation,
   startFalVideoAutomation,
@@ -518,5 +520,64 @@ describe('FableLoom fal.ai browser automation', () => {
       process.off('unhandledRejection', unhandled);
     }
     expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it('cancels a queued job before it touches the browser and lets the next job run', async () => {
+    const { page } = makeBrowser();
+    const io = { emit: vi.fn() };
+    let releaseSave;
+    mocks.saveUploadedGalleryVideoBuffer.mockImplementationOnce(() => new Promise((resolve) => { releaseSave = resolve; }));
+    mocks.getLoom.mockResolvedValue({
+      id: 'loom-1',
+      episodes: [{ id: 'ep-1', nodes: [{ id: 'node-1', image: 'scene.png' }, { id: 'node-2', image: 'scene.png' }] }],
+    });
+    const first = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'First', io });
+    const second = await startFalVideoAutomation('loom-1', 'ep-1', 'node-2', { prompt: 'Second', io });
+    expect(listActiveFalVideoAutomations('loom-1', 'ep-1').map((job) => job.id)).toEqual([first.id, second.id]);
+    expect(listActiveFalVideoAutomations('loom-1', 'other-ep')).toEqual([]);
+
+    const canceled = cancelFalVideoAutomation('loom-1', 'ep-1', 'node-2', second.id);
+    expect(canceled).toMatchObject({ id: second.id, status: 'canceled' });
+    expect(io.emit).toHaveBeenCalledWith('fableloom:fal-video:changed', expect.objectContaining({ id: second.id, status: 'canceled' }));
+    const contract = SOCKET_EVENT_CONTRACTS['fableloom:fal-video:changed'].payloadSchema;
+    expect(contract.properties.status.enum).toContain('canceled');
+
+    await vi.waitFor(() => expect(releaseSave).toBeTypeOf('function'));
+    releaseSave({ id: 'upload-ab12cd34', filename: 'upload-ab12cd34.mp4' });
+    await vi.waitFor(() => expect(getFalVideoAutomation('loom-1', 'ep-1', 'node-1', first.id).status).toBe('completed'));
+    expect(getFalVideoAutomation('loom-1', 'ep-1', 'node-2', second.id).status).toBe('canceled');
+    expect(page.goto).toHaveBeenCalledTimes(1);
+    expect(listActiveFalVideoAutomations('loom-1', 'ep-1')).toEqual([]);
+  });
+
+  it('aborts a running render promptly without recording a failure or attaching a video', async () => {
+    const { video } = makeBrowser();
+    video.evaluate.mockReset().mockResolvedValue('');
+    // Yield a macrotask per poll so the never-finishing render loop cannot starve timers.
+    mocks.sleep.mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 1)));
+    const io = { emit: vi.fn() };
+    const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example', io });
+    await vi.waitFor(() => expect(
+      getFalVideoAutomation('loom-1', 'ep-1', 'node-1', queued.id).statusMsg,
+    ).toBe('Generating the scene video on fal.ai…'));
+
+    const canceled = cancelFalVideoAutomation('loom-1', 'ep-1', 'node-1', queued.id);
+    expect(canceled.status).toBe('canceled');
+    await vi.waitFor(() => expect(mocks.browserClose).toHaveBeenCalled());
+    await vi.waitFor(() => expect(listActiveFalVideoAutomations('loom-1', 'ep-1')).toEqual([]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(getFalVideoAutomation('loom-1', 'ep-1', 'node-1', queued.id)).toMatchObject({ status: 'canceled', error: null });
+    expect(mocks.saveUploadedGalleryVideoBuffer).not.toHaveBeenCalled();
+    expect(mocks.attachNodeVideo).not.toHaveBeenCalled();
+    expect(io.emit.mock.calls.some(([, data]) => data.status === 'failed' || data.status === 'completed')).toBe(false);
+  });
+
+  it('returns terminal jobs unchanged and rejects unknown or mis-scoped cancel targets', async () => {
+    makeBrowser();
+    const queued = await startFalVideoAutomation('loom-1', 'ep-1', 'node-1', { prompt: 'Example' });
+    const done = await waitForTerminalJob(queued);
+    expect(cancelFalVideoAutomation('loom-1', 'ep-1', 'node-1', queued.id)).toEqual(done);
+    expect(() => cancelFalVideoAutomation('loom-1', 'ep-1', 'node-9', queued.id)).toThrow(/not found/);
+    expect(() => cancelFalVideoAutomation('loom-1', 'ep-1', 'node-1', 'missing')).toThrow(/not found/);
   });
 });

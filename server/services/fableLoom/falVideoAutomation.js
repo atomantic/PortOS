@@ -81,7 +81,19 @@ const pruneJobs = () => {
   }
 };
 
+const isCanceled = (job) => job.status === 'canceled';
+
+// Cancellation lands on the job record first; the running executeJob observes
+// it at its next checkpoint (or when the closed CDP connection rejects a
+// pending wait) and unwinds without recording a failure.
+const throwIfCanceled = (job) => {
+  if (isCanceled(job)) {
+    throw new ServerError('fal.ai scene video canceled', { status: 409, code: 'FAL_VIDEO_CANCELED' });
+  }
+};
+
 const setJobProgress = (job, statusMsg, progress) => {
+  if (isCanceled(job)) return;
   job.status = 'running';
   job.statusMsg = statusMsg;
   job.progress = progress;
@@ -200,12 +212,19 @@ const readVideoSource = (resultVideo) => resultVideo
  * @param {import('playwright-core').Page} page - Active Playwright page.
  * @param {import('playwright-core').Locator} resultVideo - Video element locator.
  * @param {string} previousSourceUrl - URL from any previous completed render.
+ * @param {AbortSignal} [signal] - Aborted when the user cancels the job.
  * @returns {Promise<string>} Downloadable URL of the generated video.
  * @throws {ServerError} When rendering times out or fal.ai shows an error/captcha.
  */
-const waitForFalResult = async (page, resultVideo, previousSourceUrl) => {
+const waitForFalResult = async (page, resultVideo, previousSourceUrl, signal) => {
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
+  const abortIfCanceled = () => {
+    if (signal?.aborted) {
+      throw new ServerError('fal.ai scene video canceled', { status: 409, code: 'FAL_VIDEO_CANCELED' });
+    }
+  };
   while (Date.now() < deadline) {
+    abortIfCanceled();
     const remaining = deadline - Date.now();
     const visible = await resultVideo.waitFor({
       state: 'visible',
@@ -214,6 +233,7 @@ const waitForFalResult = async (page, resultVideo, previousSourceUrl) => {
       // final probe finite instead of wedging the global job queue forever.
       timeout: Math.max(1, Math.min(FAL_RESULT_POLL_MS, remaining)),
     }).then(() => true).catch(() => false);
+    abortIfCanceled();
     if (visible) {
       const sourceUrl = await readVideoSource(resultVideo);
       if (sourceUrl && sourceUrl !== previousSourceUrl) return sourceUrl;
@@ -223,6 +243,7 @@ const waitForFalResult = async (page, resultVideo, previousSourceUrl) => {
     // between short visibility waits so the scene reports that outcome now,
     // rather than looking busy until the full render timeout expires.
     const failure = await visibleFalFailure(page);
+    abortIfCanceled();
     if (failure) {
       throw new ServerError(failure, { status: 502, code: 'FAL_VIDEO_GENERATION_FAILED' });
     }
@@ -294,6 +315,8 @@ const executeJob = async (job) => {
   let browser = null;
   let createdPage = null;
   try {
+    // Canceled while still queued: never touch the browser.
+    if (isCanceled(job)) return;
     job.startedAt = new Date().toISOString();
     setJobProgress(job, 'Opening the PortOS Browser…', 0.05);
 
@@ -319,6 +342,8 @@ const executeJob = async (job) => {
       noDefaults: true,
       timeout: 30_000,
     });
+    job.browser = browser;
+    throwIfCanceled(job);
     const context = browser.contexts()[0];
     if (!context) {
       throw new ServerError('PortOS Browser has no usable profile context.', {
@@ -361,10 +386,12 @@ const executeJob = async (job) => {
     await generate.click({ timeout: FAL_CONTROL_TIMEOUT_MS });
 
     setJobProgress(job, 'Generating the scene video on fal.ai…', 0.3);
-    const sourceUrl = await waitForFalResult(page, resultVideo, previousSourceUrl);
+    const sourceUrl = await waitForFalResult(page, resultVideo, previousSourceUrl, job.abortController.signal);
+    throwIfCanceled(job);
 
     setJobProgress(job, 'Downloading the fal.ai video…', 0.8);
     const videoBuffer = await readFalVideo(context, sourceUrl);
+    throwIfCanceled(job);
 
     setJobProgress(job, 'Saving the video to FableLoom…', 0.9);
     const galleryVideo = await saveUploadedGalleryVideoBuffer(
@@ -384,6 +411,7 @@ const executeJob = async (job) => {
       );
     }
 
+    throwIfCanceled(job);
     const latestBeforeAttach = await getLoom(job.loomId);
     const { node: sceneBeforeAttach } = findScene(latestBeforeAttach, job.episodeId, job.nodeId);
     if (!sceneBeforeAttach || sceneBeforeAttach.image !== job.imageFilename) {
@@ -392,6 +420,7 @@ const executeJob = async (job) => {
         code: 'FAL_SCENE_IMAGE_CHANGED',
       });
     }
+    throwIfCanceled(job);
     const attached = await attachNodeVideo(job.loomId, job.episodeId, job.nodeId, {
       videoHistoryId: galleryVideo.id,
     });
@@ -409,6 +438,10 @@ const executeJob = async (job) => {
     emitJob(job);
     console.log(`🎬 fal.ai scene video attached: ${galleryVideo.id}`);
   } catch (error) {
+    if (isCanceled(job)) {
+      console.log(`🛑 fal.ai scene video canceled: ${job.id}`);
+      return;
+    }
     const message = safeFailureMessage(error);
     const diagnostic = [error?.name || 'Error', error?.code].filter(Boolean).join('/');
     const failedStage = job.statusMsg || 'fal.ai automation';
@@ -419,6 +452,7 @@ const executeJob = async (job) => {
     emitJob(job);
     console.error(`❌ fal.ai scene video failed: ${message} (${diagnostic} during ${failedStage})`);
   } finally {
+    job.browser = null;
     // Keep a real fal.ai page open for login/CAPTCHA inspection, but do not
     // accumulate blank tabs when navigation itself failed.
     if (createdPage?.url() === 'about:blank') await createdPage.close().catch(() => {});
@@ -474,6 +508,8 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
     const job = {
       id: `fal-${randomUUID()}`,
       io,
+      abortController: new AbortController(),
+      browser: null,
       loomId,
       episodeId,
       nodeId,
@@ -558,6 +594,52 @@ export function getFalVideoAutomation(loomId, episodeId, nodeId, jobId) {
   if (!job || job.loomId !== loomId || job.episodeId !== episodeId || job.nodeId !== nodeId) {
     throw new ServerError('fal.ai scene video job not found', { status: 404, code: 'NOT_FOUND' });
   }
+  return publicJob(job);
+}
+
+/**
+ * Lists queued and running fal.ai jobs for one episode so a reloaded client can
+ * reattach to renders the server still owns.
+ *
+ * @param {string} loomId - The ID of the parent loom story.
+ * @param {string} episodeId - The ID of the episode.
+ * @returns {object[]} Public job descriptors, oldest first.
+ */
+export function listActiveFalVideoAutomations(loomId, episodeId) {
+  pruneJobs();
+  return [...jobs.values()]
+    .filter((job) => job.loomId === loomId && job.episodeId === episodeId && ACTIVE_STATUSES.has(job.status))
+    .map(publicJob);
+}
+
+/**
+ * Cancels a queued or running fal.ai job. A queued job is settled immediately
+ * and skipped by the serialized runner; a running job has its abort signal
+ * fired and its CDP connection dropped so pending waits reject promptly.
+ * Already-terminal jobs are returned unchanged.
+ *
+ * @param {string} loomId - The ID of the parent loom story.
+ * @param {string} episodeId - The ID of the episode containing the scene.
+ * @param {string} nodeId - The ID of the scene node.
+ * @param {string} jobId - The unique job ID.
+ * @returns {object} Public job status descriptor.
+ * @throws {ServerError} When the job is not found or does not match scene scope.
+ */
+export function cancelFalVideoAutomation(loomId, episodeId, nodeId, jobId) {
+  const job = jobs.get(jobId);
+  if (!job || job.loomId !== loomId || job.episodeId !== episodeId || job.nodeId !== nodeId) {
+    throw new ServerError('fal.ai scene video job not found', { status: 404, code: 'NOT_FOUND' });
+  }
+  if (!ACTIVE_STATUSES.has(job.status)) return publicJob(job);
+  job.status = 'canceled';
+  job.statusMsg = 'fal.ai video canceled';
+  job.progress = 0;
+  job.completedAt = new Date().toISOString();
+  job.abortController.abort();
+  emitJob(job);
+  // Closing the CDP connection rejects any in-flight Playwright wait; the
+  // user's browser and fal.ai tab stay open.
+  job.browser?.close().catch(() => {});
   return publicJob(job);
 }
 

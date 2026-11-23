@@ -17,6 +17,8 @@ vi.mock('../services/apiFableLoom.js', () => ({
   deleteLoomEpisode: vi.fn(),
   getLoom: vi.fn(),
   startLoomFalVideo: vi.fn(),
+  listLoomFalVideos: vi.fn(),
+  cancelLoomFalVideo: vi.fn(),
   updateLoomEpisode: vi.fn(),
   updateLoom: vi.fn(),
   updateLoomNode: vi.fn(),
@@ -137,7 +139,7 @@ vi.mock('../components/fableloom/LoomValidationPanel', () => ({
   },
 }));
 
-import { addLoomNode, getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo } from '../services/apiFableLoom.js';
+import { addLoomNode, getLoom, weaveLoomEpisode, updateLoomNode, startLoomFalVideo, listLoomFalVideos } from '../services/apiFableLoom.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { getPipelineSeries } from '../services/apiPipeline.js';
 import { listStoryboards, makeStoryboardFromFableLoom } from '../services/apiStoryboards.js';
@@ -178,6 +180,7 @@ const renderEditor = (initialEntry = '/fableloom/loom-1') => render(
 );
 
 beforeEach(() => {
+  listLoomFalVideos.mockReset().mockResolvedValue([]);
   vi.clearAllMocks();
   getLoom.mockResolvedValue(loom());
   getUniverse.mockResolvedValue(null);
@@ -867,6 +870,20 @@ describe('FableLoomStory scene media lifecycle', () => {
     await waitFor(() => expect(screen.getByTestId('canvas-video-id')).toHaveTextContent('upload-ab12cd34'));
     expect(screen.getByTestId('canvas-video-status')).toHaveTextContent('idle');
     expect(toastMocks.success).toHaveBeenCalledWith('Scene video ready from fal.ai');
+  });
+
+  it('reattaches an active fal.ai job the server still runs after a page reload', async () => {
+    getLoom.mockResolvedValue(loom({
+      episodes: [episode({ nodes: [{ id: 'node-1', title: 'Threshold', prose: 'A door.', image: 'threshold.png', transitions: [] }] })],
+    }));
+    listLoomFalVideos.mockResolvedValue([{
+      id: 'fal-job-9', source: 'fal-browser', loomId: 'loom-1', episodeId: 'ep-1', nodeId: 'node-1', status: 'running',
+    }]);
+    renderEditor('/fableloom/loom-1/ep-1');
+
+    await waitFor(() => expect(screen.getByTestId('canvas-video-status')).toHaveTextContent('running'));
+    expect(listLoomFalVideos).toHaveBeenCalledWith('loom-1', 'ep-1', { silent: true });
+    expect(screen.getByRole('button', { name: 'Simulate fal.ai completion' })).toBeInTheDocument();
   });
 
   // Uniquely catches the fal.ai browser handoff, which has no server compile, losing a

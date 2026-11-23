@@ -46,7 +46,8 @@ function LoomFalBrowserJobWatcher({ nodeId, kind, job, onUpdate, onTerminal }) {
       && progress.nodeId === nodeId;
     const apply = (progress) => {
       if (canceled || !matches(progress) || reportedTerminalRef.current === job.jobId) return;
-      const terminal = progress.status === 'failed' || progress.status === 'completed';
+      const terminal = progress.status === 'failed' || progress.status === 'completed'
+        || progress.status === 'canceled';
       // Latch before callbacks: parent updates may unmount this watcher.
       if (terminal) reportedTerminalRef.current = job.jobId;
       callbacks.current.onUpdate(nodeId, kind, job.jobId, progress);
@@ -59,9 +60,23 @@ function LoomFalBrowserJobWatcher({ nodeId, kind, job, onUpdate, onTerminal }) {
         .then((progress) => {
           if (started === revision) apply(progress);
         })
-        .catch(() => {
-          // A failed status read is not a failed render. Keep listening and
-          // retry at the next reconnect or tab show, without a polling timer.
+        .catch((err) => {
+          // Transient failures (offline, 5xx) are not a failed render: keep
+          // listening and retry at the next reconnect or tab show, without a
+          // polling timer. A definitive 404 means the server no longer knows
+          // this job (restart or expiry), so settle it and unlock the scene.
+          if (started !== revision || (err?.status !== 404 && err?.code !== 'NOT_FOUND')) return;
+          apply({
+            id: job.jobId,
+            source: 'fal-browser',
+            loomId: job.loomId,
+            episodeId: job.episodeId,
+            nodeId,
+            status: 'failed',
+            statusMsg: 'fal.ai video interrupted',
+            progress: 0,
+            error: 'The fal.ai video job was lost after a server restart or expiry. Retry when ready.',
+          });
         });
     };
     const onChange = (progress) => {
