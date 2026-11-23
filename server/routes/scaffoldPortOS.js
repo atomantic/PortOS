@@ -2,7 +2,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, ensureDirs } from '../lib/fileUtils.js';
 import { writeAgentInstructions } from '../lib/agent/agentInstructionsFile.js';
-import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
+import { CORS_SNIPPET, buildDevRunnerSnippet } from '../lib/scaffoldSnippets.js';
 
 // A caret on a 0.x range admits only patch releases (^0.1.0 never reaches 0.2.0),
 // so this must name the current published minor when the toolkit releases one.
@@ -23,19 +23,18 @@ export async function scaffoldPortOS({ repoPath, name, dirName, uiPort, apiPort,
     description: `${name} - built with PortOS Stack`,
     type: 'module',
     scripts: {
-      'dev': 'concurrently "npm run dev:server" "npm run dev:client"',
+      'dev': 'node scripts/dev.js',
       'dev:server': 'cd server && npm run dev',
       'dev:client': 'cd client && npm run dev',
       'build': 'cd client && npm run build',
       'start': 'cd server && npm start',
-      'install:all': 'npm install && cd client && npm install && cd ../server && npm install',
+      'install:all': 'cd client && npm install && cd ../server && npm install',
       'test': 'cd server && npm test'
-    },
-    devDependencies: {
-      'concurrently': '^8.2.2'
     }
   };
   await atomicWrite(join(repoPath, 'package.json'), rootPkg);
+  await ensureDir(join(repoPath, 'scripts'));
+  await writeFile(join(repoPath, 'scripts', 'dev.js'), buildDevRunnerSnippet(['dev:server', 'dev:client']));
 
   // === Client package.json ===
   const clientPkg = {
@@ -435,9 +434,6 @@ jobs:
         with:
           node-version: \${{ matrix.node-version }}
           cache: 'npm'
-
-      - name: Install root dependencies
-        run: npm ci
 
       - name: Install client dependencies
         working-directory: ./client

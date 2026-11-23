@@ -9,3 +9,28 @@ export const CORS_SNIPPET = `app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });`;
+
+// Dependency-free replacement for `concurrently` in generated apps: launches each npm script in
+// parallel, forwards SIGINT/SIGTERM to every child, and exits with the first child's exit code
+// after stopping its siblings.
+export const buildDevRunnerSnippet = (scripts) => `import { spawn } from 'node:child_process';
+
+const scripts = ${JSON.stringify(scripts)};
+const shell = process.platform === 'win32';
+const children = scripts.map((name) => spawn('npm', ['run', name], { stdio: 'inherit', shell }));
+let exiting = false;
+
+const stopAll = (signal) => {
+  for (const child of children) if (child.exitCode === null) child.kill(signal);
+};
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stopAll(signal));
+
+for (const child of children) {
+  child.on('exit', (code, signal) => {
+    if (exiting) return;
+    exiting = true;
+    stopAll('SIGTERM');
+    process.exitCode = code ?? (signal ? 1 : 0);
+  });
+}
+`;
