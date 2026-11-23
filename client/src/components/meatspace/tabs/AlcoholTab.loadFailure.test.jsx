@@ -45,7 +45,7 @@ describe('AlcoholTab history load', () => {
 
     getDailyAlcohol.mockResolvedValue([{ date: '2026-03-01', alcohol: { drinks: [] } }]);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByText(/All Drink Entries \(1 days\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/All Drink Entries \(1 day\)/)).toBeTruthy());
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
