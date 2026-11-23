@@ -4,6 +4,8 @@ import { scrubSecretTokens } from '../lib/secretText.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
+import { isPairedPeer } from '../lib/peerPairing.js';
+import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 import { eidoverseChatResultSchema } from '../lib/eidoverseValidation.js';
 import { getPeers } from './instances.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
@@ -82,7 +84,33 @@ export async function listEidoverseDestinations() {
   return { destinations: results.filter(Boolean) };
 }
 
-/** Called only through the authenticated/private federation API. */
+/**
+ * The federation write endpoints sit on PEER_API_SURFACE, so authGate lets an
+ * anonymous caller through on a password-free install. The self-asserted
+ * X-PortOS-Instance-Id header is never an identity on its own: a verified pair
+ * token picks the peer by registry id, and legacy Basic may name only an
+ * unpaired peer (a paired peer must present its scoped token).
+ */
+export async function authorizeEidoverseFederationPeer(req) {
+  const auth = req.portosAuthContext;
+  const deny = () => new ServerError('Verified peer authentication is required.', { status: 403, code: 'EIDOVERSE_TRAVEL_PEER_AUTH_REQUIRED' });
+  if (auth?.authenticated !== true) throw deny();
+  const peers = await getPeers();
+  if (auth.method === 'peer') {
+    const peer = typeof auth.peerId === 'string' && auth.peerId ? peers.find((entry) => entry.id === auth.peerId && entry.enabled !== false) : null;
+    if (!peer?.instanceId) throw deny();
+    return peer.instanceId;
+  }
+  if (auth.method === 'basic') {
+    const callerId = readCallerInstanceId(req);
+    const peer = callerId ? peers.find((entry) => entry.instanceId === callerId && entry.enabled !== false) : null;
+    if (!peer || isPairedPeer(peer)) throw deny();
+    return peer.instanceId;
+  }
+  throw deny();
+}
+
+/** Called only with an instanceId verified by authorizeEidoverseFederationPeer. */
 export async function receiveEidoverseVisit(instanceId, { agent = false, name } = {}) {
   await requireAvailable();
   const peer = await registeredPeer(instanceId, { inboundId: true });

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { eidoverseTravelVisitSchema, eidoverseGuestAdmissionSchema, eidoverseGuestChatSchema, eidoverseGuestLeaveSchema } from '../lib/eidoverseValidation.js';
-import { getEidoverseTravelCapabilities, listEidoverseDestinations, visitEidoversePeer, receiveEidoverseVisit, receiveEidoverseChat, receiveEidoverseLeave, getEidoverseGuestDescriptor } from '../services/eidoverseTravel.js';
+import { getEidoverseTravelCapabilities, listEidoverseDestinations, visitEidoversePeer, authorizeEidoverseFederationPeer, receiveEidoverseVisit, receiveEidoverseChat, receiveEidoverseLeave, getEidoverseGuestDescriptor } from '../services/eidoverseTravel.js';
 
 const router = Router();
 router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
@@ -21,12 +21,12 @@ router.get('/federation/capabilities', asyncHandler(async (_req, res) => {
   res.json(await getEidoverseTravelCapabilities());
 }));
 router.post('/federation/visit', asyncHandler(async (req, res) => {
-  res.json(await receiveEidoverseVisit(req.get('X-PortOS-Instance-Id'), validateRequest(eidoverseGuestAdmissionSchema, req.body)));
+  res.json(await receiveEidoverseVisit(await authorizeEidoverseFederationPeer(req), validateRequest(eidoverseGuestAdmissionSchema, req.body)));
 }));
 router.post('/federation/chat', asyncHandler(async (req, res) => {
-  res.json(await receiveEidoverseChat(req.get('X-PortOS-Instance-Id'), validateRequest(eidoverseGuestChatSchema, req.body)));
+  res.json(await receiveEidoverseChat(await authorizeEidoverseFederationPeer(req), validateRequest(eidoverseGuestChatSchema, req.body)));
 }));
 router.post('/federation/leave', asyncHandler(async (req, res) => {
-  res.json(await receiveEidoverseLeave(req.get('X-PortOS-Instance-Id'), validateRequest(eidoverseGuestLeaveSchema, req.body)));
+  res.json(await receiveEidoverseLeave(await authorizeEidoverseFederationPeer(req), validateRequest(eidoverseGuestLeaveSchema, req.body)));
 }));
 export default router;
