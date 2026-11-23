@@ -12,7 +12,7 @@ vi.mock('../../../services/apiHealth.js', () => ({
   getAppleHealthMetrics: vi.fn(),
   getLatestHealthMetrics: vi.fn(),
 }));
-vi.mock('../../ActivityBloodCorrelation', () => ({ default: () => null }));
+vi.mock('../ActivityBloodCorrelation', () => ({ default: () => null }));
 
 import { getWorkouts } from '../../../services/apiMeatspace.js';
 import {

@@ -76,7 +76,6 @@ vi.mock('../services/videoGen/local.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    getPythonPath: vi.fn(async () => '/usr/bin/python3'),
     listVideoModels: vi.fn(() => [model, mlxModel]),
     defaultVideoModelId: vi.fn(() => model.id),
     resolveByovRuntimeLoraCapable: vi.fn(async () => true),
