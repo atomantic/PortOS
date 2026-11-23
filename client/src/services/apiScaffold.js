@@ -14,7 +14,8 @@ export const getDirectories = (path = null, { includeFiles = false } = {}) => {
   return request(`/scaffold/directories${params.size ? `?${params}` : ''}`);
 };
 
-export const createFromTemplate = (data) => request('/scaffold/templates/create', {
+export const createFromTemplate = (data, options = {}) => request('/scaffold/templates/create', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });

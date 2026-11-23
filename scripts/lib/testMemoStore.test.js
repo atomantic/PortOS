@@ -1,8 +1,9 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MAX_ENTRY_AGE_MS, mergeMemoStore, readMemoEntry, readMemoRecord, resolveMemoDir, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
+import { MAX_ENTRIES_PER_TEST, MAX_ENTRY_AGE_MS, mergeMemoStore, pruneMemoStore, readMemoEntry, readMemoRecord, resolveMemoDir, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 
 const KEY = 'a'.repeat(64);
 const META = { test: 'server/lib/a.test.js', workspace: 'server', source: 'local', commit: 'abc' };
@@ -17,6 +18,18 @@ describe('test memo store', () => {
     expect(resolveMemoDir({ PORTOS_TEST_MEMO: 'off', PORTOS_TEST_MEMO_DIR: '/scratch' }, '/home/x')).toBeNull();
     expect(resolveMemoDir({ VITEST: 'true' }, '/home/x')).toBeNull();
     expect(resolveMemoDir({ VITEST: 'true', PORTOS_TEST_MEMO_DIR: '/scratch' }, '/home/x')).toBe('/scratch');
+  });
+
+  it('adds the read-only directories after the one it writes to', () => {
+    const readDirs = ['/shards/0', '/shards/1'].join(delimiter);
+    expect(resolveMemoDir({ PORTOS_TEST_MEMO_DIR: '/scratch', PORTOS_TEST_MEMO_READ_DIRS: readDirs }, '/home/x')).toEqual(['/scratch', '/shards/0', '/shards/1']);
+    expect(resolveMemoDir({ PORTOS_TEST_MEMO_READ_DIRS: readDirs }, '/home/x')).toEqual([join('/home/x', '.portos', 'test-memo'), '/shards/0', '/shards/1']);
+    // A Windows runner lists them with `;` (the composite action picks the separator).
+    expect(resolveMemoDir({ PORTOS_TEST_MEMO_DIR: 'D:\\t\\memo', PORTOS_TEST_MEMO_READ_DIRS: 'D:\\t\\0;D:\\t\\1' }, '/home/x', ';')).toEqual(['D:\\t\\memo', 'D:\\t\\0', 'D:\\t\\1']);
+    expect(resolveMemoDir({ PORTOS_TEST_MEMO_DIR: '/scratch', PORTOS_TEST_MEMO_READ_DIRS: '' }, '/home/x')).toBe('/scratch');
+    // Off and nested-Vitest rules win over the read list.
+    expect(resolveMemoDir({ PORTOS_TEST_MEMO: 'off', PORTOS_TEST_MEMO_READ_DIRS: readDirs }, '/home/x')).toBeNull();
+    expect(resolveMemoDir({ VITEST: 'true', PORTOS_TEST_MEMO_READ_DIRS: readDirs }, '/home/x')).toBeNull();
   });
 
   it('round-trips entries and records, and reads corruption or a foreign entry as a miss', () => {
@@ -37,15 +50,32 @@ describe('test memo store', () => {
     expect(readMemoRecord(dir, 'server', META.test)).toBeNull();
     // Without a digest for every module the record is written in the old shape: no narrowing.
     writeMemoRecord(dir, 'server', META.test, ['server/lib/b.js', 'server/lib/a.js']);
-    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: null });
+    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: null, served: null });
     const digests = { 'server/lib/a.js': '1'.repeat(16), 'server/lib/b.js': '2'.repeat(16) };
     writeMemoRecord(dir, 'server', META.test, ['server/lib/b.js', 'server/lib/a.js'], (rel) => digests[rel] ?? null);
-    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: ['1'.repeat(16), '2'.repeat(16)] });
+    expect(readMemoRecord(dir, 'server', META.test)).toEqual({ modules: ['server/lib/a.js', 'server/lib/b.js'], digests: ['1'.repeat(16), '2'.repeat(16)], served: null });
     writeMemoRecord(dir, 'server', META.test, ['server/lib/a.js', 'server/lib/c.js'], (rel) => digests[rel] ?? null);
     expect(readMemoRecord(dir, 'server', META.test).digests).toBeNull();
     mkdirSync(join(dir, 'records', 'client'), { recursive: true });
     expect(readMemoRecord(dir, 'client', META.test)).toBeNull();
     expect(readMemoEntry(null, KEY, META)).toBeNull();
+  });
+
+  // #17616: what a real-Chromium fixture served rides in the record, sorted and deduplicated.
+  it('round-trips a served-file record and refuses a malformed one', () => {
+    dir = mkdtempSync(join(tmpdir(), 'portos-memo-store-'));
+    const served = { roots: ['client'], files: ['client/src/b.jsx', 'client/src/a.jsx', 'client/src/a.jsx'] };
+    writeMemoRecord(dir, 'client', META.test, ['server/lib/a.js'], () => '1'.repeat(16), served);
+    expect(readMemoRecord(dir, 'client', META.test)).toEqual({
+      modules: ['server/lib/a.js'], digests: ['1'.repeat(16)], served: { roots: ['client'], files: ['client/src/a.jsx', 'client/src/b.jsx'] },
+    });
+    const path = join(dir, 'records', 'client', `${createHash('sha256').update(META.test).digest('hex')}.json`);
+    const stored = JSON.parse(readFileSync(path, 'utf8'));
+    for (const bad of [{ roots: [], files: [] }, { roots: ['client'] }, { roots: ['client'], files: ['../outside.js'] },
+      { roots: ['/abs'], files: [] }, { roots: ['client'], files: ['client/./a.js'] }, { roots: ['client'], files: ['C:/a.js'] }, 'client']) {
+      writeFileSync(path, JSON.stringify({ ...stored, served: bad }));
+      expect(readMemoRecord(dir, 'client', META.test).served, JSON.stringify(bad)).toBeNull();
+    }
   });
 
   it('merges shard lineages: keeps the newer record per test, copies live entries, and skips expired or foreign files', () => {
@@ -85,5 +115,97 @@ describe('test memo store', () => {
     expect(mergeMemoStore(target, older)).toEqual({ entries: 0, records: 0 });
     expect(readMemoRecord(target, 'server', other).modules).toEqual(['server/lib/latest.js']);
     expect(mergeMemoStore(target, join(dir, 'absent'))).toEqual({ entries: 0, records: 0 });
+  });
+
+  // A pull request reads the parked shard lineages in place (#17617): the
+  // same answer the merge into one directory gave, without copying a file.
+  it('reads several directories: the first valid entry and the newest record per test, writing to the first', () => {
+    dir = mkdtempSync(join(tmpdir(), 'portos-memo-dirs-'));
+    const [first, second, third] = ['0', '1', '2'].map((name) => join(dir, name));
+    const store = [first, second, third];
+    const other = 'server/lib/other.test.js';
+    const setRecordedAt = (root, test, recordedAt) => {
+      const path = join(root, 'records', 'server', readdirSync(join(root, 'records', 'server'))
+        .find((name) => JSON.parse(readFileSync(join(root, 'records', 'server', name), 'utf8')).test === test));
+      writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), recordedAt }));
+    };
+    writeMemoRecord(first, 'server', META.test, ['server/lib/old.js']);
+    setRecordedAt(first, META.test, '2026-01-01T00:00:00.000Z');
+    writeMemoRecord(second, 'server', META.test, ['server/lib/newest.js']);
+    setRecordedAt(second, META.test, '2026-01-03T00:00:00.000Z');
+    writeMemoRecord(third, 'server', META.test, ['server/lib/middle.js']);
+    setRecordedAt(third, META.test, '2026-01-02T00:00:00.000Z');
+    expect(readMemoRecord(store, 'server', META.test).modules).toEqual(['server/lib/newest.js']);
+    // A tie keeps the earlier directory, as the merge's ">=" did.
+    setRecordedAt(first, META.test, '2026-01-03T00:00:00.000Z');
+    expect(readMemoRecord(store, 'server', META.test).modules).toEqual(['server/lib/old.js']);
+    // A corrupt record in one directory does not hide a good one in another.
+    writeMemoRecord(third, 'server', other, ['server/lib/other.js']);
+    writeMemoRecord(first, 'server', other, ['server/lib/ignored.js']);
+    const corrupt = join(first, 'records', 'server', readdirSync(join(first, 'records', 'server'))
+      .find((name) => readFileSync(join(first, 'records', 'server', name), 'utf8').includes('ignored.js')));
+    writeFileSync(corrupt, '{ corrupt');
+    expect(readMemoRecord(store, 'server', other).modules).toEqual(['server/lib/other.js']);
+    expect(readMemoRecord(store, 'client', other)).toBeNull();
+
+    // An expired or foreign entry in an earlier directory falls through to a live one later.
+    writeMemoEntry(first, KEY, META);
+    const firstEntry = join(first, 'entries', 'aa', `${KEY}.json`);
+    writeFileSync(firstEntry, JSON.stringify({ ...JSON.parse(readFileSync(firstEntry, 'utf8')), verifiedAt: new Date(Date.now() - MAX_ENTRY_AGE_MS - 1000).toISOString() }));
+    expect(readMemoEntry(store, KEY, META)).toBeNull();
+    writeMemoEntry(third, KEY, { ...META, commit: 'third' });
+    expect(readMemoEntry(store, KEY, META)).toMatchObject({ commit: 'third' });
+    expect(readMemoEntry([first, second], KEY, META)).toBeNull();
+
+    // Writes land in the first directory only.
+    const fresh = 'c'.repeat(64);
+    writeMemoEntry(store, fresh, META);
+    writeMemoRecord(store, 'client', META.test, ['client/src/a.js']);
+    expect(readMemoEntry(first, fresh, META)).not.toBeNull();
+    expect(readMemoEntry([second, third], fresh, META)).toBeNull();
+    expect(readMemoRecord(first, 'client', META.test).modules).toEqual(['client/src/a.js']);
+    expect(readMemoRecord([second, third], 'client', META.test)).toBeNull();
+  });
+
+  it('prunes expired, corrupt and surplus entries, and the files of deleted tests', () => {
+    dir = mkdtempSync(join(tmpdir(), 'portos-memo-prune-'));
+    const now = Date.parse('2026-11-23T12:00:00.000Z');
+    const at = (offsetMs) => new Date(now - offsetMs).toISOString();
+    const key = (index) => index.toString(16).padStart(64, '0');
+    const put = (index, entry) => {
+      const k = key(index);
+      mkdirSync(join(dir, 'entries', k.slice(0, 2)), { recursive: true });
+      writeFileSync(join(dir, 'entries', k.slice(0, 2), `${k}.json`), typeof entry === 'string' ? entry : JSON.stringify(entry));
+    };
+    const live = { ...META, test: 'server/lib/live.test.js' };
+    const gone = { ...META, test: 'server/lib/deleted.test.js' };
+    // Five entries for one test, newest first by index; the cap keeps three.
+    for (let index = 1; index <= 5; index += 1) put(index, { ...live, verifiedAt: at(index * 60_000) });
+    // The same test in another workspace is its own group.
+    put(6, { ...live, workspace: 'db', verifiedAt: at(60_000) });
+    put(7, { ...live, test: 'server/lib/other.test.js', verifiedAt: at(MAX_ENTRY_AGE_MS + 1) });
+    put(8, '{ corrupt');
+    put(9, { ...gone, verifiedAt: at(60_000) });
+    // An in-flight temp file is not an entry and stays.
+    writeFileSync(join(dir, 'entries', '00', `${key(1)}.json.123.abcd.tmp`), '{}');
+    writeMemoRecord(dir, 'server', live.test, ['server/lib/live.js']);
+    writeMemoRecord(dir, 'server', gone.test, ['server/lib/gone.js']);
+    mkdirSync(join(dir, 'records', 'server'), { recursive: true });
+    writeFileSync(join(dir, 'records', 'server', 'not-a-hash.json'), JSON.stringify({ test: live.test, modules: [] }));
+
+    const testExists = (_workspace, test) => test !== gone.test;
+    expect(pruneMemoStore(dir, { now, testExists })).toEqual({ entries: MAX_ENTRIES_PER_TEST + 1, records: 1, removedEntries: 2 + 1 + 1 + 1, removedRecords: 2 });
+    const remaining = readdirSync(join(dir, 'entries', '00')).sort();
+    expect(remaining).toEqual([...[1, 2, 3, 6].map((index) => `${key(index)}.json`), `${key(1)}.json.123.abcd.tmp`].sort());
+    expect(readMemoRecord(dir, 'server', live.test).modules).toEqual(['server/lib/live.js']);
+    expect(readMemoRecord(dir, 'server', gone.test)).toBeNull();
+    // Pruning again removes nothing.
+    expect(pruneMemoStore(dir, { now, testExists })).toMatchObject({ removedEntries: 0, removedRecords: 0 });
+
+    // The shared developer store passes no cap and no existence check: only age counts.
+    put(10, { ...gone, verifiedAt: at(60_000) });
+    expect(pruneMemoStore(dir, { now, maxEntriesPerTest: Number.POSITIVE_INFINITY })).toEqual({ entries: 5, records: 1, removedEntries: 0, removedRecords: 0 });
+    expect(pruneMemoStore(dir, { now: now + MAX_ENTRY_AGE_MS })).toMatchObject({ entries: 0, removedEntries: 5 });
+    expect(pruneMemoStore(join(dir, 'absent'))).toEqual({ entries: 0, records: 0, removedEntries: 0, removedRecords: 0 });
   });
 });

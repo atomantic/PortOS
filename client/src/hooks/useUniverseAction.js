@@ -4,7 +4,7 @@
  * Use when: Universe Builder action UIs.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import toast from '../components/ui/Toast';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 
@@ -27,6 +27,10 @@ import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 // Used to flush a dirty draft via handleSave() so the LLM action operates
 // against the user's latest local edits rather than a stale persisted copy.
 export default function useUniverseAction({ selectedId, mountedRef, setWorlds }) {
+  // Render-synced: the callback closes over the selectedId of the render that
+  // created it, so a mid-flight route switch is only visible through a ref.
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   return useCallback(async function runUniverseAction({
     ref,
     setBusy,
@@ -79,7 +83,7 @@ export default function useUniverseAction({ selectedId, mountedRef, setWorlds })
     const updated = result.universe;
     setWorlds((prev) => upsertByIdPrepend(prev, updated));
 
-    if (!mountedRef.current || capturedId !== selectedId) {
+    if (!mountedRef.current || capturedId !== selectedIdRef.current) {
       if (toastId) toast.dismiss(toastId);
       return result;
     }

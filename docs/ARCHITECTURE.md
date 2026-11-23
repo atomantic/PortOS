@@ -189,12 +189,12 @@ Server Event → Socket.IO → socket.js → React Component State Update
 
 ```
 1. Task writes emit `tasks:changed`; the CoS Service evaluates tasks on that event and on an interval
-3. For each pending task:
+2. For each pending task:
    a. Select appropriate AI model based on task complexity
    b. Build prompt with context and memory injection
    c. Spawn Claude CLI via Sub-Agent Spawner
-4. Agent executes task, output captured
-5. On completion:
+3. Agent executes task, output captured
+4. On completion:
    a. Mark task as completed
    b. Extract memories from output
    c. Update usage metrics
@@ -417,7 +417,7 @@ The authoritative statement is "Security Model" in the root `AGENTS.md`; in brie
 | Process | Port | Script | Purpose |
 |---------|------|--------|---------|
 | portos-ui | 5554 | `client/node_modules/vite/bin/vite.js` | React frontend dev server (dev only) |
-| portos-server | 5555 | `server/index.js` | Main Express API server |
+| portos-server | 5555 | `server/start.js` | Main Express API server |
 | portos-browser | 5556 (CDP), 5557 (health) | `browser/server.js` | Persistent Chromium with CDP for web automation |
 | portos-cos | 5558 | `server/cos-runner/index.js` | Isolated CoS agent runner |
 | portos-autofixer | 5560 | `autofixer/server.js` | Crash detection, CLI repair, and dashboard with SSE logs |
@@ -429,9 +429,9 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 ### Adding a New Page
 1. Create component in `client/src/pages/`.
 2. Add `<Route>` in `client/src/App.jsx`.
-3. Add a navigation command entry in `server/lib/navManifest.js` (`NAV_COMMANDS`) with its keywords, section, icon, and title so the `⌘K` command palette and the voice agent's `ui_navigate` tool can discover and navigate to the page.
+3. Add a navigation command entry in `server/lib/navManifest.js` (`NAV_COMMANDS`) with its keywords, section, and label so the `⌘K` command palette and the voice agent's `ui_navigate` tool can discover and navigate to the page.
 4. If the page belongs to an optional feature (e.g. `post`, `datadog`, `jira`, `gsd`), register the feature in `server/lib/instanceFeatureRegistry.js` and tag the nav command with `feature: '<id>'` (or map its section in `SECTION_FEATURE`).
-5. Add the sidebar navigation link in `client/src/components/Layout.jsx` (tagged with `feature` if optional).
+5. Add the sidebar icon in `NAV_PRESENTATION` (`client/src/lib/navPresentation.js`, rendered by `SidebarNav.jsx`) (tagged with `feature` if optional).
 
 ### Adding an API Endpoint
 1. Create route file in `server/routes/` and mount it in `server/index.js`.
@@ -455,7 +455,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 
 ### Adding a Data Store
 1. Determine the storage tier according to `docs/STORAGE.md`.
-2. Core application relational records are `db-primary` and must be stored in PostgreSQL with schema migrations in `scripts/migrations/`.
+2. Core application relational records are `db-primary` and must be stored in PostgreSQL with schema migrations in `server/lib/db/schema/` and `server/scripts/db-migrations/`.
 3. File-backed collections under `data/` should use `createCollectionStore` (`server/lib/collectionStore.js`) for schema-versioned layouts (`data/{type}/{id}/index.json`) with atomic writes and per-record queues.
 
 ### Adding CoS Task Types

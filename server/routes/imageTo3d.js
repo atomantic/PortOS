@@ -4,10 +4,12 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
 import { getTarget, listTargets, detectHostCapabilities, unavailableReason, unavailableReasonLabel, IMAGE_TO_3D_TARGET_IDS, renderOptionSupportFor } from '../services/imageTo3d/targets.js';
 import { getTargetAdapter } from '../services/imageTo3d/adapters.js';
 import {
   listModels,
+  listModelsPage,
   getModel,
   createModel,
   startGeneration,
@@ -292,8 +294,12 @@ router.post('/trellis2/install', asyncHandler(async (req, res) => {
 // record from a gallery image (which kicks off the local render), poll the
 // record for status, re-generate, delete, and download the exported GLB.
 
-router.get('/models', asyncHandler(async (_req, res) => {
-  res.json(await listModels());
+router.get('/models', asyncHandler(async (req, res) => {
+  const query = validateRequest(boundedPaginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) return res.json(await listModels());
+  const page = { limit: query.limit ?? BOUNDED_PAGE_DEFAULT_LIMIT, offset: query.offset ?? 0 };
+  const { items, total } = await listModelsPage(page);
+  res.json(pageEnvelope(items, total, page));
 }));
 
 /**

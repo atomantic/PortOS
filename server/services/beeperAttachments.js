@@ -157,6 +157,7 @@ async function storedBytes() {
          SELECT DISTINCT ON (local_path) local_path, byte_length
            FROM beeper_attachments
           WHERE local_path IS NOT NULL
+          ORDER BY local_path, byte_length DESC NULLS LAST
        ) unique_files`,
   );
   const row = result?.rows?.[0] || {};
@@ -824,6 +825,7 @@ export async function getConversationAttachmentBytes(conversationId) {
          SELECT DISTINCT ON (local_path) local_path, byte_length
            FROM beeper_attachments
           WHERE conversation_id = $1 AND local_path IS NOT NULL
+          ORDER BY local_path, byte_length DESC NULLS LAST
        ) unique_files`,
     [conversationId],
   );

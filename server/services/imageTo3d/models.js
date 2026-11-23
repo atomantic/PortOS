@@ -329,6 +329,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
 }
 
 export const listModels = store.listModels;
+export const listModelsPage = store.listModelsPage;
 export const listGeneratingModelSummaries = store.listGeneratingModelSummaries;
 export const getModel = store.getModel;
 

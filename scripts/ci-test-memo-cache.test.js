@@ -56,12 +56,35 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(save).toContain("github.event_name != 'pull_request'");
   });
 
-  // Related selection needs the memo records from each distinct full-run shard.
-  it.each(['server', 'client'])('restores and merges each full-run %s shard lineage once', (family) => {
-    const job = jobs[family];
+  // Related selection and smoke browser ownership both need sibling records.
+  it.each([
+    ['server', FULL_SUITE_SHARDS.server],
+    ['client', FULL_SUITE_SHARDS.client],
+    ['browser', 2],
+  ])('restores and merges each full-run %s shard lineage once', (family, count) => {
+    const mergeBrowserShards = "env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0'";
+    const mergeExpression = family === 'browser'
+      ? mergeBrowserShards
+      : `fromJSON(needs.impact.outputs.plan).${family}_mode == 'full' && '0' || '${count}'`;
+    const mergeInput = `\${{ ${mergeExpression} }}`;
+    const rawJob = jobs[family];
+    // Exercise the composite with every explicit sibling restore disabled.
+    const noMergeJob = rawJob.replaceAll('inputs.merge-shards', "'0'");
+    expect(step(noMergeJob, "Park the job's own restore")).toContain("if: fromJSON('0') >= 1");
+    expect(step(noMergeJob, 'Merge the full-run shard lineages')).toContain("if: fromJSON('0') >= 1");
+    const job = rawJob.replaceAll(mergeInput, String(count));
     const save = step(job, 'Save the test memo');
-    const count = FULL_SUITE_SHARDS[family];
-    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${count}\\n`));
+    if (family === 'browser') {
+      const invocation = step(rawJob, 'Restore the test memo');
+      expect(invocation).toContain('suite: browser\n');
+      expect(invocation).toContain(`merge-shards: \${{ ${mergeBrowserShards} }}\n`);
+      expect(save).toContain("steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'");
+    } else {
+      const invocation = step(rawJob, 'Restore the test memo');
+      expect(invocation).toContain(`suite: ${family}\n`);
+      expect(invocation).toContain(`merge-shards: ${mergeInput}\n`);
+      expect(ciYml).toContain(`merge-shards: ${mergeInput}\n`);
+    }
     const initial = step(job, 'Restore from the trusted memo cache');
     const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
     const fullKeys = Array.from({ length: count }, (_, index) => expand(restoreKey(initial), {
@@ -74,6 +97,7 @@ describe('trusted CI test-memo cache reuse', () => {
       const shard = index + 1;
       const restore = step(job, `Restore full-run shard ${shard} of the memo`);
       expect(restore).toContain(`id: restore-shard-${shard}`);
+      expect(step(noMergeJob, `Restore full-run shard ${shard} of the memo`)).toContain(`fromJSON('0') >= ${shard} &&`);
       const [, minimum, template] = restore.match(/^ +if: >-\n +fromJSON\(inputs\.merge-shards\) >= (\d) &&\n +!startsWith\(steps\.restore\.outputs\.cache-matched-key, format\('([^']+)', runner\.os, runner\.arch, inputs\.suite, inputs\.merge-shards\)\)$/m);
       expect(Number(minimum)).toBe(shard);
       const formatArgs = [context['runner.os'], context['runner.arch'], family, count];
@@ -87,6 +111,8 @@ describe('trusted CI test-memo cache reuse', () => {
       const park = step(job, `Park full-run shard ${shard}`);
       expect(park).toContain(`if: steps.restore-shard-${shard}.outcome == 'success'`);
       expect(park).toContain(`portos-test-memo-shards/${shard}`);
+      expect(job.indexOf(`- name: Park full-run shard ${shard}\n`))
+        .toBeLessThan(job.indexOf('- name: Merge the full-run shard lineages\n'));
       return skipPrefix;
     });
 
@@ -102,12 +128,26 @@ describe('trusted CI test-memo cache reuse', () => {
     expect(additionalKeys(fallback)).toEqual(fullKeys.slice(0, -1));
     expect(additionalKeys(restoreFrom(initial, [fallback, scopedKey], scopedContext))).toEqual(fullKeys);
     expect(additionalKeys(restoreFrom(initial, [], scopedContext))).toEqual(fullKeys);
-    // The delimiter distinguishes, for example, client-3of3 from client-3of30.
+    // A cache from an older shard layout must still fetch every current lineage.
+    const previousLayout = fullKeys[0].replace(`of${count}-`, `of${count - 1}-`);
+    expect(additionalKeys(restoreFrom(initial, [previousLayout], scopedContext))).toEqual(fullKeys);
+    // The delimiter distinguishes, for example, client-4of4 from client-4of40.
     expect(additionalKeys(fallback.replace(`of${count}-`, `of${count}0-`))).toEqual(fullKeys);
 
     expect(memoPath(initial)).toBe(memoPath(save));
     expect(step(job, 'Park the job\'s own restore')).toContain('portos-test-memo-shards/0');
-    expect(step(job, 'Merge the full-run shard lineages')).toContain('node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*');
+    const merge = step(job, 'Merge the full-run shard lineages');
+    expect(merge).toContain('node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*');
+    // Only a trusted run, which records into and saves the store, pays for the merge.
+    expect(merge).toContain("if: fromJSON(inputs.merge-shards) >= 1 && github.event_name != 'pull_request'");
+    // A pull request reads the parked lineages in place (#17617), in park order, own restore first.
+    const inPlace = step(job, 'Read the full-run shard lineages in place');
+    expect(inPlace).toContain("if: fromJSON(inputs.merge-shards) >= 1 && github.event_name == 'pull_request'");
+    expect(inPlace).toContain('for dir in "$RUNNER_TEMP"/portos-test-memo-shards/*; do');
+    expect(inPlace).toContain('echo "PORTOS_TEST_MEMO_READ_DIRS=$dirs" >> "$GITHUB_ENV"');
+    expect(inPlace).not.toContain('merge-test-memo');
+    expect(step(noMergeJob, 'Read the full-run shard lineages in place')).toContain("if: fromJSON('0') >= 1");
+    expect(job.indexOf(`- name: Park full-run shard ${count}\n`)).toBeLessThan(job.indexOf('- name: Read the full-run shard lineages in place\n'));
   });
 
   it('keeps the database consumer on its unsharded restore and save path', () => {

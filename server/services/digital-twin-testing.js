@@ -5,7 +5,7 @@ import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona } from './digital-twin-helpers.js';
 import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
-import { getDigitalTwinForPrompt } from './digital-twin-context.js';
+import { getDigitalTwinContextWithDocs } from './digital-twin-context.js';
 
 export async function parseTestSuite() {
   if (cache.tests.data && (Date.now() - cache.tests.timestamp) < CACHE_TTL_MS) {
@@ -44,7 +44,7 @@ export async function runTests(providerId, model, testIds = null, personaId = nu
   // When a persona is selected the embodied context is flavored with that
   // persona's instructions, so the suite measures how the twin behaves *as*
   // that persona (P7 "per-persona testing"); with none it tests the base twin.
-  const soulContext = await getDigitalTwinForPrompt(personaId ? { personaId } : {});
+  const { content: soulContext, documentsUsed } = await getDigitalTwinContextWithDocs({ respectAutoInject: false, ...(personaId ? { personaId } : {}) });
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {
@@ -91,6 +91,7 @@ export async function runTests(providerId, model, testIds = null, personaId = nu
 
   return {
     ...historyEntry,
+    documentsUsed,
     results
   };
 }

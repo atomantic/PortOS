@@ -17,7 +17,7 @@
  * content off-screen.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { ArrowLeft, Download, BookOpenText, LayoutGrid, ListTree, PencilLine, Plus, Settings, Sparkles, Trash2, Waypoints, Workflow as WorkflowIcon, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -26,6 +26,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { FormField } from '../components/ui/FormField.jsx';
 import Modal from '../components/ui/Modal';
 import OverflowMenu from '../components/ui/OverflowMenu';
+import ListLoadError from '../components/ui/ListLoadError';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -36,17 +37,12 @@ import { useScrollLock } from '../hooks/useScrollLock';
 import LoomBoard from '../components/fableloom/LoomBoard';
 import LoomCanvas from '../components/fableloom/LoomCanvas';
 import LoomEpisodeOutline from '../components/fableloom/LoomEpisodeOutline';
-import LoomEpisodeOutlinePlanner from '../components/fableloom/LoomEpisodeOutlinePlanner';
 import LoomEpisodeFeedback from '../components/fableloom/LoomEpisodeFeedback';
 import LoomMediaJobWatchers from '../components/fableloom/LoomMediaJobWatchers';
 import LoomNodeEditor from '../components/fableloom/LoomNodeEditor';
-import LoomImageComposer from '../components/fableloom/LoomImageComposer';
-import LoomPlayPanel from '../components/fableloom/LoomPlayPanel';
-import LoomExportModal from '../components/fableloom/LoomExportModal';
-import LoomSettingsDrawer from '../components/fableloom/LoomSettingsDrawer';
-import LoomSeriesPlan from '../components/fableloom/LoomSeriesPlan';
 import LoomValidationPanel from '../components/fableloom/LoomValidationPanel';
 import LoomAiRunStatus from '../components/fableloom/LoomAiRunStatus';
+import { lazyWithReload } from '../utils/lazyWithReload.js';
 import { fieldClass, labelClass } from '../components/fableloom/fieldStyles';
 import {
   buildFableLoomVideoRequest,
@@ -81,6 +77,15 @@ const headerActionBase = 'flex min-h-[44px] items-center gap-1 rounded border px
 const headerActionClass = `${headerActionBase} border-port-border hover:border-port-accent`;
 const headerPlayClass = `${headerActionBase} border-port-accent bg-port-accent text-white`;
 
+// Workspaces, drawers and modals that open on demand load their own chunk, so the story route
+// ships only the graph/board/outline views it lands on.
+const LoomSeriesPlan = lazyWithReload(() => import('../components/fableloom/LoomSeriesPlan'));
+const LoomEpisodeOutlinePlanner = lazyWithReload(() => import('../components/fableloom/LoomEpisodeOutlinePlanner'));
+const LoomImageComposer = lazyWithReload(() => import('../components/fableloom/LoomImageComposer'));
+const LoomPlayPanel = lazyWithReload(() => import('../components/fableloom/LoomPlayPanel'));
+const LoomExportModal = lazyWithReload(() => import('../components/fableloom/LoomExportModal'));
+const LoomSettingsDrawer = lazyWithReload(() => import('../components/fableloom/LoomSettingsDrawer'));
+
 export default function FableLoomStory({ view = 'graph' }) {
   const { loomId, episodeId, nodeId } = useParams();
   const navigate = useNavigate();
@@ -99,6 +104,16 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [mediaJobs, setMediaJobs] = useState({});
   const [imageComposer, setImageComposer] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  // A non-404 read failure (offline, 5xx) is retryable; only a real 404 means the loom is gone.
+  const [loadError, setLoadError] = useState(null);
+  const [reloadCount, setReloadCount] = useState(0);
+  // Late responses from a previously open loom must not overwrite the current one:
+  // `loom.id !== loomId` renders the skeleton and the load effect would not re-run.
+  const activeLoomIdRef = useRef(loomId);
+  activeLoomIdRef.current = loomId;
+  const applyLoomUpdate = useCallback((next) => {
+    if (next?.id && next.id === activeLoomIdRef.current) setLoom(next);
+  }, []);
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -120,12 +135,17 @@ export default function FableLoomStory({ view = 'graph' }) {
     let canceled = false;
     setLoom(null);
     setNotFound(false);
+    setLoadError(null);
     setMediaJobs({});
-    getLoom(loomId)
+    getLoom(loomId, { silent: true })
       .then((l) => { if (!canceled) setLoom(l); })
-      .catch(() => { if (!canceled) setNotFound(true); });
+      .catch((err) => {
+        if (canceled) return;
+        if (err?.status === 404 || err?.code === 'NOT_FOUND') setNotFound(true);
+        else setLoadError(err || new Error('Request failed'));
+      });
     return () => { canceled = true; };
-  }, [loomId]);
+  }, [loomId, reloadCount]);
 
   const linkedSeriesId = loom?.seriesId || null;
   useEffect(() => {
@@ -223,6 +243,12 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
   }, []);
 
+  // Bind a job writer to the loom the request started on, so a slow response
+  // after navigating away cannot plant a job on the newly opened loom.
+  const scopeMediaJob = useCallback((targetLoomId) => (targetNodeId, kind, nextJob) => {
+    if (activeLoomIdRef.current === targetLoomId) setSceneMediaJob(targetNodeId, kind, nextJob);
+  }, [setSceneMediaJob]);
+
   const handleMediaJobUpdate = useCallback((targetNodeId, kind, jobId, progress) => {
     setMediaJobs((prev) => {
       const current = prev[targetNodeId]?.[kind];
@@ -237,8 +263,8 @@ export default function FableLoomStory({ view = 'graph' }) {
     });
   }, []);
 
-  const applySceneMedia = useCallback((targetNodeId, patch) => {
-    setLoom((prev) => (prev ? {
+  const applySceneMedia = useCallback((targetNodeId, patch, targetLoomId = activeLoomIdRef.current) => {
+    setLoom((prev) => (prev && prev.id === targetLoomId ? {
       ...prev,
       episodes: prev.episodes.map((item) => ({
         ...item,
@@ -272,6 +298,8 @@ export default function FableLoomStory({ view = 'graph' }) {
   }, [applySceneMedia, setSceneMediaJob]);
 
   const submitSceneImage = useCallback(async (targetNode, imageRequest) => {
+    const targetLoomId = loom.id;
+    const setJob = scopeMediaJob(targetLoomId);
     const prompt = (targetNode?.imagePrompt || '').trim();
     if (!prompt) {
       toast.error('Write an image prompt first');
@@ -289,12 +317,12 @@ export default function FableLoomStory({ view = 'graph' }) {
     const savedNode = episode.nodes.find(item => item.id === targetNode.id);
     if (savedNode?.imagePrompt !== targetNode.imagePrompt) {
       const updated = await updateLoomNode(loom.id, episodeId, targetNode.id, { imagePrompt: targetNode.imagePrompt }, { silent: true });
-      setLoom(updated);
+      applyLoomUpdate(updated);
     }
-    setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
+    setJob(targetNode.id, 'image', { jobId: null, status: 'submitting', progress: 0 });
     const queued = await generateImage(imageRequest, { silent: true })
       .catch((err) => {
-        setSceneMediaJob(targetNode.id, 'image', {
+        setJob(targetNode.id, 'image', {
           jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
         });
         toast.error(`Could not start scene image: ${err.message || 'Render request failed'}`);
@@ -309,8 +337,8 @@ export default function FableLoomStory({ view = 'graph' }) {
       applySceneMedia(targetNode.id, {
         image: queued.filename,
         imageJobId: queued.generationId || null,
-      });
-      setSceneMediaJob(targetNode.id, 'image', null);
+      }, targetLoomId);
+      setJob(targetNode.id, 'image', null);
       toast.success('Scene image ready');
       return queued;
     }
@@ -320,22 +348,24 @@ export default function FableLoomStory({ view = 'graph' }) {
     const jobId = queued.jobId || (queued.status ? queued.generationId : null);
     if (!jobId) {
       const error = 'Image generator returned no job id';
-      setSceneMediaJob(targetNode.id, 'image', { jobId: null, status: 'failed', progress: 0, error });
+      setJob(targetNode.id, 'image', { jobId: null, status: 'failed', progress: 0, error });
       toast.error(error);
       return null;
     }
-    setSceneMediaJob(targetNode.id, 'image', {
+    setJob(targetNode.id, 'image', {
       jobId, status: queued.status || 'queued', progress: 0,
     });
     toast.success('Scene image queued');
     return queued;
-  }, [applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [applyLoomUpdate, applySceneMedia, episode, episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, scopeMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const queueSceneImage = useCallback((targetNode) => {
     setImageComposer({ loomId, episodeId, node: targetNode });
   }, [loomId, episodeId]);
 
   const queueSceneVideo = useCallback(async (targetNode) => {
+    const targetLoomId = loom.id;
+    const setJob = scopeMediaJob(targetLoomId);
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
     if (!prompt) {
       toast.error('Write the scene first');
@@ -350,11 +380,11 @@ export default function FableLoomStory({ view = 'graph' }) {
       return null;
     }
 
-    setSceneMediaJob(targetNode.id, 'video', { jobId: null, status: 'submitting', progress: 0 });
+    setJob(targetNode.id, 'video', { jobId: null, status: 'submitting', progress: 0 });
     const queued = await generateVideo(buildFableLoomVideoRequest({
       loom, episodeId, node: targetNode,
     })).catch((err) => {
-      setSceneMediaJob(targetNode.id, 'video', {
+      setJob(targetNode.id, 'video', {
         jobId: null, status: 'failed', progress: 0, error: err.message || 'Could not start the render',
       });
       toast.error(`Could not start scene video: ${err.message || 'Render request failed'}`);
@@ -364,18 +394,20 @@ export default function FableLoomStory({ view = 'graph' }) {
     const jobId = queued.jobId || queued.generationId;
     if (!jobId) {
       const error = 'Video generator returned no job id';
-      setSceneMediaJob(targetNode.id, 'video', { jobId: null, status: 'failed', progress: 0, error });
+      setJob(targetNode.id, 'video', { jobId: null, status: 'failed', progress: 0, error });
       toast.error(error);
       return null;
     }
-    setSceneMediaJob(targetNode.id, 'video', {
+    setJob(targetNode.id, 'video', {
       jobId, status: queued.status || 'queued', progress: 0,
     });
     toast.success('Scene video queued');
     return queued;
-  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [episodeId, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, scopeMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const automateFalSceneVideo = useCallback(async (targetNode) => {
+    const targetLoomId = loom.id;
+    const setJob = scopeMediaJob(targetLoomId);
     const prompt = (targetNode?.videoPrompt || '').trim() || (targetNode?.prose || '').trim();
     if (!prompt) {
       toast.error('Write the scene first');
@@ -399,7 +431,7 @@ export default function FableLoomStory({ view = 'graph' }) {
     const styled = composeStyledPrompt(request.prompt, request.negativePrompt, falStylePreset);
     const fullPrompt = buildFalH3MaxPrompt(styled.prompt, styled.negativePrompt);
     const render = asFableLoomRenderSettings(loom?.renderSettings);
-    setSceneMediaJob(targetNode.id, 'video', {
+    setJob(targetNode.id, 'video', {
       jobId: null,
       source: 'fal-browser',
       status: 'submitting',
@@ -412,7 +444,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       { prompt: fullPrompt, aspectRatio: render.aspectRatio },
       { silent: true },
     ).catch((error) => {
-      setSceneMediaJob(targetNode.id, 'video', {
+      setJob(targetNode.id, 'video', {
         jobId: null,
         source: 'fal-browser',
         status: 'failed',
@@ -422,10 +454,10 @@ export default function FableLoomStory({ view = 'graph' }) {
       return null;
     });
     if (!queued) return null;
-    setSceneMediaJob(targetNode.id, 'video', { ...queued, jobId: queued.id });
+    setJob(targetNode.id, 'video', { ...queued, jobId: queued.id });
     toast.success(queued.status === 'queued' ? 'fal.ai scene video queued' : 'fal.ai scene video already running');
     return queued;
-  }, [episodeId, falStylePreset, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, setSceneMediaJob, styleContextLoading, styleContextUnavailable]);
+  }, [episodeId, falStylePreset, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, scopeMediaJob, styleContextLoading, styleContextUnavailable]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(
@@ -453,8 +485,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   const handleAddEpisode = async () => {
     const updated = await addLoomEpisode(loomId, { title: `Episode ${(loom?.episodes.length || 0) + 1}` })
       .catch(() => null);
-    if (updated) {
-      setLoom(updated);
+    // A late response must not navigate the user back to the loom they left.
+    if (updated && activeLoomIdRef.current === loomId) {
+      applyLoomUpdate(updated);
       const added = updated.episodes[updated.episodes.length - 1];
       navigate(episodePath(added.id));
       setSetupOpen(true);
@@ -469,13 +502,13 @@ export default function FableLoomStory({ view = 'graph' }) {
     if (nodeId) navigate(episodePath(episodeId, null) + (playOpen ? '?play=1' : ''));
     if (!refetch) return;
     const fresh = await getLoom(loomId).catch(() => null);
-    if (fresh) setLoom(fresh);
+    applyLoomUpdate(fresh);
   };
 
   const handleAddNode = async () => {
     const updated = await addLoomNode(loomId, episode.id, { title: 'New scene' }).catch(() => null);
-    if (updated) {
-      setLoom(updated);
+    if (updated && activeLoomIdRef.current === loomId) {
+      applyLoomUpdate(updated);
       const ep = updated.episodes.find((e) => e.id === episode.id);
       const added = ep?.nodes[ep.nodes.length - 1];
       if (added) navigate(episodePath(episode.id, added.id));
@@ -500,7 +533,8 @@ export default function FableLoomStory({ view = 'graph' }) {
     // The echo is NOT folded back in — pos is already exact client-side, and
     // replacing the loom would re-layout the whole canvas a second time.
     const savedPos = episode.nodes.find((n) => n.id === movedNodeId)?.pos;
-    const placeNode = (nextPos) => setLoom((prev) => ({
+    const targetLoomId = loomId;
+    const placeNode = (nextPos) => setLoom((prev) => (!prev || prev.id !== targetLoomId ? prev : {
       ...prev,
       episodes: prev.episodes.map((e) => (e.id !== episode.id ? e : {
         ...e,
@@ -512,6 +546,14 @@ export default function FableLoomStory({ view = 'graph' }) {
     updateLoomNode(loomId, episode.id, movedNodeId, { pos }).catch(() => placeNode(savedPos));
   };
 
+  if (loadError) {
+    return (
+      <div className="p-8 max-w-xl mx-auto space-y-3">
+        <ListLoadError what="this loom" error={loadError} onRetry={() => setReloadCount((n) => n + 1)} />
+        <Link to="/fableloom" className="text-port-accent text-sm hover:underline">Back to FableLoom</Link>
+      </div>
+    );
+  }
   if (notFound) {
     return (
       <div className="p-8 text-center">
@@ -634,7 +676,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       </header>
 
       {seriesPlanOpen ? (
-        <LoomSeriesPlan loom={loom} universe={linkedUniverse} onLoomUpdate={setLoom} />
+        <Suspense fallback={<PageSkeleton label="Loading series plan" sidebar={false} />}><LoomSeriesPlan loom={loom} universe={linkedUniverse} onLoomUpdate={applyLoomUpdate} /></Suspense>
       ) : !episode ? (
         <div className="flex-1 grid place-items-center p-8 text-center">
           <div>
@@ -754,7 +796,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                   episode={episode}
                   node={node}
                   universe={linkedUniverse}
-                  onLoomUpdate={setLoom}
+                  onLoomUpdate={applyLoomUpdate}
                   onClearSelection={clearNodeSelection}
                   mediaJobs={mediaJobs[node.id]}
                   onGenerateImage={queueSceneImage}
@@ -765,7 +807,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                   onMakeStart={node.id !== episode.startNodeId ? async () => {
                     const updated = await updateLoomEpisode(loomId, episode.id, { startNodeId: node.id })
                       .catch(() => null);
-                    if (updated) setLoom(updated);
+                    if (updated) applyLoomUpdate(updated);
                   } : null}
                 />
               ) : (
@@ -779,7 +821,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                   )}
                   onOpenEpisodeSetup={() => setSetupOpen(true)}
                   onOpenPlay={() => setPlayOpen(true)}
-                  onLoomUpdate={setLoom}
+                  onLoomUpdate={applyLoomUpdate}
                 />
               )}
             </div>
@@ -794,7 +836,7 @@ export default function FableLoomStory({ view = 'graph' }) {
           onClose={() => setSetupOpen(false)}
           loom={loom}
           episode={episode}
-          onLoomUpdate={setLoom}
+          onLoomUpdate={applyLoomUpdate}
           onFeedbackStarted={() => handleRewritten({ refetch: false })}
           onDeleted={() => {
             setSetupOpen(false);
@@ -804,7 +846,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       )}
 
       {imageComposer && episode && imageComposer.loomId === loom.id && imageComposer.episodeId === episode.id && (
-        <LoomImageComposer
+        <Suspense fallback={null}><LoomImageComposer
           key={`${loom.id}:${episode.id}:${imageComposer.node.id}`}
           loom={loom} episode={episode}
           node={{ ...(episode.nodes.find(item => item.id === imageComposer.node.id) || imageComposer.node), imagePrompt: imageComposer.node.imagePrompt }}
@@ -812,20 +854,20 @@ export default function FableLoomStory({ view = 'graph' }) {
           onRender={submitSceneImage} onClose={() => setImageComposer(null)}
           disabled={mediaWorkflowBlocked || styleContextLoading || styleContextUnavailable}
           disabledReason={mediaGenerationDisabledReason}
-        />
+        /></Suspense>
       )}
 
-      <LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} />
+      {exportOpen && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
 
-      <LoomSettingsDrawer
+      {settingsOpen && <Suspense fallback={null}><LoomSettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         loom={loom}
         universe={linkedUniverse}
-        onLoomUpdate={setLoom}
+        onLoomUpdate={applyLoomUpdate}
         onRewritten={handleRewritten}
         episodeId={seriesPlanOpen ? null : episodeId}
-      />
+      /></Suspense>}
 
       {episode && (
         <Modal
@@ -839,7 +881,7 @@ export default function FableLoomStory({ view = 'graph' }) {
           panelClassName="h-[100dvh] w-full overflow-hidden bg-black"
           ariaLabel={`${loom.name} player`}
         >
-          <LoomPlayPanel loom={loom} episode={episode} onClose={() => setPlayOpen(false)} />
+          <Suspense fallback={null}><LoomPlayPanel loom={loom} episode={episode} onClose={() => setPlayOpen(false)} /></Suspense>
         </Modal>
       )}
 
@@ -953,7 +995,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
           <p className="text-xs text-port-text-muted">
             Start with the beat outline below, review the whole arc, then expand it into one-camera-cut teleplay scenes.
           </p>
-          <LoomEpisodeOutlinePlanner
+          <Suspense fallback={null}><LoomEpisodeOutlinePlanner
             open={open}
             loom={loom}
             episode={episode}
@@ -962,7 +1004,7 @@ function EpisodeSetupDrawer({ open, onClose, loom, episode, onLoomUpdate, onFeed
             onLoomUpdate={onLoomUpdate}
             onExpand={requestWeave}
             expanding={weaving}
-          />
+          /></Suspense>
           {expansionConfirm.isConfirming(episode.id) && (
             <ConfirmButtonPair
               prompt={`Replace ${episode.nodes.length} existing scene${episode.nodes.length === 1 ? '' : 's'} and remove their rendered stills and video clips?`}

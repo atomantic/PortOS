@@ -31,6 +31,7 @@ import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../li
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { formatPrunedByKind } from '../lib/tombstoneKindLabels.js';
 import { diffAssetManifestAgainstLocal, pullMissingAssetsFromPeer } from './sharing/peerSyncAssets.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
@@ -1309,13 +1310,8 @@ async function runTombstoneSweep() {
       lastTombstoneSweepAt = 0;
       return null;
     });
-  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0 || result.collections > 0)) {
-    // "series" is already its own plural so no s-suffix toggle needed there.
-    const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
-    const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
-    const collections = `${result.collections} collection${result.collections === 1 ? '' : 's'}`;
-    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}, ${collections}`);
-  }
+  const prunedSummary = formatPrunedByKind(result?.prunedByKind);
+  if (prunedSummary) console.log(`🪦 Tombstone GC: pruned ${prunedSummary}`);
   if (result && result.collectionItemRemovals > 0) {
     console.log(`🪦 Tombstone GC: pruned ${result.collectionItemRemovals} collection item removal record${result.collectionItemRemovals === 1 ? '' : 's'}`);
   }

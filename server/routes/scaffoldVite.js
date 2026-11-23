@@ -5,7 +5,7 @@ import { spawn } from '../lib/childProcess.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { CORS_SNIPPET } from '../lib/scaffoldSnippets.js';
+import { CORS_SNIPPET, buildDevRunnerSnippet } from '../lib/scaffoldSnippets.js';
 
 const CREATE_VITE_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -78,9 +78,10 @@ app.listen(PORT, '0.0.0.0', () => {
     pkg.dependencies = pkg.dependencies || {};
     pkg.dependencies.express = '^4.21.2';
     pkg.scripts['server'] = 'node server/index.js';
-    pkg.scripts['dev:all'] = 'concurrently "npm run dev" "npm run server"';
-    pkg.devDependencies = pkg.devDependencies || {};
-    pkg.devDependencies.concurrently = '^8.2.2';
+    pkg.scripts['dev:all'] = 'node scripts/dev.js';
+    const scriptsDir = join(repoPath, 'scripts');
+    await ensureDir(scriptsDir);
+    await writeFile(join(scriptsDir, 'dev.js'), buildDevRunnerSnippet(['dev', 'server']));
     await atomicWrite(pkgPath, pkg);
 
     addStep('Add Express server', 'done');

@@ -26,6 +26,8 @@ vi.mock('../../services/apiGithub.js', () => ({
   updateGitHubAccount: api.updateGitHubAccount,
 }));
 vi.mock('../../services/socket', () => ({ default: socket }));
+// The rules editor loads the provider catalog on mount; out of scope here.
+vi.mock('../../hooks/useRunWithPicker', () => ({ default: () => ({ providers: [] }) }));
 
 const GitHubAutomationsTab = (await import('./GitHubAutomationsTab')).default;
 
@@ -88,5 +90,40 @@ describe('GitHubAutomationsTab', () => {
 
     await waitFor(() => expect(screen.getByText('Newest action')).toBeTruthy());
     expect(screen.queryByText(/have not acted on anything yet/)).toBeNull();
+  });
+  describe('Run now gating', () => {
+    const account = (over = {}) => ({
+      id: 'acct-1', label: 'Example', host: 'github.com', enabled: true, mode: 'observe',
+      needsYou: 0, pending: 0, suspect: 0, agentRules: [], ...over,
+    });
+    const withAccount = (over) => {
+      api.getGitHubAutomations.mockResolvedValue({ ...overview, accounts: [account(over)] });
+      api.getGitHubAutomationActivity.mockResolvedValue({ actions: [] });
+    };
+
+    it('blocks Run now with a visible reason while a mode save is in flight, then re-enables', async () => {
+      withAccount();
+      const save = deferred();
+      api.updateGitHubAccount.mockReturnValue(save.promise);
+      renderTab();
+      const run = await screen.findByRole('button', { name: 'Run now' });
+      expect(run.disabled).toBe(false);
+
+      fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'assist' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' }).disabled).toBe(true));
+      expect(screen.getAllByText('Saving changes…').length).toBeGreaterThan(0);
+
+      await act(async () => { save.resolve(account({ mode: 'assist' })); });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' }).disabled).toBe(false));
+      expect(screen.queryByText('Saving changes…')).toBeNull();
+    });
+
+    it('blocks Run now with a reason when the account mode is disabled', async () => {
+      withAccount({ mode: 'disabled' });
+      renderTab();
+      const run = await screen.findByRole('button', { name: 'Run now' });
+      expect(run.disabled).toBe(true);
+      expect(screen.getByText(/Choose a mode other than Disabled/)).toBeTruthy();
+    });
   });
 });

@@ -42,6 +42,11 @@ vi.mock('fs', () => ({
   existsSync: vi.fn().mockReturnValue(false)
 }))
 
+// The sentinel sweep in agentDataCleanup lists apps through getAllApps. Mock that
+// boundary with a successful inventory so ordinary cleanup cases never reach the
+// production catch (which turns a failed list into [] and hides the mock gap).
+vi.mock('./apps.js', () => ({ getAllApps: vi.fn(async () => []) }))
+
 vi.mock('./retirementAppScope.js', () => ({ resolveRetirementApp: vi.fn(async () => ({ app: { id: 'app-1', repoPath: '/mock/root' } })) }))
 
 vi.mock('./worktreeManager.js', () => ({

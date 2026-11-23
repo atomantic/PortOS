@@ -15,7 +15,7 @@ import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 import { checkGhHealth } from './github.js';
 import { getMediaCapacity } from './mediaCapacity.js';
 import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cos/cosSpawnWindow.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../lib/schemaVersions/platform.js';
 
 // Disk capacity remains actionable. Memory thresholds are retained on the wire
 // for older clients, but no longer generate warnings or degrade health.
@@ -466,11 +466,11 @@ export async function getSystemHealthSnapshot() {
     // THIS request authenticated with its pair token, so it can stop sending
     // the instance password. Older receivers omit the field; senders keep Basic.
     peerAuth: {
-      version: PORTOS_SCHEMA_VERSIONS.peerAuth,
+      version: PLATFORM_SCHEMA_VERSIONS.peerAuth,
       accepted: false,
     },
     // Senders add image `createdAt` to push manifests only once this is advertised (#14067).
-    assetStamps: { version: PORTOS_SCHEMA_VERSIONS.peerAssetStamps },
+    assetStamps: { version: PLATFORM_SCHEMA_VERSIONS.peerAssetStamps },
     warnings,
     system: buildSystemSection({ memStats, disk, dataDisk, sameFilesystem }),
     processes: processStats,

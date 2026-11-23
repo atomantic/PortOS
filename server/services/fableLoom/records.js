@@ -18,7 +18,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { sanitizeCharacterEvolutionList } from '../../lib/characterEvolution.js';
 import { sanitizeSeriesDesign } from '../../lib/storyArc.js';
-import { preserveLegacyRenderPins } from '../../lib/schemaVersions.js';
+import { preserveLegacyRenderPins } from '../../lib/schemaVersions/creativeMedia.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {

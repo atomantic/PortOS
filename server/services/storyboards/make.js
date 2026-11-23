@@ -27,6 +27,7 @@ import {
 } from '../../lib/storyboardRecipe.js';
 import { newStoryboardEntityId, STORYBOARD_LIMITS } from '../../lib/storyboardVocabulary.js';
 import { getStoryboard, mutateStoryboard } from './index.js';
+import { listRaw } from './store.js';
 
 export const STORYBOARD_PANEL_RENDER_TAG = 'storyboardPanelRender';
 
@@ -38,15 +39,16 @@ const deps = {
   imageParams: async (settings, route, common) => (await import('../imageGen/queueableParams.js')).queueableImageParams(
     settings, route, common, { what: 'storyboard panels', code: 'STORYBOARD_RENDER_UNAVAILABLE' },
   ),
+  jobStatus: async (jobId) => (await import('../mediaJobQueue/index.js')).getJob(jobId)?.status ?? null,
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
   markupPath: async (key) => (await import('../mediaSketches.js')).getSketchPngPath(key),
   linkedMedia: async (ids) => (await import('../catalogDB/media.js')).listMediaForIngredients(ids),
   ingredient: async (id) => (await import('../catalogDB/ingredients.js')).getIngredient(id),
   resolveImage: (image) => resolveImageInputPath(image),
-  emit: (payload) => import('../socket.js')
+  emit: (payload) => import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make', payload))
     .catch((err) => console.error(`❌ storyboard:make emit failed: ${err.message}`)),
-  emitBatch: (payload) => import('../socket.js')
+  emitBatch: (payload) => import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('storyboard:make-batch', payload))
     .catch((err) => console.error(`❌ storyboard:make-batch emit failed: ${err.message}`)),
 };
@@ -391,6 +393,55 @@ export async function failPanelFrame({ storyboardId, panelId, nodeId, runId, job
 const batches = new Map();
 const RUNNABLE_TYPES = new Set(['llm', 'image']);
 const IN_FLIGHT = new Set(['running', 'queued']);
+const LIVE_JOB = new Set(['queued', 'running']);
+export const STORYBOARD_RESTART_ERROR = 'Interrupted by server restart — retry to run again';
+
+/**
+ * Boot recovery: an LLM call dies with the process and a queued image run whose
+ * media jobs are gone can never settle, so either would stay in IN_FLIGHT and
+ * lock its panel out of "Make empty panels" / "Redraw all". Image runs with a
+ * job still live in the queue are left to the completion hooks. State repair
+ * only: nothing here calls a provider or enqueues a job.
+ */
+export async function recoverInterruptedStoryboardNodes() {
+  let recovered = 0;
+  const rows = await listRaw();
+  for (const raw of rows) {
+    if (raw?.deleted || !raw.id) continue;
+    const inFlight = (raw.beats || []).some((beat) => (beat.panels || []).some((panel) => (
+      Object.values(panel.make?.nodes || {}).some((state) => IN_FLIGHT.has(state?.status)))));
+    if (!inFlight) continue;
+    // Resolve queue liveness before the write so the mutator stays synchronous.
+    const live = new Set();
+    for (const beat of raw.beats) {
+      for (const panel of beat.panels || []) {
+        for (const state of Object.values(panel.make?.nodes || {})) {
+          if (state?.status !== 'queued') continue;
+          for (const jobId of state.jobIds || []) {
+            if (LIVE_JOB.has(await deps.jobStatus(jobId))) live.add(`${panel.id}/${state.runId}`);
+          }
+        }
+      }
+    }
+    await mutateStoryboard(raw.id, (draft) => {
+      for (const beat of draft.beats) {
+        for (const panel of beat.panels) {
+          for (const [nodeId, state] of Object.entries(panel.make?.nodes || {})) {
+            if (!IN_FLIGHT.has(state.status)) continue;
+            if (state.status === 'queued' && live.has(`${panel.id}/${state.runId}`)) continue;
+            panel.make.nodes[nodeId] = { ...state, status: 'failed', error: STORYBOARD_RESTART_ERROR };
+            recovered += 1;
+          }
+        }
+      }
+    }).catch((err) => {
+      // One unreadable board must not leave the rest locked in flight.
+      if (err?.code !== 'NOT_FOUND') console.error(`❌ Storyboard ${raw.id} run recovery failed: ${err.message}`);
+    });
+  }
+  if (recovered) console.log(`🎬 Recovered ${recovered} interrupted storyboard panel run(s)`);
+  return { recovered };
+}
 
 const runnableSteps = (board) => recipeRunOrder(effectiveRecipe(board)).filter((node) => RUNNABLE_TYPES.has(node.type));
 const isPanelDrawing = (panel, steps) => steps.some((node) => IN_FLIGHT.has(panelNodeState(panel, node.id).status));

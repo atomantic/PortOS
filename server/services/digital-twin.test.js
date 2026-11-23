@@ -102,7 +102,7 @@ import { digitalTwinEvents, loadMeta, updateSettings, getDocuments, getDocumentB
 import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants.js';
 import { saveMeta, updateMeta } from './digital-twin-meta.js';
 import { exportSoul } from './digital-twin-export.js';
-import { getSoulForPrompt } from './digital-twin-context.js';
+import { getSoulForPrompt, getDigitalTwinContextWithDocs } from './digital-twin-context.js';
 import { getSoulStatus } from './digital-twin-status.js';
 import { formatValuesHierarchy } from './digital-twin-values-testing.js';
 import { formatTranscript, clampTranscript } from './digital-twin-multi-turn-testing.js';
@@ -1107,9 +1107,9 @@ Forgets the budget and recommends lodging that exceeds it.
     it('should create target document if it does not exist', async () => {
       const meta = makeMeta();
       await setupMetaFile(meta);
-      existsSync.mockImplementation((path) => {
-        if (path.includes('MEMORIES.md')) return false;
-        return true;
+      readFile.mockImplementation(async (path) => {
+        if (path.endsWith('MEMORIES.md')) throw Object.assign(new Error('File missing'), { code: 'ENOENT' });
+        return JSON.stringify(meta);
       });
       getActiveProvider.mockResolvedValue(null);
 
@@ -1436,12 +1436,43 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result).toContain('Values content');
     });
 
+    it('reports only the document filenames actually included in the context', async () => {
+      const meta = makeMeta({
+        documents: [
+          makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 }),
+          makeDocMeta({ id: 'doc-2', filename: 'OFF.md', weight: 9, enabled: false })
+        ]
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => (
+        filePath.includes('meta.json') ? JSON.stringify(meta) : 'Soul content'));
+
+      const { content, documentsUsed } = await getDigitalTwinContextWithDocs();
+      expect(content).toContain('Soul content');
+      expect(documentsUsed).toEqual(['SOUL.md']);
+    });
+
     it('should return empty string when autoInjectToCoS is false', async () => {
       const meta = makeMeta({ settings: { autoInjectToCoS: false, maxContextTokens: 4000 } });
       await setupMetaFile(meta);
 
       const result = await getDigitalTwinForPrompt();
       expect(result).toBe('');
+    });
+
+    it('should still return soul content with respectAutoInject:false when autoInjectToCoS is false', async () => {
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        settings: { autoInjectToCoS: false, maxContextTokens: 4000 }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        return 'Soul content';
+      });
+
+      expect(await getDigitalTwinForPrompt()).toBe('');
+      expect(await getDigitalTwinForPrompt({ respectAutoInject: false })).toContain('Soul content');
     });
 
     it('should respect maxTokens limit', async () => {
@@ -1458,6 +1489,23 @@ Forgets the budget and recommends lodging that exceeds it.
       const result = await getDigitalTwinForPrompt({ maxTokens: 1000 });
       // 1000 tokens * 4 chars = 4000 chars max
       expect(result.length).toBeLessThanOrEqual(4100); // Allow small overhead for truncation message
+    });
+
+    it('uses meta.settings.maxContextTokens when no explicit maxTokens is passed, and an explicit override wins', async () => {
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'BIG.md', weight: 10 })],
+        settings: { autoInjectToCoS: true, maxContextTokens: 1000 }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        return 'x'.repeat(40000);
+      });
+
+      const byDefault = await getDigitalTwinForPrompt();
+      expect(byDefault.length).toBeLessThanOrEqual(4100);
+      const overridden = await getDigitalTwinForPrompt({ maxTokens: 5000 });
+      expect(overridden.length).toBeGreaterThan(10000);
     });
 
     it('should sort by weight descending then priority ascending', async () => {
@@ -1710,9 +1758,10 @@ Forgets the budget and recommends lodging that exceeds it.
     it('should detect found sections by keywords in content', async () => {
       const meta = makeMeta({
         documents: [
-          makeDocMeta({ id: 'doc-1', filename: 'IDENTITY.md', title: 'Identity', category: 'core' })
+          makeDocMeta({ filename: 'NOTES.md', title: 'Notes' })
         ]
       });
+      await setupMetaFile(meta);
       readFile.mockImplementation(async (filePath) => {
         if (filePath.includes('meta.json')) return JSON.stringify(meta);
         return '# Identity\n\nMy name is Test. My role is developer. I value honesty. Communication style is direct. Decision making is fast. Non-negotiable principles. Error intolerance for sloppy work.';

@@ -95,7 +95,7 @@ function Controls({ peer }) {
         </div>)}
         {confirmation && <div className="rounded border border-port-border p-3 space-y-2">
           <p>{confirmation.allow ? 'Allow' : 'Revoke'} {LABELS[confirmation.action]} planning for the exact paired identity above on this host{confirmation.allow ? ' for one hour' : ''}. This does not authorize execution, accept model licenses, or install software.</p>
-          <ConfirmButtonPair tone="warning" confirmText={confirmation.allow ? 'Allow planning for one hour' : 'Confirm revocation'}
+          <ConfirmButtonPair tone="warning" confirmText={confirmation.allow ? 'Allow planning for one hour' : 'Revoke planning access'}
             onConfirm={save} onCancel={() => setConfirmation(null)} busy={busy} />
         </div>}
         <div className="border-t border-port-border pt-3 space-y-2">
@@ -205,7 +205,7 @@ function ExecutionControls({ peer, setup, onSetup }) {
     </div>)}
     {confirmation && <div className="rounded border border-port-border p-3 space-y-2">
       <p>{confirmation.allow ? 'Allow' : 'Revoke'} {LABELS[confirmation.action]} execution by paired caller {setup.peerInstanceId} on receiving host {setup.hostInstanceId}{confirmation.allow ? ' for one hour' : ''}. This permission does not accept model licenses or start work by itself.</p>
-      <ConfirmButtonPair tone="warning" confirmText={confirmation.allow ? 'Allow execution for one hour' : 'Confirm execution revocation'}
+      <ConfirmButtonPair tone="warning" confirmText={confirmation.allow ? 'Allow execution for one hour' : 'Revoke execution access'}
         onConfirm={saveGrant} onCancel={() => setConfirmation(null)} busy={busy} />
     </div>}
     <p className="font-medium">Execute on the remote peer</p>
@@ -221,7 +221,7 @@ function ExecutionControls({ peer, setup, onSetup }) {
       {preflight.payload.intent.catalogKey && <p>Catalog entry: {preflight.payload.intent.catalogKey} · {preflight.payload.intent.backend}</p>}
       <p>Verified peer version: {preflight.payload.version} · Preview expires {timeUntil(preflight.payload.expiresAt)}</p>
       <p>Request: {preflight.payload.requestId}</p>
-      <ConfirmButtonPair tone="warning" confirmText="Submit execution" onConfirm={dispatch} onCancel={() => setPreflight(null)} busy={busy} />
+      <ConfirmButtonPair tone="warning" confirmText={`Run ${LABELS[preflight.payload.intent.action]}`} onConfirm={dispatch} onCancel={() => setPreflight(null)} busy={busy} />
     </div>}
     {request && <div role="status" className="rounded bg-port-bg p-3 space-y-2 break-all">
       <p>Execution status: {request.state}</p><p>Request: {request.requestId}</p>

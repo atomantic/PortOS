@@ -29,6 +29,7 @@ export default function ProviderPresetsTab({
   runnerAllowedCommands,
   testResults,
   refreshing,
+  refreshNotice = {},
   recovering,
   addingTuiMode,
   servingModel,
@@ -419,6 +420,7 @@ export default function ProviderPresetsTab({
                       runnerAllowedCommands={runnerAllowedCommands}
                       testResult={testResults[provider.id]}
                       refreshing={Boolean(refreshing[provider.id])}
+                      refreshNotice={refreshNotice[provider.id] || null}
                       recovering={Boolean(recovering[provider.id])}
                       onTest={onTest}
                       onRefreshModels={onRefreshModels}

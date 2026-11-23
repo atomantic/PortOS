@@ -31,6 +31,11 @@ function makeFileBackend() {
     name: 'file',
     readRaw: (id) => collection.loadOneRaw(id),
     listRaw: () => collection.loadAll(),
+    listRawPage: async ({ limit, offset }) => {
+      const live = (await collection.loadAll()).filter((r) => r && r.deleted !== true)
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || String(a.id).localeCompare(String(b.id)));
+      return { rows: live.slice(offset, offset + limit), total: live.length };
+    },
     writeRaw: (id, record) => collection.saveOneNow(id, record),
     deleteRaw: (id) => collection.deleteOneNow(id),
     // `deleted` lives inside each record on the file layout, so the live and
@@ -52,6 +57,7 @@ const facade = createPgFileFacade({
       name: 'postgres',
       readRaw: db.readRaw,
       listRaw: db.listRaw,
+      listRawPage: db.listRawPage,
       writeRaw: db.writeRaw,
       deleteRaw: db.deleteRaw,
       listIds: db.listIds,
@@ -69,6 +75,9 @@ export const readRaw = async (id) => {
 };
 
 export const listRaw = async () => (await facade.getBackend()).listRaw();
+
+/** `{ rows, total }` for one live page; PostgreSQL bounds it in SQL (#17475). */
+export const listRawPage = async (page) => (await facade.getBackend()).listRawPage(page);
 
 export const writeRaw = async (id, record) => {
   assertId(id);

@@ -4,7 +4,7 @@ import DataManager from './DataManager';
 import { formatBytes } from '../utils/formatters';
 vi.mock('../components/dataManager/CosStoragePanel', () => ({ default: ({ onMaintenanceComplete }) => <button onClick={onMaintenanceComplete}>Complete recording cleanup</button> }));
 import socket from '../services/socket';
-import { getTombstoneSweepStatus } from '../services/apiPeerSync.js';
+import { getTombstoneSweepStatus, sweepTombstonesNow } from '../services/apiPeerSync.js';
 
 // A directory with no server-side CATEGORIES entry comes back `classified: false`
 // with both permission flags off. The row must explain *why* Archive/Purge are
@@ -26,6 +26,8 @@ vi.mock('../services/apiPeerSync.js', () => ({
   sweepTombstonesNow: vi.fn(),
 }));
 
+const toastMock = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), warning: vi.fn(), error: vi.fn() }));
+vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
 vi.mock('../services/socket', () => ({ default: { connected: true, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 
 const UNKNOWN_DESCRIPTION = "Not classified — PortOS doesn't know if this is safe to remove";
@@ -123,6 +125,23 @@ describe('DataManager tombstone GC status resource', () => {
     await act(async () => onPeers({}));
 
     await waitFor(() => expect(button).toBeDisabled());
+  });
+
+  it('reports prunes of newer federated kinds instead of "Nothing is ready" (#17722)', async () => {
+    toastMock.success.mockClear();
+    toastMock.mockClear();
+    sweepTombstonesNow.mockResolvedValue({
+      universes: 0, series: 0, issues: 0, collections: 0, decks: 3, authors: 1,
+      prunedByKind: { universe: 0, deck: 3, author: 1 },
+      refused: [],
+    });
+    render(<DataManager />);
+    const button = await screen.findByRole('button', { name: 'Clean up deleted records now' });
+    // Cleanup stays disabled until the status read lands; a click before that is a no-op.
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Pruned 3 decks / 1 author'));
+    expect(toastMock).not.toHaveBeenCalledWith('Nothing is ready to clean up.');
   });
 
   it('shows an error and keeps cleanup off when the status read fails instead of assuming no peer holds a deletion', async () => {
@@ -677,6 +696,8 @@ describe('DataManager independent read failures (#9446)', () => {
     getDataBackups = (await import('../services/apiSystem.js')).getDataBackups;
     getDataBackups.mockReset().mockResolvedValue([archive]);
     getDataOverview.mockReset().mockResolvedValue(overview);
+    // An earlier suite leaves this rejecting; its role="alert" would shadow the banner under test.
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
   });
 
   it('shows unavailable measurements on initial failure and recovers measured empty snapshots', async () => {
@@ -753,5 +774,71 @@ describe('DataManager archive action disclosure (#10728)', () => {
 
     expandRow('Reports');
     expect(await screen.findByRole('button', { name: 'Export backup (keeps originals)' })).toBeInTheDocument();
+  });
+});
+
+describe('DataManager accessibility semantics (#17715)', () => {
+  let getDataBackups;
+  const backups = [{ name: 'backup-2025-01-01.tar.gz', size: 5000, created: '2025-01-01T10:00:00Z' }];
+
+  beforeEach(async () => {
+    getDataBackups = (await import('../services/apiSystem.js')).getDataBackups;
+    getDataOverview.mockReset().mockResolvedValue(overview);
+    getDataBackups.mockReset().mockResolvedValue(backups);
+    getTombstoneSweepStatus.mockReset().mockResolvedValue({ refused: [] });
+  });
+
+  it('keeps rowgroup -> row -> cell ownership and exposes disclosure state', async () => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'mystery-dir', items: [{ name: 'a.txt', type: 'file', size: 10 }] });
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getAllByText('mystery-dir').length).toBeGreaterThan(0));
+    const toggle = document.querySelector('button[aria-controls="data-category-panel-mystery-dir"]');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls'))).toBeInTheDocument();
+
+    const cell = await screen.findByRole('cell', { name: /a\.txt/ });
+    const row = cell.parentElement.closest('[role="row"]');
+    expect(cell.parentElement.getAttribute('role')).toBe('none');
+    const wrappers = [];
+    for (let el = row.parentElement; el && el.getAttribute('role') !== 'rowgroup'; el = el.parentElement) wrappers.push(el);
+    expect(wrappers).toEqual([]);
+    expect(row.parentElement.getAttribute('role')).toBe('rowgroup');
+  });
+
+  it('scopes backup headers and labels the actions column', async () => {
+    render(<DataManager />);
+    await waitFor(() => expect(screen.getByText('backup-2025-01-01.tar.gz')).toBeInTheDocument());
+    const headers = screen.getAllByRole('columnheader');
+    expect(headers).toHaveLength(4);
+    headers.forEach(th => expect(th).toHaveAttribute('scope', 'col'));
+    expect(headers[3]).toHaveTextContent('Actions');
+  });
+
+  it('announces a peer sync status failure', async () => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'x', items: [] });
+    getTombstoneSweepStatus.mockRejectedValue(new Error('503'));
+    render(<DataManager />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not read peer sync status/);
+  });
+
+  it.each([[true, 'instant'], [false, 'smooth']])('scrolls with reduced motion=%s using %s', async (reduced, behavior) => {
+    getDataCategory.mockReset().mockResolvedValue({ key: 'prompts', items: [] });
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const originalScroll = Element.prototype.scrollIntoView;
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      render(<DataManager />);
+      const tile = await screen.findByRole('button', { name: /^Prompts/, pressed: false });
+      fireEvent.click(tile);
+      fireEvent.click(await screen.findByRole('button', { name: 'Show actions and contents' }));
+      expect(scroll).toHaveBeenCalledWith({ behavior, block: 'start' });
+    } finally {
+      window.matchMedia = original;
+      Element.prototype.scrollIntoView = originalScroll;
+    }
   });
 });

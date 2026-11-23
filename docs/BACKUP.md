@@ -41,14 +41,14 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 
 ### What is excluded by default
 
-`DEFAULT_EXCLUDES` (in `backup.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
+`DEFAULT_EXCLUDES` (in `server/services/backup/excludes.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
 
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees, cached jev training embeddings — caches with no irreplaceable user data; never backed up.
 - **Overridable** (`overridable: true`): intermediate LoRA training checkpoints, cloned repos, reference repos, browser downloads, jev training corpora — re-downloadable or rebuildable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
 
 A Music Video [Blender film](./features/music-video-blender.md) is split the same way: its scripts (`data/music-video/<projectId>/blender/src/`), synced shot list and `song.json` are backed up, while `/music-video/*/blender/renders/` (frames, shot videos, stills, cuts and logs, all re-rendered from those scripts) is excluded and overridable.
 
-Rendered frames are the bulk of `renders/` (a long film's final PNG frames run to many gigabytes), and PortOS does not read them again once a shot's video is encoded. They are kept on disk by this rule (`server/services/musicVideo/blender/usage.js`):
+Rendered frames are the bulk of `renders/` (a long film's final PNG frames run to many gigabytes), and PortOS does not read them again once a shot's video is encoded. They are kept on disk by this rule (`server/services/film/usage.js`):
 
 - An unfinished render keeps its frames, so the next render of that shot resumes them.
 - A finished render keeps its frames until **Clear rendered frames** (the film panel's Settings tab, which also shows what the workspace takes) removes them, or until the shot is rendered again from changed scripts, settings or options, which replaces them.
@@ -193,9 +193,9 @@ Reconciliation can partially apply upgrades; it is separate from the completed r
 
 A non-dry-run restore requires a reachable DB first (`checkHealth()`), so a restore never half-applies against a down database.
 
-### Backend export / sync — `POST /api/database/sync`
+### Backend export and cutover — `POST /api/database/export`, `POST /api/database/maintenance/cutover`
 
-Separate from snapshot restore: `server/routes/database.js` can copy data **between** the native (port 5432) and Docker (port 5561) Postgres backends. It exports the active backend with `pg_dump`, ensures the target backend has the `portos` role/database/extensions, then imports under `ON_ERROR_STOP=1 --single-transaction`. `POST /api/database/export` produces an on-demand dump under `data/db-dumps/`. These power the Database settings tab's mode-switch/sync flows; they are independent of the rsync snapshot backups above.
+Separate from snapshot restore: `server/routes/database.js` moves data **between** the native (port 5432) and Docker (port 5561) Postgres backends. `POST /api/database/export` produces an on-demand `pg_dump` under `data/db-dumps/`. Backend mode switches go through `POST /api/database/maintenance/cutover` and `recover` (see [STORAGE.md](./STORAGE.md)); `POST /api/database/sync` is retired and returns `409 DATABASE_CUTOVER_UNAVAILABLE`. These are independent of the rsync snapshot backups above.
 
 ## Retention & deletion
 

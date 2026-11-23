@@ -1,7 +1,6 @@
-import { readFile } from 'fs/promises';
+import { readFile, unlink } from 'fs/promises';
 import { atomicWrite } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
@@ -89,7 +88,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   const fallbackAlreadyAnswered = questionsAnswered > structuredTotal;
 
   // Generate follow-up question using AI
-  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000 });
+  const existingSoul = await getDigitalTwinForPrompt({ maxTokens: 2000, respectAutoInject: false });
 
   const prompt = await buildPrompt('soul-enrichment', {
     category,
@@ -151,14 +150,37 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
 const processScaleAnswer = data =>
   withBackupAssetPublication(() => withMetaLock(() => processScaleAnswerLeased(data)));
 
-// Reads the target doc (or its header) and reports whether this exact block was already appended.
-async function readTargetForAppend(config, formattedContent) {
+async function readEnrichmentTarget(config) {
   await ensureSoulDir();
   const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
-  const existingContent = existsSync(targetPath)
-    ? await readFile(targetPath, 'utf-8')
-    : `# ${config.label}\n\n`;
-  return { targetPath, existingContent, duplicate: existingContent.includes(formattedContent) };
+  const previousContent = await readFile(targetPath).catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  return { targetPath, previousContent };
+}
+
+// Reads the target doc (or its header) and reports whether this exact block was already appended.
+async function readTargetForAppend(config, formattedContent) {
+  const target = await readEnrichmentTarget(config);
+  const existingContent = target.previousContent?.toString('utf8') ?? `# ${config.label}\n\n`;
+  return { ...target, existingContent, duplicate: existingContent.includes(formattedContent) };
+}
+
+async function saveEnrichmentDocument({ targetPath, previousContent }, content, meta) {
+  await atomicWrite(targetPath, content);
+  try {
+    await saveMeta(meta);
+  } catch (err) {
+    // A stranded answer would look like a duplicate on retry.
+    try {
+      if (previousContent === null) await unlink(targetPath);
+      else await atomicWrite(targetPath, previousContent);
+    } catch (restoreErr) {
+      console.error(`❌ Digital twin enrichment restore failed: ${restoreErr.message}`);
+    }
+    throw err;
+  }
 }
 
 async function processScaleAnswerLeased(data) {
@@ -175,10 +197,10 @@ async function processScaleAnswerLeased(data) {
 
   const labelText = scaleDef.labels[scaleValue - 1] || String(scaleValue);
   const formattedContent = `### ${question}\n\nResponse: ${labelText} (${scaleValue}/5)\n\n`;
-  const { targetPath, existingContent, duplicate } = await readTargetForAppend(config, formattedContent);
+  const target = await readTargetForAppend(config, formattedContent);
 
-  const meta = await loadMeta();
-  if (duplicate) {
+  const currentMeta = await loadMeta();
+  if (target.duplicate) {
     // Same answer already applied: leave the cached meta untouched.
     return {
       category,
@@ -186,9 +208,10 @@ async function processScaleAnswerLeased(data) {
       contentAdded: '',
       traitsUpdated: false,
       dimension: scaleDef.dimension,
-      newConfidence: meta.confidence?.dimensions?.[scaleDef.dimension]
+      newConfidence: currentMeta.confidence?.dimensions?.[scaleDef.dimension]
     };
   }
+  const meta = structuredClone(currentMeta);
   if (!meta.traits) meta.traits = {};
 
   // Update trait score via weighted moving average
@@ -231,9 +254,6 @@ async function processScaleAnswerLeased(data) {
   meta.confidence.gaps = generateGapRecommendations(meta.confidence.dimensions);
   meta.confidence.lastCalculated = now();
 
-  // Store readable line in target document
-  await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
-
   // Record scale answer
   if (!meta.enrichment.scaleQuestionsAnswered) meta.enrichment.scaleQuestionsAnswered = {};
   meta.enrichment.scaleQuestionsAnswered[scaleQuestionId] = scaleValue;
@@ -250,7 +270,7 @@ async function processScaleAnswerLeased(data) {
 
   ensureDocumentInMeta(meta, config.targetDoc, config.label, config.targetCategory || 'enrichment');
 
-  await saveMeta(meta);
+  await saveEnrichmentDocument(target, target.existingContent + '\n' + formattedContent, meta);
 
   digitalTwinEvents.emit('traits:updated', meta.traits);
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
@@ -306,16 +326,13 @@ export async function processEnrichmentAnswer(data) {
 }
 
 async function persistEnrichmentAnswer(category, config, formattedContent) {
-  const { targetPath, existingContent, duplicate } = await readTargetForAppend(config, formattedContent);
-  if (duplicate) {
+  const target = await readTargetForAppend(config, formattedContent);
+  if (target.duplicate) {
     // Same answer already applied: no second block, no counter bump.
     return { category, targetDoc: config.targetDoc, contentAdded: '' };
   }
 
-  await atomicWrite(targetPath, existingContent + '\n' + formattedContent);
-
-  // Update meta
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   if (!meta.enrichment.questionsAnswered) {
     meta.enrichment.questionsAnswered = {};
   }
@@ -360,7 +377,7 @@ async function persistEnrichmentAnswer(category, config, formattedContent) {
     meta.confidence.lastCalculated = now();
   }
 
-  await saveMeta(meta);
+  await saveEnrichmentDocument(target, target.existingContent + '\n' + formattedContent, meta);
 
   digitalTwinEvents.emit('confidence:calculated', meta.confidence);
 
@@ -531,13 +548,8 @@ async function saveEnrichmentListDocumentLeased(category, content, items) {
     throw new Error(`Unknown enrichment category: ${category}`);
   }
 
-  await ensureSoulDir();
-
-  const targetPath = join(DIGITAL_TWIN_DIR, config.targetDoc);
-  await atomicWrite(targetPath, content);
-
-  // Update meta
-  const meta = await loadMeta();
+  const target = await readEnrichmentTarget(config);
+  const meta = structuredClone(await loadMeta());
 
   // Mark as completed since they provided a full list
   if (!meta.enrichment.completedCategories.includes(category)) {
@@ -558,7 +570,7 @@ async function saveEnrichmentListDocumentLeased(category, content, items) {
 
   ensureDocumentInMeta(meta, config.targetDoc, config.label, config.targetCategory || 'enrichment');
 
-  await saveMeta(meta);
+  await saveEnrichmentDocument(target, content, meta);
 
   console.log(`🧬 Saved list-based enrichment for ${category} (${items.length} items)`);
 

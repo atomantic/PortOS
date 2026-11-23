@@ -66,6 +66,10 @@ const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalM
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
   'recheckCron', 'recheckIntervalMs',
+  // Skip Saturdays and Sundays in the user's timezone. Several task types ship
+  // with it on (pr-reviewer, code-reviewer), so the route must accept it or
+  // the user can never turn it off.
+  'weekdaysOnly',
   // Provenance of the stored prompt ('user' | 'legacy-inferred' | null). An
   // explicit prompt write re-stamps it below in updateTaskInterval, so a body
   // carrying it only matters when the prompt itself is not being changed.
@@ -87,6 +91,9 @@ function pickScheduleSettings(body, executionFields, taskType) {
   }
   if (settings.autoStart !== undefined && typeof settings.autoStart !== 'boolean') {
     throw new ServerError('autoStart must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.weekdaysOnly !== undefined && typeof settings.weekdaysOnly !== 'boolean') {
+    throw new ServerError('weekdaysOnly must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (settings.perpetual !== undefined && typeof settings.perpetual !== 'boolean') {
     throw new ServerError('perpetual must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });

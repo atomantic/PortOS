@@ -98,11 +98,14 @@ export async function deleteBlenderFile(owner, path) {
 /** A shipped starter file by its `/`-separated path; a path that climbs out of the starter throws (`pathWithin`). */
 export const starterSourcePath = (path) => pathWithin(STARTER_DIR, ...path.split('/'));
 
-async function starterFiles(directory = STARTER_DIR, prefix = '') {
+async function starterFiles(prefix = '') {
   const files = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  // Recursion used to `join` the directory parameter with `entry.name`. That
+  // segment can climb out of the starter, so the test memo refused every
+  // importer. `pathWithin` throws instead, and the memo keys this tree.
+  for (const entry of await readdir(pathWithin(STARTER_DIR, prefix), { withFileTypes: true })) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) files.push(...await starterFiles(join(directory, entry.name), path));
+    if (entry.isDirectory()) files.push(...await starterFiles(path));
     else if (entry.isFile() && blenderSourceFileKind(path)) files.push(path);
   }
   return files.sort();

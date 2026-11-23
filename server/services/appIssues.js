@@ -36,7 +36,7 @@ import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } fr
 import { scrubHomePath } from '../lib/homePath.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { redactPii } from '../lib/piiRedactionPatterns.js';
-import { ISSUE_BODY_PREVIEW_MAX_CHARS } from '../../lib/issueContext.js';
+import { ISSUE_BODY_PREVIEW_MAX_CHARS, isCompleteIssueContext } from '../../lib/issueContext.js';
 
 // Single-user repos never realistically exceed this; `glab` caps a page at 100.
 const GH_LIST_LIMIT = 200;
@@ -300,11 +300,92 @@ export async function listAppIssues(app) {
   };
 }
 
+const MAX_PREFLIGHT_LINKED_ITEMS = 25;
+
+function flattenSlurpedPages(parsed) {
+  if (!Array.isArray(parsed)) return null;
+  return parsed.length > 0 && parsed.every(Array.isArray) ? parsed.flat() : parsed;
+}
+
+/**
+ * Check whether an issue has zero third-party human comments (non-bot, non-self).
+ * Fails closed (`false`) on any lookup/parse error so the agent still runs its
+ * own comment screen rather than trusting a missing read.
+ */
+async function probeIssueCommentsClear({ tracker, target, issueNumber, account, repoPath, cwd, env }) {
+  if (!account) return false;
+  const raw = tracker === 'github'
+    ? await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
+      `repos/${target.fullName}/issues/${issueNumber}/comments?per_page=100`], undefined, { cwd, env }).catch(() => null)
+    : await execGlab(['api', '--paginate', `projects/:id/issues/${issueNumber}/notes?per_page=100`], repoPath, undefined, { rejectOnError: true }).catch(() => null);
+  if (raw === null) return false;
+  const rows = flattenSlurpedPages(safeJSONParse(raw, null, { logError: false }));
+  if (!rows) return false;
+  const selfLower = account.toLowerCase();
+  return !rows.some(comment => {
+    if (!comment || typeof comment !== 'object') return true;
+    if (tracker === 'github') {
+      const login = String(comment.user?.login || '').toLowerCase();
+      const type = String(comment.user?.type || '').toLowerCase();
+      return type !== 'bot' && login !== selfLower;
+    }
+    if (comment.system === true) return false;
+    const username = String(comment.author?.username || '').toLowerCase();
+    const bot = comment.author?.bot === true;
+    return !bot && username !== selfLower;
+  });
+}
+
+/**
+ * Prefetch cross-referenced linked issues and PRs/MRs for Phase 3b.
+ * Fails closed (`{ clear: false, items: null }`) on any lookup/parse error.
+ */
+async function probeIssueLinkedWork({ tracker, target, issueNumber, repoPath, cwd, env }) {
+  if (tracker === 'github') {
+    const raw = await execGh(['api', '--hostname', target.apiHost, '--paginate', '--slurp',
+      `repos/${target.fullName}/issues/${issueNumber}/timeline?per_page=100`], undefined, { cwd, env }).catch(() => null);
+    if (raw === null) return { clear: false, items: null };
+    const events = flattenSlurpedPages(safeJSONParse(raw, null, { logError: false }));
+    if (!events) return { clear: false, items: null };
+    const items = [];
+    for (const ev of events) {
+      if (ev?.event !== 'cross-referenced' || !ev?.source?.issue) continue;
+      const src = ev.source.issue;
+      items.push({
+        number: src.number,
+        state: src.state || '',
+        repo: src.repository?.full_name || target.fullName,
+        author: src.user?.login || '',
+        isPullRequest: Boolean(src.pull_request),
+        merged: Boolean(src.pull_request?.merged_at),
+      });
+    }
+    if (!items.length) return { clear: true, items: [] };
+    return { clear: false, items: items.length <= MAX_PREFLIGHT_LINKED_ITEMS ? items : null };
+  }
+  const [mrsRaw, linksRaw] = await Promise.all([
+    execGlab(['api', `projects/:id/issues/${issueNumber}/related_merge_requests`], repoPath, undefined, { rejectOnError: true }).catch(() => null),
+    execGlab(['api', `projects/:id/issues/${issueNumber}/links`], repoPath, undefined, { rejectOnError: true }).catch(() => null),
+  ]);
+  if (mrsRaw === null || linksRaw === null) return { clear: false, items: null };
+  const mrs = safeJSONParse(mrsRaw, null, { logError: false });
+  const links = safeJSONParse(linksRaw, null, { logError: false });
+  if (!Array.isArray(mrs) || !Array.isArray(links)) return { clear: false, items: null };
+  const items = [
+    ...mrs.map(mr => ({ iid: mr.iid, state: mr.state || '', author: mr.author?.username || '', isMergeRequest: true })),
+    ...links.map(link => ({ iid: link.iid, state: link.state || '', author: link.author?.username || '', isMergeRequest: false, labels: Array.isArray(link.labels) ? link.labels : [] })),
+  ];
+  if (!items.length) return { clear: true, items: [] };
+  return { clear: false, items: items.length <= MAX_PREFLIGHT_LINKED_ITEMS ? items : null };
+}
+
 /**
  * Verify a fresh targeted claim, then retire contributor invitations before queueing.
- * Resolves `{ epic }` so the caller can drop the epic-decomposition prompt phase.
+ * Resolves `{ epic }` by default; when `{ includePreflight: true }`, also returns
+ * the authoritative `issueContext`, `issueAuthor`, `forgeContext`, `commentsClear`,
+ * `linkedWorkClear`, and `linkedItems` so the agent can start implementing on Turn 1.
  */
-export async function prepareAppIssueClaim(app, issueNumber, tracker) {
+export async function prepareAppIssueClaim(app, issueNumber, tracker, { includePreflight = false } = {}) {
   const { tracker: resolvedTracker, target } = await resolveAppForgeTarget(app);
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
     throw new ServerError('Could not resolve the issue tracker for this claim', { status: 400, code: 'CLAIM_TRACKER_MISMATCH' });
@@ -324,9 +405,11 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   };
 
   let epic = false;
+  let lastIssue = null;
+  const ghIssueFields = includePreflight ? 'labels,assignees,state,title,body,url,author' : 'labels,assignees,state,title';
   const readLabels = async () => {
     const raw = tracker === 'github'
-      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels,assignees,state,title'], undefined, { cwd, env })
+      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', ghIssueFields], undefined, { cwd, env })
       : await execGlab(withGlabJson(['issue', 'view', issueNumber]), app.repoPath, undefined, { rejectOnError: true });
     const issue = safeJSONParse(raw, null);
     if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
@@ -352,6 +435,7 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
         throw new ServerError('Issue is already claimed by another assignee', { status: 409, code: 'ISSUE_IN_FLIGHT' });
       }
     }
+    lastIssue = issue;
     epic = names.some(name => name.toLowerCase() === EPIC_LABEL) || titleMarksEpic(issue.title);
     return names.filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
   };
@@ -373,17 +457,110 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if (changeNumbers.has(Number(issueNumber))) {
     throw new ServerError('An open PR/MR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
   }
-  if (!labels.length) return { epic };
+  if (labels.length) {
+    if (tracker === 'github') {
+      await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
+        ...labels.flatMap(label => ['--remove-label', label])], undefined, { cwd, env });
+    } else {
+      await execGlab(['issue', 'update', issueNumber, '--unlabel', labels.join(',')], app.repoPath, undefined, { rejectOnError: true });
+    }
+    if ((await readLabels()).length) {
+      throw new ServerError('Contributor labels remain on the issue; claim was not queued', { status: 502, code: 'CLAIM_LABELS_REMAIN' });
+    }
+  }
+  if (!includePreflight) return { epic };
+
+  const account = await (accountLookup ??= readAccount().catch(() => null));
+  const [commentsClear, linkedWork] = await Promise.all([
+    probeIssueCommentsClear({ tracker, target, issueNumber, account, repoPath: app.repoPath, cwd, env }),
+    probeIssueLinkedWork({ tracker, target, issueNumber, repoPath: app.repoPath, cwd, env }),
+  ]);
+
+  const rawBody = tracker === 'github' ? lastIssue?.body : lastIssue?.description;
+  const rawUrl = tracker === 'github' ? lastIssue?.url : lastIssue?.web_url;
+  const candidateContext = {
+    number: Number(issueNumber),
+    title: typeof lastIssue?.title === 'string' ? lastIssue.title : '',
+    body: typeof rawBody === 'string' ? rawBody : '',
+    ...(typeof rawUrl === 'string' && rawUrl ? { url: rawUrl } : {}),
+  };
+  const issueContext = isCompleteIssueContext(candidateContext) ? candidateContext : null;
+  const authorRaw = tracker === 'github' ? lastIssue?.author?.login : lastIssue?.author?.username;
+  const issueAuthor = typeof authorRaw === 'string' && authorRaw.trim() ? authorRaw.trim().toLowerCase() : null;
+  const forgeContext = {
+    repo: target.fullName,
+    host: target.apiHost || null,
+    me: account || null,
+  };
+
+  return {
+    epic,
+    issueContext,
+    issueAuthor,
+    forgeContext,
+    commentsClear,
+    linkedWorkClear: linkedWork.clear,
+    linkedItems: linkedWork.items,
+  };
+}
+
+/**
+ * Release PortOS's own claim markers (`@me` + `in-progress`) on a server-provisioned
+ * issue when the run exits cleanly with no PR (e.g. already fixed, stale, or blocked
+ * before any commit). Never touches an issue assigned to another user (such as a
+ * volunteer handoff) or already closed.
+ */
+export async function releaseAppIssueClaim(app, issueNumber) {
+  const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
+  if (!target || target.forge !== tracker || !['github', 'gitlab'].includes(tracker)) {
+    return { released: false, reason: 'tracker-unresolved' };
+  }
+  const { cwd, env } = await resolveForgeExecOptions(
+    tracker === 'github' ? app?.repoPath : null,
+    { forgeAccount: app?.forgeAccount }
+  );
+  const run = tracker === 'github'
+    ? args => execGh(args, undefined, { cwd, env })
+    : args => execGlab(args, app.repoPath, undefined, { rejectOnError: true });
+
+  const [rawIssue, account] = await Promise.all([
+    (tracker === 'github'
+      ? run(['issue', 'view', String(issueNumber), '--repo', target.repoSpec, '--json', 'state,assignees,labels'])
+      : run(withGlabJson(['issue', 'view', String(issueNumber)]))).catch(() => null),
+    (tracker === 'github'
+      ? run(['api', 'user', '--hostname', target.apiHost, '--jq', '.login']).then(s => s.trim())
+      : run(['api', 'user']).then(s => safeJSONParse(s, null)?.username)).catch(() => null),
+  ]);
+  const issue = safeJSONParse(rawIssue, null, { logError: false });
+  if (!issue || !account) return { released: false, reason: 'state-unavailable' };
+  if (!['open', 'opened'].includes(String(issue.state || '').toLowerCase())) {
+    return { released: false, reason: 'not-open' };
+  }
+  const selfLower = String(account).toLowerCase();
+  const field = tracker === 'github' ? 'login' : 'username';
+  const assignees = Array.isArray(issue.assignees) ? issue.assignees.map(a => String(a?.[field] || '').toLowerCase()).filter(Boolean) : [];
+  if (assignees.some(login => login !== selfLower)) {
+    return { released: false, reason: 'assigned-to-other' };
+  }
+  const labels = Array.isArray(issue.labels)
+    ? issue.labels.map(l => String(typeof l === 'string' ? l : l?.name || '').toLowerCase())
+    : [];
+  const hasInProgress = labels.includes(IN_PROGRESS_LABEL);
+  const assignedSelf = assignees.includes(selfLower);
+  if (!hasInProgress && !assignedSelf) return { released: false, reason: 'no-markers' };
+
   if (tracker === 'github') {
-    await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
-      ...labels.flatMap(label => ['--remove-label', label])], undefined, { cwd, env });
-  } else {
-    await execGlab(['issue', 'update', issueNumber, '--unlabel', labels.join(',')], app.repoPath, undefined, { rejectOnError: true });
+    const args = ['issue', 'edit', String(issueNumber), '--repo', target.repoSpec];
+    if (assignedSelf) args.push('--remove-assignee', '@me');
+    if (hasInProgress) args.push('--remove-label', IN_PROGRESS_LABEL);
+    const ok = await run(args).then(() => true, () => false);
+    return ok ? { released: true } : { released: false, reason: 'edit-failed' };
   }
-  if ((await readLabels()).length) {
-    throw new ServerError('Contributor labels remain on the issue; claim was not queued', { status: 502, code: 'CLAIM_LABELS_REMAIN' });
-  }
-  return { epic };
+  const args = ['issue', 'update', String(issueNumber)];
+  if (assignedSelf) args.push('--unassign');
+  if (hasInProgress) args.push('--unlabel', IN_PROGRESS_LABEL);
+  const ok = await run(args).then(() => true, () => false);
+  return ok ? { released: true } : { released: false, reason: 'edit-failed' };
 }
 
 /**

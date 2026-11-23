@@ -11,7 +11,7 @@
  * Update, and Use as scene/shot art; every board write returns the whole board.
  */
 
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Storyboards — the shared Create › Storyboards planning board (beats → panels,
 // panel art as takes). Every write returns the whole sanitized board, so callers
@@ -20,7 +20,8 @@ import { request } from './apiCore.js';
 const enc = encodeURIComponent;
 const json = (method, body) => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
-export const listStoryboards = (options) => request('/storyboards', options);
+// `page` ({ limit, offset }, limit <= 500) opts into the bounded `{ items, total, limit, offset }` envelope.
+export const listStoryboards = (options, page) => request(`/storyboards${queryString(page)}`, options);
 export const getStoryboard = (id, options) => request(`/storyboards/${enc(id)}`, options);
 export const createStoryboard = (data, options) => request('/storyboards', { ...json('POST', data), ...options });
 export const updateStoryboard = (id, patch, options) =>

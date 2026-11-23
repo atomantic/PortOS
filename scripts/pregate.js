@@ -332,7 +332,11 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
   // Client tree guards join the local gate by their suffix, the same name the
   // planner selects them by, so there is no second list (guards under hooks/ included).
-  const clientGuards = trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path));
+  // Selected like CI (ciPlanRules): only when the plan is full or a client source changed.
+  const touchesClient = plan.full || changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path));
+  const clientGuards = touchesClient
+    ? trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path))
+    : [];
   return {
     ...plan,
     full: false,
@@ -346,7 +350,8 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
       files: [...new Set([...clientGuards, ...clientStructuralGuards])],
       sources: [],
     },
-    lint: { mode: 'full', files: [] },
+    // A scoped plan already lints only its changed files; only a full plan lints everything.
+    lint: plan.full ? { mode: 'full', files: [] } : plan.lint,
   };
 }
 
@@ -990,18 +995,21 @@ function autoLinkWorktreeDependencies(problems, { commonDir, gitDir }) {
 }
 
 /** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
-function reportDependencyProblems(problems, { commonDir, gitDir }) {
+function reportDependencyProblems(problems, { commonDir, gitDir }, warnOnly) {
   const primaryCheckout = commonDir === gitDir ? null : resolve(commonDir, '..');
+  const print = warnOnly ? console.log : console.error;
 
-  console.error('❌ Dependency consistency preflight failed; lint/tests have not run.');
+  print(warnOnly
+    ? '⚠️ Linked dependency version drift; continuing with the installed versions because the diff has no npm manifest or lockfile changes.'
+    : '❌ Dependency consistency preflight failed; lint/tests have not run.');
   for (const { label, linked, owner, directoryAvailable, issues } of problems) {
-    console.error(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
+    print(`  ${label} (${linked ? 'linked' : 'owned'} node_modules):\n${issues.map(issue => `    ${issue}`).join('\n')}`);
     if (primaryCheckout && (!linked || !directoryAvailable)) {
-      console.error(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
+      print(`    Worktree dependency dir is missing or unlinked for ${label}. Re-link with: node scripts/link-worktree-deps.js ${primaryCheckout} ${REPO_ROOT}`);
     } else {
       const home = homedir();
       const displayOwner = owner === home ? '~' : owner.startsWith(`${home}${sep}`) ? `~${owner.slice(home.length)}` : owner;
-      console.error(linked
+      print(linked
         ? `    Reconcile dependencies in the owning source checkout (${JSON.stringify(displayOwner)}), with a full development install (npm ci --include=dev), or validate in a separate clone with its own locked installs. Never run npm install/ci through worktree links.`
         : `    Reconcile this checkout's dependencies from its committed lockfiles (npm ci --include=dev in the owning workspace), then rerun pregate.`);
     }
@@ -1156,10 +1164,14 @@ async function main() {
 
   const dependencyProblems = autoLinkWorktreeDependencies(dependencyConsistencyProblems(REPO_ROOT), repo);
   if (dependencyProblems.length > 0) {
-    reportDependencyProblems(dependencyProblems, repo);
-    process.exit(1);
+    const dependencyFilesChanged = changedFiles.some(path => /(?:^|\/)(?:package(?:-lock)?|npm-shrinkwrap)\.json$/.test(path));
+    const warnOnly = repo.commonDir !== repo.gitDir && !dependencyFilesChanged
+      && dependencyProblems.every(({ linked, versionMismatchOnly }) => linked && versionMismatchOnly);
+    reportDependencyProblems(dependencyProblems, repo, warnOnly);
+    if (!warnOnly) process.exit(1);
+  } else {
+    console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
   }
-  console.log('✅ Dependency consistency preflight passed (installed package versions match workspace locks).');
   const { PORTOS_PREGATE_MAX_WORKERS: maxWorkers } = pregateWorkerEnv(process.env, dirname(repo.commonDir));
 
   let { uncovered, stages } = planStages({}, {});

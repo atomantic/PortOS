@@ -62,6 +62,37 @@ const LINUX_MANAGERS = [
 ];
 
 /**
+ * The Linux ffmpeg install plan: `{ manager, sudo, commands }`, or `{ blocked }`
+ * when privileges are missing, or `{}` with no known package manager. Shared with
+ * scripts/setup-motion.js so both installers agree on root/sudo handling.
+ */
+export function linuxFfmpegPlan({
+  isRoot = typeof process.getuid === 'function' && process.getuid() === 0,
+  has = (name) => commandExists(name),
+  nonInteractive = false,
+  canSudoNonInteractive = () => runCommand(['sudo', '-n', 'true'])
+} = {}) {
+  // A root container (e.g. the Docker image) has no sudo binary, so prefixing
+  // unconditionally would fail to install even with apt-get present.
+  let sudo = [];
+  if (!isRoot) {
+    if (!has('sudo')) {
+      return { blocked: 'Not root and sudo unavailable — install ffmpeg manually (e.g. sudo apt-get install ffmpeg).' };
+    }
+    if (nonInteractive) {
+      if (!canSudoNonInteractive()) {
+        return { blocked: 'ffmpeg missing and passwordless sudo unavailable — install manually: sudo apt-get install ffmpeg (or your distro\'s equivalent).' };
+      }
+      sudo = ['sudo', '-n'];
+    } else {
+      sudo = ['sudo'];
+    }
+  }
+  const manager = LINUX_MANAGERS.find(({ bin }) => has(bin));
+  return manager ? { manager, sudo, commands: manager.commands(sudo) } : {};
+}
+
+/**
  * Returns 'present', 'installed' or 'unavailable'. Every collaborator is
  * injectable so each platform branch is testable without a package manager.
  */
@@ -85,28 +116,15 @@ export function ensureFfmpeg({
       log(`⚠️  Homebrew not found. ${MANUAL_HINTS.darwin}`);
     }
   } else if (platform === 'linux') {
-    // A root container (e.g. the Docker image) has no sudo binary, so prefixing
-    // unconditionally would fail to install even with apt-get present.
-    let sudo = [];
-    let blocked = null;
-    if (!isRoot) {
-      if (!has('sudo')) {
-        blocked = 'Not root and sudo unavailable — install ffmpeg manually (e.g. sudo apt-get install ffmpeg).';
-      } else if (nonInteractive) {
-        if (canSudoNonInteractive()) sudo = ['sudo', '-n'];
-        else blocked = 'ffmpeg missing and passwordless sudo unavailable — install manually: sudo apt-get install ffmpeg (or your distro\'s equivalent).';
-      } else {
-        sudo = ['sudo'];
-      }
-    }
-    const manager = LINUX_MANAGERS.find(({ bin }) => has(bin));
-    if (blocked) {
-      log(`⚠️  ${blocked}`);
-    } else if (!manager) {
+    const plan = linuxFfmpegPlan({ isRoot, has, nonInteractive, canSudoNonInteractive });
+    if (plan.blocked) {
+      log(`⚠️  ${plan.blocked}`);
+    } else if (!plan.manager) {
       log('⚠️  No known package manager (apt-get/dnf/pacman). Install ffmpeg manually so media/video features work.');
     } else {
+      const { manager, sudo } = plan;
       log(`📦 Installing ffmpeg via ${manager.bin}${sudo.length && !nonInteractive ? ' (may prompt for sudo)' : ''}...`);
-      const installed = manager.commands(sudo).every((command) => run(command));
+      const installed = plan.commands.every((command) => run(command));
       if (!installed) log(`⚠️  ${manager.bin} install ffmpeg failed — install manually: ${isRoot ? '' : 'sudo '}${manager.bin} install ffmpeg`);
     }
   } else {

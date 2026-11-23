@@ -682,18 +682,20 @@ minutes. Roughly half of all PR runs went full, so most PRs waited on the
 longest of those.
 
 Primary server/client test jobs use matrices. The impact job emits
-`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 3).
+`server_shards` and `client_shards` from `FULL_SUITE_SHARDS` (server 2, client 4).
 Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
-turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
+turns `CI_SHARD=<index>/<count>` into a disjoint file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
 native selectors and never repeats a related-graph traversal. A scoped Linux plan fans out the same way
 (`fansOut()` in the planner) only when its explicit selection exceeds its cap: `MAX_TARGETED_TEST_FILES` (125) for the server,
 `CLIENT_FANOUT_TEST_FILES` (400) for the client, since one client runner absorbs 400 files at about 0.4 s each (#16805). That cap keeps the scoped selection and only partitions it, so a server-only
-overflow does not start three client shards, the DB/browser
-suites, and a Windows run (#11871). A server `related` plan also fans out
-when its measured import reach (`serverReach.selected`, the suites the related
-walk will select) exceeds the same cap, even with few explicit selectors: one
-runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+overflow does not start the client shards, the DB/browser
+suites, and a Windows run (#11871). A `related` plan also fans out
+when its measured import reach (`serverReach.selected` / `clientReach.selected`,
+the suites its related walk will select) exceeds that runner's cap, even with few explicit selectors: one
+runner executing ~1,000 related suites took 11 minutes on the server (#16547) and 16 on the client
+(a shared module such as `client/src/services/apiCore.js`, #17456).
+4 Chrome client suites do too ([why](./TEST_MEMO.md#shards)).
 The reach, the DB, browser and client consumer closures and the gated-job
 closures all read one module graph (`scripts/lib/moduleGraph.js`, #16998),
 the same extractor and resolver pregate's local selection uses.
@@ -707,7 +709,7 @@ because it has its own job (see above). `CI Gate` sees a matrix job as one
 free, so the fan-out costs only concurrency.
 
 `npm run pregate -- --full` reuses the same split locally: a full unit plan
-becomes one stage per shard (server 2, client 3, from `FULL_SUITE_SHARDS`), run
+becomes one stage per shard (server 2, client 4, from `FULL_SUITE_SHARDS`), run
 sequentially with the env `resolvePlanStages` builds once per scope. Each shard
 is a normal runner invocation with its own memo write, so a late failure in one
 shard leaves the earlier shards' green entries reusable on the next attempt;

@@ -301,6 +301,20 @@ describe('GlobalConfigControls — issue exclude labels', () => {
   });
 });
 
+describe('GlobalConfigControls — in-flight save lock on every mutation path', () => {
+  it('locks updating around an Agent Options toggle until its PATCH settles', async () => {
+    let resolveUpdate;
+    const onUpdate = vi.fn(() => new Promise((resolve) => { resolveUpdate = resolve; }));
+    const setUpdating = vi.fn();
+    renderControls({ taskType: 'do-release', taskMetadata: { useWorktree: false, openPR: false }, onUpdate, setUpdating });
+    fireEvent.click(screen.getByRole('button', { name: /Require approval/i }));
+    expect(setUpdating).toHaveBeenCalledWith(true);
+    expect(setUpdating).not.toHaveBeenCalledWith(false);
+    await act(async () => { resolveUpdate(); await Promise.resolve(); });
+    expect(setUpdating).toHaveBeenLastCalledWith(false);
+  });
+});
+
 describe('GlobalConfigControls — require approval', () => {
   it('toggles requireApproval on the task metadata', () => {
     const onUpdate = renderControls({ taskType: 'do-release', taskMetadata: { useWorktree: false, openPR: false } });

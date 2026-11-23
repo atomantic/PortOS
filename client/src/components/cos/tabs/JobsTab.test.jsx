@@ -15,6 +15,8 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+vi.mock('../../../services/socket', () => ({ default: socket }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), loading: vi.fn() }));
 
 vi.mock('../../../services/apiAgents.js', () => ({
@@ -54,6 +56,17 @@ beforeEach(() => {
   api.getApps.mockResolvedValue([]);
   api.getProviders.mockResolvedValue({ providers: [] });
   api.getSettings.mockResolvedValue({ timezone: 'UTC' });
+});
+
+it('refetches jobs when a job incident changes and detaches on unmount', async () => {
+  const { unmount } = render(<JobsTab />);
+  await waitFor(() => expect(api.getCosJobs).toHaveBeenCalledTimes(1));
+  const handler = socket.on.mock.calls.find(([event]) => event === 'cos:jobs:incidents-changed')?.[1];
+  expect(handler).toBeTypeOf('function');
+  await act(async () => { handler({ jobId: 'job-1' }); });
+  await waitFor(() => expect(api.getCosJobs).toHaveBeenCalledTimes(2));
+  unmount();
+  expect(socket.off).toHaveBeenCalledWith('cos:jobs:incidents-changed', handler);
 });
 
 it('shows a retryable error when the provider read fails instead of hiding the provider pickers', async () => {
@@ -187,5 +200,21 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     expect(await screen.findByRole('button', { name: 'Enable job' })).toBeInTheDocument();
     expect(screen.getByText('0 enabled / 1 total')).toBeInTheDocument();
     expect(api.getCosJobs).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Trigger action control for shell jobs in the create or edit form (#17575)', async () => {
+    api.getCosJobs.mockResolvedValue({ jobs: [{ ...mockJob, type: 'shell', command: 'echo hi' }] });
+    render(<JobsTab apps={[]} providers={[]} />);
+    await waitFor(() => expect(screen.getByText('Test Job')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /New Job/ }));
+    const typeSelect = screen.getAllByRole('combobox').find(el => [...el.options].some(o => o.value === 'shell'));
+    fireEvent.change(typeSelect, { target: { value: 'shell' } });
+    expect(screen.getByLabelText('Shell command')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Trigger action')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getAllByLabelText('Shell command').length).toBeGreaterThan(1);
+    expect(screen.queryByLabelText('Trigger action')).toBeNull();
   });
 });

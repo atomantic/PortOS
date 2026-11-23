@@ -13,7 +13,7 @@ import { request } from './apiCore.js';
 
 // Running Agents (Process Management)
 const getRunningAgents = (options) => request('/agents', options);
-const killRunningAgent = (pid) => request(`/agents/${pid}`, { method: 'DELETE' });
+const killRunningAgent = (pid, options = {}) => request(`/agents/${pid}`, { method: 'DELETE', ...options });
 // Legacy aliases
 export const getAgents = getRunningAgents;
 export const killAgent = killRunningAgent;
@@ -447,7 +447,6 @@ export const triggerCosJob = (id, { formValues = null, ...options } = {}) => req
   ...(formValues ? { body: JSON.stringify({ formValues }) } : {}),
   ...options
 });
-export const getCosJobIncidents = (options = {}) => request('/cos/jobs/incidents', options);
 export const acknowledgeCosJobIncident = (id, options = {}) => request(`/cos/jobs/incidents/${id}/ack`, { method: 'POST', ...options });
 export const deleteCosJob = (id, options = {}) => request(`/cos/jobs/${id}`, { method: 'DELETE', ...options });
 

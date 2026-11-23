@@ -138,8 +138,7 @@ import { recoverInterruptedRepoClones, recoverStuckClassifications } from './bra
 import { recoverStuckAnalyses } from './writersRoom/analysisSnapshots.js';
 import { recoverStuckGeneratingStages, recoverStuckAutoRuns, recoverStuckAutopilots } from './pipeline/recovery.js';
 import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
-import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
-import { recoverStuckMusicVideoExcerpts } from './musicVideo/excerptRender.js';
+import { requireMusicVideoRecovery } from './bootHookRegistry.js';
 import { recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
 import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
@@ -193,6 +192,9 @@ import { initImageOriginStamping } from './imageGen/imageRecords.js';
  * `runBootSequence` below.
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
+  // First: the CoS daemon, media queue and git cleanup route all call through
+  // these. Loaded lazily so the registrar's loaders stay off the boot closure.
+  (await import('./bootHooks.js')).registerBootHooks();
   bindMaintenanceIo(io);
   bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
@@ -506,8 +508,10 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   recoverStuckGeneratingStages().catch(err => logBootstrapFailure('❌ Pipeline text-stage recovery failed', err));
   recoverStuckAutoRuns().catch(err => logBootstrapFailure('❌ Pipeline auto-run recovery failed', err));
   recoverStuckAutopilots().catch(err => logBootstrapFailure('❌ Pipeline autopilot recovery failed', err));
-  recoverStuckMusicVideoRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
-  recoverStuckMusicVideoExcerpts().catch(err => logBootstrapFailure('❌ Music Video excerpt recovery failed', err));
+  // Registered in registerBootHooks() above. The render pipeline is not a static boot import (#17692).
+  const musicVideoRecovery = requireMusicVideoRecovery();
+  musicVideoRecovery.recoverRenders().catch(err => logBootstrapFailure('❌ Music Video recovery failed', err));
+  musicVideoRecovery.recoverExcerpts().catch(err => logBootstrapFailure('❌ Music Video excerpt recovery failed', err));
   // A provider child cannot survive a server restart. Make interrupted
   // Three.js generations retryable; this is state recovery only, never a
   // cold-bootstrap provider call.
@@ -946,6 +950,10 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // no-op it: the reconcile needs a database the hermetic root does not have.
     initLoraTraining,
     initMediaJobDependentHooks,
+    // Needs the reloaded queue (live frame jobs keep their panel state) and the
+    // database; state repair only, never a provider or image call.
+    recoverStoryboardRuns: () => import('./storyboards/make.js')
+      .then(({ recoverInterruptedStoryboardNodes }) => recoverInterruptedStoryboardNodes()),
     resumeMediaJobCompletions: () => {
       resumeMediaJobCompletions();
       startAutomaticUpdateReservationRecovery();

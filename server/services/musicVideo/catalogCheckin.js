@@ -102,11 +102,20 @@ export async function resolveCatalogCheckin(project, {
   const mediaKey = allowsImages ? 'media' : 'none';
   // Every linked record is requested up front so the reads overlap (#16210): one round trip
   // per subject in turn made a 24-subject check-in wait on 24 database replies in a row.
+  // A transaction `client` is ONE connection: overlapping queries on it trip pg's "client is already
+  // executing a query" deprecation (removed in pg@9), so with a client the reads queue on a chain instead.
+  let clientQueue = Promise.resolve();
   for (const ingredientId of new Set(subjects.map(subject => subject.ingredientId).filter(Boolean))) {
     const key = `${mediaKey}:${ingredientId}`;
     if (!records.has(key)) {
-      records.set(key, Promise.all([db.getIngredient(ingredientId, { client }), allowsImages ? db.listMediaForIngredient(ingredientId, { client }) : Promise.resolve([])])
-        .catch(() => null));
+      const read = async () => {
+        if (!client) return Promise.all([db.getIngredient(ingredientId), allowsImages ? db.listMediaForIngredient(ingredientId) : []]);
+        const record = await db.getIngredient(ingredientId, { client });
+        return [record, allowsImages ? await db.listMediaForIngredient(ingredientId, { client }) : []];
+      };
+      const pending = client ? clientQueue.then(read, read) : read();
+      if (client) clientQueue = pending.catch(() => {});
+      records.set(key, pending.catch(() => null));
     }
   }
   for (const subject of subjects) {

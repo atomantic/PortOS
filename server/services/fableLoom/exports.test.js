@@ -908,6 +908,31 @@ describe('portable FableLoom export boundary', () => {
     await expect(getFableLoomExport(loom.id, '../../secret')).rejects.toMatchObject({ status: 404 });
   });
 
+  it('prunes missing, corrupt and future-version cache directories instead of blocking new exports', async () => {
+    loom.episodes[0].nodes[0].image = null;
+    const first = await begin();
+    await terminal(first);
+    await __testing.drain();
+    const valid = await readFile(recordFile(first), 'utf8');
+    const bad = [
+      ['00000000-0000-4000-8000-000000000001', null],
+      ['00000000-0000-4000-8000-000000000002', '{invalid-json'],
+      ['00000000-0000-4000-8000-000000000003', JSON.stringify({ ...JSON.parse(valid), version: 2, jobId: '00000000-0000-4000-8000-000000000003' })],
+    ];
+    for (const [id, body] of bad) {
+      await mkdir(join(PATHS.data, 'cache/fableloom-exports', id), { recursive: true });
+      if (body !== null) await writeFile(recordFile(id), body);
+    }
+    const next = await begin();
+    expect(next).toBeTruthy();
+    for (const [id] of bad) {
+      await expect(stat(join(PATHS.data, 'cache/fableloom-exports', id))).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    await expect(stat(recordFile(first))).resolves.toBeTruthy();
+    await terminal(next);
+    await __testing.drain();
+  });
+
   videoIt('bounds the live queue and retains a leased download through terminal-job eviction', async () => {
     const prepare = media.prepareFableLoomExportMedia;
     const gate = Promise.withResolvers();

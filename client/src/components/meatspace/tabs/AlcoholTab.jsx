@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Beer, Plus, Trash2, AlertTriangle, TrendingDown, TrendingUp, Pencil, Check, X, Settings } from 'lucide-react';
+import { pluralize } from '../../../lib/textUtils';
 import toast from '../../ui/Toast';
 import {
   getCustomDrinks,
@@ -604,7 +605,7 @@ export default function AlcoholTab() {
       {allEntries?.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4">
           <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-            All Drink Entries ({allEntries.length} days)
+            All Drink Entries ({pluralize(allEntries.length, 'day')})
           </h3>
           <div className="max-h-dvh-cap [--dvh-cap:70dvh] overflow-x-auto overflow-y-auto rounded-lg border border-port-border">
             <table className="w-full text-sm min-w-[600px]">
@@ -782,7 +783,7 @@ export default function AlcoholTab() {
               onClick={() => setVisibleDays(v => v + DAYS_PER_PAGE)}
               className="mt-3 w-full py-2 text-sm text-port-accent hover:text-port-accent/80 border border-port-border rounded-lg hover:bg-port-border/20 transition-colors"
             >
-              Load More ({allEntries.length - visibleDays} days remaining)
+              Load More ({pluralize(allEntries.length - visibleDays, 'day')} remaining)
             </button>
           )}
         </div>

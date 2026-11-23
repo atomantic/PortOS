@@ -61,6 +61,7 @@ describe('PersistentMindRecipeLibrary', () => {
     fireEvent.change(editor, { target: { value: '{bad' } });
     await user.click(screen.getByRole('button', { name: 'Save new revision' }));
     expect(await screen.findByText('Recipe could not be completed')).toBeInTheDocument();
+    expect(screen.getByText(/Invalid JSON:/)).toBeInTheDocument();
     expect(api.updateMindRecipe).not.toHaveBeenCalled();
     const changed = { ...definition, purpose: 'Updated purpose' };
     fireEvent.change(editor, { target: { value: JSON.stringify(changed) } });

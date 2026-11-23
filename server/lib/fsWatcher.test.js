@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile, rename, unlink, appendFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, rename, unlink, appendFile, realpath, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -150,10 +150,34 @@ describe('watchPaths file targets', () => {
     await waitFor(() => events.some(([, p]) => p === branch));
     expect(events.some(([, p]) => p.endsWith('.lock'))).toBe(false);
     // Unrelated siblings of a watched file are not reported.
-    events.length = 0;
-    await writeFile(join(gitDir, 'index'), 'x');
+    // Trailing events from the branch write can land late on loaded Linux
+    // inotify, so assert on the sibling's path rather than an empty list.
+    const index = join(gitDir, 'index');
+    await writeFile(index, 'x');
     await settle(250);
-    expect(events).toEqual([]);
+    expect(events.some(([, p]) => p === index)).toBe(false);
+  });
+
+  it('reports a same-size atomic replacement when mtime does not advance', async () => {
+    const gitDir = join(root, 'git');
+    await mkdir(gitDir);
+    const head = join(gitDir, 'HEAD');
+    // Both git ref lines are 21 bytes. A coarse clock (or one millisecond)
+    // leaves size and mtime unchanged across the rename, which is the
+    // replacement the parent-directory watch exists to observe.
+    const stamp = new Date('2020-01-01T00:00:00Z');
+    const stage = async (body) => {
+      const lock = `${head}.lock`;
+      await writeFile(lock, body);
+      await utimes(lock, stamp, stamp);
+      await rename(lock, head);
+    };
+    await stage('ref: refs/heads/next\n');
+    const { events } = open([head]);
+    await settle();
+    events.length = 0;
+    await stage('ref: refs/heads/main\n');
+    await waitFor(() => events.some(([event, path]) => event === 'change' && path === head));
   });
 });
 

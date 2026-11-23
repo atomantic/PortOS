@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as connection from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
-import { listGeneratingModelSummaries, listModels } from './db.js';
+import { listGeneratingModelSummaries, listModels, listModelsPage } from './db.js';
 
 const health = await connection.checkHealth();
 const runDb = requireDbOrSkip('image-to-3D summaries', health.connected, health.error);
@@ -58,5 +58,9 @@ describe.skipIf(!runDb)('image-to-3D activity projection', () => {
     expect(gallery).toHaveLength(1004);
     expect(gallery.find((model) => model.id === 'completed-0')).toEqual(completed[0]);
     expect(await listModels({ includeDeleted: true })).toHaveLength(1005);
+
+    const page = await listModelsPage({ limit: 10, offset: 5 });
+    expect(page.items).toHaveLength(10);
+    expect(page.total).toBe(1004);
   });
 });

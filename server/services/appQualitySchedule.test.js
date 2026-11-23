@@ -23,6 +23,7 @@ const {
   buildQualitySchedulePlan,
   collectBusyOccupancies,
   detectRepoCapabilities,
+  inferSavedQualitySchedule,
   inapplicableAuditReason,
   resolveAuditApplicability,
   resolveQualityChecks,
@@ -266,6 +267,66 @@ describe('buildQualitySchedulePlan', () => {
   it('plans exactly the checks the caller named, applicable or not', async () => {
     const { plan } = await buildQualitySchedulePlan(appWith(NODE_SERVICE), { taskTypes: ['accessibility', 'security'] });
     expect(plan.slots.map(slot => slot.taskType).sort()).toEqual(['accessibility', 'security']);
+  });
+});
+
+describe('saved schedule hydration', () => {
+  const SAVED = {
+    security: { enabled: true, interval: '0 9 * * 1', taskMetadata: { fileIssues: false } },
+    privacy: { enabled: true, interval: '0 11 * * 2', taskMetadata: { fileIssues: true } },
+    'code-simplification': { enabled: false, interval: null },
+    'claim-issue': { enabled: true, interval: '0 14 * * *' },
+  };
+
+  it('reports no saved schedule when no audit override exists', () => {
+    expect(inferSavedQualitySchedule({ 'claim-work': { enabled: true, interval: '0 9 * * *' } })).toEqual({ hasExistingSchedule: false });
+  });
+
+  it('derives selection, delivery modes, window and claim drain from the overrides', () => {
+    expect(inferSavedQualitySchedule(SAVED)).toEqual({
+      hasExistingSchedule: true,
+      taskTypes: ['security', 'privacy'],
+      fileIssuesByType: { security: false, privacy: true },
+      options: { windowStartHour: 9, windowEndHour: 11, claimBetween: true, claimTaskType: 'claim-issue', claimOffsetHours: 3 },
+    });
+  });
+
+  it('reads a missing or hand-scheduled drain as claimBetween false', () => {
+    const { options } = inferSavedQualitySchedule({ ...SAVED, 'claim-issue': { enabled: true, interval: '0 9 * * 1' } });
+    expect(options.claimBetween).toBe(false);
+  });
+
+  it('keeps the default layout for the GET when nothing is saved', async () => {
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE), {}, { hydrate: true });
+    expect(built.hasExistingSchedule).toBe(false);
+    expect(built.plan.options).toMatchObject({ windowStartHour: 0, windowEndHour: 23, claimBetween: true });
+  });
+
+  it('round-trips: apply, reopen, tweak one option, apply keeps the other customizations', async () => {
+    const app = appWith(NODE_SERVICE);
+    let stored = {};
+    getAppTaskTypeOverrides.mockImplementation(async () => stored);
+    updateAppTaskTypeOverrides.mockImplementation(async (_id, patches) => {
+      stored = Object.fromEntries(Object.entries({ ...stored, ...patches }).map(([type, patch]) => [type, { ...stored[type], ...patch }]));
+    });
+    await applyQualitySchedulePlan(app, { taskTypes: ['security', 'privacy'], fileIssuesByType: { security: false, privacy: true }, windowStartHour: 8, windowEndHour: 12, claimBetween: false });
+
+    const reopened = await buildQualitySchedulePlan(app, {}, { hydrate: true });
+    expect(reopened.hasExistingSchedule).toBe(true);
+    expect(reopened.plan.slots.map(slot => slot.taskType).sort()).toEqual(['privacy', 'security']);
+    expect(reopened.plan.options).toMatchObject({ windowStartHour: 8, claimBetween: false });
+    expect(Object.fromEntries(reopened.plan.slots.map(slot => [slot.taskType, slot.fileIssues]))).toEqual({ security: false, privacy: true });
+
+    // The user changes one control; the form posts the rest back untouched.
+    await applyQualitySchedulePlan(app, {
+      taskTypes: reopened.plan.slots.map(slot => slot.taskType),
+      fileIssuesByType: Object.fromEntries(reopened.plan.slots.map(slot => [slot.taskType, slot.fileIssues])),
+      ...reopened.plan.options,
+      checksPerDay: 2,
+    });
+    expect(stored.security.taskMetadata.fileIssues).toBe(false);
+    expect(stored.privacy.taskMetadata.fileIssues).toBe(true);
+    expect(stored.accessibility?.enabled ?? false).toBe(false);
   });
 });
 

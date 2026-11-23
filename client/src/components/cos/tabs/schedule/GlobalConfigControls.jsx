@@ -1,22 +1,15 @@
 import ExecutionOptionsSelect from '../../../providers/ExecutionOptionsSelect.jsx';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
-import { RotateCcw, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
 import { describeCron } from '../../../../utils/cronHelpers.js';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, MAX_SELF_MANAGED_PR_AUTHORS, normalizeSelfManagedPrAuthors, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, ISSUE_MIN_AGE_DEFAULT, ISSUE_MIN_AGE_OPTIONS, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
-import ReviewerPicker from '../../ReviewerPicker';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEPFREE_MODE_TASK_TYPES, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_TASK_TYPES } from '../../constants';
 import CollapsibleSection from '../../../ui/CollapsibleSection';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
-import { formatCount, formatDateTime } from '../../../../utils/formatters';
-import { formatSkipCauses } from '../../../../lib/perpetualSkipCauses';
-import { TASK_READINESS_REASON } from '../../../../../../server/lib/taskReadinessReasons.js';
-import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
-import useReviewerModelOptions from '../../../../hooks/useReviewerModelOptions';
-import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../../../lib/reviewerModels';
-import { resolveTaskOptionalReviewers } from '../../../../lib/reviewerPins';
+import { formatDateTime } from '../../../../utils/formatters';
 import ToggleSwitch from '../../../ToggleSwitch';
 import useTaskModelPins from '../../../../hooks/useTaskModelPins';
 import { effectiveModelFor, selectableProviders } from '../../../../utils/providers';
@@ -25,115 +18,45 @@ import PromptEditor from './PromptEditor';
 import TaskDependencyPicker from './TaskDependencyPicker';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
-import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
-import { isTruthyMeta } from '../../../../../../server/lib/metadataFlags.js';
-
-// Shown for the unpinned ('' → inherit) choice: the task type is global, so the
-// policy is whatever each target app configured, and PortOS's own self-improvement
-// runs (no app) land on the server-side fallback.
-const PR_COMPLETION_INHERIT_HINT = `Uses the target app's "After opening PR" default (Apps → Edit App), or "${prCompletionOption(IMPLICIT_PR_COMPLETION)?.label}" when it has none.`;
-
-// The task-local reviewer-loop override is REVIEWER_OVERRIDE_KEYS (imported as
-// REVIEW_CONFIG_KEYS above). Removing those keys lets the picker and the server
-// resolver fall back to the install-wide Code Review Defaults without changing
-// the task's PR policy or other agent options.
-//
-// Deliberately the WIDE roster, not `hasReviewerOverride`'s list-bearing subset:
-// the reset clears the two run flags too, so gating its visibility on the subset
-// would leave a stop-mode-only override on screen with no control that removes it.
-
-function TaskOverrides({ label, activeCount, children }) {
-  return (
-    <CollapsibleSection
-      label={label}
-      summary={`Overrides: ${formatCount(activeCount)} active`}
-      size="bar"
-      className="border-t border-port-border"
-      bodyClassName="space-y-4 pb-3"
-      keepMounted
-    >
-      {children}
-    </CollapsibleSection>
-  );
-}
+import PerpetualStatusSummary from './PerpetualStatusSummary';
+import PrAndIssueFilterSection from './PrAndIssueFilterSection';
+import ReviewerPolicySection from './ReviewerPolicySection';
+import SwarmAndAgentOptionsSection from './SwarmAndAgentOptionsSection';
+import TaskOverrides from './TaskOverrides';
+import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, managedAgentOptionsFor } from './scheduleConstants';
 
 export default function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, category: _category, providers, providersLoaded = true, activeProviderId, apps, updating, setUpdating, allTaskTypes, improvementDisabled, dataInputCatalog }) {
-  const reviewDefaults = useCodeReviewDefaults();
-  // Resolved model lists for the reviewer table's Model column (the picker itself
-  // never fetches — see its `modelOptions` prop).
-  const reviewerModelOptions = useReviewerModelOptions();
-  // The install defaults persist per-reviewer models and efforts as `<reviewer>Model`
-  // / `<reviewer>Effort` scalars; the picker takes token-keyed maps. Memoized so a
-  // re-render (every `updating` flip) doesn't re-walk the roster and hand the picker
-  // fresh object identities. Mirrors SlashDoRunDrawer's `seededReview`.
-  const seededPins = useMemo(() => ({
-    models: reviewerModelsFromDefaults(reviewDefaults),
-    efforts: reviewerEffortsFromDefaults(reviewDefaults),
-  }), [reviewDefaults]);
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
-  const labelsDraft = useFieldDraft((config.labels || []).join(', '), async next => {
-    setUpdating(true);
-    await onUpdate(taskType, { labels: next.split(',').map(label => label.trim()).filter(Boolean) })
-      .finally(() => setUpdating(false));
-  });
-  const descriptionDraft = useFieldDraft(
-    config.description || '',
-    async (next) => {
-      setUpdating(true);
-      try {
-        await onUpdate(taskType, { description: next.trim() || null });
-      } catch {
-        // The field draft owns its error state; keep the editor usable.
-      } finally {
-        setUpdating(false);
-      }
-    },
-  );
-  // Writes one taskMetadata key. Routes through setUpdating like every other
-  // handler in this file so RunTaskButton (client/src/AGENTS.md's "gate on
-  // in-flight saves, not just the form" rule) can't fire against the pre-edit
-  // value while this PATCH is still in flight.
-  const writeMetadataField = async (field, value) => {
+  // Every save routes through here so `updating` covers the whole in-flight PATCH:
+  // RunTaskButton (client/src/AGENTS.md's "gate on in-flight saves, not just the
+  // form" rule) can't fire against the pre-edit value and Esc can't close the
+  // drawer mid-save. Resolves with onUpdate's result; rejections propagate.
+  const runUpdate = async (patch) => {
     setUpdating(true);
     try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), [field]: value }
-      });
+      return await onUpdate(taskType, patch);
     } finally {
       setUpdating(false);
     }
   };
-  const splitList = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
-  // Comma-separated free text, committed as an array on blur.
-  const excludeLabelsDraft = useFieldDraft(
-    (config.taskMetadata?.issueExcludeLabels || []).join(', '),
-    (next) => writeMetadataField('issueExcludeLabels', splitList(next))
+  // taskMetadata is replaced wholesale server-side, so spread the existing keys.
+  const writeMetadataField = (field, value) => runUpdate({
+    taskMetadata: { ...(config.taskMetadata || {}), [field]: value }
+  });
+  const labelsDraft = useFieldDraft((config.labels || []).join(', '), (next) =>
+    runUpdate({ labels: next.split(',').map(label => label.trim()).filter(Boolean) }));
+  const descriptionDraft = useFieldDraft(
+    config.description || '',
+    async (next) => {
+      try {
+        await runUpdate({ description: next.trim() || null });
+      } catch {
+        // The field draft owns its error state; keep the editor usable.
+      }
+    },
   );
-  const selfManagedAuthorsDraft = useFieldDraft(
-    (config.taskMetadata?.selfManagedPrAuthors || []).join(', '),
-    (next) => {
-      const entered = splitList(next);
-      const authors = normalizeSelfManagedPrAuthors(entered);
-      // An entry that is not a GitHub login reverts the edit rather than saving a
-      // shorter list; a list only over the cap saves its first logins.
-      const distinct = new Set(entered.map((login) => login.replace(/^@+/, '').toLowerCase()));
-      if (authors.length !== Math.min(distinct.size, MAX_SELF_MANAGED_PR_AUTHORS)) return undefined;
-      return writeMetadataField('selfManagedPrAuthors', authors);
-    }
-  );
-  const selfManagedStaleDraft = useFieldDraft(
-    String(config.taskMetadata?.selfManagedPrStaleMinutes || SELF_MANAGED_PR_STALE_MINUTES_DEFAULT),
-    (next) => {
-      // Whole numbers only; anything else reverts to the saved window.
-      const minutes = /^\d+$/.test(next.trim()) ? Number(next.trim()) : Number.NaN;
-      if (!Number.isInteger(minutes) || minutes < 1) return undefined;
-      return writeMetadataField('selfManagedPrStaleMinutes', Math.min(minutes, SELF_MANAGED_PR_STALE_MINUTES_MAX));
-    }
-  );
-  // Provider/model/effort pins are shared with the schedule card's quick
-  // controls — same optimistic write + rollback, one implementation.
   const {
     providerId: selectedProviderId,
     model: selectedModel,
@@ -172,207 +95,39 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       return;
     }
     setCronEditing(false);
-    setUpdating(true);
     setSelectedType(newType);
-    try {
-      const ok = await onUpdate(taskType, { type: newType, cronExpression: null, autoStart: false }).catch(() => false);
-      if (ok === false) setSelectedType(config.type);
-    } finally {
-      setUpdating(false);
-    }
+    const ok = await runUpdate({ type: newType, cronExpression: null, autoStart: false }).catch(() => false);
+    if (ok === false) setSelectedType(config.type);
   };
 
   // Perpetual is orthogonal to the cadence — toggling it never touches `type`,
   // so a Scheduled task keeps its expression and an On-Demand one stays manual.
   // No local optimistic state to roll back, so this awaits bare like
   // handleToggleEnabled rather than attaching its own rejection handler.
-  const handlePerpetualToggle = async () => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, { perpetual: !config.perpetual, ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}) });
-    } finally {
-      setUpdating(false);
-    }
-  };
+  const handlePerpetualToggle = () => runUpdate({
+    perpetual: !config.perpetual,
+    ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}),
+  });
 
   const handleCronSave = async (expr) => {
-    setUpdating(true);
-    try {
-      const ok = await onUpdate(taskType, { type: 'cron', cronExpression: expr }).catch(() => false);
-      if (ok !== false) setCronEditing(false);
-    } finally {
-      setUpdating(false);
-    }
+    const ok = await runUpdate({ type: 'cron', cronExpression: expr }).catch(() => false);
+    if (ok !== false) setCronEditing(false);
   };
 
   const handleRecheckCronSave = async (expr) => {
-    setUpdating(true);
-    try {
-      const ok = await onUpdate(taskType, { recheckCron: expr }).catch(() => false);
-      if (ok !== false) setRecheckEditing(false);
-    } finally {
-      setUpdating(false);
-    }
+    const ok = await runUpdate({ recheckCron: expr }).catch(() => false);
+    if (ok !== false) setRecheckEditing(false);
   };
 
   const isPaused = !config.enabled;
 
-  const handleToggleEnabled = async () => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, { enabled: isPaused });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleIssueAuthorFilterChange = async (value) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), issueAuthorFilter: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleIssueMinAgeChange = async (value) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), issueMinAgeMinutes: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleSwarmCountChange = async (value) => {
-    setUpdating(true);
-    // 0 = off, 2..12 = swarm size (server keeps both; 1/out-of-range are dropped).
-    // taskMetadata is replaced wholesale server-side, so spread the existing keys.
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), swarmCount: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  // Release options are ON unless explicitly false, so the toggle writes an
-  // explicit boolean either way.
-  // ON unless explicitly false, like the release options — so it reads from
-  // the same rule the server's nudge gate applies (sessionController.js).
-  const stallNudgeEnabled = config.taskMetadata?.stallNudge !== false;
-  const handleStallNudgeToggle = async () => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), stallNudge: !stallNudgeEnabled }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleReleaseOptionToggle = async (field) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), [field]: config.taskMetadata?.[field] === false }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleBranchesPerAgentChange = async (value) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), branchesPerAgent: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-
-  // The removal bar is stored explicitly even for 'default', so the persisted
-  // task states the bar it ran under rather than leaving readers to infer it.
-  const handleDepfreeModeChange = async (value) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), depfreeMode: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  // '' drops the key so the task inherits its app's `defaultPrCompletion` —
-  // which works because no DEFAULT_TASK_INTERVALS entry ships a `prCompletion`
-  // for loadSchedule to merge back underneath. The legacy `reviewLoop` bit is
-  // the pre-`prCompletion` spelling of the same decision, so it goes too rather
-  // than outvoting whatever the user just picked.
-  const handlePrCompletionChange = async (value) => {
-    setUpdating(true);
-    const { prCompletion: _pinned, reviewLoop: _legacy, ...rest } = config.taskMetadata || {};
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: value ? { ...rest, prCompletion: value } : rest
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const handleResetReviewConfig = async () => {
-    setUpdating(true);
-    const metadata = config.taskMetadata || {};
-    const taskMetadata = Object.fromEntries(
-      Object.entries(metadata).filter(([key]) => !REVIEW_CONFIG_KEYS.includes(key))
-    );
-    try {
-      await onUpdate(taskType, { taskMetadata });
-    } finally {
-      setUpdating(false);
-    }
-  };
+  const handleToggleEnabled = () => runUpdate({ enabled: isPaused });
 
   const handleSavePrompt = async () => {
-    setUpdating(true);
     const prompt = promptValue.trim() === '' ? null : promptValue;
-    try {
-      const ok = await onUpdate(taskType, { prompt }).catch(() => false);
-      if (ok !== false) setEditingPrompt(false);
-    } finally {
-      setUpdating(false);
-    }
+    const ok = await runUpdate({ prompt }).catch(() => false);
+    if (ok !== false) setEditingPrompt(false);
   };
-
-  const claimFlow = !!config.taskMetadata?.claimFlow || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType);
-  const prCompletion = pinnedPrCompletion(config.taskMetadata);
-  // Reviewers only run under review-then-merge, so the picker hides for the two
-  // policies that never reach them — but an unpinned ('') task may still inherit
-  // review-then-merge from its app, so that keeps it.
-  //
-  // A claimFlow task is unconditional: its PROMPT opens and merges its own PR and
-  // runs the reviewers itself, so the resolved list is operative no matter what
-  // `openPR` / `reviewLoop` say (both are false in the shipped claim metadata).
-  // Without this the picker — and the "Use system Code Review Defaults" reset
-  // beside it — never render for claim-work, leaving a reviewer override that
-  // every claim obeys with no control anywhere that can clear it.
-  const reviewersApply = claimFlow
-    ? prCompletion !== 'merge-on-green'
-    : config.taskMetadata?.openPR
-      ? prCompletion === '' || prCompletion === 'review-then-merge'
-      : !!config.taskMetadata?.reviewLoop;
-  const hasTaskReviewerListOverride = (Array.isArray(config.taskMetadata?.reviewers) && config.taskMetadata.reviewers.length > 0)
-    || (typeof config.taskMetadata?.reviewer === 'string' && !!config.taskMetadata.reviewer);
 
   // `selectedProvider` / `availableModels` come from useTaskModelPins above — it
   // resolves the pin against the active provider, lists Antigravity's BASE models
@@ -426,66 +181,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
         </Banner>
       )}
 
-      {rechecksOnDemand && (() => {
-        // claim-issue/claim-work park PER-APP, so prefer the per-app aggregate
-        // (config.perpetualStatus) over the global status.reason — which always
-        // reads 'perpetual-drain' for app-scoped tasks even when every app is parked.
-        const p = config.perpetualStatus;
-        // A stall (the forge CLI has failed several evaluations in a row) can
-        // coexist with an apparently-healthy "Draining" line — the gate skips
-        // WITHOUT parking on purpose, so nothing else here would ever surface
-        // it. Render it ahead of the park/drain line rather than instead of it.
-        const stall = p?.stall;
-        const stallNote = stall ? (
-          <p className="text-xs text-port-warning mt-1">
-            Probe failing{stall.cli ? ` (${stall.cli})` : ''}: {stall.reason}{stall.detail ? ` — ${stall.detail}` : ''}
-            {' '}({stall.consecutive} consecutive)
-          </p>
-        ) : null;
-        if (p && (p.trackedAppCount > 0 || p.globalParked)) {
-          const allParked = p.globalParked || (p.trackedAppCount > 0 && p.parkedAppCount === p.trackedAppCount);
-          if (allParked) {
-            const scope = p.trackedAppCount > 0 ? `${p.trackedAppCount} app(s) parked` : 'Parked';
-            const skipSummary = formatSkipCauses(p.parkSkipCauses);
-            return (
-              <>
-                {stallNote}
-                <p className="text-xs text-port-warning mt-1">
-                  {scope}{p.parkReason ? ` (${p.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{p.nextRecheckAt ? ` — next recheck ${formatDateTime(p.nextRecheckAt)}` : ''}
-                </p>
-              </>
-            );
-          }
-          const partial = p.parkedAppCount > 0 ? ` — ${p.parkedAppCount}/${p.trackedAppCount} app(s) parked` : '';
-          return (
-            <>
-              {stallNote}
-              <p className="text-xs text-port-success mt-1">Draining — actionable work available{partial}</p>
-            </>
-          );
-        }
-        // Global (non-app) perpetual task: the global status.reason is accurate.
-        if (status.reason === TASK_READINESS_REASON.PERPETUAL_PARKED) {
-          const skipSummary = formatSkipCauses(status.parkSkipCauses);
-          return (
-            <>
-              {stallNote}
-              <p className="text-xs text-port-warning mt-1">
-                Parked{status.parkReason ? ` (${status.parkReason})` : ''}{skipSummary ? ` — ${skipSummary}` : ''}{status.nextRunAt ? ` — rechecks ${formatDateTime(status.nextRunAt)}` : ''}
-              </p>
-            </>
-          );
-        }
-        if (status.reason === TASK_READINESS_REASON.PERPETUAL_DRAIN || status.reason === TASK_READINESS_REASON.PERPETUAL_RECHECK) {
-          return (
-            <>
-              {stallNote}
-              <p className="text-xs text-port-success mt-1">Draining — actionable work available</p>
-            </>
-          );
-        }
-        return stallNote;
-      })()}
+      {rechecksOnDemand && <PerpetualStatusSummary config={config} status={status} />}
 
       <FormField label="Interval Type" labelClassName="text-sm text-gray-400 block mb-2">
         <select
@@ -611,10 +307,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <label className="flex items-center justify-between gap-3 text-sm text-gray-400">
             Automatic starts and rechecks
             <input type="checkbox" checked={config.autoStart !== false} disabled={updating}
-              onChange={async event => {
-                setUpdating(true);
-                await onUpdate(taskType, { autoStart: event.target.checked }).catch(() => {}).finally(() => setUpdating(false));
-              }} />
+              onChange={event => runUpdate({ autoStart: event.target.checked }).catch(() => {})} />
           </label>
         )}
         {config.perpetual && selectedType === 'on-demand' && config.autoStart === false && (
@@ -670,429 +363,16 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       </TaskOverrides>
 
       {(taskType === 'pr-watcher' || ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType)) && (
-        <TaskOverrides label="PR & issue filters" activeCount={countMetadata(...prFilters)}>
-          {taskType === 'pr-watcher' && (
-            <div>
-              <label htmlFor={`pr-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">PR Remediation Scope</label>
-              <select
-                id={`pr-author-filter-${taskType}`}
-                value="trusted"
-                disabled
-                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-              >
-                {PR_AUTHOR_FILTER_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                {PR_AUTHOR_FILTER_OPTIONS.find(o => o.value === 'trusted')?.description}
-                {' '}Edit the prompt below to control what the agent does for each opened PR (it can use <code>{'{prData}'}</code>, <code>{'{repoFullName}'}</code>, <code>{'{defaultBranch}'}</code>).
-              </p>
-              <div className="grid gap-3 mt-3 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_10rem]">
-                <div>
-                  <label htmlFor={`pr-self-managed-authors-${taskType}`} className="text-sm text-gray-400 block mb-2">Self-managed PR authors</label>
-                  <input
-                    id={`pr-self-managed-authors-${taskType}`}
-                    type="text"
-                    value={selfManagedAuthorsDraft.value}
-                    onChange={selfManagedAuthorsDraft.onChange}
-                    onBlur={selfManagedAuthorsDraft.onBlur}
-                    disabled={updating}
-                    placeholder="octocat, renovate[bot]"
-                    className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-                  />
-                </div>
-                <div>
-                  <label htmlFor={`pr-self-managed-stale-${taskType}`} className="text-sm text-gray-400 block mb-2">Stale after (minutes)</label>
-                  <input
-                    id={`pr-self-managed-stale-${taskType}`}
-                    type="number"
-                    min={1}
-                    max={SELF_MANAGED_PR_STALE_MINUTES_MAX}
-                    value={selfManagedStaleDraft.value}
-                    onChange={selfManagedStaleDraft.onChange}
-                    onBlur={selfManagedStaleDraft.onBlur}
-                    disabled={updating}
-                    className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                These authors run their own merge process. PR Watcher leaves their PRs alone until a PR has had no activity for the stale window, then treats it like any other trusted PR.
-              </p>
-            </div>
-          )}
-
-          {ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType) && (
-            <div>
-              <label htmlFor={`issue-author-filter-${taskType}`} className="text-sm text-gray-400 block mb-2">Issue Author Filter</label>
-              <select
-                id={`issue-author-filter-${taskType}`}
-                value={config.taskMetadata?.issueAuthorFilter || 'self'}
-                onChange={(e) => handleIssueAuthorFilterChange(e.target.value)}
-                disabled={updating}
-                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-              >
-                {ISSUE_AUTHOR_FILTER_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                {ISSUE_AUTHOR_FILTER_OPTIONS.find(o => o.value === (config.taskMetadata?.issueAuthorFilter || 'self'))?.description}.
-                {' '}This is the global default — individual apps can override it below.
-              </p>
-            </div>
-          )}
-
-          {ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType) && (
-            <div>
-              <label htmlFor={`issue-exclude-labels-${taskType}`} className="text-sm text-gray-400 block mb-2">Leave issues with these labels for humans</label>
-              <input
-                id={`issue-exclude-labels-${taskType}`}
-                type="text"
-                value={excludeLabelsDraft.value}
-                onChange={excludeLabelsDraft.onChange}
-                onBlur={excludeLabelsDraft.onBlur}
-                disabled={updating}
-                placeholder="good first issue, help wanted"
-                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Comma-separated labels. An issue carrying any of these is skipped by autonomous claiming, on top of the fixed <code>in-progress</code>/<code>blocked</code>/<code>needs-input</code>/<code>future</code>/<code>wontfix</code>/<code>question</code>/<code>discussion</code> set.
-                {' '}This is the global default — individual apps can override it below.
-              </p>
-            </div>
-          )}
-
-          {ISSUE_AUTHOR_FILTER_TASK_TYPES.has(taskType) && (
-            <div>
-              <label htmlFor={`issue-min-age-${taskType}`} className="text-sm text-gray-400 block mb-2">New-issue grace</label>
-              <select
-                id={`issue-min-age-${taskType}`}
-                value={config.taskMetadata?.issueMinAgeMinutes ?? ISSUE_MIN_AGE_DEFAULT}
-                onChange={(e) => handleIssueMinAgeChange(Number(e.target.value))}
-                disabled={updating}
-                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-              >
-                {ISSUE_MIN_AGE_OPTIONS.map(minutes => (
-                  <option key={minutes} value={minutes}>{minutes === 0 ? 'Off' : `${minutes} minutes`}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500 mt-1">
-                Autonomous claiming skips issues newer than this, so it never takes an issue the agent that just filed it is about to claim. A picked issue is claimed right away.
-              </p>
-            </div>
-          )}
-
-        </TaskOverrides>
+        <PrAndIssueFilterSection taskType={taskType} config={config} updating={updating}
+          activeCount={countMetadata(...prFilters)} onMetadataChange={writeMetadataField} />
       )}
 
-      <TaskOverrides label="Swarm, branches & agent options"
-        activeCount={countMetadata(...dispatchFields, ...agentFields, 'stallNudge', ...(config.fileIssuesCapable ? ['fileIssues'] : []))}>
-        {SWARM_TASK_TYPES.has(taskType) && (
-          <div>
-            <label htmlFor={`swarm-count-${taskType}`} className="text-sm text-gray-400 block mb-2">Swarm Mode</label>
-            <select
-              id={`swarm-count-${taskType}`}
-              value={config.taskMetadata?.swarmCount || 0}
-              onChange={(e) => handleSwarmCountChange(Number(e.target.value))}
-              disabled={updating}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            >
-              {SWARM_COUNT_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              {SWARM_COUNT_OPTIONS.find(o => o.value === (config.taskMetadata?.swarmCount || 0))?.description}.
-              {' '}Mirrors slashdo <code>/do:next --swarm</code> — each run partitions independent issues, fans out one worktree agent per issue, and serializes the merges. GitHub/GitLab issue trackers only.
-            </p>
-          </div>
-        )}
+      <SwarmAndAgentOptionsSection taskType={taskType} config={config} updating={updating}
+        activeCount={countMetadata(...dispatchFields, ...agentFields, 'stallNudge', ...(config.fileIssuesCapable ? ['fileIssues'] : []))}
+        onMetadataChange={writeMetadataField} runUpdate={runUpdate} />
 
-        {BRANCHES_PER_AGENT_TASK_TYPES.has(taskType) && (
-          <div>
-            <label htmlFor={`branches-per-agent-${taskType}`} className="text-sm text-gray-400 block mb-2">Branches per agent</label>
-            <select
-              id={`branches-per-agent-${taskType}`}
-              value={config.taskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT}
-              onChange={(e) => handleBranchesPerAgentChange(Number(e.target.value))}
-              disabled={updating}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            >
-              {BRANCHES_PER_AGENT_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              {BRANCHES_PER_AGENT_OPTIONS.find(o => o.value === (config.taskMetadata?.branchesPerAgent || BRANCHES_PER_AGENT_DEFAULT))?.description}.
-              {' '}Branches are prioritized deterministically; the next drain picks up the remainder after this batch progresses.
-            </p>
-          </div>
-        )}
+      <ReviewerPolicySection taskType={taskType} config={config} updating={updating} runUpdate={runUpdate} />
 
-        {LOG_TRIAGE_TASK_TYPES.has(taskType) && (
-          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-3">
-            {LOG_TRIAGE_CAPS.map((cap) => {
-              const value = Number.isInteger(config.taskMetadata?.[cap.field]) ? config.taskMetadata[cap.field] : cap.defaultValue;
-              // A hand-edited in-range value outside the preset list still shows.
-              const options = cap.options.some((opt) => opt.value === value) ? cap.options : [...cap.options, { value, label: String(value) }];
-              return (
-                <div key={cap.field}>
-                  <label htmlFor={`${cap.field}-${taskType}`} className="text-sm text-gray-400 block mb-2">{cap.label}</label>
-                  <select
-                    id={`${cap.field}-${taskType}`}
-                    value={value}
-                    onChange={(e) => writeMetadataField(cap.field, Number(e.target.value))}
-                    disabled={updating}
-                    className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-                  >
-                    {options.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">{cap.description}.</p>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {DEPFREE_MODE_TASK_TYPES.has(taskType) && (
-          <div>
-            <label htmlFor={`depfree-mode-${taskType}`} className="text-sm text-gray-400 block mb-2">Removal bar</label>
-            <select
-              id={`depfree-mode-${taskType}`}
-              value={config.taskMetadata?.depfreeMode || DEPFREE_MODE_DEFAULT}
-              onChange={(e) => handleDepfreeModeChange(e.target.value)}
-              disabled={updating}
-              className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-            >
-              {DEPFREE_MODE_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <p className="text-xs text-gray-500 mt-1">
-              {depfreeModeOption(config.taskMetadata?.depfreeMode)?.description}.
-              {' '}Mirrors slashdo <code>/do:depfree</code> / <code>--heavy</code> / <code>--extreme</code>; the model and effort pins above decide what runs it.
-            </p>
-          </div>
-        )}
-
-        {RELEASE_OPTIONS_TASK_TYPES.has(taskType) && (
-          <div>
-            <span className="text-sm text-gray-400 block mb-2">Release Options</span>
-            <div className="space-y-2">
-              {RELEASE_OPTIONS.map(({ field, label, description }) => {
-                const enabled = config.taskMetadata?.[field] !== false;
-                return (
-                  <button
-                    key={field}
-                    type="button"
-                    disabled={updating}
-                    aria-pressed={enabled}
-                    aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
-                    className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
-                    onClick={() => handleReleaseOptionToggle(field)}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <span className="text-sm text-white">{label}</span>
-                      <p className="text-xs text-gray-500">{description}</p>
-                    </div>
-                    <ToggleSwitch enabled={enabled} disabled={updating} decorative />
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {config.fileIssuesCapable && (
-          <button
-            type="button"
-            disabled={updating}
-            aria-pressed={fileIssuesEffective(config)}
-            aria-label={fileIssuesEffective(config) ? 'File issues only (on)' : 'File issues only (off)'}
-            className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
-            onClick={async () => {
-              setUpdating(true);
-              try {
-                await onUpdate(taskType, {
-                  taskMetadata: toggleFileIssuesMetadata(
-                    config.taskMetadata,
-                    !fileIssuesEffective(config),
-                    config.doWorkRequiresWorktree,
-                  )
-                });
-              } finally {
-                setUpdating(false);
-              }
-            }}
-          >
-            <div className="min-w-0 flex-1">
-              <span className="text-sm text-white">File issues only</span>
-              <p className="text-xs text-gray-500">
-                When on, the agent reads the code and files tracker issues — it does not change source.
-                When off, it implements the highest-value fix.
-              </p>
-            </div>
-            <ToggleSwitch enabled={fileIssuesEffective(config)} disabled={updating} decorative />
-          </button>
-        )}
-
-        <div>
-          <span className="text-sm text-gray-400 block mb-2">Agent Options</span>
-          <div className="space-y-2">
-            {AGENT_OPTIONS.map(({ field, label, description }) => {
-              const enabled = config.taskMetadata?.[field] ?? false;
-              const managed = managedAgentOptionsFor(config).includes(field);
-              const lockedHint = `${label} is managed internally by this task — the agent's prompt handles it.`;
-              return (
-                <button
-                  key={field}
-                  type="button"
-                  disabled={updating || managed}
-                  aria-pressed={enabled}
-                  aria-label={managed
-                    ? `${label} (managed by task)`
-                    : `${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
-                  title={managed ? lockedHint : undefined}
-                  className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating || managed ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
-                  onClick={() => onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) })}
-                >
-                  <div className="min-w-0 flex-1">
-                    <span className="text-sm text-white flex items-center gap-2">
-                      {label}
-                      {managed && <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">managed</span>}
-                    </span>
-                    <p className="text-xs text-gray-500">{managed ? lockedHint : description}</p>
-                  </div>
-                  <ToggleSwitch
-                    enabled={enabled}
-                    disabled={updating || managed}
-                    decorative
-                  />
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              disabled={updating}
-              aria-pressed={stallNudgeEnabled}
-              aria-label={`${stallNudgeEnabled ? 'Disable' : 'Enable'} ${STALL_NUDGE_OPTION.label.toLowerCase()}`}
-              className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
-              onClick={handleStallNudgeToggle}
-            >
-              <div className="min-w-0 flex-1">
-                <span className="text-sm text-white">{STALL_NUDGE_OPTION.label}</span>
-                <p className="text-xs text-gray-500">{STALL_NUDGE_OPTION.description}</p>
-              </div>
-              <ToggleSwitch enabled={stallNudgeEnabled} disabled={updating} decorative />
-            </button>
-          </div>
-        </div>
-      </TaskOverrides>
-
-      {(config.taskMetadata?.openPR || claimFlow || reviewersApply) && (
-        <TaskOverrides label="PR policy & reviewer overrides"
-          activeCount={Number(Boolean(prCompletion)) + (reviewersApply ? REVIEW_CONFIG_KEYS.filter((key) => key in (config.taskMetadata || {})).length : 0)}>
-            {(config.taskMetadata?.openPR || claimFlow) && (
-              <FormField label="After opening PR" className="mt-3" labelClassName="text-sm text-gray-400 block mb-2">
-                <select
-                  value={prCompletion}
-                  onChange={(e) => handlePrCompletionChange(e.target.value)}
-                  disabled={updating}
-                  className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
-                >
-                  <option value="">{claimFlow ? 'Automatic merge after reviews and CI (default)' : 'App default'}</option>
-                  {PR_COMPLETION_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <p className="text-xs text-gray-500 mt-1">
-                  {claimFlow
-                    ? (prCompletion === 'merge-on-green'
-                        ? prCompletionOption(prCompletion)?.description
-                        : (prCompletion === 'leave-open'
-                            ? 'Configured reviews and CI still run. Leave open hands the PR to you for further review without merging or closing the issue.'
-                            : 'Configured reviews and CI still run. Automatic merge after reviews and CI pass.'))
-                    : prCompletionOption(prCompletion)?.description || PR_COMPLETION_INHERIT_HINT}
-                </p>
-              </FormField>
-            )}
-            {reviewersApply && (
-              <div className="mt-3 pl-2">
-                {REVIEW_CONFIG_KEYS.some((key) => key in (config.taskMetadata || {})) && (
-                  <button
-                    type="button"
-                    onClick={handleResetReviewConfig}
-                    disabled={updating}
-                    className="mb-2 flex items-center gap-1 text-xs text-gray-400 hover:text-white disabled:opacity-50"
-                    title="Remove this task's code review override and use the system Code Review Defaults"
-                  >
-                    <RotateCcw size={13} />
-                    Use system Code Review Defaults
-                  </button>
-                )}
-                <ReviewerPicker
-                  reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : reviewDefaults.reviewers)}
-                  usernames={config.taskMetadata?.usernames ?? reviewDefaults.usernames}
-                  optionalReviewers={resolveTaskOptionalReviewers(config.taskMetadata, reviewDefaults.optionalReviewers)}
-                  reviewerMaxRounds={config.taskMetadata?.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
-                  // The task type's own pins when it has them, else the install's Code
-                  // Review Defaults (persisted as `<reviewer>Model` scalars).
-                  reviewerModels={config.taskMetadata?.reviewerModels ?? seededPins.models}
-                  reviewerEfforts={config.taskMetadata?.reviewerEfforts ?? seededPins.efforts}
-                  modelOptions={reviewerModelOptions}
-                  installed={reviewDefaults.installed}
-                  providerReviewUnsupported={reviewDefaults.providerReviewUnsupported}
-                  stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
-                  reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
-                    ? isTruthyMeta(config.taskMetadata?.reviewerApplies)
-                    : reviewDefaults.reviewerApplies}
-                  // The same fallback the props above were seeded from. The picker
-                  // omits whatever still equals it, so touching one control no
-                  // longer freezes the rest into a permanent task override (#6208).
-                  defaults={{
-                    reviewers: reviewDefaults.reviewers,
-                    usernames: reviewDefaults.usernames,
-                    optionalReviewers: reviewDefaults.optionalReviewers,
-                    reviewerMaxRounds: reviewDefaults.reviewerMaxRounds,
-                    reviewerModels: seededPins.models,
-                    reviewerEfforts: seededPins.efforts,
-                    stopMode: reviewDefaults.stopMode,
-                    reviewerApplies: reviewDefaults.reviewerApplies,
-                  }}
-                  disabled={updating}
-                  onChange={(patch) => {
-                    // The picker emits only what differs from `defaults` above, so
-                    // rebuild the reviewer slice from scratch: strip every override
-                    // key (a key that reverted to the default must be DELETED, not
-                    // left pinning its old value), then re-apply what arrived.
-                    // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
-                    const { reviewer: _reviewer, ...rest } = config.taskMetadata || {};
-                    for (const key of REVIEW_CONFIG_KEYS) delete rest[key];
-                    const taskMetadata = { ...rest };
-                    if (patch.reviewers !== undefined) taskMetadata.reviewers = patch.reviewers;
-                    if (patch.usernames !== undefined) taskMetadata.usernames = patch.usernames;
-                    if (patch.optionalReviewers !== undefined) taskMetadata.optionalReviewers = patch.optionalReviewers;
-                    if (patch.reviewerMaxRounds !== undefined) taskMetadata.reviewerMaxRounds = patch.reviewerMaxRounds;
-                    if (patch.reviewerModels !== undefined) taskMetadata.reviewerModels = patch.reviewerModels;
-                    if (patch.reviewerEfforts !== undefined) taskMetadata.reviewerEfforts = patch.reviewerEfforts;
-                    if (patch.stopMode !== undefined) taskMetadata.reviewStopMode = patch.stopMode;
-                    if (patch.reviewerApplies !== undefined) taskMetadata.reviewerApplies = patch.reviewerApplies;
-                    onUpdate(taskType, { taskMetadata });
-                  }}
-                />
-                {hasTaskReviewerListOverride && (
-                  <p className="mt-2 text-xs text-gray-500">
-                    This task’s reviewer list is its preferred tier. If any reviewer is paused, scheduled runs use the first healthy system Code Review Defaults tier, or the first configured system tier if all are paused.
-                  </p>
-                )}
-              </div>
-            )}
-        </TaskOverrides>
-      )}
 
       <TaskOverrides label="Prompt & dependencies"
         activeCount={countOverrides('labels', 'description', 'dataInputs', 'suggestedAfter', 'runAfter') + Number(Boolean(config.promptCustomized))}>
@@ -1133,14 +413,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           catalog={dataInputCatalog}
           value={config.dataInputs || []}
           disabled={updating}
-          onChange={async (dataInputs) => {
-            setUpdating(true);
-            try {
-              await onUpdate(taskType, { dataInputs });
-            } finally {
-              setUpdating(false);
-            }
-          }}
+          onChange={(dataInputs) => runUpdate({ dataInputs })}
         />
 
         {allTaskTypes?.length > 1 && (
@@ -1155,13 +428,10 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               options={allTaskTypes}
               value={config.suggestedAfter || []}
               disabled={updating}
-              onChange={(next) => {
-                setUpdating(true);
-                // Sent as-is: an emptied list saves `[]`, which the server reads
-                // back as a deliberate clear rather than re-inheriting the
-                // shipped order (see normalizeSuggestedAfter).
-                onUpdate(taskType, { suggestedAfter: next }).finally(() => setUpdating(false));
-              }}
+              // Sent as-is: an emptied list saves `[]`, which the server reads
+              // back as a deliberate clear rather than re-inheriting the
+              // shipped order (see normalizeSuggestedAfter).
+              onChange={(next) => runUpdate({ suggestedAfter: next })}
             />
             <TaskDependencyPicker
               label="Run After (enforced dependencies)"
@@ -1170,10 +440,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               options={allTaskTypes}
               value={config.runAfter || []}
               disabled={updating}
-              onChange={(next) => {
-                setUpdating(true);
-                onUpdate(taskType, { runAfter: next.length > 0 ? next : null }).finally(() => setUpdating(false));
-              }}
+              onChange={(next) => runUpdate({ runAfter: next.length > 0 ? next : null })}
             />
           </>
         )}

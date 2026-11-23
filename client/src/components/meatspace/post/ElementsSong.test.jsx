@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import ElementsSong, { elementMasteryProgress, recommendedElementsMode } from './ElementsSong';
 
 // The Flash Cards study mode (issue #2480) is a flip-to-reveal study surface —
@@ -407,5 +407,76 @@ describe('ElementsSong answer verdict accessibility', () => {
     fireEvent.keyDown(region, { key: 'Enter' });
     await settle();
     expect(document.activeElement).toBe(screen.getByLabelText(label));
+  });
+});
+
+describe('ElementsSong periodic table accessibility (issue #17716)', () => {
+  const tableItem = { ...item, content: { ...item.content,
+    lines: [{ text: 'Hydrogen sings.', elements: ['H'] }],
+    chunks: [{ id: 'v1', label: 'Verse 1', lineRange: [0, 0] }],
+  } };
+
+  it('groups the view toggle with accurate aria-pressed state', async () => {
+    render(<ElementsSong item={tableItem} mode={null} onSelectMode={() => {}} onBack={() => {}} />);
+    await settle();
+    const group = screen.getByRole('group', { name: 'Periodic table view' });
+    const mastery = within(group).getByRole('button', { name: 'Mastery' });
+    const category = within(group).getByRole('button', { name: 'Category' });
+    expect(mastery).toHaveAttribute('aria-pressed', 'true');
+    expect(category).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(category);
+    expect(category).toHaveAttribute('aria-pressed', 'true');
+    expect(mastery).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('renders cells as native buttons named by element, number, category and status', async () => {
+    render(<ElementsSong item={tableItem} mode={null} onSelectMode={() => {}} onBack={() => {}} />);
+    await settle();
+    const cell = screen.getByRole('button', { name: /^Hydrogen, H, atomic number 1, Nonmetal, / });
+    expect(cell.tagName).toBe('BUTTON');
+    expect(cell).toHaveAttribute('type', 'button');
+    expect(cell).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(cell);
+    expect(cell).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('opens the tooltip on focus, dismisses on Escape keeping focus, and stays open while hovered', async () => {
+    render(<ElementsSong item={tableItem} mode={null} onSelectMode={() => {}} onBack={() => {}} />);
+    await settle();
+    const cell = screen.getByRole('button', { name: /^Hydrogen, H,/ });
+    act(() => cell.focus());
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(cell);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.mouseEnter(cell);
+      fireEvent.mouseLeave(cell);
+      fireEvent.mouseEnter(screen.getByRole('tooltip'));
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+      fireEvent.mouseLeave(screen.getByRole('tooltip'));
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hides unrevealed Learn Mode lyrics from assistive tech until revealed', async () => {
+    const learnItem = { ...item, content: { ...item.content,
+      lines: [{ text: 'First line.', elements: [] }, { text: 'Second line.', elements: [] }],
+      chunks: [{ id: 'v1', label: 'Verse 1', lineRange: [0, 1] }],
+    } };
+    render(<ElementsSong item={learnItem} mode="learn" onBack={() => {}} />);
+    await settle();
+    const hidden = screen.getByText('Second line.', { selector: 'div[aria-hidden]' });
+    expect(hidden).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('First line.');
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal Next Line' }));
+    expect(screen.getByText('Second line.', { selector: 'div[aria-hidden]' })).toHaveAttribute('aria-hidden', 'false');
+    expect(screen.getByRole('status')).toHaveTextContent('Second line.');
   });
 });

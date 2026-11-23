@@ -9,6 +9,7 @@ import {
   documentCategoryEnum,
   exportFormatEnum,
   enrichmentCategoryEnum,
+  listItemSchema,
   documentFilenameSchema,
   soulSettingsSchema,
   bigFiveSchema,
@@ -191,12 +192,6 @@ export const identityImageSaveInputSchema = z.object({
   title: z.string().min(1).max(200).optional()
 });
 
-// List-based enrichment item
-export const listItemSchema = z.object({
-  title: z.string().min(1).max(500),
-  note: z.string().max(2000).optional()
-});
-
 // Analyze list input
 export const analyzeListInputSchema = z.object({
   category: enrichmentCategoryEnum,
@@ -245,7 +240,6 @@ export const calculateConfidenceInputSchema = z.object({
 export const importSourceEnum = z.enum([
   'goodreads',
   'spotify',
-  'lastfm',
   'letterboxd',
   'ical'
 ]);

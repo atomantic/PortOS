@@ -34,6 +34,7 @@ import {
 import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import ListLoadError from '../../ui/ListLoadError';
 import useProviderList from '../../../hooks/useProviderList';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -41,6 +42,7 @@ import { isApiProvider } from '../../../utils/providers';
 import TwinProviderPicker from '../TwinProviderPicker.jsx';
 import ObservedTasteEvidence from '../ObservedTasteEvidence';
 import { formatDateNumeric } from '../../../utils/formatters';
+import { iconBadgeClasses } from '../constants';
 
 const SECTION_ICONS = {
   movies: Film,
@@ -97,7 +99,10 @@ export const shouldReportGoDeeperError = (err, statusChannelLive) =>
 
 export default function TasteTab({ onRefresh }) {
   const [profile, setProfile] = useState(null);
+  const [profileError, setProfileError] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Failed read for the next question; rendered as a retryable error, not the completion banner.
+  const [questionError, setQuestionError] = useState(null);
 
   // Active session state
   const [activeSection, setActiveSection] = useState(null);
@@ -120,6 +125,9 @@ export default function TasteTab({ onRefresh }) {
 
   // Review mode
   const [reviewSection, setReviewSection] = useState(null);
+  // Section id awaiting reset confirmation; cleared whenever the review view changes.
+  const [confirmingReset, setConfirmingReset] = useState(null);
+  const [resetting, setResetting] = useState(false);
   const [reviewResponses, setReviewResponses] = useState([]);
   const [loadingReview, setLoadingReview] = useState(false);
   const [reviewError, setReviewError] = useState(null);
@@ -137,8 +145,14 @@ export default function TasteTab({ onRefresh }) {
   const [expandedSummary, setExpandedSummary] = useState(null);
 
   const loadProfile = useCallback(async () => {
-    const data = await getTasteProfile().catch(() => null);
-    if (data) setProfile(data);
+    setProfileError(null);
+    try {
+      setProfile(await getTasteProfile({ silent: true }));
+    } catch (err) {
+      // Keep a failed read distinct from an empty profile: the grid and progress
+      // header must not render "0/7 sections complete" for a request that never answered.
+      setProfileError(err);
+    }
     setLoading(false);
   }, []);
 
@@ -157,7 +171,11 @@ export default function TasteTab({ onRefresh }) {
   const startSection = async (sectionId) => {
     setActiveSection(sectionId);
     setLoadingQuestion(true);
-    const question = await getTasteNextQuestion(sectionId).catch(() => null);
+    setQuestionError(null);
+    const question = await getTasteNextQuestion(sectionId, { silent: true }).catch((err) => {
+      setQuestionError(err);
+      return null;
+    });
     setCurrentQuestion(question);
     setAnswer('');
     setLoadingQuestion(false);
@@ -249,6 +267,7 @@ export default function TasteTab({ onRefresh }) {
   const exitSection = () => {
     setActiveSection(null);
     setCurrentQuestion(null);
+    setQuestionError(null);
     setAnswer('');
     setReviewSection(null);
     setReviewResponses([]);
@@ -258,6 +277,7 @@ export default function TasteTab({ onRefresh }) {
   const handleReviewSection = async (sectionId) => {
     reviewRequestRef.current += 1;
     const request = reviewRequestRef.current;
+    setConfirmingReset(null);
     setReviewSection(sectionId);
     setLoadingReview(true);
     setReviewError(null);
@@ -274,7 +294,11 @@ export default function TasteTab({ onRefresh }) {
   const handleResetSection = async (sectionId) => {
     // request() owns the failure toast; bail before the success toast so a
     // failed reset doesn't report "Section reset" on top of that error.
+    if (resetting) return;
+    setResetting(true);
     const ok = await resetTasteSection(sectionId).then(() => true).catch(() => false);
+    setResetting(false);
+    setConfirmingReset(null);
     if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
@@ -312,7 +336,8 @@ export default function TasteTab({ onRefresh }) {
       contentSnippet: summary?.slice(0, 2000),
       context: `Taste section: ${sectionId}`,
       providerId: selectedProvider?.providerId,
-      model: selectedProvider?.model
+      model: selectedProvider?.model,
+      documentsUsed: ['TASTE_PROFILE.md']
     }, { silent: true }).catch(() => {
       toast.error('Failed to save feedback');
       setSummaryFeedback(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
@@ -363,8 +388,8 @@ export default function TasteTab({ onRefresh }) {
             Back to sections
           </button>
           <div className="flex items-center gap-3">
-            <div className={`p-2.5 rounded-lg bg-${color}-500/20`}>
-              <Icon className={`w-5 h-5 text-${color}-400`} />
+            <div className={`p-2.5 rounded-lg ${iconBadgeClasses(color).bg}`}>
+              <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
             </div>
             <div>
               <h2 className="text-xl font-semibold text-white">{section?.label} — Responses</h2>
@@ -410,7 +435,7 @@ export default function TasteTab({ onRefresh }) {
                 {/* Behavioral Feedback */}
                 <div className="pt-3 border-t border-port-border">
                   <p className="text-xs text-gray-500 mb-2">Does this summary capture your taste accurately?</p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {[
                       { key: 'sounds_like_me', label: 'Sounds like me', icon: ThumbsUp, active: 'bg-port-success/20 text-port-success border border-port-success/30', inactive: 'text-gray-400 border border-port-border hover:text-port-success hover:border-port-success/30 disabled:opacity-30' },
                       { key: 'not_quite', label: 'Not quite', icon: Minus, active: 'bg-port-warning/20 text-port-warning border border-port-warning/30', inactive: 'text-gray-400 border border-port-border hover:text-port-warning hover:border-port-warning/30 disabled:opacity-30' },
@@ -420,7 +445,7 @@ export default function TasteTab({ onRefresh }) {
                         key={key}
                         onClick={() => submitSummaryFeedback(reviewSection, section.summary, key)}
                         disabled={!!summaryFeedback[reviewSection]}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] pointer-coarse:min-h-11 rounded-lg text-xs transition-colors ${
                           summaryFeedback[reviewSection] === key ? active : inactive
                         }`}
                       >
@@ -443,13 +468,24 @@ export default function TasteTab({ onRefresh }) {
                 {section?.summary ? 'Regenerate Summary' : 'Generate Summary'}
               </button>
               <button
-                onClick={() => handleResetSection(reviewSection)}
-                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10"
+                onClick={() => setConfirmingReset(reviewSection)}
+                disabled={resetting}
+                className="flex items-center justify-center gap-2 px-4 py-3 min-h-[44px] text-port-error border border-port-error/30 rounded-lg text-sm hover:bg-port-error/10 disabled:opacity-50"
               >
                 <RotateCcw size={16} />
                 Reset Section
               </button>
             </div>
+            {confirmingReset === reviewSection && (
+              <InlineConfirmRow
+                question="Reset all responses and summary for this section? This cannot be undone."
+                confirmText="Reset Section"
+                onConfirm={() => handleResetSection(reviewSection)}
+                onCancel={() => setConfirmingReset(null)}
+                autoFocus
+                aria-label="Confirm section reset"
+              />
+            )}
           </div>
         )}
       </div>
@@ -475,18 +511,22 @@ export default function TasteTab({ onRefresh }) {
               Back to sections
             </button>
             <div className="flex items-center gap-3">
-              <div className={`p-2.5 rounded-lg bg-${color}-500/20`}>
-                <Icon className={`w-5 h-5 text-${color}-400`} />
+              <div className={`p-2.5 rounded-lg ${iconBadgeClasses(color).bg}`}>
+                <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
               </div>
               <h2 className="text-xl font-semibold text-white">{section?.label}</h2>
             </div>
           </div>
-          <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg mb-4">
-            <div className="flex items-center gap-3">
-              <Check className="w-5 h-5 text-port-success" />
-              <span className="text-port-success">All questions for this section are complete.</span>
+          {questionError ? (
+            <ListLoadError className="mb-4" what="the next question" error={questionError} onRetry={() => startSection(activeSection)} />
+          ) : (
+            <div className="p-4 bg-port-success/10 border border-port-success/30 rounded-lg mb-4">
+              <div className="flex items-center gap-3">
+                <Check className="w-5 h-5 text-port-success" />
+                <span className="text-port-success">All questions for this section are complete.</span>
+              </div>
             </div>
-          </div>
+          )}
           {section?.summary && (
             <div className="bg-port-card rounded-lg border border-port-accent-2/30 p-4 mb-4">
               <h3 className="text-sm font-medium text-port-accent-2 mb-2 flex items-center gap-2">
@@ -552,8 +592,8 @@ export default function TasteTab({ onRefresh }) {
           </button>
 
           <div className="flex items-center gap-3 sm:gap-4">
-            <div className={`p-2.5 sm:p-3 rounded-lg bg-${color}-500/20 shrink-0`}>
-              <Icon className={`w-5 h-5 sm:w-6 sm:h-6 text-${color}-400`} />
+            <div className={`p-2.5 sm:p-3 rounded-lg ${iconBadgeClasses(color).bg} shrink-0`}>
+              <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${iconBadgeClasses(color).text}`} />
             </div>
             <div className="min-w-0">
               <h2 className="text-lg sm:text-xl font-bold text-white">{section?.label}</h2>
@@ -634,7 +674,7 @@ export default function TasteTab({ onRefresh }) {
                     // Skip current question by submitting empty — move to next
                     setAnswer('');
                     setLoadingQuestion(true);
-                    getTasteNextQuestion(activeSection).then(q => {
+                    getTasteNextQuestion(activeSection, { silent: true }).then(q => {
                       // If same question returned (can't skip core), just clear loading
                       if (q?.questionId === currentQuestion?.questionId) {
                         toast('Core questions cannot be skipped', { icon: '⚠️' });
@@ -680,8 +720,11 @@ export default function TasteTab({ onRefresh }) {
   return (
     <div className="space-y-6">
       {/* Overall Progress */}
+      {profileError && !profile ? (
+        <ListLoadError what="your taste profile" error={profileError} onRetry={loadProfile} />
+      ) : (
       <div className="bg-port-card rounded-lg border border-port-border p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-3">
             <Palette className="w-6 h-6 text-port-accent-2" />
             <h2 className="text-lg font-semibold text-white">Aesthetic Taste Profile</h2>
@@ -704,6 +747,7 @@ export default function TasteTab({ onRefresh }) {
           </p>
         )}
       </div>
+      )}
 
       {/* Observed-behavior evidence (stated vs observed, #2156) */}
       <ObservedTasteEvidence />
@@ -728,8 +772,8 @@ export default function TasteTab({ onRefresh }) {
                 className="w-full p-4 min-h-[120px] text-left hover:bg-port-border/20 rounded-t-lg transition-colors"
               >
                 <div className="flex items-start justify-between mb-3">
-                  <div className={`p-2 rounded-lg bg-${color}-500/20`}>
-                    <Icon className={`w-5 h-5 text-${color}-400`} />
+                  <div className={`p-2 rounded-lg ${iconBadgeClasses(color).bg}`}>
+                    <Icon className={`w-5 h-5 ${iconBadgeClasses(color).text}`} />
                   </div>
                   {isComplete ? (
                     <Check className="w-5 h-5 text-port-success" />
@@ -765,7 +809,7 @@ export default function TasteTab({ onRefresh }) {
                 <div className="px-4 pb-3 flex gap-2">
                   <button
                     onClick={() => handleReviewSection(section.id)}
-                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 py-1"
+                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
                   >
                     <Eye size={12} />
                     Review
@@ -778,7 +822,7 @@ export default function TasteTab({ onRefresh }) {
                 <div className="px-4 pb-3">
                   <button
                     onClick={() => setExpandedSummary(expandedSummary === section.id ? null : section.id)}
-                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1"
+                    className="text-xs text-port-accent-2 hover:text-port-accent-2/80 flex items-center gap-1 py-1 min-h-[36px] pointer-coarse:min-h-11"
                   >
                     <Sparkles size={12} />
                     Summary

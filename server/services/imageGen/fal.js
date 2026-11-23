@@ -17,9 +17,11 @@
  *
  * Money: every submit is billed. The dispatcher refuses unless
  * `imageGen.fal.enabled` is on, `checkConnection` never submits (it reads the
- * free pricing endpoint), the model is validated against the curated catalog
- * rather than passed through as free text, and each render records its
- * estimated cost in the gallery sidecar.
+ * free pricing endpoint), and a model is either a curated family or an id on
+ * the loaded fal.ai image list. An implausible id, a listed id whose schema
+ * cannot be read, or references the schema does not accept are refused before
+ * the paid POST. Curated renders record an estimated cost; a listed model
+ * records that the price is unknown.
  *
  * The API key is the same one the fal.ai video backend uses (settings
  * `videoGen.fal.apiKey`, hydrated from the private key store, or `FAL_KEY`).
@@ -38,8 +40,10 @@ import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { createConcurrencyGate } from '../../lib/concurrencyGate.js';
 import {
-  FAL_IMAGE_DEFAULT_MODEL, FAL_MEGAPIXEL, buildFalImageRequest, falImageFamily,
+  FAL_IMAGE_DEFAULT_MODEL, FAL_MEGAPIXEL, appendFalAvoid, buildFalImageRequest, buildListedFalImageRequest, falImageFamily,
+  isPlausibleFalEndpointId,
 } from '../../lib/falImageModels.js';
+import * as falCatalog from '../falImageModelCatalog.js';
 import { broadcastSse } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
@@ -254,11 +258,17 @@ const noKeyReason = 'No fal.ai API key configured — add it under Settings → 
  * read that proves the key works and doubles as the price shown to the user.
  */
 export async function checkConnection({ model } = {}) {
-  const family = falImageFamily(model) || falImageFamily(FAL_IMAGE_DEFAULT_MODEL);
+  const requested = typeof model === 'string' ? model.trim() : '';
+  const family = falImageFamily(requested);
+  const fallback = falImageFamily(FAL_IMAGE_DEFAULT_MODEL);
+  // A curated edit pin still prices the family's text endpoint: that is the
+  // published per-image rate. A listed id prices itself.
+  const endpointId = family ? family.textEndpoint : (isPlausibleFalEndpointId(requested) ? requested : fallback.textEndpoint);
+  const name = family ? family.label : endpointId;
   const settings = await getSettings().catch(() => null);
   const apiKey = resolveFalApiKey(settings);
   if (!apiKey) return { connected: false, mode: MODE, reason: noKeyReason };
-  const url = `${FAL_PRICING_URL}?endpoint_id=${encodeURIComponent(family.textEndpoint)}`;
+  const url = `${FAL_PRICING_URL}?endpoint_id=${encodeURIComponent(endpointId)}`;
   const res = await fetchWithTimeout(url, { headers: { Authorization: `Key ${apiKey}` } }, FAL_PRICING_TIMEOUT_MS)
     .catch((err) => ({ ok: false, status: 0, error: err }));
   if (res.status === 401 || res.status === 403) {
@@ -269,9 +279,9 @@ export async function checkConnection({ model } = {}) {
     return { connected: false, mode: MODE, reason: `fal.ai pricing check failed: ${detail}` };
   }
   const payload = await res.json().catch(() => null);
-  const price = payload?.prices?.find((p) => p?.endpoint_id === family.textEndpoint);
+  const price = payload?.prices?.find((p) => p?.endpoint_id === endpointId);
   const priceLabel = price ? ` — $${price.unit_price}/${price.unit === 'images' ? 'image' : price.unit}` : '';
-  return { connected: true, mode: MODE, model: `${family.label}${priceLabel}`, modelId: family.textEndpoint };
+  return { connected: true, mode: MODE, model: `${name}${priceLabel}`, modelId: endpointId };
 }
 
 // Read one input image into a data URI — the original bytes when they are a
@@ -301,11 +311,16 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   return { dataUri: `data:${mime};base64,${data.toString('base64')}`, megapixels: (info.width * info.height) / FAL_MEGAPIXEL };
 }
 
-// The first image URL in a fal.ai image result. Every catalog model answers
-// `{ images: [{ url, … }] }`.
+// The first image URL in a fal.ai image result. Curated models answer
+// `{ images: [{ url }] }`. Some listed endpoints answer `{ image: { url } }`
+// or a bare image string.
 const firstImageUrl = (result) => {
-  const url = Array.isArray(result?.images) ? result.images[0]?.url : null;
-  return typeof url === 'string' && url.trim() ? url : null;
+  const fromList = Array.isArray(result?.images) ? result.images[0]?.url : null;
+  if (typeof fromList === 'string' && fromList.trim()) return fromList;
+  const image = result?.image;
+  if (typeof image === 'string' && image.trim()) return image;
+  if (typeof image?.url === 'string' && image.url.trim()) return image.url;
+  return null;
 };
 
 /**
@@ -321,7 +336,11 @@ export function falImageSentPrompt({ family, prompt = '', negativePrompt, inputI
   return {
     fullPrompt,
     record: sentPromptRecord({
-      sentPrompt: buildFalImageRequest({ modelId: family.textEndpoint, prompt: fullPrompt, negativePrompt }).body.prompt,
+      // A listed model has no curated family: fold the same "Avoid:" line the
+      // request builder would. The paid body is still built from its schema.
+      sentPrompt: family
+        ? buildFalImageRequest({ modelId: family.textEndpoint, prompt: fullPrompt, negativePrompt }).body.prompt
+        : appendFalAvoid(fullPrompt, negativePrompt),
       carried: carriedPromptAdditions({ promptAdditions }),
       added: [promptAddition('image-roles', 'How to read the attached images', fullPrompt.slice(prompt.trim().length)),
         promptAddition('avoid', 'Negative prompt, sent as "Avoid:"', negativePrompt)],
@@ -347,23 +366,41 @@ async function generateImagePrepared({
   const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
 
-  // The dispatcher / route already validated `model` against the catalog
-  // (resolveCloudProviderConfig), and the queue persists the validated id.
-  // This guard covers a direct caller and a job persisted by a build whose
-  // catalog has since dropped the id — a paid call is never made against a
-  // model the catalog does not describe.
-  const family = falImageFamily(model || FAL_IMAGE_DEFAULT_MODEL);
+  // Curated families are priced offline and never consult the live list.
+  // Anything else must be on the loaded list, and its OpenAPI must expose a
+  // prompt, before a job exists: a paid POST is never the place that discovers
+  // a bad id.
+  const requested = (typeof model === 'string' && model.trim()) ? model.trim() : FAL_IMAGE_DEFAULT_MODEL;
+  const family = falImageFamily(requested);
+  let listedSchema = null;
   if (!family) {
-    throw new ServerError(`fal.ai Imagegen has no model "${model}"`, { status: 400, code: 'FAL_IMAGE_MODEL_UNKNOWN' });
+    await falCatalog.assertFalImageModelAvailable(requested);
+    listedSchema = await falCatalog.falImageInputSchema(requested).catch((err) => {
+      if (err instanceof ServerError) throw err;
+      throw new ServerError(`fal.ai could not describe "${requested}"`, { status: 400, code: 'FAL_IMAGE_SCHEMA_UNSUPPORTED' });
+    });
   }
 
   // Re-anchored to the allowed input roots and capped to THIS model's
-  // reference limit (14 / 10 / 9) — see inputImages.js.
+  // reference limit (14 / 10 / 9) — see inputImages.js. A listed model stays
+  // on the catalog floor.
   const inputImages = resolveInputImages({
-    mode: MODE, initImagePath, referenceImagePaths, modelId: family.textEndpoint,
+    mode: MODE, initImagePath, referenceImagePaths, modelId: family ? family.textEndpoint : requested,
   });
   if (cloudPromptRequired(MODE, inputImages.paths.length > 0) && !prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (listedSchema) {
+    const imageCount = inputImages.paths.length;
+    if (imageCount && !listedSchema.images) {
+      throw new ServerError(
+        `fal.ai model "${requested}" does not take reference images — choose an edit model such as fal-ai/nano-banana-pro/edit`,
+        { status: 400, code: 'FAL_IMAGE_REFERENCES_UNSUPPORTED' },
+      );
+    }
+    if (!imageCount && listedSchema.images?.required) {
+      throw new ServerError(`fal.ai model "${requested}" requires reference images`, { status: 400, code: 'FAL_IMAGE_REFERENCES_REQUIRED' });
+    }
   }
 
   // Never threaded through job params (they persist in plaintext) — resolved
@@ -374,19 +411,19 @@ async function generateImagePrepared({
     throw new ServerError(noKeyReason, { status: 400, code: 'FAL_NOT_CONFIGURED' });
   }
 
-  const endpointId = inputImages.paths.length ? family.editEndpoint : family.textEndpoint;
+  const endpointId = family ? (inputImages.paths.length ? family.editEndpoint : family.textEndpoint) : requested;
   const { fullPrompt, record: sentRecord } = falImageSentPrompt({ family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions });
   const meta = runner.jobMeta({
     jobId, prompt, negativePrompt, width, height, inputImages, visualConditioning, sentRecord,
     // The endpoint that actually rendered (text vs /edit), plus the family the
     // user chose — a gallery reader should not have to re-derive either.
-    modelFields: { model: endpointId, modelFamily: family.id },
+    modelFields: { model: endpointId, ...(family ? { modelFamily: family.id } : {}) },
   });
   const reviewedReferenceBytes = await assertSnapshotForAdapter(reviewedReferenceSnapshot, jobId, inputImages.initPath, inputImages.referencePaths);
   return runner.start({
     meta, renderStartedAtMs, model: endpointId, status: 'Submitting to fal.ai…',
     run: (job) => runFal(job, jobId, {
-      apiKey, family, fullPrompt, negativePrompt, width, height, seed,
+      apiKey, family, listedSchema, requested, fullPrompt, negativePrompt, width, height, seed,
       inputPaths: inputImages.paths, reviewedReferenceBytes, meta, cleanC2PA, denoise,
     }),
   });
@@ -406,7 +443,7 @@ function formatStepFailure(step, errOrReason) {
 }
 
 async function runFal(job, jobId, {
-  apiKey, family, fullPrompt, negativePrompt, width, height, seed,
+  apiKey, family, listedSchema, requested, fullPrompt, negativePrompt, width, height, seed,
   inputPaths, reviewedReferenceBytes, meta, cleanC2PA = false, denoise = false,
 }) {
   const entry = runner.track(jobId, createFalRequestEntry(apiKey));
@@ -448,16 +485,21 @@ async function runFal(job, jobId, {
     }
 
     currentStep = 'submit';
-    const request = buildFalImageRequest({
-      modelId: family.textEndpoint,
-      prompt: fullPrompt,
-      negativePrompt,
-      width,
-      height,
-      seed,
-      imageUrls,
-      inputMegapixels: encoded.reduce((sum, e) => sum + e.megapixels, 0),
-    });
+    const request = family
+      ? buildFalImageRequest({
+        modelId: family.textEndpoint,
+        prompt: fullPrompt,
+        negativePrompt,
+        width,
+        height,
+        seed,
+        imageUrls,
+        inputMegapixels: encoded.reduce((sum, e) => sum + e.megapixels, 0),
+      })
+      : buildListedFalImageRequest({
+        modelId: requested, schema: listedSchema, prompt: fullPrompt, negativePrompt, width, height, seed, imageUrls,
+      });
+    if (!request) throw new Error(`fal.ai request for ${requested} could not be built`);
     // Cancelled while the inputs were being encoded or uploaded: nothing was submitted,
     // so there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);
@@ -504,7 +546,7 @@ async function runFal(job, jobId, {
         // account; this only lets a gallery record say roughly what it cost.
         estimatedCostUsd: request.estimatedCostUsd,
       },
-      doneNote: `fal ${request.endpointId}, ~$${request.estimatedCostUsd}`,
+      doneNote: `fal ${request.endpointId}, ${request.estimatedCostUsd == null ? 'price unknown' : `~$${request.estimatedCostUsd}`}`,
     });
     if (job.status === 'complete') void autoDeleteHostedCopy('fal', 'image', meta.filename, { apiKey });
   } catch (err) {

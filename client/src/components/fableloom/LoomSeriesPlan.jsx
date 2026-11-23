@@ -89,19 +89,21 @@ const planSavePayload = ({ characterEvolutions, seriesDesign, ...rest }) => ({
 
 const episodeBoundaryKey = (fromEpisodeId, toEpisodeId) => `${fromEpisodeId}::${toEpisodeId}`;
 
+const voicemailDraft = (fromEpisode, toEpisode, index) => ({
+  id: newItemId('voicemail'),
+  fromEpisodeId: fromEpisode.id,
+  toEpisodeId: toEpisode.id,
+  title: `Overnight voicemail: Episode ${fromEpisode.number || index + 1} → ${toEpisode.number || index + 2}`,
+  transcript: '',
+});
+
 const withVoicemailDrafts = (plan, episodes) => {
   const current = new Map((plan.interEpisodeVoicemails || [])
     .filter((item) => item?.fromEpisodeId && item?.toEpisodeId)
     .map((item) => [episodeBoundaryKey(item.fromEpisodeId, item.toEpisodeId), item]));
   return episodes.slice(0, -1).map((fromEpisode, index) => {
     const toEpisode = episodes[index + 1];
-    return current.get(episodeBoundaryKey(fromEpisode.id, toEpisode.id)) || {
-      id: newItemId('voicemail'),
-      fromEpisodeId: fromEpisode.id,
-      toEpisodeId: toEpisode.id,
-      title: `Overnight voicemail: Episode ${fromEpisode.number || index + 1} → ${toEpisode.number || index + 2}`,
-      transcript: '',
-    };
+    return current.get(episodeBoundaryKey(fromEpisode.id, toEpisode.id)) || voicemailDraft(fromEpisode, toEpisode, index);
   });
 };
 
@@ -621,13 +623,19 @@ function SeriesDeliveryPlan({ plan, episodes, onChange }) {
     return next;
   });
 
-  const updateVoicemail = (fromEpisodeId, toEpisodeId, patch) => onChange((current) => ({
-    ...current,
-    interEpisodeVoicemails: (current.interEpisodeVoicemails || []).map((item) => (
-      item.fromEpisodeId === fromEpisodeId && item.toEpisodeId === toEpisodeId
-        ? { ...item, ...patch } : item
-    )),
-  }));
+  // A boundary created after the toggle was enabled has no stored record yet; patch-or-insert so typing is never dropped.
+  const updateVoicemail = (fromEpisode, toEpisode, patch) => onChange((current) => {
+    const existing = current.interEpisodeVoicemails || [];
+    const matches = (item) => item.fromEpisodeId === fromEpisode.id && item.toEpisodeId === toEpisode.id;
+    if (existing.some(matches)) {
+      return { ...current, interEpisodeVoicemails: existing.map((item) => (matches(item) ? { ...item, ...patch } : item)) };
+    }
+    const index = episodes.findIndex((episode) => episode.id === fromEpisode.id);
+    return {
+      ...current,
+      interEpisodeVoicemails: [...existing, { ...voicemailDraft(fromEpisode, toEpisode, index), ...patch }],
+    };
+  });
 
   return (
     <section className="rounded-lg border border-port-border bg-port-card p-4 space-y-4" aria-label="Series delivery">
@@ -667,7 +675,7 @@ function SeriesDeliveryPlan({ plan, episodes, onChange }) {
                   <input
                     className={fieldClass}
                     value={item?.title || ''}
-                    onChange={(event) => updateVoicemail(fromEpisode.id, toEpisode.id, { title: event.target.value })}
+                    onChange={(event) => updateVoicemail(fromEpisode, toEpisode, { title: event.target.value })}
                   />
                 </FormField>
                 <FormField
@@ -679,7 +687,7 @@ function SeriesDeliveryPlan({ plan, episodes, onChange }) {
                     rows={4}
                     className={`${fieldClass} ${item?.transcript?.trim() ? '' : 'border-port-warning/60'}`}
                     value={item?.transcript || ''}
-                    onChange={(event) => updateVoicemail(fromEpisode.id, toEpisode.id, { transcript: event.target.value })}
+                    onChange={(event) => updateVoicemail(fromEpisode, toEpisode, { transcript: event.target.value })}
                     placeholder="I kept the receiver warm through the night…"
                   />
                 </FormField>

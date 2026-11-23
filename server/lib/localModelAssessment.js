@@ -111,6 +111,43 @@ export function maxWorkingContextTokens(samples) {
 }
 
 /**
+ * Whether a successful sample's visible text under-represents what the model generated: fewer than
+ * half a character per generated token. A thinking model answers the benchmark's "4" after ~70
+ * reasoning tokens streamed on a separate channel, so its chars/s measures the answer's length,
+ * not its speed (#17430). `null` when the runtime reported no token count to compare against.
+ *
+ * @param {{ ok?: boolean, chars?: number|null, completionTokens?: number|null }} sample
+ * @returns {boolean|null}
+ */
+export function sampleHidesReasoning(sample) {
+  if (sample?.ok !== true || !isMeasured(sample.chars) || !isMeasured(sample.completionTokens)) return null;
+  return sample.completionTokens > 2 * sample.chars;
+}
+
+/**
+ * `true` when any successful sample hid most of its generation as reasoning, `false` when token
+ * counts were reported and none did, `null` when no sample carried the evidence.
+ */
+function reasoningHiddenIn(samples) {
+  const flags = okSamples(samples).map(sampleHidesReasoning).filter((flag) => flag !== null);
+  return flags.length ? flags.some(Boolean) : null;
+}
+
+/**
+ * A stored record's performance as the current `summarizePerformance` reads it. A record saved
+ * before `reasoningHidden` existed also trended `contextDegradation` on chars/s, which for a
+ * thinking model is a flat near-zero answer, so its summary is recomputed from its stored samples.
+ */
+function performanceOf(assessment) {
+  const perf = assessment?.performance || {};
+  if (typeof perf.reasoningHidden === 'boolean' || perf.reasoningHidden === null) return perf;
+  const samples = assessment?.samples;
+  return Array.isArray(samples) && samples.length
+    ? { ...perf, ...summarizePerformance(samples) }
+    : { ...perf, reasoningHidden: null };
+}
+
+/**
  * Mean of a numeric field across successful samples, or `null` when the field
  * was never measured. Rounded to two decimals so persisted records stay stable.
  */
@@ -144,11 +181,20 @@ function meanOf(samples, field) {
  */
 export function summarizePerformance(samples) {
   const ok = okSamples(samples);
-  const measured = ok
-    .filter((s) => isMeasured(s.charsPerSecond) && s.charsPerSecond > 0 && isMeasured(s.contextTokens));
-  const fastest = measured.length ? Math.max(...measured.map((s) => s.charsPerSecond)) : null;
-  const atLongest = measured.length
-    ? measured.reduce((longest, s) => (s.contextTokens > longest.contextTokens ? s : longest)).charsPerSecond
+  const reasoningHidden = reasoningHiddenIn(samples);
+  const rated = (field) => ok.filter((s) => isMeasured(s[field]) && s[field] > 0 && isMeasured(s.contextTokens));
+  const charRated = rated('charsPerSecond');
+  // The degradation trend reads decode tokens/s when two or more distinct contexts reported it: that is the
+  // generation speed itself. Chars/s is the fallback for runtimes without token counts, and has no
+  // trend to give when the visible text hid the reasoning.
+  const tokenRated = rated('tokensPerSecond');
+  const distinctContexts = (list) => new Set(list.map((s) => s.contextTokens)).size;
+  const [trend, trendField] = distinctContexts(tokenRated) >= 2
+    ? [tokenRated, 'tokensPerSecond']
+    : [reasoningHidden ? [] : charRated, 'charsPerSecond'];
+  const fastest = trend.length ? Math.max(...trend.map((s) => s[trendField])) : null;
+  const atLongest = trend.length
+    ? trend.reduce((longest, s) => (s.contextTokens > longest.contextTokens ? s : longest))[trendField]
     : null;
   const tokenRates = ok.map((s) => s.tokensPerSecond).filter(isMeasured);
   return {
@@ -156,7 +202,10 @@ export function summarizePerformance(samples) {
     samplesOk: ok.length,
     meanCharsPerSecond: meanOf(samples, 'charsPerSecond'),
     meanTtftMs: meanOf(samples, 'ttftMs'),
-    peakCharsPerSecond: fastest,
+    peakCharsPerSecond: charRated.length ? Math.max(...charRated.map((s) => s.charsPerSecond)) : null,
+    // `true` = chars/s describes a short visible answer, not generation speed (see
+    // `sampleHidesReasoning`); readers must not present it as a speed figure.
+    reasoningHidden,
     // Token-denominated throughput, present only when the daemon reported token
     // counts. `null` here means the runtime told us nothing — a reader must show
     // "not measured", not fall back to chars/s under a tokens/s label.
@@ -176,9 +225,44 @@ export function summarizePerformance(samples) {
     maxWorkingContextTokens: maxWorkingContextTokens(samples),
     // Clamped: the longest context can measure marginally ABOVE the peak of the
     // others only through noise, and a >1 "degradation" is meaningless.
+    // Needs two DIFFERENT context sizes: a benchmark's repeated runs at one context would
+    // otherwise report run-to-run noise as falloff.
     contextDegradation:
-      measured.length >= 2 && fastest > 0 ? Number(Math.min(1, atLongest / fastest).toFixed(3)) : null,
+      distinctContexts(trend) >= 2 && fastest > 0 ? Number(Math.min(1, atLongest / fastest).toFixed(3)) : null,
   };
+}
+
+const POINT_RATE_FIELDS = ['tokensPerSecond', 'promptTokensPerSecond', 'charsPerSecond', 'ttftMs', 'totalMs', 'completionTokens'];
+
+/**
+ * One table point per context. A benchmark repeats one context, and the table keys its cells by
+ * context, so repeated runs become one point: the mean of each field over the successful runs,
+ * with `runs` saying how many there were. A context with no successful run keeps its first error.
+ */
+function mergeRepeatedContexts(points) {
+  const byContext = new Map();
+  for (const point of points) {
+    if (!byContext.has(point.contextTokens)) byContext.set(point.contextTokens, []);
+    byContext.get(point.contextTokens).push(point);
+  }
+  return [...byContext.values()].map((group) => {
+    if (group.length === 1) return group[0];
+    const ok = group.filter((p) => p.ok);
+    const mean = (field) => {
+      const values = ok.map((p) => p[field]).filter(isMeasured);
+      return values.length ? Number((values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(2)) : null;
+    };
+    const sources = [...new Set(ok.map((p) => p.timingSource).filter(Boolean))];
+    return {
+      ...group[0],
+      ok: ok.length > 0,
+      ...Object.fromEntries(POINT_RATE_FIELDS.map((field) => [field, mean(field)])),
+      timingSource: sources.length === 1 ? sources[0] : (sources.length ? 'mixed' : null),
+      error: ok.length ? null : group[0].error,
+      runs: group.length,
+      runsOk: ok.length,
+    };
+  });
 }
 
 /**
@@ -208,7 +292,7 @@ export function buildThroughputReport(assessments) {
 
   for (const assessment of list) {
     const samples = Array.isArray(assessment?.samples) ? assessment.samples : [];
-    const perf = assessment?.performance || {};
+    const perf = performanceOf(assessment);
     const points = [];
     for (const sample of samples) {
       if (!isMeasured(sample?.contextTokens)) continue;
@@ -248,12 +332,16 @@ export function buildThroughputReport(assessments) {
       peakTokensPerSecond: num(perf.peakTokensPerSecond),
       meanPromptTokensPerSecond: num(perf.meanPromptTokensPerSecond),
       meanCharsPerSecond: num(perf.meanCharsPerSecond),
+      // `true`: the chars/s column describes the visible answer only; the UI shows it as n/a.
+      reasoningHidden: perf.reasoningHidden ?? null,
       meanTtftMs: num(perf.meanTtftMs),
       // The discarded first request (load / warm-up); `null` for records measured before it existed.
       warmupMs: num(assessment?.warmup?.totalMs),
       timingSource: perf.timingSource || null,
       tokensEstimated: typeof perf.tokensEstimated === 'boolean' ? perf.tokensEstimated : null,
-      points: points.sort((a, b) => a.contextTokens - b.contextTokens),
+      // `profile: 'benchmark'` = repeated warm runs at one context, collapsed into one point below.
+      profile: assessment?.profile === 'benchmark' ? 'benchmark' : null,
+      points: mergeRepeatedContexts(points).sort((a, b) => a.contextTokens - b.contextTokens),
     });
   }
 
@@ -278,14 +366,26 @@ export function buildThroughputReport(assessments) {
   };
 }
 
-// Speed normalization anchor, in CHARACTERS per second. Chars/s, not tokens/s: a
-// runtime without a usage block would score `null` and drop out, and older records
-// carry no token counts, so chars/s is the one figure everywhere. Nothing derives
-// tokens from characters.
+// Speed normalization anchors. Decode tokens/s scores the axis whenever the runtime reported it:
+// it is the generation speed itself, where chars/s counts only the visible answer and reads ~0 for
+// a thinking model (#17430). Chars/s is the fallback for runtimes and older records without token
+// counts. The chars anchor is the tokens anchor at ~4 chars per token so the two bases score on the
+// same scale; nothing derives tokens from characters.
 //
-// 240 chars/s (~60 tok/s) is a comfortable interactive rate; at or above it the
-// axis scores 1, below it linear.
-const SPEED_CEILING_CHARS_PER_SECOND = 240;
+// 120 tok/s is fast for local decode on current Apple Silicon and GPUs; at or above it the axis
+// scores 1, below it linear. A lower anchor (60) scored every fast runtime 1 and stopped telling
+// an MTP runtime from the plain build it outruns.
+const SPEED_CEILING_TOKENS_PER_SECOND = 120;
+const SPEED_CEILING_CHARS_PER_SECOND = SPEED_CEILING_TOKENS_PER_SECOND * 4;
+
+/** Speed axis in [0, 1] from a performance summary, or `null` when no speed figure applies. */
+function speedScore(perf) {
+  if (isMeasured(perf.meanTokensPerSecond)) return clamp01(perf.meanTokensPerSecond / SPEED_CEILING_TOKENS_PER_SECOND);
+  if (perf.reasoningHidden !== true && isMeasured(perf.meanCharsPerSecond)) {
+    return clamp01(perf.meanCharsPerSecond / SPEED_CEILING_CHARS_PER_SECOND);
+  }
+  return null;
+}
 
 // Parameter-count anchor for the capability score. Local models above ~70B are
 // rare on consumer hardware and already score at the top of the curve.
@@ -320,7 +420,7 @@ export function parseParamsBillions({ params, modelId } = {}) {
  * @returns {{capability:number|null, speed:number|null, fidelity:number|null, memory:number|null}}
  */
 export function scoreAssessment(assessment) {
-  const perf = assessment?.performance || {};
+  const perf = performanceOf(assessment);
   const paramsB = parseParamsBillions({ params: assessment?.params, modelId: assessment?.modelId });
   const residentGb = assessment?.residentGb;
   const budgetGb = assessment?.environment?.memoryBudgetGb;
@@ -332,7 +432,7 @@ export function scoreAssessment(assessment) {
 
   return {
     capability: paramsB == null ? null : clamp01(Math.log10(1 + paramsB) / Math.log10(1 + PARAMS_CEILING_B)),
-    speed: isMeasured(perf.meanCharsPerSecond) ? clamp01(perf.meanCharsPerSecond / SPEED_CEILING_CHARS_PER_SECOND) : null,
+    speed: speedScore(perf),
     fidelity: isMeasured(perf.contextDegradation) ? clamp01(perf.contextDegradation) : null,
     memory,
   };
@@ -384,14 +484,14 @@ const INTENT_LABEL = {
  * described with a guess.
  */
 export function explainAssessment(assessment, intent) {
-  const perf = assessment?.performance || {};
+  const perf = performanceOf(assessment);
   const parts = [];
   // Tokens/s leads when the runtime reported token counts — it is the figure
   // people actually compare local models on. Chars/s is the fallback, never both:
   // two throughput numbers in one sentence read as a contradiction.
   if (isMeasured(perf.meanTokensPerSecond)) {
     parts.push(`${perf.meanTokensPerSecond} tok/s${perf.tokensEstimated ? ' (estimated)' : ''} measured`);
-  } else if (isMeasured(perf.meanCharsPerSecond)) {
+  } else if (perf.reasoningHidden !== true && isMeasured(perf.meanCharsPerSecond)) {
     parts.push(`${perf.meanCharsPerSecond} chars/s measured`);
   }
   if (isMeasured(perf.maxWorkingContextTokens)) {
@@ -456,7 +556,7 @@ export function rankByIntent(assessments, intent = 'balanced') {
       score,
       coverage,
       scores,
-      performance: assessment?.performance || null,
+      performance: assessment?.performance ? performanceOf(assessment) : null,
       // The measured footprint feeds the memory axis, so it travels WITH the entry.
       residentGb: Number.isFinite(assessment?.residentGb) ? assessment.residentGb : null,
       params: assessment?.params ?? null,
@@ -613,6 +713,51 @@ export function summarizeSweepScopes({ assessments, unassessed } = {}) {
   );
 }
 
+// ---- side-by-side benchmark ---------------------------------------------------
+
+/**
+ * The fixed warm benchmark Models › Performance runs on every selected model, so readings are
+ * comparable across runtimes (#17432, #17430): one discarded warm-up, then `runs` generations of
+ * `maxTokens` at one `contextTokens` prompt, under backend defaults. Fixed here, not sent by the
+ * client, so the count the consent gate names is the count that runs.
+ */
+// `minModels`/`maxModels` bound one request; they ride on the report so the picker cannot drift from the schema.
+export const BENCHMARK_PROFILE = Object.freeze({ contextTokens: 4096, runs: 3, maxTokens: 256, warmupRuns: 1, minModels: 2, maxModels: 8 });
+
+/** The repeated context list one benchmark measurement samples. */
+export const benchmarkContexts = () => Array.from({ length: BENCHMARK_PROFILE.runs }, () => BENCHMARK_PROFILE.contextTokens);
+
+/**
+ * Resolve the models a user picked for a side-by-side benchmark into sweep targets.
+ *
+ * Pure. Order follows the request, duplicates collapse, and every target runs at backend defaults
+ * (`tuning: {}`) so two runtimes are compared as shipped rather than under whichever tuning each
+ * last carried. A model is installed when it has a stored record or appears in `unassessed`;
+ * anything else, and any embedding model, lands in `missing` with the reason, so the route can
+ * refuse instead of queuing a measurement that can only fail.
+ *
+ * @param {object} options
+ * @param {Array<object>} options.assessments stored records of still-installed models
+ * @param {Array<{backend:string, modelId:string}>} options.unassessed installed models with no record
+ * @param {Array<{backend:string, modelId:string}>} options.models the user's selection
+ * @returns {{ targets: Array<object>, missing: Array<{backend:string, modelId:string, reason:string}> }}
+ */
+export function selectBenchmarkTargets({ assessments = [], unassessed = [], models = [] } = {}) {
+  const key = (m) => `${m?.backend}:${m?.modelId}`;
+  const installed = new Set([...(Array.isArray(assessments) ? assessments : []), ...(Array.isArray(unassessed) ? unassessed : [])].map(key));
+  const targets = [];
+  const missing = [];
+  const seen = new Set();
+  for (const model of Array.isArray(models) ? models : []) {
+    if (!model?.backend || !model?.modelId || seen.has(key(model))) continue;
+    seen.add(key(model));
+    if (isEmbeddingModel(model.modelId)) missing.push({ backend: model.backend, modelId: model.modelId, reason: 'is an embedding model with no generation to measure' });
+    else if (!installed.has(key(model))) missing.push({ backend: model.backend, modelId: model.modelId, reason: `is not installed on ${model.backend}` });
+    else targets.push({ backend: model.backend, modelId: model.modelId, tuning: {}, tuningKey: '', tuningLabel: null, reason: 'side-by-side benchmark' });
+  }
+  return { targets, missing };
+}
+
 // ---- staleness ---------------------------------------------------------------
 
 /**
@@ -749,39 +894,73 @@ export function reconcileFit(estimatedFit, measurement) {
   return { ...base, fit: measuredFit, fitSource: 'measured' };
 }
 
+// The measured axes Models › Comparison can plot for a local runtime, each read from one
+// `performance` summary field. `tokenCounted` rates inherit the record's `tokensEstimated` flag;
+// first-token time is a clock reading and does not.
+export const LOCAL_PERFORMANCE_METRICS = Object.freeze({
+  tokensPerSecond: { field: 'meanTokensPerSecond', noun: 'output (decode) tokens per second', tokenCounted: true },
+  prefillTokensPerSecond: { field: 'meanPromptTokensPerSecond', noun: 'prompt (prefill) tokens per second', tokenCounted: true },
+  ttftMs: { field: 'meanTtftMs', noun: 'time to first token in milliseconds', tokenCounted: false },
+});
+
+function describeSampling(assessment) {
+  const perf = assessment.performance;
+  const bench = assessment.profile === 'benchmark' ? assessment.benchmark : null;
+  if (bench) return `${perf.samplesOk ?? bench.runs} warm runs at ${Number(bench.contextTokens).toLocaleString('en-US')} tokens of context (side-by-side benchmark)`;
+  return `${perf.samplesOk ?? 'the'} successful context sizes`;
+}
+
 /**
- * This machine's measured decode speed per `runtime:modelId`, for the Models › Comparison speed axis.
- * A reading that still matches the live machine wins over a stale one, then the backend-default
- * (untuned) reading over a tuned one, then the newest. A stale reading (RAM, CPU, OS or backend
- * version changed since) is kept but marked estimated with the change named; a record without a
- * token rate is left out rather than read as zero.
+ * This machine's measured performance per `runtime:modelId`, for the Models › Comparison measured
+ * axes (decode tok/s, prefill tok/s, time to first token). Each metric picks its own record: one
+ * that still matches the live machine wins over a stale one, then the backend-default (untuned)
+ * reading over a tuned one, then the newest. A stale reading (RAM, CPU, OS or backend version
+ * changed since) is kept but marked estimated with the change named; a record without that metric
+ * is skipped for it rather than read as zero.
  *
  * @param {Array<object>} assessments stored assessment records
  * @param {Record<string, object>} [liveEnvironments] live environment per backend (`captureLiveEnvironments`)
- * @returns {Map<string, {value: number, estimated: boolean, method: string, source: object}>}
+ * @returns {Map<string, Record<keyof LOCAL_PERFORMANCE_METRICS, object|null>>} each metric is
+ *   `{value, estimated, method, source, measurement: {assessedAt, runtime, tuningLabel, stale, staleReason, profile}}` or null
  */
-export function localSpeedFromAssessments(assessments, liveEnvironments = {}) {
+export function localPerformanceFromAssessments(assessments, liveEnvironments = {}) {
   const best = new Map();
   for (const assessment of Array.isArray(assessments) ? assessments : []) {
-    const value = assessment?.performance?.meanTokensPerSecond;
-    if (!isMeasured(value) || value <= 0 || !assessment.backend || !assessment.modelId) continue;
+    if (!assessment?.backend || !assessment.modelId) continue;
     const staleness = compareEnvironments(assessment.environment, liveEnvironments?.[assessment.backend]);
-    const candidate = { assessment, staleness, rank: [staleness.stale ? 0 : 1, assessment.tuningKey ? 0 : 1, Date.parse(assessment.assessedAt || '') || 0] };
+    const rank = [staleness.stale ? 0 : 1, assessment.tuningKey ? 0 : 1, Date.parse(assessment.assessedAt || '') || 0];
     const key = `${assessment.backend}:${assessment.modelId}`;
-    const prior = best.get(key);
-    const differs = prior ? candidate.rank.findIndex((part, i) => part !== prior.rank[i]) : -1;
-    if (!prior || (differs !== -1 && candidate.rank[differs] > prior.rank[differs])) best.set(key, candidate);
+    if (!best.has(key)) best.set(key, {});
+    const slots = best.get(key);
+    for (const [metric, { field }] of Object.entries(LOCAL_PERFORMANCE_METRICS)) {
+      const value = assessment.performance?.[field];
+      if (!isMeasured(value) || value <= 0) continue;
+      const prior = slots[metric];
+      const differs = prior ? rank.findIndex((part, i) => part !== prior.rank[i]) : -1;
+      if (!prior || (differs !== -1 && rank[differs] > prior.rank[differs])) slots[metric] = { assessment, staleness, rank, value };
+    }
   }
-  return new Map([...best].map(([key, { assessment, staleness }]) => {
-    const perf = assessment.performance;
+  return new Map([...best].map(([key, slots]) => [key, Object.fromEntries(Object.entries(LOCAL_PERFORMANCE_METRICS).map(([metric, spec]) => {
+    const slot = slots[metric];
+    if (!slot) return [metric, null];
+    const { assessment, staleness, value } = slot;
     const tuning = assessment.tuningKey ? ` under tuning ${assessment.tuningLabel || assessment.tuningKey}` : '';
+    const estimatedTokens = spec.tokenCounted && assessment.performance.tokensEstimated === true;
     const stale = describeStaleness(staleness);
-    const methodology = `Measured on this machine in Models › Performance: mean output tokens per second across ${perf.samplesOk ?? 'the'} successful context sizes${tuning}${perf.tokensEstimated ? '; token counts estimated from streamed frames' : ''}.${stale ? ` ${stale} Re-run the assessment to refresh it.` : ''}`;
-    return [key, {
-      value: perf.meanTokensPerSecond,
-      estimated: perf.tokensEstimated === true || staleness.stale,
+    const methodology = `Measured on this machine in Models › Performance: mean ${spec.noun} across ${describeSampling(assessment)}${tuning}${estimatedTokens ? '; token counts estimated from streamed frames' : ''}.${stale ? ` ${stale} Re-run the assessment to refresh it.` : ''}`;
+    return [metric, {
+      value,
+      estimated: estimatedTokens || staleness.stale,
       method: methodology,
       source: { url: '/models/performance/results', retrievedAt: assessment.assessedAt || null, methodology },
+      measurement: {
+        assessedAt: assessment.assessedAt || null,
+        runtime: assessment.backend,
+        tuningLabel: assessment.tuningKey ? (assessment.tuningLabel || assessment.tuningKey) : null,
+        stale: staleness.stale,
+        staleReason: stale,
+        profile: assessment.profile === 'benchmark' ? 'benchmark' : 'context-sweep',
+      },
     }];
-  }));
+  }))]));
 }

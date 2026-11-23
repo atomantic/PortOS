@@ -1,4 +1,5 @@
 import { getRunwayModelCatalog } from '../services/runwayModelCatalog.js';
+import { getFalImageModelCatalog } from '../services/falImageModelCatalog.js';
 /**
  * Image Generation Routes — works against the external SD API, local mflux,
  * or the Codex CLI built-in image_gen tool, depending on settings.imageGen.mode
@@ -73,6 +74,12 @@ router.get('/runway-models', asyncHandler(async (_req, res) => {
 }));
 router.post('/runway-models/refresh', asyncHandler(async (_req, res) => {
   res.json(await getRunwayModelCatalog({ refresh: true }));
+}));
+router.get('/fal-models', asyncHandler(async (_req, res) => {
+  res.json(await getFalImageModelCatalog());
+}));
+router.post('/fal-models/refresh', asyncHandler(async (_req, res) => {
+  res.json(await getFalImageModelCatalog({ refresh: true }));
 }));
 
 const routeSource = (req) => ({ route: `${req.baseUrl}${req.route?.path ?? ''}`, method: req.method });

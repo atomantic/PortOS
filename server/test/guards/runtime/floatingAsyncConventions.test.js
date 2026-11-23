@@ -5,10 +5,9 @@
  *   - Nested helpers, member-access calls (`obj.run()`), namespace imports, and re-exports are not resolved.
  */
 import { describe, it, expect } from 'vitest';
-import { existsSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, relative, resolve } from 'path';
 import { parse } from '@babel/parser';
-import { readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
+import { guardCorpus, readText, REPO_ROOT, trackedFiles } from '../../../../scripts/lib/guardCorpus.js';
 
 const SERVER_ROOT = join(REPO_ROOT, 'server');
 
@@ -132,7 +131,12 @@ function createFloatingAsyncScanner(readSource = (file) => readText(file)) {
   const asyncExportsOf = (absPath) => {
     if (!resolutions.has(absPath)) {
       const candidates = [absPath, `${absPath}.js`, join(absPath, 'index.js')];
-      const file = candidates.find((p) => p.endsWith('.js') && existsSync(p) && !p.endsWith('/'));
+      // The corpus stats each path once for every guard in the process.
+      const isFile = (p) => {
+        const stats = p.endsWith('.js') ? guardCorpus().lstat(relative(REPO_ROOT, p)) : null;
+        return stats !== null && !stats.isDirectory();
+      };
+      const file = candidates.find(isFile);
       resolutions.set(absPath, file ?? null);
     }
     const file = resolutions.get(absPath);

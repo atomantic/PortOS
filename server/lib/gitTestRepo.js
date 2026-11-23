@@ -15,6 +15,7 @@ import { rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, basename } from 'path';
 import { assertGitWorkSettled, execGit } from './execGit.js';
+import { releaseWindowsGitSupervisorForTests } from './windowsGitProcess.js';
 import { assertTempPath } from './tempPathGuard.js';
 
 export const SKIP_HEAVY_INTEGRATION = ['1', 'true', 'yes'].includes(
@@ -81,7 +82,9 @@ async function cleanupTemplates() {
     while (lifecycle.operations.size) await Promise.allSettled([...lifecycle.operations]);
     // Fixture operations may still launch Git while they drain. Fence the
     // supervisor only after those operations finish, before removing templates.
-    await globalThis.__portosGitSupervisorCleanup?.();
+    // Compiler-timeout holds stay on the strict cleanup. Fixture teardown uses
+    // the release path so that hold does not become a second file failure.
+    await releaseWindowsGitSupervisorForTests();
     const failures = [];
     for (const dir of [...dirs]) {
       try {

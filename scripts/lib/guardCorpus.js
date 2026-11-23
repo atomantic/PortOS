@@ -121,7 +121,13 @@ export function createGuardCorpus(root = REPO_ROOT) {
   const lstatOf = (path) => {
     let stats = presence.get(path);
     if (stats === undefined) {
-      stats = lstatSync(join(base, path), { throwIfNoEntry: false }) ?? null;
+      try {
+        stats = lstatSync(join(base, path), { throwIfNoEntry: false }) ?? null;
+      } catch (error) {
+        // `throwIfNoEntry` does not cover a path that descends through a file (`a.mjs/index.js`).
+        if (error.code !== 'ENOTDIR') throw error;
+        stats = null;
+      }
       presence.set(path, stats);
     }
     return stats;
@@ -196,7 +202,8 @@ export function createGuardCorpus(root = REPO_ROOT) {
       const abs = absolute(path);
       text = texts.get(abs);
       if (text === undefined) {
-        text = readFileSync(abs, 'utf8');
+        // Binary-aware checks may already have loaded the bytes.
+        text = buffers.get(abs)?.toString('utf8') ?? readFileSync(abs, 'utf8');
         texts.set(abs, text);
       }
       texts.set(path, text);

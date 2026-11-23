@@ -270,7 +270,7 @@ export default function RunEventsTab() {
             ))}
           </ul>
 
-          <div className="rounded border border-port-border p-3">
+          <div className="min-w-0 rounded border border-port-border p-3">
             {!selectedId && (
               <p className="flex items-center gap-2 text-sm text-port-text-muted">
                 <ScrollText className="h-4 w-4" /> Select a run to replay its lifecycle.
@@ -439,8 +439,8 @@ function RunDiagnostic({ detail }) {
         </dl>
       )}
 
-      <div className="max-h-72 overflow-y-auto">
-        <table className="w-full text-left text-xs">
+      <div className="max-h-72 overflow-auto">
+        <table className="w-full min-w-[480px] text-left text-xs">
           <thead className="text-port-text-muted">
             <tr>
               <th className="py-1 pr-2 font-normal">When</th>

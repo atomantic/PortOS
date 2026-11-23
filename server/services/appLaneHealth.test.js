@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { collectLaneHealth, getAppLaneHealth } from './appLaneHealth.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearLaneHealthCache, collectLaneHealth, getAppLaneHealth } from './appLaneHealth.js';
 
 const NOW = Date.parse('2026-10-17T12:00:00.000Z');
 const DAY = 86_400_000;
@@ -10,12 +10,19 @@ const iso = (daysAgo) => new Date(NOW - daysAgo * DAY).toISOString();
 
 // One fake per spawn: the forge CLI answers by subcommand, git by its log call.
 const forgeExec = ({ issues = [], pullRequests = [] } = {}) => vi.fn(async (_cli, args) => {
+  if ((args[0] === 'pr' || args[0] === 'mr') && args[1] === 'view') {
+    const found = pullRequests instanceof Array ? pullRequests.find((pr) => String(pr.number ?? pr.iid) === args[2]) : null;
+    return found ? { code: 0, stdout: JSON.stringify(found) } : { code: 1, stdout: '', stderr: 'Could not resolve to a PullRequest' };
+  }
   const rows = args[0] === 'issue' ? issues : pullRequests;
   return rows instanceof Error ? { code: -1, stdout: '', stderr: rows.message } : { code: 0, stdout: JSON.stringify(rows) };
 });
 const gitLog = (records) => vi.fn(async () => ({ exitCode: 0, stdout: records.map(({ sha, subject, body = '' }) => `${sha}\x1f${subject}\x1f${body}\x1e\n`).join('') }));
 
 describe('appLaneHealth', () => {
+  beforeEach(() => { clearLaneHealthCache(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
   it('reads one GitHub lane through gh and git, linking PRs either way and matching a rebase-merged revert', async () => {
     const exec = forgeExec({
       issues: [
@@ -38,7 +45,11 @@ describe('appLaneHealth', () => {
       'issue', 'list', '--state', 'all', '--limit', '500', '--search', 'created:>=2026-07-19 sort:created-desc', '--label', 'complexity',
       '--json', 'number,title,labels,createdAt,closedAt,state,stateReason,body,url,closedByPullRequestsReferences',
     ], { cwd: '/repo', env: GH.env });
-    expect(exec).toHaveBeenCalledWith('gh', expect.arrayContaining(['pr', 'list', '--state', 'merged', '--search', 'merged:>=2026-08-18 sort:updated-desc']), { cwd: '/repo', env: GH.env });
+    // Only the PRs the revert commits name are read: #51 by number, PR 50 by the SHA its revert cites.
+    const prCalls = exec.mock.calls.filter(([, args]) => args[0] === 'pr').map(([, args]) => args.slice(0, 5).join(' '));
+    expect(prCalls).toEqual(expect.arrayContaining(['pr view 51 --json number,mergeCommit,commits,closingIssuesReferences,body', 'pr list --state merged --limit']));
+    expect(exec.mock.calls.some(([, args]) => args.includes('def1234567890'))).toBe(true);
+    expect(prCalls.some((call) => call.includes('merged:>='))).toBe(false);
     expect(runGit).toHaveBeenCalledWith(['log', '--since=2026-08-18T12:00:00.000Z', '-i', '--grep=^revert', '--format=%H%x1f%s%x1f%b%x1e', 'HEAD'], '/repo', expect.objectContaining({ ignoreExitCode: true }));
     expect(result).toMatchObject({ ok: true, truncated: false, partial: [], windowDays: 60, refileDays: 30 });
     expect(result.lanes).toHaveLength(1);
@@ -59,10 +70,11 @@ describe('appLaneHealth', () => {
       ],
       pullRequests: [{ iid: 70, merge_commit_sha: 'abc1234567', sha: 'def1234567', description: 'Closes #7' }],
     });
-    const runGit = gitLog([{ sha: 'cccc333', subject: 'Revert "drift"', body: 'This reverts commit abc1234567.' }]);
+    const runGit = gitLog([{ sha: 'cccc333', subject: 'Revert "drift" (!70)', body: 'This reverts commit abc1234567.' }]);
     const result = await collectLaneHealth(APP, { forge: GLAB, now: NOW, deps: { exec, runGit } });
     expect(exec).toHaveBeenCalledWith('glab', ['issue', 'list', '--all', '-P', '1000'], expect.any(Object));
-    expect(exec).toHaveBeenCalledWith('glab', ['mr', 'list', '--merged', '-P', '300'], expect.any(Object));
+    expect(exec).toHaveBeenCalledWith('glab', ['mr', 'view', '70', '--output', 'json'], expect.any(Object));
+    expect(exec).not.toHaveBeenCalledWith('glab', expect.arrayContaining(['list', '--merged']), expect.anything());
     expect(result.lanes.length).toBeGreaterThan(20);
     expect(result.lanes.find(({ id }) => id === 'simplify')).toMatchObject({ filed: 1, completed: 1, reverted: 1 });
     expect(result.lanes.find(({ id }) => id === 'better-complexity')).toMatchObject({ filed: 1, open: 1 });
@@ -71,15 +83,16 @@ describe('appLaneHealth', () => {
     expect(exec.mock.calls.filter(([, args]) => args[0] === 'issue').at(-1)[1]).toEqual(['issue', 'list', '--all', '-P', '1000']);
   });
 
-  it('shortens a truncated window and names failed PR and commit reads instead of reading them as no reverts', async () => {
+  it('shortens a truncated window and names a failed commit read instead of reading them as no reverts', async () => {
     const issues = [
       { number: 9, title: 'Newest', labels: ['complexity'], createdAt: iso(3), state: 'OPEN' },
       { number: 8, title: 'Oldest seen', labels: ['complexity'], createdAt: iso(20), state: 'OPEN' },
     ];
     const exec = forgeExec({ issues, pullRequests: new Error('gh: HTTP 500') });
     const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit: vi.fn().mockResolvedValue({ exitCode: 128, stdout: '' }) } });
-    expect(result).toMatchObject({ ok: true, truncated: false, partial: ['pull-requests', 'commits'] });
+    expect(result).toMatchObject({ ok: true, truncated: false, partial: ['commits'] });
 
+    clearLaneHealthCache();
     const full = Array.from({ length: 500 }, (_, index) => ({ ...issues[0], number: 1000 + index, createdAt: iso(3 + index / 100) }));
     const truncated = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec: forgeExec({ issues: full }), runGit: vi.fn().mockRejectedValue(new Error('timeout')) } });
     expect(truncated).toMatchObject({ ok: true, truncated: true, partial: ['commits'], from: iso(3 + 499 / 100) });
@@ -114,11 +127,102 @@ describe('appLaneHealth', () => {
     expect(exec).toHaveBeenCalledWith('gh', expect.any(Array), { cwd: '/repo', env: { PATH: '/bin', GH_TOKEN: 'test-token' } });
 
     deps.exec = forgeExec({ issues: new Error('To get started with GitHub CLI, please run:  gh auth login') });
-    expect(await getAppLaneHealth(APP, deps)).toMatchObject({ available: false, reason: 'issues', error: expect.stringContaining('gh auth login') });
+    expect(await getAppLaneHealth(APP, { ...deps, refresh: true })).toMatchObject({ available: false, reason: 'issues', error: expect.stringContaining('gh auth login') });
     expect(warn).toHaveBeenCalledTimes(1);
 
     deps.resolveTracker.mockResolvedValueOnce({ forge: 'jira' });
     expect(await getAppLaneHealth(APP, deps)).toEqual({ available: false, reason: 'forge-unavailable' });
     warn.mockRestore();
+  });
+  it('skips the pull request forge read entirely when no revert commit is in the window', async () => {
+    const exec = forgeExec({ issues: [{ number: 5, title: 'Hotspot', labels: ['complexity'], createdAt: iso(10), state: 'OPEN' }] });
+    // The grep prefilter matches a body line; only a Revert subject counts.
+    const runGit = gitLog([{ sha: 'dddd444', subject: 'feat: add thing', body: 'Revert the flag default later' }]);
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    expect(result).toMatchObject({ ok: true, partial: [] });
+    expect(exec.mock.calls.map(([, args]) => args[0])).toEqual(['issue']);
+    const unreadable = forgeExec();
+    await collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps: { exec: unreadable, runGit: vi.fn().mockResolvedValue({ exitCode: 128, stdout: '' }) } });
+    expect(unreadable.mock.calls.map(([, args]) => args[0])).toEqual(['issue']);
+  });
+
+  it('detects a revert older than the newest merged PRs by resolving only the PRs it names, tolerating a #N that is an issue', async () => {
+    const exec = forgeExec({
+      issues: [{ number: 5, title: 'Old fix', labels: ['complexity'], createdAt: iso(55), closedAt: iso(54), state: 'CLOSED', stateReason: 'COMPLETED', closedByPullRequestsReferences: [{ number: 12 }] }],
+      pullRequests: [{ number: 12, mergeCommit: { oid: 'abc9876543210' }, commits: [], closingIssuesReferences: [], body: '' }],
+    });
+    const runGit = gitLog([{ sha: 'eeee555', subject: 'Revert "fix (#12)"', body: 'Refs #999' }]);
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    expect(result.partial).toEqual([]);
+    expect(result.lanes[0]).toMatchObject({ filed: 1, reverted: 1 });
+    expect(exec.mock.calls.filter(([, args]) => args[0] === 'pr').map(([, args]) => args[2])).toEqual(expect.arrayContaining(['12', '999']));
+  });
+
+  it('does not let a read that was in flight across a cache clear repopulate the cache', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const slow = vi.fn(async () => { await gate; return { code: 0, stdout: '[]' }; });
+    const deps = { exec: slow, runGit: gitLog([]) };
+    const stale = collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps });
+    clearLaneHealthCache();
+    release();
+    await stale;
+    const fresh = forgeExec();
+    await collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps: { exec: fresh, runGit: gitLog([]) } });
+    expect(fresh).toHaveBeenCalled();
+  });
+
+  it('names a failed targeted PR lookup as a partial read', async () => {
+    const exec = vi.fn(async (_cli, args) => (args[0] === 'issue' ? { code: 0, stdout: '[]' } : { code: 1, stdout: '', stderr: 'gh: HTTP 502' }));
+    const runGit = gitLog([{ sha: 'ffff666', subject: 'Revert "x (#3)"' }]);
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'better-complexity', now: NOW, deps: { exec, runGit } });
+    expect(result).toMatchObject({ ok: true, partial: ['pull-requests'] });
+  });
+
+  it('filters a consolidated domain by its metric and member labels on GitHub, and reads glab unfiltered', async () => {
+    const exec = forgeExec({
+      issues: [
+        { number: 1, title: 'Member finding', labels: ['typing'], createdAt: iso(5), state: 'OPEN' },
+        { number: 2, title: 'Domain finding', labels: ['architecture-maintainability'], createdAt: iso(4), state: 'OPEN' },
+      ],
+    });
+    const result = await collectLaneHealth(APP, { forge: GH, taskType: 'architecture-maintainability', now: NOW, deps: { exec, runGit: gitLog([]) } });
+    const [, args] = exec.mock.calls.find(([, call]) => call[0] === 'issue');
+    expect(args[args.indexOf('--limit') + 1]).toBe('500');
+    expect(args).not.toContain('--label');
+    expect(args[args.indexOf('--search') + 1]).toBe('created:>=2026-07-19 sort:created-desc label:"architecture-maintainability","code-quality","structural-drift","module-hygiene","typing","source:architecture-maintainability"');
+    expect(result.lanes).toEqual([expect.objectContaining({ id: 'architecture-maintainability', filed: 2 })]);
+
+    const glab = forgeExec();
+    await collectLaneHealth(APP, { forge: GLAB, taskType: 'architecture-maintainability', now: NOW, deps: { exec: glab, runGit: gitLog([]) } });
+    expect(glab).toHaveBeenCalledWith('glab', ['issue', 'list', '--all', '-P', '1000'], expect.any(Object));
+  });
+
+  it('serves a fresh read from cache, shares an in-flight read, honors refresh, expires after 5 minutes and never stores a failure', async () => {
+    const exec = forgeExec();
+    const deps = { exec, runGit: gitLog([]) };
+    const read = (extra = {}) => collectLaneHealth(APP, { forge: GH, taskType: 'ux', now: NOW, deps, ...extra });
+    const [first, second] = await Promise.all([read(), read()]);
+    expect(second).toBe(first);
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(await read()).toBe(first);
+    expect(exec).toHaveBeenCalledTimes(1);
+    // Another lane, another forge CLI and another repo are separate entries.
+    await collectLaneHealth(APP, { forge: GH, taskType: 'ui-runtime-bugs', now: NOW, deps });
+    await collectLaneHealth({ ...APP, repoPath: '/other' }, { forge: GH, taskType: 'ux', now: NOW, deps });
+    expect(exec).toHaveBeenCalledTimes(3);
+    expect(await read({ refresh: true })).not.toBe(first);
+    expect(exec).toHaveBeenCalledTimes(4);
+
+    const later = Date.now() + 5 * 60_000 + 1;
+    vi.spyOn(Date, 'now').mockReturnValue(later);
+    await read();
+    expect(exec).toHaveBeenCalledTimes(5);
+
+    const failing = forgeExec({ issues: new Error('gh: HTTP 502') });
+    const failDeps = { exec: failing, runGit: gitLog([]) };
+    await collectLaneHealth(APP, { forge: GH, taskType: 'design', now: NOW, deps: failDeps });
+    await collectLaneHealth(APP, { forge: GH, taskType: 'design', now: NOW, deps: failDeps });
+    expect(failing.mock.calls.filter(([, args]) => args[0] === 'issue')).toHaveLength(2);
   });
 });

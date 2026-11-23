@@ -2,16 +2,15 @@
  * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`).
  * Fix: Fix the missing export/member name, or update the mock factory.
  * What this guard cannot see:
- *   - Scoped to git-tracked sources under `client/src` (comments masked); non-literal `vi.mock` factories are not checked.
+ *   - Scoped to git-tracked sources under `client/src` (comments masked); `vi.mock` factories that are not object literals (`() => makeMocks()`) are not read.
  */
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { execSync } from 'child_process';
 import { trackedSourceFiles } from '../../trackedFiles.js';
 import { lineOf, maskComments } from '../../classNameScan.js';
 import { mockDrift as scanMockDriftIn, unusedAllowed } from '../../../../../scripts/lib/mockContractScan.js';
-import { readText, REPO_ROOT } from '../../../../../scripts/lib/guardCorpus.js';
+import { readText, REPO_ROOT, trackedFiles } from '../../../../../scripts/lib/guardCorpus.js';
 
 const CLIENT_ROOT = join(REPO_ROOT, 'client');
 
@@ -102,14 +101,16 @@ const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { 
 const read = (file) => readText(join(CLIENT_ROOT, file));
 
 // Shared page mock scaffolds (`src/test/*PageMocks.jsx`) register `vi.mock` for several suites, so they are scanned too.
-const trackedTestFiles = () => execSync('git ls-files src', { cwd: CLIENT_ROOT, encoding: 'utf8' })
-  .trim().split('\n').filter((f) => /\.test\.jsx?$/.test(f) || /^src\/test\/\w+PageMocks\.jsx$/.test(f));
+const trackedTestFiles = () => trackedFiles(CLIENT_ROOT, ['src'])
+  .filter((f) => /\.test\.jsx?$/.test(f) || /^src\/test\/\w+PageMocks\.jsx$/.test(f));
 
 describe('module contract conventions', () => {
   const files = trackedSourceFiles(CLIENT_ROOT);
+  const testFiles = trackedTestFiles();
 
   it('scans a populated client tree', () => {
     expect(files.length).toBeGreaterThan(100);
+    expect(testFiles.length).toBeGreaterThan(100);
   });
 
   it('detects a missing member and a drifted mock', () => {
@@ -132,7 +133,7 @@ describe('module contract conventions', () => {
       expect(violations, 'call a member the module defines, or add the member to the module').toEqual([]);
 
       const allowed = new Set([...members, ...exportNames, '__esModule']);
-      const drift = trackedTestFiles().flatMap((file) => mockDrift(read(file), file, contract, allowed));
+      const drift = testFiles.flatMap((file) => mockDrift(read(file), file, contract, allowed));
       expect(drift, 'a mock must not define a member the real module lacks').toEqual([]);
     });
   }
@@ -144,7 +145,7 @@ describe('module contract conventions', () => {
   });
 
   it('mocks only members the real modules export', () => {
-    const drift = trackedTestFiles().flatMap((file) => scanMockDrift(join(CLIENT_ROOT, file), read(file)));
+    const drift = testFiles.flatMap((file) => scanMockDrift(join(CLIENT_ROOT, file), read(file)));
     expect(drift, 'delete the dead key, or mock the module that really exports it').toEqual([]);
     expect(unusedAllowed(MOCK_ADAPTERS, usedAdapters), 'delete the stale MOCK_ADAPTERS entry').toEqual([]);
   }, 60_000); // reads every tracked client test file; a loaded runner overran the 15s default

@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from '../../ui/Toast';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import {
   getPlatformAccounts,
   moltworldRateLimits,
@@ -30,13 +32,50 @@ import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { formatCooldown, formatDateTime } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
 
+const splitList = (text) => text.split(',').map(t => t.trim()).filter(Boolean);
+
+// The shape the Personality form saves. Topics and quirks come from the text
+// inputs because those hold uncommitted typing until blur.
+const buildPersonalityPayload = (formData, topicsText, quirksText) => ({
+  name: formData.name,
+  description: formData.description,
+  userId: formData.userId,
+  personality: { ...formData.personality, topics: splitList(topicsText), quirks: splitList(quirksText) },
+  avatar: formData.avatar
+});
+
+const buildAiConfig = (config) => {
+  if (!config) return undefined;
+  const cleaned = {};
+  if (config.providerId) cleaned.providerId = config.providerId;
+  if (config.model) cleaned.model = config.model;
+  const fnKeys = ['content', 'engagement', 'challenge'];
+  for (const key of fnKeys) {
+    if (config[key]?.providerId) {
+      cleaned[key] = { providerId: config[key].providerId };
+      if (config[key].model) cleaned[key].model = config[key].model;
+    }
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+};
+
+// undefined (no override) and {} must compare equal for dirty tracking.
+const aiConfigKey = (config) => JSON.stringify(buildAiConfig(config) ?? null);
+
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
 
-  // Personality form state
+  // Personality form and AI provider drafts are independent: saving one must
+  // never reset the other. Each has a saved snapshot so dirtiness is derived,
+  // and drafts hydrate only when the agent identity changes.
   const [formData, setFormData] = useState(null);
   const [topicsText, setTopicsText] = useState('');
   const [quirksText, setQuirksText] = useState('');
+  const [savedPersonalityKey, setSavedPersonalityKey] = useState(null);
+  const [savingPersonality, setSavingPersonality] = useState(false);
+  const [aiConfig, setAiConfig] = useState({});
+  const [savedAiConfigKey, setSavedAiConfigKey] = useState(null);
+  const [savingAiConfig, setSavingAiConfig] = useState(false);
 
   // Providers state (for AI config section)
   const [providers, setProviders] = useState([]);
@@ -47,6 +86,9 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsError, setAccountsError] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
+  const [accountSubmitting, setAccountSubmitting] = useState(false);
+  const [deletingAccountId, setDeletingAccountId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [accountForm, setAccountForm] = useState({
     platform: 'moltbook',
     name: '',
@@ -68,28 +110,27 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
 
-  // Initialize form from agent
+  // Hydrate drafts only when a different agent loads. A refetch of the same
+  // agent (after a save or enabled toggle) must not wipe unsaved edits, so the
+  // dependency is agent?.id and not agent.
   useEffect(() => {
     if (!agent) return;
-    setFormData({
+    const next = {
       name: agent.name,
       description: agent.description || '',
       userId: agent.userId,
       personality: { ...DEFAULT_PERSONALITY, ...agent.personality },
-      avatar: { ...DEFAULT_AVATAR, ...agent.avatar },
-      enabled: agent.enabled,
-      aiConfig: agent.aiConfig || {}
-    });
-  }, [agent]);
-
-  // Sync text fields — only when personality arrays change, not on every formData update
-  const topicsKey = JSON.stringify(formData?.personality?.topics);
-  const quirksKey = JSON.stringify(formData?.personality?.quirks);
-  useEffect(() => {
-    if (!formData) return;
-    setTopicsText(formData.personality.topics.join(', '));
-    setQuirksText(formData.personality.quirks.join(', '));
-  }, [topicsKey, quirksKey]);
+      avatar: { ...DEFAULT_AVATAR, ...agent.avatar }
+    };
+    const topics = next.personality.topics.join(', ');
+    const quirks = next.personality.quirks.join(', ');
+    setFormData(next);
+    setTopicsText(topics);
+    setQuirksText(quirks);
+    setSavedPersonalityKey(JSON.stringify(buildPersonalityPayload(next, topics, quirks)));
+    setAiConfig(agent.aiConfig || {});
+    setSavedAiConfigKey(aiConfigKey(agent.aiConfig));
+  }, [agent?.id]);
 
   const fetchAccounts = useCallback(async () => {
     setAccountsLoading(true);
@@ -176,36 +217,42 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     return filterSelectableModels(p?.models);
   };
 
-  const buildAiConfig = (config) => {
-    if (!config) return undefined;
-    const cleaned = {};
-    if (config.providerId) cleaned.providerId = config.providerId;
-    if (config.model) cleaned.model = config.model;
-    const fnKeys = ['content', 'engagement', 'challenge'];
-    for (const key of fnKeys) {
-      if (config[key]?.providerId) {
-        cleaned[key] = { providerId: config[key].providerId };
-        if (config[key].model) cleaned[key].model = config[key].model;
-      }
-    }
-    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
-  };
+  const personalityPayload = formData ? buildPersonalityPayload(formData, topicsText, quirksText) : null;
+  const personalityDirty = personalityPayload !== null && JSON.stringify(personalityPayload) !== savedPersonalityKey;
+  const aiConfigDirty = aiConfigKey(aiConfig) !== savedAiConfigKey;
+  const hasUnsavedChanges = personalityDirty || aiConfigDirty || savingPersonality || savingAiConfig;
 
+  // The request helper toasts failures; the catch keeps the draft and re-enables Save.
   const handleSave = async (e) => {
     e.preventDefault();
-    const aiConfig = buildAiConfig(formData.aiConfig);
-    const submitData = {
-      ...formData,
-      personality: {
-        ...formData.personality,
-        topics: topicsText.split(',').map(t => t.trim()).filter(Boolean),
-        quirks: quirksText.split(',').map(t => t.trim()).filter(Boolean)
-      },
-      aiConfig
-    };
-    await updateAgentPersonality(agentId, submitData);
-    toast.success('Agent updated');
-    onAgentUpdate?.();
+    if (savingPersonality) return;
+    setSavingPersonality(true);
+    try {
+      await updateAgentPersonality(agentId, personalityPayload);
+      setSavedPersonalityKey(JSON.stringify(personalityPayload));
+      toast.success('Agent updated');
+      onAgentUpdate?.();
+    } catch {
+      // Draft stays intact for retry.
+    } finally {
+      setSavingPersonality(false);
+    }
+  };
+
+  const handleSaveAiConfig = async () => {
+    if (savingAiConfig) return;
+    const cleaned = buildAiConfig(aiConfig);
+    setSavingAiConfig(true);
+    try {
+      await updateAgentPersonality(agentId, { aiConfig: cleaned });
+      setSavedAiConfigKey(aiConfigKey(aiConfig));
+      toast.success(cleaned ? 'AI providers saved' : 'Reset to system defaults');
+      onAgentUpdate?.();
+    } catch {
+      // Draft stays intact for retry.
+    } finally {
+      setSavingAiConfig(false);
+    }
   };
 
   const updatePersonality = (field, value) => {
@@ -266,25 +313,43 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleAccountSubmit = async (e) => {
     e.preventDefault();
-    const result = await registerPlatformAccount({
-      agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
-    });
-    resetAccountForm();
-    fetchAccounts();
-
-    if (result.claimUrl) {
-      setTestResult({
-        accountId: result.id,
-        success: true,
-        message: 'Account registered! Visit the claim URL to activate.',
-        claimUrl: result.claimUrl
+    if (accountSubmitting) return;
+    setAccountSubmitting(true);
+    try {
+      const result = await registerPlatformAccount({
+        agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
       });
+      resetAccountForm();
+      fetchAccounts();
+
+      if (result?.claimUrl) {
+        setTestResult({
+          accountId: result.id,
+          success: true,
+          message: 'Account registered! Visit the claim URL to activate.',
+          claimUrl: result.claimUrl
+        });
+      }
+    } catch {
+      // request() already toasts; keep the form so a failed register can be retried.
+    } finally {
+      setAccountSubmitting(false);
     }
   };
 
-  const handleAccountDelete = async (id) => {
-    await deletePlatformAccount(id);
-    fetchAccounts();
+  const handleAccountDelete = (id) => {
+    if (deletingAccountId) return;
+    confirmDelete(async () => {
+      setDeletingAccountId(id);
+      try {
+        await deletePlatformAccount(id);
+        setAccounts((prev) => prev.filter((account) => account.id !== id));
+      } catch {
+        // request() already toasts; leave the account in the list.
+      } finally {
+        setDeletingAccountId(null);
+      }
+    });
   };
 
   const handleAccountTest = async (id) => {
@@ -346,7 +411,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
             <form onSubmit={handleSave}>
               {/* Name + Style */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <FormField label="Name">
                   <input
                     type="text"
@@ -380,8 +445,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               </FormField>
 
               {/* Tone + Avatar (emoji + color) */}
-              <div className="flex items-end gap-4 mb-4">
-                <FormField label="Tone" className="flex-1">
+              <div className="flex flex-wrap items-end gap-2 mb-4">
+                <FormField label="Tone" className="flex-1 min-w-0">
                   <input
                     type="text"
                     value={formData.personality.tone}
@@ -410,13 +475,13 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
               </div>
 
               {/* Topics + Quirks */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <FormField label="Topics (comma-separated)">
                   <input
                     type="text"
                     value={topicsText}
                     onChange={(e) => setTopicsText(e.target.value)}
-                    onBlur={() => updatePersonality('topics', topicsText.split(',').map(t => t.trim()).filter(Boolean))}
+                    onBlur={() => updatePersonality('topics', splitList(topicsText))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., technology, AI"
                   />
@@ -426,7 +491,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     type="text"
                     value={quirksText}
                     onChange={(e) => setQuirksText(e.target.value)}
-                    onBlur={() => updatePersonality('quirks', quirksText.split(',').map(t => t.trim()).filter(Boolean))}
+                    onBlur={() => updatePersonality('quirks', splitList(quirksText))}
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
                     placeholder="e.g., uses metaphors"
                   />
@@ -445,9 +510,10 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
               <button
                 type="submit"
-                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80"
+                disabled={!personalityDirty || savingPersonality}
+                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
               >
-                Save Changes
+                {savingPersonality ? 'Saving...' : 'Save Changes'}
               </button>
             </form>
           </div>
@@ -504,7 +570,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     <>
                       <button
                         onClick={handleExplore}
-                        disabled={exploring || !quickAccountId}
+                        disabled={exploring || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <Zap size={14} />
@@ -512,7 +578,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleBuild}
-                        disabled={!quickAccountId}
+                        disabled={!quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <MessageSquare size={14} />
@@ -530,7 +596,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleEngage}
-                        disabled={engaging || !quickAccountId}
+                        disabled={engaging || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <MessageSquare size={14} />
@@ -538,7 +604,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       </button>
                       <button
                         onClick={handleCheckPosts}
-                        disabled={checking || !quickAccountId}
+                        disabled={checking || !quickAccountId || hasUnsavedChanges}
                         className="px-3 py-1.5 text-sm bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50 flex items-center gap-1.5"
                       >
                         <Eye size={14} />
@@ -547,6 +613,11 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                     </>
                   )}
                 </div>
+                {hasUnsavedChanges && (
+                  <p role="status" className="mt-2 text-xs text-port-warning">
+                    Save your Personality and AI Provider changes before running actions. They use the saved settings.
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -569,7 +640,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                 { key: 'engagement', label: 'Engagement', desc: 'Autonomous voting & commenting', selectionPolicy: providerModeSelectionPolicy('direct-api') },
                 { key: 'challenge', label: 'Challenge Solving', desc: 'Verification challenges', selectionPolicy: providerModeSelectionPolicy('direct-api') }
               ].map(({ key, label, desc, selectionPolicy }) => {
-                const fnConfig = formData.aiConfig?.[key] || {};
+                const fnConfig = aiConfig?.[key] || {};
                 const fnModels = getModelsForProvider(fnConfig.providerId);
                 return (
                   <div key={key} className="space-y-1">
@@ -586,19 +657,13 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                       selectedProviderId={fnConfig.providerId || ''}
                       selectedModel={fnConfig.model || ''}
                       availableModels={fnModels}
-                      onProviderChange={(providerId) => setFormData(prev => ({
+                      onProviderChange={(providerId) => setAiConfig(prev => ({
                         ...prev,
-                        aiConfig: {
-                          ...prev.aiConfig,
-                          [key]: { ...prev.aiConfig?.[key], providerId: providerId || undefined, model: undefined }
-                        }
+                        [key]: { ...prev?.[key], providerId: providerId || undefined, model: undefined }
                       }))}
-                      onModelChange={(model) => setFormData(prev => ({
+                      onModelChange={(model) => setAiConfig(prev => ({
                         ...prev,
-                        aiConfig: {
-                          ...prev.aiConfig,
-                          [key]: { ...prev.aiConfig?.[key], model: model || undefined }
-                        }
+                        [key]: { ...prev?.[key], model: model || undefined }
                       }))}
                       modelDisabled={!fnConfig.providerId}
                       emptyProviderOption="System Default"
@@ -611,25 +676,21 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
             </div>
             <button
               type="button"
-              onClick={async () => {
-                const aiConfig = buildAiConfig(formData.aiConfig);
-                await updateAgentPersonality(agentId, { aiConfig });
-                toast.success(aiConfig ? 'AI providers saved' : 'Reset to system defaults');
-                onAgentUpdate?.();
-              }}
-              className="mt-3 px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm"
+              onClick={handleSaveAiConfig}
+              disabled={!aiConfigDirty || savingAiConfig}
+              className="mt-3 px-4 py-1.5 bg-port-success text-white rounded hover:bg-port-success/80 text-sm disabled:opacity-50"
             >
-              Save AI Config
+              {savingAiConfig ? 'Saving...' : 'Save AI Config'}
             </button>
           </div>
 
           {/* Accounts Section */}
           <div className="bg-port-card border border-port-border rounded-lg p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-md font-semibold text-white">Platform Accounts</h3>
+            <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+              <h3 className="text-md font-semibold text-white min-w-0">Platform Accounts</h3>
               <button
                 onClick={() => setShowAccountForm(!showAccountForm)}
-                className="px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80"
+                className="shrink-0 pointer-coarse:min-h-11 px-3 py-1.5 text-sm bg-port-accent text-white rounded hover:bg-port-accent/80"
               >
                 {showAccountForm ? 'Cancel' : '+ Link Account'}
               </button>
@@ -637,7 +698,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
             {showAccountForm && (
               <form onSubmit={handleAccountSubmit} className="mb-4 p-3 bg-port-bg border border-port-border rounded-lg">
-                <div className="grid grid-cols-2 gap-4 mb-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-3">
                   <FormField label="Platform">
                     <select
                       value={accountForm.platform}
@@ -671,8 +732,12 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                   />
                 </FormField>
                 <div className="flex gap-2">
-                  <button type="submit" className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80">
-                    Register Account
+                  <button
+                    type="submit"
+                    disabled={accountSubmitting}
+                    className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
+                  >
+                    {accountSubmitting ? 'Registering...' : 'Register Account'}
                   </button>
                   <button type="button" onClick={resetAccountForm} className="px-3 py-1.5 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80">
                     Cancel
@@ -718,8 +783,8 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
                   return (
                     <div key={account.id} className="p-3 bg-port-bg border border-port-border rounded-lg">
-                      <div className="flex items-start justify-between">
-                        <div>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <span>{platform?.icon || '🔗'}</span>
                             <span className="font-medium text-white">{account.credentials.username}</span>
@@ -737,28 +802,43 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                             </a>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <button
                             onClick={() => handleAccountTest(account.id)}
                             disabled={testingId === account.id}
-                            className="px-2 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
+                            className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             {testingId === account.id ? 'Testing...' : 'Test'}
                           </button>
                           {account.status === 'pending' && (
                             <button
                               onClick={() => handleAccountClaim(account.id)}
-                              className="px-2 py-1 text-xs bg-port-success/20 text-port-success rounded hover:bg-port-success/30"
+                              className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-success/20 text-port-success rounded hover:bg-port-success/30"
                             >
                               Claimed
                             </button>
                           )}
-                          <button
-                            onClick={() => handleAccountDelete(account.id)}
-                            className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30"
-                          >
-                            Delete
-                          </button>
+                          {isConfirming(account.id) || deletingAccountId === account.id ? (
+                            <ConfirmButtonPair
+                              prompt="Delete?"
+                              busy={deletingAccountId === account.id}
+                              busyText="Deleting"
+                              onConfirm={() => handleAccountDelete(account.id)}
+                              onCancel={cancelDelete}
+                              ariaLabel="Confirm account deletion"
+                              confirmAriaLabel={`Confirm delete ${account.credentials?.username || 'account'}`}
+                              cancelAriaLabel="Cancel account deletion"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => requestDelete(account.id)}
+                              disabled={deletingAccountId != null}
+                              className="pointer-coarse:min-h-11 px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
+                            >
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>

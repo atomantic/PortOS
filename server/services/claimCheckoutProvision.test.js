@@ -116,10 +116,40 @@ describe('provisionClaimCheckout', () => {
     expect(existsSync(claimDir())).toBe(false);
   });
 
+  // A failed `-b` add used to leave the branch and directory behind, so every
+  // later attempt refused on "already exists" and the issue was stuck.
+  it('rolls back a failed add so the issue can be claimed again', async () => {
+    const hook = join(repo, '.git', 'hooks', 'post-checkout');
+    await writeFile(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const failed = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(failed.refused).toMatch(/^git worktree add failed/);
+    expect(existsSync(claimDir())).toBe(false);
+    expect((await execGit(['branch', '--list', 'claim/issue-42'], repo)).stdout.trim()).toBe('');
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).not.toContain('claim-fixture-app');
+
+    await rm(hook);
+    const retried = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(retried.claimCheckout?.worktreePath).toBe(claimDir());
+  });
+
   it('refuses when the claim branch already exists locally', async () => {
     await execGit(['branch', 'claim/issue-42'], repo);
     const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
     expect(result.refused).toMatch(/already exists locally/);
+    expect(existsSync(claimDir())).toBe(false);
+  });
+
+  it.each(['next/issue-42', 'cos/sys-claim/issue-42/agent-abc'])('refuses when a sibling documented claim ref %s exists locally', async (ref) => {
+    await execGit(['branch', ref], repo);
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(result.refused).toBe(`${ref} already exists locally`);
+    expect(existsSync(claimDir())).toBe(false);
+  });
+
+  it.each(['next/issue-42', 'cos/sys-claim/issue-42/agent-abc'])('refuses when a sibling documented claim ref %s exists on origin', async (ref) => {
+    await execGit(['push', 'origin', `HEAD:refs/heads/${ref}`], repo);
+    const result = await provisionClaimCheckout({ app, sourceWorkspace: repo, branch: 'claim/issue-42', worktreesRoot });
+    expect(result.refused).toBe(`${ref} already exists on origin`);
     expect(existsSync(claimDir())).toBe(false);
   });
 });

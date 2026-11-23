@@ -569,7 +569,7 @@ export default function NotesTab() {
             </button>
           )}
           {searchResults && (
-            <span className="text-port-accent">{formatCount(searchResults.total)} results</span>
+            <span className="text-port-accent">{formatCount(searchResults.total)} {searchResults.total === 1 ? 'result' : 'results'}</span>
           )}
           <button
             onClick={() => { loadTags(); setShowTags(!showTags); }}

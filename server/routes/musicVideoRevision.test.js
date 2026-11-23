@@ -60,9 +60,9 @@ const CLIPS = [
   { sceneId: 's2', videoPath: '/v/b.mp4', width: 640, height: 360, fps: 24, inSec: 0, outSec: 10, duration: 10, sourceSec: 10, loop: true },
   { sceneId: 's3', layer: 'still', imagePath: '/i/c.png', move: 'hold', inSec: 0, outSec: 10, duration: 10, sourceSec: 10 },
 ];
+vi.mock('../services/musicVideo/masterAudioPath.js', () => ({ resolveMasterAudioPath: vi.fn(async () => '/example/song.wav') }));
 vi.mock('../services/musicVideo/render.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  resolveMasterAudioPath: vi.fn(async () => '/example/song.wav'),
   planMusicVideoRender: vi.fn(async () => ({ ffmpeg: 'ffmpeg', audioPath: '/a/song.wav', composed: true, clips: CLIPS, audioDurationSec: 30 })),
 }));
 

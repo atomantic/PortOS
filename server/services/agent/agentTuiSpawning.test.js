@@ -3531,7 +3531,7 @@ describe('spawnTuiAgent runtime', () => {
     // retry would have fixed.
     it('blocks on an unusable PTY layer as runner-pty-unavailable', async () => {
       vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
-        new Error('CoS Runner PTY unavailable: node-pty cannot fork any process, so this is not specific to the requested command. Repair it with `npm install --prefix server`.'),
+        new Error('CoS Runner PTY unavailable: node-pty cannot fork any process, so this is not specific to the requested command. Repair it with `node scripts/ensure-deps.js`.'),
       );
 
       await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
@@ -3541,7 +3541,7 @@ describe('spawnTuiAgent runtime', () => {
           agentId: 'agent-1',
           success: false,
           completionReason: 'runner-pty-unavailable',
-          error: expect.stringContaining('npm install --prefix server'),
+          error: expect.stringContaining('node scripts/ensure-deps.js'),
         })
       );
     });

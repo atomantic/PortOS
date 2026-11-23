@@ -55,11 +55,26 @@ function buildPersonaPreamble(persona, baseTraits) {
 }
 
 export async function getDigitalTwinForPrompt(options = {}) {
-  const { maxTokens = 4000, personaId } = options;
-  const meta = await loadMeta();
+  return (await getDigitalTwinContextWithDocs(options)).content;
+}
 
-  if (!meta.settings.autoInjectToCoS) {
-    return '';
+/**
+ * Same assembly as getDigitalTwinForPrompt, but also reports which document
+ * filenames actually landed in the context (including one that was truncated).
+ * Feedback attribution (`documentsUsed`) depends on this being the real set,
+ * not every enabled document.
+ */
+export async function getDigitalTwinContextWithDocs(options = {}) {
+  // respectAutoInject: the autoInjectToCoS setting gates CoS agent injection
+  // only. User-triggered twin workflows (test suites, dynamic test generation,
+  // enrichment) pass false so they keep seeing the twin when it is unchecked.
+  const { maxTokens: requestedMaxTokens, personaId, respectAutoInject = true } = options;
+  const meta = await loadMeta();
+  // Explicit caller override wins; otherwise the saved Digital Twin setting governs.
+  const maxTokens = requestedMaxTokens ?? meta.settings?.maxContextTokens ?? 4000;
+
+  if (respectAutoInject && !meta.settings.autoInjectToCoS) {
+    return { content: '', documentsUsed: [] };
   }
 
   // A persona's instructions are always included (they're the active directive)
@@ -80,6 +95,7 @@ export async function getDigitalTwinForPrompt(options = {}) {
     });
 
   let reference = '';
+  const documentsUsed = [];
   let output = preamble;
   let tokenCount = preamble.length;
   // Reserve space for the reference notice, fence and truncation marker.
@@ -112,18 +128,20 @@ export async function getDigitalTwinForPrompt(options = {}) {
       const remaining = maxChars - tokenCount;
       if (remaining > 500) {
         reference += content.substring(0, remaining) + '\n\n[Truncated due to token limit]\n';
+        documentsUsed.push(doc.filename);
       }
       break;
     }
 
     reference += content + '\n\n---\n\n';
+    documentsUsed.push(doc.filename);
     tokenCount += content.length;
   }
 
   if (reference.trim()) {
     output += `${UNTRUSTED_REFERENCE_NOTICE}\n\n${fenceBlock(DIGITAL_TWIN_REFERENCE_LABEL, reference, Math.max(0, maxChars - preamble.length))}`;
   }
-  return output.trim();
+  return { content: output.trim(), documentsUsed };
 }
 
 export const getSoulForPrompt = getDigitalTwinForPrompt; // Alias for backwards compatibility

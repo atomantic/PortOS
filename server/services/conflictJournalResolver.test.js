@@ -23,6 +23,10 @@ const collSvc = await import('./mediaCollections.js');
 const issueSvc = await import('./pipeline/issues.js');
 const fableLoomSvc = await import('./fableLoom/index.js');
 const cj = await import('../lib/conflictJournal.js');
+const authorSvc = await import('./authors/index.js');
+const artistSvc = await import('./artists/index.js');
+const albumSvc = await import('./albums/index.js');
+const trackSvc = await import('./tracks/index.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -269,6 +273,52 @@ describe('conflictJournalResolver', () => {
     await resolver.resolveConflict(statusEntryId, { action: 'merge-fields', fields: ['productionStatus'] });
     const afterStatus = await fableLoomSvc.getLoom(loom.id);
     expect(afterStatus.productionStatus).toMatchObject({ editorialApprovedAt: '2026-05-01T00:00:00Z', editorialApprovalSource: 'manual' });
+  });
+
+
+  it('has an applier for every kind that declares RESTORABLE_FIELDS (parity guard)', () => {
+    expect([...resolver.SUPPORTED_CONFLICT_KINDS].sort()).toEqual(Object.keys(cj.RESTORABLE_FIELDS).sort());
+  });
+
+  // Music/authoring records archived by LWW overwrites must be restorable, not 400 "Unsupported conflict kind".
+  describe.each([
+    { kind: 'author', svc: authorSvc, create: 'createAuthor', update: 'updateAuthor', get: 'getAuthor', del: 'deleteAuthor', field: 'bio', mine: 'MY bio', theirs: 'REMOTE bio', other: 'name' },
+    { kind: 'artist', svc: artistSvc, create: 'createArtist', update: 'updateArtist', get: 'getArtist', del: 'deleteArtist', field: 'bio', mine: 'MY bio', theirs: 'REMOTE bio', other: 'name' },
+    { kind: 'album', svc: albumSvc, create: 'createAlbum', update: 'updateAlbum', get: 'getAlbum', del: 'deleteAlbum', field: 'description', mine: 'MY desc', theirs: 'REMOTE desc', other: 'title' },
+    { kind: 'track', svc: trackSvc, create: 'createTrack', update: 'updateTrack', get: 'getTrack', del: 'deleteTrack', field: 'concept', mine: 'MY concept', theirs: 'REMOTE concept', other: 'title' },
+  ])(' conflicts', ({ kind, svc, create, update, get, del, field, mine, theirs, other }) => {
+    const seed = async () => {
+      const rec = await svc[create]({ [other]: 'Keep', [field]: theirs });
+      return rec;
+    };
+
+    it('restore-all re-applies the archived snapshot', async () => {
+      const rec = await seed();
+      const entryId = await seedEntry(rec.id, { id: rec.id, [other]: 'Keep', [field]: mine }, kind);
+      const resolved = await resolver.resolveConflict(entryId, { action: 'restore-all' });
+      expect(resolved.status).toBe('resolved');
+      expect((await svc[get](rec.id))[field]).toBe(mine);
+    });
+
+    it('merge-fields overlays only the chosen field', async () => {
+      const rec = await seed();
+      const entryId = await seedEntry(rec.id, { id: rec.id, [other]: 'IGNORED', [field]: mine }, kind);
+      await resolver.resolveConflict(entryId, { action: 'merge-fields', fields: [field] });
+      const fresh = await svc[get](rec.id);
+      expect(fresh[field]).toBe(mine);
+      expect(fresh[other]).toBe('Keep');
+    });
+
+    it('translates a deleted target into ERR_TARGET_GONE', async () => {
+      const rec = await seed();
+      await svc[del](rec.id);
+      const entryId = await seedEntry(rec.id, { id: rec.id, [field]: mine }, kind);
+      await expect(resolver.resolveConflict(entryId, { action: 'restore-all' }))
+        .rejects.toMatchObject({ code: resolver.ERR_TARGET_GONE });
+      const missing = await seedEntry('does-not-exist', { id: 'does-not-exist', [field]: mine }, kind);
+      await expect(resolver.resolveConflict(missing, { action: 'merge-fields', fields: [field] }))
+        .rejects.toMatchObject({ code: resolver.ERR_TARGET_GONE });
+    });
   });
 
   it('discard marks resolved without touching the record', async () => {

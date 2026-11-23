@@ -23,7 +23,7 @@ import {
   resolveRenderTargetPins,
 } from '../../lib/renderModeLadder.js';
 import { RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../lib/runwayImageModels.js';
-import { FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_IDS, isFalImageModel } from '../../lib/falImageModels.js';
+import { FAL_IMAGE_DEFAULT_MODEL, isPlausibleFalEndpointId } from '../../lib/falImageModels.js';
 import { HIGGSFIELD_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_MODEL_IDS, higgsfieldImageFamily } from '../../lib/higgsfieldImageModels.js';
 import { GOOGLE_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_MODEL_IDS, googleImageFamily } from '../../lib/googleImageModels.js';
 import {
@@ -32,11 +32,13 @@ import {
   IMAGE_GEN_MODE,
 } from './modes.js';
 
-// A saved `imageGen.fal.model` outside the catalog degrades to the shipped default
-// rather than bricking every fal render; an explicit per-render override is refused
-// instead — see `knownModels` below.
+// A saved `imageGen.fal.model` that is not even a fal endpoint id (hand-edited
+// settings) degrades to the shipped default rather than bricking every fal
+// render. A plausible id is kept: the provider confirms it against the loaded
+// list before spend. An explicit per-render override that is not a plausible
+// endpoint is refused — see `acceptsModel` below.
 const falModelFrom = (c, override) => override
-  || (isFalImageModel(c.model) ? c.model.trim() : FAL_IMAGE_DEFAULT_MODEL);
+  || (isPlausibleFalEndpointId(c.model) ? c.model.trim() : FAL_IMAGE_DEFAULT_MODEL);
 const higgsfieldModelFrom = (c, override) => override
   || (higgsfieldImageFamily(c.model) ? c.model.trim() : HIGGSFIELD_IMAGE_DEFAULT_MODEL);
 const googleModelFrom = (c, override) => override
@@ -60,6 +62,9 @@ export { isModeUsable, pickUsableMode, renderTargetDefaults };
  *                   model ids are prices (fal.ai) must not let a typo or a stale pin
  *                   from another backend reach the wire, so a rejected override is a
  *                   400 (`unknownModelCode`), not a silent fallback.
+ *  - `acceptsModel` — optional predicate in place of `knownModels` when the
+ *                   catalog is open (fal.ai image endpoints, confirmed against the
+ *                   live list before spend).
  *  - `params`     — the provider's knob bundle for a queue job / direct call. Codex's
  *                   `model` carries the effective (defaulted) id so the queue row
  *                   reports what actually renders.
@@ -122,7 +127,7 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.FAL],
     label: 'fal.ai Imagegen',
     errorCode: 'FAL_IMAGEGEN_DISABLED',
-    knownModels: FAL_IMAGE_MODEL_IDS,
+    acceptsModel: isPlausibleFalEndpointId,
     unknownModelCode: 'FAL_IMAGE_MODEL_UNKNOWN',
     modelId: falModelFrom,
     // No key here: the queue persists job params in plaintext, so the provider
@@ -183,6 +188,12 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
   const enabled = config.enabled === true;
   const requestedModel = typeof overrides.model === 'string' ? overrides.model.trim() : '';
   const modelOverride = spec.supportsModelOverride && requestedModel ? requestedModel : null;
+  if (modelOverride && spec.acceptsModel && !spec.acceptsModel(modelOverride)) {
+    throw new ServerError(
+      `${spec.label} has no model "${modelOverride}" — choose a fal.ai image endpoint`,
+      { status: 400, code: spec.unknownModelCode },
+    );
+  }
   if (modelOverride && spec.knownModels && !spec.knownModels.includes(modelOverride)) {
     throw new ServerError(
       `${spec.label} has no model "${modelOverride}" — choose one of: ${spec.knownModels.join(', ')}`,

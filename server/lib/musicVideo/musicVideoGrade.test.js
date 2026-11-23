@@ -10,6 +10,12 @@ import { musicVideoGradeFilter } from './musicVideoGrade.js';
 import { _wipePixel, wipeDefinition, wipeProgress } from './musicVideoWipes.js';
 
 const ffmpeg = await findFfmpeg();
+// ffmpeg 7.1 added "-/vf <file>" and 8.0 removed "-filter_script:v"; Ubuntu 24.04 ships 6.1, which has only the latter.
+const filterFileOption = (() => {
+  if (!ffmpeg) return '-/vf';
+  const m = /version n?(\d+)\.(\d+)/.exec(execFileSync(ffmpeg, ['-version'], { encoding: 'utf8' }));
+  return m && (+m[1] < 7 || (+m[1] === 7 && +m[2] < 1)) ? '-filter_script:v' : '-/vf';
+})();
 
 // Serialization/validation boundary: no unbounded filter values from peers or PATCH.
 describe('Music Video grade contract', () => {
@@ -142,7 +148,7 @@ describe('grading a captured wipe', () => {
       const graph = join(dir, 'graph.txt');
       writeFileSync(graph, filter);
       const raw = execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `color=red:s=64x36:r=${FPS}:d=${count / 4},format=rgb24`,
-        '-/vf', graph, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1e9 });
+        filterFileOption, graph, '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-'], { maxBuffer: 1e9 });
       expect(raw.length / (64 * 36 * 3)).toBe(count * 6);
     } finally {
       rmSync(dir, { recursive: true, force: true });

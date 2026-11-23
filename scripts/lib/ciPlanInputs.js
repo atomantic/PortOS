@@ -12,7 +12,8 @@ import { join, posix } from 'path';
 import { escapeRegExp } from '../../server/lib/textUtils.js';
 import { MODULE_SOURCE_RE, createModuleGraph } from './moduleGraph.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
-import { measureRepoImportReach } from './importReach.js';
+import { clientBrowserSuiteReach, clientRunnerTestPredicate, measureRepoImportReach, serverRunnerTestPredicate } from './importReach.js';
+import { BROWSER_SERVED_SHARED_INPUTS } from './browserServedFiles.js';
 import {
   DOCKER_CONTAINMENT_LIVE_ENTRIES, LINUX_CONTAINMENT_ENTRIES, SUPERCOLLIDER_LIVE_ENTRIES, TEST_FILE_GLOBS,
   browserSuitesIn, isExecutable, isServerRunnerFile, isSharedClientDependency, isTestFile,
@@ -239,8 +240,9 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
       collectTestDependencies(graph, [test])?.filter(isSharedClientDependency) ?? null]))
     : {};
 
-  const hasRelatedServerSource = collectedChangedFiles.some((path) => isServerRunnerFile(path)
+  const relatedServerSources = collectedChangedFiles.filter((path) => isServerRunnerFile(path)
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
+  const hasRelatedServerSource = relatedServerSources.length > 0;
   const dbDependencies = hasRelatedServerSource
     ? collectTestDependencies(graph, resolveDbTestFiles(dependencyFiles))
     : [];
@@ -272,19 +274,35 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
     .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
     .map((path) => [path, classifyDependencyChange(path, baseSha ? readAtBase(path) : null, readInTree(path))]));
 
-  // `vitest related` follows dynamic imports too; report that fan-out per
-  // changed server source so the selection size is attributable. A failed
-  // walk only loses the note.
-  let serverReach = null;
-  if (hasRelatedServerSource) {
+  // `vitest related` follows dynamic imports too; measure that fan-out per
+  // changed source so the selection size is attributable and a broad related
+  // walk fans its runner out (fansOut). A failed walk only loses the
+  // measurement: the runner then stays on its explicit-selector cap.
+  const measureReach = (runner, sources, isTest) => {
+    if (sources.length === 0) return null;
     try {
-      serverReach = measureRepoImportReach({
-        graph,
-        sources: collectedChangedFiles.filter((path) => isServerRunnerFile(path)
-          && MODULE_SOURCE_RE.test(path) && !isTestFile(path)),
-      });
+      return measureRepoImportReach({ graph, sources, isTest });
     } catch (err) {
-      console.warn(`⚠️ Dynamic-aware reach not measured: ${err.message}`);
+      console.warn(`⚠️ Dynamic-aware ${runner} reach not measured: ${err.message}`);
+      return null;
+    }
+  };
+  const serverReach = measureReach('server', relatedServerSources, serverRunnerTestPredicate());
+  // The client runner's related sources (buildSuitePlan's isClientSource): any
+  // client source, plus a shared server/lib module the browser bundle imports.
+  const clientDependencySet = new Set(clientDependencies ?? []);
+  const clientReach = measureReach('client', collectedChangedFiles.filter((path) => MODULE_SOURCE_RE.test(path)
+    && !isTestFile(path) && (path.startsWith('client/') || clientDependencySet.has(path))), clientRunnerTestPredicate());
+  // Real-Chromium client suites cost tens of seconds each, so a handful of them
+  // fans the client runner out where the file count alone would not (#17616).
+  // Only a client file or a module can reach one; other diffs skip the cold edge walk.
+  let clientBrowserReach = null;
+  if (collectedChangedFiles.some((path) => path.startsWith('client/') || MODULE_SOURCE_RE.test(path))) {
+    try {
+      clientBrowserReach = clientBrowserSuiteReach({ graph, changedFiles: collectedChangedFiles,
+        sharedInputs: BROWSER_SERVED_SHARED_INPUTS.client, read: (path) => readFileSync(join(cwd, path), 'utf8') });
+    } catch (err) {
+      console.warn(`⚠️ Client browser-suite reach not measured: ${err.message}`);
     }
   }
 
@@ -313,5 +331,6 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
-    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
+    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, clientReach, clientBrowserReach,
+    gatedChangedFiles, gatedDependencyChanges };
 }

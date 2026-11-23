@@ -268,6 +268,8 @@ export async function deleteDraft(id) {
 const PRIVACY_GENERATORS = ['privacy-optout', 'privacy-change'];
 const UNSENT_STATUSES = ['draft', 'approved', 'failed'];
 export const PRIVACY_DRAFT_REDACTION_NOTICE = '[Privacy draft body redacted after erasure]';
+// Opt-out templates put the subject's legal name in the Subject line.
+export const PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE = '[Privacy draft subject redacted after erasure]';
 
 const isPrivacyDraft = d => PRIVACY_GENERATORS.includes(d.generatedBy);
 // sending/delivery_unknown drafts are owned by the send lifecycle: never touch them.
@@ -276,7 +278,7 @@ const isSendLocked = d => ['sending', 'delivery_unknown'].includes(d.status);
 /**
  * Erase privacy-originated drafts selected by `predicate`: unsent ones are
  * deleted (so they cannot be sent after erasure/consent withdrawal), sent ones
- * keep their audit trail with the body replaced by a fixed notice. `onlyUnsent`
+ * keep their audit trail with the body and subject replaced by fixed notices. `onlyUnsent`
  * (consent revocation) leaves sent drafts alone. Send-locked drafts are skipped.
  */
 export async function erasePrivacyDrafts(predicate, { onlyUnsent = false, generatedBy = PRIVACY_GENERATORS } = {}) {
@@ -288,8 +290,10 @@ export async function erasePrivacyDrafts(predicate, { onlyUnsent = false, genera
       if (!isPrivacyDraft(d) || !generatedBy.includes(d.generatedBy) || !predicate(d)) { remaining.push(d); continue; }
       if (isSendLocked(d)) { result.skipped += 1; remaining.push(d); continue; }
       if (UNSENT_STATUSES.includes(d.status)) { result.deleted += 1; continue; }
-      if (!onlyUnsent && d.status === 'sent' && d.body !== PRIVACY_DRAFT_REDACTION_NOTICE) {
+      if (!onlyUnsent && d.status === 'sent'
+        && (d.body !== PRIVACY_DRAFT_REDACTION_NOTICE || d.subject !== PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE)) {
         d.body = PRIVACY_DRAFT_REDACTION_NOTICE;
+        d.subject = PRIVACY_DRAFT_SUBJECT_REDACTION_NOTICE;
         d.updatedAt = new Date().toISOString();
         result.redacted += 1;
       }

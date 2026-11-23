@@ -16,7 +16,7 @@ import dns from 'dns/promises';
 import { isBlockedIngestHost } from '../lib/safeUrlFetch.js';
 import crypto from 'crypto';
 import { loadData, withData, UNKNOWN_INSTANCE_ID, getInstanceId, getSelf } from './instanceIdentity.js';
-import { DEFAULT_SYNC_CATEGORIES, hasOptedInCategory, resolveEffectiveCategories, allSyncCategoriesOn } from '../lib/instanceSyncCategories.js';
+import { DEFAULT_SYNC_CATEGORIES, PER_RECORD_CATEGORY_KINDS, hasOptedInCategory, resolveEffectiveCategories, allSyncCategoriesOn } from '../lib/instanceSyncCategories.js';
 export { DEFAULT_SYNC_CATEGORIES, resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { canonicalStringify } from '../lib/objects.js';
@@ -43,6 +43,10 @@ import {
   formatProbeDiagnosticLog,
 } from '../lib/peerProbeDiagnostics.js';
 
+// Streamed-size caps for probe/query bodies: plain-HTTP peers ignore peerFetch's `maxBytes`, so an
+// unbounded `res.json()` would buffer whatever a stalled or hostile peer streams.
+const PEER_PROBE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const PEER_QUERY_BODY_MAX_BYTES = 64 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
@@ -326,36 +330,6 @@ export const peerMediaSyncMode = (peer) => (MEDIA_SYNC_MODES.includes(peer?.medi
 // pair-authenticated caller. Machine-local — set per peer in Instances.
 export const peerMayDeleteMedia = (peer) => peer?.mediaDeleteAllowed !== false;
 
-// Sync categories whose records ride the PER-RECORD push pipeline (not the 60s
-// snapshot loop), paired with the record kind autoSubscribePeerToAllRecords
-// backfills. A false→true toggle on any of these triggers an inline backfill of
-// existing local records so the user doesn't have to wait for the next
-// `peer:online` / manual sync-now. Mirror of peerSync's KIND_TO_CATEGORY
-// (inverted). `pipeline → series` bundles child issues at push time; authors,
-// music records, and mediaCollections are standalone per-record kinds with no
-// snapshot category, so toggle-time backfill is the main path that subscribes
-// existing records short of a reconnect.
-const PER_RECORD_CATEGORY_KINDS = Object.freeze([
-  ['universe', 'universe'],
-  ['pipeline', 'series'],
-  ['mediaCollections', 'mediaCollection'],
-  ['authors', 'author'],
-  ['artists', 'artist'],
-  ['albums', 'album'],
-  ['tracks', 'track'],
-  ['creativeDirectorProjects', 'creativeDirectorProject'],
-  ['moodBoards', 'moodBoard'],
-  ['fableLoom', 'fableLoom'],
-  ['writersRoomWorks', 'writersRoomWork'],
-  ['writersRoomFolders', 'writersRoomFolder'],
-  ['writersRoomExercises', 'writersRoomExercise'],
-  ['musicVideoProjects', 'musicVideoProject'],
-  ['commissionFeedback', 'commissionFeedback'],
-  ['creativeCommissions', 'creativeCommission'],
-  ['decks', 'deck'],
-  ['storyboards', 'storyboard'],
-]);
-
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {
   const peer = await withData(async (data, afterCommit) => {
     const normalizedHost = validHost(host);
@@ -402,7 +376,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       directions: ['outbound']
     };
     data.peers.push(entry);
-    console.log(`🌐 Peer added: ${entry.name} (${peerBaseUrl(entry)})`);
+    console.log(`🌐 Peer added: ${entry.name} (${entry.id})`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
@@ -596,7 +570,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // re-adopts the DNS name and the user can't revert to IP).
         peer.hostManual = true;
         hostChanged = true;
-        console.log(`🌐 Peer host ${peer.host ? `set to ${peer.host}` : 'cleared'}: ${peer.name}`);
+        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peer.name}`);
       }
     }
     // Per-(peer, category) schema-version gaps, populated by syncOrchestrator
@@ -891,7 +865,7 @@ export async function probePeer(peer) {
       err.httpStatus = healthRes.status;
       throw err;
     }
-    const json = await healthRes.json();
+    const json = await readPeerBody(healthRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES });
     status = 'online';
     lastHealth = json;
     lastSeen = new Date().toISOString();
@@ -899,7 +873,7 @@ export async function probePeer(peer) {
     remoteVersion = json.version ?? null;
 
     if (appsRes?.ok) {
-      const appsJson = await appsRes.json().catch(() => null);
+      const appsJson = await readPeerBody(appsRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES }).catch(() => null);
       const appsList = Array.isArray(appsJson) ? appsJson : appsJson?.apps;
       remoteApps = appsList?.map(a => ({
         id: a.id, name: a.name, icon: a.icon,
@@ -907,7 +881,7 @@ export async function probePeer(peer) {
       })) ?? null;
     }
     if (syncRes?.ok) {
-      remoteSyncSeqs = await syncRes.json().catch(() => null);
+      remoteSyncSeqs = await readPeerBody(syncRes, 'json', { maxBytes: PEER_PROBE_BODY_MAX_BYTES }).catch(() => null);
     }
   }).catch((err) => {
     probeFailure = err;
@@ -1074,7 +1048,7 @@ export async function queryPeer(id, apiPath) {
   const url = `${peerBaseUrl(peer)}${target}`;
   return withAbortTimeout(PROBE_TIMEOUT_MS, async (signal) => {
     const res = await peerFetch(url, { signal }, peer);
-    return { success: true, data: await res.json() };
+    return { success: true, data: await readPeerBody(res, 'json', { maxBytes: PEER_QUERY_BODY_MAX_BYTES }) };
   }).catch((err) => ({ error: `Failed to query peer: ${err.message}` }));
 }
 
@@ -1122,7 +1096,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     // normal case, not a forgery signal, and its host/port are already pinned
     // to the local forward by the `transport !== 'tailcat'` guards below.
     if (existing && !matchedByAddress && existing.transport !== 'tailcat' && existing.address !== address) {
-      console.warn(`⚠️ Peer announce instanceId matched but address mismatched (expected ${existing.address}, got ${address}) — ignoring host/port/name update`);
+      console.warn(`⚠️ Peer announce instanceId matched but address mismatched — ignoring host/port/name update`);
       existing.lastSeen = new Date().toISOString();
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
@@ -1148,12 +1122,12 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // existing.host check alone can't distinguish from "never set".
       if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
-        console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
+        console.log(`🌐 Peer host learned via announce: ${existing.name}`);
       }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
-      console.log(`🌐 Peer announced (existing): ${existing.name} (${address}:${port})`);
+      console.log(`🌐 Peer announced (existing): ${existing.name}`);
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
@@ -1186,7 +1160,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       directions: ['inbound']
     };
     data.peers.push(peer);
-    console.log(`🌐 Peer announced (new): ${peer.name} (${peerBaseUrl(peer)})`);
+    console.log(`🌐 Peer announced (new): ${peer.name} (${peer.id})`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return { created: true, peer };
   });

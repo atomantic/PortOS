@@ -388,7 +388,7 @@ export function ApiAccessTab() {
             <option value="summary">Redacted summaries</option>
           </select>
           <p className="text-xs text-gray-500">
-            Metadata mode can match private text but returns only generic record labels and stable opaque references.
+            Metadata mode searches redacted text (secrets and PII are stripped before matching) and returns only generic record labels and stable opaque references.
           </p>
         </div>
 

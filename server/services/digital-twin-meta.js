@@ -221,7 +221,7 @@ export const mutateMeta = (fn) => withMetaLock(async () => {
 });
 
 export const updateSettings = (settings) => withMetaLock(async () => {
-  const meta = await loadMeta();
+  const meta = structuredClone(await loadMeta());
   meta.settings = { ...meta.settings, ...settings };
   await saveMeta(meta);
   return meta.settings;

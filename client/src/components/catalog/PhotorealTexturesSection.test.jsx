@@ -60,4 +60,23 @@ describe('PhotorealTexturesSection', () => {
     await act(async () => finish({ id: 'plc-example' }));
     await waitFor(() => expect(second).toBeEnabled());
   });
+  it('traps Tab inside the picker, closes on Escape and returns focus to the trigger', async () => {
+    searchCatalogPhotorealTextures.mockResolvedValue({ results: [{ id: 'oak_planks', name: 'Oak Planks', thumbnail: 'https://example.com/o.png', installed: false }] });
+    render(<PhotorealTexturesSection record={record} look={look} />);
+    const trigger = await screen.findByRole('button', { name: /Choose photo/ });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: /Photo textures for wood-floor/ });
+    const tile = await screen.findByRole('button', { name: /Oak Planks/ });
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement));
+
+    // Tab from the last control wraps to the first instead of escaping the dialog.
+    tile.focus();
+    fireEvent.keyDown(tile, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search textures' }));
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
 });

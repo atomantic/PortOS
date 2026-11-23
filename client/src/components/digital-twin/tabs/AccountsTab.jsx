@@ -173,9 +173,11 @@ export default function AccountsTab() {
 
     setSaving(true);
 
+    let ok = false;
     if (editingId) {
       const updated = await updateSocialAccount(editingId, form).catch(() => null);
       if (updated) {
+        ok = true;
         toast.success(`Updated ${form.platform} account`);
         setEditingId(null);
         setAccounts(prev => prev.map(a => (a.id === updated.id ? updated : a)));
@@ -183,12 +185,15 @@ export default function AccountsTab() {
     } else {
       const created = await createSocialAccount(form).catch(() => null);
       if (created) {
+        ok = true;
         toast.success(`Added ${form.platform} account`);
         setAccounts(prev => [...prev, created]);
       }
     }
 
     setSaving(false);
+    // A failed save keeps the form open so the user's draft survives a retry.
+    if (!ok) return;
     setShowForm(false);
     setForm(EMPTY_FORM);
     loadStats();
@@ -495,7 +500,7 @@ export default function AccountsTab() {
                         href={account.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs text-port-accent hover:underline mt-0.5 inline-flex items-center gap-1"
+                        className="text-xs text-port-accent hover:underline mt-0.5 inline-flex items-center gap-1 break-all"
                       >
                         {account.url.replace(/^https?:\/\//, '')}
                         <ExternalLink className="w-3 h-3" />
@@ -537,8 +542,8 @@ export default function AccountsTab() {
                     <button
                       onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
-                      className="p-1.5 text-gray-400 hover:text-red-400 rounded transition-colors min-h-[40px] min-w-[40px] flex items-center justify-center"
-                      title="Remove"
+                      className="p-1.5 text-gray-400 hover:text-red-400 rounded transition-colors min-h-[40px] min-w-[40px] pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center"
+                      title="Remove" aria-label="Remove"
                     >
                       {deleting === account.id ? (
                         <BrailleSpinner />

@@ -43,4 +43,16 @@ describe('scaffoldPortOS generated app', () => {
     const ci = await readFile(join(appDir, '.github', 'workflows', 'ci.yml'), 'utf8');
     expect(ci).toMatch(/working-directory: \.\/server\n\s+run: npm test/);
   });
+
+  it('runs dev servers through a zero-dependency runner instead of concurrently', async () => {
+    const pkg = JSON.parse(await readFile(join(appDir, 'package.json'), 'utf8'));
+    expect(JSON.stringify(pkg)).not.toMatch(/concurrently/);
+    expect(pkg.devDependencies).toBeUndefined();
+    expect(pkg.scripts.dev).toBe('node scripts/dev.js');
+    expect(pkg.scripts['install:all']).not.toMatch(/^npm install/);
+    const runner = await readFile(join(appDir, 'scripts', 'dev.js'), 'utf8');
+    expect(runner).toContain('["dev:server","dev:client"]');
+    const ci = await readFile(join(appDir, '.github', 'workflows', 'ci.yml'), 'utf8');
+    expect(ci).not.toMatch(/Install root dependencies/);
+  });
 });

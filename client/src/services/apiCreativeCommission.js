@@ -2,7 +2,7 @@
  * Creative Commissions (Autonomous Creation Engine — standing recurring briefs).
  */
 
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Client API for the Autonomous Creation Engine (#2657) — standing, recurring
 // creative briefs the server fires on a schedule through the Creative Director
@@ -11,7 +11,8 @@ import { request } from './apiCore.js';
 // `options` lets a caller that owns its own error toast pass `{ silent: true }`
 // so request() doesn't also toast — see AGENTS.md "Custom catch ⇒ silent: true".
 
-export const listCommissions = (options = {}) => request('/creative-commission', options);
+// `page` ({ limit, offset }, limit <= 500) opts into the bounded `{ items, total, limit, offset }` envelope.
+export const listCommissions = (options = {}, page) => request(`/creative-commission${queryString(page)}`, options);
 
 export const getCommission = (id, options = {}) =>
   request(`/creative-commission/${encodeURIComponent(id)}`, options);

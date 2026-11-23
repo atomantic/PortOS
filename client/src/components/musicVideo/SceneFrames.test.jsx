@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
+import { FAL_FEATURED_EDIT_MODEL_IDS } from '../../lib/imageGenBackends';
 
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
@@ -22,6 +23,7 @@ it.each(['image', 'endImage'])('refines an unselected %s take with optional shot
   fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
   expect(screen.getByRole('button', { name: 'View refinement source full size' }).querySelector('img').getAttribute('src')).toBe('/data/images/candidate.png');
   const input = screen.getByRole('textbox', { name: /What to change/ });
+  expect(document.activeElement).toBe(input);
   fireEvent.change(input, { target: { value: '  Raise the hand\nKeep the lighting  ' } });
   const include = screen.getByRole('checkbox', { name: 'Include shot reference images' });
   expect(include.checked).toBe(true);
@@ -37,8 +39,13 @@ it.each(['image', 'endImage'])('refines an unselected %s take with optional shot
 
   fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
   fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Change the hat' } });
+  fireEvent.change(screen.getByLabelText('Edit with'), { target: { value: FAL_FEATURED_EDIT_MODEL_IDS[1] } });
   fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
-  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: 'Change the hat' });
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, {
+    referenceImageId: 'candidate.png',
+    refine: 'Change the hat',
+    imageTarget: { mode: 'fal', cloudModel: FAL_FEATURED_EDIT_MODEL_IDS[1] },
+  });
 
   rerender(<SceneFrames {...props} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} generatingFrame generatingEndFrame />);
   expect(candidate().getByRole('button', { name: 'Refine take' }).disabled).toBe(true);
@@ -289,4 +296,17 @@ it('Use end frame off hides the end frame and keeps its selection for switching 
   fireEvent.click(screen.getByRole('checkbox', { name: 'Use end frame' }));
   expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null });
   expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
+});
+
+// Catches a Refine box that can only render on the project's image service.
+it('switches the image service from inside the Refine form and sends it with the refine', () => {
+  const onGenerate = vi.fn();
+  const shot = { ...scene, takes: [{ takeId: 'candidate', kind: 'image', assetId: 'candidate.png', status: 'candidate' }] };
+  frames({ project: { id: 'mv-example' }, scene: shot, onGenerateFrame: onGenerate });
+  fireEvent.click(within(screen.getAllByRole('listitem').find((item) => item.querySelector('img')?.getAttribute('src') === '/data/images/candidate.png')).getByRole('button', { name: 'Refine take' }));
+  const form = within(screen.getByRole('textbox', { name: /What to change/ }).closest('form'));
+  fireEvent.change(form.getAllByRole('combobox')[0], { target: { value: 'grok' } });
+  fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Raise the hand' } });
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, expect.objectContaining({ refine: 'Raise the hand', imageTarget: { mode: 'grok' } }));
 });

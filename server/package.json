@@ -15,7 +15,6 @@
     "test:fast": "vitest run --configLoader runner",
     "test:watch": "vitest --configLoader runner",
     "test:ci": "vitest run --silent=passed-only --reporter=default --reporter=github-actions --configLoader runner",
-    "test:coverage": "vitest run --coverage --configLoader runner",
     "setup:db:test": "node scripts/setup-db-test.mjs",
     "test:db": "vitest run --config vitest.config.db.js --configLoader runner",
     "test:db:ci": "vitest run --config vitest.config.db.js --reporter=default --reporter=github-actions --configLoader runner"
@@ -39,7 +38,6 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "5.1.1",
     "vitest": "5.1.1"
   },
   "overrides": {
@@ -48,7 +46,7 @@
     "follow-redirects": "1.16.3",
     "body-parser": "2.4.0",
     "js-yaml": "4.3.2",
-    "engine.io": "6.6.11",
+    "engine.io": "6.6.12",
     "qs": "6.17.1",
     "sharp": "0.35.5",
     "socket.io-parser": "4.2.7",

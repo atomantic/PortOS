@@ -113,7 +113,9 @@ import { getToolsSummaryForPrompt } from '../tools.js';
 import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../../lib/slashdoInvocation.js';
 import { composeClaimIssuePrompt } from '../taskPromptDefaults/prompts.js';
-import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen } from '../promptSections/claimOnDemand.js';
+import { buildClaimEpicSection, buildClaimGithubHandoff, buildClaimCheckRecovery, buildClaimLinkedScreen, buildClaimMergeSection, buildClaimCleanupSection, buildClaimPrSideReview, buildClaimReleasePaths } from '../promptSections/claimOnDemand.js';
+import { CLAIM_GITHUB_COMMENT_FALLBACK, CLAIM_GITLAB_COMMENT_FALLBACK } from '../taskPromptDefaults/catalog/claimEvidence.js';
+import { ISSUE_BLOCKER_RECONCILIATION_GH, REQUIRED_CI_LATE_REGISTRATION_NOTE } from '../taskPromptDefaults/catalog/guidance.js';
 import { sanitizeTaskMetadata } from '../../lib/cos/cosTaskMetadata.js';
 import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
@@ -713,7 +715,7 @@ describe('claim-flow completion handoff', () => {
 
     expect(prompt).toMatch(/## Claim Workflow Handoff/);
     expect(prompt).not.toContain('PR completion policy: LEAVE OPEN');
-    expect(prompt).toMatch(/owns its claim worktree, branch, PR\/MR, review, merge or human-handoff, and cleanup/);
+    expect(prompt).toMatch(/owns its worktree, branch, PR\/MR, review, merge or human-handoff, and cleanup/);
     expect(prompt).toMatch(/\.agent-done/);
     expect(prompt).not.toMatch(/PortOS will merge it back after completion/);
     expect(prompt).not.toMatch(/Do NOT push this worktree branch yourself/);
@@ -5167,12 +5169,21 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
   const stagedPath = (name) => `/install/data/cos/slashdo-resolved/${name}-0123abcd.md`;
   const resolveRoot = (text) => text.replaceAll('{portosRoot}', () => PATHS.installRoot);
   const githubPrompt = resolveRoot(composeClaimIssuePrompt({ forge: 'github' }));
+  const githubLocalReview = githubPrompt.match(/(?:^|\n)(## Phase 5 — Review locally \(BEFORE any PR exists\)\n[\s\S]*?)(?=\n## |$)/)[1];
   const githubSections = [
     ['claim-issue-filing-github', mandatoryDispatchHintGuidance({ cli: 'gh' })],
     ['claim-epic-github', buildClaimEpicSection('github', false)],
     ['claim-handoff-github', buildClaimGithubHandoff(false)],
+    ['claim-release-paths-github', buildClaimReleasePaths('github', false)],
+    ['claim-comment-fallback-github', CLAIM_GITHUB_COMMENT_FALLBACK],
+    ['claim-blocked-reconcile', ISSUE_BLOCKER_RECONCILIATION_GH],
+    ['claim-pr-side-review-github', buildClaimPrSideReview('github')],
+    ['claim-ci-late-registration', REQUIRED_CI_LATE_REGISTRATION_NOTE],
     ['claim-linked-screen-github', resolveRoot(buildClaimLinkedScreen('github'))],
     ['claim-ci-recovery-github', buildClaimCheckRecovery('github', false)],
+    ['claim-merge-github', buildClaimMergeSection('github')],
+    ['claim-cleanup-github', buildClaimCleanupSection('github')],
+    ['claim-local-review', githubLocalReview],
   ];
   const claimTask = (prompt, field) => makeTask(field === 'description'
     ? { description: prompt, metadata: { claimFlow: true } }
@@ -5198,16 +5209,26 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(prompt).toContain('When the comment check prints a CLAIMANT');
     expect(prompt).toContain('When a linked PR is by a non-collaborator');
     expect(prompt).toContain('When a required check fails');
+    expect(prompt).toContain('When no tool-free gate is present, READ');
+    expect(prompt).toContain('When any open issue carries `blocked`, READ');
+    expect(prompt).toContain('If it exits at once with `no required checks reported`, READ');
+    expect(prompt).toContain('3. **PR-SIDE reviewers.** When the reviewer list names an `@<login>`');
+    expect(prompt).toContain('- **Release paths.** When the issue is already fixed');
   });
 
   it('defers the GitLab procedures when the claim is carried in the description', async () => {
     const composed = resolveRoot(composeClaimIssuePrompt({ forge: 'gitlab', target: 42, prCompletion: 'leave-open' }));
+    const gitlabLocalReview = composed.match(/(?:^|\n)(## Phase 5 — Review locally \(BEFORE any MR exists\)\n[\s\S]*?)(?=\n## |$)/)[1];
     const prompt = await render(composed, 'cli', 'description');
     expect(stagedSections()).toEqual([
       ['claim-issue-filing-gitlab', mandatoryDispatchHintGuidance({ cli: 'glab' })],
       ['claim-epic-gitlab', buildClaimEpicSection('gitlab', true)],
+      ['claim-release-paths-gitlab', buildClaimReleasePaths('gitlab', true)],
+      ['claim-comment-fallback-gitlab', CLAIM_GITLAB_COMMENT_FALLBACK],
+      ['claim-pr-side-review-gitlab', buildClaimPrSideReview('gitlab')],
       ['claim-linked-screen-gitlab', resolveRoot(buildClaimLinkedScreen('gitlab'))],
       ['claim-ci-recovery-gitlab', buildClaimCheckRecovery('gitlab', true)],
+      ['claim-local-review', gitlabLocalReview],
     ]);
     expect(prompt).toContain('When a linked MR is by a non-collaborator');
     expect(prompt).toContain('For a claimant, verify project assignment eligibility');
@@ -5238,6 +5259,29 @@ describe('buildAgentPrompt — claim procedures on demand', () => {
     expect(prompt).toContain('Produce 2–6 slices');
     expect(prompt).not.toContain('When Phase 1 lands on an epic');
     expect(stagedSections()).toEqual(githubSections.filter(([name]) => name !== 'claim-epic-github'));
+  });
+
+  it('defers missing workflow-scope handoff on file-tool hosts and keeps it inline on API hosts', async () => {
+    const taskWithMissingScope = makeTask({
+      description: 'Claim #42',
+      metadata: {
+        claimFlow: true,
+        claimServerCheckout: true,
+        prompt: githubPrompt,
+        forgeWorkflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' },
+      },
+    });
+    const cliPrompt = await buildAgentPrompt(taskWithMissingScope, {}, '/r', null,
+      { providerType: 'cli', providerId: 'codex', providerCommand: 'codex', agentId: 'agent-1' });
+    expect(cliPrompt).toContain(`READ \`${stagedPath('claim-workflow-scope')}\``);
+    expect(cliPrompt).not.toContain('## Claim ownership binding');
+    expect(cliPrompt).toContain('do not call `/api/cos/claim-ownership` or `/api/cos/claim-selection`');
+
+    vi.mocked(writeResolvedSlashdoBody).mockClear();
+    const apiPrompt = await buildAgentPrompt(taskWithMissingScope, {}, '/r', null,
+      { providerType: 'api', providerId: 'openai', agentId: 'agent-1' });
+    expect(stagedSections()).toEqual([]);
+    expect(apiPrompt).toContain('gh auth refresh -h github.com -s workflow');
   });
 });
 

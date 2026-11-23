@@ -13,8 +13,8 @@ export const ESTABLISHED_MODEL_PUBLISHERS = new Set([
   'nvidia', 'nousresearch', 'openai', 'openbmb', 'qwen', 'stabilityai', 'thinkingmachines', 'unsloth',
 ]);
 
-// OrcaRouter is reviewed for these exact builds, not blanket-approved for
-// everything that account may publish in the future. See the research note.
+// OrcaRouter and AtomicChat are reviewed for these exact builds, not
+// blanket-approved for everything those accounts may publish in the future. See the research note.
 export const REVIEWED_SECURITY_MODELS = Object.freeze({
   'orcarouter/Qwen3.8-27B-Uncensored-MLX': {
     revision: '14963e70f886455cf93090ac95bdbf4c8730cbe1',
@@ -25,6 +25,11 @@ export const REVIEWED_SECURITY_MODELS = Object.freeze({
     revision: 'a855f377abf5cbda99a278414466743f427e97c8',
     checkedAt: '2026-09-06', likes: 748, downloads: 287720, followers: 1860,
     baseModel: 'Qwen/Qwen3.8-27B',
+  },
+  'AtomicChat/Inkling-2-Mini-Uncensored-GGUF': {
+    revision: '40886ab636cabb4decf4998224f790b462ab048e',
+    checkedAt: '2026-11-22', likes: 421, downloads: 129693, followers: 1596,
+    baseModel: 'thinkingmachines/Inkling-2-Mini',
   },
 });
 

@@ -279,5 +279,13 @@ Bare-Speed fits 24 GB hosts.
 On the MTPLX API provider an Inkling model's run effort reaches the server as
 `chat_template_kwargs.reasoning_effort` (and `reasoning_effort`), merged with
 the provider's `enable_thinking`, and the output-token cap is sent as
-`max_tokens`. A measured tok/s comparison against `inkling-2-mini-mlx` still
-needs an Apple Silicon host with 24 GB or more.
+`max_tokens`.
+
+Measured on a 128 GB Apple Silicon host (warm, 3 samples), the Optimized-Speed
+pack averaged 59 tok/s decode with a 3 s first token, against 39 tok/s and 5.8 s
+for the Qwen3.8 27B Optimized Speed pack, and passed the sandbox-repair agent
+check 3 of 3 times through OpenCode MTPLX TUI. Quality is a tie on the
+Artificial Analysis index, and its mostly sliding-window attention keeps the KV
+cache near 32 KB per token against Qwen's 65.5 KB. Models → Runtimes →
+**Recommended coding-agent setup** therefore points Apple tiers at it, with a
+window computed from the GPU budget (`HardwareLlmRecommendation.jsx`).

@@ -37,6 +37,12 @@ vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: (...args) => appendRun
 const processAgentCompletionMock = vi.fn(async () => null);
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: (...args) => processAgentCompletionMock(...args) }));
 
+const getAppDataForTaskMock = vi.fn(async () => null);
+vi.mock('./agentAppWorkspace.js', () => ({ getAppDataForTask: (...args) => getAppDataForTaskMock(...args) }));
+
+const releaseAppIssueClaimMock = vi.fn(async () => ({ released: true }));
+vi.mock('../appIssues.js', () => ({ releaseAppIssueClaim: (...args) => releaseAppIssueClaimMock(...args) }));
+
 const observePrClaimMock = vi.fn();
 vi.mock('./agentPrVerification.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -389,5 +395,42 @@ describe('recordCompletionArtifacts', () => {
       0, 5000, null, null,
       expect.any(Object),
     );
+  });
+
+  it('releases unused server-provisioned claim markers on a clean no-action-needed exit with no PR', async () => {
+    const resolvedApp = { id: 'app-1', name: 'Widget', repoPath: '/repo' };
+    getAppDataForTaskMock.mockResolvedValueOnce(resolvedApp);
+    const { ctx, forgeOutcome, settlement } = sampleStageInputs({
+      task: {
+        id: 'claim-1',
+        taskType: 'user',
+        metadata: { app: 'app-1', claimFlow: true, claimTarget: '42', claimServerCheckout: true },
+      },
+    }, {
+      taskOutcome: { status: 'no-action-needed', reason: 'already fixed' },
+      taskUpdate: { status: 'completed', metadata: { taskOutcome: { status: 'no-action-needed' } } },
+    });
+
+    await recordCompletionArtifacts(ctx, forgeOutcome, settlement);
+    expect(releaseAppIssueClaimMock).toHaveBeenCalledWith(resolvedApp, '42');
+  });
+
+  it('does not release server-provisioned claim markers when the run delivered a PR or is retrying', async () => {
+    const resolvedApp = { id: 'app-1', name: 'Widget', repoPath: '/repo' };
+    getAppDataForTaskMock.mockResolvedValue(resolvedApp);
+    const { ctx, forgeOutcome, settlement } = sampleStageInputs({
+      task: {
+        id: 'claim-2',
+        taskType: 'user',
+        metadata: { app: 'app-1', claimFlow: true, claimTarget: '42', claimServerCheckout: true },
+      },
+    }, {
+      taskOutcome: { status: 'completed' },
+      taskUpdate: { status: 'completed', metadata: { taskOutcome: { status: 'completed' } } },
+    });
+    forgeOutcome.prEvidence.cleanupEvidence = { ok: true, prs: [{ number: 100 }] };
+
+    await recordCompletionArtifacts(ctx, forgeOutcome, settlement);
+    expect(releaseAppIssueClaimMock).not.toHaveBeenCalled();
   });
 });

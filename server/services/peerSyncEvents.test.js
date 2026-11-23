@@ -17,7 +17,7 @@ vi.mock('./instances.js', async () => {
 vi.mock('./instanceIdentity.js', () => ({ UNKNOWN_INSTANCE_ID: 'unknown', getInstanceId: async () => 'local-inst' }));
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {}, unindexImage: async () => {}, indexImage: async () => {} }));
 vi.mock('../lib/pythonSetup.js', () => ({ resolveFlux2Python: () => null, FLUX2_VENV_DEFAULT: '/fake/venv/bin/python3' }));
-vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: vi.fn(async () => {}) }));
+vi.mock('./musicVideo/mediaPoolDelete.js', () => ({ forgetDeletedMusicVideoAssets: vi.fn(async () => {}) }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');
@@ -26,7 +26,7 @@ const { peerSyncBus } = await import('./peerSyncEventBus.js');
 const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
 const { mutateVideoHistory } = await import('./videoGen/history.js');
 const { listMediaTombstones } = await import('./mediaTombstones.js');
-const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPool.js');
+const { forgetDeletedMusicVideoAssets } = await import('./musicVideo/mediaPoolDelete.js');
 const { trashFiles } = await import('../lib/trashFiles.js');
 const { deleteImage } = await import('./imageGen/local.js');
 

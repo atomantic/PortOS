@@ -7,7 +7,7 @@
  * download URL, and the AR Quick Look USDZ upload/download pair.
  */
 
-import { request } from './apiCore.js';
+import { request, queryString } from './apiCore.js';
 
 // Image-to-3D (the /3d page): the selectable targets (TRELLIS.2, …)
 // annotated with host availability + install status, plus the per-image model
@@ -15,7 +15,8 @@ import { request } from './apiCore.js';
 
 export const getImageTo3dTargets = (options) => request('/image-to-3d/targets', options);
 
-export const listImageTo3dModels = (options) => request('/image-to-3d/models', options);
+// `page` ({ limit, offset }, limit <= 500) opts into the bounded `{ items, total, limit, offset }` envelope.
+export const listImageTo3dModels = (options, page) => request(`/image-to-3d/models${queryString(page)}`, options);
 
 export const getImageTo3dModel = (id, options) =>
   request(`/image-to-3d/models/${encodeURIComponent(id)}`, options);

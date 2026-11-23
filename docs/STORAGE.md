@@ -60,7 +60,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 **When to use.** Upload staging, in-flight job queues, caches, and scratch state. If a record must survive a reinstall or be queryable across records, it is **not** `ephemeral-file` — promote it.
 
-**Where it lives.** Filesystem under `./data/`, frequently excluded from backups (see `DEFAULT_EXCLUDES` in `server/services/backup.js`). The DB may hold a durable **job reference** even when the staging bytes are ephemeral.
+**Where it lives.** Filesystem under `./data/`, frequently excluded from backups (see `DEFAULT_EXCLUDES` in `server/services/backup/excludes.js`). The DB may hold a durable **job reference** even when the staging bytes are ephemeral.
 
 ---
 

@@ -63,7 +63,7 @@ afterAll(cleanupTempDataRoots);
 
 const { default: router } = await import('./mediaCollections.js');
 const { createMediaJobHookLoader } = await import('../services/mediaJobQueue/hookRegistry.js');
-const { archive, mediaJobEvents } = await import('../services/mediaJobQueue/queueState.js');
+const { archive, mediaJobEvents } = await import('../services/mediaJobQueue/state.js');
 const collections = await import('../services/mediaCollections.js');
 
 const app = express();

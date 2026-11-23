@@ -742,7 +742,7 @@ export default function MidiPianoRoll({
       {tooltip && (
         <div
           ref={tooltipRef}
-          className="pointer-events-none absolute z-10 px-1.5 py-0.5 rounded bg-black/90 border border-port-border text-[10px] text-gray-200 whitespace-nowrap"
+          className="pointer-events-none absolute z-10 px-1.5 py-0.5 rounded port-media-overlay-strong border border-port-border text-[10px] whitespace-nowrap"
           style={tooltipStyle(tooltipPosRef.current.x, tooltipPosRef.current.y, widthRef.current || 0)}
         >
           {tooltip}

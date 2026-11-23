@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { createMemoryRouter } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 
@@ -236,5 +236,60 @@ describe('Sharing — no dangling aria-controls/aria-labelledby', () => {
     const { container } = renderAt(`/sharing/${section}`);
     await waitFor(() => expect(screen.getByRole('tabpanel')).toBeInTheDocument());
     expectNoDanglingAriaRefs(container);
+  });
+});
+
+describe('Sharing accessibility semantics (#17714)', () => {
+  const renderAt = (path) => {
+    const routes = [
+      { path: '/sharing', element: <Sharing /> },
+      { path: '/sharing/:section', element: <Sharing /> },
+      { path: '/sharing/:section/:bucketId', element: <Sharing /> },
+    ];
+    return render(<RouterProvider router={createMemoryRouter(routes, { initialEntries: [path] })} />);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSettings.mockResolvedValue({});
+    listShareInbox.mockResolvedValue({ items: [] });
+    listShareActivity.mockResolvedValue({ manifests: [] });
+    listShareBuckets.mockResolvedValue({
+      buckets: [
+        { id: 'b1', name: 'Bucket One', path: '/tmp/b1', mode: 'inbox', bucketSchemaVersion: 1, localSchemaVersion: 1 },
+        { id: 'b2', name: 'Bucket Two', path: '/tmp/b2', mode: 'inbox', bucketSchemaVersion: 9, localSchemaVersion: 1, schemaCompatible: false },
+      ],
+      localSchemaVersion: 1,
+    });
+  });
+
+  it('exposes Add bucket disclosure state, a labelled bucket list, and the selected bucket', async () => {
+    renderAt('/sharing/buckets/b1?tab=inbox');
+    const add = await screen.findByRole('button', { name: 'Add bucket' });
+    expect(add).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(add);
+    expect(add).toHaveAttribute('aria-expanded', 'true');
+
+    const list = screen.getByRole('complementary', { name: 'Share buckets' });
+    const one = within(list).getByRole('button', { name: /Bucket One/ });
+    const two = within(list).getByRole('button', { name: /Bucket Two/ });
+    expect(one).toHaveAttribute('aria-current', 'true');
+    expect(two).not.toHaveAttribute('aria-current');
+    expect(two).toHaveTextContent(/incompatible/);
+    expect(one).not.toHaveTextContent(/incompatible/);
+  });
+
+  it('links the active bucket tab to a real tabpanel with no dangling refs', async () => {
+    const { container } = renderAt('/sharing/buckets/b1?tab=activity');
+    const panel = await screen.findByRole('tabpanel', { name: 'Activity' });
+    expect(panel).toHaveAttribute('id', 'bucket-panel-activity');
+    expect(screen.getByRole('tab', { name: /Activity/, selected: true })).toHaveAttribute('aria-controls', 'bucket-panel-activity');
+    expectNoDanglingAriaRefs(container);
+  });
+
+  it('announces inbox loading as a status', async () => {
+    listShareInbox.mockReturnValue(new Promise(() => {}));
+    renderAt('/sharing/buckets/b1?tab=inbox');
+    expect(await screen.findByText('Loading inbox…')).toHaveAttribute('role', 'status');
   });
 });

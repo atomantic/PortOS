@@ -10,7 +10,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 const { default: routes } = await import('../../routes/storyboards.js');
-const { __setDepsForTests, attachPanelFrame, failPanelFrame } = await import('./make.js');
+const { __setDepsForTests, attachPanelFrame, failPanelFrame, recoverInterruptedStoryboardNodes, STORYBOARD_RESTART_ERROR } = await import('./make.js');
 
 const app = express();
 app.use(express.json());
@@ -38,6 +38,7 @@ beforeEach(() => {
     getSettings: async () => ({}),
     imageParams: async (_settings, route, common) => ({ ...common, mode: route.mode }),
     enqueue,
+    jobStatus: async () => null,
     linkedMedia: async (ids) => new Map(ids.map((id) => [id, [{ kind: 'portrait', mediaKey: `${id}.png` }]])),
     ingredient: async (id) => ({ id, name: `Name of ${id}` }),
     resolveImage: (image) => `/gallery/${image}`,
@@ -432,6 +433,38 @@ describe('storyboard panel maker', () => {
     await attachPanelFrame({ ...enqueue.mock.calls[0][0].params.storyboardPanelRender, jobId: 'job-1', filename: 'drawn.png' });
     const [panel] = (await api('get', `/${id}`)).body.beats[0].panels;
     expect(panel.takes.find((t) => t.id === panel.selectedTakeId).image).toBe('drawn.png');
+  });
+
+  // Uniquely catches a restart leaving LLM/queued image nodes stuck in flight (locking Make empty/Redraw all),
+  // recovery killing a run whose frame job is still live, or recovery calling a provider or the queue.
+  it('marks orphaned running and queued nodes failed on boot, keeping live image runs and making no calls', async () => {
+    const { id, panelId: llmPanel } = await boardWithPanel();
+    const beatId = (await api('get', `/${id}`)).body.beats[0].id;
+    const imagePanel = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Gym floor' })).body.panelId;
+    const livePanel = (await api('post', `/${id}/beats/${beatId}/panels`, { action: 'Track' })).body.panelId;
+    const { mutateStoryboard } = await import('./index.js');
+    await mutateStoryboard(id, (draft) => {
+      const panels = draft.beats[0].panels;
+      const put = (panelId, nodeId, state) => { panels.find((p) => p.id === panelId).make = { nodes: { [nodeId]: state } }; };
+      put(llmPanel, 'node-writer', { status: 'running', runId: 'run-a' });
+      put(imagePanel, 'node-image', { status: 'queued', runId: 'run-b', frameCount: 1, jobIds: ['gone-job'] });
+      put(livePanel, 'node-image', { status: 'queued', runId: 'run-c', frameCount: 1, jobIds: ['live-job'] });
+    });
+    __setDepsForTests({ jobStatus: async (jobId) => (jobId === 'live-job' ? 'running' : null) });
+
+    // The shared temp root holds earlier tests' boards, which recover too.
+    expect((await recoverInterruptedStoryboardNodes()).recovered).toBeGreaterThanOrEqual(2);
+    const panels = (await api('get', `/${id}`)).body.beats[0].panels;
+    const state = (panelId, nodeId) => panels.find((p) => p.id === panelId).make.nodes[nodeId];
+    expect(state(llmPanel, 'node-writer')).toMatchObject({ status: 'failed', error: STORYBOARD_RESTART_ERROR });
+    expect(state(imagePanel, 'node-image')).toMatchObject({ status: 'failed', error: STORYBOARD_RESTART_ERROR });
+    expect(state(livePanel, 'node-image').status).toBe('queued');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+
+    // The interrupted panels are drawable again; only the live one still counts as drawing.
+    expect((await api('get', `/${id}/make-empty`)).body).toMatchObject({ panelCount: 2, allCount: 2 });
+    expect(await recoverInterruptedStoryboardNodes()).toEqual({ recovered: 0 });
   });
 
   it('keeps a library of named recipes any board can load as a copy', async () => {

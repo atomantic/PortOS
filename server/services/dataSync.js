@@ -120,6 +120,9 @@ const MEDIA_COLLECTIONS_DIR = join(PATHS.data, 'media-collections');
 // CHECKSUM_PATHS below.
 const PEER_SUBSCRIPTIONS_FILE = join(PATHS.data, 'sharing', 'peer_subscriptions.json');
 const VIDEO_HISTORY_FILE = join(PATHS.data, 'video-history.json');
+// Video tombstones ride the videoHistory snapshot (getMediaVideoHistorySnapshot
+// folds them in), so their file must fingerprint the videoHistory cache too.
+const MEDIA_TOMBSTONES_FILE = join(PATHS.data, 'media-tombstones.json');
 // Story Builder sessions used to live in per-record `data/story-builder/<id>/
 // index.json`; #1016 moved the RECORDS into PostgreSQL (`story_builder_sessions`).
 // Only `sync: true` sessions ride this category (#730). Same federation-
@@ -1345,9 +1348,11 @@ const CHECKSUM_PATHS = {
   // universe must re-checksum the collections snapshot even though no
   // media-collections record file moved. Same goes for un-ephemeral.
   mediaCollections: [MEDIA_COLLECTIONS_DIR, UNIVERSE_BUILDER_DIR, UNIVERSE_EPOCH_KEY, PIPELINE_SERIES_DIR, PIPELINE_EPOCH_KEY, PEER_SUBSCRIPTIONS_FILE],
-  // videoHistory is a flat history file with no parent-record dependency —
-  // its checksum invalidates only when video-history.json itself moves.
-  videoHistory: [VIDEO_HISTORY_FILE],
+  // videoHistory is a flat history file with no parent-record dependency, but
+  // its snapshot also folds in video tombstones from media-tombstones.json. A
+  // tombstone-only mutation (remote merge, realtime delete, superseded clear)
+  // leaves video-history.json untouched, so both files must fingerprint it.
+  videoHistory: [VIDEO_HISTORY_FILE, MEDIA_TOMBSTONES_FILE],
   // STORY_BUILDER_EPOCH_KEY folds in the store's mutation epoch so a PG-backed
   // session edit (which doesn't touch STORY_BUILDER_DIR) still invalidates the
   // cache — see STORY_BUILDER_DIR's note. The snapshot includes ONLY

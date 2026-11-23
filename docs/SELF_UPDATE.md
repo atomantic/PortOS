@@ -401,7 +401,7 @@ Order matters: install before you build, so the build sees the deps it compiles 
 **A clean rebase makes the install look broken.** Checking out a branch based on an older `main`
 rewinds the working tree, and the rebase rolls it forward, so every touched file gets a new mtime.
 `getInstallState()` (`server/services/installState.js`) compares mtimes, so it reports a stale
-build and stale deps in all four workspaces even though no dependency changed and no build input
+build and stale deps in all three workspaces (root, `client`, `server`) even though no dependency changed and no build input
 was edited. The reinstall and rebuild above clear it.
 
 ## Image-bearing Persistent Mind work must drain before source transitions

@@ -3,6 +3,7 @@ import {
   AlertTriangle, CheckCircle2, CircleAlert, Film, Info, Loader2, Sparkles,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import ListLoadError from '../ui/ListLoadError';
 import { reviewLoomEpisodeContinuity } from '../../services/apiFableLoom.js';
 
 const severityIcon = (severity) => {
@@ -21,6 +22,8 @@ export default function LoomContinuityPanel({
   review,
   onReviewChange,
   onSelectNode,
+  loadError = null,
+  onRetryLoad,
 }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [runReview, reviewing] = useAsyncAction(async () => {
@@ -53,6 +56,10 @@ export default function LoomContinuityPanel({
         {reviewing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
         {reviewing ? 'Reviewing continuity…' : review ? 'Run continuity review again' : 'Run continuity review'}
       </button>
+
+      {loadError && !review ? (
+        <ListLoadError what="the continuity review" error={loadError} onRetry={onRetryLoad} />
+      ) : null}
 
       {review ? (
         <div className="space-y-3">
@@ -113,7 +120,7 @@ export default function LoomContinuityPanel({
             <p className="text-xs text-port-text-muted">No {categoryFilter === 'all' ? '' : categoryFilter} continuity issues found.</p>
           )}
         </div>
-      ) : (
+      ) : loadError ? null : (
         <p className="rounded border border-port-border bg-port-bg/30 p-3 text-xs text-port-text-muted">
           No continuity review has run for this episode yet.
         </p>

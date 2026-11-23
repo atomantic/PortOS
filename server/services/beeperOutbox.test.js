@@ -147,6 +147,18 @@ const query = vi.fn(async (sql, params = []) => {
     row.errorMessage = params[2];
     return { rows: [], rowCount: 1 };
   }
+  if (/SELECT message_id FROM beeper_outbox/.test(sql)) {
+    const rows = [...outbox.values()]
+      .filter((row) => row.conversationId === params[0] && row.messageId && row.id !== params[1])
+      .map((row) => ({ messageId: row.messageId }));
+    return { rows, rowCount: rows.length };
+  }
+  if (/pg_advisory_xact_lock/.test(sql)) return { rows: [], rowCount: 1 };
+  if (/SELECT 1 FROM beeper_outbox WHERE conversation_id = \$1 AND message_id = \$2/.test(sql)) {
+    const hit = [...outbox.values()].some((row) => row.conversationId === params[0]
+      && row.messageId === params[1] && row.id !== params[2]);
+    return { rows: hit ? [{ '?column?': 1 }] : [], rowCount: hit ? 1 : 0 };
+  }
   if (/UPDATE beeper_outbox SET state = 'sent'/.test(sql)) {
     const row = outbox.get(params[0]);
     if (row?.state !== 'awaiting-confirmation') return { rows: [], rowCount: 0 };
@@ -536,6 +548,50 @@ describe('sendOutboxEntry — ambiguous and definitive outcomes', () => {
     });
     expect(outbox.get(entry.id).errorMessage).toContain('may still have been delivered');
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not bind a second identical send within 60s to the first send\'s message', async () => {
+    markPriorSend();
+    const first = await approvedEntry('ok');
+    const second = await approvedEntry('ok');
+    sendMessage.mockResolvedValue({ chatID: CHAT_ID, pendingMessageID: undefined });
+    listMessagesPage.mockResolvedValue({ items: [sentMessage({ id: 'msg-A', text: 'ok' })] });
+
+    await sendOutboxEntry(first.id);
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+    expect(outbox.get(first.id)).toMatchObject({ state: 'sent', messageId: 'msg-A' });
+
+    await sendOutboxEntry(second.id);
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+    expect(outbox.get(second.id)).toMatchObject({ state: 'awaiting-confirmation', messageId: null });
+
+    listMessagesPage.mockResolvedValue({ items: [
+      sentMessage({ id: 'msg-B', text: 'ok', timestamp: '2026-09-01T00:01:10.000Z' }),
+      sentMessage({ id: 'msg-A', text: 'ok' }),
+    ] });
+    await reconcileOutboxEntry(second.id);
+    expect(outbox.get(second.id)).toMatchObject({ state: 'sent', messageId: 'msg-B' });
+  });
+
+  it('does not let a reconciled response-less send claim a later identical send that already settled', async () => {
+    markPriorSend();
+    const lost = await approvedEntry('on my way');
+    sendMessage.mockRejectedValueOnce(new BeeperApiError('response lost', { status: 0, code: 'NETWORK_ERROR' }));
+    await sendOutboxEntry(lost.id);
+    const resend = strandedRow('sent', { body: 'on my way', messageId: 'msg-resend' });
+    clock.advance(CONFIRMATION_TIMEOUT_MS);
+    listMessagesPage.mockResolvedValue({ items: [
+      sentMessage({ id: 'msg-resend', text: 'on my way', timestamp: '2026-09-01T00:00:40.000Z' }),
+    ] });
+    clock.runTimersWithDelay(CONFIRMATION_TIMEOUT_MS);
+    await flush();
+
+    expect(outbox.get(lost.id)).toMatchObject({ state: 'awaiting-confirmation', messageId: null });
+    expect(outbox.get(resend.id).messageId).toBe('msg-resend');
   });
 
   it('does not let an earlier identical message confirm a response-less send', async () => {

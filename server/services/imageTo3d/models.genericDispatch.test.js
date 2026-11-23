@@ -51,6 +51,7 @@ vi.mock('../localMemory.js', () => ({
 
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
+  listModelsPage: vi.fn(),
   listGeneratingModelSummaries: vi.fn(),
   getModel: vi.fn(),
   createModel: vi.fn(),

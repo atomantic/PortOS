@@ -14,48 +14,43 @@
  * and a test-only helper has no business in the browser barrel.
  */
 
+import { guardCorpus } from '../../../scripts/lib/guardCorpus.js';
+
 /** Blank out `//` and block comments so a quoted example class isn't scanned as markup. */
-export function maskComments(source) {
+export const maskComments = (source) => guardCorpus().derive('clientMaskedComments', source, () => blankComments(source));
+
+function blankComments(source) {
   let out = '';
+  let retainedFrom = 0;
   let i = 0;
   while (i < source.length) {
     const ch = source[i];
     if (ch === '/' && source[i + 1] === '/') {
-      while (i < source.length && source[i] !== '\n') {
-        out += ' ';
-        i += 1;
-      }
+      const newline = source.indexOf('\n', i + 2);
+      const end = newline === -1 ? source.length : newline;
+      out += source.slice(retainedFrom, i) + ' '.repeat(end - i);
+      retainedFrom = end;
+      i = end;
       continue;
     }
     if (ch === '/' && source[i + 1] === '*') {
-      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
-        out += source[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      out += '  ';
-      i += 2;
+      const close = source.indexOf('*/', i + 1);
+      const end = close === -1 ? source.length : close + 2;
+      out += source.slice(retainedFrom, i) + source.slice(i, end).replace(/[^\n]/g, ' ');
+      if (close === -1) out += '  ';
+      retainedFrom = end;
+      i = end;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
-      out += ch;
       i += 1;
       while (i < source.length && source[i] !== ch) {
-        if (source[i] === '\\') {
-          out += source.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-        out += source[i];
-        i += 1;
+        i += source[i] === '\\' ? 2 : 1;
       }
-      out += source[i] ?? '';
-      i += 1;
-      continue;
     }
-    out += ch;
     i += 1;
   }
-  return out;
+  return out + source.slice(retainedFrom);
 }
 
 const STRING_LITERAL = /(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;

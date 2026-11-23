@@ -8,6 +8,8 @@ import { retryHoldMetadata, isDeliveryCleanupHeld } from '../../lib/taskRetryHol
 import { prClaimWasVerified } from '../../lib/prDisposition.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
+import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { getAppDataForTask } from './agentAppWorkspace.js';
 /**
  * Agent Finalization
  *
@@ -304,6 +306,69 @@ async function persistRecoveredTaskUpdate({ task, agent, recoveryUpdate }) {
   return { recoveryUpdate, recoveryOwnershipLost: false };
 }
 
+// Shared with finalizeAgent. Hoisted above retirement so a recovered
+// dependency wait uses the same retry-hold categories as a live completion
+// (internal-dependency and internal-dependency-unverified included).
+const PREREQUISITE_BLOCKED_CATEGORIES = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'];
+const DELIVERY_RECOVERY_BLOCKED_CATEGORIES = ['task-approval', 'task-recovery-exhausted', ...PREREQUISITE_BLOCKED_CATEGORIES];
+
+/**
+ * The six-step forge completion pipeline shared by live finalization and
+ * dead-agent recovery: persist the summary, then review follow-up, claim
+ * disposition, claim outcome, and review handoff. `summarize` / eligibility
+ * flags stay with the caller — recovery and finalizeAgent gate those differently.
+ *
+ * @returns {Promise<{ reportedCompletion: object|null, reportedOutcome: object|null, mergedReviewFollowUp: object|null, claimDisposition: object|null, deliveryHeld: boolean }>}
+ */
+async function reconcileForgeReportedOutcome({
+  agentId, task, agent, workspacePath, finalSummary, existingRecord,
+  summarize, reviewEligible, claimEligible, handoffEligible,
+}) {
+  const reportedCompletion = summarize
+    ? await persistCompletionSummary(agentId, { workspacePath, finalSummary, existingRecord }) : null;
+  let reportedOutcome = reportedCompletion?.taskOutcome ?? null;
+  const mergedReviewFollowUp = await completionReviewFollowUp({
+    task, agentId, workspacePath, reportedOutcome, eligible: reviewEligible,
+  });
+  if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
+  const claimDisposition = await completionClaimDisposition({
+    task, agent, agentId, reportedOutcome, success: claimEligible,
+  });
+  reportedOutcome = await completionClaimOutcome(agentId, reportedOutcome, claimDisposition);
+  const reviewHandoff = await completionReviewHandoff({
+    task, agent, agentId, reportedOutcome, eligible: handoffEligible,
+  });
+  if (reviewHandoff) reportedOutcome = reviewHandoff.taskOutcome;
+  return {
+    reportedCompletion,
+    reportedOutcome,
+    mergedReviewFollowUp,
+    claimDisposition,
+    deliveryHeld: ['blocked', 'incomplete'].includes(reportedOutcome?.status),
+  };
+}
+
+/** Release verification for do-release and synchronization handoff v2. */
+async function applyReleaseDeliveryGate(owner, taskOutcome) {
+  const { verifyReleaseDelivery } = await import('../releaseDeliveryGate.js');
+  const delivery = await verifyReleaseDelivery(owner, taskOutcome);
+  if (delivery && !delivery.verified) {
+    return {
+      taskOutcome: {
+        status: 'incomplete',
+        reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}`,
+      },
+      held: true,
+    };
+  }
+  return { taskOutcome, held: false };
+}
+
+function releaseDeliveryApplies(metadata) {
+  return metadata?.taskAnalysisType === 'do-release'
+    || metadata?.releasePublication?.synchronizationHandoffVersion === 2;
+}
+
 /**
  * Retire an agent whose process is gone — the one step list both recovery
  * paths now share (issue #8440). Before this, the orphan sweep
@@ -340,7 +405,7 @@ async function persistRecoveredTaskUpdate({ task, agent, recoveryUpdate }) {
  * @returns {Promise<{ success: boolean, taskOutcome: object|null, deliveryHeld: boolean }>} the effective success used for the retirement (post
  *   private-security override), so callers that branch on it don't have to re-derive it
  */
-export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
+async function prepareRetiredAgent({ agent, task, success, exitCode, errorMessage, category }) {
   if (agent.metadata?.taskAnalysisType === 'security' && agent.metadata.useRunner) {
     const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
     const scanner = await settleAgentSecurityScan(agent.id);
@@ -350,56 +415,48 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   const isPrivateSecurity = isPrivateSecurityTask(task) || isPrivateSecurityTask(agent);
   const interruption = agent.metadata?.executionInterruption;
   const refused = ['content-refusal', 'content-filtered'].includes(interruption?.category);
-  const reportedCompletion = !isPrivateSecurity && !refused
-    ? await persistCompletionSummary(agent.id, { workspacePath: agent.metadata?.workspacePath, existingRecord: agent }) : null;
-  let reportedOutcome = reportedCompletion?.taskOutcome ?? null;
   const executionSuccess = success && exitCode === 0;
   const recoveryEligible = executionSuccess && !isPrivateSecurity && !interruption;
-  const mergedReviewFollowUp = await completionReviewFollowUp({ task, agentId: agent.id,
-    workspacePath: agent.metadata?.workspacePath, reportedOutcome,
-    eligible: recoveryEligible });
-  if (mergedReviewFollowUp) reportedOutcome = mergedReviewFollowUp.taskOutcome;
-  const claimDisposition = await completionClaimDisposition({ task, agent, reportedOutcome,
-    success: recoveryEligible && agent.result?.validationPassed !== false });
-  reportedOutcome = await completionClaimOutcome(agent.id, reportedOutcome, claimDisposition);
-  const reviewHandoff = await completionReviewHandoff({ task, agent, agentId: agent.id, reportedOutcome,
-    eligible: recoveryEligible && agent.result?.validationPassed !== false });
-  if (reviewHandoff) reportedOutcome = reviewHandoff.taskOutcome;
-  // Only an explicit hold suppresses orphan recovery; a failed delivery check
-  // must retain the caller's normal failure/retry handling.
-  let deliveryHeld = ['blocked', 'incomplete'].includes(reportedOutcome?.status);
-  let effectiveSuccess = isPrivateSecurity || refused || deliveryHeld ? false : success;
-  const errorAnalysis = refused ? {
-    category: interruption.category, origin: interruption.source || 'provider',
-    message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
-    permanent: true, actionable: false, requiresFallback: false,
-  } : { message: errorMessage, category };
-
-  const recoveredHook = await dispatchRecoveredTaskOutputHook({
-    agentId: agent.id,
-    task,
-    success: effectiveSuccess,
-    workspacePath: agent.metadata?.workspacePath || null,
+  const claimEligible = recoveryEligible && agent.result?.validationPassed !== false;
+  const forge = await reconcileForgeReportedOutcome({
+    agentId: agent.id, task, agent, workspacePath: agent.metadata?.workspacePath, existingRecord: agent,
+    summarize: !isPrivateSecurity && !refused,
+    reviewEligible: recoveryEligible, claimEligible, handoffEligible: claimEligible,
   });
+  return {
+    agent, task, isPrivateSecurity, interruption, refused, executionSuccess, ...forge,
+    effectiveSuccess: isPrivateSecurity || refused || forge.deliveryHeld ? false : success,
+    errorAnalysis: refused ? {
+      category: interruption.category, origin: interruption.source || 'provider',
+      message: 'Provider safety refusal; automatic continuation, retries and provider fallback are disabled.',
+      permanent: true, actionable: false, requiresFallback: false,
+    } : { message: errorMessage, category },
+  };
+}
 
+async function settleRetiredDelivery(state) {
+  const { agent, task, reportedOutcome, mergedReviewFollowUp, claimDisposition, executionSuccess, refused, isPrivateSecurity } = state;
+  let { effectiveSuccess, deliveryHeld } = state;
+  const recoveredHook = await dispatchRecoveredTaskOutputHook({
+    agentId: agent.id, task, success: effectiveSuccess, workspacePath: agent.metadata?.workspacePath || null,
+  });
   if (Number(task?.metadata?.auditDispositionVersion) === 1 && recoveredHook?.auditDisposition?.status !== 'complete') effectiveSuccess = false;
   const retirementCompletion = isCleanupOnlyRecovery(task) ? await verifyCleanupCompletion(task) : null;
   const validationPassed = resolveRecoveredValidation({ task, agent, effectiveSuccess, recoveredHook,
     retirementCompletion, mergedReviewFollowUp, claimDisposition });
-  let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({ reported: retirementCompletion?.status === 'unverified'
-    ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
-    success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task) }) : null;
-  if (effectiveSuccess && (agent.metadata?.taskAnalysisType === 'do-release'
-    || agent.metadata?.releasePublication?.synchronizationHandoffVersion === 2)) {
-    const { verifyReleaseDelivery } = await import('../releaseDeliveryGate.js');
-    const delivery = await verifyReleaseDelivery(agent, taskOutcome);
-    if (delivery && !delivery.verified) {
-      taskOutcome = { status: 'incomplete', reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}` };
+  let taskOutcome = reportedOutcome || retirementCompletion ? resolveTaskOutcome({
+    reported: retirementCompletion?.status === 'unverified'
+      ? { status: 'incomplete', reason: retirementCompletion.reason } : reportedOutcome,
+    success: effectiveSuccess, validationPassed, noCommitDeclared: declaresNoCommitCriterion(task),
+  }) : null;
+  if (effectiveSuccess && releaseDeliveryApplies(agent.metadata)) {
+    const gated = await applyReleaseDeliveryGate(agent, taskOutcome);
+    if (gated.held) {
+      taskOutcome = gated.taskOutcome;
       deliveryHeld = true;
     }
   }
   if (['blocked', 'incomplete'].includes(taskOutcome?.status)) effectiveSuccess = false;
-
   const savedCleanup = isDeliveryCleanupHeld(task?.metadata) && task.metadata.deliveryRecoveryAgentId === agent.id;
   const cleanupAllowed = savedCleanup || (executionSuccess && validationPassed !== false
     && (agent.metadata?.isWorktree === true || hasClaimCheckoutBindings(agent.metadata)));
@@ -407,22 +464,23 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
   let recoveryUpdate = deliveryHeld && !refused && !isPrivateSecurity && task?.id && task.status !== 'completed'
     ? await resolveDeliveryRecoveryUpdate(task, recoveryOutcome, agent.id) : null;
   if (recoveryUpdate?.runtimeRecoveryContext) taskOutcome = recoveryUpdate.metadata.taskOutcome;
+  return { ...state, recoveredHook, retirementCompletion, validationPassed, taskOutcome, deliveryHeld, effectiveSuccess, savedCleanup, recoveryUpdate };
+}
 
+async function recordRetiredAgent(state, { exitCode, duration, errorMessage, agentResultExtra = {} }) {
+  const { agent, task, effectiveSuccess, executionSuccess, taskOutcome, errorAnalysis, isPrivateSecurity,
+    validationPassed, claimDisposition, retirementCompletion, recoveredHook, refused, interruption, savedCleanup } = state;
   if (agent.metadata?.runId) {
     await completeAgentRun(
       agent.metadata.runId,
       await recoveredRunOutput(agent, isPrivateSecurity),
-      exitCode,
-      duration,
-      errorAnalysis,
+      exitCode, duration, errorAnalysis,
       effectiveSuccess ? null : false,
       { executionSuccess, taskOutcome },
     );
   }
-
-  const persisted = await persistRecoveredTaskUpdate({ task, agent, recoveryUpdate });
-  recoveryUpdate = persisted.recoveryUpdate;
-  const { recoveryOwnershipLost } = persisted;
+  const persisted = await persistRecoveredTaskUpdate({ task, agent, recoveryUpdate: state.recoveryUpdate });
+  const { recoveryUpdate, recoveryOwnershipLost } = persisted;
   await completeAgent(agent.id, {
     success: effectiveSuccess,
     executionSuccess,
@@ -438,29 +496,36 @@ export async function retireDeadAgent({ agent, task, success, exitCode, duration
     orphaned: true,
     error: errorMessage,
     ...agentResultExtra,
-    ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? { success: effectiveSuccess,
-      auditDisposition: recoveredHook?.auditDisposition || { status: 'unverified' } } : {}),
+    ...(Number(task?.metadata?.auditDispositionVersion) === 1 ? {
+      auditDisposition: recoveredHook?.auditDisposition || { status: 'unverified' },
+    } : {}),
     ...(refused ? { success: false, error: errorAnalysis.message, errorAnalysis, executionInterruption: interruption } : {}),
   });
+  return { ...state, recoveryUpdate, taskOutcome, effectiveSuccess };
+}
 
+async function releaseRetiredAgent({ agent, task, recoveryUpdate }) {
   // Recovery retires the run without reaching finalizeAgent's completion
-  // cleanup, so the sentinel has no other owner — and the hook above was the
-  // last consumer of its payload. Persist the outcome before removing evidence.
-  // Keep this recovery-only dependency lazy: the
-  // completion-cleanup module also imports worktree/PR orchestration, while
-  // agentFinalization is on the static path of nearly every agent service.
+  // cleanup, so the sentinel has no other owner. Persist the outcome before
+  // removing evidence. Lazy: completion cleanup imports worktree/PR orchestration,
+  // while agentFinalization is on the static path of nearly every agent service.
   const { removeCompletionSentinel } = await import('./agentCompletionCleanup.js');
   await removeCompletionSentinel({ agentId: agent.id, agentState: agent })
     .catch(err => emitLog('warn', `Completion sentinel removal failed for ${agent.id}: ${err.message}`, { agentId: agent.id }));
-
   if (recoveryUpdate?.metadata?.retryPendingCleanup
-    || ['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(recoveryUpdate?.metadata?.blockedCategory)) {
+    || DELIVERY_RECOVERY_BLOCKED_CATEGORIES.includes(recoveryUpdate?.metadata?.blockedCategory)) {
     const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
     await releaseRetryHold({ agentId: agent.id, task, success: false, agentMetadata: agent.metadata })
       .catch(err => emitLog('warn', `Recovered delivery retry deferred for ${agent.id}: ${err.message}`, { agentId: agent.id }));
   }
+}
 
-  return { success: effectiveSuccess, taskOutcome, deliveryHeld };
+export async function retireDeadAgent({ agent, task, success, exitCode, duration, errorMessage, category, agentResultExtra = {} }) {
+  const prepared = await prepareRetiredAgent({ agent, task, success, exitCode, errorMessage, category });
+  const settled = await settleRetiredDelivery(prepared);
+  const recorded = await recordRetiredAgent(settled, { exitCode, duration, errorMessage, agentResultExtra });
+  await releaseRetiredAgent(recorded);
+  return { success: recorded.effectiveSuccess, taskOutcome: recorded.taskOutcome, deliveryHeld: recorded.deliveryHeld };
 }
 
 /**
@@ -776,9 +841,6 @@ function completionRecord({ task, verdict, hookResult, fidelity, executionInterr
   };
 }
 
-const PREREQUISITE_BLOCKED_CATEGORIES = ['runtime-verification', 'internal-dependency', 'internal-dependency-unverified'];
-const DELIVERY_RECOVERY_BLOCKED_CATEGORIES = ['task-approval', 'task-recovery-exhausted', ...PREREQUISITE_BLOCKED_CATEGORIES];
-
 // Folds an explicit task hold and any scanner/provider safety refusal into the
 // reported execution state the verdict ladder reads. A cleanup-only hold keeps
 // the reported success; a refusal is persisted as the run's interruption.
@@ -960,28 +1022,16 @@ export function createCompletionContext({
 
 async function verifyForgeReportedOutcome(ctx) {
   const { agentId, task, workspacePath, finalSummary, terminatedByUser, executionSuccess } = ctx;
-  const reportedCompletion = !terminatedByUser && !isPrivateSecurityTask(task)
-    ? await persistCompletionSummary(agentId, { workspacePath, finalSummary }) : null;
-  let reportedTaskOutcome = reportedCompletion?.taskOutcome ?? null;
   // Only a clean, uninterrupted, non-private run whose own analysis raised no
   // terminal error may have its reported hold re-judged against the forge.
   const forgeVerifiable = executionSuccess && !terminatedByUser && !ctx.executionInterruption
     && !isPrivateSecurityTask(task) && !ctx.reportedErrorAnalysis?.actionable && !ctx.reportedErrorAnalysis?.permanent;
-  // A successful process may report a hold after discovering its PR merged.
-  // Verify that exact target before the hold can schedule another run.
-  const mergedReviewFollowUp = await completionReviewFollowUp({
-    task, agentId, workspacePath, reportedOutcome: reportedTaskOutcome, eligible: forgeVerifiable,
+  const forge = await reconcileForgeReportedOutcome({
+    agentId, task, workspacePath, finalSummary,
+    summarize: !terminatedByUser && !isPrivateSecurityTask(task),
+    reviewEligible: forgeVerifiable, claimEligible: forgeVerifiable, handoffEligible: forgeVerifiable,
   });
-  if (mergedReviewFollowUp) reportedTaskOutcome = mergedReviewFollowUp.taskOutcome;
-  const claimDisposition = await completionClaimDisposition({
-    task, agentId, reportedOutcome: reportedTaskOutcome, success: forgeVerifiable,
-  });
-  reportedTaskOutcome = await completionClaimOutcome(agentId, reportedTaskOutcome, claimDisposition);
-  const reviewHandoff = await completionReviewHandoff({
-    task, agentId, reportedOutcome: reportedTaskOutcome, eligible: forgeVerifiable,
-  });
-  if (reviewHandoff) reportedTaskOutcome = reviewHandoff.taskOutcome;
-  const deliveryHeld = ['blocked', 'incomplete'].includes(reportedTaskOutcome?.status);
+  const { reportedCompletion, reportedOutcome: reportedTaskOutcome, mergedReviewFollowUp, claimDisposition, deliveryHeld } = forge;
   const settled = await settleReportedExecution({
     agentId, task, reportedTaskOutcome, deliveryHeld,
     reportedSuccess: ctx.reportedSuccess,
@@ -1157,16 +1207,9 @@ async function resolveSettledTaskOutcome({
   });
   if (verdict.success) {
     const owner = await getAgentRecord(agentId);
-    if (owner?.metadata?.taskAnalysisType === 'do-release'
-      || owner?.metadata?.releasePublication?.synchronizationHandoffVersion === 2) {
-      const { verifyReleaseDelivery } = await import('../releaseDeliveryGate.js');
-      const delivery = await verifyReleaseDelivery(owner, taskOutcome);
-      if (delivery && !delivery.verified) {
-        taskOutcome = {
-          status: 'incomplete',
-          reason: `Release synchronization is unfinished: ${delivery?.reason || 'evidence unavailable'}`,
-        };
-      }
+    if (releaseDeliveryApplies(owner?.metadata)) {
+      const gated = await applyReleaseDeliveryGate(owner, taskOutcome);
+      if (gated.held) taskOutcome = gated.taskOutcome;
     }
   }
   if (verdict.success && executionSuccess && validationPassed !== false && taskOutcome?.recovery?.mode === 'cleanup') {
@@ -1435,6 +1478,29 @@ export async function recordCompletionArtifacts(ctx, forgeOutcome, settlement) {
   });
 
   await processAgentCompletion(agentId, task, deliverySuccess, outputBuffer);
+
+  // If PortOS stamped `@me` + `in-progress` at spawn for a server-provisioned
+  // claim and the run stopped with no PR (clean `no-action-needed` or a
+  // terminal `blocked` on an empty branch), release those markers defensively
+  // so an agent that forgot to unmark never leaves a zombie `in-progress` issue.
+  const serverClaimTarget = isTruthyMeta(task.metadata?.claimServerCheckout)
+    ? String(task.metadata?.claimTarget ?? '').trim()
+    : '';
+  const unusedServerClaim = /^\d+$/.test(serverClaimTarget)
+    && !prEvidence.cleanupEvidence?.prs?.length
+    && taskUpdate.status !== 'pending'
+    && (taskOutcome?.status === 'no-action-needed'
+      || (taskUpdate.status === 'blocked' && prEvidence.branchProvenEmpty === true));
+  if (unusedServerClaim && task.metadata?.app) {
+    const resolvedApp = await getAppDataForTask(task).catch(() => null);
+    if (resolvedApp) {
+      await import('../appIssues.js')
+        .then(({ releaseAppIssueClaim }) => releaseAppIssueClaim(resolvedApp, serverClaimTarget))
+        .catch(err => {
+          emitLog('warn', `⚠️ Could not release unused claim markers for issue #${serverClaimTarget}: ${err.message}`, { agentId, taskId: task.id });
+        });
+    }
+  }
 
   if (usesCreativeDirectorScratchCwd(task)) {
     await removeCreativeDirectorScratchCwd(agentId).catch((err) => {

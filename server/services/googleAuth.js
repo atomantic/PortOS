@@ -1,5 +1,7 @@
 import { join } from 'path';
-import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { ensureSecureDir, writeSecureJson } from '../lib/secureAuthStore.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createGoogleOAuthClient } from '../lib/googleOAuthClient.js';
 import { PORTS } from '../lib/ports.js';
@@ -17,7 +19,7 @@ export const OAUTH_REDIRECT_URI = `http://${process.env.PUBLIC_HOST || 'localhos
 let oAuth2Client = null;
 
 async function ensureAuthDir() {
-  await ensureDir(AUTH_DIR);
+  await ensureSecureDir(AUTH_DIR);
 }
 
 export async function getCredentials() {
@@ -30,10 +32,10 @@ export async function getCredentials() {
 export async function saveCredentials({ clientId, clientSecret }) {
   await ensureAuthDir();
   const credentials = { clientId, clientSecret, redirectUri: OAUTH_REDIRECT_URI };
-  await atomicWrite(CREDENTIALS_FILE, credentials);
+  await writeSecureJson(CREDENTIALS_FILE, credentials);
   oAuth2Client = null; // Reset client
   console.log('📅 Google OAuth credentials saved');
-  return credentials;
+  return { hasCredentials: true, redirectUri: credentials.redirectUri };
 }
 
 export async function getTokens() {
@@ -45,7 +47,7 @@ export async function getTokens() {
 
 async function saveTokens(tokens) {
   await ensureAuthDir();
-  await atomicWrite(TOKENS_FILE, tokens);
+  await writeSecureJson(TOKENS_FILE, tokens);
   console.log('📅 Google OAuth tokens saved');
 }
 
@@ -62,9 +64,28 @@ function attachTokenPersistence(client) {
   });
 }
 
+const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
+const REVOKE_TIMEOUT_MS = 5_000;
+
+// Best-effort: disconnecting must succeed locally even when Google is unreachable.
+async function revokeStoredToken() {
+  const tokens = await getTokens().catch(() => null);
+  const token = tokens?.refresh_token || tokens?.access_token;
+  if (!token) return;
+  const res = await fetchWithTimeout(REVOKE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ token }).toString(),
+  }, REVOKE_TIMEOUT_MS).catch((err) => ({ ok: false, status: err?.name || 'error' }));
+  console.log(res.ok
+    ? '📅 Google OAuth token revoked upstream'
+    : `⚠️ Google OAuth token revocation not accepted (${res.status}); clearing local copy anyway`);
+}
+
 export async function clearAuth() {
   await ensureAuthDir();
-  await atomicWrite(TOKENS_FILE, {}).catch(() => {});
+  await revokeStoredToken();
+  await writeSecureJson(TOKENS_FILE, {}).catch(() => {});
   oAuth2Client = null;
   console.log('📅 Google OAuth tokens cleared');
 }

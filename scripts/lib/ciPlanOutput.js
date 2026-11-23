@@ -15,17 +15,22 @@ import { WINDOWS_CONTRACT_TESTS } from './ciPlanRules.js';
 // selection now stays exactly as computed and only execution is partitioned
 // (#11871). 125 is that former full-plan threshold (#10312).
 export const MAX_TARGETED_TEST_FILES = 125;
-// The client runner has no reach measure and its cold-memo cost is about 0.4s per
-// file including overhead (#16805 measurements), so one runner absorbs 400 client
-// files inside the existing critical path. Fanning out earlier only adds three
-// runner starts, Chrome warm-ups and memo restores.
+// A client runner's cold-memo cost is about 0.4s per file including overhead
+// (#16805 measurements), so one runner absorbs 400 client files, explicit or
+// reached through a related walk, inside the existing critical path. Fanning
+// out earlier adds runner starts, Chrome warm-ups and memo restores.
 export const CLIENT_FANOUT_TEST_FILES = 400;
+// A real-Chromium client suite costs a Chrome launch and a cold Vite graph:
+// 30-75s each on a 4-vCPU runner against ~0.4s for a happy-dom file, so 32 of
+// them on one runner took 282-402s while four shards finished in 55-91s
+// (#17616). Four such suites already outweigh the extra runner starts.
+export const CLIENT_BROWSER_FANOUT_SUITES = 4;
 
 // Parallel runners per test job on a full plan. Decided here rather than in
 // ci.yml because a job-level `if` cannot read the matrix context, so the
 // planner emits the matrix for scoped plans too. Sizing rationale:
 // docs/GITHUB_ACTIONS.md "Full-suite sharding".
-export const FULL_SUITE_SHARDS = { server: 2, client: 3, windows: 1 };
+export const FULL_SUITE_SHARDS = { server: 2, client: 4, windows: 1 };
 
 /** Matrix values for one runner: every shard on a full run, one otherwise. */
 export const shardIndexes = (mode, count) => (
@@ -37,22 +42,27 @@ export const shardIndexes = (mode, count) => (
  *
  * - Over the runner's cap of explicit selectors (MAX_TARGETED_TEST_FILES for the
  *   server, CLIENT_FANOUT_TEST_FILES for the client): either mode.
- * - A server `related` plan whose measured import reach (`serverReach.selected`,
- *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
- *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
- *   The client has no reach measure, so only the cap applies there.
+ * - A `related` plan whose measured import reach (`serverReach.selected` /
+ *   `clientReach.selected`, the suites Vitest's related walk will select)
+ *   exceeds the same cap (#16547 server, #17456 client): its explicit selectors
+ *   stay few, yet one runner would execute ~1,000 suites.
+ * - A client plan whose real-Chromium suites (`browserSuites`: explicit
+ *   selectors plus, for `related`, the suites changed files reach) number at
+ *   least CLIENT_BROWSER_FANOUT_SUITES, whatever the file count (#17616).
  * - Everything else stays on one runner. Record-aware selection
- *   (`recordedReach` in lib/testMemo.js, #16424) narrows what a selected test
+ *   (`recordedReach` in lib/testMemo/analyzer.js, #16424) narrows what a selected test
  *   actually runs; reach is measured, not assumed, so a small graph stays put.
  *
  * No shard-count floor is needed: the runner slices the selection itself and
  * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
 const runnerFanOutCap = (runner) => (runner === 'client' ? CLIENT_FANOUT_TEST_FILES : MAX_TARGETED_TEST_FILES);
-export const fansOut = (runner, { mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
-  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+export const fansOut = (runner, { mode, files }, reach = 0, browserSuites = 0) => mode !== 'skip' && mode !== 'full'
+  && (Math.max(files.length, mode === 'related' ? reach : 0) > runnerFanOutCap(runner)
+    || (runner === 'client' && browserSuites >= CLIENT_BROWSER_FANOUT_SUITES));
 
-export const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
+/** The suites a measureRepoImportReach() report selects; 0 when it was not measured. */
+export const reachCount = (report) => (Number.isFinite(report?.selected) ? report.selected : 0);
 
 // A scoped runner spread over several shards says why, so the summary never
 // reads as a full run.
@@ -60,10 +70,9 @@ const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
   const cap = runnerFanOutCap(runner);
-  if (plan[runner].files.length <= cap) {
-    return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
-  }
-  return `; ${plan[runner].files.length} selected test files exceed the ${cap}-file cap, sharded ${count} ways`;
+  if (plan[runner].files.length > cap) return `; ${plan[runner].files.length} selected test files exceed the ${cap}-file cap, sharded ${count} ways`;
+  if (plan.reachSelected[runner] > cap) return `; related import reach of ${plan.reachSelected[runner]} suites exceeds the ${cap}-file cap, sharded ${count} ways`;
+  return `; ${plan.browserSuites?.[runner] ?? 0} real-Chromium suites selected (at least ${CLIENT_BROWSER_FANOUT_SUITES}), sharded ${count} ways`;
 };
 
 export const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({

@@ -175,10 +175,13 @@ if ($TTS_ENGINE -eq 'piper') {
         $url = "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${zipName}"
         $tmp = Join-Path $env:TEMP $zipName
         Write-Host "⬇️  Piper TTS → $PIPER_DIR"
-        Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-        New-Item -ItemType Directory -Force -Path $PIPER_DIR | Out-Null
-        Expand-Archive -Path $tmp -DestinationPath $VOICE_HOME -Force
-        Remove-Item $tmp -ErrorAction SilentlyContinue
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+            New-Item -ItemType Directory -Force -Path $PIPER_DIR | Out-Null
+            Expand-Archive -Path $tmp -DestinationPath $VOICE_HOME -Force
+        } finally {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

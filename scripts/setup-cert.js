@@ -27,14 +27,15 @@
  *   --self-signed    skip Tailscale attempt and go straight to self-signed
  */
 import { execFileSync } from 'child_process';
-import { X509Certificate } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { createSecureContext } from 'tls';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, statSync } from 'fs';
 import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { findTailscale, hasOnlySandboxedTailscale } from '../server/lib/tailscale.js';
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
+import { readCertExpiresAt } from '../lib/certMeta.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -111,23 +112,42 @@ subjectAltName = @alt_names
 ${buildSANs(ips)}
 `;
 
-  const cnfPath = join(CERT_DIR, 'openssl.cnf');
-  writeFileSync(cnfPath, cnf);
+  // Stage everything (including openssl.cnf) in a sibling temp dir so an
+  // interrupted run never leaves a truncated key/cert at the live paths.
+  const stage = mkdtempSync(join(CERT_DIR, '.stage-'));
+  try {
+    const cnfPath = join(stage, 'openssl.cnf');
+    const stagedKey = join(stage, 'key.pem');
+    const stagedCert = join(stage, 'cert.pem');
+    const stagedMeta = join(stage, 'meta.json');
+    writeFileSync(cnfPath, cnf);
 
-  execFileSync('openssl', [
-    'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-    '-keyout', KEY_PATH,
-    '-out', CERT_PATH,
-    '-days', '3650',
-    '-config', cnfPath,
-    '-extensions', 'v3_req'
-  ], { stdio: ['ignore', 'ignore', 'inherit'] });
+    execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', stagedKey,
+      '-out', stagedCert,
+      '-days', '3650',
+      '-config', cnfPath,
+      '-extensions', 'v3_req'
+    ], { stdio: ['ignore', 'ignore', 'inherit'] });
+    chmodSync(stagedKey, 0o600);
 
-  writeFileSync(META_PATH, JSON.stringify({
-    mode: 'self-signed',
-    ips,
-    generatedAt: new Date().toISOString()
-  }, null, 2));
+    // Throws on an unparseable or mismatched pair, before anything goes live.
+    createSecureContext({ cert: readFileSync(stagedCert), key: readFileSync(stagedKey) });
+
+    writeFileSync(stagedMeta, JSON.stringify({
+      mode: 'self-signed',
+      ips,
+      generatedAt: new Date().toISOString()
+    }, null, 2));
+
+    // Same-filesystem renames; meta last so it only ever describes a live pair.
+    renameSync(stagedKey, KEY_PATH);
+    renameSync(stagedCert, CERT_PATH);
+    renameSync(stagedMeta, META_PATH);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
   console.log(`🔒 Generated self-signed cert for ${ips.join(', ')}`);
 }
 
@@ -146,16 +166,8 @@ function readMeta() {
 }
 
 function certExpiresAt() {
-  if (!existsSync(CERT_PATH)) return null;
-  // Node already ships the same X.509 parser its TLS stack uses. Relying on an
-  // `openssl` executable here made otherwise-successful Tailscale provisioning
-  // fail on Windows, where OpenSSL is not normally on PATH.
-  try {
-    const expiresAt = new Date(new X509Certificate(readFileSync(CERT_PATH)).validTo);
-    return Number.isNaN(expiresAt.getTime()) ? null : expiresAt;
-  } catch {
-    return null;
-  }
+  const iso = readCertExpiresAt(CERT_PATH);
+  return iso ? new Date(iso) : null;
 }
 
 function daysUntil(date) {
@@ -305,11 +317,13 @@ if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) {
 }
 
 const expiry = certExpiresAt();
-writeFileSync(META_PATH, JSON.stringify({
+const metaTmp = `${META_PATH}.${process.pid}.tmp`;
+writeFileSync(metaTmp, JSON.stringify({
   mode: 'tailscale',
   hostname,
   issuedAt: new Date().toISOString(),
   expiresAt: expiry?.toISOString() ?? null,
   certMtime: statSync(CERT_PATH).mtimeMs
 }, null, 2));
+renameSync(metaTmp, META_PATH);
 console.log(`✅ Tailscale cert installed for ${hostname} (expires ${expiry?.toISOString() ?? 'unknown'})`);

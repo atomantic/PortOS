@@ -81,11 +81,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('hello')
-      const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource).toBeDefined()
-      expect(brainSource.results).toHaveLength(1)
-      expect(brainSource.results[0].id).toBe('i1')
-      expect(brainSource.results[0].type).toBe('inbox')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'i1', type: 'inbox', title: 'Hello world from inbox', url: '/brain/inbox' }]
+      })
     })
 
     it('should search across people', async () => {
@@ -95,12 +95,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('john')
-      const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource).toBeDefined()
-      const personResult = brainSource.results.find(r => r.id === 'p1')
-      expect(personResult).toBeDefined()
-      expect(personResult.type).toBe('person')
-      expect(personResult.title).toBe('John Doe')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'p1', type: 'person', title: 'John Doe', url: '/brain/memory?type=people&id=p1' }]
+      })
     })
 
     it('should search across projects', async () => {
@@ -109,11 +108,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('portos')
-      const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource).toBeDefined()
-      const projectResult = brainSource.results.find(r => r.id === 'pr1')
-      expect(projectResult).toBeDefined()
-      expect(projectResult.type).toBe('project')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'pr1', type: 'project', title: 'PortOS', url: '/brain/memory?type=projects&id=pr1' }]
+      })
     })
 
     it('should search across ideas', async () => {
@@ -122,11 +121,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('agent')
-      const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource).toBeDefined()
-      const ideaResult = brainSource.results.find(r => r.id === 'id1')
-      expect(ideaResult).toBeDefined()
-      expect(ideaResult.type).toBe('idea')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'id1', type: 'idea', title: 'AI assistant', url: '/brain/memory?type=ideas&id=id1' }]
+      })
     })
 
     it('should search across links', async () => {
@@ -135,11 +134,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('github')
-      const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource).toBeDefined()
-      const linkResult = brainSource.results.find(r => r.id === 'l1')
-      expect(linkResult).toBeDefined()
-      expect(linkResult.type).toBe('link')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'l1', type: 'link', title: 'GitHub', url: '/brain/links' }]
+      })
     })
 
     it('should search across threads and deep-link the record drawer', async () => {
@@ -164,11 +163,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('renew')
-      const brainSource = results.find(s => s.id === 'brain')
-      const adminResult = brainSource.results.find(r => r.id === 'ad1')
-      expect(adminResult).toBeDefined()
-      expect(adminResult.type).toBe('admin')
-      expect(adminResult.url).toBe('/brain/memory?type=admin&id=ad1')
+      expect(results.find(s => s.id === 'brain')).toMatchObject({
+        label: 'Brain',
+        icon: 'Brain',
+        results: [{ id: 'ad1', type: 'admin', title: 'Renew registration', url: '/brain/memory?type=admin&id=ad1' }]
+      })
     })
 
     it('should search across memory entries, newest first', async () => {
@@ -211,11 +210,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('mortal')
-      const appsSource = results.find(s => s.id === 'apps')
-      expect(appsSource).toBeDefined()
-      expect(appsSource.results).toHaveLength(1)
-      expect(appsSource.results[0].id).toBe('a1')
-      expect(appsSource.results[0].type).toBe('app')
+      expect(results.find(s => s.id === 'apps')).toMatchObject({
+        label: 'Apps',
+        icon: 'Package',
+        results: [{ id: 'a1', type: 'app', title: 'MortalLoom', url: '/apps' }]
+      })
     })
 
     it('should search history', async () => {
@@ -227,36 +226,32 @@ describe('search service', () => {
       })
 
       const results = await fanOutSearch('deploy')
-      const historySource = results.find(s => s.id === 'history')
-      expect(historySource).toBeDefined()
-      expect(historySource.results).toHaveLength(1)
-      expect(historySource.results[0].id).toBe('h1')
-      expect(historySource.results[0].type).toBe('history')
+      expect(results.find(s => s.id === 'history')).toMatchObject({
+        label: 'History',
+        icon: 'History',
+        results: [{ id: 'h1', type: 'history', title: 'deploy', url: '/devtools/history' }]
+      })
     })
 
     it('should search health metrics', async () => {
       const results = await fanOutSearch('heart')
       const healthSource = results.find(s => s.id === 'health')
-      expect(healthSource).toBeDefined()
-      expect(healthSource.results.length).toBeGreaterThan(0)
-      expect(healthSource.results[0].type).toBe('health-metric')
+      expect(healthSource).toMatchObject({ label: 'Health', icon: 'HeartPulse' })
+      expect(healthSource.results[0]).toMatchObject({ id: 'heart_rate', type: 'health-metric', title: 'Heart Rate', url: '/meatspace/health' })
     })
 
     it('should match health metrics by display name', async () => {
       const results = await fanOutSearch('steps')
       const healthSource = results.find(s => s.id === 'health')
-      expect(healthSource).toBeDefined()
-      const stepsResult = healthSource.results.find(r => r.id === 'step_count')
-      expect(stepsResult).toBeDefined()
-      expect(stepsResult.title).toBe('Steps')
+      expect(healthSource).toMatchObject({ label: 'Health', icon: 'HeartPulse' })
+      expect(healthSource.results.find(r => r.id === 'step_count')).toMatchObject({ id: 'step_count', type: 'health-metric', title: 'Steps', url: '/meatspace/health' })
     })
 
     it('should match health metrics by key name', async () => {
       const results = await fanOutSearch('hrv')
       const healthSource = results.find(s => s.id === 'health')
-      expect(healthSource).toBeDefined()
-      const hrvResult = healthSource.results.find(r => r.id === 'hrv')
-      expect(hrvResult).toBeDefined()
+      expect(healthSource).toMatchObject({ label: 'Health', icon: 'HeartPulse' })
+      expect(healthSource.results.find(r => r.id === 'hrv')).toMatchObject({ id: 'hrv', type: 'health-metric', title: 'HRV', url: '/meatspace/health' })
     })
 
     it('should use BM25 search for file-based memory backend', async () => {
@@ -271,10 +266,11 @@ describe('search service', () => {
       })
 
       const results = await fanOutSearch('coding')
-      const memorySource = results.find(s => s.id === 'memory')
-      expect(memorySource).toBeDefined()
-      expect(memorySource.results).toHaveLength(1)
-      expect(memorySource.results[0].type).toBe('memory')
+      expect(results.find(s => s.id === 'memory')).toMatchObject({
+        label: 'Memory',
+        icon: 'Cpu',
+        results: [{ id: 'mem1', type: 'memory', title: 'Test memory about coding', url: '/cos/memory' }]
+      })
     })
 
     it('should use hybrid search for postgres backend', async () => {
@@ -286,9 +282,11 @@ describe('search service', () => {
       })
 
       const results = await fanOutSearch('postgres')
-      const memorySource = results.find(s => s.id === 'memory')
-      expect(memorySource).toBeDefined()
-      expect(memorySource.results).toHaveLength(1)
+      expect(results.find(s => s.id === 'memory')).toMatchObject({
+        label: 'Memory',
+        icon: 'Cpu',
+        results: [{ id: 'pgm1', type: 'memory', title: 'Postgres memory result', url: '/cos/memory' }]
+      })
       expect(hybridSearchMemories).toHaveBeenCalledWith('postgres', null, { limit: 10 })
     })
 
@@ -315,7 +313,7 @@ describe('search service', () => {
 
       const results = await fanOutSearch('test')
       const brainSource = results.find(s => s.id === 'brain')
-      expect(brainSource.results.length).toBeLessThanOrEqual(8)
+      expect(brainSource.results.map(r => r.id)).toEqual(Array.from({ length: 8 }, (_, i) => `inbox-${i}`))
     })
 
     it('should only return non-empty sources', async () => {
@@ -325,9 +323,7 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('testapp')
-      for (const source of results) {
-        expect(source.results.length).toBeGreaterThan(0)
-      }
+      expect(results).toMatchObject([{ id: 'apps', results: [{ id: 'a1', title: 'TestApp' }] }])
     })
 
     it('should be case-insensitive', async () => {
@@ -336,9 +332,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('PORTOS')
-      const appsSource = results.find(s => s.id === 'apps')
-      expect(appsSource).toBeDefined()
-      expect(appsSource.results).toHaveLength(1)
+      expect(results.find(s => s.id === 'apps')).toMatchObject({
+        label: 'Apps',
+        icon: 'Package',
+        results: [{ id: 'a1', type: 'app', title: 'PortOS', url: '/apps' }]
+      })
     })
 
     it('should search across music-video projects', async () => {
@@ -348,13 +346,11 @@ describe('search service', () => {
       ])
 
       const results = await fanOutSearch('cyberpunk')
-      const mvSource = results.find(s => s.id === 'musicVideo')
-      expect(mvSource).toBeDefined()
-      expect(mvSource.results).toHaveLength(1)
-      expect(mvSource.results[0].id).toBe('mv-1')
-      expect(mvSource.results[0].title).toBe('Cyberpunk Odyssey')
-      expect(mvSource.results[0].url).toBe('/music-video/mv-1')
-      expect(mvSource.results[0].type).toBe('music-video')
+      expect(results.find(s => s.id === 'musicVideo')).toMatchObject({
+        label: 'Music Video',
+        icon: 'Video',
+        results: [{ id: 'mv-1', type: 'music-video', title: 'Cyberpunk Odyssey', url: '/music-video/mv-1' }]
+      })
     })
 
     it('should keep music-video matches when a concept is a structured object', async () => {
@@ -367,7 +363,7 @@ describe('search service', () => {
 
       const results = await fanOutSearch('example')
       const mvSource = results.find(s => s.id === 'musicVideo')
-      expect(mvSource).toBeDefined()
+      expect(mvSource).toMatchObject({ label: 'Music Video', icon: 'Video' })
       expect(mvSource.results).toHaveLength(4)
       const snippets = Object.fromEntries(mvSource.results.map(r => [r.id, r.snippet]))
       expect(snippets['mv-1']).toBe('Synthetic concept')
@@ -388,7 +384,7 @@ describe('search service', () => {
       const results = await fanOutSearch('example')
       const mvSource = results.find(s => s.id === 'musicVideo')
       expect(mvSource.results).toHaveLength(5)
-      expect(mvSource.results.every(r => typeof r.snippet === 'string')).toBe(true)
+      expect(mvSource.results.map(r => r.snippet)).toEqual(['Concept 0', 'Concept 1', 'Concept 2', 'Concept 3', 'Concept 4'])
     })
   })
 })

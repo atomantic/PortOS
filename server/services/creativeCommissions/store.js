@@ -60,7 +60,7 @@ import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createPgFileFacade, resolvePgBackend, isFileBackend, POSTGRES_SETUP_HINT } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron, isValidRecurrence } from '../eventScheduler.js';
-import { preserveLegacyRenderPins } from '../../lib/schemaVersions.js';
+import { preserveLegacyRenderPins } from '../../lib/schemaVersions/creativeMedia.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import {
   contentHashForRecord,
@@ -424,6 +424,11 @@ function makeFileBackend(dir) {
     name: 'file',
     listRaw: async ({ includeDeleted = false } = {}) =>
       (await cs.loadAll()).filter((r) => includeDeleted || live(r)),
+    listRawPage: async ({ limit, offset }) => {
+      const rows = (await cs.loadAll()).filter(live)
+        .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+      return { rows: rows.slice(offset, offset + limit), total: rows.length };
+    },
     readRaw: async (id, { includeDeleted = false } = {}) => {
       const rec = await cs.loadOne(id);
       if (!rec) return null;
@@ -462,6 +467,7 @@ function makePgBackend(db) {
   return {
     name: 'postgres',
     listRaw: db.listRaw,
+    listRawPage: db.listRawPage,
     readRaw: db.readRaw,
     listIds: db.listIds,
     writeRaw: db.writeRaw,
@@ -507,6 +513,7 @@ function createFacade(dir) {
     type: TYPE,
     getBackendName,
     listRaw: async (opts) => (await getBackend()).listRaw(opts),
+    listRawPage: async (page) => (await getBackend()).listRawPage(page),
     readRaw: async (id, opts) => (await getBackend()).readRaw(id, opts),
     listIds: async (opts) => (await getBackend()).listIds(opts),
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
@@ -600,7 +607,16 @@ async function clearInlineFeedback(id) {
 }
 
 export async function listCommissions({ strict = false } = {}) {
-  const raw = await commissionStore().listRaw();
+  return hydrateCommissions(await commissionStore().listRaw(), { strict });
+}
+
+/** One bounded page of hydrated commissions (oldest first) with the live total (#17475). */
+export async function listCommissionsPage({ limit, offset }) {
+  const { rows, total } = await commissionStore().listRawPage({ limit, offset });
+  return { items: await hydrateCommissions(rows), total };
+}
+
+async function hydrateCommissions(raw, { strict = false } = {}) {
   const recs = raw.map(sanitizeCommission).filter(Boolean);
   // Hydrate the federated feedback view (read-through) in ONE pass — feedback is
   // no longer stored inline on the machine-local commission (#2686). Read-only:

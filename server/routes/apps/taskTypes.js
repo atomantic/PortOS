@@ -20,7 +20,7 @@
  */
 
 import { Router } from 'express';
-import { workItemsQuerySchema } from '../../lib/queryValidation.js';
+import { defaultsQuerySchema, workItemsQuerySchema } from '../../lib/queryValidation.js';
 import { logCosScheduleUpdate } from '../../services/userActionScheduleLog.js';
 import * as appsService from '../../services/apps.js';
 import { PORTOS_APP_ID } from '../../services/apps.js';
@@ -234,7 +234,9 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
 // expressions the planner has to work around, and the plan the shipped
 // defaults produce. Read-only — no LLM call, no schedule write.
 router.get('/:id/quality-schedule', loadApp, asyncHandler(async (req, res) => {
-  res.json(await buildQualitySchedulePlan(req.loadedApp));
+  // Seed from the saved overrides so reopening the form shows what Apply wrote;
+  // `?defaults=1` is the form's explicit "Reset to defaults".
+  res.json(await buildQualitySchedulePlan(req.loadedApp, {}, { hydrate: validateRequest(defaultsQuerySchema, req.query).defaults !== '1' }));
 }));
 
 // POST /api/apps/:id/quality-schedule/preview - The same plan for a form the

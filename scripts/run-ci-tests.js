@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
@@ -16,13 +16,16 @@ import { browserShardSlice } from './lib/browserSuites.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
+import { saveFactsCache } from './lib/testMemo/factsCache.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
+import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
 import { getAlwaysRunTests } from './lib/ciPlanRules.js';
+import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -124,7 +127,7 @@ export function toRunnerPath(scope, path) {
  * This runner's slice of the job matrix. `CI_SHARD` is `<index>/<count>`
  * (ci.yml); a single shard is no shard, so the one-runner invocation stays
  * identical to a local `npm run test:ci`. The slice is taken by the runner
- * itself (scripts/lib/testMemoRunner.js vitestShardSlice), never by Vitest:
+ * itself (scripts/lib/testMemoRunner.js serverShardSlice), never by Vitest:
  * each shard subtracts a different memo state, and a `--shard` applied after
  * that subtraction could leave a file to no shard at all.
  */
@@ -467,6 +470,22 @@ function guardBudgetStatus(files, results, loads, { enforce }) {
   return 1;
 }
 
+/**
+ * Whether this run will launch the real browser, so CI warms Chrome's install
+ * into the page cache only then (#17750). The client shards used to read ~450 MiB
+ * on every push, including memo hits and happy-dom-only runs. The cross-workspace
+ * browser job (`PORTOS_CI_BROWSER_OWNER=browser`) launches it for any suite it runs.
+ */
+export function shouldWarmTestChrome({ scope, run, env = process.env }) {
+  if (!env.CI || run.length === 0) return false;
+  return env.PORTOS_CI_BROWSER_OWNER === 'browser' || (scope === 'client' && run.some(isClientBrowserSuite));
+}
+
+// The script is best-effort by contract (never fails the job); a spawn error is ignored the same way.
+function warmTestChrome() {
+  spawnSync('bash', [join(repoRoot, 'scripts', 'ci-warm-test-chrome.sh')], { stdio: 'inherit' });
+}
+
 async function main() {
   const scope = process.argv[2];
   if (!Object.hasOwn(TEST_SCOPES, scope)) {
@@ -490,8 +509,8 @@ async function main() {
     ? browserOwnerExcludes().map(path => `server/${path}`) : []);
   const dbExcludes = new Set(scope === 'server'
     ? resolveDbTestFiles(inputFiles) : []);
-  const profileFiles = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserTestProfileFiles(process.env.PORTOS_BROWSER_TEST_PROFILE, inputFiles) : inputFiles;
+  const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
+  const profileFiles = profile !== undefined ? browserTestProfileFiles(profile, inputFiles) : inputFiles;
   const repoFiles = profileFiles.filter(path => !browserExcludes.has(path) && !dbExcludes.has(path));
   const repoSources = JSON.parse(process.env.CI_TEST_SOURCES || '[]');
   const selectedFiles = repoFiles.map((path) => toRunnerPath(workspace, path));
@@ -507,7 +526,6 @@ async function main() {
   }
 
   if (mode === 'files' && selectedFiles.length === 0) {
-    const profile = process.env.PORTOS_BROWSER_TEST_PROFILE;
     const deferredOnly = profile === 'smoke' && inputFiles.length > 0
       && inputFiles.every(file => BROWSER_FIDELITY_ONLY_FILES.includes(file));
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
@@ -540,22 +558,32 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   const caseFilter = browserProfileArgs();
-  const acceptVerdictsFrom = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserProfileAcceptedVerdicts(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const acceptVerdictsFrom = profile !== undefined ? browserProfileAcceptedVerdicts(profile) : [];
   const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
-    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
+    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser'
+      ? { shardSlice: (files, shard) => browserShardSlice(files, shard, profile) } : {}),
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
+    // The next run's planner starts from these parsed facts; a pull request's store is discarded.
+    if (!readOnlyMemo && plan.factsCache) saveFactsCache(memoDir, scope, plan.factsCache);
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
       for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
   }
+  // A run that may save its store bounds it first (the cache save follows a green step).
+  const pruneMemo = () => {
+    if (!memoDir || readOnlyMemo) return;
+    const pruned = pruneTestMemo({ memoDir, repoRoot, trustedCi: Boolean(process.env.CI) });
+    if (pruned) console.log(`🧠 Test memo: pruned ${pruned.removedEntries} entries and ${pruned.removedRecords} records; kept ${pruned.entries} entries and ${pruned.records} records.`);
+  };
   if (plan.run.length === 0) {
     console.log(`No ${scope} tests left to run${shard ? ' in this shard' : ''}.`);
+    pruneMemo();
     process.exitCode = 0;
     return;
   }
+  if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
   // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
   // hosted run enforces it, and only there do the guards run first as their own
   // Vitest pass, so a related or full selection's heavy suites do not stretch
@@ -568,11 +596,16 @@ async function main() {
   const passes = guardRun.length > 0 && rest.length > 0
     ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
+  // What each real-Chromium fixture's Vite server served, for the records written below (#17616).
+  let servedDir = null;
   if (extraArgs.length) {
     clearVitestDependencies(repoRoot, scope);
     // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
     if (caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
+    servedDir = mkdtempSync(join(tmpdir(), 'portos-served-files-'));
+    process.env[SERVED_FILES_ENV] = servedDir;
   }
+  let served = new Map();
   const passed = [];
   const results = [];
   // Each structural guard runner logs its checks' load times here (registerGuardChecks).
@@ -605,10 +638,18 @@ async function main() {
     }
   } finally {
     delete process.env.PORTOS_GUARD_LOAD_LOG;
+    delete process.env[SERVED_FILES_ENV];
+    if (servedDir) {
+      served = readServedFiles(servedDir, repoRoot);
+      rmSync(servedDir, { recursive: true, force: true });
+    }
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(guardDurations(results, loads)));
   }
   process.exitCode = status;
-  if (!memoDir || passed.length === 0) return;
+  if (!memoDir || passed.length === 0) {
+    if (status === 0) pruneMemo();
+    return;
+  }
   // PR jobs restore trusted memos, but ci.yml never saves their new entries.
   // Avoid expensive post-success closure hashing/writes that cannot be reused
   // and can consume the Windows step deadline after every test already passed.
@@ -619,11 +660,13 @@ async function main() {
   const { written, unrecorded } = recordTestMemo({
     scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
     dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
+    served,
     source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
   });
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
   // A passed file that stores nothing re-runs on every trusted run; say which and why.
   for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
+  if (status === 0) pruneMemo();
 }
 
 if (isDirectlyInvoked(import.meta.url)) await main();

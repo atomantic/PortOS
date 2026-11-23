@@ -104,7 +104,12 @@ import {
   sweepTombstones,
   getSweepStatus,
   TOMBSTONE_GRACE_MS,
+  TOMBSTONE_PRUNE_SPECS,
+  LIVE_ID_LISTERS,
+  ALL_ID_LISTERS,
 } from './tombstoneGc.js';
+import { formatPrunedByKind } from '../../lib/tombstoneKindLabels.js';
+import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 import {
   pruneTombstonedUniverses, listUniverses,
   listLiveIds as listLiveUniverseIds, listIds as listUniverseIds,
@@ -215,6 +220,29 @@ describe('sweepTombstones — no peers subscribed', () => {
     mockSubs({});
     const res = await sweepTombstones({ now: NOW });
     expect(res.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
+  });
+});
+
+describe('sweepTombstones — prunedByKind descriptor table (#17722)', () => {
+  it('every PEER_SUBSCRIBABLE_KINDS entry (plus issue) has a pruner, a live lister and an all-ids lister', () => {
+    for (const kind of PEER_SUBSCRIBABLE_KINDS) {
+      expect(TOMBSTONE_PRUNE_SPECS[kind], `prune spec for ${kind}`).toBeDefined();
+      expect(LIVE_ID_LISTERS[kind], `live lister for ${kind}`).toBeTypeOf('function');
+      expect(ALL_ID_LISTERS[kind], `all-ids lister for ${kind}`).toBeTypeOf('function');
+    }
+    expect(TOMBSTONE_PRUNE_SPECS.issue).toBeDefined();
+    expect(LIVE_ID_LISTERS.issue).toBeTypeOf('function');
+  });
+
+  it('reports newer-kind prunes under prunedByKind and the legacy plural key', async () => {
+    pruneTombstonedDecks.mockResolvedValueOnce({ pruned: 3 });
+    pruneTombstonedAuthors.mockResolvedValueOnce({ pruned: 2 });
+    const res = await sweepTombstones({ now: NOW });
+    expect(res.prunedByKind).toMatchObject({ deck: 3, author: 2, universe: 0, issue: 0 });
+    expect(Object.keys(res.prunedByKind).sort()).toEqual([...PEER_SUBSCRIBABLE_KINDS, 'issue'].sort());
+    expect(res.decks).toBe(3);
+    expect(res.authors).toBe(2);
+    expect(formatPrunedByKind(res.prunedByKind)).toBe('2 authors, 3 decks');
   });
 });
 
@@ -714,7 +742,9 @@ describe('sweepTombstones — return shape', () => {
     pruneTombstonedFolders.mockResolvedValueOnce({ pruned: 11 });
     pruneTombstonedExercises.mockResolvedValueOnce({ pruned: 12 });
     const result = await sweepTombstones({ now: NOW });
-    expect(result).toEqual({
+    const { prunedByKind, ...legacy } = result;
+    expect(prunedByKind).toMatchObject({ universe: 2, issue: 5, mediaCollection: 3, musicVideoProject: 13 });
+    expect(legacy).toEqual({
       universes: 2,
       series: 0,
       issues: 5,

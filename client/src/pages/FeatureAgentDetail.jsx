@@ -58,16 +58,16 @@ export default function FeatureAgentDetail() {
   }, []);
 
   const handleStart = useCallback((agentId) => {
-    startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));
+    startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Couldn’t activate feature agent'));
   }, []);
   const handlePause = useCallback((agentId) => {
-    pauseFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(err => toast.error(err.message || 'Action failed'));
+    pauseFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Paused'); }).catch(err => toast.error(err.message || 'Couldn’t pause feature agent'));
   }, []);
   const handleResume = useCallback((agentId) => {
-    resumeFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(err => toast.error(err.message || 'Action failed'));
+    resumeFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Resumed'); }).catch(err => toast.error(err.message || 'Couldn’t resume feature agent'));
   }, []);
   const handleStop = useCallback((agentId) => {
-    stopFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Action failed'));
+    stopFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Stopped'); }).catch(err => toast.error(err.message || 'Couldn’t stop feature agent'));
   }, []);
   const handleTrigger = useCallback((agentId) => {
     triggerFeatureAgent(agentId, { silent: true }).then(result => {
@@ -77,7 +77,7 @@ export default function FeatureAgentDetail() {
       }
       if (result?.agent) setAgent(prev => ({ ...prev, ...result.agent }));
       toast.success('Run started');
-    }).catch(err => toast.error(err.message || 'Action failed'));
+    }).catch(err => toast.error(err.message || 'Couldn’t start feature agent run'));
   }, []);
 
   const handleSave = useCallback((saved) => {

@@ -83,14 +83,17 @@ const FULL_TRIGGER_RULES = [
   { re: /^client\/vite\.config\.js$/, reason: 'client build configuration changed', windowsRelevant: false },
   { re: /^server\/index\.js$/, reason: 'server composition root changed', windowsRelevant: true },
   // Widely imported, but pure cross-platform schema logic: no spawn, path or
-  // filesystem semantics that pinPlatform() stubs cannot cover on Linux.
+  // filesystem semantics that pinPlatform() stubs cannot cover on Linux. Only
+  // the composer (category registry and gate helpers) is a full trigger; the
+  // per-domain version slices under server/lib/schemaVersions/ take the
+  // related plan so a routine bump does not run the full matrix (#17460).
   { re: /^server\/lib\/schemaVersions\.js$/, reason: 'shared server contract changed', windowsRelevant: false },
   // Measured hotspot (#9999): a two-file worktreeManager change expanded through
   // import consumers to 57 selectors and a ~941-file local run, yet counted as
   // a "scoped" plan because MAX_TARGETED_TEST_FILES only sees explicit selectors.
   // Own the cost honestly: a full plan, sharded in CI. It also owns cross-platform
   // worktree lifecycle, so Windows escalates (matches WINDOWS_RISK_RULES).
-  { re: /^server\/services\/worktreeManager\.js$/, reason: 'worktree manager source changed (broad import fanout)', windowsRelevant: true },
+  { re: /^server\/services\/worktree(Manager\.js$|\/)/, reason: 'worktree manager source changed (broad import fanout)', windowsRelevant: true },
   // Measured log socket hotspot (#10030): changing this source fans out through
   // nearly the full server suite, so make the cost explicit in CI. The socket
   // starts and supervises a real child process; retain the native Windows job.
@@ -254,6 +257,7 @@ export const getAlwaysRunTests = (trackedFiles) => trackedFiles
 // other tracked files stays out (runCiTestsClientFixture.test.js is that half of
 // run-ci-tests.test.js, split off so the rest can be listed).
 export const TOOLING_TESTS = [
+  'scripts/ci-test-plan.test.js',
   'scripts/lib/testMemo.test.js',
   'scripts/lib/testMemoRunner.test.js',
   'scripts/pregate.test.js',

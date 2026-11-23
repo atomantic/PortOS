@@ -156,7 +156,7 @@ describe('PublishPostingPanel (#9282)', () => {
     fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));
     expect(publishing.prepare).toHaveBeenLastCalledWith('x', {});
     // Any gallery image (or an upload) instead of a frame; picking a frame again clears it.
-    fireEvent.click(within(picker).getByRole('button', { name: 'Gallery image…' }));
+    fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Gallery image…' }));
     fireEvent.click(screen.getByRole('button', { name: 'Pick artwork.png' }));
     expect(within(picker).getByRole('radio', { name: 'Gallery image' }).querySelector('img')).toHaveAttribute('src', '/data/images/artwork.png');
     fireEvent.click(within(row('X thread')).getByRole('button', { name: 'Fill draft' }));

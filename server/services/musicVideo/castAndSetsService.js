@@ -32,6 +32,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
  */
 
 import { randomUUID } from 'crypto';
+import { CAST_SETS_PROCESS_ID, presentProjectCastAndSets } from './processPins.js';
 import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'node:fs';
@@ -108,7 +109,7 @@ import { PRODUCTION_RESUMABLE_STATUSES, findProductionRun, haltProduction, rebas
 import { getSettings } from '../settings.js';
 import { getTrack } from '../tracks/index.js';
 
-const PROCESS_ID = `proc-${randomUUID()}`;
+const PROCESS_ID = CAST_SETS_PROCESS_ID;
 const short = (id) => String(id || '').slice(3, 11);
 const MAX_SUBMITTED_PROMPT = 20_000;
 const MAX_SUBMITTED_REFERENCES = 16;
@@ -142,7 +143,7 @@ const defaults = {
 };
 let deps = { ...defaults };
 export function __setCastAndSetsDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
-export const __castAndSetsProcessId = () => PROCESS_ID;
+export { __castAndSetsProcessId } from './processPins.js';
 
 // Reconcile the old single pending flag against the actual capture sent to the plate.
 async function pendingGreyboxState(project) {
@@ -201,9 +202,7 @@ function presentStage(project) {
  * one still running here; a raw record read would show every such stage as
  * live forever (#9940). Not for write paths — never persist the result.
  */
-export const presentProjectCastAndSets = (project) => (project?.castAndSets
-  ? { ...project, castAndSets: presentCastAndSets(project.castAndSets, PROCESS_ID) }
-  : project);
+export { presentProjectCastAndSets } from './processPins.js';
 
 function publish(projectId, project) {
   const presented = presentProjectCastAndSets(project);

@@ -8,7 +8,7 @@ import {
   attestMemoryMastery,
 } from '../../../services/apiMeatspace.js';
 import { RapidReaderModal } from '../../RapidReader';
-import { clickableProps, onActivateKeyDown, shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard';
+import { shouldIgnoreGlobalKey } from '../../../lib/a11yKeyboard';
 import PostCompletionActions from './PostCompletionActions';
 import { ELEMENTS_PRACTICE_MODES as PRACTICE_MODES } from './trainerModes';
 
@@ -178,6 +178,29 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
   const [tableView, setTableView] = useState('mastery');
   const [hoveredElement, setHoveredElement] = useState(null);
   const [hoverPos, setHoverPos] = useState(null);
+  // Short close delay lets the pointer travel from a cell into the tooltip without
+  // dismissing it (WCAG 1.4.13: hoverable); Escape closes it immediately.
+  const tooltipCloseTimer = useRef(null);
+  const cancelTooltipClose = useCallback(() => {
+    clearTimeout(tooltipCloseTimer.current);
+    tooltipCloseTimer.current = null;
+  }, []);
+  const closeTooltip = useCallback(() => {
+    cancelTooltipClose();
+    setHoveredElement(null);
+    setHoverPos(null);
+  }, [cancelTooltipClose]);
+  const scheduleTooltipClose = useCallback(() => {
+    cancelTooltipClose();
+    tooltipCloseTimer.current = setTimeout(closeTooltip, 150);
+  }, [cancelTooltipClose, closeTooltip]);
+  useEffect(() => {
+    if (!hoveredElement) return undefined;
+    const onKeyDown = (e) => { if (e.key === 'Escape') closeTooltip(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [hoveredElement, closeTooltip]);
+  useEffect(() => cancelTooltipClose, [cancelTooltipClose]);
   const [selectedElement, setSelectedElement] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   // Speed-reading (RSVP): { text, title } while the rapid reader modal is open.
@@ -338,12 +361,12 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search..." aria-label="Search elements"
                 className="w-full sm:w-32 bg-port-bg border border-port-border rounded pl-7 pr-2 py-1.5 sm:py-1 text-xs text-white placeholder-gray-600 focus:border-port-accent focus:outline-none" />
             </div>
-            <div className="flex bg-port-bg rounded border border-port-border shrink-0">
-              <button onClick={() => setTableView('mastery')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-l transition-colors ${tableView === 'mastery' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
-                <BarChart3 size={12} /> Mastery
+            <div role="group" aria-label="Periodic table view" className="flex bg-port-bg rounded border border-port-border shrink-0">
+              <button type="button" aria-pressed={tableView === 'mastery'} onClick={() => setTableView('mastery')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-l transition-colors ${tableView === 'mastery' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
+                <BarChart3 size={12} aria-hidden="true" /> Mastery
               </button>
-              <button onClick={() => setTableView('category')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-r transition-colors ${tableView === 'category' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
-                <Eye size={12} /> Category
+              <button type="button" aria-pressed={tableView === 'category'} onClick={() => setTableView('category')} className={`flex items-center gap-1 px-2 py-1.5 sm:py-1 text-xs rounded-r transition-colors ${tableView === 'category' ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}>
+                <Eye size={12} aria-hidden="true" /> Category
               </button>
             </div>
           </div>
@@ -380,22 +403,30 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
                 const textColor = dimmed ? 'text-gray-800' : !inSong && tableView === 'mastery' ? 'text-gray-700' : 'text-white';
                 const atomicNum = elementMap[sym]?.atomicNumber;
 
+                const toggleSelected = () => setSelectedElement(prev => prev === sym ? null : sym);
+                const showTooltip = (el) => {
+                  cancelTooltipClose();
+                  setHoveredElement(sym);
+                  const rect = el.getBoundingClientRect();
+                  setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
+                };
+                const status = !inSong ? 'not in song' : progress.mastered ? 'mastered' : progress.attempts > 0 ? 'learning' : 'not practiced';
+                const label = `${elementMap[sym]?.name || sym}, ${sym}${atomicNum ? `, atomic number ${atomicNum}` : ''}${cat ? `, ${cat.label}` : ''}, ${status}`;
+
                 return (
-                  <div key={`${ri}-${ci}`}
+                  <button key={`${ri}-${ci}`} type="button"
+                    aria-label={label}
+                    aria-pressed={isSelected}
                     className={`relative w-[30px] sm:w-[36px] h-[30px] sm:h-[36px] flex flex-col items-center justify-center font-mono rounded-sm border cursor-pointer transition-all duration-150 ${bg} ${textColor} ${borderColor} ${catBorderStyle} ${dimmed ? 'opacity-30' : ''} ${isHovered ? 'scale-125 z-10 shadow-lg shadow-black/50 ring-1 ring-white/30' : ''} ${isSelected ? 'ring-2 ring-port-accent' : ''}`}
-                    onMouseEnter={(e) => {
-                      setHoveredElement(sym);
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setHoverPos({ x: rect.left + rect.width / 2, y: rect.top });
-                    }}
-                    onMouseLeave={() => { setHoveredElement(null); setHoverPos(null); }}
-                    onClick={() => setSelectedElement(prev => prev === sym ? null : sym)}
-                    {...clickableProps(() => setSelectedElement(prev => prev === sym ? null : sym))}
-                    onKeyDown={onActivateKeyDown(() => setSelectedElement(prev => prev === sym ? null : sym))}
+                    onMouseEnter={(e) => showTooltip(e.currentTarget)}
+                    onMouseLeave={scheduleTooltipClose}
+                    onFocus={(e) => showTooltip(e.currentTarget)}
+                    onBlur={closeTooltip}
+                    onClick={toggleSelected}
                   >
-                    {atomicNum && <span className="text-[7px] leading-none opacity-50 absolute top-0.5 left-1">{atomicNum}</span>}
-                    <span className="text-[10px] leading-none font-semibold">{sym}</span>
-                  </div>
+                    {atomicNum && <span aria-hidden="true" className="text-[7px] leading-none opacity-50 absolute top-0.5 left-1">{atomicNum}</span>}
+                    <span aria-hidden="true" className="text-[10px] leading-none font-semibold">{sym}</span>
+                  </button>
                 );
               })
             ])}
@@ -499,20 +530,22 @@ function ElementsSongMain({ item, mastery, onSelectMode, onBack, onAttestMastery
       {hoveredElement && hoverPos && (
         <ElementTooltip sym={hoveredElement} elementMap={elementMap} mastery={mastery}
           inSong={songElements.has(hoveredElement)} category={getCategory(hoveredElement)}
-          verses={elementVerseMap[hoveredElement] || []} chunks={item.content?.chunks || []} pos={hoverPos} />
+          verses={elementVerseMap[hoveredElement] || []} chunks={item.content?.chunks || []} pos={hoverPos}
+          onMouseEnter={cancelTooltipClose} onMouseLeave={scheduleTooltipClose} />
       )}
     </div>
   );
 }
 
-function ElementTooltip({ sym, elementMap, mastery, inSong, category, verses, chunks, pos }) {
+function ElementTooltip({ sym, elementMap, mastery, inSong, category, verses, chunks, pos, onMouseEnter, onMouseLeave }) {
   const info = elementMap[sym];
   const progress = elementMasteryProgress(mastery.elements?.[sym]);
   const pct = progress.attempts > 0 ? Math.round(progress.accuracy * 100) : null;
   const verseLabels = verses.map(v => chunks.find(c => c.id === v)?.label).filter(Boolean);
 
   return (
-    <div style={{ position: 'fixed', left: `${Math.max(8, Math.min(pos.x - 120, window.innerWidth - 256))}px`, top: `${Math.max(8, pos.y - 8)}px`, transform: 'translateY(-100%)', zIndex: 9999, pointerEvents: 'none' }}
+    <div style={{ position: 'fixed', left: `${Math.max(8, Math.min(pos.x - 120, window.innerWidth - 256))}px`, top: `${Math.max(8, pos.y - 8)}px`, transform: 'translateY(-100%)', zIndex: 9999 }}
+      role="tooltip" onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}
       className="w-[240px] bg-port-bg border border-port-border rounded-lg p-2.5 shadow-xl shadow-black/60">
       <div className="flex items-start gap-3">
         <div className="flex flex-col items-center gap-0 min-w-[40px]">
@@ -643,10 +676,14 @@ function LearnMode({ item, onBack, onComplete }) {
       </div>
 
       <div className="bg-port-card border border-port-border rounded-lg p-6">
+        <div role="status" aria-live="polite" className="sr-only">
+          {lines[revealedLines - 1]?.text}
+        </div>
         <div className="space-y-2">
           {lines.map((line, i) => (
             <div
               key={i}
+              aria-hidden={i >= revealedLines}
               className={`text-sm leading-relaxed transition-all duration-300 ${
                 i < revealedLines ? (i === revealedLines - 1 ? 'text-white font-medium text-base' : 'text-gray-400') : 'text-transparent select-none'
               }`}

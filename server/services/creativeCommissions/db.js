@@ -51,6 +51,15 @@ export async function listRaw({ includeDeleted = false } = {}) {
   return rows.map((r) => r.data);
 }
 
+/** One live page (oldest first, `LIMIT`/`OFFSET` in SQL) plus the live total. */
+export async function listRawPage({ limit, offset }) {
+  const [page, count] = await Promise.all([
+    query('SELECT data FROM creative_commissions WHERE deleted = FALSE ORDER BY created_at ASC, id ASC LIMIT $1 OFFSET $2', [limit, offset]),
+    query('SELECT COUNT(*)::int AS total FROM creative_commissions WHERE deleted = FALSE'),
+  ]);
+  return { rows: page.rows.map((r) => r.data), total: count.rows[0].total };
+}
+
 /** Every commission id — live only by default, or all (incl. tombstones) for the sweep. */
 export async function listIds({ includeDeleted = false } = {}) {
   const { rows } = await query(

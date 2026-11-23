@@ -85,7 +85,7 @@ router.post('/chatgpt/zip', uploadZip, asyncHandler(async (req, res) => {
     .slice(0, 10);
   const skipEmpty = req.body?.skipEmpty !== 'false';
 
-  console.log(`📥 ChatGPT ZIP import start: ${req.file.originalname} (${req.file.size} bytes)`);
+  console.log(`📥 ChatGPT ZIP import start: upload (${req.file.size} bytes)`);
   try {
     const result = await importChatgptZip(filePath, { tags: tags.length ? tags : undefined, skipEmpty });
     if (!result.ok) {

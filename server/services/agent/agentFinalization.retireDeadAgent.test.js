@@ -278,6 +278,34 @@ describe('retireDeadAgent (#8440)', () => {
     expect(completeAgent).toHaveBeenCalledWith('agent-dead', expect.objectContaining({ success: false }));
   });
 
+  it.each(['internal-dependency', 'internal-dependency-unverified'])(
+    'releases the retry hold when a recovered dependency wait blocks as %s',
+    async blockedCategory => {
+      const taskOutcome = {
+        status: 'incomplete',
+        reason: 'Waiting on an owned dependency.',
+        recovery: { mode: 'dependency-wait', ownerTaskId: 'sys-owner' },
+      };
+      const service = await import('../investigationDependencyWait.js');
+      const resolve = vi.spyOn(service, 'resolveInvestigationDependencyUpdate').mockResolvedValue({
+        status: 'blocked',
+        metadata: { blockedCategory, taskOutcome },
+      });
+      try {
+        await retireDeadAgent({
+          agent: { ...AGENT, result: { taskOutcome } },
+          task: { ...TASK, status: 'in_progress' },
+          success: true, exitCode: 0, duration: 100,
+        });
+        expect(releaseRetryHold).toHaveBeenCalledWith({
+          agentId: AGENT.id, task: expect.objectContaining({ id: TASK.id }), success: false, agentMetadata: AGENT.metadata,
+        });
+      } finally {
+        resolve.mockRestore();
+      }
+    },
+  );
+
   it('merges caller-specific extra fields into the agent-record result without leaking them into the run record', async () => {
     await retireDeadAgent({
       agent: AGENT,

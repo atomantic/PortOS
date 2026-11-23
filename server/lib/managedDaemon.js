@@ -377,9 +377,32 @@ export function createOnDemandDaemon({
    * endpoint, because "still loading" and "already died" look identical from
    * the endpoint alone and cost wildly different amounts of time to wait out.
    */
-  const waitForReady = async (endpoint) => {
+  // The injected sleeper is not required to be cancellable. A real timer is
+  // cleared on abort so a multi-minute readiness budget does not keep running.
+  const sleepOrAbort = (ms, signal) => {
+    if (!signal) return sleep(ms);
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', finish);
+        resolve();
+      }, ms);
+      const finish = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener('abort', finish, { once: true });
+    });
+  };
+
+  const waitForReady = async (endpoint, { signal } = {}) => {
+    const aborted = () => (signal?.aborted
+      ? { ready: false, aborted: true, reason: `${label} readiness wait was aborted` }
+      : null);
     const deadline = Date.now() + getRelaunchReadyTimeoutMs();
     while (Date.now() < deadline) {
+      const stopped = aborted();
+      if (stopped) return stopped;
       if (await probe(endpoint)) return { ready: true, reason: null };
       clearStatusCache();
       const proc = await getStatusStrict();
@@ -387,9 +410,9 @@ export function createOnDemandDaemon({
         const tail = exitTail ? await exitTail(proc.status) : `PM2 status: ${proc.status}`;
         return { ready: false, reason: `${label} exited while loading (${tail})` };
       }
-      await sleep(getRelaunchPollMs());
+      await sleepOrAbort(getRelaunchPollMs(), signal);
     }
-    return { ready: false, reason: `${label} relaunched but never answered on its port` };
+    return aborted() || { ready: false, reason: `${label} relaunched but never answered on its port` };
   };
 
   const markUsed = () => markDaemonUsed(appName);

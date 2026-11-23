@@ -6,13 +6,14 @@
  * the canvas.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
   AlertTriangle, CircleAlert, Film, Layers, ListChecks, Loader2, Sparkles, Waypoints,
 } from 'lucide-react';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { reviewLoomEpisode, reviewLoomEpisodeContinuity, validateLoomEpisode } from '../../services/apiFableLoom.js';
+import ListLoadError from '../ui/ListLoadError';
 import TabPills from '../ui/TabPills';
 import LoomContinuityPanel from './LoomContinuityPanel';
 import LoomProductionPanel from './LoomProductionPanel';
@@ -41,6 +42,17 @@ export default function LoomValidationPanel({
   const [structuralByEpisode, setStructuralByEpisode] = useState({});
   const [reviewByEpisode, setReviewByEpisode] = useState({});
   const [continuityByEpisode, setContinuityByEpisode] = useState({});
+  // A failed read must not look like "still validating" / "no review has run".
+  const [structuralErrors, setStructuralErrors] = useState({});
+  const [continuityErrors, setContinuityErrors] = useState({});
+  const [validationReload, setValidationReload] = useState(0);
+  const [continuityReload, setContinuityReload] = useState(0);
+  const activeLoomIdRef = useRef(loom.id);
+  activeLoomIdRef.current = loom.id;
+  // Episode ids are read through a ref so a prose edit (new loom.episodes
+  // identity, same structureKey) doesn't re-run validation for every episode.
+  const episodesRef = useRef(loom.episodes);
+  episodesRef.current = loom.episodes;
   const structural = structuralByEpisode[episode.id] || null;
   const review = reviewByEpisode[episode.id] || null;
   const continuityReview = continuityByEpisode[episode.id] || null;
@@ -69,25 +81,35 @@ export default function LoomValidationPanel({
 
   useEffect(() => {
     let active = true;
-    Promise.all((loom.episodes || []).map(async (item) => [
-      item.id,
-      await validateLoomEpisode(loom.id, item.id, { silent: true }).catch(() => null),
-    ])).then((entries) => {
-      if (active) setStructuralByEpisode(Object.fromEntries(entries));
+    Promise.all((episodesRef.current || []).map(async (item) => {
+      try {
+        return [item.id, await validateLoomEpisode(loom.id, item.id, { silent: true }), null];
+      } catch (err) {
+        return [item.id, null, err];
+      }
+    })).then((entries) => {
+      if (!active) return;
+      setStructuralByEpisode(Object.fromEntries(entries.map(([id, value]) => [id, value])));
+      setStructuralErrors(Object.fromEntries(entries.filter(([, , err]) => err).map(([id, , err]) => [id, err])));
     });
     return () => { active = false; };
-  }, [loom.id, loom.episodes, structureKey]);
+  }, [loom.id, structureKey, validationReload]);
 
   useEffect(() => {
     let active = true;
-    Promise.all((loom.episodes || []).map(async (item) => [
-      item.id,
-      await reviewLoomEpisodeContinuity(loom.id, item.id, {}, { silent: true }).catch(() => null),
-    ])).then((entries) => {
-      if (active) setContinuityByEpisode(Object.fromEntries(entries));
+    Promise.all((episodesRef.current || []).map(async (item) => {
+      try {
+        return [item.id, await reviewLoomEpisodeContinuity(loom.id, item.id, {}, { silent: true }), null];
+      } catch (err) {
+        return [item.id, null, err];
+      }
+    })).then((entries) => {
+      if (!active) return;
+      setContinuityByEpisode(Object.fromEntries(entries.map(([id, value]) => [id, value])));
+      setContinuityErrors(Object.fromEntries(entries.filter(([, , err]) => err).map(([id, , err]) => [id, err])));
     });
     return () => { active = false; };
-  }, [loom.id, loom.updatedAt]);
+  }, [loom.id, loom.updatedAt, continuityReload]);
 
   const handleWorkflowAction = (action) => {
     if (action === 'settings') onOpenSettings?.();
@@ -103,10 +125,27 @@ export default function LoomValidationPanel({
   };
 
   const [runReview, reviewing] = useAsyncAction(async () => {
+    const requestedLoomId = loom.id;
     const requestedEpisodeId = episode.id;
-    const result = await reviewLoomEpisode(loom.id, requestedEpisodeId, {}, { silent: true });
+    const result = await reviewLoomEpisode(requestedLoomId, requestedEpisodeId, {}, { silent: true });
+    if (activeLoomIdRef.current !== requestedLoomId) return;
     setReviewByEpisode((current) => ({ ...current, [requestedEpisodeId]: result.review }));
-    setStructuralByEpisode((current) => ({ ...current, [requestedEpisodeId]: result.structural }));
+    // reviewLoomEpisode omits productionReadiness (only the validate route
+    // computes it); merge so the readiness section and workflow gate survive.
+    setStructuralByEpisode((current) => ({
+      ...current,
+      [requestedEpisodeId]: {
+        ...(current[requestedEpisodeId]?.productionReadiness
+          ? { productionReadiness: current[requestedEpisodeId].productionReadiness }
+          : {}),
+        ...result.structural,
+      },
+    }));
+    setStructuralErrors((current) => {
+      if (!current[requestedEpisodeId]) return current;
+      const { [requestedEpisodeId]: _cleared, ...rest } = current;
+      return rest;
+    });
   }, { errorMessage: 'Story review failed' });
 
   const findingRow = (item, key, nodeId) => (
@@ -173,6 +212,8 @@ export default function LoomValidationPanel({
             [reviewEpisodeId]: result,
           }))}
           onSelectNode={onSelectNode}
+          loadError={continuityErrors[episode.id] || null}
+          onRetryLoad={() => setContinuityReload((n) => n + 1)}
         />
       ) : (
         <>
@@ -193,6 +234,12 @@ export default function LoomValidationPanel({
               </div>
             ) : structural ? (
               <p className="text-xs text-port-success">Graph is sound — every path reaches an ending.</p>
+            ) : structuralErrors[episode.id] ? (
+              <ListLoadError
+                what="structure validation"
+                error={structuralErrors[episode.id]}
+                onRetry={() => setValidationReload((n) => n + 1)}
+              />
             ) : (
               <p className="text-xs text-port-text-muted">Validating…</p>
             )}

@@ -15,7 +15,7 @@ import {
 } from '../lib/storyboardValidation.js';
 import {
   addBeat, addPanel, addPanelTake, createStoryboard, deleteBeat, deletePanel, deleteStoryboard, getStoryboard,
-  listStoryboards, moveBeat, movePanel, removePanelTake, selectPanelTake, updateBeat, updatePanel,
+  listStoryboards, listStoryboardsPage, moveBeat, movePanel, removePanelTake, selectPanelTake, updateBeat, updatePanel,
   updateStoryboard,
 } from '../services/storyboards/index.js';
 import {
@@ -31,10 +31,17 @@ import { startVideoFromStoryboard } from '../services/storyboards/toVideo.js';
 import { addBeats, extractBeats } from '../services/storyboards/plot.js';
 import { deleteSavedRecipe, listSavedRecipes, saveRecipe } from '../services/storyboards/recipeLibrary.js';
 
+import { BOUNDED_PAGE_DEFAULT_LIMIT, boundedPaginationQuerySchema, isPaginationRequested, pageEnvelope } from '../lib/queryValidation.js';
+
 const router = Router();
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listStoryboards());
+// No query keeps the legacy full array; `limit`/`offset` (max 500) opt into a bounded envelope.
+router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(boundedPaginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) return res.json(await listStoryboards());
+  const page = { limit: query.limit ?? BOUNDED_PAGE_DEFAULT_LIMIT, offset: query.offset ?? 0 };
+  const { items, total } = await listStoryboardsPage(page);
+  res.json(pageEnvelope(items, total, page));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

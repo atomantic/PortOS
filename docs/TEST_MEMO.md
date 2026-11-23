@@ -116,6 +116,28 @@ A directory a test reads as a whole is an input as a whole.
   directory or by its proven containing tree. An unbounded rooting option
   refuses the browser test. A Node test that passes a directory along keeps
   the older reading.
+- **A served root narrows to what the fixture served** (#17616). Keyed
+  whole, `client/` is ~4,600 files, so any client edit re-ran every
+  real-Chromium suite. When the runner records (`--experimental.recordDependencies`)
+  it also sets `PORTOS_TEST_MEMO_SERVED_DIR`, and `startBrowserFixture` adds
+  a recorder plugin (`scripts/lib/browserServedFiles.js`) that notes every
+  file its Vite server loads, transforms or answers a request from. The
+  suite's memo record stores those files (`served: { roots, files }`,
+  repo-relative, installed packages and paths outside the repository
+  dropped). For a root the record names, the recorded key and
+  `recordedReach` then key only the served files, what served CSS
+  `@import`s, the shared inputs no request names
+  (`BROWSER_SERVED_SHARED_INPUTS`: `client/src/index.css`,
+  `client/src/themes/`), the root's own direct non-dot files (its
+  manifests and PostCSS config) and the manifests above it (`servedTree`).
+  A served module is not walked, as with the recorded key: the importer
+  that gains an edge is itself served. A Tailwind class an unrelated page
+  adds styles only elements that use it, and those live in served files.
+  The whole tree stays keyed, failing closed, when there is no record or
+  the record names another root, a served path leaves the repository, or
+  the test file serves or bundles through a call of its own
+  (`UNRECORDED_SERVER_CALL`: `createServer(`, `express.static(`, …), which
+  the recorder never sees. The floor key is unchanged.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is
@@ -298,6 +320,45 @@ verdict. The runner prints one line —
 (plus `U never-memoized guards not analyzed.` when U > 0: those are decided before
 any closure walk; and `Related selection used R digest records.` in a related
 plan) — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`.
+
+The planner checks a file's recorded key before anything else. Its floor
+key and static closure are computed only when that misses, or when related
+selection has no narrowing record for the file, so a warm memo does not
+walk the closures of the files it is about to skip (#17617). Every file
+that runs has had its floor key computed before Vitest starts, which the
+after-run comparison above relies on.
+
+Parsing every file the plan reaches (about 9k on the server side) was the
+rest of the planning time, so the parsed facts persist too
+(`scripts/lib/testMemo/factsCache.js`, `facts/<workspace>.json` in the
+store). An entry is keyed by the file's bytes and path, the workspace, the
+three sources the setup files replace, and the version of the extraction code
+(`FACTS_CODE`, the Node version and the platform). Every constant the file
+imported from another module (`exportedConstant`) is recorded with it and
+looked up again on reuse; a different answer re-parses the file. Facts or
+lookups that would not decode to exactly what extraction returned are never
+stored. A save keeps what the run used and anything another branch used in
+the last 14 days. A pull request reads it from the parked lineages and never
+writes it, and the merge copies it into a store that has none. Over the real
+tree, keys, closures and narrowed reach match an uncached analysis exactly,
+and a warm server plan parses 2 of about 12k files.
+
+A store can also be several directories: `PORTOS_TEST_MEMO_READ_DIRS` (a
+`path.delimiter` list) adds read-only ones after the usual directory. An
+entry is the first valid one across them, a record the newest by
+`recordedAt` (a tie keeps the earlier directory), and writes go to the
+first. Pull-request CI jobs use it to read the parked shard lineages in
+place ([CI seeding](#ci-seeding)).
+
+The store is bounded at the end of a run that may publish it
+(`pruneTestMemo`). A trusted CI run (not a pull request) removes unreadable
+and expired entries, keeps the newest three entries per `(workspace, test)`
+(`MAX_ENTRIES_PER_TEST`) and drops entries and records of test files the
+checkout no longer has: a test gets new entries only when it ran, which
+means its inputs had already moved past the older ones. Before #17617 a
+saved server lineage carried 213,086 entry files. The developer's store is
+shared by every worktree and branch, so a local run only removes expired
+entries, at most once a day (a `pruned-at` stamp in the store).
 When every selected file is memoized nothing is launched and the job exits 0.
 
 After a run that may record (every run but a pull request's), the runner
@@ -346,6 +407,11 @@ Every other key line (file bytes, records, packages, tools, Node, platform,
 arch and other env values) stays this run's own, and entries are still written
 under the run's own key only.
 
+Smoke uses its own stable two-shard assignment before the runner checks memo
+entries. The smoke jobs restore and merge both trusted full-run browser shard
+lineages, so a suite that moves can still reuse its former owner's verdict.
+Full-profile jobs keep their per-partition restore and save behavior.
+
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.
@@ -365,6 +431,16 @@ The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
 
+The planner sizes the client matrix before any memo is restored, so it
+counts real-Chromium suites itself (#17616): a client plan fans out across
+`FULL_SUITE_SHARDS.client` once it selects `CLIENT_BROWSER_FANOUT_SUITES` (4)
+of them, explicitly or, for `related`, by reach (`clientBrowserSuiteReach()`
+in `scripts/lib/importReach.js`: the suite's own import closure, the closure
+of the `/src/…` entries its fixture renders, or a shared input such as
+`client/src/index.css`, `client/src/themes/` or a direct file of `client/`).
+Each costs a Chrome launch and a cold Vite graph, so 32 of them on one runner
+took 282–402 s against 55–91 s across four shards.
+
 ## Related selection
 
 A `related` plan selects, besides the planner's explicit files, every test a
@@ -373,7 +449,7 @@ imported server cluster: across the server's sources the median selected 1,392
 suites, nearly all of them because some module in their closure has a
 non-literal edge (#16424). A test with a version 2 record whose recorded key is
 memoizable (the gate the record was written under) is now selected through
-`recordedReach` (`scripts/lib/testMemo.js`):
+`recordedReach` (`scripts/lib/testMemo/analyzer.js`):
 
 - the test, every module its green run loaded, and those modules' non-JS
   inputs;
@@ -427,9 +503,12 @@ still run. Partitioning happens before memo lookup, so changing the memo's
 source shard cannot omit or duplicate a selected test. The server and client
 jobs restore each distinct full-run lineage once, counting the initial partition
 or family match. Their `merge-shards` input equals `FULL_SUITE_SHARDS` for the
-family and is pinned by `scripts/ci-test-memo-cache.test.js`. They fold the
-lineages in with `scripts/merge-test-memo.js`, keeping the newer record per test
-and every live entry. A shard records only its slice, and related selection
+family and is pinned by `scripts/ci-test-memo-cache.test.js`. A trusted run
+folds the lineages in with `scripts/merge-test-memo.js`, keeping the newer
+record per test and every live entry, because it records into that store and
+saves it. A pull request only reads and discards its store with the job, so it
+skips the copy and exports `PORTOS_TEST_MEMO_READ_DIRS` naming the parked
+lineages, which the runner reads in place with the same precedence. A shard records only its slice, and related selection
 narrows a test only through its own record. Each lineage restores to the path it
 was saved from because the cache version hashes that path. The job then moves
 it aside before the next restore. Each shard saves as soon as its own tests pass.
@@ -447,4 +526,6 @@ invalidates every key) and `PGDATABASE` is a keyed env var.
 
 `PORTOS_TEST_MEMO=off` turns reads and writes off together and
 restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
-never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.
+never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`;
+the workspace configs also clear `PORTOS_TEST_MEMO_READ_DIRS`, so a nested
+run never reads a pull-request job's parked lineages.

@@ -15,13 +15,13 @@ vi.mock('./instances.js', async () => {
   return { ...actual, getPeers: async () => registry.peers };
 });
 vi.mock('./mediaAssetIndex/index.js', () => ({ unindexVideo: async () => {} }));
-vi.mock('./musicVideo/mediaPool.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
+vi.mock('./musicVideo/mediaPoolDelete.js', () => ({ forgetDeletedMusicVideoAssets: async () => {} }));
 vi.mock('../lib/trashFiles.js', () => ({ trashFiles: vi.fn(async () => {}) }));
 
 const { PATHS, readJSONFile, atomicWrite } = await import('../lib/fileUtils.js');
 const dataSync = await import('./dataSync.js');
 const { deleteHistoryItem } = await import('./videoGen/historyOps.js');
-const { listMediaTombstones, recordMediaTombstone } = await import('./mediaTombstones.js');
+const { listMediaTombstones, recordMediaTombstone, clearMediaTombstone } = await import('./mediaTombstones.js');
 const { trashFiles } = await import('../lib/trashFiles.js');
 
 const HISTORY = join(PATHS.data, 'video-history.json');
@@ -288,5 +288,25 @@ describe('Make-primary designation in the video snapshot', () => {
     await atomicWrite(HISTORY, [designated('peer-a', '2026-06-01T00:00:00.000Z')]);
     await dataSync.applyRemote('videoHistory', { videos: [row('v1', '2026-05-15T00:00:00.000Z', ownedBy('peer-a'))] }, { peerId: 'peer-a' });
     expect(await stored()).toMatchObject({ createdAt: '2026-05-15T00:00:00.000Z', primaryInstanceId: 'peer-a', primaryAt: '2026-06-01T00:00:00.000Z' });
+  });
+});
+
+// The videoHistory snapshot folds in media-tombstones.json, so a tombstone-only
+// write (video-history.json untouched) must invalidate the cached checksum.
+describe('videoHistory checksum tracks tombstone-only mutations', () => {
+  it('re-checksums when a video tombstone is recorded or cleared without a history write', async () => {
+    await atomicWrite(HISTORY, [row('v1')]);
+    const before = await dataSync.getChecksum('videoHistory');
+    expect(before.checksum).toBe((await dataSync.getSnapshot('videoHistory')).checksum);
+
+    await recordMediaTombstone('video', 'v-remote', '2026-06-01T00:00:00.000Z');
+    const recorded = await dataSync.getChecksum('videoHistory');
+    expect(recorded.checksum).not.toBe(before.checksum);
+    expect(recorded.checksum).toBe((await dataSync.getSnapshot('videoHistory')).checksum);
+
+    await clearMediaTombstone('video', 'v-remote');
+    const cleared = await dataSync.getChecksum('videoHistory');
+    expect(cleared.checksum).toBe(before.checksum);
+    expect(cleared.checksum).toBe((await dataSync.getSnapshot('videoHistory')).checksum);
   });
 });

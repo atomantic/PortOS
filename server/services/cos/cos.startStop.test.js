@@ -40,10 +40,6 @@ vi.mock('./cosState.js', async (importOriginal) => ({
 }));
 
 const boot = { cleanupOrphanedAgents: vi.fn(async () => 0) };
-vi.mock('../agent/agentManagement.js', () => ({
-  cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
-  handleOrphanedTask: vi.fn(async () => {}),
-}));
 
 let releaseRecovery;
 vi.mock('../creativeDirector/recovery.js', () => ({
@@ -56,7 +52,7 @@ vi.mock('./cosTaskStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getAllTasks: vi.fn(async () => ({ user: { tasks: [], grouped: {} }, cos: { tasks: [], grouped: {} } })),
   getCosTasks: vi.fn(async () => ({ tasks: [] })),
-  readPendingTaskIds: vi.fn(async () => []),
+  getPendingTaskIds: vi.fn(async () => []),
 }));
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('./cosAgentIndex.js', async importOriginal => ({ ...(await importOriginal()), loadAgentIndex: vi.fn(async () => new Map()) }));
@@ -104,6 +100,11 @@ vi.mock('../prWatcher.js', () => ({
 }));
 
 const { start, stop, getStatus, resumeDeferredCompletions } = await import('./cos.js');
+// The daemon reaches agent recovery only through the handlers bootHooks.js registers at boot.
+(await import('../bootHookRegistry.js')).registerCosOrphanRecoveryHandlers({
+  cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
+  handleOrphanedTask: vi.fn(async () => {}),
+});
 const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 

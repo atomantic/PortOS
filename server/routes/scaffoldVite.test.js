@@ -15,7 +15,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 import { scaffoldVite } from './scaffoldVite.js';
 import { spawn } from '../lib/childProcess.js';
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
+import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
 
 function fakeChild({ code = 0, stderr = '', error } = {}) {
   const proc = new EventEmitter();
@@ -58,5 +59,23 @@ describe('scaffoldVite failure handling (#9650)', () => {
     spawn.mockReturnValueOnce(fakeChild({ error: new Error('spawn npm ENOENT') }));
     await expect(scaffoldVite(opts(vi.fn()))).rejects.toMatchObject({ code: 'SCAFFOLD_FAILED' });
     expect(readFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('scaffoldVite vite-express dev runner', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('emits scripts/dev.js and no concurrently dependency', async () => {
+    spawn.mockReturnValueOnce(fakeChild());
+    spawn.mockReturnValueOnce(fakeChild());
+    readFile.mockResolvedValue('{}');
+    safeJSONParse.mockReturnValue({ dependencies: {}, devDependencies: {}, scripts: {} });
+    await scaffoldVite(opts(vi.fn()));
+    const [pkgPath, pkg] = atomicWrite.mock.calls.at(-1);
+    expect(pkgPath).toContain('package.json');
+    expect(pkg.scripts['dev:all']).toBe('node scripts/dev.js');
+    expect(JSON.stringify(pkg)).not.toMatch(/concurrently/);
+    const written = writeFile.mock.calls.find(([p]) => p.endsWith('scripts/dev.js'));
+    expect(written[1]).toContain('["dev","server"]');
   });
 });

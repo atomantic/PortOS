@@ -48,10 +48,10 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
 
   return (
     <Modal open onClose={() => !busy && setMerge(null)} size="2xl" ariaLabel="Merge duplicates" panelClassName="bg-port-card border border-port-border rounded-lg p-5 space-y-4 overflow-y-auto [--dvh-cap:85dvh]">
-      <h2 className="text-lg font-semibold text-white flex items-center gap-2"><GitMerge size={18} /> Merge {kind}</h2>
+      <h2 className="text-lg font-semibold text-white flex items-center gap-2"><GitMerge size={18} aria-hidden="true" /> Merge {kind}</h2>
 
-      <div>
-        <span className="block text-xs text-gray-400 mb-1">Keep (survivor)</span>
+      <fieldset>
+        <legend className="block text-xs text-gray-400 mb-1">Keep (survivor)</legend>
         <div className="grid gap-2">
           {records.map((r) => (
             <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded border cursor-pointer text-sm ${r.id === survivorId ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400'}`}>
@@ -61,11 +61,11 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
             </label>
           ))}
         </div>
-      </div>
+      </fieldset>
 
       {multi ? (
-        <div>
-          <span className="block text-xs text-gray-400 mb-1">Fold in (this merge folds one copy at a time — repeat for the rest)</span>
+        <fieldset>
+          <legend className="block text-xs text-gray-400 mb-1">Fold in (this merge folds one copy at a time — repeat for the rest)</legend>
           <div className="grid gap-2">
             {records.filter((r) => r.id !== survivorId).map((r) => (
               <label key={r.id} className={`flex items-center gap-2 px-3 py-2 rounded border cursor-pointer text-sm ${r.id === loserId ? 'border-port-error/60 bg-port-error/10 text-white' : 'border-port-border text-gray-400'}`}>
@@ -74,12 +74,12 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
               </label>
             ))}
           </div>
-        </div>
+        </fieldset>
       ) : (
         <p className="text-xs text-gray-500">Folding in &amp; tombstoning <span className="text-port-error">{loser?.name}</span> <span className="font-mono text-[10px]">{loser?.id.slice(0, 12)}</span>.</p>
       )}
 
-      {busy && !preview && <div className="flex items-center gap-2 text-gray-400 text-sm"><Loader2 className="animate-spin" size={14} /> Building preview…</div>}
+      {busy && !preview && <div role="status" className="flex items-center gap-2 text-gray-400 text-sm"><Loader2 className="animate-spin" size={14} aria-hidden="true" /> Building preview…</div>}
 
       {preview && conflicts.length > 0 && (
         <div>
@@ -93,7 +93,7 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
                 title="Use the configured AI provider to synthesize a unified value per text-string field"
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-port-accent/60 text-port-accent text-xs font-medium hover:bg-port-accent/10 disabled:opacity-50"
               >
-                {aiBusy ? <Loader2 className="animate-spin" size={12} /> : <Sparkles size={12} />} Merge with AI
+                {aiBusy ? <Loader2 className="animate-spin" size={12} aria-hidden="true" /> : <Sparkles size={12} aria-hidden="true" />} Merge with AI
               </button>
             )}
           </div>
@@ -106,12 +106,12 @@ export default function MergeModal({ merge, setMerge, onExecute, onRepreview, on
                 <div key={c.field} className="border border-port-border rounded p-3 bg-port-bg/40">
                   <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                     <span className="text-xs font-medium text-white">{c.field}</span>
-                    <div className="flex gap-1 text-[11px]">
-                      <button type="button" onClick={() => setChoice(c.field, MERGE_CHOICE.SURVIVOR)} className={`px-2 py-0.5 rounded ${choice === MERGE_CHOICE.SURVIVOR ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>Keep survivor</button>
-                      <button type="button" onClick={() => setChoice(c.field, MERGE_CHOICE.LOSER)} className={`px-2 py-0.5 rounded ${choice === MERGE_CHOICE.LOSER ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>Use folded</button>
+                    <div role="group" aria-label={`Resolution for ${c.field}`} className="flex gap-1 text-[11px]">
+                      <button type="button" aria-pressed={choice === MERGE_CHOICE.SURVIVOR} onClick={() => setChoice(c.field, MERGE_CHOICE.SURVIVOR)} className={`px-2 py-0.5 rounded ${choice === MERGE_CHOICE.SURVIVOR ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>Keep survivor</button>
+                      <button type="button" aria-pressed={choice === MERGE_CHOICE.LOSER} onClick={() => setChoice(c.field, MERGE_CHOICE.LOSER)} className={`px-2 py-0.5 rounded ${choice === MERGE_CHOICE.LOSER ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>Use folded</button>
                       {canAI && typeof overrides[c.field] === 'string' && (
-                        <button type="button" onClick={() => setChoice(c.field, MERGE_CHOICE.AI)} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded ${choice === MERGE_CHOICE.AI ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>
-                          <Sparkles size={10} /> AI merged
+                        <button type="button" aria-pressed={choice === MERGE_CHOICE.AI} onClick={() => setChoice(c.field, MERGE_CHOICE.AI)} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded ${choice === MERGE_CHOICE.AI ? 'bg-port-accent text-white' : 'bg-port-bg text-gray-400'}`}>
+                          <Sparkles size={10} aria-hidden="true" /> AI merged
                         </button>
                       )}
                     </div>

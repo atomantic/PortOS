@@ -28,7 +28,7 @@ export const getAppQualitySummaries = (options) => request('/apps/quality/summar
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
 // Per-lane outcome of filed audit issues (#12088); the table renders its own
 // unavailable state, so the wrapper is silent.
-export const getAppLaneHealth = (id, options) => request(`/apps/${id}/lane-health`, { silent: true, ...options });
+export const getAppLaneHealth = (id, { refresh = false, ...options } = {}) => request(`/apps/${id}/lane-health${refresh ? '?refresh=1' : ''}`, { silent: true, ...options });
 // Land the app's numeric quality scores as `.quality.json` through an
 // immediately-merged pull request, so other PortOS installs running this app start
 // with the latest scores. Opt-in per app (`publishQualitySnapshot`) and
@@ -42,8 +42,9 @@ export const publishAppQualitySnapshot = (id, options = {}) =>
 // for, and the plan the shipped defaults produce; `preview` re-plans an edited
 // form without writing; `apply` persists the plan as per-app task overrides.
 // All three are silent — the form renders its own errors and warnings inline.
-export const getAppQualitySchedule = (id, options = {}) =>
-  request(`/apps/${id}/quality-schedule`, { silent: true, ...options });
+// `defaults` skips hydration from the app's saved overrides ("Reset to defaults").
+export const getAppQualitySchedule = (id, { defaults = false, ...options } = {}) =>
+  request(`/apps/${id}/quality-schedule${defaults ? '?defaults=1' : ''}`, { silent: true, ...options });
 export const previewAppQualitySchedule = (id, body, options = {}) =>
   request(`/apps/${id}/quality-schedule/preview`, { method: 'POST', body: JSON.stringify(body), silent: true, ...options });
 export const applyAppQualitySchedule = (id, body, options = {}) =>

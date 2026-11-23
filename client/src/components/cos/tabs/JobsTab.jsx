@@ -13,14 +13,14 @@ import JobCard, {
   JOB_TYPE_OPTIONS,
   isAgentJobType,
   normalizeJobPayload,
-  ScheduleFields,
-  SHELL_TRIGGER_ACTION_OPTIONS,
-  TRIGGER_ACTION_OPTIONS
+  ScheduleFields
 } from '../JobCard';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
 import TaskDataInputs from '../TaskDataInputs';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
+import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
+import socket from '../../../services/socket';
 
 const fetchApps = () => getApps({ silent: true }).then(data => data?.apps || data || []);
 
@@ -42,7 +42,6 @@ const INITIAL_JOB = {
   autonomyLevel: 'manager',
   promptTemplate: '',
   command: '',
-  triggerAction: 'log-only',
   appId: '',
   providerId: '',
   model: '',
@@ -79,6 +78,13 @@ export default function JobsTab() {
   }, []);
 
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  // Incidents open, resolve and acknowledge server-side; refetch so the card badges stay live.
+  useSocketSubscription('cos', { onResubscribe: fetchJobs });
+  useEffect(() => {
+    socket.on('cos:jobs:incidents-changed', fetchJobs);
+    return () => socket.off('cos:jobs:incidents-changed', fetchJobs);
+  }, [fetchJobs]);
 
   // A failed read would otherwise hide every provider picker, leaving new and
   // edited agent jobs on the default provider with no sign anything went wrong.
@@ -337,14 +343,7 @@ export default function JobsTab() {
                   onChange={e => setNewJob(j => ({ ...j, command: e.target.value }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
                 />
-                <select
-                  aria-label="Trigger action"
-                  value={newJob.triggerAction}
-                  onChange={e => setNewJob(j => ({ ...j, triggerAction: e.target.value }))}
-                  className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                >
-                  {(newJob.type === 'shell' ? SHELL_TRIGGER_ACTION_OPTIONS : TRIGGER_ACTION_OPTIONS).map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                </select>
+                <span className="text-xs text-gray-500">Output and exit code are logged on the job card.</span>
               </>
             ) : (
               <textarea

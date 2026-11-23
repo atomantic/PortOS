@@ -153,3 +153,28 @@ describe('storyboards routes', () => {
     expect((await api('get', '/')).body.some((row) => row.id === board.id)).toBe(false);
   });
 });
+
+describe('storyboards list pagination (#17475)', () => {
+  it('keeps the legacy array, pages as a bounded envelope, and rejects out-of-range params', async () => {
+    for (const name of ['Page A', 'Page B', 'Page C']) await api('post', '/', { name });
+    const all = await api('get', '/');
+    expect(Array.isArray(all.body)).toBe(true);
+    expect(all.body.length).toBeGreaterThanOrEqual(3);
+
+    const first = await api('get', '/?limit=2');
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ total: all.body.length, limit: 2, offset: 0 });
+    expect(first.body.items.map((b) => b.id)).toEqual(all.body.slice(0, 2).map((b) => b.id));
+
+    const next = await api('get', '/?limit=2&offset=2');
+    expect(next.body.items.map((b) => b.id)).toEqual(all.body.slice(2, 4).map((b) => b.id));
+
+    const offsetOnly = await api('get', '/?offset=1');
+    expect(offsetOnly.body).toMatchObject({ limit: 100, offset: 1 });
+
+    for (const bad of ['limit=501', 'limit=0', 'limit=abc', 'offset=-1']) {
+      const res = await api('get', `/?${bad}`);
+      expect(res.status, bad).toBe(400);
+    }
+  });
+});

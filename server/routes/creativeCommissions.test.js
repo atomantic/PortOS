@@ -10,6 +10,7 @@ const svc = {
   ERR_NOT_FOUND: 'NOT_FOUND',
   ERR_VALIDATION: 'VALIDATION_ERROR',
   listCommissions: vi.fn(),
+  listCommissionsPage: vi.fn(),
   getCommission: vi.fn(),
   createCommission: vi.fn(),
   updateCommission: vi.fn(),
@@ -285,5 +286,33 @@ describe('DELETE /api/creative-commission/:id', () => {
     const res = await request(buildApp()).delete('/api/creative-commission/commission-1');
     expect(res.status).toBe(200);
     expect(svc.deleteCommission).toHaveBeenCalledWith('commission-1');
+  });
+});
+
+describe('GET /api/creative-commission pagination (#17475)', () => {
+  it('returns the legacy array when no pagination param is sent', async () => {
+    svc.listCommissions.mockResolvedValue([{ id: 'commission-1' }]);
+    const res = await request(buildApp()).get('/api/creative-commission');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'commission-1' }]);
+    expect(svc.listCommissionsPage).not.toHaveBeenCalled();
+  });
+
+  it('pushes a bounded page to the service and returns the envelope', async () => {
+    svc.listCommissionsPage.mockResolvedValue({ items: [{ id: 'commission-2' }], total: 7 });
+    const res = await request(buildApp()).get('/api/creative-commission?limit=5&offset=5');
+    expect(res.status).toBe(200);
+    expect(svc.listCommissionsPage).toHaveBeenCalledWith({ limit: 5, offset: 5 });
+    expect(res.body).toEqual({ items: [{ id: 'commission-2' }], total: 7, limit: 5, offset: 5 });
+    expect(svc.listCommissions).not.toHaveBeenCalled();
+  });
+
+  it('defaults limit to 100 when only offset is sent and rejects out-of-range values', async () => {
+    svc.listCommissionsPage.mockResolvedValue({ items: [], total: 0 });
+    await request(buildApp()).get('/api/creative-commission?offset=3');
+    expect(svc.listCommissionsPage).toHaveBeenCalledWith({ limit: 100, offset: 3 });
+    for (const bad of ['limit=501', 'limit=0', 'offset=-1']) {
+      expect((await request(buildApp()).get(`/api/creative-commission?${bad}`)).status, bad).toBe(400);
+    }
   });
 });

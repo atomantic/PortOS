@@ -275,4 +275,17 @@ describe('catalog reads per check-in (#16210)', () => {
     await resolveCatalogCheckin(project, { catalog: other, exists: () => true, reads });
     expect(other.getIngredient).toHaveBeenCalledTimes(linked.length);
   });
+
+  it('never overlaps catalog reads on a transaction client, but still overlaps pool reads', async () => {
+    const project = fixture({ concept: { subjects: [subject, { ...subject, id: 'other', ingredientId: 'character-other' }] } });
+    const run = async (client) => {
+      let active = 0; let peak = 0;
+      const guarded = (value) => vi.fn(async () => { active++; peak = Math.max(peak, active); await new Promise(r => setTimeout(r, 2)); active--; return value; });
+      const db = { getIngredient: guarded({ id: subject.ingredientId, type: 'character', name: 'Actor', payload: {} }), listMediaForIngredient: guarded([{ kind: 'portrait', mediaKey: 'a.png' }]) };
+      await resolveCatalogCheckin(project, { catalog: db, exists: () => true, ...(client ? { client } : {}) });
+      return peak;
+    };
+    expect(await run({})).toBe(1);
+    expect(await run(null)).toBeGreaterThan(1);
+  });
 });

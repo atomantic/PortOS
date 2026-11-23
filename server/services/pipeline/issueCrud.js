@@ -428,11 +428,12 @@ function mergeIssuePatch(cur, patch = {}, updatedAt = null) {
   // should use `updateStage`, which does a shallow merge of the patch over the
   // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
   //
-  // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
-  // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
-  // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
-  // just persisted. Passing `null` explicitly still clears the sub-object.
-  const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
+  // `cover`, `backCover` and `genConfig` are treated as deep-merge sub-objects:
+  // a partial `{ cover: { script } }` (or `backCover`) patch from a textarea-blur
+  // save must not wipe the sibling render slots (`proofImage`/`finalImage`/
+  // `imageJobId`/`prompt`) that a parallel "Render" mutation just persisted.
+  // Passing `null` explicitly still clears the sub-object.
+  const NESTED_DEEP_MERGE_KEYS = ['cover', 'backCover', 'genConfig'];
   let mergedStages = cur.stages;
   if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
     mergedStages = { ...cur.stages };

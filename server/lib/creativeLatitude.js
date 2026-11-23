@@ -185,6 +185,7 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'goal-organization',
   'goal-phases',
   'goal-scorecard',
+  'html-pages-bench', // HTML Pages model comparison: the prompt is shown in full before a run, so nothing is added
   'insights-narrative',
   'insights-taste-themes',
   'jira-status-report',

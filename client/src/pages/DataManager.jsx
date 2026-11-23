@@ -17,6 +17,7 @@ import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { useSocketResource } from '../hooks/useSocketResource';
+import usePrefersReducedMotion from '../hooks/usePrefersReducedMotion';
 import CollapsibleListItem from '../components/ui/CollapsibleListItem';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -49,6 +50,29 @@ const TOMBSTONE_KIND_PLURAL = {
   creativeCommission: 'commissions',
   deck: 'decks',
   storyboard: 'storyboards',
+};
+
+// [singular, plural] per kind for the "Pruned N …" toast.
+const TOMBSTONE_KIND_COUNT_LABELS = {
+  universe: ['universe', 'universes'],
+  series: ['series', 'series'],
+  issue: ['issue', 'issues'],
+  mediaCollection: ['collection', 'collections'],
+  author: ['author', 'authors'],
+  artist: ['artist', 'artists'],
+  album: ['album', 'albums'],
+  track: ['track', 'tracks'],
+  creativeDirectorProject: ['creative director project', 'creative director projects'],
+  moodBoard: ['mood board', 'mood boards'],
+  fableLoom: ['loom', 'looms'],
+  writersRoomWork: ['writers room work', 'writers room works'],
+  writersRoomFolder: ['writers room folder', 'writers room folders'],
+  writersRoomExercise: ['writers room exercise', 'writers room exercises'],
+  musicVideoProject: ['music video', 'music videos'],
+  commissionFeedback: ['commission feedback', 'commission feedback'],
+  creativeCommission: ['commission', 'commissions'],
+  deck: ['deck', 'decks'],
+  storyboard: ['storyboard', 'storyboards'],
 };
 
 function kindList(kinds) {
@@ -104,14 +128,22 @@ function TombstoneGcSection() {
   const [runSweep, sweeping] = useAsyncAction(async () => {
     const result = await sweepTombstonesNow({ graceMs: 0 }, { silent: true });
     if (!result) return null;
-    const { universes = 0, series = 0, issues = 0, collections = 0, refused: refusedKinds = [] } = result;
-    const totalPruned = universes + series + issues + collections;
-    if (totalPruned > 0) {
-      const parts = [];
-      if (universes) parts.push(`${universes} universe${universes === 1 ? '' : 's'}`);
-      if (series) parts.push(`${series} series`);
-      if (issues) parts.push(`${issues} issue${issues === 1 ? '' : 's'}`);
-      if (collections) parts.push(`${collections} collection${collections === 1 ? '' : 's'}`);
+    const { refused: refusedKinds = [] } = result;
+    // prunedByKind covers every federated kind; the legacy keys are only a
+    // fallback for a server that predates it.
+    const prunedByKind = result.prunedByKind ?? {
+      universe: result.universes ?? 0,
+      series: result.series ?? 0,
+      issue: result.issues ?? 0,
+      mediaCollection: result.collections ?? 0,
+    };
+    const parts = Object.entries(prunedByKind)
+      .filter(([, count]) => count > 0)
+      .map(([kind, count]) => {
+        const [singular, plural] = TOMBSTONE_KIND_COUNT_LABELS[kind] ?? [kind, kind];
+        return `${count} ${count === 1 ? singular : plural}`;
+      });
+    if (parts.length > 0) {
       toast.success(`Pruned ${parts.join(' / ')}`);
     } else if (refusedKinds.length === 0) {
       toast('Nothing is ready to clean up.');
@@ -151,10 +183,10 @@ function TombstoneGcSection() {
           <h2 className="text-gray-400 uppercase tracking-wider text-[11px] font-medium">Deleted-record cleanup</h2>
         </div>
         <p className="mt-1 text-gray-500 text-xs">
-          Remove the leftover record of Universes, Pipeline series and issues, and Media Collections you already deleted. Automatic cleanup waits 24 hours. This runs it now.
+          Remove the leftover record of deleted federated records (Universes, Pipeline series and issues, Media Collections, Authors, Decks, and more). Automatic cleanup waits 24 hours. This runs it now.
         </p>
         {error && !status && (
-          <p className="mt-1 text-xs text-port-error">
+          <p role="alert" className="mt-1 text-xs text-port-error">
             Could not read peer sync status, so cleanup is paused.{' '}
             <button type="button" onClick={refetch} className="underline">Retry</button>
           </p>
@@ -218,9 +250,11 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
     <div id={`data-category-${cat.key}`} className={`border rounded-lg overflow-hidden scroll-mt-4 ${expanded ? 'border-port-accent/60' : 'border-port-border'}`}>
       <button
         onClick={() => onExpand(cat.key)}
+        aria-expanded={expanded}
+        aria-controls={`data-category-panel-${cat.key}`}
         className="w-full flex items-center gap-3 p-3 hover:bg-port-card/50 transition-colors text-left"
       >
-        {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
+        {expanded ? <ChevronDown aria-hidden="true" size={14} className="text-gray-500 shrink-0" /> : <ChevronRight aria-hidden="true" size={14} className="text-gray-500 shrink-0" />}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-sm shrink-0 ${kind.swatch}`} title={kind.label} />
@@ -238,7 +272,7 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
       </button>
 
       {expanded && (
-        <div className="border-t border-port-border bg-port-bg/50">
+        <div id={`data-category-panel-${cat.key}`} className="border-t border-port-border bg-port-bg/50">
           {/* Actions */}
           {confirmingPurge && !busy ? (
             <InlineConfirmRow
@@ -314,11 +348,11 @@ function CategoryRow({ onMaintenanceComplete, cat, maxSize, onExpand, expanded, 
                   </div>
                   <div role="rowgroup">
                     {detail.items.map(item => (
-                      <CollapsibleListItem key={item.name} spacing="0" removing={removingItems.has(item.name)} onExited={() => {
+                      <CollapsibleListItem key={item.name} role="row" spacing="0" removing={removingItems.has(item.name)} onExited={() => {
                         onRemoveItem(cat.key, item.name);
                         setRemovingItems(prev => { const next = new Set(prev); next.delete(item.name); return next; });
                       }}>
-                        <div role="row" tabIndex={-1} style={{ gridTemplateColumns: itemColumns }} className="grid border-b border-port-border/20 hover:bg-port-card/30">
+                        <div role="none" style={{ gridTemplateColumns: itemColumns }} className="grid border-b border-port-border/20 hover:bg-port-card/30">
                           <div role="cell" className="p-2 pl-3 text-gray-300 flex items-center gap-1.5">
                             {item.type === 'directory' ? <FolderOpen size={11} className="text-port-accent shrink-0" /> : <File size={11} className="text-gray-500 shrink-0" />}
                             <div className="min-w-0">
@@ -403,10 +437,10 @@ function BackupsSection({ backups, loading, onDelete }) {
         <table className="w-full text-xs min-w-[480px]">
           <thead>
             <tr className="text-gray-500 border-b border-port-border/30 bg-port-card/30">
-              <th className="text-left p-2 pl-3 font-medium">Archive</th>
-              <th className="text-right p-2 font-medium">Size</th>
-              <th className="text-right p-2 font-medium">Created</th>
-              <th className="text-right p-2 pr-3 font-medium"></th>
+              <th scope="col" className="text-left p-2 pl-3 font-medium">Archive</th>
+              <th scope="col" className="text-right p-2 font-medium">Size</th>
+              <th scope="col" className="text-right p-2 font-medium">Created</th>
+              <th scope="col" className="text-right p-2 pr-3 font-medium"><span className="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
@@ -447,6 +481,7 @@ function BackupsSection({ backups, loading, onDelete }) {
 }
 
 export default function DataManager() {
+  const reducedMotion = usePrefersReducedMotion();
   const [overview, setOverview] = useState(null);
   const [backups, setBackups] = useState(null);
   const [overviewError, setOverviewError] = useState(false);
@@ -548,7 +583,7 @@ export default function DataManager() {
 
   const showSelectedActions = () => {
     document.getElementById(`data-category-${expandedCatRef.current}`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      ?.scrollIntoView({ behavior: reducedMotion ? 'instant' : 'smooth', block: 'start' });
   };
 
   const refreshAfterAction = async (key) => {

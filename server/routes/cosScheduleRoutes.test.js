@@ -25,11 +25,6 @@ vi.mock('../services/taskSchedule.js', () => ({
   INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
-vi.mock('../lib/cos/cosValidation.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  sanitizeTaskMetadata: vi.fn((meta) => meta),
-}));
-
 import * as taskSchedule from '../services/taskSchedule.js';
 
 describe('CoS Schedule Routes', () => {
@@ -245,6 +240,18 @@ describe('CoS Schedule Routes', () => {
         expect((await request(app).put('/api/cos/schedule/task/documentation').send(fields)).status).toBe(200);
         expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('documentation', fields);
       }
+    });
+
+    it('passes weekdaysOnly through so a weekday-only default can be turned off', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({});
+      for (const weekdaysOnly of [false, true]) {
+        expect((await request(app).put('/api/cos/schedule/task/pr-reviewer').send({ weekdaysOnly })).status).toBe(200);
+        expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('pr-reviewer', { weekdaysOnly });
+      }
+      taskSchedule.updateTaskInterval.mockClear();
+      const response = await request(app).put('/api/cos/schedule/task/pr-reviewer').send({ weekdaysOnly: 'no' });
+      expect(response.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
     });
 
     it('should update interval for task type', async () => {

@@ -469,7 +469,9 @@ export default function DailyLogTab() {
     if (!mountedRef.current) return;
     setSaving(false);
     if (!res?.entry || res.stale) {
-      if (!auto || !autoSaveFailedRef.current) toast.error('Save failed');
+      if (!auto || !autoSaveFailedRef.current) toast.error(res?.stale
+        ? 'Couldn’t save daily log because it changed elsewhere — your edits remain in the editor; try saving again'
+        : 'Couldn’t save daily log — your edits remain in the editor; try saving again');
       autoSaveFailedRef.current = true;
       lastFailedBodyRef.current = body;
       return;
@@ -531,11 +533,12 @@ export default function DailyLogTab() {
     // request is in flight (see applyEntry's comment above).
     const requestDate = date;
     setAppending(true);
-    const res = await appendDailyLog(date, text, 'text', { silent: true }).catch(() => null);
+    let failure = null;
+    const res = await appendDailyLog(date, text, 'text', { silent: true }).catch((err) => { failure = err; return null; });
     if (!mountedRef.current) return;
     setAppending(false);
     if (!res?.entry) {
-      toast.error('Append failed');
+      toast.error(failure?.message || 'Couldn’t append entry to daily log');
       return;
     }
     if (applyEntry(res.entry, requestDate)) {
@@ -578,9 +581,10 @@ export default function DailyLogTab() {
   };
 
   const handleDelete = async () => {
-    const ok = await deleteDailyLog(date, { silent: true }).then(() => true, () => false);
+    let failure = null;
+    const ok = await deleteDailyLog(date, { silent: true }).then(() => true, (err) => { failure = err; return false; });
     if (!ok) {
-      toast.error('Delete failed');
+      toast.error(failure?.message || 'Couldn’t delete daily log entry');
       return;
     }
     toast.success('Deleted');
@@ -592,10 +596,11 @@ export default function DailyLogTab() {
 
   const handleSyncObsidian = async () => {
     setSyncing(true);
-    const res = await syncDailyLogsToObsidian({ silent: true }).catch(() => null);
+    let failure = null;
+    const res = await syncDailyLogsToObsidian({ silent: true }).catch((err) => { failure = err; return null; });
     setSyncing(false);
     if (res) toast.success(`Synced ${pluralize(res.synced, 'entry', 'entries')} to Obsidian`);
-    else toast.error('Sync failed');
+    else toast.error(failure?.message || 'Couldn’t sync daily logs to Obsidian');
   };
 
   const saveSettings = async (partial) => {

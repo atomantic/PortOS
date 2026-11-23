@@ -125,6 +125,15 @@ describe('computeEffectiveExcludes', () => {
     expect(result).not.toContain(target);
   });
 
+  it('keeps Beeper download partials excluded when the attachment mirror is re-enabled', () => {
+    const result = computeEffectiveExcludes({
+      excludePaths: [],
+      disabledDefaultExcludes: ['/beeper/attachments/']
+    });
+    expect(result).not.toContain('/beeper/attachments/');
+    expect(result).toContain('/beeper/attachments/.tmp/');
+  });
+
   it('ignores attempts to disable a non-overridable default', () => {
     const target = nonOverridable[0];
     const result = computeEffectiveExcludes({

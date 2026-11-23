@@ -497,7 +497,7 @@ export async function upsertMirroredMessage(client, conversationId, message, att
        -- the inbound Message, so a later page that omits it must not flip a
        -- message the user actually sent onto the other side of the thread.
        is_sender = beeper_messages.is_sender OR EXCLUDED.is_sender,
-       observed_at = EXCLUDED.observed_at, updated_at = NOW()
+       observed_at = GREATEST(beeper_messages.observed_at, EXCLUDED.observed_at), updated_at = NOW()
      WHERE beeper_messages.conversation_id = EXCLUDED.conversation_id
        AND ((EXCLUDED.unsent_at IS NOT NULL AND EXCLUDED.observed_at >= beeper_messages.observed_at) OR
          (beeper_messages.unsent_at IS NULL
@@ -519,10 +519,45 @@ export async function upsertMirroredMessage(client, conversationId, message, att
       `INSERT INTO beeper_attachments (conversation_id, message_id, idx, mxc_id, mime_type,
          byte_length, file_name, width, height)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       -- A different mxc_id is a replaced attachment: take upstream metadata and
+       -- reset fetch state (the old file is left for sweepAttachmentOrphans).
+       -- Otherwise upstream often omits fileSize, so never let NULL/stale
+       -- metadata overwrite the measured or HEAD-probed byte_length.
        ON CONFLICT (conversation_id, message_id, idx) DO UPDATE SET
          mxc_id = COALESCE(EXCLUDED.mxc_id, beeper_attachments.mxc_id),
-         mime_type = EXCLUDED.mime_type, byte_length = EXCLUDED.byte_length,
-         file_name = EXCLUDED.file_name, width = EXCLUDED.width, height = EXCLUDED.height,
+         mime_type = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.mime_type
+           ELSE COALESCE(NULLIF(EXCLUDED.mime_type, ''), beeper_attachments.mime_type) END,
+         byte_length = CASE
+           WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+             THEN EXCLUDED.byte_length
+           WHEN beeper_attachments.local_path IS NOT NULL AND beeper_attachments.byte_length IS NOT NULL
+             THEN beeper_attachments.byte_length
+           ELSE COALESCE(EXCLUDED.byte_length, beeper_attachments.byte_length) END,
+         file_name = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.file_name
+           ELSE COALESCE(NULLIF(EXCLUDED.file_name, ''), beeper_attachments.file_name) END,
+         width = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.width ELSE COALESCE(EXCLUDED.width, beeper_attachments.width) END,
+         height = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN EXCLUDED.height ELSE COALESCE(EXCLUDED.height, beeper_attachments.height) END,
+         local_path = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.local_path END,
+         fetched_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.fetched_at END,
+         unavailable_at = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.unavailable_at END,
+         fetch_error = CASE WHEN (EXCLUDED.mxc_id IS NOT NULL AND beeper_attachments.mxc_id IS NOT NULL
+                  AND beeper_attachments.mxc_id <> EXCLUDED.mxc_id)
+           THEN NULL ELSE beeper_attachments.fetch_error END,
          updated_at = NOW()`,
       [
         conversationId, message.id, attachment.idx, attachment.mxcId, attachment.mimeType,
@@ -576,7 +611,7 @@ async function commitMessages({ conversationId, accountId, sourceChatId, rows, c
 // ---------------------------------------------------------------------------
 
 async function sweepChat({
-  chat, stored, clientOptions, observedAt, personIndex,
+  chat, stored, clientOptions, personIndex,
 }) {
   const normalized = normalizeChatRow(chat);
   if (!normalized.accountId || !normalized.sourceChatId) return { messages: 0 };
@@ -584,6 +619,10 @@ async function sweepChat({
   const conversationId = await upsertConversation(normalized);
   if (!conversationId) return { messages: 0 };
 
+  // Stamped per chat, immediately before the fetch (like reconcileStoredRow):
+  // a sweep-wide timestamp predates socket/outbox writes made mid-sweep, so
+  // upsertMirroredMessage would reject newer HTTP observations as stale.
+  const observedAt = new Date().toISOString();
   const { messages, cursor, truncated } = await fetchNewMessages(
     normalized.sourceChatId, stored?.cursor, clientOptions,
   );
@@ -739,7 +778,7 @@ async function sweepChat({
  * resume next run, reserving one page to refresh the head. End-of-list resets
  * the checkpoint so failed chats remain reachable on subsequent traversals.
  */
-async function sweepAccount(account, clientOptions, observedAt, personIndex) {
+async function sweepAccount(account, clientOptions, personIndex) {
   await reconcileStoredMessages(account.accountId, clientOptions);
   const cursors = await readAccountCursors(account.accountId);
   const checkpoint = await query('SELECT chat_cursor FROM beeper_accounts WHERE account_id = $1', [account.accountId]);
@@ -791,7 +830,7 @@ async function sweepAccount(account, clientOptions, observedAt, personIndex) {
       }
       // one chat at a time; each is its own transaction
       const result = await sweepChat({
-        chat, stored, clientOptions, observedAt, personIndex,
+        chat, stored, clientOptions, personIndex,
       }).catch((err) => {
         failedChats++;
         console.error(`❌ ${LOG_PREFIX}: chat ${String(chat?.id ?? 'unknown')} failed: ${err.message}`);
@@ -973,7 +1012,6 @@ async function executeSweep(reason) {
     }
 
     const startedAt = Date.now();
-    const observedAt = new Date(startedAt).toISOString();
     const accounts = await refreshAccounts(clientOptions);
     updateBeeperSweepProgress({ accountsTotal: accounts.length });
     emitSweepInvalidation();
@@ -993,7 +1031,7 @@ async function executeSweep(reason) {
     let cursorRestarts = 0;
     for (const account of accounts) {
       // accounts are swept in order; each owns its own cursors
-      const result = await sweepAccount(account, clientOptions, observedAt, personIndex).catch((err) => {
+      const result = await sweepAccount(account, clientOptions, personIndex).catch((err) => {
         failedAccounts++;
         console.error(`❌ ${LOG_PREFIX}: account ${account.accountId} failed: ${err.message}`);
         return null;

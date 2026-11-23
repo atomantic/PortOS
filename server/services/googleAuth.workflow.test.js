@@ -9,6 +9,10 @@ vi.mock('../lib/fileUtils.js', async importOriginal => ({
   tryReadFile: async path => fixture.files.get(path) ?? null,
   atomicWrite: async (path, data) => { fixture.files.set(path, JSON.stringify(data)); }
 }));
+vi.mock('../lib/secureAuthStore.js', () => ({
+  ensureSecureDir: async () => {},
+  writeSecureJson: async (path, data) => { fixture.files.set(path, JSON.stringify(data)); }
+}));
 vi.mock('./messageAccounts.js', () => ({
   getAccount: async () => fixture.account,
   updateSyncStatus: async () => {},

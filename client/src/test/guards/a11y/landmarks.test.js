@@ -1,5 +1,5 @@
 /**
- * Accessibility conventions: tablists, menus, live regions, landmarks and coarse-pointer text.
+ * Accessibility conventions: tablists, menus, radiogroups, live regions, landmarks and coarse-pointer text.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
  */
 import { describe, it, expect } from 'vitest';
@@ -166,6 +166,79 @@ describe('a11y conventions: landmarks', () => {
       offenders.push(...offendersIn(file, maskedSourceOf(file)));
     }
     expect(offenders, `Menu-family role without arrow-key focus management — a role="menu" promises ArrowUp/ArrowDown roving focus, Home/End and Escape-to-trigger that a hand-rolled popover doesn't implement (WCAG 4.1.2). Drop the role (the ShellProviderLauncher.jsx precedent: a named group of plain controls needs none) or route the popover through components/ui/OverflowMenu.jsx:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
+  // --- radiogroup owns radios and arrow keys (#17562) -------------------------
+  //
+  // `role="radiogroup"` promises one tab stop and Arrow/Home/End selection
+  // (WAI-ARIA 1.2 Radio Group, WCAG 4.1.2). A group of `aria-pressed` toggles
+  // is `role="group"`. Arrow handling is `onRadioGroupKeyDown` from
+  // `lib/a11yKeyboard.js`, or an in-file Arrow* handler. The group may own
+  // `role="radio"` controls only — a plain button inside it is a second violation.
+
+  const implementsRadioKeys = (src) => src.includes('onRadioGroupKeyDown') || /\bArrow(?:Up|Down|Left|Right)\b/.test(src);
+
+  const elementRole = (node) => normalizedAttributeValue(attributeValue(node.tag, 'role'));
+
+  const radioGroupSites = function* (src) {
+    if (!src.includes('radiogroup')) return;
+    for (const node of forEachOpeningTag(src)) {
+      if (elementRole(node) === 'radiogroup') yield node;
+    }
+  };
+
+  // Openers nested in `group`, stopping at its matching close. A sibling that
+  // follows the group is not owned by it.
+  const ownedOpeners = (src, group) => {
+    const end = group.matchingClose?.index ?? src.length;
+    const owned = [];
+    for (const node of forEachOpeningTag(src)) {
+      if (node.index <= group.index || node.index >= end) continue;
+      owned.push(node);
+    }
+    return owned;
+  };
+
+  const radioGroupOffendersIn = (file, src) => {
+    const sites = [...radioGroupSites(src)];
+    if (sites.length === 0) return [];
+    const keys = implementsRadioKeys(src);
+    const offenders = [];
+    for (const site of sites) {
+      const owned = ownedOpeners(src, site);
+      const radios = owned.filter((node) => elementRole(node) === 'radio');
+      const strayControls = owned.filter((node) => (
+        (node.name === 'button' || node.name === 'a' || node.name === 'input')
+        && elementRole(node) !== 'radio'
+      ));
+      if (radios.length === 0 || strayControls.length > 0 || !keys) {
+        offenders.push(`${file}:${lineOf(src, site.index)}`);
+      }
+    }
+    return offenders;
+  };
+
+  it('ships radiogroups only with radio children and arrow-key handling (#17562)', () => {
+    const probe = (src, file = 'src/components/probe/Probe.jsx') => radioGroupOffendersIn(file, src);
+    expect(probe('<div role="radiogroup" aria-label="Background"><button aria-pressed="true">A</button></div>'))
+      .toEqual(['src/components/probe/Probe.jsx:1']);
+    expect(probe('<div role="radiogroup"><button role="radio">A</button></div>'))
+      .toEqual(['src/components/probe/Probe.jsx:1']);
+    expect(probe('<div role="radiogroup"><button role="radio">A</button><button>Gallery image…</button></div>'))
+      .toEqual(['src/components/probe/Probe.jsx:1']);
+    expect(probe('<div role="radiogroup" onKeyDown={onRadioGroupKeyDown}><button role="radio">A</button></div>')).toEqual([]);
+    expect(probe('const onKey = (e) => e.key === "ArrowRight";\n<div role="radiogroup" onKeyDown={onKey}><button role="radio">A</button></div>')).toEqual([]);
+    expect(probe("<div\n  role='radiogroup'\n><button role={'radio'}>A</button></div>"))
+      .toEqual(['src/components/probe/Probe.jsx:1']);
+    expect(probe(maskComments('{/* <div role="radiogroup" /> */}'))).toEqual([]);
+    expect(probe('<div onKeyDown={onRadioGroupKeyDown}><button role="radio">A</button></div>')).toEqual([]);
+    expect(probe('<div role="group" aria-label="Preview background"><button aria-pressed="true">A</button></div>')).toEqual([]);
+
+    const offenders = [];
+    for (const file of trackedSourceFiles()) {
+      offenders.push(...radioGroupOffendersIn(file, maskedSourceOf(file)));
+    }
+    expect(offenders, `role="radiogroup" without role="radio" children or arrow-key handling — wire onRadioGroupKeyDown from lib/a11yKeyboard.js and keep non-radio actions outside the group (WCAG 4.1.2). Toggle clusters use role="group":\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('gives every conditional error render a live region (#7266)', () => {

@@ -1038,7 +1038,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
                     aria-label="Preset"
                     onChange={(e) => handlePresetSelect(e.target.value)}
                     value={llamaPresetId}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-port-accent focus:outline-none"
+                    className="bg-port-card border border-port-border rounded px-2 py-1 text-xs text-port-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent"
                   >
                     {specPresets.map((p) => (
                       <option key={p.id} value={p.id}>

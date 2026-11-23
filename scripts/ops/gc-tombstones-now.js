@@ -29,6 +29,7 @@
  * peer null from a same-day mass-delete that the user wanted off disk early).
  */
 import { sweepTombstones, getSweepStatus } from '../../server/services/sharing/tombstoneGc.js';
+import { formatPrunedByKind } from '../../server/lib/tombstoneKindLabels.js';
 
 // Mirrors `TOMBSTONE_KIND_PLURAL` in the Instances UI so the CLI output
 // matches the toast wording. Dedupe handles the series/issue cohort.
@@ -53,7 +54,6 @@ const KIND_PLURAL = {
   deck: 'decks',
   storyboard: 'storyboards',
 };
-const KIND_SINGULAR = { universe: 'universe', series: 'series', issue: 'issue', mediaCollection: 'media collection' };
 const labelKinds = (kinds) => [...new Set(kinds.map((k) => KIND_PLURAL[k] ?? k))].join(', ');
 
 // Same sentence as Data Manager: resume or remove releases a paused peer's
@@ -65,7 +65,6 @@ function pausedHoldSentence(held) {
   const who = ids.length === 1 ? `Paused peer ${ids[0]} is` : `Paused peers ${ids.join(', ')} are`;
   return `${who} holding ${labelKinds(kinds) || 'deleted records'}. Resume or remove the peer to release them.`;
 }
-const countPhrase = (count, key) => `${count} ${count === 1 ? KIND_SINGULAR[key] : KIND_PLURAL[key]}`;
 
 function parseArgs(argv) {
   const out = { apply: false };
@@ -104,13 +103,7 @@ async function main() {
   }
 
   const result = await sweepTombstones({ graceMs: 0 });
-  const parts = [
-    countPhrase(result.universes, 'universe'),
-    countPhrase(result.series, 'series'),
-    countPhrase(result.issues, 'issue'),
-  ];
-  if (result.collections) parts.push(countPhrase(result.collections, 'mediaCollection'));
-  console.log(`\n🗑️  Pruned ${parts.join(' / ')}`);
+  console.log(`\n🗑️  Pruned ${formatPrunedByKind(result.prunedByKind) || 'nothing'}`);
   if (result.refused.length > 0) {
     console.log(`⚠️  Skipped ${labelKinds(result.refused)}: open Instances, select the peer, and turn on that category under Sync Categories so it receives the deletion, or remove the peer. Pausing does not release the hold.`);
   }

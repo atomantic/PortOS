@@ -43,7 +43,7 @@ async function shouldForward(notification, cachedForwardTypes) {
   const mode = await getDomainAutonomyMode(DOMAIN);
   if (mode !== 'execute') {
     if (mode === 'dry-run') {
-      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} — "${notification.title}"`);
+      console.log(`📨 [dry-run] Messages auto-send would forward notification: ${notification.type} (${notification.id})`);
     }
     return false;
   }
@@ -52,7 +52,7 @@ async function shouldForward(notification, cachedForwardTypes) {
   // suppress further forwarding for the rest of the day (acts like `off`).
   const budget = await getDomainBudgetStatus(DOMAIN);
   if (!budget.withinBudget) {
-    console.log(`📨 Messages auto-send daily ${budget.exceeded} budget reached — suppressing forward: ${notification.type} — "${notification.title}"`);
+    console.log(`📨 Messages auto-send daily ${budget.exceeded} budget reached — suppressing forward: ${notification.type} (${notification.id})`);
     return false;
   }
 

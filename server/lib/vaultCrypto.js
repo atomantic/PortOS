@@ -227,7 +227,7 @@ export function maskValue(type, plaintext) {
     case 'address': {
       // Keep only the trailing city/state segments visible. Masking just the
       // FIRST comma segment would leak the street whenever the value starts
-      // with a non-street segment ("c/o Adam Eivy, 123 Main St, ...").
+      // with a non-street segment ("c/o Alex Example, 123 Main St, ...").
       const parts = value.split(',').map((p) => p.trim()).filter(Boolean);
       if (parts.length < 2) return '•••';
       const visible = parts.slice(parts.length >= 3 ? -2 : -1);

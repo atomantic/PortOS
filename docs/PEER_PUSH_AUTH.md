@@ -158,7 +158,7 @@ Rollout without breaking older installs:
   peer confirms the token, remove the stored password there. No migration deletes
   stored credentials.
 
-The handshake version is `peerAuth` in `server/lib/schemaVersions.js`.
+The handshake version is `peerAuth` in `server/lib/schemaVersions/platform.js` (composed into `PORTOS_SCHEMA_VERSIONS` by `server/lib/schemaVersions.js`).
 
 ## Existing installations and mixed versions
 

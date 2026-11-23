@@ -7,10 +7,18 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { listRepositoryFiles } from './testMemoRunner.js';
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   DIRECTORY_INPUT_LIMIT,
   TEST_MEMO_NEVER,
+  WORKSPACE_BASE_INPUTS,
+  WORKSPACE_SETUP_ENTRIES,
   computeTestMemoKeys,
+  createDiskFs,
+  createTestMemoAnalyzer,
   extractFileFacts,
   literalExports,
   relatedTests,
@@ -385,6 +393,83 @@ describe('floor key', () => {
         expect(relatedTests(info, ['server/lib/unrelated.js'])).toEqual([]);
       }
     });
+
+    // #17616: a record of what the fixture's Vite server served stands in for the whole root,
+    // so an edit to a page the fixture never rendered neither moves its key nor selects it.
+    describe('narrowed to what a recorded fixture served', () => {
+      const FIXTURE = 'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: (temp) => ({ configFile: false, root: client }) });';
+      const tree = {
+        ...SERVED,
+        'client/src/Panel.jsx': "import './Panel.css';\nimport { nav } from '../../server/lib/nav.js';\nexport const Panel = nav;\n",
+        'client/src/Panel.css': "@import './panelTokens.css';\n@import url(./panelLayout.css);\n.panel { color: red; }\n",
+        'client/src/panelTokens.css': '.token { color: blue; }\n',
+        'client/src/panelLayout.css': '.layout { display: grid; }\n',
+        'client/src/index.css': '@import "tailwindcss";\n',
+        'client/src/themes/tokens.js': "import { palette } from '../palette.js';\nexport const tokens = palette;\n",
+        'client/src/palette.js': 'export const palette = 1;\n',
+        'client/postcss.config.js': "import plugins from './postcssPlugins.js';\nexport default { plugins };\n",
+        'client/postcssPlugins.js': 'export default {};\n',
+        'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 1;\n',
+        'server/lib/nav.js': 'export const nav = 1;\n',
+        [test]: browserTest(FIXTURE),
+      };
+      const served = { roots: ['client'], files: ['client/src/Panel.jsx', 'client/src/Panel.css', 'server/lib/nav.js'] };
+      const digestsOf = (files, modules) => modules.map((rel) => createHash('sha256').update(files[rel]).digest('hex').slice(0, 16));
+      const analyzed = (files, record = served, body = FIXTURE) => {
+        const withBody = { ...files, [test]: browserTest(body) };
+        return computeTestMemoKeys([test], options(withBody, {
+          records: new Map([[test, [test]]]), digests: new Map([[test, digestsOf(withBody, [test])]]), served: new Map(record ? [[test, record]] : []),
+        }));
+      };
+      const recordedKey = (files, record, body) => analyzed(files, record, body).get(test).recorded;
+      const edit = (rel) => ({ ...tree, [rel]: `${tree[rel] ?? ''}/* edited */\n` });
+
+      it('keys the served graph and shared style inputs, and nothing else under the root', () => {
+        const baseline = recordedKey(tree);
+        expect(baseline.memoizable).toBe(true);
+        // An unrelated page, a new file and an unrelated server module leave the key alone.
+        for (const rel of ['client/src/pages/HtmlPages.jsx', 'client/src/New.jsx', 'server/lib/unrelated.js']) {
+          expect(recordedKey(edit(rel)).key, rel).toBe(baseline.key);
+        }
+        // The served component, its CSS and what that CSS imports, a module served from outside
+        // the root, the global stylesheet, theme tokens, the PostCSS config and the lockfile move it.
+        // So do the never-served modules a theme module or the PostCSS config imports.
+        for (const rel of ['client/src/Panel.jsx', 'client/src/Panel.css', 'client/src/panelTokens.css', 'client/src/panelLayout.css', 'server/lib/nav.js',
+          'client/src/index.css', 'client/src/themes/tokens.js', 'client/src/palette.js', 'client/postcss.config.js', 'client/postcssPlugins.js', 'client/package-lock.json']) {
+          expect(recordedKey(edit(rel)).key, rel).not.toBe(baseline.key);
+        }
+        // Never the whole-tree key of the same suite.
+        expect(baseline.key).not.toBe(recordedKey(tree, null).key);
+      });
+
+      it('selects the suite only for a served or shared input when a narrowing record exists', () => {
+        const keys = analyzed(tree);
+        expect(keys.get(test).narrowed).not.toBeNull();
+        for (const rel of ['client/src/Panel.jsx', 'client/src/panelTokens.css', 'server/lib/nav.js', 'client/src/index.css', 'client/src/themes/tokens.js', 'client/postcss.config.js']) {
+          expect(relatedTests(keys, [rel]), rel).toEqual([test]);
+        }
+        expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx'])).toEqual([]);
+      });
+
+      it('falls back to the whole root without a record, for a root it does not name, a path outside the repository, or a server of the test\'s own', () => {
+        const wholeTree = recordedKey(tree, null);
+        const fallbacks = {
+          'no served record': [null, FIXTURE],
+          'another root': [{ roots: ['server/lib/static'], files: served.files }, FIXTURE],
+          'a served path outside the repository': [{ roots: ['client'], files: [...served.files, '../elsewhere/x.js'] }, FIXTURE],
+          'a server the recorder never saw': [served, `${FIXTURE}\nconst other = await createServer({ configFile: false, root: client });`],
+          'a served import.meta.glob': [{ ...served, files: [...served.files, 'client/src/routes.js'] }, FIXTURE],
+        };
+        for (const [label, [record, body]] of Object.entries(fallbacks)) {
+          const keys = analyzed({ ...tree, 'client/src/routes.js': "export const pages = import.meta.glob('./pages/*.jsx');\n" }, record, body);
+          expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx']), label).toEqual([test]);
+          const globbed = { ...tree, 'client/src/routes.js': "export const pages = import.meta.glob('./pages/*.jsx');\n" };
+          const changed = recordedKey({ ...globbed, 'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 2;\n' }, record, body);
+          expect(changed.key, label).not.toBe(recordedKey(globbed, record, body).key);
+        }
+        expect(wholeTree.memoizable).toBe(true);
+      });
+    });
   });
 
   it('keys the arguments that select which cases run', () => {
@@ -451,6 +536,15 @@ describe('a read whose variable segment can leave the directory the source names
   const refusal = (body) => floorOf(body).reason;
   const leaves = (dir) => `${test}: reads a path with a variable segment that can leave ${dir}`;
   const through = (helper, dir) => `${test}: reads a path through ${helper}() that the analyzer cannot resolve (under ${dir})`;
+
+  it('does not key on gitignored __pycache__ bytecode under a keyed tree', () => {
+    const body = "for (const name of readdirSync(FIXTURES)) readFileSync(join(FIXTURES, name));";
+    const base = floorOf(body, { 'server/lib/fixtures/x.py': 'x = 1\n' });
+    const cached = floorOf(body, { 'server/lib/fixtures/x.py': 'x = 1\n', 'server/lib/fixtures/__pycache__/x.cpython-313.pyc': 'bytecode\n' });
+    expect(base.memoizable).toBe(true);
+    expect(cached.key).toBe(base.key);
+    expect(floorOf(body, { 'server/lib/fixtures/x.py': 'x = 2\n' }).key).not.toBe(base.key);
+  });
 
   it('keeps slash normalization and refuses another member operation only when its result can be read', () => {
     const path = "join(FIXTURES, 'f0.json')";
@@ -1629,6 +1723,30 @@ describe('record-aware related selection (#16424)', () => {
 });
 
 describe('extractFileFacts', () => {
+  it('keys a defaulted path parameter only where every call relies on the default', () => {
+    const head = ["import { readdirSync } from 'fs';", "import { join } from 'path';", "const FIXTURES = join(__dirname, 'fixtures');", "const OTHER = join(__dirname, 'other');"];
+    const keyed = (...lines) => {
+      const facts = extractFileFacts([...head, ...lines].join('\n'), { fileRel: 'server/x.test.js', cwdRel: 'server' });
+      return [facts.dirs.map((dir) => dir.rel).sort(), facts.handedDirs.slice().sort()];
+    };
+    const plain = 'function read(dir = FIXTURES) { return readdirSync(dir); }';
+    // Every call omits the argument: the default is keyed, as before.
+    expect(keyed(plain, 'read();')).toEqual([['server/fixtures'], []]);
+    // Calls that disagree leave the read open (guessed and unbounded), never the default alone as if it were the value.
+    const disagreeing = extractFileFacts([...head, plain, 'read(OTHER);', 'read();'].join('\n'), { fileRel: 'server/x.test.js', cwdRel: 'server' });
+    expect(disagreeing.dirs).toEqual([expect.objectContaining({ rel: 'server/fixtures', guessed: true, open: true })]);
+    // The issue's snippet: the default is never read, the passed path is.
+    const swapped = keyed(plain, 'read(OTHER);');
+    expect(swapped[0]).toContain('server/other');
+    expect(swapped[0]).not.toContain('server/fixtures');
+    // Destructured property: same rule per call's object literal.
+    const destructured = 'function read({ dir = FIXTURES } = {}) { return readdirSync(dir); }';
+    expect(keyed(destructured, 'read({});')).toEqual([['server/fixtures'], []]);
+    const other = keyed(destructured, 'read({ dir: OTHER });');
+    expect(other[0]).toContain('server/other');
+    expect(other[0]).not.toContain('server/fixtures');
+  });
+
   it('reads a module\'s literal string and frozen array exports, and nothing else', () => {
     const exported = literalExports([
       "export const A = 'a.json';",
@@ -1810,4 +1928,80 @@ describe('data-only JS files and bounded dynamic imports (#16902)', () => {
     }).get('server/lib/a.test.js');
     expect(edited.floor.key).not.toBe(first.floor.key);
   });
+});
+
+// A warm memo answers most tests from the recorded key or the narrowed reach.
+// Walking their static closure first cost CI most of its planning time (#17617).
+describe('lazy floor analysis', () => {
+  const test = 'server/lib/a.test.js';
+  const loaded = [test, 'server/lib/a.js', 'server/lib/b.js', 'server/vitest.setup.js'];
+  const digestOf = (rel) => createHash('sha256').update(TREE[rel]).digest('hex').slice(0, 16);
+  const counting = (files) => {
+    const fs = memoryFs(files);
+    const reads = [];
+    return { reads, fs: { ...fs, read: (rel) => { reads.push(rel); return fs.read(rel); } } };
+  };
+  const analyzeWith = (fs, extra = {}) => computeTestMemoKeys([test], { ...options(TREE), fs, ...extra }).get(test);
+
+  it('computes the recorded verdict and narrowing without walking the static closure', () => {
+    const { reads, fs } = counting(TREE);
+    const info = analyzeWith(fs, { records: new Map([[test, loaded]]), digests: new Map([[test, loaded.map(digestOf)]]) });
+    expect(info.recorded.memoizable).toBe(true);
+    expect(info.narrowed.failClosed).toBeNull();
+    // lazy.js sits only behind b.js's `import()`: the record vouches for that edge, the floor would walk it.
+    expect(relatedTests(new Map([[test, info]]), ['server/lib/unrelated.js'])).toEqual([]);
+    expect(reads).not.toContain('server/lib/lazy.js');
+    expect(info.floor.memoizable).toBe(true);
+    expect(reads).toContain('server/lib/lazy.js');
+  });
+
+  it('gives the same keys and closure in whichever order they are read', () => {
+    const records = new Map([[test, loaded]]);
+    const eager = analyzeWith(memoryFs(TREE), { records });
+    const floorFirst = { floor: eager.floor.key, closure: [...eager.closure].sort(), inputs: [...eager.inputs].sort(), edgesResolved: eager.edgesResolved, hasOpenReads: eager.hasOpenReads, recorded: eager.recorded.key };
+    const later = analyzeWith(memoryFs(TREE), { records });
+    const recordedFirst = { recorded: later.recorded.key, hasOpenReads: later.hasOpenReads, edgesResolved: later.edgesResolved, inputs: [...later.inputs].sort(), closure: [...later.closure].sort(), floor: later.floor.key };
+    expect(recordedFirst).toEqual(floorFirst);
+    expect(floorFirst.closure).toContain('server/lib/lazy.js');
+    // A test with no record still exposes a full floor verdict on demand.
+    expect(analyzeWith(memoryFs(TREE)).floor.key).toBe(eager.floor.key);
+  });
+});
+
+describe('blender starter reads stay inside py/starter (#17618)', () => {
+  const repoRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const analyzerFor = () => createTestMemoAnalyzer({
+    fs: createDiskFs(repoRoot, nodeFs, nodePath),
+    workspaceRel: 'server',
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version,
+    toolVersion: () => null,
+    caseFilter: [],
+    acceptVerdictsFrom: [],
+    listFiles: () => listRepositoryFiles(repoRoot),
+  });
+
+  it('memoizes suites whose only starter refusal was the unbounded recursive read', () => {
+    const analyzer = analyzerFor();
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    for (const test of ['server/routes/musicVideoBlender.test.js', 'server/routes/codeAnimationFilms.test.js']) {
+      const info = analyzer.analyzeTest(test, { baseClosure, recorded: null });
+      expect(info.floor, info.floor.reason).toMatchObject({ memoizable: true });
+      expect([...info.inputs].some((rel) => rel.startsWith('server/services/film/py/starter/'))).toBe(true);
+      const recorded = analyzer.analyzeTest(test, {
+        baseClosure,
+        recorded: [test, 'server/services/film/sources.js'],
+      }).recorded;
+      expect(recorded, recorded.reason).toMatchObject({ memoizable: true });
+    }
+  }, 120_000);
+
+  it('no longer refuses backup.manifestScope for a starter path that can leave py/starter', () => {
+    const analyzer = analyzerFor();
+    const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS.server, WORKSPACE_SETUP_ENTRIES.server);
+    const floor = analyzer.analyzeTest('server/services/backup.manifestScope.test.js', { baseClosure, recorded: null }).floor;
+    expect(floor.reasons.join('\n')).not.toMatch(/py\/starter/);
+  }, 60_000);
 });

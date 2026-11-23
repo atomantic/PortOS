@@ -109,7 +109,7 @@ afterAll(() => cleanupTempDataRoots());
 
 it('blocks composition and exposes a repair when supplied audio used an older take of the same track', async () => {
   const { assertCurrentPerformanceTakes } = await import('./performanceShot.js');
-  const { resolveMasterAudioPath } = await import('./render.js');
+  const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   const { getDependencyImpact } = await import('./revisionService.js');
   const sourceSha256 = createHash('sha256').update(songWav()).digest('hex');
   const supplied = { ...project({ shotMode: 'cutaway' }), trackId: 'same-track', uploadedAudioFilename: null };

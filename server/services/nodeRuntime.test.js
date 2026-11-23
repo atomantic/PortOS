@@ -67,21 +67,21 @@ describe('resolveNvm', () => {
   });
 });
 
-it('distinguishes a missing global pm2 CLI from an unreadable installation', () => {
+it('distinguishes a missing global pm2 CLI from an unreadable installation', async () => {
   const node = '/example/node/bin/node';
   const readError = (code) => () => { throw Object.assign(new Error(code), { code }); };
-  expect(globalPm2Status(node, { isWindows: false, readText: () => '{"version":"7.1.0"}' })).toEqual({ state: 'available', version: '7.1.0' });
-  expect(globalPm2Status(node, { isWindows: false, readText: readError('ENOENT') })).toEqual({ state: 'missing', version: null });
-  expect(globalPm2Status(node, { isWindows: false, readText: readError('EACCES') })).toEqual({ state: 'unverified', version: null });
-  expect(globalPm2Status(node, { isWindows: false, readText: () => '{broken' })).toEqual({ state: 'unverified', version: null });
+  expect(await globalPm2Status(node, { isWindows: false, readText: () => '{"version":"7.1.0"}' })).toEqual({ state: 'available', version: '7.1.0' });
+  expect(await globalPm2Status(node, { isWindows: false, readText: readError('ENOENT') })).toEqual({ state: 'missing', version: null });
+  expect(await globalPm2Status(node, { isWindows: false, readText: readError('EACCES') })).toEqual({ state: 'unverified', version: null });
+  expect(await globalPm2Status(node, { isWindows: false, readText: () => '{broken' })).toEqual({ state: 'unverified', version: null });
 });
 
 describe('getStartupStatus', () => {
   const nodeBinary = '/home/example/.nvm/versions/node/v26.12.1/bin/node';
   const binDir = '/home/example/.nvm/versions/node/v26.12.1/bin';
 
-  it('flags a boot script that still launches an older Node and gives the sudo command', () => {
-    const status = getStartupStatus({
+  it('flags a boot script that still launches an older Node and gives the sudo command', async () => {
+    const status = await getStartupStatus({
       nodeBinary, platform: 'darwin', home: '/Users/example', user: 'example',
       readText: (file) => (file === posix.join('/Users/example', 'Library', 'LaunchAgents', 'pm2.example.plist')
         ? '<string>/Users/example/.nvm/versions/node/v24.14.1/bin</string>' : null),
@@ -98,15 +98,15 @@ describe('getStartupStatus', () => {
     expect(rewriteLaunchAgent('<string>/opt/homebrew/bin/pm2</string>', binDir)).toBeNull();
   });
 
-  it('reads a boot script on the pinned Node as current, and a missing one as unconfigured', () => {
-    const current = getStartupStatus({ nodeBinary, platform: 'linux', home: '/home/example', user: 'example', readText: () => `PATH=${binDir}` });
+  it('reads a boot script on the pinned Node as current, and a missing one as unconfigured', async () => {
+    const current = await getStartupStatus({ nodeBinary, platform: 'linux', home: '/home/example', user: 'example', readText: () => `PATH=${binDir}` });
     expect(current).toMatchObject({ system: 'systemd', configured: true, current: true });
-    const missing = getStartupStatus({ nodeBinary, platform: 'linux', home: '/home/example', user: 'example', readText: () => null });
+    const missing = await getStartupStatus({ nodeBinary, platform: 'linux', home: '/home/example', user: 'example', readText: () => null });
     expect(missing).toMatchObject({ configured: false, current: null });
   });
 
-  it('names Homebrew’s global pm2, not the Cellar keg, for a Homebrew node', () => {
-    const status = getStartupStatus({
+  it('names Homebrew’s global pm2, not the Cellar keg, for a Homebrew node', async () => {
+    const status = await getStartupStatus({
       nodeBinary: '/opt/homebrew/Cellar/node/26.0.0/bin/node', platform: 'darwin', home: '/Users/example', user: 'example',
       readText: () => '<string>/opt/homebrew/bin/pm2</string>',
     });
@@ -114,7 +114,7 @@ describe('getStartupStatus', () => {
     expect(status.command).toContain(' /opt/homebrew/bin/pm2 startup launchd');
   });
 
-  it('stays silent where PortOS cannot generate a boot script', () => {
-    expect(getStartupStatus({ nodeBinary, platform: 'win32', user: 'example' })).toBeNull();
+  it('stays silent where PortOS cannot generate a boot script', async () => {
+    expect(await getStartupStatus({ nodeBinary, platform: 'win32', user: 'example' })).toBeNull();
   });
 });

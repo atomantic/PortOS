@@ -45,14 +45,16 @@ import { join } from 'node:path';
 import { readText, REPO_ROOT } from '../../../../../scripts/lib/guardCorpus.js';
 
 const source = readText(join(REPO_ROOT, 'client/src/components/music/MusicGenPanel.jsx'));
+// The engine-defaults effect lives in the selection hook the panel composes.
+const selectionSource = readText(join(REPO_ROOT, 'client/src/components/music/useMusicEngineSelection.js'));
 
 describe('MusicGenPanel model selection', () => {
   it('resets the model through a functional updater, never a closure read', () => {
     // Scoped to the engine-defaults effect. Other call sites legitimately
     // name the default (removing the model that is currently selected); only
     // THIS one runs from a queued closure that can be older than a user pick.
-    const start = source.indexOf('if (!engine) return;');
-    const effect = source.slice(start, source.indexOf('}, [engine?.id, engine?.models]);', start));
+    const start = selectionSource.indexOf('if (!engine) return;');
+    const effect = selectionSource.slice(start, selectionSource.indexOf('}, [engine?.id, engine?.models]);', start));
     expect(effect).not.toMatch(/if \(!ids\.includes\(modelId\)\)/);
     expect(effect).toMatch(/setModelId\(\(current\) => \(ids\.includes\(current\)/);
   });

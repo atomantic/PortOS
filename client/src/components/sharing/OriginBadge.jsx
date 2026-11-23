@@ -29,7 +29,8 @@ export default function OriginBadge({ origin, compact = false, className = '' })
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] text-gray-400 ${className}`}
       title={title}
     >
-      <Users size={10} />
+      <Users size={10} aria-hidden="true" />
+      {compact && <span className="sr-only">{title}</span>}
       {!compact && (
         <>
           <span className="text-port-accent">{source}</span>

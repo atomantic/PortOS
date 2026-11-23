@@ -2153,6 +2153,29 @@ describe('AIProviders model refresh', () => {
     expect(screen.getByText(/Models: mtplx-served$/)).toBeInTheDocument();
   });
 
+  it('renders a typed MTPLX stopped refusal inline on the card, with a link to the MTPLX card', async () => {
+    api.refreshProviderModels.mockRejectedValue(Object.assign(new Error(
+      'MTPLX is stopped and has no saved launch line — open Models → Runtimes to start it and save its launch line, then refresh again.',
+    ), { code: 'MTPLX_STOPPED' }));
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('MTPLX is stopped'));
+    const link = screen.getByRole('link', { name: 'Open the MTPLX card' });
+    expect(link).toHaveAttribute('href', '/models/llms-runtimes/mtplx');
+    // The inline card is the one place the fix is named — no toast around it.
+    expect(toast.error).not.toHaveBeenCalled();
+
+    // A later refresh clears the refusal once the server answers again.
+    api.refreshProviderModels.mockResolvedValue({
+      id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode', enabled: true,
+      models: ['mtplx-served'], canRefreshModels: true,
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
   // The root cause under the refresh button, which the other four reload paths
   // on this page share: `loadData` flipped `loading` on unconditionally, so ANY
   // reload after a click swapped the whole list for the page skeleton and

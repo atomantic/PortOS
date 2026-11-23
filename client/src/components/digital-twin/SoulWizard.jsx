@@ -257,21 +257,25 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
       </div>
 
       {/* Step Indicators */}
-      <div className="flex items-center justify-center gap-3 mt-6">
+      <div className="flex flex-wrap items-center justify-center gap-1 mt-6">
         {WIZARD_STEPS.map((s, index) => (
           <button
             key={s.id}
             onClick={() => setCurrentStep(index)}
             aria-label={`Go to step ${index + 1}: ${s.title}`}
             aria-current={index === currentStep ? 'step' : undefined}
-            className={`w-3 h-3 min-w-[12px] min-h-[12px] rounded-full transition-colors ${
-              index === currentStep
-                ? 'bg-port-accent'
-                : index < currentStep
-                ? 'bg-port-success'
-                : 'bg-port-border'
-            }`}
-          />
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center"
+          >
+            <span
+              className={`w-3 h-3 rounded-full transition-colors ${
+                index === currentStep
+                  ? 'bg-port-accent'
+                  : index < currentStep
+                  ? 'bg-port-success'
+                  : 'bg-port-border'
+              }`}
+            />
+          </button>
         ))}
       </div>
     </div>

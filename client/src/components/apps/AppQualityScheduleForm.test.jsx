@@ -196,4 +196,30 @@ describe('AppQualityScheduleForm', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Server unreachable');
     expect(screen.queryByRole('button', { name: /Apply schedule/ })).not.toBeInTheDocument();
   });
+
+  it('offers Reset to defaults only for a saved schedule and reloads the default layout', async () => {
+    getAppQualitySchedule.mockResolvedValueOnce(response({
+      hasExistingSchedule: true,
+      plan: { ...response().plan, options: { ...OPTIONS, windowStartHour: 9, windowEndHour: 11 } },
+    }));
+    renderForm();
+    await screen.findByRole('heading', { name: 'Weekly quality schedule' });
+    // The saved window is shown, not the factory 00:00-23:00.
+    expect(screen.getByLabelText('Earliest hour')).toHaveValue('9');
+    expect(screen.getByLabelText('Latest hour')).toHaveValue('11');
+    // A previewed edit must not hide the button (previews omit the flag).
+    fireEvent.change(screen.getByLabelText('Checks per day'), { target: { value: '2' } });
+    await waitFor(() => expect(previewAppQualitySchedule).toHaveBeenCalled());
+
+    fireEvent.click(await findEnabledByRole('button', { name: 'Reset to defaults' }));
+    await waitFor(() => expect(getAppQualitySchedule).toHaveBeenLastCalledWith(app.id, { defaults: true }));
+    await waitFor(() => expect(screen.getByLabelText('Earliest hour')).toHaveValue('0'));
+    expect(screen.queryByRole('button', { name: 'Reset to defaults' })).not.toBeInTheDocument();
+  });
+
+  it('hides Reset to defaults when nothing is saved', async () => {
+    renderForm();
+    await screen.findByRole('heading', { name: 'Weekly quality schedule' });
+    expect(screen.queryByRole('button', { name: 'Reset to defaults' })).not.toBeInTheDocument();
+  });
 });

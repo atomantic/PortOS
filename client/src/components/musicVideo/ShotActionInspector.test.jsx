@@ -16,9 +16,9 @@ const treatment = { arc: { beats: [] }, shotDirections: [{ sceneId: 's', mode: '
 
 // Regression: intent was neither inspectable beside the preview nor editable as a validated treatment contract.
 describe('shot intent in the treatment and scene board', () => {
-  it('shows action, reaction and acceptance beside the shot preview', () => {
+  it('shows action, reaction and acceptance beside the shot preview', async () => {
     render(<SceneCard scene={scene} index={0} isLast onEditLocal={vi.fn()} onSave={vi.fn()} />);
-    expect(screen.getByText(/Singer: Offers a hand/)).toBeTruthy();
+    expect(await screen.findByText(/Singer: Offers a hand/)).toBeTruthy();
     expect(screen.getByText(/Listener: Turns back/)).toBeTruthy();
     expect(screen.getByText(/Both people remain visible/)).toBeTruthy();
     expect(screen.getByText(/The listener visibly changes their decision/)).toBeTruthy();

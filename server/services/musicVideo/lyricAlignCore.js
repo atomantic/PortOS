@@ -820,7 +820,7 @@ export async function pickAlignmentPath(project, io = {}) {
   const { resolveVocalStemPath, vocalStemMasterChanged } = await import('./vocalStem.js');
   const resolveStem = io.resolveStem || resolveVocalStemPath;
   const resolveMaster = io.resolveMaster || (async (record) => {
-    const { resolveMasterAudioPath } = await import('./render.js');
+    const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
     return resolveMasterAudioPath(record);
   });
   const stem = resolveStem(project);

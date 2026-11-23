@@ -115,6 +115,10 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     expect(corpus.derive('kind', 'key', () => 2)).toBe(1);
   });
 
+  it('reports a path that descends through a file as absent', () => {
+    expect(createGuardCorpus(REPO_ROOT).lstat('package.json/index.js')).toBeNull();
+  });
+
   it('caches reads only inside this repository', () => {
     const outside = join(root, 'outside.txt');
     writeFileSync(outside, 'one');
@@ -122,5 +126,15 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     writeFileSync(outside, 'two');
     expect(readText(outside)).toBe('two');
     expect(readText(join(REPO_ROOT, 'AGENTS.md'))).toBe(readText(join(REPO_ROOT, 'AGENTS.md')));
+  });
+
+  it('decodes an existing byte read without rereading the file', () => {
+    const path = join(root, 'bytes.txt');
+    const text = 'first café\n';
+    writeFileSync(path, text);
+    const corpus = createGuardCorpus(root);
+    expect(corpus.bytes(path)).toEqual(Buffer.from(text));
+    writeFileSync(path, 'second\n');
+    expect(corpus.read('bytes.txt')).toBe(text);
   });
 });

@@ -282,6 +282,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate the decision summary after an appended or collapsed decision.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'cos:jobs:incidents-changed': {
+    direction: 'server-to-client',
+    summary: 'A failure incident for an autonomous job was opened, resolved or acknowledged; refetch the Jobs list.',
+    payloadSchema: { type: 'object', required: ['jobId'], additionalProperties: false, properties: { jobId: { type: 'string' } } },
+  },
   'cos:schedule:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate upcoming tasks after schedule persistence.',
@@ -738,7 +743,8 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
           tuningLabel: { type: ['string', 'null'] }, finishedAt: { type: 'string' },
           verdict: { type: ['string', 'null'] }, error: { type: ['string', 'null'] },
           meanTokensPerSecond: { type: ['number', 'null'] }, meanCharsPerSecond: { type: ['number', 'null'] },
-          tokensEstimated: { type: ['boolean', 'null'] }, tuningApplied: { type: ['boolean', 'null'] },
+          tokensEstimated: { type: ['boolean', 'null'] }, reasoningHidden: { type: ['boolean', 'null'] },
+          tuningApplied: { type: ['boolean', 'null'] },
           tuningNotApplied: { type: ['string', 'null'] },
         } } },
         cancelRequested: { type: 'boolean' },
@@ -834,6 +840,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'threejs-model:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate one model after a persisted lifecycle change, including progress and deletion.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  },
+  'html-page-run:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate one HTML Pages bench run after a persisted change, including progress, completion and deletion; identity only, no generated HTML.',
     payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   },
   'provider-quota:updated': {

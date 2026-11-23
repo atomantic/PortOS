@@ -33,8 +33,9 @@ import { snapshotQuotaCooldowns, restoreQuotaCooldowns } from './limits.js';
 import {
   queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
   getRunningJob, findJob, listJobs, swimlanePositions, trackTerminalOperation, isTopazUpscale,
-} from './queueState.js';
+} from './state.js';
 import { broadcastTerminalSse, closeArchivedJobSse } from './sse.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // Boot restoration is the second way a job enters the queue, so it needs the
 // same routed-job normalization enqueueJob applies (#4683). A job written by a
@@ -89,11 +90,11 @@ async function safeUnlinkUpload(path) {
 
 // #1332: probe (via loraTraining, which owns the run's on-disk layout) whether
 // a training run's detached trainer survived the restart and is worth
-// re-attaching to. Lazy import avoids a static cycle (loraTraining statically
-// imports the queue). Never throws — a missing module / probe error reads as
-// "not reattachable" so the reconcile falls back to the fail path.
+// re-attaching to. Loaded through the runtime registry because loraTraining
+// imports the queue (#17499). Never throws — a missing module / probe error reads
+// as "not reattachable" so the reconcile falls back to the fail path.
 async function jobHasSurvivingTrainer(runId) {
-  const mod = await import('../loraTraining/index.js').catch(() => null);
+  const mod = await loadMediaRuntimeModule('training').catch(() => null);
   if (!mod?.hasSurvivingTrainer) return false;
   return mod.hasSurvivingTrainer(runId).catch(() => false);
 }

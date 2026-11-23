@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { ffmpegInstallCommand, parseMotionSetupArgs, skillInstallCommand } from './setup-motion.js';
+import { ffmpegInstallCommands, parseMotionSetupArgs } from './setup-motion.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills } from '../server/lib/motionSkills.js';
 
 describe('motion studio setup', () => {
@@ -11,20 +11,41 @@ describe('motion studio setup', () => {
     expect(() => parseMotionSetupArgs(['--force'])).toThrow('Unknown option');
   });
 
-  it('installs each pack user-wide without prompts, for the agents CoS runs', () => {
-    const pack = MOTION_SKILL_PACKS.find(entry => entry.id === 'hyperframes');
-    const [command, args] = skillInstallCommand(pack);
-    expect(command).toBe('npx');
-    // --global/--yes keep an unattended setup from hanging on a scope prompt.
-    expect(args).toEqual(['-y', 'skills@latest', 'add', 'heygen-com/hyperframes', '--global', '--yes',
-      '--agent', 'claude-code', 'codex', '--skill', ...pack.skills]);
+  it('pins every pack to an immutable commit and archive digest instead of a floating npx CLI', () => {
+    for (const pack of MOTION_SKILL_PACKS) {
+      expect(pack.revision).toMatch(/^[0-9a-f]{40}$/);
+      expect(pack.sha256).toMatch(/^[0-9a-f]{64}$/);
+    }
   });
 
   it('uses the platform package manager for ffmpeg and reports none when unavailable', () => {
     const has = available => command => available.includes(command);
-    expect(ffmpegInstallCommand('darwin', has(['brew']))).toEqual(['brew', ['install', 'ffmpeg']]);
-    expect(ffmpegInstallCommand('linux', has(['apt-get']))[1]).toEqual(['apt-get', 'install', '-y', 'ffmpeg']);
-    expect(ffmpegInstallCommand('darwin', has([]))).toBeNull();
+    expect(ffmpegInstallCommands('darwin', has(['brew']))).toEqual([['brew', 'install', 'ffmpeg']]);
+    expect(ffmpegInstallCommands('darwin', has([]))).toBeNull();
+    expect(ffmpegInstallCommands('win32', has(['winget']))[0][0]).toBe('winget');
+  });
+
+  it('installs on a root Linux container without sudo, refreshing the apt cache first', () => {
+    const has = available => command => available.includes(command);
+    expect(ffmpegInstallCommands('linux', has(['apt-get']), { isRoot: true })).toEqual([
+      ['apt-get', 'update'],
+      ['apt-get', 'install', '-y', 'ffmpeg']
+    ]);
+  });
+
+  it('prefixes non-root Linux installs with sudo, or sudo -n when non-interactive', () => {
+    const has = available => command => available.includes(command);
+    const interactive = ffmpegInstallCommands('linux', has(['apt-get', 'sudo']), { isRoot: false });
+    expect(interactive).toEqual([['sudo', 'apt-get', 'update'], ['sudo', 'apt-get', 'install', '-y', 'ffmpeg']]);
+    const quiet = ffmpegInstallCommands('linux', has(['dnf', 'sudo']), { isRoot: false, nonInteractive: true, canSudoNonInteractive: () => true });
+    expect(quiet).toEqual([['sudo', '-n', 'dnf', 'install', '-y', 'ffmpeg']]);
+    expect(ffmpegInstallCommands('linux', has(['dnf', 'sudo']), { isRoot: false, nonInteractive: true, canSudoNonInteractive: () => false })).toBeNull();
+    expect(ffmpegInstallCommands('linux', has(['apt-get']), { isRoot: false })).toBeNull();
+  });
+
+  it('supports pacman on Linux', () => {
+    const has = available => command => available.includes(command);
+    expect(ffmpegInstallCommands('linux', has(['pacman']), { isRoot: true })).toEqual([['pacman', '-S', '--noconfirm', 'ffmpeg']]);
   });
 
   it('detects skills linked into either agent skill directory', () => {

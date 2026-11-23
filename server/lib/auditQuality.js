@@ -439,10 +439,26 @@ export function qualityTieKey(record) {
   ])).digest('hex');
 }
 
+/** How many repository hashes one `repositories=` pull may name. */
+export const QUALITY_FEDERATION_MAX_REPOSITORIES = 100;
+
+const repositoryHash = z.string().regex(/^[a-f0-9]{64}$/);
+
 export const appQualityFederationQuerySchema = appQualityHistoryQuerySchema.extend({
-  repository: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  // v1 single-app pull. The response stays `{ schemaVersion, repository, measurements }`.
+  repository: repositoryHash.optional(),
+  // One pull for many apps. The response is `{ schemaVersion, repositories }` at the
+  // same schema version. Absent on older callers, which keep the v1 body.
+  repositories: z.string()
+    .max(QUALITY_FEDERATION_MAX_REPOSITORIES * 64 + QUALITY_FEDERATION_MAX_REPOSITORIES - 1)
+    .regex(/^[a-f0-9]{64}(,[a-f0-9]{64})*$/)
+    .optional()
+    .transform(value => (value ? value.split(',') : undefined)),
   // The categories the requesting install can parse, comma-separated. Absent on
   // a request from an install that predates it — see FEDERATION_LEGACY_CATEGORIES.
   categories: z.string().max(4000).regex(/^[a-z0-9-]+(,[a-z0-9-]+)*$/).optional()
     .transform(value => (value ? value.split(',') : undefined)),
+}).refine(query => !(query.repository && query.repositories), {
+  message: 'Use repository or repositories, not both',
+  path: ['repositories'],
 });

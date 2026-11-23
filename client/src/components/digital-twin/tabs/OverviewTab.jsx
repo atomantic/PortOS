@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Heart,
@@ -44,9 +44,12 @@ import NextActionBanner from '../NextActionBanner';
 export default function OverviewTab({ status, settings, onRefresh, onSettingsChange }) {
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
+  const settingsRef = useRef(null);
+  const revealSettingsRef = useRef(false);
   const [settingsForm, setSettingsForm] = useState(settings || {});
   const [saving, setSaving] = useState(false);
   const [completeness, setCompleteness] = useState(null);
+  const [completenessError, setCompletenessError] = useState(null);
   const [loadingCompleteness, setLoadingCompleteness] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
   const [contradictions, setContradictions] = useState(null);
@@ -69,6 +72,18 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     if (!showSettings) setSettingsForm(settings || {});
   }, [settings, showSettings]);
 
+  // The bottom CoS status "Enable" opens a panel far above it; bring it into view.
+  const revealSettings = () => {
+    const panel = settingsRef.current;
+    panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    panel?.querySelector('input[type="checkbox"]')?.focus({ preventScroll: true });
+  };
+  useEffect(() => {
+    if (!showSettings || !revealSettingsRef.current) return;
+    revealSettingsRef.current = false;
+    revealSettings();
+  }, [showSettings]);
+
   useEffect(() => {
     loadCompleteness();
     loadTraitsAndConfidence();
@@ -90,8 +105,13 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
   const loadCompleteness = async () => {
     setLoadingCompleteness(true);
-    const data = await getDigitalTwinCompleteness().catch(() => null);
-    setCompleteness(data);
+    setCompletenessError(null);
+    try {
+      setCompleteness(await getDigitalTwinCompleteness({ silent: true }));
+    } catch (err) {
+      setCompleteness(null);
+      setCompletenessError(err);
+    }
     setLoadingCompleteness(false);
   };
 
@@ -119,7 +139,9 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
     // request() owns the failure toast, but the spinner must clear either way:
     // an uncaught rejection here left `saving` true, stranding the button
     // permanently disabled on "Saving..." with no way to retry.
-    const ok = await updateSoulSettings(settingsForm).then(saved => {
+    const tokens = Number(settingsForm.maxContextTokens);
+    const payload = { ...settingsForm, maxContextTokens: Math.min(100000, Math.max(1000, Number.isFinite(tokens) && tokens > 0 ? tokens : 4000)) };
+    const ok = await updateSoulSettings(payload).then(saved => {
       onSettingsChange?.(saved);
       return true;
     }).catch(() => false);
@@ -281,7 +303,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="mt-6 pt-6 border-t border-port-border">
+          <div ref={settingsRef} className="mt-6 pt-6 border-t border-port-border">
             <h3 className="text-sm font-medium text-gray-400 mb-4">Settings</h3>
             <div className="space-y-4">
               <label className="flex items-center gap-3">
@@ -313,8 +335,15 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               <FormField labelClassName="block text-sm text-gray-400 mb-2" label="Max context tokens">
                 <input
                   type="number"
-                  value={settingsForm.maxContextTokens || 4000}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, maxContextTokens: parseInt(e.target.value, 10) })}
+                  min={1000}
+                  max={100000}
+                  value={settingsForm.maxContextTokens ?? 4000}
+                  onChange={(e) => {
+                    // '' while the field is cleared mid-edit; never store NaN.
+                    const next = e.target.value === '' ? '' : parseInt(e.target.value, 10);
+                    if (next !== '' && Number.isNaN(next)) return;
+                    setSettingsForm({ ...settingsForm, maxContextTokens: next });
+                  }}
                   className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white"
                 />
               </FormField>
@@ -429,8 +458,10 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               </div>
             )}
           </div>
+        ) : completenessError ? (
+          <ListLoadError what="completeness analysis" error={completenessError} onRetry={loadCompleteness} />
         ) : (
-          <div className="text-gray-500">Unable to analyze completeness</div>
+          <div className="text-gray-500">No completeness data yet</div>
         )}
       </div>
 
@@ -632,7 +663,14 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               <AlertCircle className="w-5 h-5 text-port-warning" />
               <span className="text-white">Soul context injection is disabled</span>
               <button
-                onClick={() => setShowSettings(true)}
+                onClick={() => {
+                  if (showSettings) {
+                    revealSettings();
+                  } else {
+                    revealSettingsRef.current = true;
+                    setShowSettings(true);
+                  }
+                }}
                 className="ml-auto text-sm text-port-accent hover:text-white"
               >
                 Enable

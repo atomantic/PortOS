@@ -193,7 +193,9 @@ jobs:
           suite: server
           partition: server-${{ matrix.shard }}of${{ strategy.job-total }}
           # FULL_SUITE_SHARDS.server; scripts/ci-test-memo-cache.test.js pins it.
-          merge-shards: 2
+          # A full run executes only its own partition, so sibling lineages
+          # are merged only for scoped plans (recordedReach narrowing).
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).server_mode == 'full' && '0' || '2' }}
 
       - name: Run server tests
         id: server-tests
@@ -278,14 +280,8 @@ jobs:
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
 
-      # These runners have their own page cache: the DB job's warm-up cannot
-      # help client fixtures (#9641). Apply the same bounded mitigation here
-      # and retain its duration alongside the fixtures' existing phase timings.
-      # A passing launch is a non-reproduction, not proof of the startup cause.
-      - name: Warm the Chrome install for client fixtures
-        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
-        run: bash scripts/ci-warm-test-chrome.sh
-
+      # Chrome is warmed by the test runner only when this shard actually
+      # launches a browser suite (#17750).
       - name: Restore the test memo
         id: test-memo
         if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
@@ -294,7 +290,9 @@ jobs:
           suite: client
           partition: client-${{ matrix.shard }}of${{ strategy.job-total }}
           # FULL_SUITE_SHARDS.client; scripts/ci-test-memo-cache.test.js pins it.
-          merge-shards: 3
+          # A full run executes only its own partition, so sibling lineages
+          # are merged only for scoped plans (recordedReach narrowing).
+          merge-shards: ${{ fromJSON(needs.impact.outputs.plan).client_mode == 'full' && '0' || '4' }}
 
       - name: Run client tests
         id: client-tests
@@ -493,6 +491,8 @@ jobs:
     if: fromJSON(needs.impact.outputs.plan).browser
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
     strategy:
       # Keep every shard's evidence if another fails; CI Gate requires all.
       fail-fast: false
@@ -516,29 +516,21 @@ jobs:
         with:
           include-postgres: 'false'
 
-      # Read the runner's Chrome tree into the page cache before any suite
-      # launches it (#9641). The recurring startup hang was captured with the
-      # browser's lead thread waiting on a page-cache read and I/O pressure
-      # above 50 right after the installs above, suggesting a cold read. The
-      # launcher's 20s startup deadline is unchanged; the printed duration shows
-      # whether the cold read is as slow as the failures suggest. Completion
-      # requires every read to succeed within the warm-up budget; a passing
-      # browser run remains a non-reproduction, not proof of a causal repair.
-      - name: Warm the Chrome install
-        run: bash scripts/ci-warm-test-chrome.sh
-
+      # The test runner reads the runner's Chrome tree into the page cache
+      # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
       - uses: ./.github/actions/setup-client
         with:
           setup-node: 'false'
 
-      # The browser profile is part of every per-test memo key, so a smoke
-      # verdict never stands in for a full one.
+      # Smoke uses both trusted full-run lineages because its shard owners
+      # differ. Per-test keys still require compatible inputs and coverage.
       - name: Restore the test memo
         id: test-memo
         uses: ./.github/actions/test-memo
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0' }}
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
@@ -551,7 +543,6 @@ jobs:
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
-          PORTOS_BROWSER_TEST_PROFILE: ${{ github.event_name == 'pull_request' && github.base_ref != 'release' && inputs.full != true && 'smoke' || 'full' }}
           CI_TEST_MODE: files
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_CI_BROWSER_OWNER: browser

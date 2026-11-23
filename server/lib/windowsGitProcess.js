@@ -4,7 +4,7 @@
  *
  * Each command has its own Job Object, output pipes, cwd and environment. Other platforms use direct
  * spawn. Windows PowerShell 5.1 compiles `windowsGitSupervisor.cs` once per Node process into a
- * private temporary executable (15-second compiler budget). `windowsGitFailureMetadata` projects fixed
+ * private temporary executable (`WINDOWS_GIT_COMPILER_BUDGET_MS`). `windowsGitFailureMetadata` projects fixed
  * startup phases, numeric compiler exit codes and allowlisted spawn codes without raw error details.
  * Native job membership is atomic with process creation, captures ordinary helper descendants,
  * disallows breakaway, and cancels without PID-addressed kills. Completion requires an empty job and
@@ -22,6 +22,13 @@ import { join, resolve as resolvePath } from 'node:path';
 import { spawn } from './childProcess.js';
 
 const compilerKey = Symbol.for('portos.windowsGitSupervisor');
+// In-script Add-Type on hosted Windows runs finishes in 157–262ms. One cold
+// runner spent 5346ms starting PowerShell and was still inside Add-Type when
+// a 15s budget fired at 15017ms; a sibling native start on that runner
+// completed in 15485ms. 25s covers that stall plus the PowerShell start, and
+// stays under the 30s Vitest timeout so a real hang fails only the case that
+// needed containment. Never raise this to or past that test timeout.
+export const WINDOWS_GIT_COMPILER_BUDGET_MS = 25_000;
 const startupPhases = new Set(['startup', 'compiler-setup', 'compiler-spawn', 'compiler-exit', 'compiler-timeout',
   'git-lookup', 'broker-spawn', 'broker-readiness', 'broker-exit', 'broker-transport', 'broker-protocol', 'native-launch']);
 const spawnErrorCodes = new Set(['ENOENT', 'EACCES', 'EPERM', 'EMFILE', 'ENFILE', 'ENOMEM', 'EAGAIN']);
@@ -113,7 +120,7 @@ function supervisor() {
           state.holdReasons.add('compiler-unconfirmed');
           try { compiler.kill(); } catch { /* report unavailable without launching Git */ }
           reject(unavailable('compiler-timeout', progress.metadata()));
-        }, 15000);
+        }, WINDOWS_GIT_COMPILER_BUDGET_MS);
         compiler.once('error', error => { clearTimeout(timer); reject(unavailable('compiler-spawn', { spawnErrorCode: error.code, ...progress.metadata() })); });
         compiler.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(unavailable('compiler-exit', { compilerExitCode: code, ...progress.metadata() })); });
       });
@@ -137,6 +144,7 @@ function supervisor() {
     state.cleanup = cleanupSupervisor(state).finally(() => { state.cleanup = null; });
     return state.cleanup;
   };
+  globalThis.__portosReleaseGitSupervisor = releaseWindowsGitSupervisorForTests;
   return state.ready;
 }
 
@@ -166,6 +174,33 @@ const unavailable = (startupPhase = 'startup', details = {}) => Object.assign(ne
 const held = reasons => Object.assign(new Error('Git work settlement is held'), {
   code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReasons: [...reasons].sort(),
 });
+
+/** A compiler-timeout hold keeps the private directory. It is not evidence that
+ * Git is still writing fixture trees, so automatic teardown must not fail the
+ * file again after the case that needed containment already rejected. */
+export function absorbCompilerTimeoutHold(error) {
+  const reasons = error?.settlementReasons;
+  return error?.code === 'GIT_SETTLEMENT_HELD'
+    && Array.isArray(reasons) && reasons.length === 1 && reasons[0] === 'compiler-unconfirmed';
+}
+
+// Identity, not a boolean: the next process-lifetime compile installs a new
+// cleanup function and must still run. Repeating teardown for the same hold
+// would throw again out of Vitest's afterAll. The marker lives on globalThis
+// so every copy of this module shares it inside one worker.
+const absorbedCompilerCleanup = Symbol.for('portos.windowsGitCompilerTimeoutReleased');
+
+export async function releaseWindowsGitSupervisorForTests() {
+  const cleanup = globalThis.__portosGitSupervisorCleanup;
+  if (cleanup && cleanup === globalThis[absorbedCompilerCleanup]) return;
+  try {
+    await cleanup?.();
+  } catch (error) {
+    if (!absorbCompilerTimeoutHold(error)) throw error;
+    globalThis[absorbedCompilerCleanup] = cleanup;
+    console.log('🐢 Windows Git compiler timed out; fixture teardown left its private directory in place');
+  }
+}
 
 async function stopBroker(state) {
   if (state.stopping) return state.stopping;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { onActivateKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, isPushToTalkKey, isFocusEscapeKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
+import { onActivateKeyDown, onRadioGroupKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, isPushToTalkKey, isFocusEscapeKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
 
 describe('onActivateKeyDown', () => {
   it('returns undefined when handler is not a function', () => {
@@ -311,5 +311,121 @@ describe('noPointerFocusSurfaceProps', () => {
     expect(press(root.querySelector('#i'))).toBe(false);
     expect(press(root.querySelector('#p'))).toBe(false);
     root.remove();
+  });
+});
+
+describe('onRadioGroupKeyDown', () => {
+  const mount = (html) => {
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    document.body.appendChild(root);
+    const group = root.querySelector('[role="radiogroup"]');
+    for (const radio of group.querySelectorAll('[role="radio"]')) {
+      radio.addEventListener('click', () => { radio.dataset.clicked = '1'; });
+    }
+    return { root, group };
+  };
+
+  const key = (group, target, name, extra = {}) => {
+    const event = { key: name, target, currentTarget: group, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...extra };
+    onRadioGroupKeyDown(event);
+    return event;
+  };
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('moves forward and backward, wrapping, and activates the target radio', () => {
+    const { root, group } = mount(`
+      <div role="radiogroup">
+        <button role="radio" id="a">A</button>
+        <button role="radio" id="b">B</button>
+        <button role="radio" id="c">C</button>
+      </div>
+    `);
+    const a = root.querySelector('#a');
+    const b = root.querySelector('#b');
+    const c = root.querySelector('#c');
+    a.focus();
+    const right = key(group, a, 'ArrowRight');
+    expect(right.preventDefault).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(b);
+    expect(b.dataset.clicked).toBe('1');
+    key(group, b, 'ArrowDown');
+    expect(document.activeElement).toBe(c);
+    key(group, c, 'ArrowRight');
+    expect(document.activeElement).toBe(a);
+    expect(a.dataset.clicked).toBe('1');
+    key(group, a, 'ArrowLeft');
+    expect(document.activeElement).toBe(c);
+    key(group, c, 'ArrowUp');
+    expect(document.activeElement).toBe(b);
+  });
+
+  it('jumps with Home and End and skips disabled radios', () => {
+    const { root, group } = mount(`
+      <div role="radiogroup">
+        <button role="radio" id="a">A</button>
+        <button role="radio" id="b" disabled>B</button>
+        <button role="radio" id="c" aria-disabled="true">C</button>
+        <button role="radio" id="d">D</button>
+      </div>
+    `);
+    const a = root.querySelector('#a');
+    const d = root.querySelector('#d');
+    a.focus();
+    key(group, a, 'End');
+    expect(document.activeElement).toBe(d);
+    expect(d.dataset.clicked).toBe('1');
+    key(group, d, 'Home');
+    expect(document.activeElement).toBe(a);
+    key(group, a, 'ArrowRight');
+    expect(document.activeElement).toBe(d);
+    key(group, d, 'ArrowLeft');
+    expect(document.activeElement).toBe(a);
+  });
+
+  it('ignores unrelated keys, chords, and keys from a non-radio descendant', () => {
+    const { root, group } = mount(`
+      <div role="radiogroup">
+        <button role="radio" id="a">A</button>
+        <button id="other">Gallery image…</button>
+      </div>
+    `);
+    const a = root.querySelector('#a');
+    a.focus();
+    const tab = key(group, a, 'Tab');
+    expect(tab.preventDefault).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(a);
+    const chord = key(group, a, 'ArrowRight', { metaKey: true });
+    expect(chord.preventDefault).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(a);
+    const stray = key(group, root.querySelector('#other'), 'ArrowDown');
+    expect(stray.preventDefault).not.toHaveBeenCalled();
+    expect(a.dataset.clicked).toBeUndefined();
+  });
+
+  it('does not move a nested radiogroup when the outer group handles the event', () => {
+    const { root } = mount(`
+      <div role="radiogroup" id="outer">
+        <button role="radio" id="a">A</button>
+        <div role="radiogroup" id="inner">
+          <button role="radio" id="b">B</button>
+          <button role="radio" id="c">C</button>
+        </div>
+      </div>
+    `);
+    const outer = root.querySelector('#outer');
+    const b = root.querySelector('#b');
+    const c = root.querySelector('#c');
+    b.focus();
+    key(outer, b, 'ArrowRight');
+    expect(document.activeElement).toBe(b);
+    expect(c.dataset.clicked).toBeUndefined();
+    const inner = root.querySelector('#inner');
+    key(inner, b, 'ArrowRight');
+    expect(document.activeElement).toBe(c);
+    expect(c.dataset.clicked).toBe('1');
   });
 });

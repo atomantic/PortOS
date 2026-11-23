@@ -19,10 +19,8 @@ import { PATHS, atomicWrite, ensureDir, rmGuarded, sha256File } from '../../lib/
 import { isPlainObject } from '../../lib/objects.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
-import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { fetchPeerJsonEnvelope } from './peerEnvelopePull.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { getPeers } from '../instances.js';
 import {
   peerCosHistoryManifestSchema,
@@ -78,8 +76,6 @@ function cosAgentsDir() {
 const COS_HISTORY_MANIFEST_CAP = 150_000;
 // The manifest JSON itself (not the archive bytes — those ride the per-file cap).
 const COS_HISTORY_MANIFEST_MAX_BYTES = 32 * 1024 * 1024;
-// readPeerBody outcome for a body that streamed past its cap, distinct from invalid JSON.
-const TOO_LARGE = Symbol('too-large');
 // Per-archive-file hard cap. Agent transcripts (output.txt) can be large; 64MB is
 // generous while still bounding a hostile/runaway peer. An oversized file is
 // logged + skipped (it stays "missing" and is retried, never silently dropped).
@@ -127,7 +123,7 @@ export async function buildCosHistoryManifest() {
   const manifestHash = createHash('sha256')
     .update(entries.map((e) => `${e.date}:${e.agentId}:${e.file}:${e.sha256}`).join('\n'))
     .digest('hex');
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosHistory, manifestHash, entries };
+  return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosHistory, manifestHash, entries };
 }
 
 /**
@@ -250,31 +246,16 @@ export async function syncCosHistoryFromPeer(peer) {
   cosHistorySweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/cos-history-manifest`;
-    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES }, peer))
-      .catch(() => null);
-    if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
-    const declaredLen = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLen) && declaredLen > COS_HISTORY_MANIFEST_MAX_BYTES) {
-      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_HISTORY_MANIFEST_MAX_BYTES}) — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    const body = await readPeerBody(res, 'json', { maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES })
-      .catch((err) => (err?.code === RESPONSE_TOO_LARGE ? TOO_LARGE : null));
-    if (body === TOO_LARGE) {
-      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} streamed past ${COS_HISTORY_MANIFEST_MAX_BYTES} bytes — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    const parsed = peerCosHistoryManifestSchema.safeParse(body);
-    if (!parsed.success) {
-      console.error(`⚠️ peerSync: cos-history manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
-      return { pulled: 0, skipped: 'invalid' };
-    }
-    const manifest = parsed.data;
+    const envelope = await fetchPeerJsonEnvelope(peer, url, {
+      maxBytes: COS_HISTORY_MANIFEST_MAX_BYTES, timeoutMs: ASSET_PULL_TIMEOUT_MS,
+      schema: peerCosHistoryManifestSchema, label: 'cos-history manifest', peerName: peer.name || peer.instanceId,
+    });
+    if (!envelope.ok) return { pulled: 0, skipped: envelope.skipped };
+    const manifest = envelope.data;
     // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
     // upgrade rather than mis-pull against a manifest shape we can't read.
-    if (manifest.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosHistory) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-history manifest is schema v${manifest.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.cosHistory} — skipping until this instance updates`);
+    if (manifest.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosHistory) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-history manifest is schema v${manifest.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.cosHistory} — skipping until this instance updates`);
       return { pulled: 0, skipped: 'schema-ahead' };
     }
     // Unchanged short-circuit, with a periodic forced re-diff so a LOCAL file
@@ -418,7 +399,7 @@ function taskToWireEntry(task, taskType) {
  * @returns {Promise<{ schemaVersion:number, listHash:string, tasks:Array }>}
  */
 export async function buildCosTasksPayload() {
-  const empty = { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
+  const empty = { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
   const mod = await import('../cos/cosTaskStore.js').catch(() => null);
   if (!mod?.getUserTasks || !mod?.getCosTasks) return empty;
   const [userRes, cosRes] = await Promise.all([
@@ -444,7 +425,7 @@ export async function buildCosTasksPayload() {
   const listHash = createHash('sha256')
     .update(entries.map((e) => `${e.taskType}:${e.id}:${e.status}:${e.priority}:${e.description || ''}:${e.approvalRequired ?? ''}:${e.autoApproved ?? ''}:${JSON.stringify(e.metadata || {})}`).join('\n'))
     .digest('hex');
-  return { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
+  return { schemaVersion: PLATFORM_SCHEMA_VERSIONS.cosTasks, listHash, tasks: entries };
 }
 
 // Receiver-side bookkeeping — mirrors the cos-history sweep.
@@ -499,31 +480,16 @@ export async function syncCosTasksFromPeer(peer) {
   cosTasksSweepInFlight.add(peer.instanceId);
   try {
     const url = `${peerBaseUrl(peer)}/api/peer-sync/cos-tasks`;
-    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: COS_TASKS_MAX_BYTES }, peer))
-      .catch(() => null);
-    if (!res || !res.ok) return { merged: 0, skipped: 'unreachable' };
-    const declaredLen = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLen) && declaredLen > COS_TASKS_MAX_BYTES) {
-      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} too large (${declaredLen} > ${COS_TASKS_MAX_BYTES}) — skipping`);
-      return { merged: 0, skipped: 'too-large' };
-    }
-    const body = await readPeerBody(res, 'json', { maxBytes: COS_TASKS_MAX_BYTES })
-      .catch((err) => (err?.code === RESPONSE_TOO_LARGE ? TOO_LARGE : null));
-    if (body === TOO_LARGE) {
-      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} streamed past ${COS_TASKS_MAX_BYTES} bytes — skipping`);
-      return { merged: 0, skipped: 'too-large' };
-    }
-    const parsed = peerCosTasksSchema.safeParse(body);
-    if (!parsed.success) {
-      console.error(`⚠️ peerSync: cos-tasks payload from ${peer.name || peer.instanceId} failed validation — skipping`);
-      return { merged: 0, skipped: 'invalid' };
-    }
-    const payload = parsed.data;
+    const envelope = await fetchPeerJsonEnvelope(peer, url, {
+      maxBytes: COS_TASKS_MAX_BYTES, timeoutMs: ASSET_PULL_TIMEOUT_MS,
+      schema: peerCosTasksSchema, label: 'cos-tasks payload', peerName: peer.name || peer.instanceId,
+    });
+    if (!envelope.ok) return { merged: 0, skipped: envelope.skipped };
+    const payload = envelope.data;
     // Schema gate — GENTLE skip (not reject): wait for the local PortOS to
     // upgrade rather than mis-merge against a payload shape we can't read.
-    if (payload.schemaVersion > PORTOS_SCHEMA_VERSIONS.cosTasks) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-tasks payload is schema v${payload.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.cosTasks} — skipping until this instance updates`);
+    if (payload.schemaVersion > PLATFORM_SCHEMA_VERSIONS.cosTasks) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} cos-tasks payload is schema v${payload.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.cosTasks} — skipping until this instance updates`);
       return { merged: 0, skipped: 'schema-ahead' };
     }
     // Unchanged short-circuit, with a periodic forced re-merge so a LOCAL task

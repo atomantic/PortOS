@@ -38,7 +38,7 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { composeYoutubeThumbnail } from './coverArtCompose.js';
 import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
-import { defaultImageRoute, projectCoverArt, songCoverDesign, sourcePath } from './coverArt.js';
+import { defaultImageRoute, projectCoverArt, songCoverDesign, sourcePath } from './coverArtShared.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { musicVideoEvents } from './events.js';

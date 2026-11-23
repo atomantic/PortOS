@@ -10,7 +10,7 @@
  * Federation: standalone media-library bytes (`asset-file-db-indexed`) mirror only to
  * `peer.fullSync` peers and honor backup `DEFAULT_EXCLUDES`; the derived `media_assets`
  * index is rebuilt locally and video thumbnails are regenerated, never byte-federated.
- * The manifest envelope is version-gated by `PORTOS_SCHEMA_VERSIONS.mediaLibrary`.
+ * The manifest envelope is version-gated by `PLATFORM_SCHEMA_VERSIONS.mediaLibrary`.
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
@@ -22,11 +22,9 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
-import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
-import { withAbortTimeout } from '../../lib/abortTimeout.js';
+import { fetchPeerJsonEnvelope } from './peerEnvelopePull.js';
 import { sanitizeAssetFilename } from './buckets.js';
-import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { PLATFORM_SCHEMA_VERSIONS } from '../../lib/schemaVersions/platform.js';
 import { getPeers } from '../instances.js';
 import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/peerSyncValidation.js';
 import { listExportableMediaTombstones } from '../mediaTombstones.js';
@@ -220,7 +218,7 @@ export async function buildMediaLibraryManifest({ models = false, tombstones = f
     + (deleted.length > 0 ? `\n#tombstones\n${deleted.map((t) => `${t.key}@${t.deletedAt}`).join('\n')}` : '');
   const manifestHash = createHash('sha256').update(hashInput).digest('hex');
   return {
-    schemaVersion: PORTOS_SCHEMA_VERSIONS.mediaLibrary,
+    schemaVersion: PLATFORM_SCHEMA_VERSIONS.mediaLibrary,
     manifestHash,
     assets: sorted,
     ...(deleted.length > 0 ? { tombstones: deleted } : {}),
@@ -306,43 +304,18 @@ export async function syncMediaLibraryFromPeer(peer) {
     libraryTombstoneSweeps.set(peer.instanceId, cursorSweeps % FORCE_REVALIDATE_EVERY);
     const cursor = cursorSweeps % FORCE_REVALIDATE_EVERY === 0 ? undefined : libraryTombstoneCursor.get(peer.instanceId);
     const headers = { [PEER_LIBRARY_TOMBSTONES_HEADER]: '1', ...(cursor ? { [PEER_LIBRARY_TOMBSTONES_SINCE_HEADER]: cursor } : {}) };
-    const res = await withAbortTimeout(ASSET_PULL_TIMEOUT_MS, (signal) =>
-      peerFetch(url, { signal, maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, headers }, peer))
-      .catch(() => null);
-    if (!res || !res.ok) return { pulled: 0, skipped: 'unreachable' };
-    // Enforce the manifest cap before buffering the body. peerFetch's `maxBytes`
-    // only streams-caps the HTTPS (host) shim; for a plain-HTTP (address) peer it
-    // delegates to native fetch, which ignores `maxBytes`, so `res.json()` would
-    // otherwise buffer an unbounded body. Express on the sender sets Content-Length
-    // for the JSON response, so the declared-length check is a fast path; a chunked
-    // body that declares none is capped while streaming by readPeerBody below.
-    const declaredLen = Number(res.headers?.get?.('content-length'));
-    if (Number.isFinite(declaredLen) && declaredLen > MEDIA_LIBRARY_MANIFEST_MAX_BYTES) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} too large (${declaredLen} > ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES}) — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    let tooLarge = false;
-    const body = await readPeerBody(res, 'json', { maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES })
-      .catch((err) => {
-        tooLarge = err?.code === RESPONSE_TOO_LARGE;
-        return null;
-      });
-    if (tooLarge) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} streamed past ${MEDIA_LIBRARY_MANIFEST_MAX_BYTES} bytes — skipping`);
-      return { pulled: 0, skipped: 'too-large' };
-    }
-    const parsed = peerLibraryManifestSchema.safeParse(body);
-    if (!parsed.success) {
-      console.log(`⚠️ peerSync: media-library manifest from ${peer.name || peer.instanceId} failed validation — skipping`);
-      return { pulled: 0, skipped: 'invalid' };
-    }
-    const manifest = parsed.data;
+    const envelope = await fetchPeerJsonEnvelope(peer, url, {
+      maxBytes: MEDIA_LIBRARY_MANIFEST_MAX_BYTES, timeoutMs: ASSET_PULL_TIMEOUT_MS, headers,
+      schema: peerLibraryManifestSchema, label: 'media-library manifest', peerName: peer.name || peer.instanceId,
+    });
+    if (!envelope.ok) return { pulled: 0, skipped: envelope.skipped };
+    const manifest = envelope.data;
     // Schema gate — GENTLE skip (not reject): the sender's manifest envelope is
     // newer than this instance understands. Wait for the local PortOS to upgrade
     // rather than mis-pull against a contract we can't read. (Bytes are
     // version-agnostic, but a manifest-SHAPE bump means a new field we'd mishandle.)
-    if (manifest.schemaVersion > PORTOS_SCHEMA_VERSIONS.mediaLibrary) {
-      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} media-library manifest is schema v${manifest.schemaVersion} > local v${PORTOS_SCHEMA_VERSIONS.mediaLibrary} — skipping until this instance updates`);
+    if (manifest.schemaVersion > PLATFORM_SCHEMA_VERSIONS.mediaLibrary) {
+      console.log(`⏸️ peerSync: ${peer.name || peer.instanceId} media-library manifest is schema v${manifest.schemaVersion} > local v${PLATFORM_SCHEMA_VERSIONS.mediaLibrary} — skipping until this instance updates`);
       return { pulled: 0, skipped: 'schema-ahead' };
     }
     // Unchanged-library short-circuit — but force a full re-diff every

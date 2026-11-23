@@ -8,8 +8,7 @@
 
 import { musicVideoRenderDependencyState, presentMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { productionReadiness } from './productionReview.js';
-import { presentProjectCastAndSets } from './castAndSetsService.js';
-import { presentProjectAutonomousRun } from './autonomousService.js';
+import { presentProjectAutonomousRun, presentProjectCastAndSets } from './processPins.js';
 
 import { withCatalogCheckin } from './catalogCheckin.js';
 import { musicVideoCompletionOverride } from '../../lib/musicVideo/musicVideoCompletion.js';

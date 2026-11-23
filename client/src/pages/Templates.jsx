@@ -1,8 +1,8 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
-import { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router';
-import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone } from 'lucide-react';
 import { getTemplates, createFromTemplate } from '../services/apiScaffold.js';
 import FolderPicker from '../components/FolderPicker';
 import { FormField } from '../components/ui/FormField';
@@ -21,8 +21,8 @@ const ICONS = {
 
 function TemplatesContent() {
   const navigate = useNavigate();
-  const [selectedTemplate, setSelectedTemplate] = useState(null);
-  const [createMode, setCreateMode] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get('template');
   const [appName, setAppName] = useState('');
   const [targetPath, setTargetPath] = useState('');
   const [creating, setCreating] = useState(false);
@@ -35,12 +35,26 @@ function TemplatesContent() {
   const templatesResource = useListResource(fetchTemplates);
   const { items: templates, state: templatesState, error: templatesError, retry: retryTemplates } = templatesResource;
 
-  const handleSelectTemplate = (template) => {
-    setSelectedTemplate(template);
-    setCreateMode(true);
+  // The URL owns selection so reload and Browser Back keep the creation form in step.
+  // An unknown id (stale link) is only judged once the list is ready, then cleared.
+  const selectedTemplate = templatesState === 'ready' && selectedId
+    ? templates.find(t => t.id === selectedId) || null
+    : null;
+  const unknownSelection = templatesState === 'ready' && selectedId && !selectedTemplate;
+  useEffect(() => {
+    if (unknownSelection) setSearchParams({}, { replace: true });
+  }, [unknownSelection, setSearchParams]);
+
+  // Form fields are not in the URL, so any selection change (including Browser Back
+  // to another ?template=) must drop them or Create would scaffold A with B's inputs.
+  useEffect(() => {
     setAppName('');
     setTargetPath('');
     setError(null);
+  }, [selectedId]);
+
+  const handleSelectTemplate = (template) => {
+    setSearchParams({ template: template.id });
   };
 
   const handleCreate = async (e) => {
@@ -54,7 +68,7 @@ function TemplatesContent() {
       templateId: selectedTemplate.id,
       name: appName,
       targetPath
-    }).catch(err => ({ error: err.message }));
+    }, { silent: true }).catch(err => ({ error: err.message }));
 
     setCreating(false);
 
@@ -84,15 +98,15 @@ function TemplatesContent() {
     <div>
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
         <p className="text-gray-500 text-sm sm:text-base">Create new apps from pre-configured templates</p>
-        <button
-          onClick={() => navigate('/apps/create')}
+        <Link
+          to="/apps/create"
           className="px-4 py-2 text-gray-400 hover:text-white text-sm sm:text-base self-start sm:self-auto"
         >
           ← Back to Import
-        </button>
+        </Link>
       </div>
 
-      {createMode && selectedTemplate ? (
+      {selectedTemplate ? (
         <div className="bg-port-card border border-port-border rounded-xl p-6 max-w-2xl">
           <div className="flex items-center gap-3 mb-6">
             {(() => {
@@ -145,8 +159,8 @@ function TemplatesContent() {
             <div className="flex justify-between pt-4">
               <button
                 type="button"
-                onClick={() => { setCreateMode(false); setSelectedTemplate(null); }}
-                className="px-4 py-2 text-gray-400 hover:text-white"
+                onClick={() => setSearchParams({})}
+                className="px-4 py-2 border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent transition-colors"
               >
                 ← Back
               </button>
@@ -212,15 +226,6 @@ function TemplatesContent() {
               </button>
             );
           })}
-
-          {/* Add Template Card */}
-          <button
-            onClick={() => navigate('/templates/new')}
-            className="p-6 border-2 border-dashed border-port-border rounded-xl hover:border-port-accent/50 transition-colors flex items-center justify-center gap-3 text-gray-500 hover:text-gray-400"
-          >
-            <Plus size={20} />
-            <span>Add Custom Template</span>
-          </button>
         </div>
         </>
       )}

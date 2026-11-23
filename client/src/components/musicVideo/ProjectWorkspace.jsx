@@ -2,7 +2,6 @@ import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'rea
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import toast from '../ui/Toast';
 import PageSkeleton from '../ui/PageSkeleton';
-import ProductionReviewPanel from './ProductionReviewPanel.jsx';
 import { unfoldToAnchor } from '../../lib/unfoldToAnchor.js';
 import useMusicVideoProductionReview from '../../hooks/useMusicVideoProductionReview.js';
 import usePrevizJobs from '../../hooks/usePrevizJobs.js';
@@ -18,17 +17,10 @@ import { castAndSetsPreviewItems } from './CastAndSetsReferenceProgress.jsx';
 import MediaPreview from '../media/MediaPreview.jsx';
 import MusicVideoLayout from './MusicVideoLayout.jsx';
 import ProjectManageActions from './ProjectManageActions.jsx';
-import ProjectSettingsDrawer, { SETTINGS_TAB_IDS } from './ProjectSettingsDrawer.jsx';
+import { SETTINGS_TAB_IDS } from './projectSettingsTabs.js';
 import PreviewDock from './PreviewDock.jsx';
-import TitleCardPanel from './TitleCardPanel.jsx';
-import StatsOutroPanel from './StatsOutroPanel.jsx';
-import CreditsOutroPanel from './CreditsOutroPanel.jsx';
 import NeedsAttentionBanner from './NeedsAttentionBanner.jsx';
 import StageChecklist from './StageChecklist.jsx';
-import ContactSheetDrawer from './ContactSheetDrawer.jsx';
-import DevArtifactDrawer from './DevArtifactDrawer.jsx';
-import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
-import GalleryVideoPicker from '../videoGen/GalleryVideoPicker.jsx';
 import { lazyWithReload } from '../../utils/lazyWithReload.js';
 import useSetupStageWiring from './stages/useSetupStageWiring.js';
 import useStoryStageWiring from './stages/useStoryStageWiring.js';
@@ -63,6 +55,17 @@ const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
 // Each stage panel is its own chunk, fetched when its step first opens, so the
 // project list and every other step never download it. The wiring hooks above
 // stay static: they run for every step (checklists, notes, attention items).
+// Panels and drawers that only render on one step or once opened load the same way, so the
+// workspace's entry chunk carries just the shell every step shares.
+const ProductionReviewPanel = lazyWithReload(() => import('./ProductionReviewPanel.jsx'));
+const TitleCardPanel = lazyWithReload(() => import('./TitleCardPanel.jsx'));
+const StatsOutroPanel = lazyWithReload(() => import('./StatsOutroPanel.jsx'));
+const CreditsOutroPanel = lazyWithReload(() => import('./CreditsOutroPanel.jsx'));
+const ContactSheetDrawer = lazyWithReload(() => import('./ContactSheetDrawer.jsx'));
+const DevArtifactDrawer = lazyWithReload(() => import('./DevArtifactDrawer.jsx'));
+const ProjectSettingsDrawer = lazyWithReload(() => import('./ProjectSettingsDrawer.jsx'));
+const GalleryImagePicker = lazyWithReload(() => import('../imageGen/GalleryImagePicker.jsx'));
+const GalleryVideoPicker = lazyWithReload(() => import('../videoGen/GalleryVideoPicker.jsx'));
 const SetupStage = lazyWithReload(() => import('./stages/SetupStage.jsx'));
 const StoryStage = lazyWithReload(() => import('./stages/StoryStage.jsx'));
 const CastSetsStage = lazyWithReload(() => import('./stages/CastSetsStage.jsx'));
@@ -498,10 +501,12 @@ export default function ProjectWorkspace({
   const withTitleCard = (dock) => (activeStage !== 'cast-sets' || !selected ? dock : (
     <div className="flex flex-col gap-3">
       {dock}
+      <Suspense fallback={null}>
       <TitleCardPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields}
         onPreview={(startSec) => seekToScene({ startSec }, { play: true })} />
       <StatsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
       <CreditsOutroPanel project={selected} onEditLocal={editProjectLocal} onSave={saveProjectFields} />
+      </Suspense>
     </div>
   ));
   const board = selected ? {
@@ -588,6 +593,7 @@ export default function ProjectWorkspace({
     <>
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems}
         filmLookProject={selected ? { look: selected.filmLook, name: selected.name, onSave: saveFilmLook } : null} />
+      <Suspense fallback={null}>
       {pickerTarget && pickerTarget.type !== 'clip' && (
         <GalleryImagePicker
           open
@@ -605,7 +611,7 @@ export default function ProjectWorkspace({
           uploadToGallery
         />
       )}
-      <DevArtifactDrawer
+      {routeArtifactId && <DevArtifactDrawer
           key={routeArtifactId || 'none'}
           open={!!routeArtifactId}
           onClose={closeArtifact}
@@ -616,8 +622,8 @@ export default function ProjectWorkspace({
           ops={devArtifacts}
           busy={devArtifacts.busy || castSets.busy}
           castAndSets={{ regenerate: () => castSets.regenerate(), approveAndContinue: plan.approveCastAndSets }}
-        />
-      <ContactSheetDrawer
+        />}
+      {contactSheetOpen && <ContactSheetDrawer
           open={contactSheetOpen}
           onClose={() => setContactSheetOpen(false)}
           project={selected}
@@ -630,8 +636,9 @@ export default function ProjectWorkspace({
           onPendingOnlyChange={setContactSheetPendingOnly}
           onRegenerateFrame={sceneMedia.generateFrame}
           generatingScenes={sceneMedia.genScenes}
-        />
-          <ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)}
+        />}
+      </Suspense>
+          {settingsTab && <Suspense fallback={null}><ProjectSettingsDrawer open={!!settingsTab} tab={settingsTab || 'project'} onTabChange={setSettingsTab} onClose={() => setSettingsTab(null)}
             board={board}
             manageActions={(
               <ProjectManageActions
@@ -644,7 +651,7 @@ export default function ProjectWorkspace({
                 onDeleteCancel={deletion.cancel}
               />
             )}
-          />
+          /></Suspense>}
           <MusicVideoLayout
             project={selected}
             trackLabel={trackName(selected.trackId)}
@@ -674,7 +681,7 @@ export default function ProjectWorkspace({
               />
             ) : null}
             review={reviewStage ? (
-              <ProductionReviewPanel
+              <Suspense fallback={null}><ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
                 project={selected}
                 review={productionReview}
@@ -683,7 +690,7 @@ export default function ProjectWorkspace({
                 planning={planningDraft}
                 onNavigate={goToStage}
                 onSeek={(startSec) => seekToScene({ startSec }, { play: true })}
-              />
+              /></Suspense>
             ) : null}
             attention={(
               <>

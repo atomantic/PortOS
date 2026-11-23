@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import RetiredTrainingData from './RetiredTrainingData';
+import toast from '../ui/Toast';
 import { getRetiredDataInventory, deleteRetiredData } from '../../services/apiLoraTraining.js';
 
 vi.mock('../../services/apiLoraTraining.js', () => ({
@@ -53,5 +54,14 @@ describe('RetiredTrainingData', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
     await waitFor(() => expect(deleteRetiredData).toHaveBeenCalled());
     expect(await screen.findByText('Retired training-runs')).toBeInTheDocument();
+  });
+
+  it.each([[1, 'Deleted 1 file ('], [3, 'Deleted 3 files (']])('words the deleted-files toast grammatically for %i', async (removedFiles, text) => {
+    getRetiredDataInventory.mockResolvedValue([row('retired-training-runs', 'training-runs')]);
+    deleteRetiredData.mockResolvedValue({ ok: true, operationId: 'retired-training-runs', removedFiles, removedBytes: 2048, status: 'deleted' });
+    render(<RetiredTrainingData />);
+    fireEvent.click(await screen.findByRole('button', { name: /Delete Retired training-runs/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete permanently' }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining(text)));
   });
 });

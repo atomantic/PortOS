@@ -36,6 +36,10 @@ import {
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
 import { ensureExecutionRecord, loadSchedule, updateSchedule } from './taskScheduleStore.js';
+
+// Declared in the store so apps.js resets a cooldown without importing this
+// module, which imports apps.js (#17499).
+export { resetExecutionHistory } from './taskScheduleStore.js';
 import { recordUserAction } from './userActions.js';
 import { isManualOnDemandRequest, normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { enabledAppIdsByTaskType, evaluateOnDemandEligibility } from '../lib/quotaBurnTaskRef.js';
@@ -473,30 +477,3 @@ export async function clearOnDemandRequest(requestId) {
   });
 }
 
-/**
- * Reset execution history for a task type
- */
-export async function resetExecutionHistory(taskType, appId = null) {
-  const result = await updateSchedule(async (schedule) => {
-    const key = `task:${taskType}`;
-
-    if (!schedule.executions[key]) {
-      return { result: { error: 'No execution history found' }, changed: false };
-    }
-
-    if (appId) {
-      if (schedule.executions[key].perApp?.[appId]) {
-        delete schedule.executions[key].perApp[appId];
-      }
-    } else {
-      delete schedule.executions[key];
-    }
-
-    return { result: { success: true, taskType, appId }, changed: true };
-  });
-
-  if (result.error) return result;
-  emitLog('info', `Reset execution history for ${taskType}`, { appId }, '📅 TaskSchedule');
-
-  return result;
-}

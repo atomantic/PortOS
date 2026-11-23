@@ -17,13 +17,17 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async () => 'example prompt' }));
-vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => '' }));
+vi.mock('./digital-twin-context.js', () => ({
+  getDigitalTwinForPrompt: async () => '',
+  getDigitalTwinContextWithDocs: async () => ({ content: '', documentsUsed: [] })
+}));
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));
 vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 
-const { processEnrichmentAnswer, saveEnrichmentListDocument } = await import('./digital-twin-enrichment.js');
-const { DEFAULT_META, cache } = await import('./digital-twin-meta.js');
+const { processEnrichmentAnswer, saveEnrichmentListDocument, getEnrichmentListItems } = await import('./digital-twin-enrichment.js');
+const { DEFAULT_META, cache, loadMeta, saveMeta, updateSettings } = await import('./digital-twin-meta.js');
 const { ENRICHMENT_CATEGORIES } = await import('./digital-twin-constants.js');
+const { createPersona, updatePersona, deletePersona, setActivePersona } = await import('./digital-twin-personas.js');
 
 const category = 'values';
 const targetDoc = ENRICHMENT_CATEGORIES[category].targetDoc;
@@ -70,10 +74,128 @@ describe('enrichment write serialization (#14159)', () => {
     };
     const first = answer('Q1', 'Answer one');
     await turn();
-    await saveEnrichmentListDocument(category, '# Saved list\n', ['a', 'b']);
+    await saveEnrichmentListDocument(category, '# Saved list\n', [{ title: 'A' }, { title: 'B' }]);
     await first;
 
     expect(await readDoc()).toBe('# Saved list\n');
     expect((await readMeta()).enrichment.questionsAnswered[category]).toBe(2);
   });
+});
+
+async function expectMetaWriteFailure(write) {
+  const cached = await loadMeta();
+  const persisted = await readFile(join(root, 'meta.json'));
+  state.beforeWrite = path => {
+    if (path === join(root, 'meta.json')) throw new Error('injected meta failure');
+  };
+  try {
+    await expect(write()).rejects.toThrow('injected meta failure');
+  } finally {
+    state.beforeWrite = null;
+  }
+  expect(cache.meta.data).toBe(cached);
+  expect(await loadMeta()).toEqual(JSON.parse(persisted));
+  expect(await readFile(join(root, 'meta.json'))).toEqual(persisted);
+}
+
+describe('enrichment metadata write failures (#17597)', () => {
+  const cases = [
+    {
+      name: 'free-text answer',
+      category,
+      write: () => answer('Example question', 'Example answer'),
+      content: '### Example question\n\nExample answer\n\n',
+      metadata: { enrichment: { questionsAnswered: { values: 1 } }, confidence: { dimensions: { values: 0.15 } } },
+    },
+    {
+      name: 'scale answer',
+      category: 'communication',
+      write: () => processEnrichmentAnswer({
+        category: 'communication', questionType: 'scale', question: 'Example scale', scaleQuestionId: 'comm-f', scaleValue: 5,
+      }),
+      content: '### Example scale\n\nResponse: Very Formal (5/5)\n\n',
+      metadata: {
+        enrichment: { questionsAnswered: { communication: 1 }, scaleQuestionsAnswered: { 'comm-f': 5 } },
+        confidence: { dimensions: { communication: 0.15 } },
+        traits: { communicationProfile: { formality: 10 } },
+      },
+    },
+    {
+      name: 'list document',
+      category: 'favorite_books',
+      write: () => saveEnrichmentListDocument('favorite_books', '# Saved list\n', [{ title: 'Example book' }]),
+      content: '# Saved list\n',
+      metadata: {
+        enrichment: {
+          questionsAnswered: { favorite_books: 1 },
+          completedCategories: ['favorite_books'],
+          listItems: { favorite_books: [{ title: 'Example book' }] },
+        },
+      },
+    },
+  ];
+
+  describe.each(cases)('$name', ({ category, write, content, metadata }) => {
+    // An invalid UTF-8 byte makes accidental text decoding during rollback observable.
+    it.each([null, Buffer.from('# Previous\r\n\xff', 'latin1')])('restores the prior file (%s) and persists a retry', async previous => {
+      const filename = ENRICHMENT_CATEGORIES[category].targetDoc;
+      const path = join(root, filename);
+      const updatedAt = '2000-01-01T00:00:00.000Z';
+      if (previous !== null) {
+        await writeFile(path, previous);
+        const existingDoc = { id: 'example-doc', filename, title: 'Example', category: 'enrichment', enabled: true, priority: 30, weight: 5, updatedAt };
+        await saveMeta({ ...await loadMeta(), documents: [existingDoc] });
+      }
+      await expectMetaWriteFailure(write);
+
+      if (previous === null) await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
+      else expect(await readFile(path)).toEqual(previous);
+
+      await write();
+      const markdown = await readFile(path, 'utf8');
+      expect(markdown.split(content)).toHaveLength(2);
+      const persisted = await readMeta();
+      expect(persisted).toMatchObject(metadata);
+      expect(persisted.documents).toEqual([expect.objectContaining({ filename })]);
+      if (previous !== null) {
+        expect(persisted.documents[0]).toMatchObject({ id: 'example-doc', updatedAt: expect.any(String) });
+        expect(persisted.documents[0].updatedAt > updatedAt).toBe(true);
+      }
+      expect(await loadMeta()).toEqual(persisted);
+    });
+  });
+});
+
+describe('persona and settings metadata write failures (#17597)', () => {
+  it.each([
+    ['create persona', () => createPersona({ name: 'New persona', instructions: 'Example instructions' })],
+    ['update persona', id => updatePersona(id, { name: 'Updated persona' })],
+    ['delete persona', id => deletePersona(id)],
+    ['clear active persona', () => setActivePersona(null)],
+    ['update settings', () => updateSettings({ autoInjectToCoS: false })],
+  ])('preserves the cached and persisted metadata on %s', async (_name, write) => {
+    const { id } = await createPersona({ name: 'Example persona', instructions: 'Example instructions' });
+    await setActivePersona(id);
+    await expectMetaWriteFailure(() => write(id));
+  });
+});
+
+it('preserves saved list items through a cold metadata load and settings save', async () => {
+  const items = [{ title: 'First book', note: 'A favorite' }, { title: 'Second book' }];
+  await saveEnrichmentListDocument('favorite_books', '# Favorite books\n', items);
+
+  const saved = await readMeta();
+  expect(saved.enrichment.listItems).toEqual({ favorite_books: items });
+  // A nested default distinguishes a successful parse from the raw fallback.
+  delete saved.settings.includePrivacyContext;
+  await writeFile(join(root, 'meta.json'), JSON.stringify(saved));
+  cache.meta.data = null;
+
+  expect((await loadMeta()).settings.includePrivacyContext).toBe(false);
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
+  await updateSettings({ maxContextTokens: 6000 });
+  expect((await readMeta()).enrichment.listItems).toEqual(saved.enrichment.listItems);
+
+  cache.meta.data = null;
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
 });

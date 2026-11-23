@@ -489,16 +489,19 @@ export function formatContextTokens(tokens) {
 
 /**
  * How fast a measured model generated: `"58.5 tok/s"`, `"~58.5 tok/s"` for a frame-counted estimate, or
- * `"240 chars/s"` when no token counts were reported; null when neither was measured.
+ * `"240 chars/s"` when no token counts were reported; null when neither was measured, or when only a
+ * `reasoningHidden` chars/s exists.
  * The `~` is not decoration: PortOS has no tokenizer, so frame-derived counts must not look tokenizer-produced.
  *
- * @param {{meanTokensPerSecond?: number|null, meanCharsPerSecond?: number|null, tokensEstimated?: boolean|null}} perf
+ * @param {{meanTokensPerSecond?: number|null, meanCharsPerSecond?: number|null, tokensEstimated?: boolean|null, reasoningHidden?: boolean|null}} perf
  */
 export function throughputLabel(perf) {
   const tokens = perf?.meanTokensPerSecond;
   if (typeof tokens === 'number' && Number.isFinite(tokens)) {
     return `${perf?.tokensEstimated ? '~' : ''}${tokens} tok/s`;
   }
+  // A thinking model's chars/s counts only its one-character visible answer (`reasoningHidden`), not speed.
+  if (perf?.reasoningHidden === true) return null;
   const chars = perf?.meanCharsPerSecond;
   return typeof chars === 'number' && Number.isFinite(chars) ? `${chars} chars/s` : null;
 }

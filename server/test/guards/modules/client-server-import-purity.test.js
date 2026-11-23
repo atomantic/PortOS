@@ -22,12 +22,20 @@ const resolveRelative = (file, specifier) => {
   return /^\.{1,2}\//.test(path) ? posix.join(posix.dirname(file), path) : null;
 };
 
+/**
+ * A client file can only reach `server/` through a relative specifier spelling `../server`
+ * (backslashes and `./` segments included) or any escape that could spell one; tokenizing the rest is wasted work.
+ */
+const MAY_REACH_SERVER = /\.\.[/\\]+(?:\.{1,2}[/\\]+)*server\b|\\[^\\]/;
+
 function inspectClientImports(clientFiles, readSource) {
   const violations = [];
   const seen = new Set();
   const queue = [];
   for (const file of clientFiles) {
-    const { statics: imports, deferred: dynamic } = moduleSpecifiers(readSource(file), file);
+    const source = readSource(file);
+    if (!MAY_REACH_SERVER.test(source)) continue;
+    const { statics: imports, deferred: dynamic } = moduleSpecifiers(source, file);
     for (const specifier of [...imports, ...dynamic]) {
       const target = resolveRelative(file, specifier);
       if (!target || !isWithin('server', target)) continue;
@@ -105,6 +113,16 @@ describe('browser-safe server imports from the client (#6364, #16709)', () => {
       `${file} → server/lib/leaf.js → server/lib/nested.js imports 'node:fs' (non-relative import (Node built-in or npm package))`,
       `${file} → server/lib/leaf.js → server/lib/nested.js imports '../services/helper.js' → server/services/helper.js (resolves outside server/lib)`,
     ]));
+  });
+
+  it('still tokenizes files whose specifier hides ../server behind an escape', () => {
+    const file = 'client/src/lib/escaped.js';
+    const source = String.raw`import { x } from '..\/..\/..\/server\/services\/x.js';`;
+    expect(inspectClientImports([file], () => source).violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => String.raw`import { x } from '\x2e\x2e/../../server/services/x.js';`).violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => "import { x } from '../../.././server/services/x.js';").violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => String.raw`import { x } from '../../../\server/services/x.js';`).violations).toHaveLength(1);
+    expect(inspectClientImports([file], () => "import { x } from './lib/other.js';").violations).toEqual([]);
   });
 
   it('ignores unrelated paths and comments', () => {

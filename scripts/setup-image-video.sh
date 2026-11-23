@@ -19,7 +19,7 @@
 #   INSTALL_WAN22_CUDA '1' to install the official Wan 2.2 Diffusers runtime at ~/.portos/wan2.2-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (Apple Silicon, or x86_64 Windows/Linux via a hash-locked CUDA runtime; default: 1 on Apple Silicon, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
-#   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
+#   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: a pinned 40-char SHA; main is a tracking opt-in).
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU; Apple Silicon or x86_64 Windows/Linux, hash-locked).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
@@ -38,6 +38,13 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 # a per-block copy makes that a grep instead of an edit.
 TORCH_CUDA_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Scratch files are kept in these globals (empty when none is live) so one EXIT
+# trap removes them after an awk/lipo failure or SIGINT/SIGTERM under set -e.
+PIN_VENV_TMP=""
+MFLUX_SELF_REQ=""
+VIDEO_SELF_REQ=""
+trap 'rm -f -- "$PIN_VENV_TMP" "$MFLUX_SELF_REQ" "$VIDEO_SELF_REQ"' EXIT
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORTOS_DATA="${PORTOS_DATA:-${REPO_ROOT}/data}"
 PORTOS_UV_DIR="${HOME}/.portos/tools/uv-0.13.7"
@@ -145,6 +152,7 @@ pin_venv_arm64() {
     [[ -e "$origin" && ! -d "$origin" ]] || continue
     origin_dir="$(cd "$(dirname "$origin")" && pwd)" || continue
     tmp="$(mktemp)"
+    PIN_VENV_TMP="$tmp"
     if ! lipo -thin arm64 "$py" -output "$tmp"; then
       rm -f "$tmp"
       continue
@@ -173,6 +181,7 @@ pin_venv_arm64() {
     fi
     rm -f "$py"
     mv "$tmp" "$py"
+    PIN_VENV_TMP=""
     chmod +x "$py"
   done
 }
@@ -402,21 +411,26 @@ sync_cuda_lock_venv() {
 # to build wheel" — after the multi-GB torch download, with a schema error that
 # reads like a pip bug. mflux/mlx need the same floor.
 python_at_least_310() {
-  [[ -n "${1:-}" ]] && "$1" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 10) else 1)' 2>/dev/null
+  python_at_least_minor 10 "${1:-}"
 }
 
-# Echo the first Python 3.10+ on PATH, preferring $PYTHON_BIN. $1, when set,
-# is a venv to skip: its interpreter cannot recreate itself. Empty when the
-# machine has none outside that directory.
+# True when $2 is a Python 3.<$1>+ interpreter.
+python_at_least_minor() {
+  [[ -n "${2:-}" ]] && "$2" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, $1) else 1)" 2>/dev/null
+}
+
+# Echo the first Python 3.<$2>+ (default 3.10+) on PATH, preferring $PYTHON_BIN.
+# $1, when set, is a venv to skip: its interpreter cannot recreate itself. Empty
+# when the machine has none outside that directory.
 newest_supported_python() {
-  local candidate found exclude="${1:-}"
-  if python_at_least_310 "$PYTHON_BIN"; then
+  local candidate found exclude="${1:-}" min_minor="${2:-10}"
+  if python_at_least_minor "$min_minor" "$PYTHON_BIN"; then
     found="$(command -v "$PYTHON_BIN" 2>/dev/null || true)"
     if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then found=""; fi
     if [[ -n "$found" ]]; then printf '%s\n' "$found"; return 0; fi
   fi
   for candidate in python3.14 python3.13 python3.12 python3.11 python3.10; do
-    if have "$candidate" && python_at_least_310 "$candidate"; then
+    if have "$candidate" && python_at_least_minor "$min_minor" "$candidate"; then
       found="$(command -v "$candidate")"
       if [[ -n "$exclude" && "$found" == "$exclude"/* ]]; then continue; fi
       printf '%s\n' "$found"
@@ -1178,16 +1192,16 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
     MUSICGEN_VENV="${HOME}/.portos/venv-musicgen"
     MUSICGEN_PY="$MUSICGEN_VENV/bin/python3"
     MLX_EXAMPLES_DIR="${HOME}/.portos/mlx-examples"
-    MLX_EXAMPLES_PIN="${MLX_EXAMPLES_PIN:-main}"
+    MLX_EXAMPLES_PIN="${MLX_EXAMPLES_PIN:-796f5b53cab69a3d48a44233ce21aae889e94a08}"
     mkdir -p "${HOME}/.portos"
 
     if [[ ! -d "${MLX_EXAMPLES_DIR}/.git" ]]; then
       echo "📦 Cloning ml-explore/mlx-examples → ${MLX_EXAMPLES_DIR}..."
       git clone --progress https://github.com/ml-explore/mlx-examples.git "${MLX_EXAMPLES_DIR}"
     fi
-    # Pin to a known commit when MLX_EXAMPLES_PIN is set to a SHA; default
-    # 'main' tracks HEAD (the musicgen example is stable, but a pin keeps new
-    # installs reproducible — mirror of the LTX2_PIN pattern above).
+    # Default is a reviewed commit SHA so installs and repairs are reproducible
+    # (mirror of the LTX2_PIN pattern above); export MLX_EXAMPLES_PIN=main to
+    # opt in to tracking upstream.
     git -C "${MLX_EXAMPLES_DIR}" fetch --quiet origin
     git_checkout_pin "${MLX_EXAMPLES_DIR}" "${MLX_EXAMPLES_PIN}"
 
@@ -1327,6 +1341,8 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    else
+      git -C "${ACESTEP_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
     # docopt/unidic-lite are source-only; mojimoji also builds on newer Python.
@@ -1346,6 +1362,8 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    else
+      git -C "${ACESTEP_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
     portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
@@ -1401,6 +1419,8 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
     if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step-1.5..."
       git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    else
+      git -C "${ACESTEP15_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
     "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/ml/requirements/requirements-acestep15-mlx.lock.txt"
@@ -1416,6 +1436,8 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
     if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step-1.5..."
       git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    else
+      git -C "${ACESTEP15_DIR}" fetch --progress origin
     fi
     git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
     portos_uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
@@ -1582,9 +1604,10 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
     # Prefer a base outside the venv. An activated universal venv is the first
     # python3 on PATH; deleting it and then calling that path fails the rebuild.
     # reset also refuses when the only interpreter lives inside the venv.
-    if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
-        && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
-      echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
+    # The FLUX.2 lock needs 3.11+ (filelock), so a 3.10 base would only fail later.
+    if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV" 11)" \
+        && ! FLUX2_BASE_PY="$(newest_supported_python "" 11)"; then
+      echo "❌ FLUX.2 needs Python 3.11+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
       echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
       exit 1
     fi
@@ -1592,8 +1615,8 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
     # A venv left behind by an earlier run against a too-old base can never
     # install these packages, and `python -m venv` reuses it silently — so every
     # retry would fail the same way. Rebuild it instead of pip-ing into it.
-    if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
-      echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
+    if venv_exists "$FLUX2_VENV" && ! python_at_least_minor 11 "$(venv_python "$FLUX2_VENV")"; then
+      echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.11 — recreating it..."
       "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
     elif ! venv_exists "$FLUX2_VENV"; then
       echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."

@@ -570,7 +570,7 @@ describe('DailyLogTab autosave', () => {
       { silent: true, ifMatchUpdatedAt: `${TODAY}T12:03:00Z` },
     ]);
     expect(editor().value).toBe('typed while speaking\n\nspoken-a\n\nspoken-b');
-    expect(screen.queryByText(/Save failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t save daily log/i)).not.toBeInTheDocument();
   });
 
   it('shows save status in the toolbar', async () => {

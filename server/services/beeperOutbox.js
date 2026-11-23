@@ -114,6 +114,7 @@ let breaker = { tripped: false, reason: null, trippedAt: null };
 // outboxId → { chatId, body, pendingMessageId, requestedAt,
 //   deliveryOutcomeUnknown, timer, resolving }
 const pendingConfirmations = new Map();
+const MESSAGE_ALREADY_CLAIMED = Symbol('message-already-claimed');
 const localTransitions = new Map();
 const activeSends = new Set();
 const reconciliationOperations = new Map();
@@ -559,7 +560,7 @@ function armConfirmation({
  *     `isSender` + the exact body + a timestamp at or after the send. The body
  *     match is deliberately exact: a near-match is a different message.
  */
-async function lookupSentMessage(pending) {
+async function lookupSentMessage(pending, id) {
   if (pending.pendingMessageId) {
     const direct = await getMessage(pending.chatId, pending.pendingMessageId)
       .then((value) => value)
@@ -570,6 +571,15 @@ async function lookupSentMessage(pending) {
     if (direct?.id) return direct;
   }
 
+  // Another row in this conversation may already own a message with the same
+  // body (an identical "ok" sent twice); body+time alone would bind this row to
+  // that earlier send and report a false `sent`.
+  const claimedRows = await query(
+    `SELECT message_id FROM beeper_outbox
+     WHERE conversation_id = $1 AND message_id IS NOT NULL AND id <> $2`,
+    [pending.conversationId, id],
+  );
+  const claimed = new Set((claimedRows?.rows ?? []).map((row) => String(row.message_id ?? row.messageId)));
   const page = await listMessagesPage(pending.chatId);
   const items = Array.isArray(page?.items) ? page.items : [];
   // A normal send response proves the POST landed, so tolerate clock skew (and
@@ -582,13 +592,21 @@ async function lookupSentMessage(pending) {
   const floor = pending.deliveryOutcomeUnknown
     ? pending.requestedAt
     : pending.requestedAt - 60_000;
-  return items.find((message) => {
+  const candidates = items.filter((message) => {
     if (message?.isSender !== true || message?.text !== pending.body) return false;
+    if (claimed.has(String(message.id))) return false;
     const messageTime = Date.parse(message?.timestamp ?? '');
     return pending.deliveryOutcomeUnknown
       ? Number.isFinite(messageTime) && messageTime >= floor
       : !message?.timestamp || (Number.isFinite(messageTime) && messageTime >= floor);
-  }) ?? null;
+  });
+  // Oldest unclaimed first, so concurrent identical sends claim in send order.
+  // Array.sort is stable, so untimestamped payloads keep their page order.
+  const timeOf = (message) => {
+    const time = Date.parse(message?.timestamp ?? '');
+    return Number.isFinite(time) ? time : 0;
+  };
+  return candidates.sort((a, b) => timeOf(a) - timeOf(b))[0] ?? null;
 }
 
 /** Mirror confirmed sends through the same version/retention gate as ingestion.
@@ -636,7 +654,7 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
   pending.resolving = true;
 
   const observedAt = new Date(runtime.now()).toISOString();
-  const found = await lookupSentMessage(pending)
+  const found = await lookupSentMessage(pending, id)
     .then((value) => ({ ok: true, value }))
     .catch((err) => ({ ok: false, err }));
   pending.resolving = false;
@@ -677,7 +695,15 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
     return null;
   }
 
-  return persistTransition(id, () => withTransaction(async (client) => {
+  const result = await persistTransition(id, () => withTransaction(async (client) => {
+    // Serialize settlement per conversation, then re-check the claim: the
+    // lookup's snapshot may predate a sibling row settling on this message.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [pending.conversationId]);
+    const claimedBy = await client.query(
+      `SELECT 1 FROM beeper_outbox WHERE conversation_id = $1 AND message_id = $2 AND id <> $3 LIMIT 1`,
+      [pending.conversationId, String(message.id), id],
+    );
+    if ((claimedBy?.rowCount ?? 0) > 0) return MESSAGE_ALREADY_CLAIMED;
     const settled = await client.query(
       `UPDATE beeper_outbox SET state = 'sent', message_id = $2, sent_at = COALESCE($3::timestamptz, NOW()),
          error_code = NULL, error_message = NULL, updated_at = NOW()
@@ -687,7 +713,9 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
     if ((settled?.rowCount ?? 0) !== 1) return null;
     await mirrorSentMessage(client, pending.conversationId, message, observedAt);
     return settled.rows[0];
-  }), () => {
+  }), (settledRow) => {
+    // A claimed message leaves the row armed so a later lookup can find its own.
+    if (settledRow === MESSAGE_ALREADY_CLAIMED) return;
     releasePending(id);
     beeperSocketEvents.emit('invalidate', {
       kind: 'message.upserted', chatID: pending.chatId, ids: [String(message.id)],
@@ -695,6 +723,7 @@ async function resolveConfirmation(id, reason, { terminal = false } = {}) {
     });
     console.log(`${LOG_PREFIX}: send confirmed via ${reason}`);
   });
+  return result === MESSAGE_ALREADY_CLAIMED ? null : result;
 }
 
 /** Record why a send is unconfirmed without moving it out of flight. */

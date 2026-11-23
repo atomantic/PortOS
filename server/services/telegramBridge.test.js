@@ -475,6 +475,25 @@ describe('telegramBridge service', () => {
       expect(await photo.text()).toBe('png-bytes');
     });
 
+    it('does not upload files named in prose of an untrusted notification type (#17468)', async () => {
+      seedCredentials();
+      const fetchSpy = mockTelegramFetch();
+      vi.stubGlobal('fetch', fetchSpy);
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      await init();
+      fetchSpy.mockClear();
+
+      await forwardAdded({
+        type: NOTIFICATION_TYPES.GITHUB_AUDIT,
+        title: 'Audit',
+        description: 'Image: /data/images/daily.png',
+        priority: PRIORITY_LEVELS.LOW
+      });
+
+      expect(fetchSpy.mock.calls.map(([url]) => url.split('/').pop())).toEqual(['sendMessage']);
+      expect(JSON.parse(fetchSpy.mock.calls[0][1].body).text).toContain('/data/images/daily.png');
+    });
+
     it('keeps the path in the text when its upload fails (#17398)', async () => {
       seedCredentials();
       const fetchSpy = mockTelegramFetch({ uploadOk: false });

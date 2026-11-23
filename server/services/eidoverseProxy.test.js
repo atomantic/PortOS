@@ -12,6 +12,8 @@ import {
   mountEidoverseWebSocket,
   stripEidoverseHostPrefix,
   isEidoverseRootProxyPath,
+  forwardedHeaders,
+  websocketRequestHead,
 } from './eidoverseProxy.js';
 
 const HOST_DESCRIPTOR = Object.freeze({
@@ -377,5 +379,35 @@ describe('main-server eidoverse reverse-proxy', () => {
     expect(closed).toBe(true);
     expect(client.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
     webSocketClients.pop();
+  });
+});
+
+describe('upstream credential stripping', () => {
+  const headers = {
+    host: 'portos.example:5555',
+    authorization: 'Bearer secret',
+    'x-portos-peer-auth': 'peer',
+    cookie: 'portos_auth=a; portos_auth_5555=b; portos_eidoverse_guest=g; eido=keep',
+  };
+  const rawHeaders = Object.entries(headers).flat();
+
+  it('removes PortOS credentials from forwarded HTTP headers but keeps other cookies', () => {
+    const out = forwardedHeaders({ headers }, 'http', '127.0.0.1', 8940);
+    expect(out.authorization).toBeUndefined();
+    expect(out['x-portos-peer-auth']).toBeUndefined();
+    expect(out.cookie).toBe('eido=keep');
+  });
+
+  it('omits Cookie entirely when only PortOS cookies were present', () => {
+    const out = forwardedHeaders({ headers: { host: 'h', cookie: 'portos_auth=a' } }, 'http', '127.0.0.1', 8940);
+    expect('cookie' in out).toBe(false);
+  });
+
+  it('applies the same stripping to the WebSocket upgrade head', () => {
+    const head = websocketRequestHead(
+      { rawHeaders, headers, method: 'GET', url: '/ws', httpVersion: '1.1' }, 'http', '127.0.0.1', 8940,
+    );
+    expect(head).not.toMatch(/portos_auth|authorization|x-portos-peer-auth|portos_eidoverse_guest/i);
+    expect(head).toContain('cookie: eido=keep');
   });
 });

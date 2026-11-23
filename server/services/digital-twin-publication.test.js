@@ -17,12 +17,15 @@ vi.mock('fs/promises', async original => {
 vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => state.provider, getProviderById: async () => state.provider }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async () => 'example prompt' }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => state.runProvider(...args) }));
-vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => '' }));
+vi.mock('./digital-twin-context.js', () => ({
+  getDigitalTwinForPrompt: async () => '',
+  getDigitalTwinContextWithDocs: async () => ({ content: '', documentsUsed: [] })
+}));
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));
 vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 
-const { processEnrichmentAnswer, saveEnrichmentListDocument } = await import('./digital-twin-enrichment.js');
-const { applyDigitalTwinRemote } = await import('./digital-twin-sync.js');
+const { processEnrichmentAnswer, saveEnrichmentListDocument, getEnrichmentListItems } = await import('./digital-twin-enrichment.js');
+const { applyDigitalTwinRemote, getDigitalTwinSnapshot } = await import('./digital-twin-sync.js');
 const { DEFAULT_META, cache } = await import('./digital-twin-meta.js');
 const { ENRICHMENT_CATEGORIES } = await import('./digital-twin-constants.js');
 const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');
@@ -54,6 +57,42 @@ beforeEach(async () => {
   await seed();
 });
 afterAll(async () => { await rm(root, { recursive: true, force: true }); });
+
+it('replicates traits, scale answers, and editable lists through peer sync and a cold read', async () => {
+  const older = {
+    enrichment: {
+      completedCategories: ['favorite_movies'],
+      lastSession: '2026-01-01T00:00:00Z',
+      questionsAnswered: { favorite_movies: 1 },
+      listItems: { favorite_movies: [{ title: 'Example movie' }] },
+    },
+  };
+  const newer = {
+    traits: { valuesHierarchy: [{ value: 'Curiosity', priority: 3 }] },
+    enrichment: {
+      listItems: { favorite_books: [{ title: 'Example book' }] },
+      scaleQuestionsAnswered: { 'bf-o-1': 4 },
+      completedCategories: ['favorite_books'],
+      lastSession: '2026-01-02T00:00:00Z',
+    },
+  };
+  await seed(older);
+  const oldSnapshot = await getDigitalTwinSnapshot();
+  await seed(newer);
+  const newSnapshot = await getDigitalTwinSnapshot();
+  await applyDigitalTwinRemote(oldSnapshot.data);
+  const merged = await getDigitalTwinSnapshot();
+
+  await seed(older);
+  cache.meta.data = null;
+  await applyDigitalTwinRemote(newSnapshot.data);
+  expect((await getDigitalTwinSnapshot()).checksum).toBe(merged.checksum);
+  expect(merged.data.meta.traits).toEqual(newer.traits);
+  expect(merged.data.meta.enrichment.scaleQuestionsAnswered).toEqual(newer.enrichment.scaleQuestionsAnswered);
+  cache.meta.data = null;
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(newer.enrichment.listItems.favorite_books);
+  expect(await getEnrichmentListItems('favorite_movies')).toEqual(older.enrichment.listItems.favorite_movies);
+});
 
 describe('enrichment document publication', () => {
   it.each(['answer', 'scale', 'list'])('drains the %s document rewrite through the saved metadata', async kind => {

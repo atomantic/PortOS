@@ -61,26 +61,23 @@ export async function describeCatalogRefs(refs, exec = query) {
     if (!byKind.has(ref.refKind)) byKind.set(ref.refKind, new Set());
     byKind.get(ref.refKind).add(ref.refId);
   }
-  for (const [kind, ids] of byKind) {
+  const lookups = [...byKind].filter(([kind]) => REF_TARGET_TABLES[kind] || DERIVED_TARGETS[kind]).map(([kind, ids]) => {
     const target = REF_TARGET_TABLES[kind] || DERIVED_TARGETS[kind];
-    if (!target) continue;
-    const { rows } = await exec(`SELECT id, ${REF_TITLE_SQL[kind]} AS name FROM ${target.table}
-      WHERE id = ANY($1) AND ${target.liveClause}`, [[...ids]]);
-    for (const row of rows) names.set(JSON.stringify([kind, row.id]), row.name || row.id);
-  }
+    return async () => {
+      const { rows } = await exec(`SELECT id, ${REF_TITLE_SQL[kind]} AS name FROM ${target.table}
+        WHERE id = ANY($1) AND ${target.liveClause}`, [[...ids]]);
+      for (const row of rows) names.set(JSON.stringify([kind, row.id]), row.name || row.id);
+    };
+  });
+  // A caller-supplied exec is a single transaction client, which cannot run
+  // concurrent queries; only the default pool may fan out.
+  if (exec === query) await Promise.all(lookups.map((run) => run()));
+  else for (const run of lookups) await run();
   return refs.map((ref) => {
     const name = names.get(JSON.stringify([ref.refKind, ref.refId]));
     return { ...ref, refName: name || null, resolved: name !== undefined,
       ...(name === undefined ? { reason: REF_TARGET_TABLES[ref.refKind] || DERIVED_TARGETS[ref.refKind] ? 'missing-target' : 'unknown-kind' } : {}) };
   });
-}
-
-// SELECT 1 … existence probe for one target, honoring its live predicate.
-function targetExistsSql(refKind) {
-  const target = REF_TARGET_TABLES[refKind];
-  if (!target) return null;
-  const where = target.liveClause ? `id = $1 AND ${target.liveClause}` : 'id = $1';
-  return `SELECT EXISTS(SELECT 1 FROM ${target.table} WHERE ${where}) AS ok`;
 }
 
 // Cache key for a (refKind, refId) pair. JSON-stringify so the two fields are
@@ -97,29 +94,33 @@ function cacheKey(refKind, refId) {
  * `resolved: false` with `reason: 'unknown-kind'` rather than throwing — a
  * peer-sourced ref could name a kind this build doesn't know.
  *
- * Distinct (refKind, refId) pairs are probed once each; duplicates in the input
- * reuse the result. Small N (a record's ref set), so per-tuple probes are fine.
+ * Distinct ids are probed with one `id = ANY($1)` query per refKind, run
+ * concurrently; duplicates in the input reuse the result.
  */
 export async function resolveRefs(tuples) {
   if (!Array.isArray(tuples) || tuples.length === 0) return [];
   const cache = new Map();
-  const out = [];
+  const idsByKind = new Map();
   for (const t of tuples) {
     const refKind = t?.refKind;
     const refId = t?.refId;
     const key = cacheKey(refKind, refId);
-    if (!cache.has(key)) {
-      if (!REF_TARGET_TABLES[refKind]) {
-        cache.set(key, { resolved: false, reason: 'unknown-kind' });
-      } else if (typeof refId !== 'string' || !refId) {
-        cache.set(key, { resolved: false, reason: 'missing-ref-id' });
-      } else {
-        const { rows } = await query(targetExistsSql(refKind), [refId]);
-        const resolved = rows[0]?.ok === true;
-        cache.set(key, resolved ? { resolved: true } : { resolved: false, reason: 'missing-target' });
-      }
+    if (cache.has(key)) continue;
+    if (!REF_TARGET_TABLES[refKind]) {
+      cache.set(key, { resolved: false, reason: 'unknown-kind' });
+    } else if (typeof refId !== 'string' || !refId) {
+      cache.set(key, { resolved: false, reason: 'missing-ref-id' });
+    } else {
+      cache.set(key, { resolved: false, reason: 'missing-target' });
+      if (!idsByKind.has(refKind)) idsByKind.set(refKind, new Set());
+      idsByKind.get(refKind).add(refId);
     }
-    out.push({ refKind, refId, ...cache.get(key) });
   }
-  return out;
+  await Promise.all([...idsByKind].map(async ([refKind, ids]) => {
+    const target = REF_TARGET_TABLES[refKind];
+    const live = target.liveClause ? ` AND ${target.liveClause}` : '';
+    const { rows } = await query(`SELECT id FROM ${target.table} WHERE id = ANY($1)${live}`, [[...ids]]);
+    for (const row of rows) cache.set(cacheKey(refKind, row.id), { resolved: true });
+  }));
+  return tuples.map((t) => ({ refKind: t?.refKind, refId: t?.refId, ...cache.get(cacheKey(t?.refKind, t?.refId)) }));
 }

@@ -36,7 +36,7 @@ import useUrlParams from '../../hooks/useUrlParams';
 import { TestCell } from './ModelTestCell.jsx';
 import { lazyWithReload } from '../../utils/lazyWithReload';
 import CapabilityBadges from '../models/CapabilityBadges.jsx';
-import ModelThroughputReport from './ModelThroughputReport';
+import ModelThroughputReport, { reasoningHiddenTitle } from './ModelThroughputReport';
 import { formatContextTokens, formatDurationMs, timeAgo, throughputLabel } from '../../utils/formatters';
 import { tuningNoticeChip } from '../../lib/assessmentTuningNotice';
 import { decodeLocalModelAssessmentKey, localModelAssessmentPath } from '../../lib/localModelAssessmentKey';
@@ -53,6 +53,7 @@ import {
 const PortosModelBenchmarkPanel = lazyWithReload(() => import('./PortosModelBenchmarkPanel'));
 const ModelCapabilityTests = lazyWithReload(() => import('./ModelCapabilityTests.jsx'));
 const AssessmentSweepPanel = lazyWithReload(() => import('./AssessmentSweepPanel'));
+const LocalBenchmarkPanel = lazyWithReload(() => import('./LocalBenchmarkPanel'));
 const PANEL_FALLBACK = <BrailleSpinner text="Loading panel" />;
 
 const INTENTS = [
@@ -574,10 +575,14 @@ function RankedRow({ entry, runtimeLabel, onRemeasure, onDelete, onSweepTunings,
               one. A runtime that reports no usage shows chars/s alone rather than
               a tokens/s figure divided out of it. */}
           <div className="text-gray-200">
-            {throughputLabel(perf) || <span className="text-gray-600 italic">not measured</span>}
+            {throughputLabel(perf) || (perf.reasoningHidden === true
+              ? <span className="text-gray-600 italic" title={reasoningHiddenTitle(perf.meanTokensPerSecond)}>n/a (reasoning)</span>
+              : <span className="text-gray-600 italic">not measured</span>)}
             {Number.isFinite(perf.meanTokensPerSecond) && (
-              <span className="text-gray-600 ml-1.5 text-[10px]">
-                <Measured value={perf.meanCharsPerSecond} suffix=" chars/s" />
+              <span className="text-gray-600 ml-1.5 text-[10px]" title={perf.reasoningHidden === true ? reasoningHiddenTitle(perf.meanTokensPerSecond) : undefined}>
+                {perf.reasoningHidden === true
+                  ? 'chars/s n/a (reasoning)'
+                  : <Measured value={perf.meanCharsPerSecond} suffix=" chars/s" />}
               </span>
             )}
           </div>
@@ -1201,6 +1206,11 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
             onSweepFinished={() => load(intent)}
             tuningRequest={tuningSweepRequest}
             onTuningRequestClose={closeSweepTarget}
+          />
+          <LocalBenchmarkPanel
+            report={report}
+            runtimeLabelFor={runtimeLabelFor}
+            disabled={busy}
           />
         </Suspense>
         <ModelThroughputReport

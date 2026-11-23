@@ -31,7 +31,7 @@ describe('diagnosePtySpawnFailure', () => {
     expect(message.startsWith(PTY_UNAVAILABLE_PREFIX)).toBe(true);
     // The repair command is the payload — a diagnosis that omits it leaves the
     // reader exactly where the raw node-pty string did.
-    expect(message).toContain('npm install --prefix server');
+    expect(message).toContain('node scripts/ensure-deps.js');
     expect(message).toContain(POSIX_SPAWN_ENOENT.message);
   });
 

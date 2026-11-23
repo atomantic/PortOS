@@ -37,6 +37,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
+import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
@@ -161,6 +162,13 @@ const task = (id, priority = 'MEDIUM', { app } = {}) => ({
   priority,
   status: 'pending',
   metadata: app !== undefined ? { app } : {},
+});
+
+// resetOrphanedTasks reaches agentManagement (spied below) only through the handlers bootHooks.js registers at boot.
+const loadAgentManagement = () => import('../agent/agentManagement.js');
+registerCosOrphanRecoveryHandlers({
+  cleanupOrphanedAgents: async (...args) => (await loadAgentManagement()).cleanupOrphanedAgents(...args),
+  handleOrphanedTask: async (...args) => (await loadAgentManagement()).handleOrphanedTask(...args),
 });
 
 // ─── evaluateTasks: priority ordering ──────────────────────────────────────
@@ -1858,7 +1866,9 @@ describe('cos.js source — priority + capacity invariants', () => {
     // there are template-literal braces nested inside.
     const fnStart = IMP_SRC.indexOf('async function prepareManagedAppImprovementTask');
     expect(fnStart, 'prepareManagedAppImprovementTask must exist').toBeGreaterThan(-1);
-    const fnEnd = IMP_SRC.indexOf('\nasync function ', fnStart + 1);
+    // The post-gate tail lives in finalizePreparedImprovementTask, which
+    // follows the function in source order and ends at the task return.
+    const fnEnd = IMP_SRC.indexOf('return { task, pendingPerpetualDispatch, skip: null };', fnStart);
     const fnBody = IMP_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
 
     // The updateAppActivity call must appear AFTER applyPlanIdMetadata —

@@ -1,9 +1,11 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import BoardStage from './BoardStage.jsx';
 import { blenderFilmState } from '../../../test/blenderFilmFixture.js';
+import { warmSceneCard } from '../sceneCardTestWarmup.jsx';
+beforeAll(warmSceneCard, 30000);
 
 vi.mock('../../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: () => ({}) }));

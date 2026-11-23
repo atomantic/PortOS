@@ -24,6 +24,7 @@ import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import { refreshQuerySchema } from '../../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
@@ -47,8 +48,9 @@ async function withGitRepoFlag(app) {
 
 // Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
 router.get('/quality-federation', asyncHandler(async (req, res) => {
-  const { days, repository, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
-  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories);
+  const { days, repository, repositories, categories } = validateRequest(appQualityFederationQuerySchema, req.query);
+  // `repository` keeps the v1 body. `repositories` is the list pull; older callers omit it.
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days, {}, repository, categories, repositories);
   if (!payload) throw new ServerError('Quality sharing requires a registered enabled sync peer and a known repository', {
     status: 403,
     code: 'PEER_PULL_FORBIDDEN',
@@ -101,9 +103,10 @@ router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
 }));
 
 // GET /api/apps/:id/lane-health - What became of each audit lane's filed issues
-// (#12088): a forge read on request, never cached into the app record.
+// (#12088): a forge read on request, cached briefly in memory (`?refresh=1` bypasses), never stored on the app record.
 router.get('/:id/lane-health', loadApp, asyncHandler(async (req, res) => {
-  res.json(await getAppLaneHealth(req.loadedApp));
+  const { refresh } = validateRequest(refreshQuerySchema, req.query);
+  res.json(await getAppLaneHealth(req.loadedApp, { refresh: refresh === '1' || refresh === 'true' }));
 }));
 
 // POST /api/apps/:id/quality-snapshot - Land this app's numeric snapshot as
@@ -172,6 +175,8 @@ router.get('/:id', loadApp, asyncHandler(async (req, res) => {
   // so the Quality tab's denominator and runner skip audits that cannot apply.
   const [enrichedApp] = includeQuality === 'true'
     ? await enrichAppsWithQuality([app], {
+      // A detail read is the explicit retry: drop the list's sleeping-peer backoff.
+      freshPeerPull: true,
       resolveApplicability: async (target) => (await import('../../services/appQualitySchedule.js')).inapplicableAuditReasons(target),
     })
     : [app];

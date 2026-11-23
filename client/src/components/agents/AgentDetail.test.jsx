@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 
@@ -75,8 +75,8 @@ describe('AgentDetail route lifecycle', () => {
       screen.getByText('go-b').click();
     });
     await waitFor(() => {
-      expect(getAgentPersonality).toHaveBeenLastCalledWith('agent-b');
-      expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-b');
+      expect(getAgentPersonality).toHaveBeenLastCalledWith('agent-b', { silent: true });
+      expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-b', null, { silent: true });
     });
 
     await act(async () => {
@@ -126,6 +126,20 @@ describe('AgentDetail route lifecycle', () => {
     expect(toggleAgentPersonality).toHaveBeenCalledWith('agent-b', false);
   });
 
+  it('applies the toggle response locally without refetching the agent', async () => {
+    renderAgentDetail();
+    await act(async () => {
+      mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+      mockPlatformDeferreds['agent-a'].resolve([]);
+    });
+    toggleAgentPersonality.mockResolvedValueOnce({ id: 'agent-a', enabled: false });
+    await act(async () => { screen.getByRole('button', { name: 'Enabled' }).click(); });
+
+    expect(await screen.findByRole('button', { name: 'Disabled' })).toBeInTheDocument();
+    expect(getAgentPersonality).toHaveBeenCalledTimes(1);
+    expect(mockOverviewRender.mock.calls.at(-1)[0].agent.enabled).toBe(false);
+  });
+
   it('keeps the new agent load active when an old toggle completes', async () => {
     renderAgentDetail();
     await act(async () => {
@@ -145,5 +159,65 @@ describe('AgentDetail route lifecycle', () => {
     });
     expect(screen.getByText('Agent Beta')).toBeInTheDocument();
     expect(screen.queryByRole('status', { name: 'Loading agent' })).not.toBeInTheDocument();
+  });
+
+  it('gives the icon-only back link a name and a 44px touch target that shrinks only on fine pointers', async () => {
+    renderAgentDetail();
+    await act(async () => {
+      mockAgentDeferreds['agent-a'].resolve({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+      mockPlatformDeferreds['agent-a'].resolve([]);
+    });
+    const back = await screen.findByRole('link', { name: 'Back to Social Agents' });
+    expect(back.className).toContain('min-h-[44px]');
+    expect(back.className).toContain('min-w-[44px]');
+    expect(back.className).toContain('pointer-fine:sm:min-h-0');
+    expect(back.className).toContain('pointer-fine:sm:min-w-0');
+    expect(back.parentElement.className).toContain('flex-wrap');
+  });
+});
+
+describe('AgentDetail load failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.keys(mockAgentDeferreds).forEach(id => delete mockAgentDeferreds[id]);
+    Object.keys(mockPlatformDeferreds).forEach(id => delete mockPlatformDeferreds[id]);
+  });
+
+  it('shows a retryable error, not "Agent not found", on a non-404 failure', async () => {
+    getPlatformAccounts.mockResolvedValue([]);
+    getAgentPersonality
+      .mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }))
+      .mockResolvedValueOnce({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+    renderAgentDetail();
+
+    expect(await screen.findByText('Could not load agent.')).toBeInTheDocument();
+    expect(screen.queryByText('Agent not found')).not.toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
+  });
+
+  it('still renders "Agent not found" on a 404', async () => {
+    getPlatformAccounts.mockResolvedValue([]);
+    getAgentPersonality.mockRejectedValueOnce(Object.assign(new Error('nope'), { status: 404 }));
+    renderAgentDetail();
+
+    expect(await screen.findByText('Agent not found')).toBeInTheDocument();
+    expect(screen.getByText('Back to Agents')).toBeInTheDocument();
+  });
+
+  it('explains a failed platform-accounts read and recovers the tabs on Retry', async () => {
+    getAgentPersonality.mockResolvedValue({ id: 'agent-a', name: 'Agent Alpha', enabled: true });
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce([{ platform: 'moltbook' }]);
+    renderAgentDetail();
+
+    expect(await screen.findByText(/Could not load platform accounts/)).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /Moltbook/ })).not.toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Moltbook/ })).toBeInTheDocument());
+    expect(screen.queryByText(/Could not load platform accounts/)).not.toBeInTheDocument();
   });
 });

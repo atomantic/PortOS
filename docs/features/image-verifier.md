@@ -116,60 +116,25 @@ Users can customize what the Verifier inspects. Profiles are stored in user sett
 | `physical_fusions` | Object-environment coherence | Fingers melted into props (cups, weapons, steering wheels), objects passing through solid anatomy, floating shadows. |
 | `prompt_faithfulness`| Semantic & stylistic alignment | Match between prompt description and rendered subject, wardrobe, environment, lighting style (e.g. noir contrast). |
 
-### Verification Profile Schema (`server/lib/imageVerificationProfile.js`)
+### Verification Profile Schema (`server/lib/imageVerification.js`)
 
 ```json
 {
-  "id": "profile-portrait-strict",
-  "name": "Portrait & Hands (Strict)",
-  "description": "Strict anatomical checking for character portraits and close-ups",
-  "reviewer": {
-    "providerId": "codex",
-    "model": "claude-3-7-sonnet"
-  },
+  "id": "my_profile",
+  "name": "My Profile",
+  "description": "Strict anatomical checking for character portraits",
+  "reviewer": { "providerId": "codex", "model": "claude-3-7-sonnet" },
   "dimensions": {
-    "hands_and_fingers": {
-      "enabled": true,
-      "severity": "critical",
-      "maxDigitsPerHand": 5,
-      "minDigitsPerHand": 5,
-      "allowOcclusion": true
-    },
-    "spurious_limbs": {
-      "enabled": true,
-      "severity": "critical"
-    },
-    "facial_geometry": {
-      "enabled": true,
-      "severity": "critical"
-    },
-    "text_generation": {
-      "enabled": false
-    },
-    "image_composition": {
-      "enabled": true,
-      "severity": "advisory",
-      "rules": ["no_subject_decapitation", "balanced_framing"]
-    },
-    "physical_fusions": {
-      "enabled": true,
-      "severity": "critical"
-    },
-    "prompt_faithfulness": {
-      "enabled": true,
-      "severity": "advisory"
-    }
+    "hands_and_fingers": { "enabled": true, "severity": "critical" },
+    "image_composition": { "enabled": true, "severity": "advisory", "rules": ["no_subject_decapitation"] },
+    "text_generation": { "enabled": false }
   },
-  "generationPolicy": {
-    "actionOnFail": "reroll",
-    "maxRerolls": 2
-  },
-  "importPolicy": {
-    "actionOnFail": "flag",
-    "quarantine": false
-  }
+  "generationPolicy": { "actionOnFail": "reroll", "maxRerolls": 2 },
+  "importPolicy": { "actionOnFail": "flag" }
 }
 ```
+
+Per dimension only `enabled`, `severity` (`critical` | `advisory`) and optional `rules` exist. `generationPolicy.actionOnFail` is `reroll` | `flag` | `quarantine` (`maxRerolls` 0–5); `importPolicy.actionOnFail` is `flag` | `reject` | `none`. Built-in profile IDs: `strict_anatomy` (default), `composition_and_text`, `full_audit`, `quick_screen`; an unknown `profileId` falls back to `strict_anatomy`.
 
 ---
 
@@ -213,12 +178,12 @@ Users can customize what the Verifier inspects. Profiles are stored in user sett
         ┌─────────────────┐                               ┌─────────────────┐
         │ Pass: Admit job │                               │ Attach verdict  │
         │ Fail: Auto-re-roll│                             │ to .metadata.json│
-        │ with new seed   │                               │ Emit WS event   │
+        │ with new seed   │                               │ Emit event      │
         └─────────────────┘                               └─────────────────┘
 ```
 
 ### Flow 1: New Image Generation Pipeline
-1. **Queue Intercept:** When an image job finishes rendering in `server/services/mediaJobQueue/index.js`, the verification hook intercepts the completion transition before marking the job `completed`.
+1. **Queue Intercept:** When an image job finishes rendering in `server/services/mediaJobQueue/jobLifecycle.js`, the verification hook intercepts the completion transition before marking the job `completed`.
 2. **Execute Evaluation:** The Verifier runs the active profile's enabled dimensions against the newly rendered image and its input prompt.
 3. **Branching Verdict:**
    * **Pass:** The job is admitted as `completed`, and the verification summary is stored in the job's result and image sidecar.
@@ -233,7 +198,7 @@ Users can customize what the Verifier inspects. Profiles are stored in user sett
 2. **Background Queue Enqueue:** If verification is enabled for imports, an async verification task is queued.
 3. **Audit Execution:** The Verifier inspects the image without a prompt (or using any embedded EXIF/PNG text prompt metadata if present), running general anatomical, composition, text, and defect checks.
 4. **Sidecar Enrichment:** The verification report is written directly into `data/images/<filename>.metadata.json` under the `verification` key.
-5. **Real-Time Push:** A WebSocket event (`media:image:verified`) is broadcast to the client, updating the gallery item live with verification badges.
+5. **Event:** `verified` is emitted on the in-process `imageVerifierEvents` emitter. There is no Socket.IO push yet; the gallery reads the sidecar on its next load.
 
 ---
 
@@ -291,13 +256,10 @@ Verification results are saved alongside the image in its `.metadata.json` sidec
   "createdAt": "2026-11-14T05:15:00.000Z",
   "originInstanceId": "local-main",
   "verification": {
-    "verifiedAt": "2026-11-14T05:15:04.210Z",
     "verdict": "fail",
-    "profileId": "profile-portrait-strict",
-    "reviewer": {
-      "providerId": "codex",
-      "model": "claude-3-7-sonnet"
-    },
+    "verifiedAt": "2026-11-14T05:15:04.210Z",
+    "profileId": "strict_anatomy",
+    "profileName": "Strict Anatomy (Hands & Limbs)",
     "summary": "Right hand exhibits 6 distinct digits gripping cane.",
     "defects": [
       {
@@ -308,44 +270,36 @@ Verification results are saved alongside the image in its `.metadata.json` sidec
         "confirmed": true
       }
     ],
-    "metrics": {
-      "handCount": 1,
-      "hands": [
-        { "region": "lower-right", "visibleDigits": 6, "status": "fail" }
-      ],
-      "textLegibility": "n/a",
-      "compositionRating": "good"
-    }
+    "hands": [
+      { "location": "lower-right holding cane", "visibleDigits": 6, "anomalies": "extra finger", "pass": false }
+    ],
+    "checks": [
+      { "dimension": "hands_and_fingers", "status": "fail", "severity": "critical", "note": "Six digits on right hand" }
+    ],
+    "reviewer": { "providerId": "codex", "model": "claude-3-7-sonnet" }
   }
 }
 ```
 
 ---
 
+
 ## 9. User Interface & Operator Experience
 
-1. **Image Generation Workspace (`/media/image`):**
-   * **Verification Toggle:** An inline toggle in the prompt workspace: `[✓] Verify on render` with a profile dropdown (`Portrait & Hands`, `Composition & Text`, `Quick Screen`).
-   * **Re-Roll Feedback:** If an image fails and re-rolls, the queue displays an informative step indicator: `Defect detected (6 fingers) → Re-rolling with seed 64151059 (attempt 2 of 3)`.
-2. **Image Gallery Badges:**
-   * **Green Badge (`Verified Clean`):** Displayed on thumbnails that passed all criteria.
-   * **Amber Warning Badge (`Advisory Flag`):** Displayed for composition or minor advisory notes.
-   * **Red Defect Badge (`Defect Flagged`):** Displayed on imported or retained generation failures (e.g. `6 Fingers`, `Garbled Text`).
-3. **Inspector Drawer (Image Detail Modal):**
-   * Clicking an image reveals the **Quality Audit Tab**:
-     * Visual breakdown of all evaluated dimensions.
-     * Detected hands table with verified digit counts.
-     * Bounding region locator indicating where the defect is located.
-     * Manual Override: "Mark as False Positive" or "Force Pass", allowing operator corrections to feed back into model calibration.
+1. **Image Generation Workspace (`/media/image`):** a `Verify Quality & Anatomy` checkbox in `ImageGenFormEditor.jsx`. There is no profile dropdown; the profile comes from the stored default (see below).
+2. **Gallery badges (`MediaCard.jsx`):** `✓ verified` (pass), `⚠ defect` (fail) and `override` (operator forced a pass).
+3. **Lightbox (`MediaLightbox.jsx`):** an inline `Quality & Anatomy Verification` card (`ImageVerificationDetails.jsx`) showing the verdict, checks, hands and defects, with a single `Force Pass (False Alarm)` button that writes the override to the sidecar.
 4. **Settings:** there is no settings page or REST surface yet. Verification reads the stored `imageVerification` settings (generation/import opt-ins, default profile, reviewer, reroll budget, custom profiles); only `POST /api/image-verifier/verify` and `POST /api/image-verifier/override` are served.
 
 ---
 
-## 10. Phased Implementation Plan
+## 10. Module Map
 
-| Phase | Milestone | Deliverables |
-| :--- | :--- | :--- |
-| **Phase 1** | **Core Verification Engine** | Extract and expand `server/services/imageVerifier/` from `imageRenderInspection.js`. Implement profile schema, multi-aspect prompt builder, and structured JSON parser. |
-| **Phase 2** | **Generation Hook & Re-Roll Loop** | Wire verification interceptor into `server/services/mediaJobQueue/index.js`. Add automated seed re-roll and retry budget accounting. |
-| **Phase 3** | **Import & Upload Integration** | Connect `saveUploadedGalleryImage` to an async verification worker. Persist `verification` metadata to `.metadata.json` and broadcast WebSocket events. |
-| **Phase 4** | **UI Profile Editor & Gallery Integration** | Build Verifier settings panel, gallery status badges, and the defect inspector drawer with manual override controls. |
+| Module | Role |
+| :--- | :--- |
+| `server/lib/imageVerification.js` | Dimension catalog, Zod profile schemas, built-in profiles, prompt builder. |
+| `server/services/imageVerifier.js` | Verification engine, sidecar persistence, override, `imageVerifierEvents` emitter. |
+| `server/routes/imageVerifier.js` | `POST /api/image-verifier/verify` and `/override`. |
+| `client/src/components/imageGen/ImageGenFormEditor.jsx` | `Verify Quality & Anatomy` checkbox. |
+| `client/src/components/media/MediaCard.jsx` | Gallery badges. |
+| `client/src/components/media/ImageVerificationDetails.jsx` | Lightbox card and override button. |

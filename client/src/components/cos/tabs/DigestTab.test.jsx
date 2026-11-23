@@ -11,7 +11,22 @@ vi.mock('../../../services/apiAgents.js', () => ({
   generateCosDigest: api.generateCosDigest,
 }));
 
+import { MemoryRouter, useLocation, useNavigate } from 'react-router';
 import DigestTab from './DigestTab';
+
+const LocationProbe = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="search">{location.search}</output>
+      <button onClick={() => navigate(-1)}>history-back</button>
+    </>
+  );
+};
+const renderTab = (entry = '/cos/digest') => render(
+  <MemoryRouter initialEntries={[entry]}><DigestTab /><LocationProbe /></MemoryRouter>
+);
 
 describe('CoS DigestTab loading', () => {
   beforeEach(() => {
@@ -22,7 +37,7 @@ describe('CoS DigestTab loading', () => {
 
   it('shows a retryable failure after a rejected primary load, then keeps empty success distinct', async () => {
     api.getCosWeeklyDigest.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(null);
-    render(<DigestTab />);
+    renderTab();
 
     expect(await screen.findByText('Could not load weekly digest data.')).toBeInTheDocument();
     expect(screen.queryByText(/Complete some tasks and generate a digest/)).not.toBeInTheDocument();
@@ -38,7 +53,7 @@ describe('CoS DigestTab loading', () => {
     api.listCosWeeklyDigests.mockResolvedValue({ digests: [
       { weekId: '2026-W40', totalTasks: 1 }, { weekId: '2026-W39', totalTasks: 2 },
     ] });
-    render(<DigestTab />);
+    renderTab();
     const week = await screen.findByRole('combobox', { name: 'Week' });
     api.getCosWeeklyDigest.mockRejectedValueOnce(new Error('offline'));
     fireEvent.change(week, { target: { value: '2026-W39' } });
@@ -60,7 +75,7 @@ describe('CoS DigestTab loading', () => {
     api.listCosWeeklyDigests.mockResolvedValue({ digests: [
       { weekId: '2026-W40', totalTasks: 1 }, { weekId: '2026-W39', totalTasks: 2 },
     ] });
-    render(<DigestTab />);
+    renderTab();
     const week = await screen.findByRole('combobox', { name: 'Week' });
     api.getCosWeeklyDigest
       .mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }))
@@ -94,7 +109,7 @@ describe('CoS DigestTab loading', () => {
         { weekId: '2026-W41', totalTasks: 41 }, { weekId: '2026-W40', totalTasks: 40 },
       ] });
     api.generateCosDigest.mockResolvedValue({ weekId: '2026-W41', summary: { totalTasks: 41 }, weekOverWeek: {} });
-    render(<DigestTab />);
+    renderTab();
     const week = await screen.findByRole('combobox', { name: 'Week' });
     fireEvent.change(week, { target: { value: '2026-W39' } });
     expect(await screen.findByText('39')).toBeInTheDocument();
@@ -116,7 +131,7 @@ describe('CoS DigestTab loading', () => {
       { weekId: '2026-W40', totalTasks: 40 }, { weekId: '2026-W39', totalTasks: 39 },
     ] });
     api.generateCosDigest.mockImplementationOnce(() => new Promise(resolve => { finishGeneration = resolve; }));
-    render(<DigestTab />);
+    renderTab();
     const week = await screen.findByRole('combobox', { name: 'Week' });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh Digest' }));
     fireEvent.change(week, { target: { value: '2026-W39' } });
@@ -131,5 +146,47 @@ describe('CoS DigestTab loading', () => {
     expect(api.getCosWeeklyDigest).toHaveBeenLastCalledWith('2026-W39');
     expect(week).toHaveValue('2026-W39');
     expect(screen.getByText('390')).toBeInTheDocument();
+  });
+});
+
+describe('CoS DigestTab ?week= deep link', () => {
+  const digests = [{ weekId: '2026-W40', totalTasks: 1 }, { weekId: '2026-W39', totalTasks: 2 }];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCosWeekProgress.mockResolvedValue(null);
+    api.listCosWeeklyDigests.mockResolvedValue({ digests });
+    api.getCosWeeklyDigest.mockImplementation(async (weekId = '2026-W40') => (
+      { weekId, summary: { totalTasks: weekId === '2026-W39' ? 39 : 40 }, weekOverWeek: {} }
+    ));
+  });
+
+  it('restores the week from the URL on load', async () => {
+    renderTab('/cos/digest?week=2026-W39');
+    expect(await screen.findByText('39')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Week' })).toHaveValue('2026-W39');
+    expect(api.getCosWeeklyDigest).toHaveBeenCalledWith('2026-W39');
+  });
+
+  it('pushes the selected week to the URL and Back returns to the latest week', async () => {
+    renderTab();
+    const week = await screen.findByRole('combobox', { name: 'Week' });
+    expect(await screen.findByText('40')).toBeInTheDocument();
+    fireEvent.change(week, { target: { value: '2026-W39' } });
+    expect(await screen.findByText('39')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('?week=2026-W39');
+
+    fireEvent.click(screen.getByRole('button', { name: 'history-back' }));
+    expect(await screen.findByText('40')).toBeInTheDocument();
+    expect(screen.getByTestId('search')).toHaveTextContent('');
+    expect(screen.getByRole('combobox', { name: 'Week' })).toHaveValue('2026-W40');
+  });
+
+  it('clears ?week= when the digest is regenerated', async () => {
+    api.generateCosDigest.mockResolvedValue({ weekId: '2026-W40', summary: { totalTasks: 40 }, weekOverWeek: {} });
+    renderTab('/cos/digest?week=2026-W39');
+    await screen.findByText('39');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Digest' }));
+    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent(/^$/));
+    expect(await screen.findByText('40')).toBeInTheDocument();
   });
 });

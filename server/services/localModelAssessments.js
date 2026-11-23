@@ -30,10 +30,13 @@
 
 import {
   ASSESSMENT_INTENTS,
+  BENCHMARK_PROFILE,
+  benchmarkContexts,
   buildThroughputReport,
   classifyFitVerdict,
   classifySampleFailure,
   rankByIntent,
+  sampleHidesReasoning,
   summarizePerformance,
   summarizeSweepScopes,
 } from '../lib/localModelAssessment.js';
@@ -81,6 +84,9 @@ import {
 } from './llamaServerManager.js';
 import { getMtplxServerEndpoint, getMtplxServerStatus, relaunchMtplxServerWithTuning } from './mtplxServerManager.js';
 import { getSlotstreamServerEndpoint } from './slotstreamServerManager.js';
+import { LLAMA_APP, MTPLX_APP, SLOTSTREAM_APP } from '../lib/managedDaemon.js';
+import { readProcessTreeResidentBytes } from '../lib/processTreeMemory.js';
+import { getAppStatus } from './pm2.js';
 import { getSpecDecodePresetStatus } from './specDecodeModels.js';
 import { listManagedBackendModels } from './localLlm.js';
 import {
@@ -105,7 +111,7 @@ const CHARS_PER_TOKEN = 4;
 // Fixed output budget: the point is prefill + decode at a context, comparable across models. Long
 // enough that a thinking model's reasoning and a multi-token-prediction runtime's draft acceptance
 // average over many decode steps rather than a handful (#17430).
-const SAMPLE_MAX_TOKENS = 256;
+const SAMPLE_MAX_TOKENS = BENCHMARK_PROFILE.maxTokens;
 
 // One short generation before the measured samples. A runtime's first request pays one-off costs
 // (weights paging in, kernel compilation, a speculative-decoding draft head warming up) that are not
@@ -254,14 +260,48 @@ export function toSample(contextTokens, result) {
   };
 }
 
-/** Resident bytes for a model, from Ollama's `/api/ps`. `null` when unknown. */
-async function residentGbFor(backend, modelId) {
-  // Only Ollama reports a resident size; `null` elsewhere rather than a weight-file estimate.
-  if (backend !== 'ollama') return null;
-  const loaded = await getLoadedOllamaModels().catch(() => []);
-  const match = loaded.find((m) => m?.id === modelId || m?.name === modelId);
-  const bytes = match?.size;
-  return Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : null;
+// PM2 app per runtime PortOS runs as a managed daemon. Their footprint is the process's own: each
+// serves the model it was launched with, so the whole process is what that model costs to hold.
+const MANAGED_DAEMON_APPS = { llama: LLAMA_APP, mtplx: MTPLX_APP, slotstream: SLOTSTREAM_APP };
+
+// A reading that rounds to 0.00 GB (a wrapper-only tree) is not a measured footprint of the model;
+// stored as `0` it would score the memory axis as free.
+const toGb = (bytes) => {
+  const gb = Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : 0;
+  return gb > 0 ? gb : null;
+};
+
+/**
+ * A measured model's resident footprint and where it came from, `{ residentGb: null, residentSource: null }`
+ * when unknown. Ollama reports per-model size in `/api/ps`; a PM2-managed daemon is read from its process
+ * tree (`lib/processTreeMemory.js`). An external daemon PortOS does not run, LM Studio and vLLM report
+ * nothing, and are left `null` rather than given a weight-file estimate.
+ */
+async function residentMemoryFor(backend, modelId) {
+  const unknown = { residentGb: null, residentSource: null };
+  if (backend === 'ollama') {
+    const loaded = await getLoadedOllamaModels().catch(() => []);
+    const match = loaded.find((m) => m?.id === modelId || m?.name === modelId);
+    const residentGb = toGb(match?.size);
+    return residentGb === null ? unknown : { residentGb, residentSource: 'ollama' };
+  }
+  const app = MANAGED_DAEMON_APPS[backend];
+  if (!app) return unknown;
+  const status = await getAppStatus(app).catch(() => null);
+  // A daemon PM2 does not show online is not the one that answered the samples (an external
+  // server on the same port, or it exited), so its pid says nothing about this model.
+  if (status?.status !== 'online' || !Number.isSafeInteger(status?.pid) || status.pid <= 0) return unknown;
+  const reading = await readProcessTreeResidentBytes(status.pid).catch(() => null);
+  const residentGb = toGb(reading?.bytes);
+  return residentGb === null ? unknown : { residentGb, residentSource: `process-${reading.source}` };
+}
+
+// Tokens/s first: a thinking model's visible answer is a character or two, so its chars/s is ~0
+// and is never shown as its speed.
+function sampleRateText(sample) {
+  if (Number.isFinite(sample.tokensPerSecond)) return `${sample.tokensPerSecond} tok/s`;
+  if (sampleHidesReasoning(sample)) return 'speed n/a (reasoning hidden from the answer)';
+  return `${sample.charsPerSecond ?? '?'} chars/s`;
 }
 
 // Human-readable reason behind a non-`fits` verdict; quotes the backend's own error.
@@ -283,6 +323,8 @@ function describeVerdict(verdict, samples) {
  * @param {'ollama'|'lmstudio'|'llama'|'mtplx'|'vllm'} options.backend
  * @param {string} options.modelId
  * @param {number[]} [options.contextTokens] nominal context sizes to sample
+ * @param {'benchmark'|null} [options.profile] `'benchmark'` runs `BENCHMARK_PROFILE` instead
+ *   (repeated warm runs at one context) and ignores `contextTokens`
  * @param {object} [options.tuning] launch/runtime knobs (`lib/localModelTuning.js`). Launch knobs apply
  *   where PortOS starts the daemon (llama.cpp); the rest are recorded. The tuning is part of the
  *   record's identity: a second tuning is a NEW record.
@@ -293,7 +335,7 @@ function describeVerdict(verdict, samples) {
  *   Frames carry `backend` + `modelId` to tell this run from unrelated installs on the same event.
  * @returns {Promise<object>} the persisted assessment record
  */
-export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, tuning, resetTuning = false, signal, onProgress, claimTimeoutMs = 0 } = {}) {
+export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, profile = null, tuning, resetTuning = false, signal, onProgress, claimTimeoutMs = 0 } = {}) {
   // Refused before the heavy-job claim: an embedding-only model answers every sample with a 400
   // and each one raises an investigation task. Covers the direct run route.
   if (isEmbeddingModel(modelId)) {
@@ -302,7 +344,12 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
       { status: 400, code: 'MODEL_NOT_ASSESSABLE', context: { backend, modelId } },
     );
   }
-  const contexts = [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+  // A benchmark repeats ONE context on purpose (warm runs to average); a context sweep samples
+  // each size once, so its list is deduped.
+  const benchmark = profile === 'benchmark';
+  const contexts = benchmark
+    ? benchmarkContexts()
+    : [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
   // A broken progress consumer must never abort a measurement.
   const emit = (frame) => {
     if (typeof onProgress !== 'function') return;
@@ -332,7 +379,7 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
         performance: summarizePerformance([]),
       };
     }
-    return await measureModel({ backend, modelId, contexts, tuning, resetTuning, signal, emit });
+    return await measureModel({ backend, modelId, contexts, benchmark, tuning, resetTuning, signal, emit });
   } finally {
     await claim.release();
   }
@@ -483,7 +530,7 @@ async function applyLaunchTuning({ backend, modelId, launch, reset }) {
 // The measurement itself, with the accelerator already claimed by the caller
 // above. Split out so the claim's release is one `finally` around one call
 // rather than wrapped around a 100-line body.
-async function measureModel({ backend, modelId, contexts, tuning, resetTuning, signal, emit }) {
+async function measureModel({ backend, modelId, contexts, benchmark = false, tuning, resetTuning, signal, emit }) {
   const normalizedTuning = normalizeTuning(backend, tuning);
   const tuningKey = tuningSignature(normalizedTuning);
   const tuningLabel = describeTuning(backend, normalizedTuning);
@@ -622,7 +669,7 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
       contextTokens: context,
       sample,
       message: sample.ok
-        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sample.charsPerSecond ?? '?'} chars/s`
+        ? `${modelId}: ${context.toLocaleString('en-US')} tokens → ${sampleRateText(sample)}`
         : `${modelId}: ${context.toLocaleString('en-US')} tokens → failed (${sample.error})`,
     });
     if (!sample.ok && classifySampleFailure(sample)) break;
@@ -652,10 +699,15 @@ async function measureModel({ backend, modelId, contexts, tuning, resetTuning, s
     // build was measured. `null` on Ollama (its id already carries the tag) and
     // whenever the backend reported none.
     quantization: card?.quantization ?? null,
-    // `null` = never measured; the LM Studio path legitimately reports null.
-    residentGb: verdict === 'fits' ? await residentGbFor(backend, modelId) : null,
+    // `null` = never measured; LM Studio, vLLM and external daemons legitimately report null.
+    // `residentSource` names the reading: 'ollama', 'process-footprint' or 'process-rss'.
+    ...(verdict === 'fits' ? await residentMemoryFor(backend, modelId) : { residentGb: null, residentSource: null }),
     // The discarded first request's time (load and warm-up costs), kept apart from `performance`.
     warmup,
+    // `benchmark` = the fixed side-by-side profile (repeated warm runs at one context);
+    // `context-sweep` = one sample per context size. Both feed the comparison axes.
+    profile: benchmark ? 'benchmark' : 'context-sweep',
+    benchmark: benchmark ? { ...BENCHMARK_PROFILE } : null,
     assessedAt: new Date().toISOString(),
     environment,
     verdict,
@@ -819,6 +871,8 @@ export async function getAssessmentReport({ intent = 'balanced' } = {}) {
     intent: resolvedIntent,
     intents: ASSESSMENT_INTENTS,
     defaultContextTokens: DEFAULT_CONTEXT_TOKENS,
+    // The fixed side-by-side benchmark, so its consent gate names the generations that run.
+    benchmarkProfile: BENCHMARK_PROFILE,
     assessments,
     unassessed,
     // Every assessable runtime with its label, reachability, and knob catalog —

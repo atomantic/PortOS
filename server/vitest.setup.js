@@ -42,5 +42,8 @@ afterEach(() => drainDetachedWrites());
 // the helper's `process.on('exit')` never fires when the pool kills a worker.
 afterAll(async () => {
   await globalThis.__portosCleanupGitTemplates?.();
-  await globalThis.__portosGitSupervisorCleanup?.();
+  // Prefer the release path once a supervisor exists. A compiler timeout
+  // already failed the case that needed containment; other holds still throw.
+  if (globalThis.__portosReleaseGitSupervisor) await globalThis.__portosReleaseGitSupervisor();
+  else await globalThis.__portosGitSupervisorCleanup?.();
 });

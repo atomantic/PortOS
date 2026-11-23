@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync
 import { tmpdir } from 'os';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
-import { cleanWorkspaceDeps, installWorkspace, WORKSPACES } from './ensure-deps.js';
+import { cleanWorkspaceDeps, installWorkspace, WORKSPACES, writeDependencyHashes } from './ensure-deps.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -134,6 +134,7 @@ describe('startup dependency reconciliation', () => {
       }
       writeFileSync(join(dir, 'node_modules', 'installed-lock.json'), readFileSync(join(dir, 'package-lock.json')));
       writeFileSync(join(dir, 'node_modules', '.package-lock.json'), '{}');
+      writeFileSync(join(dir, 'node_modules', 'npm-ran'), '1');
     `);
     for (const label of ['root', 'client', 'server']) {
       const dir = label === 'root' ? root : join(root, label);
@@ -226,6 +227,36 @@ describe('startup dependency reconciliation', () => {
       f.run();
       expect(existsSync(join(f.client, 'node_modules', 'stale'))).toBe(false);
       expect(f.run()).not.toContain('reinstall');
+    } finally {
+      rmSync(f.root, { recursive: true, force: true });
+    }
+  });
+
+  // setup.js and update.mjs both persist this receipt. A matching v2 hash plus
+  // an already-installed tree must not be installed again.
+  it('performs zero installs when writeDependencyHashes matches the installed inputs', () => {
+    const f = fixture();
+    try {
+      for (const label of ['root', 'client', 'server']) {
+        const dir = label === 'root' ? f.root : join(f.root, label);
+        execFileSync(process.execPath, [join(f.root, 'fake-npm.js')], { cwd: dir });
+      }
+      const hashes = writeDependencyHashes(f.root);
+      for (const label of ['root', 'client', 'server']) {
+        const dir = label === 'root' ? f.root : join(f.root, label);
+        const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
+        hash.update(readFileSync(join(dir, 'package-lock.json')));
+        expect(hashes[label]).toBe(`v2:${hash.digest('hex')}`);
+        rmSync(join(dir, 'node_modules', 'npm-ran'));
+      }
+      expect(JSON.parse(readFileSync(f.receipt, 'utf8'))).toEqual(hashes);
+      const output = f.run();
+      expect(output).not.toMatch(/reinstall|installing/i);
+      for (const label of ['root', 'client', 'server']) {
+        const dir = label === 'root' ? f.root : join(f.root, label);
+        expect(existsSync(join(dir, 'node_modules', 'npm-ran'))).toBe(false);
+        expect(existsSync(join(dir, 'node_modules', 'pm2', 'package.json'))).toBe(true);
+      }
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }

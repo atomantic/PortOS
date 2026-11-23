@@ -1,22 +1,13 @@
 /**
  * OpenClaw — operator chat surface (streaming, context, attachments).
  *
- * Deep-linking exemption (issue #2025): `selectedSessionId` is intentionally
- * NOT encoded in the URL as a routable record. Unlike the master-detail record
- * views (Authors/Music/Sharing/Prompts) that this issue converts to id'd routes,
- * an OpenClaw session is ephemeral runtime state, not a user-owned record:
- *  - The session list is discovered from an external OpenClaw runtime and can
- *    change on every Refresh; sessions come and go with the runtime.
- *  - Selection is runtime-managed, not user-owned: `loadRuntime` auto-picks a
- *    `preferredSessionId` (last selection → runtime `defaultSession` → first
- *    session) on every load/reconnect, so the runtime — not a pasted URL — is
- *    the source of truth for "what's open."
- *  - The active session is wired into live SSE streaming state (useOpenClawStream)
- *    with in-flight refs; driving it from a URL param would fight that lifecycle.
- * This mirrors the transient-session rationale for other socket/stream surfaces.
- * If OpenClaw ever gains a persistent, user-owned session registry, revisit this.
+ * The selected session is deep-linked as `?session=<id>`. The runtime stays the
+ * source of truth for which sessions exist: an unknown/stale id is normalized
+ * (replace) to the runtime default, while user selections push history so
+ * Browser Back returns to the previous session.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   Bot,
   RefreshCw,
@@ -138,6 +129,10 @@ export default function OpenClaw() {
   const [sessions, setSessions] = useState([]);
   const { items: loadedApps, state: appsState, error: appsError, retry: retryApps } = useListResource(fetchActiveApps, { enabled: featureEnabled });
   const apps = featureEnabled ? loadedApps : NO_APPS;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlSessionId = searchParams.get('session') || '';
+  const urlSessionIdRef = useRef(urlSessionId);
+  urlSessionIdRef.current = urlSessionId;
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [composer, setComposer] = useState('');
   const [context, setContext] = useState({
@@ -255,12 +250,22 @@ export default function OpenClaw() {
 
         const validIds = new Set(nextSessions.map(session => session.id).filter(Boolean));
         const preferredSessionId = [
+          urlSessionIdRef.current,
           selectedSessionIdRef.current,
           statusData.defaultSession,
           nextSessions[0]?.id
         ].find(id => id && (validIds.size === 0 || validIds.has(id)));
 
-        setSelectedSessionId(preferredSessionId || statusData.defaultSession || '');
+        const resolvedSessionId = preferredSessionId || statusData.defaultSession || '';
+        setSelectedSessionId(resolvedSessionId);
+        // Normalize a stale/unknown ?session= to the resolved session without adding history.
+        if (urlSessionIdRef.current && urlSessionIdRef.current !== resolvedSessionId) {
+          setSearchParams(prev => {
+            const next = new URLSearchParams(prev);
+            if (resolvedSessionId) next.set('session', resolvedSessionId); else next.delete('session');
+            return next;
+          }, { replace: true });
+        }
       } catch (sessErr) {
         setSessions([]);
         setSelectedSessionId('');
@@ -276,7 +281,7 @@ export default function OpenClaw() {
       setStatusLoading(false);
       setSessionsLoading(false);
     }
-  }, [featureEnabled, loadMessages]);
+  }, [featureEnabled, loadMessages, setSearchParams]);
 
   useEffect(() => {
     loadRuntime();
@@ -295,13 +300,29 @@ export default function OpenClaw() {
     loadMessages(selectedSessionId);
   }, [loadMessages, selectedSessionId, status?.configured]);
 
+  // Browser Back/Forward (or a pasted link) changes ?session=; follow it once the
+  // runtime has told us which sessions are valid. An absent param means the default.
+  useEffect(() => {
+    if (!status?.configured || sessions.length === 0) return;
+    const target = urlSessionId || status.defaultSession || '';
+    if (!target || target === selectedSessionIdRef.current) return;
+    if (sessions.some(session => session.id === target)) setSelectedSessionId(target);
+  }, [urlSessionId, sessions, status]);
+
   const handleSelectSession = useCallback((sessionId) => {
     if (sending) return;
+    if (sessionId !== urlSessionIdRef.current) {
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.set('session', sessionId);
+        return next;
+      });
+    }
     // Re-tapping the active session is still a dismissal of the mobile panel,
     // so the side panel closes even when the selection doesn't change.
     if (sessionId !== selectedSessionIdRef.current) setSelectedSessionId(sessionId);
     setShowSidePanel(false);
-  }, [sending]);
+  }, [sending, setSearchParams]);
 
   const activeContextCount = Object.values(context).filter(value => String(value || '').trim()).length;
 

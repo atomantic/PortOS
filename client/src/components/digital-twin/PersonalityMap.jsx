@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
 import { analyzeDigitalTwinTraits } from '../../services/apiDigitalTwin.js';
 import toast from '../ui/Toast';
-import { filterSelectableModels } from '../../utils/providers';
+import TwinProviderPicker from './TwinProviderPicker';
 import { formatDateNumeric } from '../../utils/formatters';
 
 const BIG_FIVE_LABELS = {
@@ -29,9 +29,11 @@ function getConfidenceBg(confidence) {
 
 export default function PersonalityMap({ traits, confidence, providers, onAnalyze }) {
   const [analyzing, setAnalyzing] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState(
-    providers?.[0] ? { providerId: providers[0].id, model: providers[0].defaultModel } : null
-  );
+  // Providers load asynchronously in the parent, so the default is derived each
+  // render; only an explicit user pick is stored.
+  const [pickedProvider, setSelectedProvider] = useState(null);
+  const selectedProvider = pickedProvider
+    ?? (providers?.[0] ? { providerId: providers[0].id, model: providers[0].defaultModel } : null);
   const [showDetails, setShowDetails] = useState(false);
 
   const handleAnalyze = async () => {
@@ -115,24 +117,13 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
             No personality traits analyzed yet. Run an analysis to extract Big Five traits from your documents.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <label htmlFor="personality-model-select" className="sr-only">AI Provider &amp; Model</label>
-            <select
-              id="personality-model-select"
-              value={selectedProvider ? `${selectedProvider.providerId}:${selectedProvider.model}` : ''}
-              onChange={(e) => {
-                const [providerId, model] = e.target.value.split(':');
-                setSelectedProvider({ providerId, model });
-              }}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-w-[200px]"
-            >
-              {providers?.map(p => (
-                (filterSelectableModels(p.models).length > 0 ? filterSelectableModels(p.models) : [p.defaultModel]).filter(Boolean).map(model => (
-                  <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
-                    {p.name} - {model}
-                  </option>
-                ))
-              ))}
-            </select>
+            <TwinProviderPicker
+              providers={providers}
+              selected={selectedProvider}
+              onChange={setSelectedProvider}
+              label="AI Provider & Model"
+              disabled={analyzing}
+            />
             <button
               onClick={handleAnalyze}
               disabled={analyzing}
@@ -296,6 +287,14 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
                       : 'Never'}
                   </span>
                 </div>
+                <TwinProviderPicker
+                  providers={providers}
+                  selected={selectedProvider}
+                  onChange={setSelectedProvider}
+                  label="AI Provider & Model"
+                  disabled={analyzing}
+                  className="mt-2"
+                />
                 <button
                   onClick={handleAnalyze}
                   disabled={analyzing}

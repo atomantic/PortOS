@@ -117,6 +117,16 @@ describe('Brain Threads routes', () => {
     }));
   });
 
+  it('logs the opaque thread id, never the user-authored title', async () => {
+    brainStorage.create.mockImplementation(async (type, data) => ({ id: THREAD_ID, ...data }));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await request(app).post('/api/brain/threads').send({ title: 'Private grief journal' });
+    const lines = log.mock.calls.map((c) => c.join(' '));
+    log.mockRestore();
+    expect(lines.some((l) => l.includes(THREAD_ID))).toBe(true);
+    expect(lines.some((l) => l.includes('Private grief journal'))).toBe(false);
+  });
+
   it('strips the server-managed fields from a client write', async () => {
     // `source`/`externalState`/`closedAt` belong to the auto-ingest sync. A
     // client that sets them could forge provenance or backdate a completion.

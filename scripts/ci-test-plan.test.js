@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { fansOut } from './lib/ciPlanOutput.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { TRUSTED_REBUILDS } from './trusted-rebuilds.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
@@ -25,6 +26,7 @@ import {
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   LINUX_CONTAINMENT_TESTS,
+  CLIENT_BROWSER_FANOUT_SUITES,
   CLIENT_FANOUT_TEST_FILES,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
@@ -55,6 +57,7 @@ const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const REAL_TREE_SOURCES = [
   'server/lib/postScoring.js', 'server/lib/editorial/checkInfra/taxonomy.js',
   'server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+  'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js',
   'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
@@ -387,7 +390,7 @@ describe('real shared-source import chains', () => {
   });
 });
 
-// The eight gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
+// The gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
 // narrowing record and `related` selection used to fail closed into every plan (#16798).
 describe('gate-tooling tests in a related plan', () => {
   const inputs = realTree();
@@ -398,8 +401,9 @@ describe('gate-tooling tests in a related plan', () => {
     return plan;
   };
 
-  it('lists eight existing suites, each under an owner path', () => {
-    expect(TOOLING_TESTS).toHaveLength(8);
+  it('lists the gate-tooling suites, each an existing file under an owner path', () => {
+    expect(TOOLING_TESTS).toContain('scripts/ci-test-plan.test.js');
+    expect(TOOLING_TESTS).toHaveLength(9);
     for (const test of TOOLING_TESTS) {
       expect(existsSync(join(REPO_ROOT, test)), test).toBe(true);
       expect(TOOLING_OWNER_RE.test(test), test).toBe(true);
@@ -412,7 +416,7 @@ describe('gate-tooling tests in a related plan', () => {
   });
 
   it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
-    'selects all eight for a diff of %s, an owner path', (path) => {
+    'selects every gate-tooling suite for a diff of %s, an owner path', (path) => {
       const plan = relatedPlan(path);
       expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
     });
@@ -614,6 +618,141 @@ it('resolves local client imports of present untracked modules and still fails c
   }
 });
 
+it('measures client related import reach and fans a broad shared client module out across the client shards (#17456)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-client-reach-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const shared = 'client/src/services/apiCore.js';
+  const narrow = 'client/src/components/lonely/Lonely.jsx';
+  const leaf = 'server/lib/shared/leaf.js';
+  const consumers = CLIENT_FANOUT_TEST_FILES + 1;
+  const inspect = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: root });
+    return { inputs, plan: buildCiTestPlan(inputs.changedFiles, inputs) };
+  };
+  try {
+    git('init', '-q');
+    write(leaf, 'export const value = 1;\n');
+    write(shared, "export { value } from '../../../server/lib/shared/leaf.js';\n");
+    write(narrow, 'export const Lonely = () => null;\n');
+    write('client/src/components/lonely/Lonely.test.jsx', "import './Lonely.jsx';\n");
+    for (let i = 0; i < consumers; i += 1) {
+      const dir = `client/src/pages/p${String(i).padStart(3, '0')}`;
+      // A lazy edge: the related walk follows it, so the reach is dynamic-aware.
+      write(`${dir}/Page.jsx`, "export const load = () => import('../../services/apiCore.js');\n");
+      write(`${dir}/Page.test.jsx`, "import './Page.jsx';\n");
+    }
+    // A guard check lives in the client tree but no client runner collects it.
+    write('client/src/test/guards/structure/apiCore.guard.test.js', "import '../../../services/apiCore.js';\n");
+    git('add', '--all');
+
+    const broad = inspect([shared]);
+    expect(broad.inputs.serverReach).toBeNull();
+    expect(broad.inputs.clientReach).toMatchObject({ selected: consumers, rows: [{ source: shared, staticReach: 0, dynamicReach: consumers }] });
+    expect(broad.plan).toMatchObject({ full: false, client: { mode: 'related', sources: [shared] } });
+    // Explicit selectors stay few; only the measured reach fans the runner out.
+    expect(broad.plan.client.files.length).toBeLessThanOrEqual(CLIENT_FANOUT_TEST_FILES);
+    expect(broad.plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    expect(broad.plan.shards.server).toEqual([1]);
+    expect(broad.plan.suiteReasons.client).toMatch(new RegExp(
+      `related import reach of ${consumers} suites exceeds the ${CLIENT_FANOUT_TEST_FILES}-file cap, sharded ${FULL_SUITE_SHARDS.client} ways`));
+    expect(broad.plan.suiteReasons.client).toContain(`dynamic-aware fan-out ${consumers} suite(s): ${shared} ${consumers} (static 0)`);
+    // The step summary carries the reach-based fan-out.
+    const summary = formatPlanSummary(githubPlanOutput(broad.plan), broad.plan.shards);
+    expect(summary).toContain(`related import reach of ${consumers} suites exceeds the ${CLIENT_FANOUT_TEST_FILES}-file cap`);
+    expect(summary).toContain(`Client tests: \`related\` (shards \`${JSON.stringify(broad.plan.shards.client)}\`)`);
+
+    const small = inspect([narrow]);
+    expect(small.inputs.clientReach).toMatchObject({ selected: 1 });
+    expect(small.plan.client.mode).toBe('related');
+    expect(small.plan.shards.client).toEqual([1]);
+    expect(small.plan.suiteReasons.client).not.toMatch(/sharded/);
+
+    // A shared server/lib module the browser bundle imports is a client related
+    // source too, so its client reach is measured alongside the server reach.
+    const sharedServer = inspect([leaf]);
+    expect(sharedServer.inputs.clientReach).toMatchObject({ selected: consumers });
+    expect(sharedServer.plan.client.sources).toContain(leaf);
+    expect(sharedServer.plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('counts the real-Chromium client suites a change reaches and fans the client out at four (#17616)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-browser-reach-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const write = (path, source) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), source);
+  };
+  const inspect = (changedFiles) => {
+    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles, cwd: root });
+    return { inputs, plan: buildCiTestPlan(inputs.changedFiles, inputs) };
+  };
+  // A fixture names what it renders only inside strings: the virtual module and optimizeDeps.entries.
+  const suite = (entry) => [
+    "import { startBrowserFixture } from '../../../scripts/lib/browserFixture.js';",
+    `const config = { optimizeDeps: { entries: ['${entry}'] } };`,
+    `const fixture = \`import Rendered from '/${entry}';\`;`,
+  ].join('\n');
+  const suites = Array.from({ length: 5 }, (_, i) => `client/src/components/s${i}.browser.test.js`);
+  try {
+    git('init', '-q');
+    write('scripts/lib/browserFixture.js', 'export const startBrowserFixture = () => null;\n');
+    write('client/package.json', '{"name":"client"}\n');
+    write('client/postcss.config.js', 'export default {};\n');
+    write('client/src/index.css', '@import "tailwindcss";\n');
+    write('client/src/themes/tokens.js', "import { palette } from '../palette.js';\nexport const tokens = palette;\n");
+    write('client/src/palette.js', 'export const palette = 1;\n');
+    write('client/src/components/ui/Menu.jsx', "import './Menu.css';\nexport const Menu = () => null;\n");
+    write('client/src/components/ui/Menu.css', '.menu {}\n');
+    write('client/src/pages/Other.jsx', 'export const Other = () => null;\n');
+    write('client/src/pages/HtmlPages.jsx', 'export const HtmlPages = () => null;\n');
+    suites.forEach((path, i) => write(path, suite(i < 4 ? 'src/components/ui/Menu.jsx' : 'src/pages/Other.jsx')));
+    git('add', '--all');
+
+    const reach = (changed) => inspect(changed).inputs.clientBrowserReach?.selected;
+    expect(reach(['client/src/components/ui/Menu.jsx'])).toBe(4);
+    expect(reach(['client/src/components/ui/Menu.css'])).toBe(4);
+    expect(reach(['client/src/pages/Other.jsx'])).toBe(1);
+    expect(reach(['client/src/pages/HtmlPages.jsx'])).toBe(0);
+    // A module a shared input imports is on every served key too.
+    for (const shared of ['client/src/index.css', 'client/src/themes/tokens.js', 'client/src/palette.js', 'client/postcss.config.js', 'client/package.json', 'scripts/lib/browserFixture.js']) {
+      expect(reach([shared]), shared).toBe(5);
+    }
+    expect(inspect(['docs/notes.md']).inputs.clientBrowserReach).toBeNull();
+
+    const menu = inspect(['client/src/components/ui/Menu.jsx']).plan;
+    expect(menu).toMatchObject({ full: false, client: { mode: 'related' } });
+    expect(menu.client.files.length).toBeLessThan(CLIENT_FANOUT_TEST_FILES);
+    expect(menu.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    expect(menu.suiteReasons.client).toContain(`4 real-Chromium suites selected (at least ${CLIENT_BROWSER_FANOUT_SUITES}), sharded ${FULL_SUITE_SHARDS.client} ways`);
+    expect(inspect(['client/src/index.css']).plan.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+    for (const narrow of ['client/src/pages/HtmlPages.jsx', 'client/src/pages/Other.jsx']) {
+      const plan = inspect([narrow]).plan;
+      expect(plan.client.mode, narrow).toBe('related');
+      expect(plan.shards.client, narrow).toEqual([1]);
+      expect(plan.suiteReasons.client, narrow).not.toMatch(/sharded/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it('fans a test-only client plan out once it names four real-Chromium suites (#17616)', () => {
+  const browser = Array.from({ length: 4 }, (_, i) => `client/src/components/s${i}.browser.test.js`);
+  const trackedFiles = [...browser, 'client/src/components/plain.test.jsx'];
+  const four = buildCiTestPlan(browser, { trackedFiles });
+  expect(four.client).toMatchObject({ mode: 'files', files: browser });
+  expect(four.shards.client).toEqual(shardIndexes('full', FULL_SUITE_SHARDS.client));
+  const three = buildCiTestPlan([...browser.slice(0, 3), 'client/src/components/plain.test.jsx'], { trackedFiles });
+  expect(three.shards.client).toEqual([1]);
+});
+
 it('shares source reads within one collection and observes edits and unreadable sources in the next', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-snapshot-'));
   const planner = new URL('./ci-test-plan.js', import.meta.url).href;
@@ -733,7 +872,10 @@ it('runs the whole-tree import-cycle guard on a PR that touches one server/servi
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
-  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js'];
+  // The backup facade re-exports its snapshot, file-restore and database-restore
+  // modules, so a change to any of them must still reach backup.db.test.js.
+  const sources = ['server/routes/decks.js', 'server/services/modelPinRecords.js', 'server/services/backup.js',
+    'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js'];
   const inputs = realTree();
   for (const source of sources) {
     expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
@@ -976,6 +1118,24 @@ describe('CI test impact planner', () => {
       expect(plan.client.mode, path).toBe('full');
       expect(plan.db, path).toBe(true);
     }
+  });
+
+  // #17460: routine version bumps edit a domain slice, never the composer above.
+  it('scopes a schema-version domain slice to its related suites and the registry contract test', () => {
+    const slice = 'server/lib/schemaVersions/music.js';
+    const contract = 'server/lib/schemaVersions.test.js';
+    const plan = buildCiTestPlan([slice], {
+      trackedFiles: [...TRACKED, slice, contract],
+      // collectPlanInputs finds the contract test because it names the slice's basename.
+      pathContractTests: { [slice]: [contract] },
+    });
+
+    expect(plan.full).toBe(false);
+    expect(plan.server.mode).toBe('related');
+    expect(plan.server.sources).toEqual([slice]);
+    expect(plan.server.files).toContain(contract);
+    expect(plan.client.mode).toBe('skip');
+    expect(plan.windowsMode).toBe('skip');
   });
 
   it('scopes an App.jsx change only when its diff contains route declarations', () => {
@@ -1570,7 +1730,7 @@ describe('CI test impact planner', () => {
     const full = buildCiTestPlan(['server/vitest.config.js'], { trackedFiles: [...TRACKED, ...BROWSER_SUITES] });
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
-      client: shardIndexes('full', FULL_SUITE_SHARDS.client),
+      client: [1, 2, 3, 4],
       browser: [1, 2],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
@@ -1637,7 +1797,7 @@ describe('CI test impact planner', () => {
       expect(plan.client.files).toEqual(expect.arrayContaining(tests));
       expect(plan.shards.client).toEqual(CLIENT_FANOUT);
       expect(plan.shards.server).toEqual([1]);
-      expect(plan.suiteReasons.client).toMatch(/exceed the 400-file cap, sharded 3 ways/);
+      expect(plan.suiteReasons.client).toContain(`exceed the 400-file cap, sharded ${CLIENT_FANOUT.length} ways`);
 
       // TRACKED adds client selectors of its own, so size the boundary case from the measured floor.
       const floor = plan.client.files.length - tests.length;
@@ -1680,6 +1840,35 @@ describe('CI test impact planner', () => {
       const exact = buildCiTestPlan(tests, { trackedFiles, serverReach: reach(1069) });
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
+    });
+
+    it('fans a client related plan out on measured import reach over the client cap, never at or under it (#17456)', () => {
+      const source = 'client/src/services/apiShared.js';
+      const tests = featureTests('client/src/components/sharedfeature', 2, 'jsx');
+      const trackedFiles = [...TRACKED, source, ...tests];
+      const reach = (selected) => ({ selected, rows: [{ source, dynamicReach: selected, staticReach: 10 }] });
+
+      const broad = buildCiTestPlan([source], { trackedFiles, clientReach: reach(1042) });
+      expect(broad.client).toMatchObject({ mode: 'related', sources: [source] });
+      expect(broad.shards).toEqual({ server: [1], client: CLIENT_FANOUT, browser: [1], windows: [1] });
+      expect(broad.suiteReasons.client).toContain(`related import reach of 1042 suites exceeds the 400-file cap, sharded ${CLIENT_FANOUT.length} ways`);
+      expect(broad.suiteReasons.client).toContain(`dynamic-aware fan-out 1042 suite(s): ${source} 1042 (static 10)`);
+
+      // The server's lower cap never applies to client reach.
+      for (const selected of [MAX_TARGETED_TEST_FILES + 1, CLIENT_FANOUT_TEST_FILES]) {
+        const low = buildCiTestPlan([source], { trackedFiles, clientReach: reach(selected) });
+        expect(low.shards.client).toEqual([1]);
+        expect(low.suiteReasons.client).not.toMatch(/sharded/);
+      }
+      expect(fansOut('client', { mode: 'related', files: [] }, CLIENT_FANOUT_TEST_FILES + 1)).toBe(true);
+      expect(fansOut('client', { mode: 'files', files: [] }, CLIENT_FANOUT_TEST_FILES + 1)).toBe(false);
+
+      // Each runner reads only its own reach.
+      const serverOnly = buildCiTestPlan([source], { trackedFiles, serverReach: reach(1042) });
+      expect(serverOnly.shards.client).toEqual([1]);
+      const exact = buildCiTestPlan(tests, { trackedFiles, clientReach: reach(1042) });
+      expect(exact.client.mode).toBe('files');
+      expect(exact.shards.client).toEqual([1]);
     });
   });
 
@@ -1784,14 +1973,19 @@ describe('CI test impact planner', () => {
     expect(buildCiTestPlan(['scripts/ci-test-plan.js', '.github/workflows/ci.yml'], { trackedFiles: TRACKED }).windowsMode).toBe('files');
   });
 
-  it('routes worktree-manager source to a full plan instead of a broad nominal scoped plan (#9999)', () => {
-    const plan = buildCiTestPlan(['server/services/worktreeManager.js'], { trackedFiles: TRACKED });
-    expect(plan.full).toBe(true);
-    expect(plan.reason).toMatch(/worktree manager source changed/);
-    expect(plan.server.mode).toBe('full');
-    expect(plan.client.mode).toBe('full');
-    expect(plan.windowsMode).toBe('files');
-    // Its test file alone stays a scoped plan.
+  it.each(['server/services/worktreeManager.js', 'server/services/worktree/create.js'])(
+    'routes %s to a full plan instead of a broad nominal scoped plan (#9999)',
+    (path) => {
+      const plan = buildCiTestPlan([path], { trackedFiles: TRACKED });
+      expect(plan.full).toBe(true);
+      expect(plan.reason).toMatch(/worktree manager source changed/);
+      expect(plan.server.mode).toBe('full');
+      expect(plan.client.mode).toBe('full');
+      expect(plan.windowsMode).toBe('files');
+    },
+  );
+
+  it('keeps the worktree manager facade test on a scoped plan', () => {
     expect(buildCiTestPlan(['server/services/worktreeManager.test.js'], { trackedFiles: TRACKED }).full).toBe(false);
   });
 
@@ -2271,8 +2465,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan(['package.json'], { trackedFiles });
 
     expect(plan.full).toBe(true);
-    // Planning sorts selectors; the registry separately preserves execution
-    // order so adding coverage need not rebalance existing browser shards.
+    // Planning sorts selectors. The registry assigns shard owners by path.
     expect(plan.browserFiles).toEqual([...BROWSER_SUITES].sort());
   });
 

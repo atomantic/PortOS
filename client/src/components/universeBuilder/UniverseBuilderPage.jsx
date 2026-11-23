@@ -195,16 +195,20 @@ export default function UniverseBuilder() {
     setRenderOpts,
   } = useUniverseRender({
     selectedId,
+    selectedIdRef,
+    mountedRef,
     draft,
     availableBackends,
     defaultMode: effectiveDefaultMode,
-    runs,
     setRuns,
     preflight: flushDraftIfDirty,
     syncEntryIdsFromServer,
   });
   const { expanding, handleExpand, refine } = useUniverseExpand({
     selectedId,
+    selectedIdRef,
+    mountedRef,
+    draftRef,
     draft,
     setDraft,
     setSaving,
@@ -230,6 +234,7 @@ export default function UniverseBuilder() {
     autoSorting, handleAutoSort, handleGenerateInCategory, handlePromoteVariation, promoting,
   } = useUniverseBucketActions({
     selectedId,
+    selectedIdRef,
     draft,
     draftRef,
     setDraft,

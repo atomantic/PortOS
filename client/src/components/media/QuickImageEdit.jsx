@@ -6,7 +6,7 @@ import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import { formatCount } from '../../utils/formatters';
 import ModelInputPreview from './ModelInputPreview';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import IngredientPicker from '../IngredientPicker';
 import MediaImage from '../MediaImage';
@@ -15,6 +15,11 @@ import CatalogReferenceImagePicker from './CatalogReferenceImagePicker';
 // Extra pictures to draw from (a place, a prop, a face) beside the edited image.
 export const QUICK_EDIT_MAX_REFERENCES = 3;
 const thumbUrl = (filename) => `/data/images/${encodeURIComponent(filename)}`;
+// The edit endpoints to offer here. Leaving the select blank keeps the
+// install's current image render; picking one sends this edit to that fal model.
+const QUICK_EDIT_MODELS = FAL_FEATURED_EDIT_MODEL_IDS
+  .map((id) => FAL_IMAGE_MODEL_OPTIONS.find((row) => row.id === id))
+  .filter(Boolean);
 
 /**
  * One-step "change this about the image" action: sends the image as the
@@ -25,6 +30,7 @@ const thumbUrl = (filename) => `/data/images/${encodeURIComponent(filename)}`;
  */
 export default function QuickImageEdit({ item, onDone, generateParams, referenceChoices = [] }) {
   const [instruction, setInstruction] = useState('');
+  const [editModel, setEditModel] = useState('');
   const [references, setReferences] = useState([]);
   const [choosing, setChoosing] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -47,7 +53,9 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
     prompt: instruction,
     quickEdit: true,
     referenceImageFiles: [item.filename, ...references],
+    ...(editModel ? { mode: IMAGE_GEN_MODE.FAL, cloudModel: editModel } : {}),
   };
+  const chosenEdit = QUICK_EDIT_MODELS.find((model) => model.id === editModel);
   const modelInputPreview = useModelInputPreview(previewImagePrompt, { ...request, reviewReference: true }, { enabled: Boolean(instruction.trim()), revision: previewRevision });
   const { preview } = modelInputPreview;
   const canSubmit = instruction.trim() && !busy && Boolean(preview?.reviewedPromptDigest && preview?.reviewedReferenceDigest && preview?.reviewedReferenceImage);
@@ -93,12 +101,25 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
           <Pencil className="w-3.5 h-3.5" /> {busy ? 'Sending…' : 'Edit'}
         </button>
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="quick-edit-model" className="text-[11px] uppercase tracking-wide text-gray-400">Edit with</label>
+        <select
+          id="quick-edit-model"
+          value={editModel}
+          onChange={(e) => setEditModel(e.target.value)}
+          disabled={busy}
+          className="min-w-0 flex-1 px-2 py-1 text-xs rounded bg-port-card border border-port-border text-gray-100 focus:outline-none focus:border-port-accent disabled:opacity-50"
+        >
+          <option value="">Current image render</option>
+          {QUICK_EDIT_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+        </select>
+      </div>
       <div className="flex flex-wrap items-end gap-2">
         {preview?.reviewedReferenceImage && <img src={preview.reviewedReferenceImage} alt="Reference for this edit" className="max-h-32 max-w-full object-contain" />}
         {references.map((filename, index) => (
           <div key={filename} className="relative shrink-0">
             <MediaImage src={thumbUrl(filename)} fallbackSrc={`/data/image-refs/${encodeURIComponent(filename)}`} alt={`Reference image ${index + 2}`} loading="lazy" className="h-16 w-16 rounded object-cover border border-port-border" />
-            <span className="absolute bottom-0.5 left-0.5 rounded bg-black/70 px-1 text-[10px] text-white">{index + 2}</span>
+            <span className="absolute bottom-0.5 left-0.5 rounded port-media-overlay-strong px-1 text-[10px]">{index + 2}</span>
             <button type="button" onClick={() => removeReference(filename)} disabled={busy}
               aria-label={`Remove reference image ${index + 2}`}
               className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 absolute -top-2 -right-2 w-6 h-6 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white flex items-center justify-center">
@@ -150,7 +171,7 @@ export default function QuickImageEdit({ item, onDone, generateParams, reference
       <p className="text-[10px] text-gray-500">Instruction: {formatCount(instruction.length)} characters{preview?.sentPrompt ? ` · Full prompt: ${formatCount(preview.sentPrompt.length)} characters` : ''}</p>
       <ModelInputPreview preview={modelInputPreview} prompt={instruction} />
       <p className="text-[10px] leading-snug text-gray-500">
-        Sends this image as the reference with your instruction to the default image render, keeping everything else.{references.length ? ' Added images go along as visual references; name them by number (image 2, image 3).' : ''} Creates a new image; the original is kept.
+        Sends this image as the reference with your instruction to {chosenEdit ? chosenEdit.label : 'the default image render'}, keeping everything else.{references.length ? ' Added images go along as visual references; name them by number (image 2, image 3).' : ''} Creates a new image; the original is kept.
       </p>
     </form>
   );

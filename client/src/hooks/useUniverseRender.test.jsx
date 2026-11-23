@@ -45,19 +45,31 @@ beforeEach(() => {
 
 const renderUniverseRender = (availableBackends = [{ id: 'local' }], preflight = async () => true) => {
   const setRuns = vi.fn();
+  const selectedIdRef = { current: 'u1' };
   const hook = renderHook(() => useUniverseRender({
     selectedId: 'u1',
+    selectedIdRef,
+    mountedRef: { current: true },
     draft,
     availableBackends,
     defaultMode: 'local',
-    runs: [],
     setRuns,
     preflight,
   }));
-  return { ...hook, setRuns };
+  return { ...hook, setRuns, selectedIdRef };
 };
 
 describe('useUniverseRender', () => {
+  it('does not apply run history when the user switched universes during the render call', async () => {
+    const { result, setRuns, selectedIdRef } = renderUniverseRender();
+    apiMocks.renderWorld.mockImplementation(async () => {
+      selectedIdRef.current = 'u2';
+      return { promptCount: 1, collectionName: 'C', entryJobs: [] };
+    });
+    await act(async () => { await result.current.handleRender(); });
+    expect(setRuns).not.toHaveBeenCalled();
+  });
+
   it('adds the all-trunks canon selection for an unscoped all-mode render', async () => {
     const { result, setRuns } = renderUniverseRender();
     act(() => result.current.setRenderOpts((current) => ({ ...current, promptMode: 'all' })));

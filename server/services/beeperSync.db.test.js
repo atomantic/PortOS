@@ -56,7 +56,7 @@ vi.mock('./beeperCredentials.js', async (importOriginal) => {
 });
 
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: async () => true }));
-const { runBeeperSweep, reconcileBeeperEvent, upsertMirroredMessage, normalizeMessageRow } = await import('./beeperSync.js');
+const { runBeeperSweep, reconcileBeeperEvent, upsertMirroredMessage, normalizeMessageRow, normalizeAttachmentRows } = await import('./beeperSync.js');
 const { listMessages: readThread } = await import('./beeperConversations.js');
 const { beeperSocketEvents } = await import('./beeperSocketEvents.js');
 
@@ -306,6 +306,48 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     }
   });
 
+  it('keeps observed_at monotonic when a newer edit arrives with an older observation', async () => {
+    const conversationId = (await query('SELECT conversation_id FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0].conversation_id;
+    try {
+      await withTransaction(async (client) => {
+        await upsertMirroredMessage(client, conversationId,
+          normalizeMessageRow(messageFixture(), '2026-09-10T00:00:00Z'));
+        const edited = { ...messageFixture({ text: 'Edited example' }), editedTimestamp: '2026-09-11T00:00:00Z' };
+        await upsertMirroredMessage(client, conversationId, normalizeMessageRow(edited, '2026-09-05T00:00:00Z'));
+      });
+      const row = (await query('SELECT body, observed_at FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0];
+      expect(row.body).toBe('Edited example');
+      expect(row.observed_at.toISOString()).toBe('2026-09-10T00:00:00.000Z');
+    } finally {
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+    }
+  });
+
+  it('stamps a swept tombstone at chat-fetch time, not at sweep start', async () => {
+    installFetch({
+      chats: { items: [chatFixture('2026-10-01T10:00:00.000Z')], hasMore: false },
+      messages: { items: [messageFixture({ isDeleted: true })], hasMore: false, newestCursor: 'cursor-fetch-time' },
+    });
+    const baseFetch = globalThis.fetch;
+    // Models a slow multi-account sweep: the chat is reached well after the
+    // sweep began, so a sweep-start stamp would predate the fetch.
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      const { pathname } = new URL(url);
+      // Keep the stored-row reconcile out of this case: only the chat sweep may write the tombstone.
+      if (/\/messages\//.test(pathname)) return { ok: false, status: 404, text: async () => '{}' };
+      if (pathname === '/v1/accounts') await new Promise((resolve) => setTimeout(resolve, 60));
+      return baseFetch(url);
+    }));
+    const sweepStart = Date.now();
+    try {
+      await runBeeperSweep({ reason: 'db-test' });
+      const row = (await query('SELECT unsent_at FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0];
+      expect(row.unsent_at.getTime() - sweepStart).toBeGreaterThanOrEqual(50);
+    } finally {
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+    }
+  });
+
   it('keeps the body and stamps unsent_at when the source unsends the message', async () => {
     installFetch({
       chats: { items: [chatFixture('2026-09-03T10:00:00.000Z')], hasMore: false },
@@ -468,6 +510,43 @@ describe.skipIf(!runDb)('beeperSync against Postgres', () => {
     await runBeeperSweep({ reason: 'db-test' }); // end-of-rotation reset
     await runBeeperSweep({ reason: 'db-test' });
     expect((await query('SELECT body FROM beeper_messages WHERE id = $1', [ids[0]])).rows[0].body).toBe('Reconciled');
+  });
+
+  it('keeps measured byte_length when upstream omits fileSize and resets fetch state on a replaced mxc_id', async () => {
+    const conversationId = (await query('SELECT conversation_id FROM beeper_messages WHERE id = $1', [MESSAGE_ID])).rows[0].conversation_id;
+    const upsert = (fixture, at) => withTransaction(async (client) => {
+      await upsertMirroredMessage(client, conversationId, normalizeMessageRow(fixture, at), normalizeAttachmentRows(fixture));
+    });
+    const read = async () => (await query(
+      'SELECT mxc_id, byte_length, mime_type, file_name, local_path, fetched_at, unavailable_at, fetch_error FROM beeper_attachments WHERE message_id = $1 AND idx = 0',
+      [MESSAGE_ID])).rows[0];
+    const bare = (over = {}) => {
+      const m = messageFixture();
+      m.attachments = [{ ...m.attachments[0], fileSize: undefined, mimeType: '', fileName: '', ...over }];
+      return m;
+    };
+    try {
+      await query("UPDATE beeper_messages SET unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+      await upsert(messageFixture(), '2026-10-01T00:00:00Z');
+      // HEAD-probed size on a not-yet-downloaded row survives a sparse re-observation.
+      await query('UPDATE beeper_attachments SET byte_length = 7777 WHERE message_id = $1', [MESSAGE_ID]);
+      await upsert(bare(), '2026-10-02T00:00:00Z');
+      expect(await read()).toMatchObject({ byte_length: '7777', mime_type: 'image/png', file_name: 'example.png' });
+      // A downloaded row keeps its measured disk size even over a non-null upstream value.
+      await query("UPDATE beeper_attachments SET local_path = 'x/example.bin', byte_length = 5000, fetched_at = NOW(), fetch_error = 'old' WHERE message_id = $1", [MESSAGE_ID]);
+      await upsert(messageFixture(), '2026-10-03T00:00:00Z');
+      expect(await read()).toMatchObject({ byte_length: '5000', local_path: 'x/example.bin' });
+      // Replaced attachment: fetch state resets and upstream metadata wins.
+      await query("UPDATE beeper_attachments SET unavailable_at = NOW() WHERE message_id = $1", [MESSAGE_ID]);
+      await upsert(bare({ id: 'mxc://example.invalid/attachment-2', fileSize: 123, mimeType: 'image/jpeg', fileName: 'new.jpg' }), '2026-10-04T00:00:00Z');
+      expect(await read()).toMatchObject({
+        mxc_id: 'mxc://example.invalid/attachment-2', byte_length: '123', mime_type: 'image/jpeg', file_name: 'new.jpg',
+        local_path: null, fetched_at: null, unavailable_at: null, fetch_error: null,
+      });
+    } finally {
+      await query("UPDATE beeper_messages SET body = 'Example message body', edited_at = NULL, unsent_at = NULL, observed_at = 'epoch' WHERE id = $1", [MESSAGE_ID]);
+      await query("UPDATE beeper_attachments SET mxc_id = 'mxc://example.invalid/attachment-1', mime_type = 'image/png', file_name = 'example.png', byte_length = 4096, local_path = NULL, fetched_at = NULL, unavailable_at = NULL, fetch_error = NULL WHERE message_id = $1", [MESSAGE_ID]);
+    }
   });
 
 });

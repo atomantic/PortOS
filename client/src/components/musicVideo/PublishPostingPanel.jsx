@@ -7,6 +7,7 @@ import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import { DISTROKID_GENRES, DISTROKID_REMEMBERED_OPTIONS, suggestDistrokidGenres } from '../../../../server/lib/distrokidGenres.js';
 import { publishRowAnchor } from '../../lib/musicVideoStages.js';
+import { onRadioGroupKeyDown } from '../../lib/a11yKeyboard.js';
 
 // Where the release goes, in posting order: the full video first so every
 // other post can link to it.
@@ -132,32 +133,39 @@ function StoryImagePicker({ idFor, thumbnails, frame, galleryFile, onFrame, onGa
   const tile = (selected) => `relative rounded overflow-hidden border-2 aspect-video min-h-[44px] ${selected ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'}`;
   const mark = <span className="absolute top-1 right-1 rounded-full bg-port-accent text-white p-0.5" aria-hidden="true"><Check size={12} /></span>;
   const none = !frame && !galleryFile;
+  const frameSelected = !galleryFile && thumbnails.includes(frame);
+  // Roving tabindex lands on the checked radio, or the first ("No image") when the saved frame is not in this list.
+  let roving = 'none';
+  if (galleryFile) roving = 'gallery';
+  else if (frameSelected) roving = 'frame';
   return (
     <div className="space-y-0.5 min-w-0">
       <span id={idFor('storyImage')} className="block text-[11px] text-port-text-muted">Image on the story reply (optional)</span>
-      <div role="radiogroup" aria-labelledby={idFor('storyImage')} className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-        <button type="button" role="radio" aria-checked={none} onClick={() => onFrame('')}
-          className={`${tile(none)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
-          <ImageOff size={14} aria-hidden="true" /> No image
-          {none && mark}
-        </button>
-        {galleryFile ? (
-          <button type="button" role="radio" aria-checked="true" aria-label="Gallery image" title={galleryFile}
-            onClick={() => setPickerOpen(true)} className={tile(true)}>
-            <img src={`/data/images/${encodeURIComponent(galleryFile)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
-            {mark}
+      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+        <div role="radiogroup" aria-labelledby={idFor('storyImage')} onKeyDown={onRadioGroupKeyDown} className="contents">
+          <button type="button" role="radio" aria-checked={none} tabIndex={roving === 'none' ? 0 : -1} onClick={() => onFrame('')}
+            className={`${tile(none)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
+            <ImageOff size={14} aria-hidden="true" /> No image
+            {none && mark}
           </button>
-        ) : null}
-        {thumbnails.map((name, i) => {
-          const selected = !galleryFile && frame === name;
-          return (
-            <button key={name} type="button" role="radio" aria-checked={selected} aria-label={`Video frame ${i + 1}`} title={name}
-              onClick={() => onFrame(name)} className={tile(selected)}>
-              <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
-              {selected && mark}
+          {galleryFile ? (
+            <button type="button" role="radio" aria-checked="true" tabIndex={roving === 'gallery' ? 0 : -1} aria-label="Gallery image" title={galleryFile}
+              onClick={() => setPickerOpen(true)} className={tile(true)}>
+              <img src={`/data/images/${encodeURIComponent(galleryFile)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+              {mark}
             </button>
-          );
-        })}
+          ) : null}
+          {thumbnails.map((name, i) => {
+            const selected = !galleryFile && frame === name;
+            return (
+              <button key={name} type="button" role="radio" aria-checked={selected} tabIndex={roving === 'frame' && selected ? 0 : -1} aria-label={`Video frame ${i + 1}`} title={name}
+                onClick={() => onFrame(name)} className={tile(selected)}>
+                <img src={`/data/video-thumbnails/${encodeURIComponent(name)}`} alt="" loading="lazy" className="w-full h-full object-cover" />
+                {selected && mark}
+              </button>
+            );
+          })}
+        </div>
         <button type="button" onClick={() => setPickerOpen(true)}
           className={`${tile(false)} flex items-center justify-center gap-1 bg-port-bg text-xs text-port-text-muted`}>
           <ImagePlus size={14} aria-hidden="true" /> {galleryFile ? 'Other image…' : 'Gallery image…'}

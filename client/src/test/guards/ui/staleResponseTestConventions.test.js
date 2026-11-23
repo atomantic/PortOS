@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
-import { execSync } from 'child_process';
+import { trackedTestFiles } from '../../trackedFiles.js';
 import { readText, REPO_ROOT } from '../../../../../scripts/lib/guardCorpus.js';
 
 const CLIENT_ROOT = join(REPO_ROOT, 'client');
@@ -49,17 +49,15 @@ const ALLOWED = {
   'src/pages/SongBookViewer.test.jsx :: hides the discard row while a save is in flight': 'the editor sheet is open (Content label present) until the save settles, so waitFor genuinely waits',
 };
 
-// Git-tracked only, so an untracked scratch file can't fail the suite.
-const testFiles = () => execSync('git ls-files src', { cwd: CLIENT_ROOT, encoding: 'utf8' })
-  .trim().split('\n').filter((f) => /\.test\.jsx?$/.test(f));
-
 describe('stale-response tests flush before asserting absence', () => {
-  const found = () => testFiles().flatMap((file) =>
-    findVacuousAbsenceWaits(readText(join(CLIENT_ROOT, file))).map((title) => `${file} :: ${title}`));
+  const files = trackedTestFiles(CLIENT_ROOT).filter((file) => /\.test\.jsx?$/.test(file));
+  let found;
+  const findings = () => (found ??= files.flatMap((file) =>
+    findVacuousAbsenceWaits(readText(join(CLIENT_ROOT, file))).map((title) => `${file} :: ${title}`)));
 
   it('has no un-flushed absence waitFor after a bare resolve', () => {
-    expect(testFiles().length).toBeGreaterThan(100);
-    const violations = found().filter((key) => !(key in ALLOWED));
+    expect(files.length).toBeGreaterThan(100);
+    const violations = findings().filter((key) => !(key in ALLOWED));
     expect(
       violations,
       'waitFor checks synchronously first, so an absence assertion right after a bare resolve passes '
@@ -70,7 +68,7 @@ describe('stale-response tests flush before asserting absence', () => {
   });
 
   it('has no stale allowlist entry', () => {
-    const seen = new Set(found());
+    const seen = new Set(findings());
     expect(Object.keys(ALLOWED).filter((key) => !seen.has(key))).toEqual([]);
   });
 });

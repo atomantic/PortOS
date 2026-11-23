@@ -121,3 +121,31 @@ describe('LegacyExportTab', () => {
     expect(screen.getByRole('button', { name: /generate & download/i })).toBeDisabled();
   });
 });
+
+describe('LegacyExportTab preview failure', () => {
+  it('shows a retryable error, not the "no identity data" empty state, when the preview read fails', async () => {
+    const user = userEvent.setup();
+    getLegacyExportPreview.mockRejectedValueOnce(new Error('preview offline'));
+    render(<LegacyExportTab />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Could not load legacy bundle sections — preview offline');
+    expect(screen.queryByText(/No identity data available yet/)).not.toBeInTheDocument();
+
+    await user.click(alert.querySelector('button'));
+    expect(await screen.findByLabelText(/Identity & Values/)).toBeChecked();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the empty-state copy when the preview genuinely has no present sections', async () => {
+    getLegacyExportPreview.mockResolvedValueOnce({
+      fileCount: 0,
+      estimatedBytes: 0,
+      sections: { health: { label: 'Health Summary', present: false, included: false } },
+    });
+    render(<LegacyExportTab />);
+
+    expect(await screen.findByText(/No identity data available yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});

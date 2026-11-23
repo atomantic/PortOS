@@ -10,8 +10,11 @@
 import { z } from 'zod';
 import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalog/catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
+import { PEER_SUBSCRIBABLE_KINDS } from './instanceSyncCategories.js';
 import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
 import { MEDIA_COLLECTION_ITEMS_MAX } from './mediaItemKey.js';
+
+const peerSubscribableKindSchema = z.enum(PEER_SUBSCRIBABLE_KINDS);
 
 // Wire/request schemas for federated peer-to-peer record sync (see server/services/sharing/peerSync.js).
 
@@ -19,7 +22,7 @@ import { MEDIA_COLLECTION_ITEMS_MAX } from './mediaItemKey.js';
 // instance over Tailnet, unlike share-bucket subscriptions).
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']),
+  recordKind: peerSubscribableKindSchema,
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -264,7 +267,7 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'fableLoom', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission', 'deck', 'storyboard']),
+  recordKind: peerSubscribableKindSchema,
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

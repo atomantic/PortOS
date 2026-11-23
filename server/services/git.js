@@ -4,8 +4,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdtemp, realpath } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
-import { safeJSONParse, sleep, rmGuarded, pathExists } from '../lib/fileUtils.js';
-import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
+import { safeJSONParse, sleep, rmGuarded, pathExists, PATHS } from '../lib/fileUtils.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { readRepoBranchSnapshot, repoObservationEnv } from './repoBranchSnapshot.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
@@ -30,6 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { securityScanPRDisclosure } from '../lib/securityScanEvidence.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { parseGitRemoteUrl } from '../lib/gitRemote.js';
+import { requireMergedBranchCleanup } from './bootHookRegistry.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit, execGitSafe };
@@ -362,7 +362,7 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
       recordFetchSuccess(dir);
       return true;
     },
-    (err) => {
+    async (err) => {
       // A concurrent fetch that already wrote the exact refs this one wanted is
       // a SUCCESS reported as a failure — git exits non-zero on the lost
       // compare-and-swap even though the remote-tracking refs now hold the
@@ -374,7 +374,9 @@ function fetchOriginAttempt(dir, attempt, prune = false) {
         return true;
       }
       // Another PortOS surface or agent may advance the same remote ref mid-fetch.
-      if (attempt >= FETCH_MAX_ATTEMPTS || !isGitLockError(err.message)) throw err;
+      if (attempt >= FETCH_MAX_ATTEMPTS) throw err;
+      const { isGitLockError } = await import('./worktreeManager.js');
+      if (!isGitLockError(err.message)) throw err;
       return sleep(FETCH_RETRY_DELAY_MS).then(() => fetchOriginAttempt(dir, attempt + 1, prune));
     }
   );
@@ -624,7 +626,7 @@ export async function mergePR(dir, prNumber, { forgeAccount = null, expectedHead
 
   // A zero exit may mean queued, and a timeout/nonzero exit may follow a
   // completed merge. Read back before reporting success or deleting anything.
-  const { readPullRequest } = await import('./prProbe.js');
+  const { readPullRequest } = await import('./prView.js');
   const merged = await readPullRequest(prNumber,
     'state,url,headRefName,headRefOid,baseRefName,isCrossRepository,headRepository', { cwd: dir, env });
   if (merged?.state !== 'MERGED') {
@@ -1395,6 +1397,7 @@ async function ensureLatestUnserialized(dir) {
   const mergeOk = mergeResult.exitCode === 0;
 
   if (mergeOk) {
+    await noteLockfileChanges(dir, localHead);
     return { success: true, branch: currentBranch, conflict: false, error: null };
   }
 
@@ -1427,7 +1430,22 @@ async function ensureLatestUnserialized(dir) {
     };
   }
 
+  await noteLockfileChanges(dir, localHead);
   return { success: true, branch: currentBranch, conflict: false, error: null };
+}
+
+// Advancing the PortOS source checkout never reinstalls, so a range that changes
+// a workspace lockfile leaves node_modules stale for every linked claim. Record
+// it for the idle updater (#17511); managed apps' checkouts are not ours to reconcile.
+async function noteLockfileChanges(dir, before) {
+  if (await realpath(dir).catch(() => resolve(dir)) !== await realpath(PATHS.root).catch(() => resolve(PATHS.root))) return;
+  // Deferred: the boot import closure is capped (lib/importScoping.test.js).
+  const { changedDependencyLockfiles, markDependencyReconcilePending } = await import('../../scripts/lib/dependencyReconcile.js');
+  const diff = await execGit(['diff', '--name-only', before, 'HEAD'], dir, { ignoreExitCode: true });
+  const lockfiles = diff.exitCode === 0 ? changedDependencyLockfiles(diff.stdout.split(/\r?\n/)) : [];
+  if (!lockfiles.length) return;
+  markDependencyReconcilePending(PATHS.data, lockfiles);
+  console.log(`📦 Source checkout lockfiles changed (${lockfiles.join(', ')}) — dependency reconcile queued for the next idle update`);
 }
 
 /**
@@ -1514,6 +1532,7 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
  * @returns {Promise<Set<string>>} Set of branch names in active worktrees
  */
 export async function getWorktreeBranches(dir) {
+  const { listWorktrees } = await import('./worktreeManager.js');
   const worktrees = await listWorktrees(dir).catch(() => []);
   return new Set(
     worktrees
@@ -1622,6 +1641,7 @@ async function deletePinnedLocalBranch(dir, branch, expectedHead) {
       if (existing.exitCode === 0 && existing.stdout.trim() !== head) throw new Error('Branch source preservation changed');
       if (existing.exitCode !== 0) await execGit(['update-ref', backup, head, '0'.repeat(head.length)], dir);
     };
+    const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
     const deleted = await deleteCompletedLocalBranch(dir, branch, head, { beforeMutation });
     return { exitCode: deleted ? 0 : 1, stderr: deleted ? '' : 'branch head or holder changed' };
   });
@@ -1677,10 +1697,29 @@ export async function readBranchLineage(dir, branch, head, target) {
 }
 
 /**
+ * How long ago `branch` was created, from the oldest entry of its reflog, in ms.
+ * Answers how long a branch with no commits of its own and no checkout has sat
+ * unused. null when unreadable or the reflog is empty.
+ *
+ * @returns {Promise<number|null>}
+ */
+export async function readBranchAgeMs(dir, branch, nowMs = Date.now()) {
+  if (!dir || !branch) return null;
+  const log = await execGit(['reflog', 'show', '--date=unix', '--format=%gd', `refs/heads/${branch}`, '--'], dir, { ignoreExitCode: true }).catch(() => null);
+  if (log?.exitCode !== 0) return null;
+  const seconds = Number(/@\{(\d+)\}$/.exec(log.stdout.trim().split('\n').filter(Boolean).at(-1) || '')?.[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.max(0, nowMs - seconds * 1000) : null;
+}
+
+/**
  * Whether `branch` is published: some configured remote has a remote-tracking
  * ref of the same name, or the branch's upstream resolves to an existing
- * remote-tracking ref (a branch may track one named differently). Local refs
- * only, so it is safe inside an ownership section. null when unreadable.
+ * remote-tracking ref (a branch may track one named differently). An upstream
+ * that is a remote's default branch (its `<remote>/HEAD` target) is not
+ * publication: `git worktree add -b x path origin/main` makes origin/main the
+ * new branch's upstream, and reading that as published held every merged
+ * claim checkout forever as `published-claim-unmerged`. Local refs only, so
+ * it is safe inside an ownership section. null when unreadable.
  *
  * @returns {Promise<boolean|null>}
  */
@@ -1689,15 +1728,18 @@ export async function readBranchPublished(dir, branch) {
   const lines = r => r.stdout.split('\n').map(line => line.trim()).filter(Boolean);
   const read = await Promise.all([
     execGit(['remote'], dir).then(lines),
-    execGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/'], dir).then(lines),
+    execGit(['for-each-ref', '--format=%(refname)%00%(symref)', 'refs/remotes/'], dir).then(lines),
     // A pattern also matches refs nested under it, so the exact ref is picked below.
     execGit(['for-each-ref', '--format=%(refname)%00%(upstream)', `refs/heads/${branch}`], dir).then(lines),
   ]).catch(() => null);
   if (!read) return null;
   const [remotes, remoteRefs, heads] = read;
-  const tracking = new Set(remoteRefs);
+  const refs = remoteRefs.map(line => line.split('\0'));
+  const tracking = new Set(refs.map(([ref]) => ref));
+  const remoteDefaults = new Set(refs.filter(([ref, target]) => ref.endsWith('/HEAD') && target).map(([, target]) => target));
   const upstream = heads.map(line => line.split('\0')).find(([ref]) => ref === `refs/heads/${branch}`)?.[1] || null;
-  return remotes.some(remote => tracking.has(`refs/remotes/${remote}/${branch}`)) || Boolean(upstream && tracking.has(upstream));
+  const publishedUpstream = Boolean(upstream && tracking.has(upstream) && !remoteDefaults.has(upstream));
+  return remotes.some(remote => tracking.has(`refs/remotes/${remote}/${branch}`)) || publishedUpstream;
 }
 
 /**
@@ -2086,6 +2128,7 @@ async function prepareRemoteRetirement(dir, defaultBranch) {
 // recovery ref. Re-read immediately before the leased push, inside the same
 // ownership fence used to register managed claims.
 async function remoteRetirementLocalHold(dir, name) {
+  const { listWorktrees } = await import('./worktreeManager.js');
   const [refs, trees] = await Promise.all([
     execGitSafe(['for-each-ref', '--format=%(refname:short)%09%(upstream:short)', 'refs/heads/'], dir),
     listWorktrees(dir).catch(() => null),
@@ -2170,7 +2213,7 @@ export async function deleteMergedRemoteBranches(dir, names, { defaultBranch, ex
  */
 export async function deleteMergedBranches(dir, { excludeBranches, activeAgentIds = null, onlyBranches } = {}) {
   if (onlyBranches !== undefined && !(onlyBranches instanceof Set)) throw new Error('Cleanup branch selector must be a Set');
-  const { cleanupMerged } = await import('./branchReconcile.js');
+  const cleanupMerged = requireMergedBranchCleanup();
   const { baseBranch } = await getRepoBranches(dir);
   const defaultBranch = baseBranch || 'main';
   const protectedSet = new Set([...PROTECTED_BRANCHES, defaultBranch]);

@@ -152,6 +152,8 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS review_origin JSONB;
 
 CREATE INDEX IF NOT EXISTS idx_memories_mind_reflection ON memories (source_agent_id, created_at, id) WHERE status = 'active' AND importance < 0.15;
 
+CREATE INDEX IF NOT EXISTS idx_memories_source_agent_active ON memories (source_agent_id, importance DESC) WHERE status = 'active' AND source_agent_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,
       category TEXT NOT NULL,
@@ -1360,8 +1362,8 @@ CREATE OR REPLACE VIEW catalog_identity_read_revisions AS
       SELECT jsonb_populate_record(NULL::catalog_ingredient_revisions, item) AS r, 3 AS priority
         FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'survivor'->'revisions', '[]'::jsonb)) item
       
-    ) SELECT DISTINCT ON ((r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
-      FROM candidates ORDER BY (r).id, priority;
+    ) SELECT DISTINCT ON ((r).ingredient_id, (r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).ingredient_id, (r).id, priority;
 
 CREATE TABLE IF NOT EXISTS media_prompt_examinations (
       id TEXT PRIMARY KEY,
@@ -1422,6 +1424,20 @@ CREATE TABLE IF NOT EXISTS image_to_3d_models (
     );
 
 CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE;
+
+CREATE TABLE IF NOT EXISTS html_page_runs (
+      id TEXT PRIMARY KEY,
+      backend VARCHAR(32) NOT NULL,
+      model_id TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    );
+
+CREATE INDEX IF NOT EXISTS idx_html_page_runs_live_created ON html_page_runs (created_at DESC) WHERE deleted = FALSE;
 
 CREATE TABLE IF NOT EXISTS music_video_projects (
       id TEXT PRIMARY KEY,
@@ -2749,6 +2765,10 @@ DROP TRIGGER IF EXISTS trg_threejs_models_audit ON threejs_models;
 
 CREATE TRIGGER trg_threejs_models_audit AFTER UPDATE OR DELETE ON threejs_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
+DROP TRIGGER IF EXISTS trg_html_page_runs_audit ON html_page_runs;
+
+CREATE TRIGGER trg_html_page_runs_audit AFTER UPDATE OR DELETE ON html_page_runs FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
 DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
 
 CREATE TRIGGER trg_image_to_3d_models_audit AFTER UPDATE OR DELETE ON image_to_3d_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
@@ -2812,6 +2832,46 @@ CREATE TRIGGER trg_tribe_touchpoints_audit AFTER UPDATE OR DELETE ON tribe_touch
 DROP TRIGGER IF EXISTS trg_tribe_identities_audit ON tribe_identities;
 
 CREATE TRIGGER trg_tribe_identities_audit AFTER UPDATE OR DELETE ON tribe_identities FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_music_video_projects_audit ON music_video_projects;
+
+CREATE TRIGGER trg_music_video_projects_audit AFTER UPDATE OR DELETE ON music_video_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_creative_commissions_audit ON creative_commissions;
+
+CREATE TRIGGER trg_creative_commissions_audit AFTER UPDATE OR DELETE ON creative_commissions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_code_animation_projects_audit ON code_animation_projects;
+
+CREATE TRIGGER trg_code_animation_projects_audit AFTER UPDATE OR DELETE ON code_animation_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_code_animation_project_revisions_audit ON code_animation_project_revisions;
+
+CREATE TRIGGER trg_code_animation_project_revisions_audit AFTER UPDATE OR DELETE ON code_animation_project_revisions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_decks_audit ON decks;
+
+CREATE TRIGGER trg_decks_audit AFTER UPDATE OR DELETE ON decks FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_deck_cards_audit ON deck_cards;
+
+CREATE TRIGGER trg_deck_cards_audit AFTER UPDATE OR DELETE ON deck_cards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_mind_tool_recipes_audit ON mind_tool_recipes;
+
+CREATE TRIGGER trg_mind_tool_recipes_audit AFTER UPDATE OR DELETE ON mind_tool_recipes FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_mind_tool_recipe_versions_audit ON mind_tool_recipe_versions;
+
+CREATE TRIGGER trg_mind_tool_recipe_versions_audit AFTER UPDATE OR DELETE ON mind_tool_recipe_versions FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_voice_profiles_audit ON voice_profiles;
+
+CREATE TRIGGER trg_voice_profiles_audit AFTER UPDATE OR DELETE ON voice_profiles FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_writers_room_exercises_audit ON writers_room_exercises;
+
+CREATE TRIGGER trg_writers_room_exercises_audit AFTER UPDATE OR DELETE ON writers_room_exercises FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
 CREATE TABLE IF NOT EXISTS sync_feed (
       stream TEXT NOT NULL,

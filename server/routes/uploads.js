@@ -158,7 +158,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
   const stats = await stat(filepath);
   await unlinkGuarded(filepath);
 
-  console.log(`🗑️ File deleted: ${safeFilename} (${formatSize(stats.size)})`);
+  console.log(`🗑️ File deleted (${formatSize(stats.size)})`);
 
   res.json({ success: true, filename: safeFilename, size: stats.size });
 })));

@@ -104,23 +104,28 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  * after its own gates. Gates, in order:
  *
  * 1. lineage (`readBranchLineage`): a branch still at the commit it was created
- *    at has no commits of its own and is new (`branch-has-no-own-commits`);
+ *    at has no commits of its own and is new;
  * 2. a branch published to a remote is a claim others can see
  *    (`published-claim-unmerged`);
- * 3. evidence by ancestry alone (lineage `'ancestry'`; a rebase or squash merge
- *    reads `'patch'` and skips this): a reserved issue claim, a process with its
- *    working directory in the checkout, or activity there within
+ * 3. evidence by ancestry alone (lineage `'ancestry'` or `'new'`; a rebase or
+ *    squash merge reads `'patch'` and skips this): a reserved issue claim, a
+ *    process with its working directory in the checkout, or activity there within
  *    ANCESTRY_RETIREMENT_IDLE_MS holds, because a live owner outranks ancestry.
  *    Where the process probe cannot tell, UNPROBED_CHECKOUT_IDLE_MS of quiet
  *    stands in for it (`checkout-process-unverified` until then).
  *    A checkout directory proven absent has neither, so it skips those two.
+ * 4. a new branch is a session's start until it has sat unused for
+ *    UNPROBED_CHECKOUT_IDLE_MS (`branch-has-no-own-commits`, dated): its checkout
+ *    untouched that long, or with no checkout, the branch that old. It holds no
+ *    commits, so retiring it loses nothing; holding it forever stranded every
+ *    branch a failed claim checkout left behind.
  *
  * Each hold lifts only when the forge reports a PR merged at exactly this head
  * (`mergedPrAtHead`, read only once something would hold). Every unreadable fact
  * holds under its own reason.
  *
  * @param {{ branch: string, checkoutPath: string|null, nowMs?: number, facts: object }} input
- *   facts: `lineage`, `published`, `claimReserved`, `checkoutPresent`, `checkoutProcess`, `idleMs`, `mergedPrAtHead`
+ *   facts: `lineage`, `published`, `claimReserved`, `checkoutPresent`, `checkoutProcess`, `idleMs`, `branchAgeMs`, `mergedPrAtHead`
  * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | null}
  */
 function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }) {
@@ -130,29 +135,39 @@ function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }
   };
   if (facts.lineage === undefined) return { need: 'lineage' };
   if (facts.lineage === null) return unlessShipped('branch-own-commits-unreadable');
-  if (facts.lineage === 'new') return unlessShipped('branch-has-no-own-commits');
+  const fresh = facts.lineage === 'new';
   if (facts.published === undefined) return { need: 'published' };
   if (facts.published !== false) return unlessShipped(facts.published === null ? 'branch-publication-unreadable' : 'published-claim-unmerged');
-  if (facts.lineage !== 'ancestry') return null;
+  if (facts.lineage === 'patch') return null;
   if (claimIssueOfBranch(branch)) {
     if (facts.claimReserved === undefined) return { need: 'claimReserved' };
     if (facts.claimReserved !== false) return unlessShipped(facts.claimReserved === null ? 'claim-issue-unverified' : 'claim-issue-reserved');
   }
-  if (!checkoutPath) return null;
+  // A new branch with no checkout to read is dated by its own creation.
+  const unusedBranch = () => {
+    if (!fresh) return null;
+    if (facts.branchAgeMs === undefined) return { need: 'branchAgeMs' };
+    if (!Number.isFinite(facts.branchAgeMs)) return unlessShipped('branch-has-no-own-commits');
+    return facts.branchAgeMs < UNPROBED_CHECKOUT_IDLE_MS
+      ? unlessShipped('branch-has-no-own-commits', new Date(nowMs + UNPROBED_CHECKOUT_IDLE_MS - facts.branchAgeMs).toISOString())
+      : null;
+  };
+  if (!checkoutPath) return unusedBranch();
   if (facts.checkoutPresent === undefined) return { need: 'checkoutPresent' };
   if (facts.checkoutPresent === null) return unlessShipped('checkout-presence-unreadable');
   // A directory proven gone holds no process and no activity: retiring it
   // prunes a stale registration and its merged branch.
-  if (!facts.checkoutPresent) return null;
+  if (!facts.checkoutPresent) return unusedBranch();
   if (facts.checkoutProcess === undefined) return { need: 'checkoutProcess' };
   if (facts.checkoutProcess === true) return unlessShipped('checkout-process-active');
   // An unknown probe answer (null) needs the longer quiet period instead.
   const probed = facts.checkoutProcess === false;
-  const window = probed ? ANCESTRY_RETIREMENT_IDLE_MS : UNPROBED_CHECKOUT_IDLE_MS;
+  const window = probed && !fresh ? ANCESTRY_RETIREMENT_IDLE_MS : UNPROBED_CHECKOUT_IDLE_MS;
   if (facts.idleMs === undefined) return { need: 'idleMs' };
   if (!Number.isFinite(facts.idleMs)) return unlessShipped('checkout-idle-unreadable');
   if (facts.idleMs < window) {
-    return unlessShipped(probed ? 'checkout-recently-touched' : 'checkout-process-unverified', new Date(nowMs + window - facts.idleMs).toISOString());
+    const reason = fresh ? 'branch-has-no-own-commits' : probed ? 'checkout-recently-touched' : 'checkout-process-unverified';
+    return unlessShipped(reason, new Date(nowMs + window - facts.idleMs).toISOString());
   }
   return null;
 }

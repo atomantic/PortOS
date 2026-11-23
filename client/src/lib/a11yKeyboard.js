@@ -9,6 +9,54 @@
  * @param {(event: KeyboardEvent) => void} handler
  * @returns {((event: KeyboardEvent) => void) | undefined}
  */
+const RADIO_GROUP_KEYS = new Set(['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End']);
+
+/**
+ * Enabled `role="radio"` controls this radiogroup owns. A nested radiogroup's radios stay with that group.
+ * @param {EventTarget} root
+ * @returns {HTMLElement[]}
+ */
+function radiosOwnedBy(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return [];
+  return [...root.querySelectorAll('[role="radio"]')].filter((el) => {
+    if (typeof el.closest === 'function' && el.closest('[role="radiogroup"]') !== root) return false;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+    return true;
+  });
+}
+
+/**
+ * Roving-focus keyboard contract for a `role="radiogroup"` (WAI-ARIA 1.2 / WCAG 4.1.2).
+ * ArrowRight/ArrowDown move to the next enabled radio, ArrowLeft/ArrowUp to the previous, both wrapping;
+ * Home and End jump to the ends. The target is focused and clicked so the caller's `onClick` selects it.
+ * Pair with a roving `tabIndex`: `0` on the checked radio (or the first when none is checked), `-1` on the rest.
+ * @param {KeyboardEvent} event - keydown bubbling from a radio to the radiogroup (`onKeyDown={onRadioGroupKeyDown}`)
+ */
+export function onRadioGroupKeyDown(event) {
+  if (!RADIO_GROUP_KEYS.has(event?.key)) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
+  const root = event.currentTarget;
+  const radios = radiosOwnedBy(root);
+  if (radios.length === 0) return;
+  const fromTarget = radios.indexOf(event.target);
+  // Arrows typed on a non-radio inside the group (a label, an action) are not radio navigation.
+  if (fromTarget < 0 && event.target !== root) return;
+  const current = fromTarget >= 0 ? fromTarget : radios.indexOf(document.activeElement);
+  event.preventDefault();
+  event.stopPropagation();
+  let next;
+  if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = radios.length - 1;
+  else if (current < 0) next = (event.key === 'ArrowLeft' || event.key === 'ArrowUp') ? radios.length - 1 : 0;
+  else {
+    const direction = (event.key === 'ArrowRight' || event.key === 'ArrowDown') ? 1 : -1;
+    next = (current + direction + radios.length) % radios.length;
+  }
+  const target = radios[next];
+  target.focus();
+  target.click();
+}
+
 export function onActivateKeyDown(handler) {
   if (typeof handler !== 'function') return undefined;
   return (event) => {

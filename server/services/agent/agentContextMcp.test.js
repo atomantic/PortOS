@@ -157,6 +157,23 @@ describe('agentContextMcp service', () => {
     expect(JSON.stringify(result)).not.toContain('private-plan');
   });
 
+  it.each(['metadata', 'summary'])('searches only redacted Brain and workspace text in the %s profile', async (profile) => {
+    const scopes = ['brain', 'workspaces'];
+    mocks.settings = { agentContext: { enabled: true, profile, scopes } };
+    const text = 'Field sk-examplefixture0123456789 Notes contact fixture@example.com host 192.0.2.10 phone 202-555-0148 checkout /Users/exampleuser/notes';
+    mocks.getBrainProjections.mockResolvedValue([{ id: 'project-1', title: text }]);
+    mocks.listContexts.mockResolvedValue([{ appId: 'workspace-1', appName: text }]);
+
+    const allowed = await callAgentContextTool('search_context', { query: 'Field Notes', scopes });
+    expect(allowed.structuredContent.total).toBe(2);
+    expect(allowed.structuredContent.items.map((item) => item.scope)).toEqual(scopes);
+
+    for (const query of ['sk-example', 'fixture@', '192.0.2', '555-0148', '/Users/exampleuser', 'REDACTED', '~']) {
+      const result = await callAgentContextTool('search_context', { query, scopes });
+      expect(result.structuredContent, `query ${query}`).toMatchObject({ items: [], total: 0 });
+    }
+  });
+
   it('redacts high-confidence personal data in explicitly enabled summaries', async () => {
     mocks.settings = { agentContext: { enabled: true, profile: 'summary', scopes: ['brain'] } };
     mocks.getBrainProjections.mockResolvedValue([{

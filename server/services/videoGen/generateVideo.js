@@ -550,18 +550,11 @@ function buildLocalVideoJobRecord({
   };
 }
 
-async function renderLocalVideo(preparation, { pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, audioConditioning = null, mode = null, imageStrength = null, i2vReferenceMode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [], continuityStrategy, contextFrames, continuation = null, historyContext = null, executionParent = null }) {
-  const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
-  uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
-  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  // Single-flight is now enforced by the mediaJobQueue worker upstream — only
-  // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
-  // callers (legacy / tests) bypass the queue and would clobber the shared active process
-  // on concurrent calls; that's an explicit "don't do that" contract.
-
-  const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
-  modelId = selectedModelId;
-  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+// Every continuity contract check the render performs, in the order callers
+// observe their errors: the explicit request, the history-window request, then
+// the strategy replayed from a persisted `continuation`. Returns the
+// continuation record to persist (null when no continuity was requested).
+function resolveVideoContinuity({ model, continuityStrategy, contextFrames, continuation, historyContext, extendFromVideoPath }) {
   const continuityError = videoContinuityContractError({ model, continuityStrategy, contextFrames });
   if (continuityError) throw continuityError;
   if (historyContext) {
@@ -576,12 +569,78 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   if (replayContinuityError) throw replayContinuityError;
   const currentContinuation = resolveContinuityRequest({ model, continuityStrategy: requestedStrategy,
     contextFrames: contextFrames ?? safeContinuation?.contextFrames });
-  const resolvedContinuation = (safeContinuation || continuityStrategy != null) ? {
+  if (!safeContinuation && continuityStrategy == null) return null;
+  return {
     ...currentContinuation,
     actualHistoryFrames: (extendFromVideoPath || historyContext)
       && currentContinuation.effectiveStrategy === 'window'
       ? (historyContext?.frames ?? safeContinuation?.actualHistoryFrames ?? null) : 0,
-  } : null;
+  };
+}
+
+// IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
+// weight resolves to the exact file inside the HF snapshot; an un-cached one
+// falls back to the repo id, which ICLoraPipeline downloads itself — log that
+// so a several-hundred-MB pull mid-render isn't a mystery in the server log.
+async function resolveLocalIcLoraWeight(mode) {
+  if (!isIcLoraMode(mode)) return null;
+  const resolved = await resolveIcLoraWeight(mode);
+  if (!resolved) {
+    throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
+  }
+  if (!resolved.path && mode === 'ic-ingredients-25') {
+    throw new ServerError('Download ' + resolved.spec.label + ' from the model panel first.',
+      { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' });
+  }
+  if (!resolved.cached && resolved.path) {
+    console.log(`⬇️  IC-LoRA weight not cached — ${resolved.spec.repo} will download at render time`);
+  }
+  // A null path means the registry deliberately refused the repo-id fallback
+  // (requiresPreDownload). icLoraArgs turns that into the user-facing 400; log
+  // the reason here so the server log explains WHY there's no auto-download.
+  if (!resolved.path) {
+    console.warn(`⛔ IC-LoRA weight for ${mode} needs an explicit download (auto-fetch would snapshot ${resolved.spec.mirrorRepo || resolved.spec.repo})`);
+  }
+  return resolved.path;
+}
+
+// IC-LoRA mode / frame-count / Wan frame-count contract. Throws the 400.
+function assertLocalFrameContract({ model, mode, numFrames, icSkipStage2 }) {
+  const icSpec = icLoraSpecForMode(mode);
+  if (icSpec && !icLoraSupportsRuntime(icSpec, model.runtime)) {
+    throw new ServerError(mode + ' requires a ' + icSpec.baseModel + ' model.',
+      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' });
+  }
+  const icFrameIssue = icLoraFrameIssue(icSpec, numFrames);
+  if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
+  if (mode === 'ic-ingredients-25' && icSkipStage2) {
+    throw new ServerError('LTX 2.5 References requires the refinement stage.',
+      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
+  }
+  const frameCountError = wan22FrameCountError(model, numFrames);
+  if (frameCountError) throw frameCountError;
+}
+
+// Model/hardware/continuity/mode validation plus asset and LoRA resolution —
+// everything that can fail with a clean 4xx before any directory, job id or GPU
+// work exists. Returns the resolved values the later phases consume (the raw
+// `width`/`height`/`numFrames`/`sourceImagePath` it normalizes come back under
+// the same names).
+async function validateAndResolveLocalInputs(params) {
+  const {
+    pythonPath, modelId: requestedModelId, width = null, height = null, numFrames = null, batchSize = 1, seed,
+    uploadedTempPath = null, lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null,
+    audioStartSec = null, mode = null, a2vLoraStageStrengths, loras = null, icReferencePaths = null,
+    referenceImagePaths = null, referenceVideoPaths = null, referenceAudioPaths = null, icSkipStage2 = false,
+    textEncoderId = null, continuityStrategy, contextFrames, continuation = null, historyContext = null,
+  } = params;
+  let { sourceImagePath = null } = params;
+
+  const { modelId, model } = await resolveVideoModelSelection(requestedModelId, { resolveModel: resolveVideoModel });
+  if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const resolvedContinuation = resolveVideoContinuity({
+    model, continuityStrategy, contextFrames, continuation, historyContext, extendFromVideoPath,
+  });
   validateVideoBatch({ batchSize, seed }, model);
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -600,42 +659,18 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   // then render text-only with its image dropped.
   if (VIDEO_MODE_GATED_RUNTIMES.has(model.runtime)) sourceImagePath ||= uploadedTempPath;
   assertRenderModeContract({
-    model,
-    mode,
-    sourceImagePath,
-    lastImagePath,
-    keyframes,
-    extendFromVideoPath,
-    audioFilePath,
-    audioStartSec,
-    icReferencePaths,
-    referenceImagePaths,
-    referenceVideoPaths,
-    referenceAudioPaths,
+    model, mode, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec,
+    icReferencePaths, referenceImagePaths, referenceVideoPaths, referenceAudioPaths,
   });
   const { validateA2vLoraStages } = await import('./loraStages.js');
   await validateA2vLoraStages({ strengths: a2vLoraStageStrengths, model, mode, hasLoras: loras?.length > 0 });
   // Registry defaults are user-editable. Validate them at this internal-call
   // boundary so an empty or malformed value cannot turn into a 0/NaN runner
   // argument when the caller deliberately leaves the resolution unset.
-  ({ width, height } = resolveVideoDimensions(model, width, height));
-  numFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
-  const icSpec = icLoraSpecForMode(mode);
-  if (icSpec && !icLoraSupportsRuntime(icSpec, model.runtime)) {
-    throw new ServerError(mode + ' requires a ' + icSpec.baseModel + ' model.',
-      { status: 400, code: 'IC_LORA_REQUIRES_LTX2' });
-  }
-  const icFrameIssue = icLoraFrameIssue(icSpec, numFrames);
-  if (icFrameIssue) throw new ServerError(icFrameIssue, { status: 400, code: 'IC_LORA_REFERENCE_TOO_SHORT' });
-  if (mode === 'ic-ingredients-25' && icSkipStage2) {
-    throw new ServerError('LTX 2.5 References requires the refinement stage.',
-      { status: 400, code: 'IC_LORA_SKIP_STAGE2_UNSUPPORTED' });
-  }
-  const frameCountError = wan22FrameCountError(model, numFrames);
-  if (frameCountError) throw frameCountError;
-  const {
-    wanModelPath, wanRequiredWeights, fastvideoModelPath, fastvideoOmniAssets, ltxModelPath, ref2vaModelPath, resolvedTextEncoder,
-  } = await resolveVideoModelAssets({ model, modelId, textEncoderId });
+  const dimensions = resolveVideoDimensions(model, width, height);
+  const resolvedNumFrames = numFrames ?? model.defaultFrames ?? DEFAULT_NUM_FRAMES;
+  assertLocalFrameContract({ model, mode, numFrames: resolvedNumFrames, icSkipStage2 });
+  const assets = await resolveVideoModelAssets({ model, modelId, textEncoderId });
 
   // Only require the legacy mlx_video pythonPath when the chosen runtime
   // actually uses it. BYOV runtimes resolve their own venv path inside
@@ -666,56 +701,25 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   const loraCapableModel = resolvedLoras.length
     ? { ...model, runtimeLoraCapable: await resolveByovRuntimeLoraCapable(model.runtime) }
     : model;
+  const icLoraWeightPath = await resolveLocalIcLoraWeight(mode);
 
-  // IC-LoRA remix: resolve the per-mode weight before any GPU work. A cached
-  // weight resolves to the exact file inside the HF snapshot; an un-cached one
-  // falls back to the repo id, which ICLoraPipeline downloads itself — log that
-  // so a several-hundred-MB pull mid-render isn't a mystery in the server log.
-  let icLoraWeightPath = null;
-  if (isIcLoraMode(mode)) {
-    const resolved = await resolveIcLoraWeight(mode);
-    if (!resolved) {
-      throw new ServerError(`Unknown IC-LoRA remix mode: ${mode}`, { status: 400, code: 'IC_LORA_UNKNOWN_MODE' });
-    }
-    icLoraWeightPath = resolved.path;
-    if (!resolved.path && mode === 'ic-ingredients-25') {
-      throw new ServerError('Download ' + resolved.spec.label + ' from the model panel first.',
-        { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' });
-    }
-    if (!resolved.cached && resolved.path) {
-      console.log(`⬇️  IC-LoRA weight not cached — ${resolved.spec.repo} will download at render time`);
-    }
-    // A null path means the registry deliberately refused the repo-id fallback
-    // (requiresPreDownload). icLoraArgs turns that into the user-facing 400; log
-    // the reason here so the server log explains WHY there's no auto-download.
-    if (!resolved.path) {
-      console.warn(`⛔ IC-LoRA weight for ${mode} needs an explicit download (auto-fetch would snapshot ${resolved.spec.mirrorRepo || resolved.spec.repo})`);
-    }
-  }
+  return {
+    modelId, model, loraCapableModel, resolvedContinuation, sourceImagePath, resolvedLoras, icLoraWeightPath,
+    width: dimensions.width, height: dimensions.height, numFrames: resolvedNumFrames, ...assets,
+  };
+}
 
-  await ensureDir(PATHS.videos);
-  await ensureDir(PATHS.videoThumbnails);
-
-  // jobId may be supplied by the queue so SSE clients (which attached against
-  // the queue's id) reach the same generation events.
-  const jobId = providedJobId || randomUUID();
-
-  // Weave each selected LoRA's activation token into the prompt the runner
-  // actually receives (#4665) — a video LoRA whose trigger word never reaches
-  // the model is loaded but inert, which reads to the user as "the LoRA didn't
-  // work". Only the FIRST trigger word per LoRA is used, and one already in the
-  // prompt is never duplicated. Done here rather than in the route so the chain
-  // orchestrator's per-chunk beats (`chunkPrompts`) get the tokens too — each
-  // chunk re-enters through this function with its own prompt.
-  const loraLicenses = await readLoraLicensesByFilename(resolvedLoras.map((l) => l.filename));
-  const { renderPrompt, addedTriggerWords, record: sentRecord } = await localVideoSentPrompt({
-    prompt, negativePrompt, loraFilenames: resolvedLoras.map((l) => l.filename), promptAdditions,
-  });
-  if (addedTriggerWords.length) {
-    console.log(`🔤 Video LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
-  }
-  const filename = `${jobId}.mp4`;
-  const outputPath = join(PATHS.videos, filename);
+// Resolves every numeric/derived knob the runner and the job record share:
+// grid-snapped dimensions, seed/batch plan, speed profile, draft decoder,
+// sampler schedule, and the i2v / IC-LoRA strengths. The returned names are the
+// "actual" values; the raw request fields never reach `meta` or `buildParams`.
+async function resolveLocalRenderPlan(params, inputs, jobId) {
+  const {
+    batchSize = 1, seed, fps = 24, steps, guidanceScale, uploadedTempPath = null, uploadedTempPaths, keyframes = null,
+    extendFromVideoPath = null, audioFilePath = null, lastImagePath = null, mode = null, speedProfileId = null,
+    draftDecode = null, imageStrength = null, i2vReferenceMode = null, icStrength = null, icAttentionStrength = null,
+  } = params;
+  const { model, width, height, numFrames, sourceImagePath, resolvedLoras } = inputs;
   // Most local runners use PortOS's shared 64px grid. H3's released canvas
   // resolver is explicitly 32px-aligned, including its native 21:9 height of
   // 672px; honor a model-declared step so that valid preset is not silently
@@ -765,22 +769,144 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   // contract substitutes its low default rather than deferring to a pipeline that
   // would anchor. An explicit slider value always wins on both modes.
   const effectiveReferenceMode = normalizeI2vReferenceMode(i2vReferenceMode);
-  const actualImageStrength = resolveI2vReferenceStrength(effectiveReferenceMode, imageStrength);
-  // IC-LoRA dials. `icStrength` weights the reference-video conditioning
-  // channel (default 1.0 matches the pipeline); `icAttentionStrength` stays
-  // null when unset so the pipeline applies its own default rather than us
-  // pinning 1.0 and shadowing a future upstream change.
-  const actualIcStrength = icStrength != null && icStrength !== '' ? Number(icStrength) : 1.0;
-  const actualIcAttentionStrength = icAttentionStrength != null && icAttentionStrength !== ''
-    ? Number(icAttentionStrength) : null;
-  const actualTextEncoderRepo = getTextEncoderRepo();
-  const parsedNumFrames = Number(numFrames);
-  const parsedFps = Number(fps);
+  return {
+    w, h, batch, actualSeed, speedProfile, t2vTwoStage, draftDecoder, actualSteps, actualGuidance, actualStage2Steps,
+    effectiveReferenceMode,
+    actualImageStrength: resolveI2vReferenceStrength(effectiveReferenceMode, imageStrength),
+    // IC-LoRA dials. `icStrength` weights the reference-video conditioning
+    // channel (default 1.0 matches the pipeline); `icAttentionStrength` stays
+    // null when unset so the pipeline applies its own default rather than us
+    // pinning 1.0 and shadowing a future upstream change.
+    actualIcStrength: icStrength != null && icStrength !== '' ? Number(icStrength) : 1.0,
+    actualIcAttentionStrength: icAttentionStrength != null && icAttentionStrength !== ''
+      ? Number(icAttentionStrength) : null,
+    actualTextEncoderRepo: getTextEncoderRepo(),
+    parsedNumFrames: Number(numFrames),
+    parsedFps: Number(fps),
+  };
+}
 
+// The "this render extends a source clip" splice contract handed to the watcher.
+// A native Extend delivers the original source, not the model's re-decode of
+// it. Chain chunks (`hidden`) are skipped — the chain trims the echoed context
+// itself and a window hop's "source" is a temp tail clip — except a chain's
+// FIRST chunk (`keepExtendSource`), whose source is the user's own clip. That
+// chunk is spliced in place at its rendered length, so the chain's trim math
+// and the tail window it cuts for chunk 1 are unaffected. Only a visible
+// render keeps an audio master: a hidden chunk is never extended again.
+function localExtendSplice({ model, mode, extendFromVideoPath, hidden, keepExtendSource, batch, parsedNumFrames }) {
+  if (!(mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model))) return null;
+  return { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden };
+}
+
+// The argument bag `buildArgs` consumes. Resolved ("actual") values replace the
+// raw request fields; passthrough fields keep the request's own value.
+function buildLocalRunnerParams({ params, inputs, plan, media, renderPrompt, outputPath }) {
   const {
-    resolvedSourceImage, resolvedLastImage, resolvedKeyframes, resolvedIcReferencePaths,
-    hasMultiKeyframes, ffmpeg, ffprobe, cleanupTempFiles,
-  } = await prepareVideoConditioningMedia({
+    pythonPath, negativePrompt = '', tiling = 'auto', disableAudio = false, extendFromVideoPath = null, audioFilePath = null,
+    audioStartSec = null, mode = null, a2vLoraStageStrengths, referenceImagePaths = null, referenceVideoPaths = null,
+    referenceAudioPaths = null, icSkipStage2 = false, streamingMode = null, continuityStrategy, contextFrames,
+    historyContext = null,
+  } = params;
+  return {
+    pythonPath,
+    modelId: inputs.modelId,
+    model: inputs.loraCapableModel,
+    wanModelPath: inputs.wanModelPath,
+    fastvideoModelPath: inputs.fastvideoModelPath,
+    fastvideoOmniAssets: inputs.fastvideoOmniAssets,
+    referenceImagePaths,
+    referenceVideoPaths,
+    referenceAudioPaths,
+    wanRequiredWeights: inputs.wanRequiredWeights,
+    ltxModelPath: inputs.ltxModelPath,
+    ref2vaModelPath: inputs.ref2vaModelPath,
+    prompt: renderPrompt,
+    negativePrompt,
+    width: plan.w,
+    height: plan.h,
+    numFrames: plan.parsedNumFrames,
+    fps: plan.parsedFps,
+    continuityStrategy, contextFrames, historyContext,
+    steps: plan.actualSteps,
+    stage2Steps: plan.actualStage2Steps,
+    guidance: plan.actualGuidance,
+    seed: plan.actualSeed,
+    tiling,
+    disableAudio,
+    sourceImagePath: media.resolvedSourceImage,
+    lastImagePath: media.resolvedLastImage,
+    keyframes: media.resolvedKeyframes,
+    extendFromVideoPath,
+    audioFilePath,
+    audioStartSec,
+    mode,
+    imageStrength: plan.actualImageStrength,
+    i2vReferenceMode: plan.effectiveReferenceMode,
+    a2vLoraStageStrengths,
+    textEncoderRepo: plan.actualTextEncoderRepo,
+    textEncoder: inputs.resolvedTextEncoder,
+    outputPath,
+    loras: inputs.resolvedLoras,
+    icReferencePaths: media.resolvedIcReferencePaths,
+    icLoraWeightPath: inputs.icLoraWeightPath,
+    icStrength: plan.actualIcStrength,
+    icAttentionStrength: plan.actualIcAttentionStrength,
+    icSkipStage2,
+    speedProfile: plan.speedProfile,
+    draftDecoder: plan.draftDecoder,
+    streamingMode,
+    ffmpegPath: media.ffmpeg,
+    ffprobePath: media.ffprobe,
+  };
+}
+
+async function renderLocalVideo(preparation, request) {
+  // Callers may pass null/undefined; every downstream phase reads an array.
+  const params = { ...request, uploadedTempPaths: Array.isArray(request.uploadedTempPaths) ? request.uploadedTempPaths : [] };
+  const {
+    prompt, negativePrompt = '', batchSize = 1, tiling = 'auto', disableAudio = false, audioConditioning = null,
+    audioFilePath = null, mode = null, a2vLoraStageStrengths, extendFromVideoPath = null, keyframes = null,
+    lastImagePath = null, icReferencePaths = null, referenceImagePaths = null, referenceVideoPaths = null,
+    referenceAudioPaths = null, icSkipStage2 = false, streamingMode = null, visualConditioning = null, hidden = false,
+    keepExtendSource = false, displaySleep = null, jobId: providedJobId = null, promptAdditions = [],
+    executionParent = null, uploadedTempPath = null, uploadedTempPaths,
+  } = params;
+  const sourceAudioProvenance = audioConditioning == null ? null : federatedSourceAudioSchema.parse(audioConditioning);
+  if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  // Single-flight is now enforced by the mediaJobQueue worker upstream — only
+  // one job is dequeued at a time, so we don't need a BUSY guard here. Direct
+  // callers (legacy / tests) bypass the queue and would clobber the shared active process
+  // on concurrent calls; that's an explicit "don't do that" contract.
+  const inputs = await validateAndResolveLocalInputs(params);
+  const { modelId, model, resolvedLoras, sourceImagePath } = inputs;
+
+  await ensureDir(PATHS.videos);
+  await ensureDir(PATHS.videoThumbnails);
+  // jobId may be supplied by the queue so SSE clients (which attached against
+  // the queue's id) reach the same generation events.
+  const jobId = providedJobId || randomUUID();
+
+  // Weave each selected LoRA's activation token into the prompt the runner
+  // actually receives (#4665) — a video LoRA whose trigger word never reaches
+  // the model is loaded but inert, which reads to the user as "the LoRA didn't
+  // work". Only the FIRST trigger word per LoRA is used, and one already in the
+  // prompt is never duplicated. Done here rather than in the route so the chain
+  // orchestrator's per-chunk beats (`chunkPrompts`) get the tokens too — each
+  // chunk re-enters through this function with its own prompt.
+  const loraLicenses = await readLoraLicensesByFilename(resolvedLoras.map((l) => l.filename));
+  const { renderPrompt, addedTriggerWords, record: sentRecord } = await localVideoSentPrompt({
+    prompt, negativePrompt, loraFilenames: resolvedLoras.map((l) => l.filename), promptAdditions,
+  });
+  if (addedTriggerWords.length) {
+    console.log(`🔤 Video LoRA trigger words woven [${jobId.slice(0, 8)}]: ${addedTriggerWords.join(', ')}`);
+  }
+  const filename = `${jobId}.mp4`;
+  const outputPath = join(PATHS.videos, filename);
+  const plan = await resolveLocalRenderPlan(params, inputs, jobId);
+  const { w, h, batch, actualSeed, parsedNumFrames, parsedFps, speedProfile } = plan;
+
+  const media = await prepareVideoConditioningMedia({
     model, mode, sourceImagePath, lastImagePath, keyframes, icReferencePaths,
     w, h, parsedFps, parsedNumFrames, jobId, uploadedTempPath, uploadedTempPaths, audioFilePath,
   });
@@ -788,98 +914,31 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
   const createdAt = new Date().toISOString();
   const meta = buildLocalVideoJobRecord({
     jobId, batch, batchSize, prompt, negativePrompt, modelId, model, actualSeed, w, h, parsedNumFrames,
-    parsedFps, actualSteps, actualGuidance, actualStage2Steps, tiling, disableAudio, sourceAudioProvenance,
-    resolvedTextEncoder, filename, createdAt, mode, hasMultiKeyframes, sourceImagePath,
-    effectiveReferenceMode, actualImageStrength, resolvedContinuation, resolvedSourceImage, resolvedLastImage,
-    resolvedKeyframes, extendFromVideoPath, audioFilePath, resolvedIcReferencePaths, visualConditioning,
-    t2vTwoStage, speedProfile, draftDecoder, a2vLoraStageStrengths, resolvedLoras, streamingMode,
-    actualIcStrength, actualIcAttentionStrength, icSkipStage2, icReferencePaths, referenceImagePaths,
-    referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt, sentRecord,
-    hidden,
+    parsedFps, actualSteps: plan.actualSteps, actualGuidance: plan.actualGuidance,
+    actualStage2Steps: plan.actualStage2Steps, tiling, disableAudio, sourceAudioProvenance,
+    resolvedTextEncoder: inputs.resolvedTextEncoder, filename, createdAt, mode,
+    hasMultiKeyframes: media.hasMultiKeyframes, sourceImagePath,
+    effectiveReferenceMode: plan.effectiveReferenceMode, actualImageStrength: plan.actualImageStrength,
+    resolvedContinuation: inputs.resolvedContinuation, resolvedSourceImage: media.resolvedSourceImage,
+    resolvedLastImage: media.resolvedLastImage, resolvedKeyframes: media.resolvedKeyframes, extendFromVideoPath,
+    audioFilePath, resolvedIcReferencePaths: media.resolvedIcReferencePaths, visualConditioning,
+    t2vTwoStage: plan.t2vTwoStage, speedProfile, draftDecoder: plan.draftDecoder, a2vLoraStageStrengths,
+    resolvedLoras, streamingMode, actualIcStrength: plan.actualIcStrength,
+    actualIcAttentionStrength: plan.actualIcAttentionStrength, icSkipStage2, icReferencePaths,
+    referenceImagePaths, referenceVideoPaths, referenceAudioPaths, loraLicenses, addedTriggerWords, renderPrompt,
+    sentRecord, hidden,
   });
   await startPreparedLocalVideo({
-    preparation,
-    jobId,
-    executionParent,
-    meta,
-    batch,
-    cleanupTempFiles,
-    displaySleep,
-    buildParams: {
-      pythonPath,
-      modelId,
-      model: loraCapableModel,
-      wanModelPath,
-      fastvideoModelPath,
-      fastvideoOmniAssets,
-      referenceImagePaths,
-      referenceVideoPaths,
-      referenceAudioPaths,
-      wanRequiredWeights,
-      ltxModelPath,
-      ref2vaModelPath,
-      prompt: renderPrompt,
-      negativePrompt,
-      width: w,
-      height: h,
-      numFrames: parsedNumFrames,
-      fps: parsedFps,
-      continuityStrategy, contextFrames, historyContext,
-      steps: actualSteps,
-      stage2Steps: actualStage2Steps,
-      guidance: actualGuidance,
-      seed: actualSeed,
-      tiling,
-      disableAudio,
-      sourceImagePath: resolvedSourceImage,
-      lastImagePath: resolvedLastImage,
-      keyframes: resolvedKeyframes,
-      extendFromVideoPath,
-      audioFilePath,
-      audioStartSec,
-      mode,
-      imageStrength: actualImageStrength,
-      i2vReferenceMode: effectiveReferenceMode,
-      a2vLoraStageStrengths,
-      textEncoderRepo: actualTextEncoderRepo,
-      textEncoder: resolvedTextEncoder,
-      outputPath,
-      loras: resolvedLoras,
-      icReferencePaths: resolvedIcReferencePaths,
-      icLoraWeightPath,
-      icStrength: actualIcStrength,
-      icAttentionStrength: actualIcAttentionStrength,
-      icSkipStage2,
-      speedProfile,
-      draftDecoder,
-      streamingMode,
-      ffmpegPath: ffmpeg,
-      ffprobePath: ffprobe,
-    },
+    preparation, jobId, executionParent, meta, batch, cleanupTempFiles: media.cleanupTempFiles, displaySleep,
+    buildParams: buildLocalRunnerParams({ params, inputs, plan, media, renderPrompt, outputPath }),
     watchParams: {
-      encoder: resolvedTextEncoder,
+      encoder: inputs.resolvedTextEncoder,
       // Keeps this render's ETA samples in its own cost bucket — a speed profile
       // changes the slope, not just the step count.
       speedProfileId: speedProfile?.id ?? null,
-      outputPath,
-      filename,
-      actualSeed,
-      model,
-      modelId,
-      width: w,
-      height: h,
-      numFrames: parsedNumFrames,
-      steps: actualSteps,
-      // A native Extend delivers the original source, not the model's re-decode of
-      // it. Chain chunks (`hidden`) are skipped — the chain trims the echoed context
-      // itself and a window hop's "source" is a temp tail clip — except a chain's
-      // FIRST chunk (`keepExtendSource`), whose source is the user's own clip. That
-      // chunk is spliced in place at its rendered length, so the chain's trim math
-      // and the tail window it cuts for chunk 1 are unaffected. Only a visible
-      // render keeps an audio master: a hidden chunk is never extended again.
-      extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
-        ? { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden }
-        : null,
+      outputPath, filename, actualSeed, model, modelId, width: w, height: h, numFrames: parsedNumFrames,
+      steps: plan.actualSteps,
+      extendSplice: localExtendSplice({ model, mode, extendFromVideoPath, hidden, keepExtendSource, batch, parsedNumFrames }),
       lipsyncAlign: mode === 'a2v' && !batch,
     },
   });

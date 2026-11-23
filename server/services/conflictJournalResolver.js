@@ -27,6 +27,10 @@ import { restoreCommission } from './creativeCommissions/store.js';
 import { restoreDeck } from './decks.js';
 import { restoreStoryboard } from './storyboards/index.js';
 import { restoreLoom } from './fableLoom/records.js';
+import { updateAuthor } from './authors/index.js';
+import { updateArtist } from './artists/index.js';
+import { updateAlbum } from './albums/index.js';
+import { updateTrack } from './tracks/index.js';
 import { codedError } from '../lib/codedError.js';
 import { isSafeRecordId } from '../lib/zodCompat.js';
 
@@ -63,92 +67,99 @@ export async function getConflict(id) {
   return entry;
 }
 
-// Apply a content patch through the service's normal update path. `replace` (restore-all only) makes
-// per-key-merged fields replace wholesale, currently just universe `categories`.
-async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
-  // The target may have been tombstoned since archive time; map the services' not-found codes to
-  // ERR_TARGET_GONE so the route returns a clean 409 instead of a 500.
-  const translateGone = (err) => {
-    if (err?.code === UNIVERSE_NOT_FOUND || err?.code === SERIES_NOT_FOUND
-        || err?.code === COLLECTION_NOT_FOUND || err?.code === ISSUE_NOT_FOUND
-        // Creative Director/music-video updateProject throw a generic 'NOT_FOUND' when the row is missing or tombstoned.
-        || err?.code === 'NOT_FOUND') {
-      throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
-    }
-    throw err;
-  };
-  if (kind === 'universe') {
-    // Mutator form bypasses the literal-patch reference-sheet guard (the snapshot is the trusted writer);
-    // `replace` swaps the additive categories merge for a wholesale replace.
-    await updateUniverse(recordId, () => patch, { replaceCategories: replace }).catch(translateGone);
-  } else if (kind === 'series') {
-    await updateSeries(recordId, patch).catch(translateGone);
-  } else if (kind === 'mediaCollection') {
-    // A linked collection (universeId/seriesId set) locks `name` to its owner: updateCollection rejects a
-    // name change, and such a "conflict" is an owner-rename cascade artifact. Drop `name` for linked
-    // collections so restore still applies the editable scalars instead of 500ing.
-    const cur = await getCollection(recordId, { includeDeleted: true }).catch(translateGone);
+const goneError = (kind) => codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+
+// restore* helpers return null (not throw) for a missing record; surface it as ERR_TARGET_GONE (#2686).
+const restoredOrGone = (kind) => (restored) => {
+  if (!restored) throw goneError(kind);
+};
+
+// Dispatch map keyed by conflict kind. Each applier receives (recordId, patch, { replace }) and applies the patch
+// through the service's normal update path. `replace` (restore-all only) makes per-key-merged fields replace
+// wholesale, currently just universe `categories`. Parity with RESTORABLE_FIELDS is pinned by a test so a kind
+// cannot declare restorable fields without an applier.
+const RECORD_APPLIERS = Object.assign(Object.create(null), {
+  // Mutator form bypasses the literal-patch reference-sheet guard (the snapshot is the trusted writer);
+  // `replace` swaps the additive categories merge for a wholesale replace.
+  universe: (id, patch, { replace }) => updateUniverse(id, () => patch, { replaceCategories: replace }),
+  series: (id, patch) => updateSeries(id, patch),
+  // A linked collection (universeId/seriesId set) locks `name` to its owner: updateCollection rejects a
+  // name change, and such a "conflict" is an owner-rename cascade artifact. Drop `name` for linked
+  // collections so restore still applies the editable scalars instead of 500ing.
+  mediaCollection: async (id, patch) => {
+    const cur = await getCollection(id, { includeDeleted: true });
     const { name: _lockedName, ...withoutName } = patch;
     const effective = (cur?.universeId || cur?.seriesId) ? withoutName : patch;
-    if (Object.keys(effective).length > 0) await updateCollection(recordId, effective).catch(translateGone);
-  } else if (kind === 'issue') {
-    // updateIssue merges `stages` per-key, but `sanitizeStages` seeds a CLOSED stage-id set with complete
-    // shapes, so the snapshot always carries every stage and its value wins: restore-all equals a wholesale
-    // replace without a flag. (`runHistory` is intentionally recomputed, not rolled back.)
-    await updateIssue(recordId, patch).catch(translateGone);
-  } else if (kind === 'creativeDirectorProject') {
-    // updateProject does a wholesale spread, so restorable scalars + treatment overwrite the live values.
-    // It validates `status` and rejects a tombstoned row (404 -> translateGone).
-    await updateProject(recordId, patch).catch(translateGone);
-  } else if (kind === 'moodBoard') {
-    // restoreBoard applies name/description/items wholesale (the route's applyBoardPatch skips items[]).
-    // Rejects a tombstoned row (404 -> translateGone).
-    await restoreBoard(recordId, patch).catch(translateGone);
-  } else if (kind === 'musicVideoProject') {
-    // Wholesale spread (applyProjectPatch -> touch): restorable scalars + scenes[] overwrite the live values.
-    // Rejects a missing/tombstoned row with the generic 'NOT_FOUND' (-> translateGone).
-    await updateMusicVideoProject(recordId, patch).catch(translateGone);
-  } else if (['writersRoomCharacters', 'writersRoomPlaces', 'writersRoomObjects'].includes(kind)) {
-    const { restoreWorkBible, BIBLE_CONFLICT_KINDS } = await import('./writersRoom/bibleSync.js');
-    const bibleKind = Object.keys(BIBLE_CONFLICT_KINDS).find((key) => BIBLE_CONFLICT_KINDS[key] === kind);
-    await restoreWorkBible(recordId, bibleKind, patch).catch(translateGone);
-  } else if (kind === WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND) {
+    if (Object.keys(effective).length > 0) await updateCollection(id, effective);
+  },
+  // These services' update* take every RESTORABLE_FIELDS key through their PATCHABLE allow-list and throw
+  // NOT_FOUND for a missing/tombstoned row.
+  author: (id, patch) => updateAuthor(id, patch),
+  artist: (id, patch) => updateArtist(id, patch),
+  album: (id, patch) => updateAlbum(id, patch),
+  track: (id, patch) => updateTrack(id, patch),
+  // updateIssue merges `stages` per-key, but `sanitizeStages` seeds a CLOSED stage-id set with complete
+  // shapes, so the snapshot always carries every stage and its value wins: restore-all equals a wholesale
+  // replace without a flag. (`runHistory` is intentionally recomputed, not rolled back.)
+  issue: (id, patch) => updateIssue(id, patch),
+  // updateProject does a wholesale spread, so restorable scalars + treatment overwrite the live values.
+  // It validates `status` and rejects a tombstoned row (generic 'NOT_FOUND').
+  creativeDirectorProject: (id, patch) => updateProject(id, patch),
+  // restoreBoard applies name/description/items wholesale (the route's applyBoardPatch skips items[]).
+  moodBoard: (id, patch) => restoreBoard(id, patch),
+  // Wholesale spread (applyProjectPatch -> touch): restorable scalars + scenes[] overwrite the live values.
+  musicVideoProject: (id, patch) => updateMusicVideoProject(id, patch),
+  writersRoomCharacters: (id, patch) => restoreBible(id, 'writersRoomCharacters', patch),
+  writersRoomPlaces: (id, patch) => restoreBible(id, 'writersRoomPlaces', patch),
+  writersRoomObjects: (id, patch) => restoreBible(id, 'writersRoomObjects', patch),
+  [WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND]: (recordId, patch) => {
     const [workId, draftId, ...rest] = recordId.split('/');
     if (!workId || !draftId || rest.length > 0 || typeof patch.body !== 'string') {
       throw codedError('Invalid Writers Room draft-body conflict', ERR_VALIDATION);
     }
-    await saveDraftBody(workId, patch.body, { draftId }).catch(translateGone);
-  } else if (kind === 'writersRoomWork') {
-    // updateWork applies the RESTORABLE_FIELDS set through its allow-list and liveMode partial merge.
-    // Draft-version structure and prose bodies are file-primary + lineage-managed, so not restorable here.
-    await updateWork(recordId, patch).catch(translateGone);
-  } else if (kind === 'writersRoomFolder') {
-    // Merges name/parentId/sortOrder and bumps updatedAt so the restore wins the next LWW and re-pushes.
-    await restoreFolder(recordId, patch).catch(translateGone);
-  } else if (kind === 'writersRoomExercise') {
-    // Merges sprint fields (appendedText + config) and stamps updatedAt so the restore wins the next LWW.
-    await restoreExercise(recordId, patch).catch(translateGone);
-  } else if (kind === 'commissionFeedback') {
-    // Merges rating/note/tags, un-tombstones, bumps updatedAt. Returns null (not throw) for a missing record; translate it to ERR_TARGET_GONE for a clean 409 (#2686).
-    const restored = await restoreCommissionFeedback(recordId, patch).catch(translateGone);
-    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
-  } else if (kind === 'creativeCommission') {
-    // Merges brief fields, un-tombstones, bumps updatedAt; machine-local schedule/runs/assignment are kept. Null = missing (#2686).
-    const restored = await restoreCommission(recordId, patch).catch(translateGone);
-    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
-  } else if (kind === 'deck') {
-    // Merges style-guide/identity fields, un-tombstones, bumps updatedAt. Null = hard-pruned by the tombstone sweep.
-    const restored = await restoreDeck(recordId, patch).catch(translateGone);
-    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
-  } else if (kind === 'storyboard') {
-    // Overlays authored fields, un-tombstones, bumps updatedAt. Null = already hard-pruned.
-    const restored = await restoreStoryboard(recordId, patch).catch(translateGone);
-    if (!restored) throw codedError(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
-  } else if (kind === 'fableLoom') {
-    // Restore through the normal loom mutation path so the edit is sanitized, timestamped, and re-pushed.
-    await restoreLoom(recordId, patch).catch(translateGone);
-  } else {
-    throw codedError(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
+    return saveDraftBody(workId, patch.body, { draftId });
+  },
+  // updateWork applies the RESTORABLE_FIELDS set through its allow-list and liveMode partial merge.
+  // Draft-version structure and prose bodies are file-primary + lineage-managed, so not restorable here.
+  writersRoomWork: (id, patch) => updateWork(id, patch),
+  // Merges name/parentId/sortOrder and bumps updatedAt so the restore wins the next LWW and re-pushes.
+  writersRoomFolder: (id, patch) => restoreFolder(id, patch),
+  // Merges sprint fields (appendedText + config) and stamps updatedAt so the restore wins the next LWW.
+  writersRoomExercise: (id, patch) => restoreExercise(id, patch),
+  // Merges rating/note/tags, un-tombstones, bumps updatedAt.
+  commissionFeedback: (id, patch) => restoreCommissionFeedback(id, patch).then(restoredOrGone('commissionFeedback')),
+  // Merges brief fields, un-tombstones, bumps updatedAt; machine-local schedule/runs/assignment are kept.
+  creativeCommission: (id, patch) => restoreCommission(id, patch).then(restoredOrGone('creativeCommission')),
+  // Merges style-guide/identity fields, un-tombstones, bumps updatedAt. Null = hard-pruned by the tombstone sweep.
+  deck: (id, patch) => restoreDeck(id, patch).then(restoredOrGone('deck')),
+  // Overlays authored fields, un-tombstones, bumps updatedAt. Null = already hard-pruned.
+  storyboard: (id, patch) => restoreStoryboard(id, patch).then(restoredOrGone('storyboard')),
+  // Restore through the normal loom mutation path so the edit is sanitized, timestamped, and re-pushed.
+  fableLoom: (id, patch) => restoreLoom(id, patch),
+});
+
+export const SUPPORTED_CONFLICT_KINDS = Object.freeze(Object.keys(RECORD_APPLIERS));
+
+async function restoreBible(recordId, kind, patch) {
+  const { restoreWorkBible, BIBLE_CONFLICT_KINDS } = await import('./writersRoom/bibleSync.js');
+  const bibleKind = Object.keys(BIBLE_CONFLICT_KINDS).find((key) => BIBLE_CONFLICT_KINDS[key] === kind);
+  return restoreWorkBible(recordId, bibleKind, patch);
+}
+
+const GONE_CODES = new Set([UNIVERSE_NOT_FOUND, SERIES_NOT_FOUND, COLLECTION_NOT_FOUND, ISSUE_NOT_FOUND,
+  // Creative Director/music-video/author/artist/album/track updates throw a generic 'NOT_FOUND' when the row is missing or tombstoned.
+  'NOT_FOUND']);
+
+async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
+  const applier = RECORD_APPLIERS[kind];
+  if (!applier) throw codedError(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
+  // The target may have been tombstoned since archive time; map the services' not-found codes to
+  // ERR_TARGET_GONE so the route returns a clean 409 instead of a 500.
+  try {
+    await applier(recordId, patch, { replace });
+  } catch (err) {
+    if (GONE_CODES.has(err?.code)) throw goneError(kind);
+    throw err;
   }
 }
 

@@ -340,9 +340,9 @@ see `server/lib/ptySpawnDiagnostics.js`.
 **Recovery**:
 ```bash
 # In the PRIMARY checkout, never in a worktree
-npm install --prefix server
-npm install --prefix client
-npx pm2 restart portos-cos
+# Plain `npm install` skips the node-pty rebuild (server/.npmrc ignore-scripts=true)
+node scripts/ensure-deps.js
+node ./node_modules/pm2/bin/pm2 restart portos-cos
 ```
 
 **Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
@@ -546,9 +546,9 @@ If 428 already ran, preserve the current collection and recover membership from 
 
 **Symptom**: `npm run migrations` or server boot exits with `Another migration run (pid N) holds …/data/migrations.lock`.
 
-Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `pm2 stop portos`) and retry. A live holder never expires, even during a long upgrade. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it once the recorded pid is gone. An acquisition with a missing or malformed owner can be reclaimed after 30 minutes; other owner-read errors refuse recovery.
+Only one migration runner may touch `data/migrations.applied.json` at a time: the booting server and a manual `npm run migrations` would otherwise both read the ledger before either persists it and apply the same migration twice. The second runner waits up to a minute for the holder to finish, then gives up with this message. Let the running server finish booting (or stop it with `npm run pm2:stop`) and retry. A live holder never expires. A runner that died mid-run (power loss, `kill -9`) leaves the directory behind; the next run reclaims it once the recorded pid is gone. An acquisition with a missing or malformed owner can be reclaimed after 30 minutes; other owner-read errors refuse recovery.
 
-Release and stale recovery serialize through `data/migrations.lock/.transition`. If a process dies during that brief transition, the lock stays closed rather than risking duplicate migrations. Stop all migration runners before removing `data/migrations.lock` by hand, then retry. A crash after atomic retirement can also leave a `data/migrations.lock.retired-*` directory; it is no longer an active lock and can be removed once runners have stopped.
+Release and stale recovery serialize through `data/migrations.lock/.transition`. If a process dies during that transition, the lock stays closed rather than risking duplicate migrations. Stop all migration runners before removing `data/migrations.lock` by hand, then retry. A crash after atomic retirement can also leave a `data/migrations.lock.retired-*` directory; it is no longer an active lock and can be removed once runners have stopped.
 
 ### Lost App Registrations
 
@@ -627,8 +627,8 @@ Lag resolves to about one tick: the first 100 ms of a stall and any overdue stre
 # Check PM2 memory usage
 npx pm2 monit
 
-# Set memory limits in ecosystem.config.cjs
-max_memory_restart: '500M'
+# Override the server memory ceiling in .env (see .env.example), not in ecosystem.config.cjs
+PORTOS_SERVER_MAX_MEMORY=4G
 ```
 
 ### Agent Runs Timeout
@@ -763,7 +763,7 @@ want it to stay stopped.
 
 ### Windows server unit tests fail but macOS/Linux pass
 
-**Symptom**: `Windows server unit tests (n/3)` is the only shard with a real
+**Symptom**: `Windows native contracts` is the only shard with a real
 assertion failure.
 
 The cause is almost always a **test** that hardcodes the POSIX answer to a

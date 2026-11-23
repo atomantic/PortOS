@@ -44,6 +44,7 @@ vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await
 const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
+const filmActions = await import('../services/musicVideo/projectFilmActions.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
 const { DIRECTOR_STARTED, assertProductionApproval, approveProductionStage, productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 const app = express();
@@ -212,7 +213,7 @@ describe('human-reviewed Music Video workflow', () => {
       timecodedNotes: '0:04 doorway opens on the accent; 0:12 the second gesture grows in scale.',
     });
     expect(() => assertProductionApproval(accepted)).not.toThrow();
-    const fork = await store.cloneProject(project.id, { variant: 'video-generation' });
+    const fork = await filmActions.cloneProject(project.id, { variant: 'video-generation' });
     expect(fork.productionReview.approvals).toEqual({});
     expect(fork.productionReview.draft.cast).toBe('');
     expect(fork.productionReview.draft.storyboard[0].sceneId).toBe(fork.scenes[0].sceneId);

@@ -2,9 +2,10 @@ import { useEffect, useRef } from 'react';
 import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion';
 
 /** Keep the row mounted until its successful deletion has collapsed its space.
- * Put row spacing INSIDE this wrapper (paddingBottom), never on the parent gap.
+ * Pass role="row" when the item is a table row: the wrapper divs then become row/none so
+ * a rowgroup still directly owns the row. Put row spacing INSIDE this wrapper (paddingBottom), never on the parent gap.
  */
-export default function CollapsibleListItem({ removing, onExited, children, spacing = '0.5rem' }) {
+export default function CollapsibleListItem({ removing, onExited, children, spacing = '0.5rem', role }) {
   const elementRef = useRef(null);
   const hadFocusRef = useRef(false);
   const exitRef = useRef(onExited);
@@ -31,6 +32,7 @@ export default function CollapsibleListItem({ removing, onExited, children, spac
   return (
     <div
       ref={elementRef}
+      role={role}
       tabIndex={-1}
       inert={removing || undefined}
       onFocusCapture={() => { hadFocusRef.current = true; }}
@@ -42,8 +44,8 @@ export default function CollapsibleListItem({ removing, onExited, children, spac
       }}
       className="grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none"
       style={{ gridTemplateRows: removing ? '0fr' : '1fr', opacity: removing ? 0 : 1 }}>
-      <div className="min-h-0 overflow-hidden">
-        <div style={{ paddingBottom: spacing }}>{children}</div>
+      <div role={role && 'none'} className="min-h-0 overflow-hidden">
+        <div role={role && 'none'} style={{ paddingBottom: spacing }}>{children}</div>
       </div>
     </div>
   );

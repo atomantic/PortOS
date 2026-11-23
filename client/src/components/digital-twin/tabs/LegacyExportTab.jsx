@@ -4,6 +4,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
 import { getLegacyExportPreview, downloadLegacyExport } from '../../../services/apiDigitalTwin.js';
 import toast from '../../ui/Toast';
+import ListLoadError from '../../ui/ListLoadError';
 import { downloadBlob } from '../../../lib/downloadBlob';
 import { formatBytes } from '../../../utils/formatters';
 
@@ -25,6 +26,7 @@ function describeCounts(meta) {
 
 export default function LegacyExportTab() {
   const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState([]);
   const [generating, setGenerating] = useState(false);
@@ -32,13 +34,18 @@ export default function LegacyExportTab() {
 
   const loadPreview = useCallback(async () => {
     setLoading(true);
-    // ExportTab-style: tolerate a failed preview with a falsy fallback so the
-    // tab still renders an empty state instead of throwing.
-    const data = await getLegacyExportPreview({ silent: true }).catch(() => null);
-    setPreview(data);
-    // Default selection: every present section.
-    if (data?.sections) {
-      setSelected(Object.entries(data.sections).filter(([, m]) => m.present).map(([k]) => k));
+    setPreviewError(null);
+    try {
+      const data = await getLegacyExportPreview({ silent: true });
+      setPreview(data);
+      // Default selection: every present section.
+      if (data?.sections) {
+        setSelected(Object.entries(data.sections).filter(([, m]) => m.present).map(([k]) => k));
+      }
+    } catch (err) {
+      // A failed read must not render as "No identity data available yet" (an empty state).
+      setPreview(null);
+      setPreviewError(err);
     }
     setLoading(false);
   }, []);
@@ -123,7 +130,9 @@ export default function LegacyExportTab() {
           </button>
         </div>
 
-        {presentSections.length === 0 ? (
+        {previewError ? (
+          <ListLoadError what="legacy bundle sections" error={previewError} onRetry={loadPreview} />
+        ) : presentSections.length === 0 ? (
           <p className="text-sm text-gray-500 py-4 text-center">
             No identity data available yet — build out your Digital Twin to populate the bundle.
           </p>

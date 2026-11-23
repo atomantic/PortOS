@@ -44,14 +44,21 @@ const PLACEMENTS_SQL = `WITH ${CANONICAL_REFS_CTE},
     UNION SELECT pm.cid, s.universe_id FROM (${STORYBOARD_PANEL_MEMBERS_SQL}) pm
       JOIN storyboards s ON s.id = pm.board_id
     UNION SELECT r.cid, p.universe_id FROM canonical_refs r
-      JOIN pipeline_series p ON r.ref_kind = 'series' AND p.id = r.ref_id AND p.deleted = false)
+      JOIN pipeline_series p ON r.ref_kind = 'series' AND p.id = r.ref_id AND p.deleted = false),
+  target_members AS (
+    SELECT i.id AS cid, member_id FROM catalog_ingredients i
+      CROSS JOIN LATERAL unnest(catalog_identity_member_ids(i.id)) AS member_id
+     WHERE i.deleted = false AND i.id = catalog_canonical_ingredient_id(i.id)
+       AND ($1::text[] IS NULL OR i.id IN (SELECT catalog_canonical_ingredient_id(x) FROM unnest($1::text[]) x)))
   SELECT DISTINCT i.id AS ingredient_id, i.name AS ingredient_name, u.id AS universe_id, u.name AS universe_name, m.media_key
     FROM member_universes mu
     JOIN universes u ON u.id = mu.universe_id AND u.deleted = false
     JOIN catalog_ingredients i ON i.id = mu.cid AND i.deleted = false
-    JOIN catalog_identity_read_media m ON m.ingredient_id = ANY(catalog_identity_member_ids(i.id))
+    JOIN target_members tm ON tm.cid = i.id
+    JOIN catalog_identity_read_media m ON m.ingredient_id = tm.member_id
      AND m.deleted = false AND m.kind IN ('portrait', 'reference')
      AND (m.role IS NULL OR m.role NOT LIKE 'archive:%')
+     AND ($1::text[] IS NULL OR m.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM target_members)))
    WHERE $1::text[] IS NULL OR i.id IN (SELECT catalog_canonical_ingredient_id(x) FROM unnest($1::text[]) x)
    ORDER BY u.id, i.id, m.media_key`;
 
@@ -65,11 +72,18 @@ const loadPlacements = async (ingredientIds) => {
 
 // (type, image) for every live portrait/reference on a canonical record of a
 // type with a library collection. `$1` narrows like PLACEMENTS_SQL.
-const TYPE_PLACEMENTS_SQL = `SELECT DISTINCT i.type, m.media_key
+const TYPE_PLACEMENTS_SQL = `WITH target_members AS (
+    SELECT i.id AS cid, member_id FROM catalog_ingredients i
+      CROSS JOIN LATERAL unnest(catalog_identity_member_ids(i.id)) AS member_id
+     WHERE i.deleted = false AND i.type = ANY($2::text[]) AND i.id = catalog_canonical_ingredient_id(i.id)
+       AND ($1::text[] IS NULL OR i.id IN (SELECT catalog_canonical_ingredient_id(x) FROM unnest($1::text[]) x)))
+  SELECT DISTINCT i.type, m.media_key
     FROM catalog_ingredients i
-    JOIN catalog_identity_read_media m ON m.ingredient_id = ANY(catalog_identity_member_ids(i.id))
+    JOIN target_members tm ON tm.cid = i.id
+    JOIN catalog_identity_read_media m ON m.ingredient_id = tm.member_id
      AND m.deleted = false AND m.kind IN ('portrait', 'reference')
      AND (m.role IS NULL OR m.role NOT LIKE 'archive:%')
+     AND ($1::text[] IS NULL OR m.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM target_members)))
    WHERE i.deleted = false AND i.type = ANY($2::text[]) AND i.id = catalog_canonical_ingredient_id(i.id)
      AND ($1::text[] IS NULL OR i.id IN (SELECT catalog_canonical_ingredient_id(x) FROM unnest($1::text[]) x))
    ORDER BY i.type, m.media_key`;

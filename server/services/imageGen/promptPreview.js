@@ -121,8 +121,9 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
     return { ...envelope, ...runwayImageSentPrompt({ ...common, modelId: cloud?.providerParams.model, inputImages: previewInputImages(mode, params, cloud?.providerParams.model), visualConditioning: params.visualConditioning }).record };
   }
   if (mode === IMAGE_GEN_MODE.FAL) {
-    const family = falImageFamily(cloud?.providerParams.model || FAL_IMAGE_DEFAULT_MODEL) || falImageFamily(FAL_IMAGE_DEFAULT_MODEL);
-    return { ...envelope, ...falImageSentPrompt({ ...common, family, inputImages: previewInputImages(mode, params, family.textEndpoint) }).record };
+    const modelId = cloud?.providerParams.model || FAL_IMAGE_DEFAULT_MODEL;
+    const family = falImageFamily(modelId);
+    return { ...envelope, ...falImageSentPrompt({ ...common, family, inputImages: previewInputImages(mode, params, family ? family.textEndpoint : modelId) }).record };
   }
   if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
     const family = higgsfieldImageFamily(cloud?.providerParams.model || HIGGSFIELD_IMAGE_DEFAULT_MODEL) || higgsfieldImageFamily(HIGGSFIELD_IMAGE_DEFAULT_MODEL);

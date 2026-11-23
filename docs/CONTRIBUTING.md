@@ -359,7 +359,8 @@ Pull requests into `main` run the tests for affected feature directories, with
 conservative fallbacks to the runner's related-test mode or the complete suite; a
 pull request into `release`, nightly CI, and manual CI runs always run the
 complete server, client, DB, lint, build, and smoke checks. Pushes to `main`
-run nothing — the pull request gate already covered that tree. Release
+run the full primary CI suite with path-gated native jobs (see
+[GitHub Actions](./GITHUB_ACTIONS.md#native-jobs-on-a-push-to-main)). Release
 publication is blocked until a full CI gate has succeeded on the exact tree
 being released. See [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md).
 

@@ -710,14 +710,14 @@ export function updateAppTaskTypeOverrides(id, patches = {}) {
  * Reset the schedule execution cooldown for an app's pr-watcher so a re-enable
  * baselines on the next tick instead of waiting out the prior 30-min custom
  * interval — otherwise PRs opened in that delayed window slip past the firstRun
- * baseline. Dynamic import avoids a static apps↔taskSchedule cycle (taskSchedule
- * already imports this module). Best-effort: a missing history is a no-op and a
+ * baseline. Imported from the schedule store, not taskSchedule.js, which imports
+ * this module (#17499). Best-effort: a missing history is a no-op and a
  * storage failure must not block the primary app-disable write, but it is logged
  * with app context instead of disappearing.
  */
 async function resetWatcherCooldown(taskType, appId) {
   try {
-    const { resetExecutionHistory } = await import('./taskSchedule.js');
+    const { resetExecutionHistory } = await import('./taskScheduleStore.js');
     const result = await resetExecutionHistory(taskType, appId);
     if (result?.error && result.error !== 'No execution history found') {
       console.error(`❌ Failed to reset ${taskType} cooldown for app ${appId}: ${result.error}`);

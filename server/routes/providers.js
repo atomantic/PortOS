@@ -9,6 +9,7 @@ import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/provid
 import {
   createBinding,
   createConnection,
+  findConnectionByRef,
   getManagementGraph,
   presetSkipReason,
   providerGraphEnabled,
@@ -17,6 +18,7 @@ import {
   updateConnectionSettings,
   updateRouteSettings,
 } from '../services/provider/providerGraph.js';
+import { readGraph } from '../services/provider/providerGraphStore.js';
 import {
   createService,
   getService,
@@ -55,7 +57,8 @@ import {
   getCodexAccountReadiness,
   startCodexChatGptLogin,
 } from '../services/codexAppServer.js';
-import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
+import { isLocalInstanceEndpoint, localEndpointPort, localRuntimeForProvider, LOCAL_RUNTIMES } from '../lib/localProviderRuntime.js';
+import { expandPageToken } from '../lib/navManifest.js';
 import {
   isAuthoringOneShotProvider,
   isToolFreeOneShotProvider,
@@ -74,7 +77,7 @@ import {
   detectSystemCapabilities,
   withProviderHardwareCompatibility,
 } from '../lib/systemCapabilities.js';
-import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
+import { SERVICE_DEFINITIONS, serviceDefinitionById } from '../lib/serviceDefinitions.js';
 import { presentServiceDefinition } from '../lib/provider/providerServiceInstances.js';
 import {
   executionOptionSelectionSchema, providerExecutionOptionsQuerySchema, codexLoginCancelSchema,
@@ -225,6 +228,48 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
 // Deferred: the preset service reaches the graph store and the composite
 // resolver, which every suite that mounts these routes would otherwise pay for.
 const presetService = () => import('../services/provider/providerPresets.js');
+
+/**
+ * Bring a managed MTPLX up before its catalog is probed (#17439).
+ *
+ * A derived preset's catalog is its service's catalog, and a service pointed at
+ * a stopped local MTPLX answers `ECONNREFUSED` — the same failure the card
+ * then renders as a bare connection error. A routed inference request goes
+ * through `ensureMtplxRunning` first, and the refresh path does the same.
+ * Only the install's OWN daemon is woken: a managed MTPLX row pointed at a
+ * remote port, or a service with another definition, is left exactly as it is.
+ * A stop with no saved launch line is a typed refusal, not a connection
+ * failure — the card renders the refusal with a link to Models → Runtimes.
+ *
+ * The managed daemon is lazy-imported so no suite that never refreshes a
+ * managed MTPLX pays for the process-manager graph (server/AGENTS.md
+ * "Import scoping").
+ */
+async function wakeManagedMtpxForRefresh(serviceSlug) {
+  const graph = await readGraph();
+  const connection = findConnectionByRef(graph, serviceSlug);
+  if (!connection) return;
+  const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+  if (definition?.localRuntime !== 'mtplx') return;
+  const endpoint = connection.transports?.openai?.baseUrl;
+  if (!endpoint || !isLocalInstanceEndpoint(endpoint)) return;
+  const { getMtplxSavedLaunch, ensureMtplxRunning } = await import('../services/mtplxServerManager.js');
+  const saved = await getMtplxSavedLaunch();
+  if (!saved || Object.keys(saved.raw ?? {}).length === 0) {
+    console.log('🚄 MTPLX catalog refresh refused — the server is stopped and has no saved launch line');
+    throw new ServerError(
+      expandPageToken('MTPLX is stopped and has no saved launch line — open the MTPLX card in {page} to start it and save its launch line, then refresh again.', LOCAL_RUNTIMES.mtplx),
+      { status: 409, code: 'MTPLX_STOPPED' },
+    );
+  }
+  const { ready, reason } = await ensureMtplxRunning();
+  if (!ready) {
+    throw new ServerError(
+      `MTPLX is stopped and PortOS could not start it: ${reason || 'unknown error'}`,
+      { status: 502, code: 'MTPLX_START_FAILED' },
+    );
+  }
+}
 
 /**
  * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
@@ -1237,7 +1282,9 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
       // A DERIVED preset's models are its service's catalog (#7565). Writing a
       // probe onto the record alone leaves that catalog stale, so the next
       // derivation discards what was found — refresh the service instead, which
-      // re-derives every preset on it.
+      // re-derives every preset on it. A stopped managed MTPLX is woken first,
+      // exactly as a routed request would wake it.
+      await wakeManagedMtpxForRefresh(stored.serviceId);
       const { service } = await refreshServiceCatalog(stored.serviceId, { resetPresetId: stored.id });
       if (service.catalog?.state === 'failed') {
         throw new ServerError(service.catalog.error || 'The service could not list its models; its catalog was preserved.', { status: 502 });

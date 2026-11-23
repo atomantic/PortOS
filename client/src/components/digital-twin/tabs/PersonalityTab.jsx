@@ -23,6 +23,8 @@ import {
   updateModelPersonalitySettings,
 } from '../../../services/apiModelPersonality.js';
 import toast from '../../ui/Toast';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterGenerationModels } from '../../../utils/providers.js';
@@ -185,9 +187,19 @@ function RunDetail({ run }) {
   );
 }
 
+// Normalizes a settings payload to the form's value shapes (matches loadData).
+const optionsFrom = (s) => ({
+  scorerProviderId: s.scorerProviderId || '',
+  scorerModel: s.scorerModel || '',
+  historyCap: Number(s.historyCap ?? 200) || 200,
+  defaultAlignment: s.defaultIncludeAlignment ?? true
+});
+
 export default function PersonalityTab() {
   const providersResource = useProviderList();
   const providers = useMemo(() => providersResource.items.filter((p) => p.enabled), [providersResource.items]);
+  const [deletingId, setDeletingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const loading = historyLoading || providersResource.state === 'loading';
@@ -224,6 +236,9 @@ export default function PersonalityTab() {
   const [historyCap, setHistoryCap] = useState(200);
   const [defaultAlignment, setDefaultAlignment] = useState(true); // the SAVED default, distinct from this run's toggle
   const [savingSettings, setSavingSettings] = useState(false);
+  // Last server-confirmed options: a test run reads the server's saved scorer
+  // settings, so the Run button gates on these, not on the edited form.
+  const [savedOptions, setSavedOptions] = useState(null);
   const [settingsError, setSettingsError] = useState(false);
   const [historyError, setHistoryError] = useState(false);
 
@@ -248,6 +263,7 @@ export default function PersonalityTab() {
       setScorerProviderId(settingsData.scorerProviderId || '');
       setScorerModel(settingsData.scorerModel || '');
       setHistoryCap(settingsData.historyCap ?? 200);
+      setSavedOptions(optionsFrom(settingsData));
     }
     setHistoryLoading(false);
   };
@@ -289,9 +305,12 @@ export default function PersonalityTab() {
   };
 
   const deleteRun = async (runId) => {
+    if (deletingId) return;
+    setDeletingId(runId);
     const ok = await deleteModelPersonalityResult(runId)
       .then(() => true)
       .catch(() => false);
+    setDeletingId(null);
     if (!ok) return;
     setHistory((prev) => prev.filter((r) => r.runId !== runId));
     setResults((prev) => prev.filter((r) => r.runId !== runId));
@@ -314,8 +333,26 @@ export default function PersonalityTab() {
       })
       .catch(() => null);
     setSavingSettings(false);
-    if (saved) toast.success('Personality test settings saved');
+    if (saved) {
+      setSavedOptions(optionsFrom(saved));
+      toast.success('Personality test settings saved');
+    }
   };
+
+  const revertOptions = () => {
+    if (!savedOptions) return;
+    setScorerProviderId(savedOptions.scorerProviderId);
+    setScorerModel(savedOptions.scorerModel);
+    setHistoryCap(savedOptions.historyCap);
+    setDefaultAlignment(savedOptions.defaultAlignment);
+  };
+
+  const optionsDirty = !!savedOptions && (
+    scorerProviderId !== savedOptions.scorerProviderId
+    || scorerModel !== savedOptions.scorerModel
+    || (Number(historyCap) || 200) !== savedOptions.historyCap
+    || defaultAlignment !== savedOptions.defaultAlignment
+  );
 
   const toggleCompare = (runId) => {
     updateParams((p) => {
@@ -397,7 +434,7 @@ export default function PersonalityTab() {
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
         <button
           onClick={runTest}
-          disabled={!!running || selectedProviders.length === 0}
+          disabled={!!running || selectedProviders.length === 0 || optionsDirty || savingSettings}
           className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {running ? (
@@ -422,6 +459,12 @@ export default function PersonalityTab() {
           />
           Include twin alignment check
         </label>
+
+        {optionsDirty && (
+          <span className="text-sm text-port-warning" role="status">
+            Save or revert pending option changes before running
+          </span>
+        )}
 
         <button
           onClick={() => setShowOptions((v) => !v)}
@@ -495,6 +538,13 @@ export default function PersonalityTab() {
             className="px-4 py-2 min-h-[40px] text-sm bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50"
           >
             {savingSettings ? 'Saving...' : 'Save Options'}
+          </button>
+          <button
+            onClick={revertOptions}
+            disabled={!optionsDirty || savingSettings}
+            className="ml-2 px-4 py-2 min-h-[40px] text-sm text-gray-300 border border-port-border rounded-lg hover:text-white hover:border-gray-500 disabled:opacity-50"
+          >
+            Revert
           </button>
         </div>
       )}
@@ -596,9 +646,9 @@ export default function PersonalityTab() {
                   />
                   <button
                     onClick={() => setExpandedRunId(expandedRunId === run.runId ? null : run.runId)}
-                    className="flex-1 flex items-center gap-2 text-left min-h-[40px]"
+                    className="flex-1 min-w-0 flex items-center gap-2 text-left min-h-[40px]"
                   >
-                    {expandedRunId === run.runId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    {expandedRunId === run.runId ? <ChevronDown size={14} className="shrink-0" /> : <ChevronRight size={14} className="shrink-0" />}
                     <div className="min-w-0">
                       <div className="text-sm text-white truncate">{run.model || run.providerId}</div>
                       <div className="text-xs text-gray-500">{timeAgo(run.timestamp)}</div>
@@ -610,13 +660,23 @@ export default function PersonalityTab() {
                     </span>
                   )}
                   <button
-                    onClick={() => deleteRun(run.runId)}
+                    onClick={() => requestDelete(run.runId)}
+                    disabled={deletingId === run.runId}
                     aria-label={`Delete ${seriesLabel(run)}`}
-                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error"
+                    className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-port-error disabled:opacity-50"
                   >
-                    <Trash2 size={16} />
+                    {deletingId === run.runId ? <BrailleSpinner /> : <Trash2 size={16} />}
                   </button>
                 </div>
+                {isConfirming(run.runId) && (
+                  <InlineConfirmRow
+                    className="mx-3 mb-3"
+                    question="Delete this personality run? This cannot be undone."
+                    confirmText="Delete Run"
+                    onConfirm={() => confirmDelete(() => deleteRun(run.runId))}
+                    onCancel={cancelDelete}
+                  />
+                )}
                 {expandedRunId === run.runId && (
                   <div className="p-3 pt-0 border-t border-port-border">
                     <RunDetail run={run} />

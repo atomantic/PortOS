@@ -6,17 +6,18 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies,
-  recordTestMemo, seedVitestDependencies, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
+  CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
+  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
+  SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { vitestCaptureProjects } from '../vitestCiPool.js';
-import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
+import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
@@ -44,6 +45,8 @@ function writeRepo(root, files) {
   }
 }
 
+const repoRootDir = fileURLToPath(new URL('../..', import.meta.url));
+
 describe('planTestMemo and recordTestMemo', () => {
   let root;
   let memoDir;
@@ -52,6 +55,43 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  // #17616: a real-Chromium suite's record carries what its fixture served, so an
+  // unrelated client page neither selects it nor misses its memo entry.
+  it('records what a browser fixture served and narrows the suite to it', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-served-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-served-memo-store-'));
+    const view = 'server/lib/view.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+      'client/package.json': '{"name":"client"}',
+      'client/src/index.css': '@import "tailwindcss";\n',
+      'client/src/Panel.jsx': 'export const Panel = 1;\n',
+      'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 1;\n',
+      [view]: ["import { it } from 'vitest';", "import { chromium } from 'playwright-core';",
+        "const client = join(import.meta.dirname, '../../client');",
+        'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: () => ({ configFile: false, root: client }) });',
+        "it('renders', () => {});"].join('\n'),
+    });
+    const tests = () => ['lib/view.test.js'];
+    const full = plan({ listTests: tests, repoFiles: [view] });
+    const served = new Map([[view, { roots: ['client'], files: ['client/src/Panel.jsx'] }]]);
+    const { written } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed: [view],
+      dependencies: new Map([[view, [view]]]), served, source: 'ci', commit: 'abc' });
+    expect(written).toBeGreaterThanOrEqual(1);
+    expect(readMemoRecord(memoDir, 'server', view).served).toEqual(served.get(view));
+
+    const related = (source) => plan({ mode: 'related', listTests: tests, repoFiles: [], repoSources: [source] });
+    writeFileSync(join(root, 'client/src/pages/HtmlPages.jsx'), 'export const HtmlPages = 2;\n');
+    expect(related('client/src/pages/HtmlPages.jsx').selected).toEqual([]);
+    expect(plan({ listTests: tests, repoFiles: [view] }).skipped).toEqual([{ test: view, via: 'recorded' }]);
+    for (const [rel, text] of [['client/src/Panel.jsx', 'export const Panel = 2;\n'], ['client/src/index.css', '@import "tailwindcss";\n.x {}\n']]) {
+      writeFileSync(join(root, rel), text);
+      expect(related(rel).selected, rel).toEqual([view]);
+      expect(plan({ listTests: tests, repoFiles: [view] }).run, rel).toEqual([view]);
+    }
   });
 
   it('keeps the layering guard selected and executable after a cached pass when an unrelated lib file gains an upward import', () => {
@@ -159,7 +199,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(written).toBe(2);
     // A v2 record: each loaded module's digest, so related selection can narrow it.
     expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual({ modules: ['server/lib/a.js', 'server/lib/a.test.js'],
-      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)) });
+      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)), served: null });
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/a.test.js').floor.key, { test: 'server/lib/a.test.js', workspace: 'server' })).toMatchObject({ source: 'local', commit: 'abc' });
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/b.test.js').floor.key, { test: 'server/lib/b.test.js', workspace: 'server' })).toBeNull();
@@ -470,7 +510,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(dependencies.has(idle)).toBe(false);
     expect(record(seeded)).toEqual({ written: 2, unrecorded: [] });
     // Stored without digests: a filtered record must never narrow related selection for a run that skips nothing.
-    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null });
+    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null, served: null });
     expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
 
     // The entry vouches for this filter only: no filter, or another one, runs the file.
@@ -594,6 +634,78 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(after.skipped.map(({ test }) => test).sort()).toEqual(seed.slice.filter(test => test !== changed).sort());
   });
 
+  // A pull request reads every parked shard lineage in place instead of merging them (#17617).
+  it('plans from several read-only shard directories as it did from their merge, consulting the floor only on a recorded miss', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-dirs-'));
+    writeRepo(root, FILES);
+    const [own, shard1, shard2] = ['own', '1', '2'].map((name) => join(memoDir, name));
+    const dependencies = new Map([
+      ['server/lib/a.test.js', ['server/lib/a.js', 'server/lib/a.test.js']],
+      ['server/lib/b.test.js', ['server/lib/b.js', 'server/lib/b.test.js']],
+      ['server/lib/c.test.js', ['server/lib/c.test.js']],
+    ]);
+    for (const [index, dir] of [[1, shard1], [2, shard2]]) {
+      const seed = plan({ memoDir: dir, shard: { index, count: 2 } });
+      recordTestMemo({ scope: 'server', repoRoot: root, memoDir: dir, plan: seed, passed: seed.slice, dependencies, source: 'ci' });
+    }
+    const all = TESTS.map((t) => `server/${t}`);
+    const store = [own, shard1, shard2];
+    const looked = [];
+    const readEntry = (dir, key, meta) => { looked.push(key); return readMemoEntry(dir, key, meta); };
+    const warm = plan({ memoDir: store, readEntry });
+    expect(warm.skipped).toEqual(all.map((test) => ({ test, via: 'recorded' })));
+    // Every file hit its recorded key, so no floor key was computed or looked up.
+    expect(looked).toEqual(all.map((test) => warm.verdicts.get(test).recorded.key));
+    expect(plan({ memoDir: own }).skipped).toEqual([]);
+
+    // Related selection narrows through records found in any directory: b.js's lazy import of
+    // lazy.js is vouched for by b.test.js's record, which only one shard holds.
+    const related = (dir) => plan({ memoDir: dir, mode: 'related', repoFiles: [], repoSources: ['server/lib/lazy.js'] });
+    expect(related(own).selected).toEqual(['server/lib/b.test.js']);
+    expect(related(store).selected).toEqual([]);
+    expect(related(store).narrowed).toBe(3);
+
+    // The newest record wins across directories. Here it names a module set no entry was
+    // written under, so the recorded key misses and the floor key, computed now, still hits.
+    writeMemoRecord(own, 'server', 'server/lib/a.test.js', ['server/lib/a.js', 'server/lib/a.test.js', 'server/lib/lazy.js']);
+    expect(plan({ memoDir: store }).skipped.find(({ test }) => test === 'server/lib/a.test.js')).toEqual({ test: 'server/lib/a.test.js', via: 'floor' });
+  });
+
+  it('prunes a trusted CI store to live tests and recent entries, and the shared local store only of expired entries, daily', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-repo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-prune-'));
+    writeRepo(root, FILES);
+    const calls = [];
+    const prune = (dir, options) => { calls.push({ dir, options }); return { entries: 0, records: 0, removedEntries: 0, removedRecords: 0 }; };
+    const now = Date.parse('2026-11-23T12:00:00.000Z');
+
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: true, now, prune })).not.toBeNull();
+    const [trusted] = calls;
+    expect(trusted.dir).toBe(memoDir);
+    expect(trusted.options.maxEntriesPerTest).toBeUndefined();
+    expect(trusted.options.testExists('server', 'server/lib/a.test.js')).toBe(true);
+    expect(trusted.options.testExists('server', 'server/lib/deleted.test.js')).toBe(false);
+
+    // Local: age only, never the existence check (another worktree may own the test), then throttled.
+    calls.length = 0;
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now, prune })).not.toBeNull();
+    expect(calls).toEqual([{ dir: memoDir, options: { now, maxEntriesPerTest: Number.POSITIVE_INFINITY } }]);
+    expect(readFileSync(join(memoDir, 'pruned-at'), 'utf8')).toBe(new Date(now).toISOString());
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now + LOCAL_PRUNE_INTERVAL_MS - 1, prune })).toBeNull();
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now + LOCAL_PRUNE_INTERVAL_MS, prune })).not.toBeNull();
+    // A stamp from the future (a clock that moved back) does not stop pruning forever.
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: false, now: now - 1000, prune })).not.toBeNull();
+    expect(calls).toHaveLength(3);
+    expect(pruneTestMemo({ memoDir: null, repoRoot: root, trustedCi: true, now, prune })).toBeNull();
+
+    // The real prune: a trusted run forgets an entry for a test file this checkout no longer has.
+    writeMemoEntry(memoDir, 'd'.repeat(64), { test: 'server/lib/deleted.test.js', workspace: 'server', source: 'ci' });
+    writeMemoEntry(memoDir, 'e'.repeat(64), { test: 'server/lib/a.test.js', workspace: 'server', source: 'ci' });
+    expect(pruneTestMemo({ memoDir, repoRoot: root, trustedCi: true })).toMatchObject({ entries: 1, removedEntries: 1 });
+    expect(readMemoEntry(memoDir, 'e'.repeat(64), { test: 'server/lib/a.test.js', workspace: 'server' })).not.toBeNull();
+  });
+
   it('hashes the forward-slashed root-relative path on every platform, like Vitest', () => {
     // pathe's resolve slashes before the slice, so a Windows root yields the same tail as a POSIX one.
     expect(vitestShardHashInput('server/lib/x.test.js', { repoRoot: '/repo', scope: 'server', path: posix })).toBe('/lib/x.test.js');
@@ -605,6 +717,75 @@ describe('planTestMemo and recordTestMemo', () => {
     const slices = (path, repoRoot) => [1, 2].map((index) => vitestShardSlice(files, { repoRoot, scope: 'server', index, count: 2, path }));
     expect(slices(win32, 'D:\\a\\repo')).toEqual(slices(posix, '/repo'));
     expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
+  });
+
+  it('spreads the real-Chromium client suites over four shards without moving other files (#17750)', () => {
+    const browser = Object.keys(CLIENT_BROWSER_SHARD_OWNERS);
+    const plain = Array.from({ length: 40 }, (_, i) => `client/src/lib/plain${i}.test.js`);
+    const files = [...browser, ...plain];
+    const slices = [1, 2, 3, 4].map((index) => serverShardSlice(files, { repoRoot: '/repo', scope: 'client', index, count: 4 }));
+    expect(slices.flat().sort()).toEqual([...files].sort());
+    expect(new Set(slices.flat()).size).toBe(files.length);
+    slices.forEach((slice, i) => {
+      const count = slice.filter((file) => CLIENT_BROWSER_SHARD_OWNERS[file]).length;
+      expect(count).toBeGreaterThanOrEqual(8);
+      expect(count).toBeLessThanOrEqual(9);
+      const hashed = vitestShardSlice(files, { repoRoot: '/repo', scope: 'client', index: i + 1, count: 4 }).filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file]);
+      expect(slice.filter((file) => !CLIENT_BROWSER_SHARD_OWNERS[file])).toEqual(hashed);
+    });
+    const heavy = ['SceneClipCoverageLayout', 'MoodBoardDetail', 'PageLayout', 'SceneCard']
+      .map((name) => CLIENT_BROWSER_SHARD_OWNERS[browser.find((file) => file.endsWith(`/${name}.browser.test.js`))]);
+    expect(new Set(heavy).size).toBe(4);
+    for (const file of browser) expect(existsSync(join(repoRootDir, file)), file).toBe(true);
+  });
+
+  it('pins heavy server suites onto two shards and leaves every other file on the hash slice', () => {
+    const heavy = Object.keys(SERVER_HEAVY_SHARD_OWNERS);
+    const extras = ['server/lib/a.test.js', 'server/lib/b.test.js', 'scripts/plain.test.js'];
+    const files = [...heavy, ...extras];
+    const shardOf = (slice) => serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: slice, count: 2 });
+    const slices = [shardOf(1), shardOf(2)];
+    expect(slices.flat().sort()).toEqual([...files].sort());
+    expect(new Set(slices.flat()).size).toBe(files.length);
+    for (const [file, owner] of Object.entries(SERVER_HEAVY_SHARD_OWNERS)) {
+      expect(slices[owner - 1], file).toContain(file);
+      expect(slices[owner % 2], file).not.toContain(file);
+    }
+    for (const extra of extras) {
+      const onFirst = vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }).includes(extra);
+      expect(slices[onFirst ? 0 : 1], extra).toContain(extra);
+    }
+    expect(serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 })).toEqual(
+      vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 }),
+    );
+    expect(serverShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 })).toEqual(
+      vitestShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }),
+    );
+    // Measured seconds from #17618, plus shard 1's 7s Smoke-boot step outside Vitest.
+    const seconds = {
+      'server/test/guards/repo.guard.test.js': 9.1,
+      'server/scripts/run-local-code-review.test.js': 7,
+      'scripts/pregate.test.js': 25.1,
+      'scripts/setup-image-video.test.js': 19.5,
+      'scripts/lib/testMemo.test.js': 15,
+      'scripts/vitestTempRoot.test.js': 14,
+      'scripts/generate_ltx2.test.js': 13.8,
+      'scripts/vitestSiblingSweep.test.js': 12.3,
+      'scripts/update-headless-recovery.test.js': 11.4,
+      'server/services/updateExecutor.deferred.test.js': 11.1,
+      'server/test/guards/modules.guard.test.js': 9.6,
+      'server/test/guards/runtime.guard.test.js': 10,
+      'scripts/ci-test-plan.test.js': 33.1,
+      'scripts/run-ci-tests.test.js': 33.2,
+      'server/services/repoRepairCompletion.test.js': 27,
+      'scripts/runCiTestsClientFixture.test.js': 20.2,
+      'scripts/lib/testMemoRunner.test.js': 11.4,
+    };
+    expect(Object.keys(seconds).sort()).toEqual(heavy.sort());
+    const pinned = (owner) => heavy.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === owner)
+      .reduce((sum, file) => sum + seconds[file], 0);
+    const smokeBootSec = 7;
+    expect(Math.abs((pinned(1) + smokeBootSec) - pinned(2))).toBeLessThanOrEqual(15);
   });
 
   it('partitions all four Windows slices exactly like Vitest\'s sequencer', () => {

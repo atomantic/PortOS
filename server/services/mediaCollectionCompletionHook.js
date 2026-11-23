@@ -1,5 +1,5 @@
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { mediaJobEvents } from './mediaJobQueue/queueState.js';
+import { mediaJobEvents } from './mediaJobQueue/state.js';
 import { fileCompletedOwnedMedia, queueCollectionSources } from './mediaCollectionRules.js';
 
 let initialized = false;

@@ -56,6 +56,7 @@ require('node:module').syncBuiltinESMExports();
     // Deliberately do not inherit the install's database settings or NODE_OPTIONS.
     childEnv = {
       PATH: `${join(root, 'bin')}:/usr/bin:/bin`, HOME: root,
+      PORTOS_BREW_PG_PREFIXES: join(root, 'no-keg'),
       NODE_OPTIONS: `--require=${preload}`, STUB_ENV_PATH: envPath, STUB_LOG: logPath,
     };
   });

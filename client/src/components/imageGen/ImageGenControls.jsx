@@ -13,13 +13,34 @@ import { Dice5 } from 'lucide-react';
 import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, imageGenReadiness, isCloudCliMode } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, falImageModelGroups, imageGenReadiness, isCloudCliMode } from '../../lib/imageGenBackends';
 import { isSelfServeRuntimeRemedy } from './RuntimeRemedyModals';
 import { formatCount } from '../../utils/formatters';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
 import ListLoadError from '../ui/ListLoadError';
+
+function CloudModelOptions({ models, editing = false }) {
+  const option = (model) => {
+    const id = typeof model === 'string' ? model : model.id;
+    const label = typeof model === 'string' ? model : (model.label || model.id);
+    return <option key={id} value={id}>{label}</option>;
+  };
+  const featured = models.filter((model) => typeof model !== 'string' && model.featured);
+  if (!featured.length) return models.map(option);
+  if (editing) {
+    return falImageModelGroups(models.filter((model) => typeof model !== 'string'), { editing: true })
+      .map((group) => <optgroup key={group.label} label={group.label}>{group.models.map(option)}</optgroup>);
+  }
+  const rest = models.filter((model) => typeof model === 'string' || !model.featured);
+  return (
+    <>
+      <optgroup label="Featured">{featured.map(option)}</optgroup>
+      <optgroup label="All image models">{rest.map(option)}</optgroup>
+    </>
+  );
+}
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -81,6 +102,9 @@ export default function ImageGenControls({
   onCloudModelChange,
   cloudModelLabel = 'Model',
   cloudModelDefaultLabel = '',
+  // An edit or refine, or a fal render that already has a source image, leads
+  // with the featured edit endpoints. A fresh text render keeps Featured as-is.
+  cloudModelEditing = false,
 }) {
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
   // Cloud-CLI backends (codex, grok) pick model/steps/seed internally — only
@@ -162,10 +186,7 @@ export default function ImageGenControls({
             <option value="">
               {cloudModelDefaultLabel ? `Settings default (${cloudModelDefaultLabel})` : 'Settings default'}
             </option>
-            {cloudModels.map((m) => {
-              const id = typeof m === 'string' ? m : m.id;
-              return <option key={id} value={id}>{typeof m === 'string' ? m : (m.label || m.id)}</option>;
-            })}
+            <CloudModelOptions models={cloudModels} editing={cloudModelEditing} />
           </select>
         </FormField>
       )}

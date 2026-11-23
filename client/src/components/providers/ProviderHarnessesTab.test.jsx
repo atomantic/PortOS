@@ -120,6 +120,16 @@ describe('ProviderHarnessesTab', () => {
     expect(screen.getByRole('article', { name: /Direct API/ })).toHaveTextContent('1 preset');
   });
 
+  it('explains on tap why each harness is useful, from its best-for, strengths and limits', async () => {
+    renderTab();
+    const claude = await screen.findByRole('article', { name: /Claude Code/ });
+    fireEvent.click(within(claude).getByRole('button', { name: 'Why use Claude Code' }));
+    const panel = await screen.findByRole('tooltip');
+    expect(panel).toHaveTextContent('Best for:');
+    expect(panel).toHaveTextContent('Strengths');
+    expect(panel).toHaveTextContent('Cannot use MTPLX, LM Studio or llama.cpp here');
+  });
+
   it('offers no switch on the direct harness — it is always on', async () => {
     renderTab();
     await screen.findByRole('heading', { name: /Direct API/ });

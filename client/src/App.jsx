@@ -58,6 +58,7 @@ const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollecti
 const MediaCollectionSyncView = lazyWithReload(() => import('./pages/MediaCollectionSyncView'));
 const SyncView = lazyWithReload(() => import('./pages/SyncView'));
 const ThreejsModels = lazyWithReload(() => import('./pages/ThreejsModels'));
+const HtmlPages = lazyWithReload(() => import('./pages/HtmlPages'));
 const Media3D = lazyWithReload(() => import('./pages/Media3D'));
 const Media3DDetail = lazyWithReload(() => import('./pages/Media3DDetail'));
 const ThreejsModelDetail = lazyWithReload(() => import('./pages/ThreejsModelDetail'));
@@ -470,6 +471,9 @@ export default function App() {
                 the detail page. */}
             <Route path="creative-commission" element={<CreativeCommissions />} />
             <Route path="creative-commission/new" element={<CreativeCommissions />} />
+            <Route path="html-pages" element={<HtmlPages />} />
+            <Route path="html-pages/runs" element={<HtmlPages />} />
+            <Route path="html-pages/gallery" element={<HtmlPages />} />
             <Route path="game" element={<Game />} />
             <Route path="game/:id" element={<Game />} />
             <Route path="wiki/:tab" element={<Wiki />} />

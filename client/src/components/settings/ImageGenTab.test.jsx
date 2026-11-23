@@ -26,6 +26,9 @@ vi.mock('../../services/apiProviders.js', () => ({
 vi.mock('../../hooks/useHfTokenStatus', () => ({
   useHfTokenStatus: vi.fn(),
 }));
+vi.mock('../../hooks/useFalImageCatalog.js', () => ({
+  useFalImageCatalog: () => ({ models: [], bundled: true, stale: true, truncated: false, refresh: () => Promise.resolve() }),
+}));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), {
     success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(),
