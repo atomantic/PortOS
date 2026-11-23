@@ -18,9 +18,8 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  *   - feedback.json        — union of entries by id (stats/weights LWW)
  *   - taste-profile.json   — per-section union of responses (never lose answers)
  *   - meta.json            — union of documents/histories/personas, deep-union
- *                            enrichment, fill-missing settings, and the analyzed
- *                            personality-trait confidence (max per dimension —
- *                            see mergeConfidence)
+ *                            enrichment, fill-missing settings, and analyzed
+ *                            personality traits with max-per-dimension confidence
  *   - *.md documents       — content shipped by filename; a missing file is
  *                            added, an existing body is replaced only when the
  *                            peer's live stamp is strictly newer (#14160) MINUS
@@ -63,7 +62,7 @@ import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { atomicWrite, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
-import { snapshotChecksum } from '../lib/snapshotChecksum.js';
+import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { canonicalStringify, isPlainObject } from '../lib/objects.js';
 import { normalizeTombstones, mergeTombstones, isTombstoned, pruneTombstones, tombstonesEqual } from '../lib/tombstones.js';
 import { compareNewerWins } from '../lib/lwwTimestamp.js';
@@ -93,10 +92,6 @@ const SOCIAL_ACCOUNTS_FILE = join(DIR, 'social-accounts.json');
 // on a goals edit is harmless over-invalidation (the snapshot omits goals, so
 // the checksum is unchanged and the orchestrator still skips the transfer).
 export const DIGITAL_TWIN_CHECKSUM_PATHS = [DIR];
-
-// Insertion-order sensitive by design: every getter here canonicalizes its own
-// ordering before hashing (see the sorted-record notes below).
-const computeChecksum = snapshotChecksum;
 
 // --- Pure merge helpers (exported for unit tests) ---
 
@@ -357,15 +352,49 @@ function mergeEnrichment(local, remote) {
   const completedCategories = [...new Set([
     ...(Array.isArray(l.completedCategories) ? l.completedCategories : []),
     ...(Array.isArray(r.completedCategories) ? r.completedCategories : []),
-  ])];
-  const lastSession = (r.lastSession || '') > (l.lastSession || '') ? r.lastSession : (l.lastSession ?? null);
-  const questionsAnswered = { ...(isPlainObject(l.questionsAnswered) ? l.questionsAnswered : {}) };
+  ])].sort();
+  const localSession = l.lastSession || '';
+  const remoteSession = r.lastSession || '';
+  const remoteNewer = remoteSession > localSession;
+  const lastSession = remoteNewer ? r.lastSession : (l.lastSession ?? null);
+  const questionsAnswered = new Map(Object.entries(isPlainObject(l.questionsAnswered) ? l.questionsAnswered : {}));
   for (const [k, v] of Object.entries(isPlainObject(r.questionsAnswered) ? r.questionsAnswered : {})) {
-    questionsAnswered[k] = Math.max(questionsAnswered[k] || 0, v || 0);
+    questionsAnswered.set(k, Math.max(questionsAnswered.get(k) || 0, v || 0));
   }
   const merged = { ...l, completedCategories, lastSession };
-  if (Object.keys(questionsAnswered).length) merged.questionsAnswered = questionsAnswered;
-  return { merged, changed: JSON.stringify(merged) !== JSON.stringify(l) };
+  if (questionsAnswered.size || isPlainObject(r.questionsAnswered)) {
+    merged.questionsAnswered = Object.fromEntries(questionsAnswered);
+  }
+
+  if (isPlainObject(r.listItems)) {
+    const localLists = isPlainObject(l.listItems) ? l.listItems : {};
+    merged.listItems = remoteNewer ? { ...localLists, ...r.listItems } : { ...r.listItems, ...localLists };
+  }
+  if (isPlainObject(r.scaleQuestionsAnswered)) {
+    const answers = new Map(Object.entries(isPlainObject(l.scaleQuestionsAnswered) ? l.scaleQuestionsAnswered : {}));
+    for (const [id, value] of Object.entries(r.scaleQuestionsAnswered)) {
+      // Equal session stamps cannot establish which answer was given last.
+      if (remoteNewer || !answers.has(id) || (remoteSession === localSession && value > answers.get(id))) {
+        answers.set(id, value);
+      }
+    }
+    merged.scaleQuestionsAnswered = Object.fromEntries(answers);
+  }
+
+  const serialized = canonicalStringify(merged);
+  return { merged: JSON.parse(serialized), changed: serialized !== canonicalStringify(l) };
+}
+
+function mergeTraits(local, remote) {
+  const l = isPlainObject(local) ? local : {};
+  const localNewer = compareNewerWins(l.lastAnalyzed, remote.lastAnalyzed);
+  // Stamps can tie or be missing on manually edited traits. Use the canonical
+  // analysis as a tiebreak so peers select the same winning sections.
+  const remoteWins = compareNewerWins(remote.lastAnalyzed, l.lastAnalyzed)
+    || (!localNewer && canonicalStringify(remote) > canonicalStringify(l));
+  const merged = remoteWins ? { ...l, ...remote } : { ...remote, ...l };
+  const serialized = canonicalStringify(merged);
+  return { merged: JSON.parse(serialized), changed: serialized !== canonicalStringify(local) };
 }
 
 /**
@@ -568,8 +597,8 @@ export function mergePersonasWithTombstones(local, remote) {
  * doc entry is never replaced) minus anything either side has tombstoned in
  * `deletedDocuments`, the four test histories union by runId, personas union by
  * id (LWW) minus anything tombstoned in `deletedPersonas`, enrichment
- * deep-unions, settings fill missing keys (local values win), and the analyzed
- * personality-trait confidence max-per-dimension.
+ * deep-unions, settings fill missing keys (local values win), and the newest
+ * personality analysis fills missing sections from its peer.
  */
 export function mergeMeta(local, remote) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
@@ -616,7 +645,14 @@ export function mergeMeta(local, remote) {
 
   if (isPlainObject(remote.enrichment)) {
     const e = mergeEnrichment(local.enrichment, remote.enrichment);
-    if (e.changed) { merged.enrichment = e.merged; changed = true; }
+    merged.enrichment = e.merged;
+    changed ||= e.changed;
+  }
+
+  if (isPlainObject(remote.traits)) {
+    const t = mergeTraits(local.traits, remote.traits);
+    merged.traits = t.merged;
+    changed ||= t.changed;
   }
 
   if (isPlainObject(remote.settings)) {
@@ -726,7 +762,7 @@ function storyLiveStamp(story) {
  * Merge autobiography stories: union by id (LWW on updatedAt||createdAt), union
  * usedPrompts, minus anything either side tombstoned in `deletedStories`. Both
  * outputs are sorted by a stable key — this file feeds the snapshot checksum
- * (via JSON.stringify), and union-by-Map preserves insertion order, so without a
+ * and union-by-Map preserves insertion order, so without a
  * stable sort two peers with identical stories would emit different array orders
  * → different checksums → never converge. (getStories re-sorts by createdAt for
  * display, so the on-disk order is presentation-free.)
@@ -802,10 +838,7 @@ async function readMarkdownDocuments() {
       readFile(join(DIR, name), 'utf-8').then((content) => [name, content], () => [name, null])
     )
   );
-  // Sort by filename before building the map: readdir() order is
-  // filesystem-dependent, and the documents object's key insertion order feeds
-  // the snapshot checksum via JSON.stringify — without a stable order two peers
-  // with identical documents compute different checksums and never converge.
+  // Keep the snapshot payload's document order independent of readdir().
   reads.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const out = {};
   for (const [name, content] of reads) if (typeof content === 'string') out[name] = content;
@@ -839,7 +872,8 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
     ]);
   const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
-  return { data, checksum: computeChecksum(data) };
+  // A field already present on one peer may be appended by the other on merge.
+  return { data, checksum: canonicalSnapshotChecksum(data) };
 }
 
 // --- Apply ---
