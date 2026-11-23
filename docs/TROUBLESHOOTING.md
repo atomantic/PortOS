@@ -346,10 +346,10 @@ node ./node_modules/pm2/bin/pm2 restart portos-cos
 ```
 
 **Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
-use the workspace binaries from the primary checkout
-(`server/node_modules/.bin/vitest run <files>`) and never install there. The
-`dependency-updates` scheduled task is the exception: its managed worktree gets
-no dependency symlinks, and any package-manager install stays in that worktree.
+use the primary checkout's binaries
+(`server/node_modules/.bin/vitest run --configLoader runner <files>`); never install.
+The `dependency-updates` task is the exception: its managed worktree gets no
+dependency symlinks, and any install stays in that worktree.
 
 ### Worktree Tests Fail on a Clean Tree in a Workspace-Link Repo (Stale Workspace Packages)
 
@@ -778,7 +778,7 @@ platform-dependent question, not a production bug. Three recurring shapes:
   `PORTOS_SHELL=pwsh`, which yields the exact Windows string with no runner:
 
   ```bash
-  cd server && PORTOS_SHELL=pwsh node_modules/.bin/vitest run <suite>
+  cd server && PORTOS_SHELL=pwsh node_modules/.bin/vitest run --configLoader runner <suite>
   ```
 
 - **Path separators.** A suite that mocks `node:os` `platform()` still gets the
