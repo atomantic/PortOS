@@ -6,7 +6,7 @@ import Pill from '../ui/Pill';
 import { formatDateTime } from '../../utils/formatters';
 import { getGitHubNotification } from '../../services/apiGithub.js';
 import socket from '../../services/socket';
-import { AI_SKIP_LABELS, DECISION_VIEW, HANDOFF_SKIP_LABELS, LANE_VIEW, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
+import { AI_SKIP_LABELS, DECISION_VIEW, HANDOFF_SKIP_LABELS, LANE_VIEW, notificationAudienceLabel, RULE_LABELS, SIGNAL_LABELS, TRUST_VIEW } from './githubTriageLabels';
 
 const EVENT_LABELS = {
   triaged: 'Triaged',
@@ -81,6 +81,7 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
   const current = detail && detail.accountId === accountId && detail.threadId === threadId ? detail : null;
   const decision = DECISION_VIEW[current?.decision];
   const trust = TRUST_VIEW[current?.trust];
+  const audienceLabel = current && notificationAudienceLabel(current);
   const evidence = current?.evidence || {};
 
   return (
@@ -94,6 +95,8 @@ export default function GitHubThreadDrawer({ accountId, threadId }) {
             <div className="flex flex-wrap gap-2">
               {decision ? <Pill tone={decision.tone}>{decision.label}</Pill> : <Pill tone="muted">{current.decision ? 'Needs you' : 'Not triaged yet'}</Pill>}
               {trust && <Pill tone={trust.tone}>{trust.label}</Pill>}
+              {audienceLabel && <Pill tone="muted">{audienceLabel}</Pill>}
+              {current.mutedInPortOS && <Pill tone="muted">Muted in PortOS</Pill>}
               {current.yourRepo && <Pill tone="accent">Your repo</Pill>}
             </div>
             {current.htmlUrl && (

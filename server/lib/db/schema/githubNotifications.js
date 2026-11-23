@@ -80,6 +80,13 @@ export const githubNotificationsDdl = [
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (account_id, repo_full_name, reason, actor)
   )`,
+  // Local display preference, not a thread subscription or automation rule.
+  `CREATE TABLE IF NOT EXISTS github_notification_mutes (
+    account_id TEXT NOT NULL,
+    repo_full_name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (account_id, repo_full_name, reason)
+  )`,
   // Subscription audit (#12873): each change the operator applied from an
   // audit card, with what Undo needs to reverse it.
   `CREATE TABLE IF NOT EXISTS github_notification_audit_changes (

@@ -120,6 +120,13 @@ export const githubNotificationsQuerySchema = z.object({
   view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
 }).strict();
 
+export const githubNotificationMuteSchema = z.object({
+  accountId: z.string().trim().min(1).max(100),
+  repoFullName: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/),
+  reason: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).refine((reason) => reason !== 'security_alert', 'Security alerts cannot be muted'),
+  muted: z.boolean(),
+}).strict();
+
 export const githubNotificationsSyncSchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
 }).strict();

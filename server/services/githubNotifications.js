@@ -8,7 +8,7 @@
  * text screened and sorted (githubNotificationAssist.js).
  *
  * Storage: `db-primary` (`github_notifications`, `github_notification_sync`,
- * `github_notification_events`, `github_notification_rules`,
+ * `github_notification_events`, `github_notification_rules`, `github_notification_mutes`,
  * `github_notification_audit_changes`, `github_notification_audit_reports`) —
  * machine-local, never federated, like the accounts they describe. Queried by
  * account, state and recency and joined to triage results, so Postgres. Only
@@ -332,10 +332,20 @@ const CLEARABLE_SQL = `state = 'open' AND NOT suspect AND (${FINISHED_SQL} OR NO
 // Each mark-done is one gh call; the rest wait for the next sync.
 const MAX_AUTO_DONE_PER_RUN = 50;
 const OPEN_UNREAD_SQL = "state = 'open' AND unread AND read_on_github_at IS NULL";
+// Apply before LIMIT so a repo with many muted notices cannot push visible
+// items off the page. Keep suspicious notices visible in the safety lane.
+const HAS_MUTE_SQL = `NOT github_notifications.suspect AND EXISTS (
+  SELECT 1 FROM github_notification_mutes m
+  WHERE m.account_id = github_notifications.account_id
+    AND m.repo_full_name = lower(github_notifications.repo_full_name)
+    AND m.reason = github_notifications.reason
+)`;
+const VISIBLE_SQL = `NOT (${HAS_MUTE_SQL})`;
+
 const VIEW_FILTERS = {
-  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect`,
+  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect AND ${VISIBLE_SQL}`,
   suspect: `${OPEN_UNREAD_SQL} AND suspect`,
-  handled: "(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL)",
+  handled: `(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL) AND ${VISIBLE_SQL}`,
   all: 'TRUE',
 };
 
@@ -384,6 +394,14 @@ const subjectStatusView = (row) => {
   };
 };
 
+const notificationAudience = (row) => {
+  if (row.reason === 'mention' || row.reason === 'assign') return 'direct';
+  if (row.reason === 'team_mention') return 'team';
+  if (row.reason !== 'review_requested') return null;
+  const request = row.evidence?.reviewAudience;
+  return request?.forActivity === toIso(row.gh_updated_at) ? request?.audience ?? null : null;
+};
+
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
   const login = account?.login?.toLowerCase();
@@ -395,6 +413,8 @@ const toApi = (row, accountsById) => {
     repoPrivate: row.repo_private,
     yourRepo: Boolean(login) && row.repo_owner.toLowerCase() === login,
     reason: row.reason,
+    mutedInPortOS: row.muted_in_portos === true,
+    audience: notificationAudience(row),
     subjectType: row.subject_type,
     title: row.subject_title,
     htmlUrl: deployment?.htmlUrl || row.html_url,
@@ -427,7 +447,7 @@ export async function listActionableNotifications({ limit = 100 } = {}) {
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${OPEN_UNREAD_SQL}
-       AND NOT COALESCE(${FINISHED_SQL}, FALSE)
+       AND NOT COALESCE(${FINISHED_SQL}, FALSE) AND ${VISIBLE_SQL}
      ORDER BY gh_updated_at DESC, account_id, thread_id LIMIT $2`,
     [accounts.map((account) => account.id), limit],
   );
@@ -438,9 +458,9 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
   const accounts = (await listAccounts()).filter(isActive);
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const ids = accounts.filter((account) => !accountId || account.id === accountId).map((account) => account.id);
-  const [rows, syncRows, countRows] = await Promise.all([
+  const [rows, syncRows, countRows, muteRows] = await Promise.all([
     query(
-      `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}
+      `SELECT *, (${HAS_MUTE_SQL}) AS muted_in_portos FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}
        ORDER BY gh_updated_at DESC LIMIT ${LIST_LIMIT}`,
       [ids],
     ),
@@ -448,14 +468,19 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
     // Every view's size for the inbox's summary, plus the open threads an agent has.
     query(
       `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
-         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents",
+         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off' AND ${VISIBLE_SQL})::int AS "with-agents",
          COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished,
-         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL})::int AS clearable
+         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL} AND ${VISIBLE_SQL})::int AS clearable
        FROM github_notifications WHERE account_id = ANY($1::text[])`,
       [ids],
     ),
+    query(`SELECT account_id, repo_full_name, reason FROM github_notification_mutes
+      WHERE account_id = ANY($1::text[]) ORDER BY repo_full_name, reason, account_id`, [ids]),
   ]);
   return {
+    mutes: muteRows.rows.map(({ account_id, repo_full_name, reason }) => ({
+      accountId: account_id, accountLabel: accountsById.get(account_id).label, repoFullName: repo_full_name, reason,
+    })),
     notifications: rows.rows.map((row) => toApi(row, accountsById)),
     counts: countRows.rows[0],
     sync: Object.fromEntries(syncRows.rows.map((row) => [row.account_id, {
@@ -464,6 +489,18 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
       pollIntervalSeconds: row.poll_interval_seconds,
     }])),
   };
+}
+
+export async function setNotificationMute({ accountId, repoFullName, reason, muted }) {
+  const account = await getAccount(accountId);
+  const repoKey = repoFullName.toLowerCase();
+  await query(muted
+    ? `INSERT INTO github_notification_mutes (account_id, repo_full_name, reason)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
+    : 'DELETE FROM github_notification_mutes WHERE account_id = $1 AND repo_full_name = $2 AND reason = $3',
+  [account.id, repoKey, reason]);
+  githubNotificationEvents.emit('changed', { accountId });
+  return { accountId, repoFullName: repoKey, reason, muted };
 }
 
 /**
@@ -517,7 +554,7 @@ export async function applyNotificationAction(accountId, threadId, action, { act
          state = COALESCE($4::text, state),
          state_changed_at = CASE WHEN $4::text IS NULL THEN state_changed_at ELSE NOW() END,
          updated_at = NOW()
-       WHERE account_id = $1 AND thread_id = $2 RETURNING *`,
+       WHERE account_id = $1 AND thread_id = $2 RETURNING *, (${HAS_MUTE_SQL}) AS muted_in_portos`,
       [account.id, threadId, action, spec.state],
     );
     await client.query(
@@ -578,7 +615,7 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
   let cleared = 0;
   let failed = 0;
   for (const account of accounts) {
-    const result = await markThreadsDone(account, CLEARABLE_SQL);
+    const result = await markThreadsDone(account, `${CLEARABLE_SQL} AND ${VISIBLE_SQL}`);
     cleared += result.cleared;
     failed += result.failed;
     if (result.matched) githubNotificationEvents.emit('changed', { accountId: account.id });
@@ -657,7 +694,7 @@ export async function deleteLearnedRule(id) {
 /** One thread with its triage evidence and action log, newest event first. */
 export async function getNotification(accountId, threadId) {
   const account = await getAccount(accountId);
-  const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+  const row = (await query(`SELECT *, (${HAS_MUTE_SQL}) AS muted_in_portos FROM github_notifications WHERE account_id = $1 AND thread_id = $2`, [account.id, threadId])).rows[0];
   if (!row) throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
   const events = await query(
     'SELECT actor, kind, detail, created_at FROM github_notification_events WHERE account_id = $1 AND thread_id = $2 ORDER BY created_at DESC, id DESC LIMIT 50',

@@ -59,7 +59,7 @@ const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_t
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 
-const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false), draft: (.draft // false), mergeableState: .mergeable_state}';
+const SUBJECT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, state: .state, merged: (.merged // false), draft: (.draft // false), mergeableState: .mergeable_state, requestedUsers: [.requested_reviewers[]?.login], requestedTeams: [.requested_teams[]?.id]}';
 const COMMENT_JQ = '{author: .user.login, authorType: .user.type, association: .author_association, mentions: ([(.body // "") | scan("@[A-Za-z0-9][A-Za-z0-9-]*")] | length)}';
 
 const REPO_INFO_JQ = '{defaultBranch: .default_branch, canPush: .permissions.push}';
@@ -114,6 +114,10 @@ function createReader(account, env) {
       runGh: (args) => execGh(args, GH_TIMEOUT_MS, { env }), host, repoFullName: repo, currentUser: null,
     })),
     viewer: () => once('viewer', () => run(['user', '--jq', '.login']).then((out) => loginOrNull(out.trim())).catch(() => null)),
+    // A positive team-ID match is evidence; missing scope, pagination, or a
+    // removed request is never evidence that a request wasn't team-routed.
+    viewerTeamIds: () => once('viewer-teams', () => json('user/teams?per_page=100', '[.[].id]')
+      .then((ids) => new Set(Array.isArray(ids) ? ids : []))),
     // null when the forge could not be read, so a failure is never "none waiting".
     waitingRuns: (repo) => once(`w:${repo}`, () => json(`repos/${repo}/actions/runs?status=waiting&per_page=50`, WAITING_RUNS_JQ)
       .then((runs) => (Array.isArray(runs) ? runs : null))),
@@ -201,6 +205,23 @@ export async function threadDiscussionVouched(account, env, row) {
     return false;
   }
   return true;
+}
+
+// GitHub uses the same notification reason for personal and group requests.
+// These are the current PR targets, not a reconstruction of delivery history.
+async function readReviewAudience(row, account, reader, subject) {
+  if (row.reason !== 'review_requested' || row.subject_type !== 'PullRequest') return null;
+  let audience = null;
+  if (subject?.state === 'open' && subject.merged !== true) {
+    const viewer = (account.login || await reader.viewer())?.toLowerCase();
+    const direct = Boolean(viewer) && Array.isArray(subject.requestedUsers)
+      && subject.requestedUsers.some((login) => loginOrNull(login)?.toLowerCase() === viewer);
+    const teamIds = Array.isArray(subject.requestedTeams) ? subject.requestedTeams.filter(Number.isSafeInteger) : [];
+    const memberships = teamIds.length ? await reader.viewerTeamIds() : null;
+    const team = Boolean(memberships && teamIds.some((id) => memberships.has(id)));
+    audience = direct && team ? 'direct-and-team' : direct ? 'direct' : team ? 'team' : null;
+  }
+  return { forActivity: new Date(row.gh_updated_at).toISOString(), audience };
 }
 
 async function triageThread(row, ctx) {
@@ -303,6 +324,7 @@ async function triageThread(row, ctx) {
       subjectDraft: subject?.draft === true,
       mergeState: typeof subject?.mergeableState === 'string' ? subject.mergeableState : null,
       viewerCanPush,
+      reviewAudience: await readReviewAudience(row, account, reader, subject),
       statusCheckedAt: new Date(now).toISOString(),
       ciBranch,
       metadataMissing: Boolean(subjectPath && !subject) || (isDeployment && waitingRun === undefined),
@@ -368,7 +390,8 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
        AND subject_type = 'PullRequest' AND evidence->>'subjectState' = 'open'
-       AND COALESCE(evidence->>'statusCheckedAt', '') < $2
+       AND (COALESCE(evidence->>'statusCheckedAt', '') < $2
+         OR (reason = 'review_requested' AND NOT (evidence ? 'reviewAudience')))
      ORDER BY evidence->>'statusCheckedAt' ASC NULLS FIRST, gh_updated_at DESC LIMIT ${MAX_STATUS_REFRESH_PER_RUN}`,
     [account.id, cutoff],
   );
@@ -385,6 +408,9 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
       mergeState: typeof subject.mergeableState === 'string' ? subject.mergeableState : null,
       statusCheckedAt,
     } : { statusCheckedAt };
+    const reviewAudience = await readReviewAudience(row, account, reader, subject);
+    if (reviewAudience) status.reviewAudience = reviewAudience;
+    const audienceMoved = reviewAudience && (row.evidence?.reviewAudience?.audience ?? null) !== reviewAudience.audience;
     const finished = Boolean(subject) && status.subjectState !== 'open';
     const moved = Boolean(subject) && ['subjectState', 'subjectDraft', 'mergeState'].some((key) => (row.evidence?.[key] ?? null) !== status[key]);
     // Only the status keys change, and only on the row as read.
@@ -394,7 +420,7 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
        WHERE account_id = $1 AND thread_id = $2 AND evidence = $5::jsonb`,
       [account.id, row.thread_id, toPgJson(status), finished, toPgJson(row.evidence)],
     );
-    return rowCount && moved ? 1 : 0;
+    return rowCount && (moved || audienceMoved) ? 1 : 0;
   });
   return changes.reduce((sum, n) => sum + n, 0);
 }
