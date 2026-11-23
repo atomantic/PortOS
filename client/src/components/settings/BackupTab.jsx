@@ -24,6 +24,8 @@ import { formatBytes } from '../../utils/formatters';
 import { describeCron } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import { anchorUserExclude, anchorUserExcludes, isSafeExcludePattern } from '../../lib/backupExcludes';
+import { pluralize } from '../../lib/textUtils';
+import { failureMessage } from '../messages/failureMessage';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
 // is NOT a dirty state; only membership changes (added/removed entries) are.
@@ -194,9 +196,9 @@ export function BackupTab() {
         setRestoreWarning(status?.restoreWarning ?? null);
         setRestoreRecovery(status?.restoreRecovery?.pending ? status.restoreRecovery : null);
       })
-      .catch(() => {
+      .catch((err) => {
         setLoadFailed(true);
-        toast.error('Failed to load settings');
+        toast.error(failureMessage('Could not load backup settings', err, 'Reload the page to retry.'));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -356,7 +358,7 @@ export function BackupTab() {
     if (loadFailures.status) return <span className="text-port-warning">Backup status unavailable — reload to retry</span>;
     if (!pgBackup) return <span className="text-gray-500">No backup run yet</span>;
     if (pgBackup.status === 'ok') {
-      return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pgBackup.tableCount} tables</span>;
+      return <span className="text-port-success">✅ {formatBytes(pgBackup.sizeBytes || 0)} · {pluralize(pgBackup.tableCount, 'table')}</span>;
     }
     if (pgBackup.status === 'skipped') {
       return <span className="text-gray-400">⏭️ Not configured (file mode)</span>;
@@ -885,7 +887,7 @@ export function BackupTab() {
           <p className="text-sm text-gray-400">
             This replays <code>portos-db.sql</code> from snapshot <code className="text-gray-300">{restoreTarget?.request.snapshotId}</code>
             {' '}on <span className="text-gray-300">{restoreTarget?.sourceLabel}</span>
-            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {restorePreview.tableCount} tables)</>}
+            {restorePreview && <> ({formatBytes(restorePreview.sizeBytes || 0)} · {pluralize(restorePreview.tableCount, 'table')})</>}
             {' '}as a full replacement of the live PostgreSQL database. All current application tables and rows are replaced, including tables added after this snapshot. Newer tables are recreated empty and current migrations run afterward.
           </p>
           <div className="flex justify-end gap-2">

@@ -10,6 +10,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import ListLoadError from '../../ui/ListLoadError';
 import { decodeHtmlEntities, parseMessageBody } from '../../../lib/beeperMessageBody';
 import { formatBytes } from '../../../utils/formatters';
+import { pluralize } from '../../../lib/textUtils';
 
 /**
  * Thread + composer + the inline Tribe-linking action, for the Beeper chat
@@ -778,7 +779,7 @@ export default function BeeperThread({
             Deletes PortOS&rsquo;s copy of <span className="text-white">{conversation.title || 'this conversation'}</span>
             {' '}— its messages, participants and{' '}
             {formatBytes(conversation.attachmentBytes || 0)} of mirrored attachment bytes
-            {conversation.attachmentFiles ? ` across ${conversation.attachmentFiles} file(s)` : ''}.
+            {conversation.attachmentFiles ? ` across ${pluralize(conversation.attachmentFiles, 'file')}` : ''}.
           </p>
           <p className="pt-1 text-[11px] text-gray-500">
             Beeper itself is untouched: the chat stays on its network, and the next sync will mirror it again.

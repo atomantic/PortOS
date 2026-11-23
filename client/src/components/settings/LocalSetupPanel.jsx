@@ -8,6 +8,7 @@ import { useInstallStream } from '../../hooks/useInstallStream.js';
 import useMounted from '../../hooks/useMounted.js';
 import QueueInstallInvestigationButton from '../install/QueueInstallInvestigationButton';
 import { checkImageGenSetup, detectImageGenPython, createImageGenVenv } from '../../services/apiImageVideo.js';
+import { failureMessage } from '../messages/failureMessage';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -132,8 +133,8 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
       } else {
         toast.error('No Python 3 found on this system');
       }
-    } catch {
-      toast.error('Detection failed');
+    } catch (err) {
+      toast.error(failureMessage('Python detection failed', err, 'Enter the Python path manually.'));
     } finally {
       // Always clear detecting state — without this, a fetch reject would
       // leave the button stuck disabled forever.

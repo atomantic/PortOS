@@ -23,6 +23,8 @@ import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { IMessageSettingsPanel } from './IMessageSettingsPanel';
 import useLatestRequest from '../../hooks/useLatestRequest';
+import { pluralize } from '../../lib/textUtils';
+import { failureMessage } from './failureMessage';
 
 // Comms → Messages → iMessage (#2413). Browse / manage PortOS-side activity
 // ingested from macOS chat.db. Deletes and blocklists never write Apple's Messages database.
@@ -177,14 +179,15 @@ function ConversationDetail({
 
   const runPurge = async () => {
     setBusy(true);
-    const result = await purgeImessageConversation(chatKey, { silent: true }).catch(() => null);
+    let failure = null;
+    const result = await purgeImessageConversation(chatKey, { silent: true }).catch((err) => { failure = err; return null; });
     setBusy(false);
     setConfirm(null);
     if (!result) {
-      toast.error('Failed to purge conversation');
+      toast.error(failureMessage('Could not purge the conversation', failure));
       return;
     }
-    toast.success(`Removed ${result.deleted} event(s) from PortOS`);
+    toast.success(`Removed ${pluralize(result.deleted, 'event')} from PortOS`);
     onPurged?.(chatKey);
   };
 
@@ -195,26 +198,28 @@ function ConversationDetail({
       return;
     }
     setBusy(true);
-    const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch(() => null);
+    let failure = null;
+    const result = await addImessageBlocklist(handle, { purgeExisting, silent: true }).catch((err) => { failure = err; return null; });
     setBusy(false);
     setConfirm(null);
     if (!result) {
-      toast.error('Failed to update blocklist');
+      toast.error(failureMessage('Could not update the blocklist', failure));
       return;
     }
     const purged = result.purged || 0;
     toast.success(
       purged > 0
-        ? `Blocked ${handle} — removed ${purged} PortOS event(s)`
+        ? `Blocked ${handle} — removed ${pluralize(purged, 'PortOS event')}`
         : `Blocked ${handle} — future syncs will skip it`,
     );
     onBlocked?.(chatKey, { purged });
   };
 
   const deleteEvent = async (id) => {
-    const result = await deleteImessageEvent(id, { silent: true }).catch(() => null);
+    let failure = null;
+    const result = await deleteImessageEvent(id, { silent: true }).catch((err) => { failure = err; return null; });
     if (!result) {
-      toast.error('Failed to delete event');
+      toast.error(failureMessage('Could not delete the event', failure));
       return;
     }
     if (result.deleted > 0) {
@@ -257,7 +262,7 @@ function ConversationDetail({
               {organization && <span>{organization}</span>}
               {handle && <span className="font-mono">{handle}</span>}
               {conversation?.eventCount != null && (
-                <span>{conversation.eventCount} event(s)</span>
+                <span>{pluralize(conversation.eventCount, 'event')}</span>
               )}
               {(conversation?.identitySource || identity?.identitySource) && (
                 <span className="rounded bg-port-bg border border-port-border px-1.5 py-0.5 text-[10px] uppercase">
@@ -289,7 +294,7 @@ function ConversationDetail({
         {confirm === 'block-purge' && (
           <ConfirmBar
             message={`Block ${handle || 'this handle'} and remove matching PortOS events?`}
-            confirmLabel={busy ? 'Working…' : 'Block + purge'}
+            confirmLabel={busy ? 'Blocking and purging…' : 'Block and purge'}
             danger
             onCancel={() => setConfirm(null)}
             onConfirm={() => runBlock({ purgeExisting: true })}
@@ -424,9 +429,10 @@ function BlocklistPanel({ onChanged }) {
   }, [attempt]);
 
   const unblock = async (handle) => {
-    const res = await removeImessageBlocklist(handle, { silent: true }).catch(() => null);
+    let failure = null;
+    const res = await removeImessageBlocklist(handle, { silent: true }).catch((err) => { failure = err; return null; });
     if (!res) {
-      toast.error('Failed to unblock');
+      toast.error(failureMessage(`Could not unblock ${handle}`, failure));
       return;
     }
     setHandles(res.handles || []);
@@ -540,11 +546,11 @@ export default function IMessageTab() {
           setConversationIdentity(res?.identity || null);
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (active) {
           setEvents([]);
           setConversationIdentity(null);
-          toast.error('Failed to load conversation');
+          toast.error(failureMessage('Could not load the conversation', err));
         }
       })
       .finally(() => {
@@ -568,7 +574,7 @@ export default function IMessageTab() {
     setSyncing(false);
     if (result?.ok) {
       toast.success(
-        `Synced: ${result.recorded} event(s)`
+        `Synced: ${pluralize(result.recorded, 'event')}`
           + (result.blockedSkipped ? `, ${result.blockedSkipped} blocked` : '')
           + (result.hasMore ? ' — more history remains' : ''),
       );

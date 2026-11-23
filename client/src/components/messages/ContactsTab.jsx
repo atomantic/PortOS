@@ -9,6 +9,8 @@ import FullDiskAccessSteps from './FullDiskAccessSteps';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatDateTime } from '../../utils/formatters';
 import {
+import { pluralize } from '../../lib/textUtils';
+import { failureMessage } from './failureMessage';
   getContactsStatus,
   checkContactsSetup,
   syncContacts,
@@ -44,7 +46,7 @@ export default function ContactsTab() {
     const report = await checkContactsSetup({ silent: true }).catch(() => ({ ok: false, error: 'Setup check failed' }));
     setChecking(false);
     setSetup(report);
-    if (report?.ok) toast.success(`AddressBook OK — ${report.sourceCount ?? 0} source(s), ${report.rawContactRows ?? 0} row(s)`);
+    if (report?.ok) toast.success(`Apple Contacts OK — ${pluralize(report.sourceCount ?? 0, 'source')}, ${pluralize(report.rawContactRows ?? 0, 'contact record')}`);
     else toast.error(report?.fullDiskAccessRequired ? 'Full Disk Access required' : (report?.error || 'Contacts not reachable'));
   };
 
@@ -53,7 +55,7 @@ export default function ContactsTab() {
     const result = await syncContacts({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
     setSyncing(false);
     if (result?.ok) {
-      toast.success(`Synced ${result.contactCount} contact(s) from ${result.sourceCount} source(s)`);
+      toast.success(`Synced ${pluralize(result.contactCount, 'contact')} from ${pluralize(result.sourceCount, 'source')}`);
       await reload();
     } else {
       toast.error(result?.fullDiskAccessRequired ? 'Full Disk Access required' : (result?.error || 'Sync failed'));
@@ -63,30 +65,33 @@ export default function ContactsTab() {
 
   const handleEnrich = async ({ dryRun }) => {
     setEnriching(true);
-    const result = await enrichTribeFromContacts({ dryRun, silent: true }).catch(() => null);
+    let failure = null;
+    const result = await enrichTribeFromContacts({ dryRun, silent: true }).catch((err) => { failure = err; return null; });
     setEnriching(false);
     if (!result) {
-      toast.error('Tribe enrich failed');
+      toast.error(failureMessage('Could not enrich Tribe from Contacts', failure));
       return;
     }
     if (dryRun) {
-      toast.success(`Would update ${result.matched} Tribe person/people`);
+      toast.success(`Would update ${result.matched === 1 ? '1 person' : `${result.matched} people`} in Tribe`);
     } else {
-      toast.success(`Updated phones/emails on ${result.updated} Tribe person/people`);
+      toast.success(`Updated phones/emails for ${result.updated === 1 ? '1 person' : `${result.updated} people`} in Tribe`);
     }
   };
 
   const loadSuggestions = async () => {
     setLoadingSuggest(true);
-    const res = await suggestTribeFromContacts({ limit: 30, silent: true }).catch(() => null);
+    let failure = null;
+    const res = await suggestTribeFromContacts({ limit: 30, silent: true }).catch((err) => { failure = err; return null; });
     setLoadingSuggest(false);
     setSuggestions(res?.suggestions || []);
-    if (!res) toast.error('Failed to load suggestions');
+    if (!res) toast.error(failureMessage('Could not load Tribe suggestions', failure));
   };
 
   const handleImport = async (s) => {
     const key = s.contactId || s.handle || s.displayName;
     setImportingId(key);
+    let failure = null;
     const result = await importContactToTribe({
       contactId: s.contactId || undefined,
       name: s.displayName,
@@ -94,10 +99,10 @@ export default function ContactsTab() {
       emails: s.emails,
       organization: s.organization || undefined,
       ring: 'tribe',
-    }, { silent: true }).catch(() => null);
+    }, { silent: true }).catch((err) => { failure = err; return null; });
     setImportingId(null);
     if (!result) {
-      toast.error('Import failed');
+      toast.error(failureMessage('Could not import the contact to Tribe', failure));
       return;
     }
     toast.success(result.created ? `Added ${result.person?.name} to Tribe` : `${result.person?.name} already in Tribe`);
@@ -117,7 +122,7 @@ export default function ContactsTab() {
           <h2 className="text-lg font-semibold text-white">macOS Contacts</h2>
         </div>
         <p className="text-sm text-gray-400 mb-4">
-          Reads your local AddressBook databases read-only into a machine-local cache.
+          Reads your local Apple Contacts databases read-only into a machine-local cache.
           Used to show names (and companies) on{' '}
           <Link to="/messages/imessage" className="text-port-accent hover:underline">Comms → iMessage</Link>
           {' '}and to fill missing phones/emails on{' '}
@@ -158,7 +163,7 @@ export default function ContactsTab() {
           </div>
           {setup.ok ? (
             <p className="text-sm text-gray-300">
-              {setup.sourceCount} AddressBook source(s), {setup.rawContactRows ?? 0} raw row(s) under{' '}
+              {pluralize(setup.sourceCount ?? 0, 'Apple Contacts source')}, {pluralize(setup.rawContactRows ?? 0, 'contact record')} under{' '}
               <code className="text-gray-400 text-xs">{setup.root}</code>
             </p>
           ) : (

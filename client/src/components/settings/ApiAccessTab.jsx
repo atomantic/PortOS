@@ -6,6 +6,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 import { getApiCatalog, getSettings, updateSettings, getOpenApiSpec } from '../../services/apiSystem';
 import { copyToClipboard } from '../../lib/clipboard';
+import { pluralize } from '../../lib/textUtils';
 
 const DEFAULT_ACCESS = { exposed: false, requireAuth: false };
 const DEFAULT_AGENT_CONTEXT = {
@@ -423,7 +424,7 @@ export function ApiAccessTab() {
         </Link>
         {spec ? (
           <div className="text-xs text-gray-400">
-            <span className="text-port-success">{Object.keys(spec.paths || {}).length}</span> path(s) documented
+            <span className="text-port-success">{pluralize(Object.keys(spec.paths || {}).length, 'path')}</span> documented
             {Object.keys(spec.paths || {}).length === 0 && ' — expose an API above to populate the spec.'}
           </div>
         ) : (
