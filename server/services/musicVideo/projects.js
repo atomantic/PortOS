@@ -462,10 +462,12 @@ export async function swapProjectSceneFrames(id, sceneId) {
 export async function reviewSceneTake(id, sceneId, takeId, review) {
   // A catalog project's character references come from its check-in, which only the full write resolves (#16473).
   const accepting = Boolean(review.acceptCharacterReferences);
-  const { project, scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), accepting ? SCENES_REPLY : SCENE_ONLY);
+  const { project, scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), accepting ? {} : SCENE_ONLY);
+  // The full write's saved project already carries its check-in; present the accepted shot as GET does.
+  if (accepting) return presentMusicVideoDependencies(project).scenes.find((entry) => entry.sceneId === sceneId) || scene;
   // A scene-only write presents takes against the stored record. A confirmation's reply is what the
   // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
-  if (accepting || !review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
+  if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
   const { withCatalogCheckin } = await import('./catalogCheckin.js');
   const presented = presentMusicVideoDependencies(await withCatalogCheckin(project));
   return presented.scenes.find((entry) => entry.sceneId === sceneId) || scene;
