@@ -93,7 +93,7 @@ export default function Brain() {
       case 'feeds':
         return <FeedsTab onRefresh={refetch} />;
       case 'trust':
-        return <TrustTab onRefresh={refetch} />;
+        return <TrustTab />;
       case 'import':
         return <ImportTab />;
       case 'spotify':

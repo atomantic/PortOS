@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
 
 // ── Mock toast ────────────────────────────────────────────────────────────────
 const mockToast = vi.hoisted(() => Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }));
@@ -20,7 +21,7 @@ const TrustTab = (await import('./TrustTab')).default;
 const COUNTS = { total: 128, filed: 96, needs_review: 18, corrected: 12, error: 2 };
 
 const renderTab = async () => {
-  const result = render(<TrustTab />);
+  const result = render(<MemoryRouter><TrustTab /></MemoryRouter>);
   // Flush the mount fetches (inbox + settings).
   await act(async () => {});
   return result;
@@ -83,7 +84,7 @@ describe('TrustTab mobile header', () => {
 });
 
 describe('TrustTab failed reads', () => {
-  it('shows retryable errors, not an empty log or default settings, and offers no Edit while settings are unknown', async () => {
+  it('shows retryable errors, not an empty log or default settings, and offers no Edit link while settings are unknown', async () => {
     api.getBrainInbox.mockRejectedValueOnce(new Error('inbox down'));
     api.getBrainSettings.mockRejectedValueOnce(new Error('settings down'));
     await renderTab();
@@ -93,7 +94,7 @@ describe('TrustTab failed reads', () => {
     expect(screen.queryByText('No entries found.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Confidence Threshold/)).not.toBeInTheDocument();
     // Saving the default-seeded form would overwrite the stored settings.
-    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Edit in Config' })).not.toBeInTheDocument();
 
     fireEvent.click(alerts[0].querySelector('button'));
     await act(async () => {});
@@ -102,16 +103,13 @@ describe('TrustTab failed reads', () => {
   });
 });
 
-describe('TrustTab filter reloads (#12951)', () => {
-  it('keeps an in-progress settings edit when only the status filter changes', async () => {
+describe("TrustTab read-only settings (#17972)", () => {
+  it("links to /brain/config and preserves a 0 threshold", async () => {
+    api.getBrainSettings.mockResolvedValue({ confidenceThreshold: 0, scheduledReviewsEnabled: false });
     await renderTab();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    const input = screen.getByLabelText('Confidence Threshold');
-    fireEvent.change(input, { target: { value: '0.9' } });
-
-    fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'filed' } });
-    await act(async () => {});
-
-    expect(screen.getByLabelText('Confidence Threshold')).toHaveValue(0.9);
+    expect(screen.getByRole("link", { name: "Edit in Config" })).toHaveAttribute("href", "/brain/config");
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.getByText("Off")).toBeInTheDocument();
+    expect(screen.getByText("Not configured")).toBeInTheDocument();
   });
 });
