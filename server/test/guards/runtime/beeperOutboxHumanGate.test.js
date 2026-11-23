@@ -79,7 +79,7 @@ describe('beeper outbox has no agent-initiated send path (#36)', () => {
     // reach `POST /v1/chats/{chatID}/messages`, not about the identifier.
     const senders = PRODUCTION_SOURCES
       .filter((file) => file.path !== 'services/beeper/beeperClient.js')
-      .filter((file) => /from '\.{1,2}\/(?:services\/)?beeperClient\.js'/.test(file.source))
+      .filter((file) => /from '\.{1,2}\/(?:services\/)?(?:beeper\/)?beeperClient\.js'/.test(file.source))
       .filter((file) => /\bsendMessage\b/.test(file.source))
       .map((file) => file.path);
     expect(senders).toEqual(['services/beeper/beeperOutbox.js']);
