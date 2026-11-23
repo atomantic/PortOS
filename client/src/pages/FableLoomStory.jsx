@@ -485,7 +485,8 @@ export default function FableLoomStory({ view = 'graph' }) {
   const handleAddEpisode = async () => {
     const updated = await addLoomEpisode(loomId, { title: `Episode ${(loom?.episodes.length || 0) + 1}` })
       .catch(() => null);
-    if (updated) {
+    // A late response must not navigate the user back to the loom they left.
+    if (updated && activeLoomIdRef.current === loomId) {
       applyLoomUpdate(updated);
       const added = updated.episodes[updated.episodes.length - 1];
       navigate(episodePath(added.id));
@@ -506,7 +507,7 @@ export default function FableLoomStory({ view = 'graph' }) {
 
   const handleAddNode = async () => {
     const updated = await addLoomNode(loomId, episode.id, { title: 'New scene' }).catch(() => null);
-    if (updated) {
+    if (updated && activeLoomIdRef.current === loomId) {
       applyLoomUpdate(updated);
       const ep = updated.episodes.find((e) => e.id === episode.id);
       const added = ep?.nodes[ep.nodes.length - 1];
