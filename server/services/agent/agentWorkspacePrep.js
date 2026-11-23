@@ -50,6 +50,7 @@ import { isNonCommittingCoordinatorTask, resolveTaskHookType } from '../taskType
 import { prHeldForOperator, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../../lib/claimContinuation.js';
 import { provisionClaimCheckout, serverClaimCheckoutBranch } from '../claimCheckoutProvision.js';
+import { matchesNotificationIssueRepository } from '../../lib/githubNotificationIssue.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -423,7 +424,7 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
  * @param {{ agentId: string, task: object }} params
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
-export async function prepareAgentWorkspace({ agentId, task, onPrepared = result => result }) {
+export async function prepareAgentWorkspace({ agentId, task, inboxEnv, onPrepared = result => result }) {
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityScratchCwd } = await import('../../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
@@ -525,7 +526,7 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
   }
 
   const prepareAndRegister = async () => {
-    const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly });
+    const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly, inboxEnv });
     if (result.outcome === 'ready' && task.metadata?.pendingMergeGuardTarget) {
       const { validatePendingMergeRecovery } = await import('../pendingMergeRecovery.js');
       const refused = await validatePendingMergeRecovery({ target: task.metadata.pendingMergeGuardTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
@@ -848,9 +849,21 @@ async function provisionConflictWorktree({ agentId, task, workspacePath }) {
  * order and any refusal, deferral, continued claim or JIRA branch returns at
  * once, so a later step never has to infer an earlier outcome from a flag.
  */
-async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly }) {
+async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly, inboxEnv }) {
   const refusal = await refuseUnsafeLaunchTarget({ task, workspacePath: sourceWorkspace });
   if (refusal) return refusal;
+
+  const inboxIssue = task.metadata?.githubIssueClaim;
+  if (inboxIssue) {
+    const { resolveAppForgeTarget } = await import('../../lib/workTracker.js');
+    const { tracker, target } = resolvedApp ? await resolveAppForgeTarget(resolvedApp, { repoPath: sourceWorkspace }) : {};
+    if (tracker !== 'github' || !matchesNotificationIssueRepository(target, inboxIssue)
+      || String(task.metadata.claimTarget) !== String(inboxIssue.number)) {
+      const reason = 'The managed app no longer points to the GitHub issue requested in the inbox. Restore the repository and tracker or queue the claim again.';
+      await blockTask(task, reason, 'github-inbox-issue-mismatch');
+      return { outcome: 'blocked', reason };
+    }
+  }
 
   const remediationPin = resolveTaskPinnedHead(task.metadata);
   const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || isTruthyMeta(task.metadata?.openPR) || remediationPin !== null;
@@ -877,6 +890,25 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWo
   const claim = remediationPin === null ? await admitClaimWorkspace({ task, agentId, workspacePath: sourceWorkspace }) : null;
   if (claim?.outcome) return claim;
   if (claim) return ready(claim);
+
+  // An already-owned continuation above has the claim's durable ownership proof.
+  // A new launch must prove the issue is still claimable before it cuts or marks
+  // a checkout. It can have closed or acquired an owner/PR while in the queue.
+  if (inboxIssue) {
+    const { prepareAppIssueClaim } = await import('../appIssues.js');
+    const result = inboxEnv && await prepareAppIssueClaim({ ...resolvedApp, repoPath: sourceWorkspace }, String(inboxIssue.number), 'github', {
+      expectedGithubIssue: { ...inboxIssue, login: task.metadata.githubAccount?.login },
+      readOnly: true,
+      inboxEnv,
+    }).then(() => ({ ok: true }), error => ({ code: error.code }));
+    if (!result?.ok) {
+      const reason = result?.code === 'ISSUE_IN_FLIGHT'
+        ? 'This GitHub issue is now closed, claimed, or covered by an open pull request.'
+        : 'PortOS could not verify that the GitHub issue is still claimable with the inbox account.';
+      await blockTask(task, reason, 'github-inbox-issue-unavailable');
+      return { outcome: 'blocked', reason };
+    }
+  }
 
   // A pinned forge claim whose prompt omits the checkout phase. Refusing is the
   // only safe answer when the checkout cannot be cut: the prompt tells the agent

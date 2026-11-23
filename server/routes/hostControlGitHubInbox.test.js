@@ -25,6 +25,7 @@ const inbox = vi.hoisted(() => ({
   syncAllNotifications: vi.fn(async () => []),
   getNotification: vi.fn(async () => ({})),
   applyNotificationAction: vi.fn(async () => ({ state: 'done' })),
+  claimIssue: vi.fn(async () => ({ taskId: 'claim-task' })),
   resolveWithAgent: vi.fn(async () => ({})),
   actOnPullRequest: vi.fn(async () => ({})),
   getAutomationsOverview: vi.fn(async () => ({})),
@@ -62,6 +63,7 @@ const mounts = [['/api/github', githubRoutes]];
 const writes = [
   ['put', '/api/github/notifications/mutes', { accountId: 'example-account', repoFullName: 'example/repo', reason: 'review_requested', muted: true }, inbox.setNotificationMute],
   ['post', '/api/github/notifications/example-account/123', { action: 'unsubscribe' }, inbox.applyNotificationAction],
+  ['post', '/api/github/notifications/example-account/123/claim-issue', { effort: 'medium' }, inbox.claimIssue],
   ['post', '/api/github/notifications/example-account/123/agent', { provider: 'example-provider', effort: 'high' }, inbox.resolveWithAgent],
   ['post', '/api/github/notifications/example-account/123/pull-request', { action: 'merge', method: 'squash' }, inbox.actOnPullRequest],
   ['post', '/api/github/audit/example-account/apply', { suggestionId: 'unwatch:example/repo' }, audit.applyAuditSuggestion],
@@ -134,5 +136,22 @@ describe('GitHub notification PR actions', () => {
     expect(inbox.actOnPullRequest).not.toHaveBeenCalled();
     await send(app, ['post', path, { action: 'merge', method: 'squash', deleteBranch: false }]);
     expect(inbox.actOnPullRequest).toHaveBeenLastCalledWith('example-account', '123', { action: 'merge', method: 'squash', deleteBranch: false });
+  });
+});
+
+describe('claim a notified GitHub issue', () => {
+  const path = '/api/github/notifications/example-account/123/claim-issue';
+  it('accepts model options but never a client-supplied app, repo, or issue number', async () => {
+    const app = localApp();
+    const pin = { provider: 'example-provider', effort: 'medium' };
+    const invalid = await send(app, ['post', path, { ...pin, app: 'wrong-app', target: '543' }]);
+    expect(invalid.status).toBe(400);
+    expect(inbox.claimIssue).not.toHaveBeenCalled();
+    const allowed = await send(app, ['post', path, pin]);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body).toEqual({ taskId: 'claim-task' });
+    expect(inbox.claimIssue).toHaveBeenCalledWith('example-account', '123', pin);
+    await expectRemoteRefusal(mounts, ['post', path, pin, vi.fn()]);
+    expect(inbox.claimIssue).toHaveBeenCalledTimes(1);
   });
 });

@@ -40,6 +40,9 @@ vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: (...args) => pr
 const getAppDataForTaskMock = vi.fn(async () => null);
 vi.mock('./agentAppWorkspace.js', () => ({ getAppDataForTask: (...args) => getAppDataForTaskMock(...args) }));
 
+const resolveInboxEnv = vi.hoisted(() => vi.fn());
+vi.mock('../githubNotificationAgentAuth.js', () => ({ resolveNotificationAgentEnv: (...args) => resolveInboxEnv(...args) }));
+
 const releaseAppIssueClaimMock = vi.fn(async () => ({ released: true }));
 vi.mock('../appIssues.js', () => ({ releaseAppIssueClaim: (...args) => releaseAppIssueClaimMock(...args) }));
 
@@ -413,6 +416,32 @@ describe('recordCompletionArtifacts', () => {
 
     await recordCompletionArtifacts(ctx, forgeOutcome, settlement);
     expect(releaseAppIssueClaimMock).toHaveBeenCalledWith(resolvedApp, '42');
+  });
+
+  it.each([false, true])('binds unused inbox claim cleanup to the selected login (credential available: %j)', async available => {
+    const app = { id: 'app-1', name: 'Widget', repoPath: '/repo' };
+    const issue = { host: 'github.com', repo: 'example/app', number: 42, author: 'operator' };
+    const env = { GH_TOKEN: 'bound-test-token' };
+    getAppDataForTaskMock.mockResolvedValueOnce(app);
+    if (available) resolveInboxEnv.mockResolvedValueOnce(env);
+    else resolveInboxEnv.mockRejectedValueOnce(new Error('Inbox account changed'));
+    const { ctx, forgeOutcome, settlement } = sampleStageInputs({
+      task: {
+        id: 'claim-1', taskType: 'user',
+        metadata: {
+          app: 'app-1', claimFlow: true, claimTarget: '42', claimServerCheckout: true,
+          githubIssueClaim: issue, githubAccount: { id: 'account-1', host: 'github.com', login: 'operator' },
+        },
+      },
+    }, {
+      taskOutcome: { status: 'no-action-needed', reason: 'already fixed' },
+      taskUpdate: { status: 'completed', metadata: { taskOutcome: { status: 'no-action-needed' } } },
+    });
+    await recordCompletionArtifacts(ctx, forgeOutcome, settlement);
+    if (available) expect(releaseAppIssueClaimMock).toHaveBeenCalledExactlyOnceWith(app, '42', {
+      inboxIssue: issue, inboxLogin: 'operator', inboxEnv: env,
+    });
+    else expect(releaseAppIssueClaimMock).not.toHaveBeenCalled();
   });
 
   it('does not release server-provisioned claim markers when the run delivered a PR or is retrying', async () => {
