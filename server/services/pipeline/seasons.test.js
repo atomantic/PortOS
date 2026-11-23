@@ -84,6 +84,29 @@ describe('pipeline seasons service', () => {
     expect(patched.createdAt).toBe(a.createdAt);
   });
 
+  it('updateSeason keeps rendered cover/backCover slots on a script-only patch and clears on null', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    const slot = (n) => ({ jobId: `job-${n}`, filename: `${n}.png`, prompt: 'p', width: 1, height: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+    const rendered = (n) => ({
+      script: 'old', imageJobId: `j-${n}`, prompt: 'pr', filename: `${n}.png`,
+      proofImage: slot(`proof${n}`), finalImage: slot(`final${n}`),
+    });
+    await svc.updateSeason(s.id, a.id, { cover: rendered('c'), backCover: rendered('b') });
+    const patched = await svc.updateSeason(s.id, a.id, { cover: { script: 'Updated' }, backCover: { script: 'Updated B' } });
+    for (const [key, n] of [['cover', 'c'], ['backCover', 'b']]) {
+      expect(patched[key].script).toBe(key === 'cover' ? 'Updated' : 'Updated B');
+      expect(patched[key].imageJobId).toBe(`j-${n}`);
+      expect(patched[key].prompt).toBe('pr');
+      expect(patched[key].filename).toBe(`${n}.png`);
+      expect(patched[key].proofImage.jobId).toBe(`job-proof${n}`);
+      expect(patched[key].finalImage.jobId).toBe(`job-final${n}`);
+    }
+    const cleared = await svc.updateSeason(s.id, a.id, { cover: null, backCover: null });
+    expect(cleared.cover).toBeNull();
+    expect(cleared.backCover).toBeNull();
+  });
+
   it('updateSeason re-sorts when number changes', async () => {
     const s = await setupSeries();
     const a = await svc.createSeason(s.id, { title: 'A', number: 1 });
