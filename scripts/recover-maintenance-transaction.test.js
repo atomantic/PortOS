@@ -22,6 +22,9 @@ const interrupt = directory => {
   fs.writeFileSync(join(directory, 'transaction', 'evidence'), 'retained lock evidence');
   fs.writeFileSync(join(directory, 'pending-fixture.json'), '');
   fs.writeFileSync(join(directory, 'pending-other.json'), '{"partial":true}');
+  // Aged after its evidence write: a just-created lock reads as a live writer.
+  const crashedAt = new Date(Date.now() - 60_000);
+  fs.utimesSync(join(directory, 'transaction'), crashedAt, crashedAt);
 };
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 

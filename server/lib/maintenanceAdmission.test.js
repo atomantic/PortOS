@@ -63,6 +63,25 @@ describe('durable graceful maintenance', () => {
     expect(admission.status()).toMatchObject({ state: 'ready', hold });
   });
 
+  it('reads a hold-free journal through a live writer lock but fails closed once the lock outlives the grace', () => {
+    const { root, admission } = gate();
+    const work = admission.admit('agent', 'running-example');
+    const lock = join(admission.directory, 'transaction');
+    // Another process (runner vs server) is mid-publication: lock held, file committed.
+    mkdirSync(lock);
+    const peer = createMaintenanceAdmission(root);
+    expect(peer.held()).toBe(false);
+    expect(peer.status()).toMatchObject({ state: 'normal', blockers: [expect.objectContaining({ resource: 'running-example' })] });
+    // Admission stays authoritative: it still waits on the lock and refuses.
+    expect(createMaintenanceAdmission(root, { lockRetryAttempts: 1 }).tryAdmit('agent', 'queued')).toBeNull();
+    const crashedAt = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, crashedAt, crashedAt);
+    expect(peer.held()).toBe(true);
+    expect(peer.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction', since: crashedAt.toISOString() });
+    rmSync(lock, { recursive: true });
+    return work.finish();
+  });
+
   it('logs a failed ENOSPC publication once and remains uncertain even after lock removal', () => {
     const { root } = gate();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -247,7 +266,11 @@ describe('durable graceful maintenance', () => {
     const before = fs.readFileSync(file, 'utf8');
     // The older writer acquired its lock before parsing. A parse failure kept
     // the lock, just as an uncertain publication did; do not repair it by age.
-    fs.mkdirSync(join(admission.directory, 'transaction'));
+    // Backdated: a fresh lock is indistinguishable from a live writer.
+    const staleLock = join(admission.directory, 'transaction');
+    fs.mkdirSync(staleLock);
+    const crashedAt = new Date(Date.now() - 60_000);
+    fs.utimesSync(staleLock, crashedAt, crashedAt);
     expect(() => legacyOperation.parse(JSON.parse(before).operations[0])).toThrow();
     const restarted = createMaintenanceAdmission(root, { lockRetryDelayMs: 0 });
     expect(restarted.status()).toMatchObject({ state: 'unavailable', cause: 'interrupted-transaction' });
