@@ -13,6 +13,7 @@ import {
   isEidoverseRootProxyPath,
   stripEidoverseHostPrefix,
 } from '../lib/eidoverseProxyRoutes.js';
+import { isSessionCookieName } from '../../lib/portosAuthCore.js';
 import { PORTS } from '../lib/ports.js';
 import { markUpgradeClaimed } from '../lib/upgradeFallback.js';
 import { EIDOVERSE_PORT } from './eidoverse.js';
@@ -24,14 +25,40 @@ const HOST_DESCRIPTOR_PATH = '/host';
 const EMBED_CONFIG_PATH = '/embed-config';
 const FORWARDED_HEADER_NAMES = new Set(['host', 'x-forwarded-host', 'x-forwarded-proto']);
 
+// Eidoverse Worlds is an external third-party process: PortOS operator
+// credentials must never reach it, even though the browser attaches them to
+// the same-origin proxy requests.
+const STRIPPED_UPSTREAM_HEADERS = new Set(['authorization', 'x-portos-peer-auth', 'x-eidoverse-guest']);
+const PORTOS_OWNED_COOKIES = new Set(['portos_autofixer_auth', 'portos_eidoverse_guest']);
+
+export const stripPortosCookies = (cookieHeader) => {
+  const kept = String(cookieHeader ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (!part) return false;
+      const name = part.split('=')[0].trim();
+      return !isSessionCookieName(name) && !PORTOS_OWNED_COOKIES.has(name);
+    });
+  return kept.length ? kept.join('; ') : null;
+};
+
 const targetAuthority = (host, port) => `${host}:${port}`;
 
-export const forwardedHeaders = (req, protocol, targetHost, targetPort) => ({
-  ...req.headers,
+export const forwardedHeaders = (req, protocol, targetHost, targetPort) => {
+  const headers = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (!STRIPPED_UPSTREAM_HEADERS.has(name.toLowerCase()) && name.toLowerCase() !== 'cookie') headers[name] = value;
+  }
+  const cookie = stripPortosCookies(req.headers.cookie);
+  if (cookie) headers.cookie = cookie;
+  return {
+  ...headers,
   host: targetAuthority(targetHost, targetPort),
   'x-forwarded-host': req.headers.host || '',
   'x-forwarded-proto': protocol,
-});
+  };
+};
 
 export const requestPathname = (url) => String(url || '').split('?')[0].replace(/\/+$/, '') || '/';
 
@@ -140,9 +167,14 @@ export const websocketRequestHead = (req, protocol, targetHost, targetPort, path
   const headers = [];
   for (let index = 0; index < req.rawHeaders.length; index += 2) {
     const name = req.rawHeaders[index];
-    if (!FORWARDED_HEADER_NAMES.has(name.toLowerCase())) {
-      headers.push(`${name}: ${req.rawHeaders[index + 1]}`);
+    const lower = name.toLowerCase();
+    if (FORWARDED_HEADER_NAMES.has(lower) || STRIPPED_UPSTREAM_HEADERS.has(lower)) continue;
+    if (lower === 'cookie') {
+      const cookie = stripPortosCookies(req.rawHeaders[index + 1]);
+      if (cookie) headers.push(`${name}: ${cookie}`);
+      continue;
     }
+    headers.push(`${name}: ${req.rawHeaders[index + 1]}`);
   }
   headers.push(`Host: ${targetAuthority(targetHost, targetPort)}`);
   headers.push(`X-Forwarded-Host: ${req.headers.host || ''}`);
