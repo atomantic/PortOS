@@ -29,6 +29,7 @@ vi.mock('./catalogDB.js', () => ({
   upsertRelationFromPeer: vi.fn(),
   upsertTagFromPeer: vi.fn(),
   upsertMediaFromPeer: vi.fn(),
+  withPeerIdentityBatch: vi.fn(async (_ids, fn) => fn({ isolate: (work) => work() })),
   updateIngredient: vi.fn(),
   // Registers a label in the canonical tag taxonomy and echoes back the STORED
   // label (existing casing wins) — the default double mirrors that contract.
@@ -107,6 +108,7 @@ describe('applyRemoteChanges — dispatch + stats', () => {
     expect(stats.media.applied).toBe(1);
     expect(catalogDB.upsertMediaFromPeer).toHaveBeenCalledWith(
       expect.objectContaining({ ingredientId: 'i1', mediaKey: 'hero.png', kind: 'portrait' }),
+      expect.anything(),
     );
     expect(stats.errors).toHaveLength(0);
   });
