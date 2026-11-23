@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { withSpawnDedupGuard, withRunnerAgentCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
-import { runnerAgents } from './agentState.js';
+import { withSpawnDedupGuard, withRunnerAgentCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
+import { runnerAgents, spawningTasks } from './agentState.js';
 
 describe('withSpawnDedupGuard', () => {
   it('acquires, runs, and releases on success', async () => {
@@ -82,5 +82,55 @@ describe('withRunnerAgentCleanup', () => {
   it('is a no-op when the key is absent', async () => {
     await withRunnerAgentCleanup('missing', async () => {});
     expect(runnerAgents.has('missing')).toBe(false);
+  });
+});
+
+// ─── withUpdateInProgressGuard — the self-update spawn hold (issue #4124) ───
+
+describe('withUpdateInProgressGuard — self-update spawn hold', () => {
+  it('runs the spawn body when no update is in progress', async () => {
+    let ran = false;
+    const result = await withUpdateInProgressGuard(() => false, async () => {
+      ran = true;
+      return 'agent-1';
+    });
+    expect(ran).toBe(true);
+    expect(result).toBe('agent-1');
+  });
+
+  it('returns SPAWN_UPDATE_SKIP without running the body while an update is in progress', async () => {
+    let ran = false;
+    const result = await withUpdateInProgressGuard(() => true, async () => {
+      ran = true;
+      return 'agent-2';
+    });
+    // The whole point: no agent process is created inside the window where
+    // update.sh is about to pm2-delete this server. The task record is never
+    // touched, so it stays `pending` and runs after the restart.
+    expect(ran).toBe(false);
+    expect(result).toBe(SPAWN_UPDATE_SKIP);
+  });
+
+  it('reads the flag on EVERY call, so the hold releases when the update settles', async () => {
+    let updating = true;
+    const isUpdating = () => updating;
+    expect(await withUpdateInProgressGuard(isUpdating, async () => 'spawned')).toBe(SPAWN_UPDATE_SKIP);
+    updating = false;
+    expect(await withUpdateInProgressGuard(isUpdating, async () => 'spawned')).toBe('spawned');
+  });
+
+  it('uses a sentinel distinct from the dedup skip, so the two holds stay distinguishable', () => {
+    expect(SPAWN_UPDATE_SKIP).not.toBe(SPAWN_DEDUP_SKIP);
+  });
+
+  it('checks the flag OUTSIDE the dedup guard, so a held task leaves no stranded guard entry', async () => {
+    // Mirrors how spawnAgentForTask composes them. If the update check sat
+    // inside withSpawnDedupGuard the task id would be added and removed for a
+    // spawn that never happened — harmless today, but it would also mean the
+    // dedup set churned once per held dispatch during the whole update window.
+    const outcome = await withUpdateInProgressGuard(() => true, () =>
+      withSpawnDedupGuard(spawningTasks, 'task-held', async () => 'agent-3'));
+    expect(outcome).toBe(SPAWN_UPDATE_SKIP);
+    expect(spawningTasks.has('task-held')).toBe(false);
   });
 });
