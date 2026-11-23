@@ -171,3 +171,33 @@ export const writeVoiceAssetReceipt = async (kind, primaryPath) => {
   }
   return receiptPath;
 };
+
+// Pinned sha256 of every Piper release archive the setup scripts may download
+// (rhasspy/piper@2023.11.14-2 and rhasspy/piper-phonemize@2023.11.14-4). The archives hold
+// native binaries and shared libraries run on every Piper synthesis, so a re-pointed tag or
+// replaced release asset must fail closed before extraction. Bump a digest only together with
+// the version pin in scripts/setup-voice.sh / setup-voice.ps1.
+export const PIPER_RELEASE_ARCHIVE_SHA256 = Object.freeze({
+  'piper_linux_aarch64.tar.gz': 'fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb',
+  'piper_linux_armv7l.tar.gz': 'c6946fcd57c705ed1d4666ea880f80ba0bbbd14de62ecbdd13460baf3bac8e37',
+  'piper_linux_x86_64.tar.gz': 'a50cb45f355b7af1f6d758c1b360717877ba0a398cc8cbe6d2a7a3a26e225992',
+  'piper_macos_aarch64.tar.gz': '6b1eb03b3735946cb35216e063e7eebcc33a6bbf5dd96ec0217959bf1cdcb0cc',
+  'piper_macos_x64.tar.gz': 'ced85c0a3df13945b1e623b878a48fdc2854d5c485b4b67f62857cf551deaf8b',
+  'piper_windows_amd64.zip': 'f3c58906402b24f3a96d92145f58acba6d86c9b5db896d207f78dc80811efcea',
+  'piper-phonemize_linux_aarch64.tar.gz': 'f216660f6225a165155839110cd387947d69618f014f3d1c56729fdedb6557cc',
+  'piper-phonemize_linux_x86_64.tar.gz': '3fb3d58b4ac42bd69d38948acdbeab335eee7e599984169d28fb0082496649ad',
+  'piper-phonemize_macos_aarch64.tar.gz': '78a9c28b3c94baf6e9526b2e386ce547909abaec4f31aadd7e16b01fbfe5f322',
+  'piper-phonemize_macos_x64.tar.gz': '9ec6e300c0d012a663758bc45a097b47ee759761a3b91c7742de042af789d84b',
+});
+
+/**
+ * Throws unless `filePath` hashes to the pinned digest for `archiveName`. Unknown names are
+ * rejected too, so a platform without a pinned archive cannot slip through unverified.
+ * `table` exists for tests; production callers use the frozen default.
+ */
+export const verifyVoiceArchiveSha256 = async (archiveName, filePath, table = PIPER_RELEASE_ARCHIVE_SHA256) => {
+  const expected = Object.hasOwn(table, archiveName) ? table[archiveName] : undefined;
+  if (!expected) throw new Error(`no pinned sha256 for archive ${archiveName}`);
+  const actual = await sha256File(filePath);
+  if (actual !== expected) throw new Error(`sha256 mismatch for ${archiveName}: expected ${expected}, got ${actual}`);
+};
