@@ -19,7 +19,8 @@ const IDLE_PROGRESS = Object.freeze({ percent: 0, stage: null });
  * Options:
  * - `startRequest(startArg)` → resolves `{ jobId }` — the feature's kickoff call.
  * - `eventsUrl(jobId)` / `cancelRequest(jobId, { silent })` — SSE URL + cancel call.
- * - `onSettled(reason, context)` — refresh saved state on success, failure, cancellation or disconnect.
+ * - `onSettled(reason, context)` — refresh saved state on success, failure, cancellation, disconnect or a
+ *   rejected cancel (`'cancel-rejected'`, slot stays active).
  * - `onComplete(frame, context)` — fires on the terminal `complete` frame.
  * - `context` (the second `start` arg, or the start arg itself when omitted) is
  *   captured and exposed immediately at kickoff, including while `pending`.
@@ -164,7 +165,16 @@ export default function useSseJobSlot({
 
   const cancel = () => {
     if (!mounted.current || !job?.jobId) return;
-    cancelRequest(job.jobId, { silent: true }).catch(() => {});
+    const { jobId, context } = job;
+    // `{ ok: false }` (job settled or committing) and request failures must not vanish: tell the
+    // user and let the caller reconcile its persisted state.
+    cancelRequest(jobId, { silent: true })
+      .then((res) => {
+        if (res?.ok !== false || !mounted.current) return;
+        toast.error('This job can no longer be stopped — it may be finishing');
+        onSettled?.('cancel-rejected', context);
+      })
+      .catch((err) => { if (mounted.current) toast.error(err?.message || 'Could not stop the job'); });
   };
 
   return {
