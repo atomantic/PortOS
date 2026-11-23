@@ -98,9 +98,12 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
   safeChildProcessOptions({ stdio: ['pipe', 'ignore', 'pipe'] }));
   let stderr = '';
   let exited = false;
+  let spawned = false;
+  proc.once('spawn', () => { spawned = true; });
   proc.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-2000); });
   const finished = new Promise((resolve, reject) => {
-    proc.on('error', reject);
+    // A pre-spawn failure (ENOENT/EACCES/EAGAIN) emits 'error' and never 'close'.
+    proc.on('error', (error) => { if (!spawned && !proc.pid) exited = true; reject(error); });
     proc.stdin.on('error', reject);
     proc.once('close', (code) => { exited = true; code === 0 ? resolve() : reject(new Error(`overlay encode failed (${code}): ${stderr}`)); });
   });
@@ -122,9 +125,16 @@ async function captureWindow(page, ffmpeg, { startSec, frames, fps, outputPath, 
     proc.stdin.end();
     await step(() => finished);
   } finally {
-    if (!exited) {
-      killWithEscalation(proc, { label: 'music-video overlay', stillRunning: () => !exited, delayMs: 1000 });
-      await new Promise((resolve) => proc.once('close', resolve));
+    if (!exited && (spawned || proc.pid)) {
+      const delayMs = 1000;
+      killWithEscalation(proc, { label: 'music-video overlay', stillRunning: () => !exited, delayMs });
+      // Bounded: an unkillable child must not wedge the render mutexes and Chromium forever.
+      await new Promise((resolve) => {
+        const timer = setTimeout(() => { proc.off('close', settle); resolve(); }, delayMs + 3000);
+        timer.unref?.();
+        function settle() { clearTimeout(timer); resolve(); }
+        proc.once('close', settle);
+      });
     }
   }
 }
@@ -264,7 +274,8 @@ export async function renderTypographyOverlays({ jobId, cues, style, width, heig
         }
         await page.close({ verify: true });
       } finally {
-        await page.close();
+        // A browser crash must not replace the timeout/abort that got us here.
+        await page.close().catch(() => {});
       }
     }
     return overlays;
