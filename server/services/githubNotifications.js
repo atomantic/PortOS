@@ -35,6 +35,7 @@ import {
   agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, REASON_KIND_SQL, threadAgentKind, threadReasonKind,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { notificationIssueClaimTarget } from '../lib/githubNotificationIssue.js';
 import { notificationPullRequestView } from '../lib/githubNotificationPullRequest.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -433,6 +434,7 @@ const toApi = (row, accountsById) => {
     reasonRuleKind: threadReasonKind(row),
     agent: agentView(account, row),
     agentFailed: agentFailedView(row),
+    claimIssue: notificationIssueClaimTarget(account, row)?.number ?? null,
     pullRequest: notificationPullRequestView(account, row),
     pullRequestAction: row.evidence?.pullRequestAction || null,
     pullRequestAttempt: row.evidence?.pullRequestAttempt || null,
@@ -864,4 +866,10 @@ export async function actOnPullRequest(accountId, threadId, options) {
   const result = await actOnNotificationPullRequest(account, threadId, options);
   const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   return { notification: toApi(row, new Map([[account.id, account]])), ...result };
+}
+
+export async function claimIssue(accountId, threadId, pin) {
+  const account = await getAccount(accountId);
+  const { claimNotificationIssue } = await import('./githubNotificationIssue.js');
+  return claimNotificationIssue(account, threadId, pin);
 }

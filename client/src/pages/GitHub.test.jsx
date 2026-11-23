@@ -18,6 +18,7 @@ const mock = vi.hoisted(() => ({
   deleteGitHubAccount: vi.fn(),
   getGitHubAccountStatus: vi.fn(),
   getGitHubNotifications: vi.fn(),
+  claimGitHubNotificationIssue: vi.fn(),
   setGitHubNotificationMute: vi.fn(),
   syncGitHubNotifications: vi.fn(),
   applyGitHubNotificationAction: vi.fn(),
@@ -57,6 +58,7 @@ vi.mock('../services/apiGithub.js', () => ({
   deleteGitHubAccount: mock.deleteGitHubAccount,
   getGitHubAccountStatus: mock.getGitHubAccountStatus,
   getGitHubNotifications: mock.getGitHubNotifications,
+  claimGitHubNotificationIssue: mock.claimGitHubNotificationIssue,
   setGitHubNotificationMute: mock.setGitHubNotificationMute,
   syncGitHubNotifications: mock.syncGitHubNotifications,
   applyGitHubNotificationAction: mock.applyGitHubNotificationAction,
@@ -750,6 +752,28 @@ describe('GitHub inbox tab', () => {
       accountId: 'github-com', repoFullName: NOTIFICATION.repoFullName, reason: 'review_requested', muted: true,
     })));
     expect(mock.applyGitHubNotificationAction).not.toHaveBeenCalled();
+  });
+
+  it('queues the issue-management claim from an eligible inbox issue and keeps the notification open', async () => {
+    mock.getGitHubNotifications.mockResolvedValue({ notifications: [
+      { ...NOTIFICATION, title: 'Open issue', subjectType: 'Issue', claimIssue: 42 },
+      { ...NOTIFICATION, title: 'Closed issue', threadId: '103', subjectType: 'Issue', subjectStatus: { state: 'closed' } },
+    ], sync: {} });
+    mock.getProviders.mockResolvedValue({ providers: [] });
+    mock.claimGitHubNotificationIssue.mockResolvedValue({ taskId: 'task-42', duplicate: false });
+    await renderInbox();
+    const claim = await screen.findByRole('button', { name: 'Claim issue' });
+    expect(screen.getAllByRole('button', { name: 'Claim issue' })).toHaveLength(1);
+    fireEvent.click(claim);
+    expect(mock.claimGitHubNotificationIssue).not.toHaveBeenCalled();
+    const queue = await screen.findByRole('button', { name: 'Queue claim' });
+    await waitFor(() => expect(queue.disabled).toBe(false));
+    fireEvent.click(queue);
+    expect((await screen.findByRole('link', { name: 'Claim queued' })).getAttribute('href'))
+      .toBe('/cos/tasks?task=task-42&source=user');
+    expect(mock.claimGitHubNotificationIssue).toHaveBeenCalledWith('github-com', '101', { provider: null, model: null, effort: null });
+    expect(mock.applyGitHubNotificationAction).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: 'Open issue' })).toBeTruthy();
   });
 
   it('marks a thread done and takes it out of the inbox', async () => {

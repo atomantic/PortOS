@@ -441,6 +441,36 @@ describe('prepareAppIssueClaim', () => {
   const issue = (labels = [], extra = {}) => JSON.stringify({ labels, assignees: [], state: 'OPEN', ...extra });
   const prs = (...rows) => prPages(rows);
 
+  const inbox = { host: 'github.com', repo: 'acme/widget', login: 'operator', author: 'operator' };
+
+  it.each([
+    ['different repository', { ...inbox, repo: 'acme/other' }, [], 'CLAIM_TRACKER_MISMATCH'],
+    ['different login', inbox, ['colleague'], 'CLAIM_ACCOUNT_MISMATCH'],
+    ['different issue author', inbox, ['operator', issue(['help wanted'], { author: { login: 'outsider' } })], 'CLAIM_AUTHOR_CHANGED'],
+    ['closed issue', inbox, ['operator', issue(['help wanted'], { author: { login: 'operator' }, state: 'CLOSED' })], 'ISSUE_IN_FLIGHT'],
+  ])('rejects an inbox claim for a %s before any write', async (_label, expectedGithubIssue, answers, code) => {
+    for (const answer of answers) execGh.mockResolvedValueOnce(answer);
+    await expect(prepareAppIssueClaim(APP, '42', 'github', { includePreflight: true, expectedGithubIssue })).rejects.toMatchObject({ code });
+    expect(execGh).toHaveBeenCalledTimes(answers.length);
+    expect(execGh.mock.calls.every(([args]) => !args.includes('edit'))).toBe(true);
+  });
+
+  it.each([false, true])('keeps release promotion evidence distinct from active issue coverage for an inbox claim (live: %j)', async live => {
+    const message = live ? 'fix: remaining scope (#42)' : 'chore: prepare release';
+    const currentCommit = { oid: 'a'.repeat(40), messageHeadline: message };
+    execGh.mockResolvedValueOnce('operator')
+      .mockResolvedValueOnce(issue([], { author: { login: 'operator' } }))
+      .mockResolvedValueOnce(prs({
+        number: 23, baseRefName: 'release', headRefName: 'candidate/release', body: '',
+        commits: [{ oid: 'b'.repeat(40), messageHeadline: 'test: already shipped slice (#42)' }, currentCommit],
+      }))
+      .mockResolvedValueOnce(JSON.stringify([{ total_commits: 1, commits: [{ sha: currentCommit.oid, commit: { message } }] }]));
+    const claim = prepareAppIssueClaim(APP, '42', 'github', { readOnly: true, expectedGithubIssue: inbox, inboxEnv: { GH_TOKEN: 'bound-test-token' } });
+    if (live) await expect(claim).rejects.toMatchObject({ code: 'ISSUE_IN_FLIGHT' });
+    else await expect(claim).resolves.toEqual({ epic: false });
+    expect(execGh.mock.calls.some(([args]) => args[1] === 'edit')).toBe(false);
+  });
+
   it('removes only invitations present on GitHub after verifying eligibility', async () => {
     execGh.mockResolvedValueOnce(issue([{ name: 'Help Wanted' }, { name: 'good first issue' }, { name: 'bug' }]))
       .mockResolvedValueOnce(prs()).mockResolvedValueOnce('').mockResolvedValueOnce(issue([{ name: 'bug' }]));
@@ -738,6 +768,27 @@ describe('prepareAppIssueClaim', () => {
 });
 
 describe('releaseAppIssueClaim', () => {
+  const inbox = {
+    inboxIssue: { host: 'github.com', repo: 'acme/widget', number: 42 },
+    inboxLogin: 'operator',
+    inboxEnv: { GH_TOKEN: 'bound-test-token' },
+  };
+
+  it('does not touch markers after the managed app changes origin', async () => {
+    getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'acme/replacement' });
+    readOriginRemoteUrl.mockResolvedValue('git@github.com:acme/replacement.git');
+    await expect(releaseAppIssueClaim(APP, '42', inbox)).resolves.toMatchObject({ released: false });
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('does not release a different account’s markers', async () => {
+    execGh.mockResolvedValueOnce(JSON.stringify({ state: 'OPEN', labels: ['in-progress'], assignees: [{ login: 'different' }] }))
+      .mockResolvedValueOnce('different');
+    await expect(releaseAppIssueClaim(APP, '42', inbox)).resolves.toEqual({ released: false, reason: 'inbox-account-mismatch' });
+    expect(execGh).toHaveBeenCalledTimes(2);
+    expect(execGh.mock.calls.every(([args, , { env }]) => args[1] !== 'edit' && env.GH_TOKEN === 'bound-test-token')).toBe(true);
+  });
+
   it('removes @me and in-progress when self is the sole assignee on an open GitHub issue', async () => {
     execGh
       .mockResolvedValueOnce(JSON.stringify({ state: 'OPEN', assignees: [{ login: 'Alice' }], labels: [{ name: 'in-progress' }, { name: 'bug' }] }))

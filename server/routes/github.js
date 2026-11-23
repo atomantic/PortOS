@@ -207,6 +207,11 @@ router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req
   res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req), perRun));
 }));
 
+router.post('/notifications/:accountId/:threadId/claim-issue', asyncHandler(async (req, res) => {
+  const pin = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
+  res.json(await githubNotifications.claimIssue(req.params.accountId, threadIdParam(req), pin));
+}));
+
 router.post('/notifications/:accountId/:threadId/pull-request', asyncHandler(async (req, res) => {
   const body = validateRequest(githubNotificationPullRequestActionSchema, req.body ?? {});
   res.json(await githubNotifications.actOnPullRequest(req.params.accountId, threadIdParam(req), body));
