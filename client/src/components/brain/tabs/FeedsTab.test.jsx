@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-const api = vi.hoisted(() => ({ getFeeds: vi.fn(), getFeedItems: vi.fn() }));
-vi.mock('../../../services/apiMessages.js', () => ({ getFeeds: api.getFeeds, getFeedItems: api.getFeedItems }));
+const api = vi.hoisted(() => ({ getFeeds: vi.fn(), getFeedItems: vi.fn(), removeFeed: vi.fn() }));
+vi.mock('../../../services/apiMessages.js', () => ({ getFeeds: api.getFeeds, getFeedItems: api.getFeedItems, removeFeed: api.removeFeed }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 import FeedsTab from './FeedsTab';
@@ -40,5 +40,31 @@ describe('FeedsTab loading', () => {
     expect(screen.queryByText(/No items yet/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText(/No items yet/)).toBeInTheDocument();
+  });
+});
+
+describe('FeedsTab delete confirmation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getFeedItems.mockResolvedValue([]);
+    api.getFeeds.mockResolvedValue([{ id: 'feed-1', title: 'Example Feed', unreadCount: 0 }]);
+    api.removeFeed.mockResolvedValue({});
+  });
+
+  it('cancels via the in-flow InlineConfirmRow', async () => {
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove feed' }));
+    expect(screen.getByText('Remove this feed?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('Remove this feed?')).not.toBeInTheDocument();
+    expect(api.removeFeed).not.toHaveBeenCalled();
+  });
+
+  it('confirms removal', async () => {
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove feed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(api.removeFeed).toHaveBeenCalledWith('feed-1');
+    expect(await screen.findByText('No feeds subscribed yet.')).toBeInTheDocument();
   });
 });
