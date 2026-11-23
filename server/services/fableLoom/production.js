@@ -837,7 +837,27 @@ async function prepareJob(run, asset) {
   return prepareVideoJob(run, asset);
 }
 
-function failRun(run, error) {
+/**
+ * Cancel every queued/running media job of a run and drop its job mappings so
+ * the terminal events they emit are ignored. Leaves no asset in
+ * ACTIVE_ASSET_STATUSES with a live job, which would otherwise stall resume.
+ */
+async function cancelActiveBatchJobs(run, { status = 'canceled', error = 'Canceled by the user.' } = {}) {
+  const active = run.assets.filter((asset) => asset.jobId && ['queued', 'running'].includes(asset.status));
+  for (const asset of active) {
+    _jobToAsset.delete(asset.jobId);
+    asset.status = status;
+    asset.error = error;
+  }
+  const results = await Promise.allSettled(active.map((asset) => cancelJob(asset.jobId)));
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      console.error(`❌ FableLoom could not cancel media job ${active[index].jobId}: ${errorMessage(result.reason)}`);
+    }
+  });
+}
+
+async function failRun(run, error) {
   if (isTerminalRun(run)) return;
   run.status = 'failed';
   run.error = errorMessage(error);
@@ -847,6 +867,7 @@ function failRun(run, error) {
       asset.error = 'Batch stopped before this dependency stage could run.';
     }
   }
+  await cancelActiveBatchJobs(run, { error: 'Canceled after another asset in the batch failed.' });
   touchRun(run);
 }
 
@@ -854,10 +875,10 @@ function scheduleRun(runId, operation) {
   const runtime = _runRuntime.get(runId);
   if (!runtime) return Promise.resolve(null);
   const next = runtime.tail.then(operation);
-  const handled = next.catch((error) => {
+  const handled = next.catch(async (error) => {
     const run = _batchRuns.get(runId);
-    if (run) failRun(run, error);
     console.error(`❌ FableLoom production batch ${runId.slice(0, 16)} failed: ${errorMessage(error)}`);
+    if (run) await failRun(run, error);
     return null;
   });
   runtime.tail = handled;
@@ -922,6 +943,7 @@ async function advanceRun(runId) {
       asset.skipReason = asset.skipReason || 'No queue-backed render is required for this asset.';
       continue;
     }
+    if (run.cancelRequested || run.status !== 'in_progress') break;
     const visualConditioning = enrichConditioning(job.params.visualConditioning, job, asset);
     if (visualConditioning) job.params.visualConditioning = visualConditioning;
     const enqueued = await enqueueJob({
@@ -929,6 +951,14 @@ async function advanceRun(runId) {
       params: job.params,
       owner: `fableloom:${run.loomId}:${run.episodeId}:${asset.id}`,
     });
+    // Canceled while enqueueJob was suspended: the job exists but the run no
+    // longer owns it, so revoke it rather than recording it as queued.
+    if (run.cancelRequested || run.status !== 'in_progress') {
+      await cancelJob(enqueued.jobId).catch((error) => {
+        console.error(`❌ FableLoom could not cancel late-enqueued job ${enqueued.jobId}: ${errorMessage(error)}`);
+      });
+      break;
+    }
     asset.jobId = enqueued.jobId;
     asset.provider = job.provider || (job.kind === 'image' ? IMAGE_GEN_MODE.LOCAL : VIDEO_GEN_MODE.LOCAL);
     asset.modelId = job.modelId || null;
@@ -979,6 +1009,7 @@ async function handleJobTerminal(event, job) {
         pendingAsset.error = 'Batch stopped after a media job failed.';
       }
     }
+    await cancelActiveBatchJobs(run, { error: 'Canceled after another asset in the batch failed.' });
     touchRun(run);
   }
 }
@@ -1235,22 +1266,24 @@ export async function cancelEpisodeProductionBatch(runId) {
   const run = _batchRuns.get(runId);
   if (!run) throw new ServerError('Batch run not found', { status: 404, code: 'NOT_FOUND' });
   if (run.status !== 'in_progress') return run;
+  // Flag synchronously so an in-flight advanceRun stops enqueueing, then run the
+  // teardown on the run's queue so it waits for that enqueue step to drain.
   run.cancelRequested = true;
-  const jobIds = run.assets
-    .filter((asset) => asset.jobId && ['queued', 'running'].includes(asset.status))
-    .map((asset) => asset.jobId);
-  await Promise.all(jobIds.map((jobId) => cancelJob(jobId)));
-  for (const asset of run.assets) {
-    if (asset.status === 'pending' || asset.status === 'preparing'
-      || asset.status === 'queued' || asset.status === 'running') {
-      asset.status = 'canceled';
-      asset.error = 'Canceled by the user.';
+  const teardown = async () => {
+    if (run.status !== 'in_progress') return run;
+    await cancelActiveBatchJobs(run);
+    for (const asset of run.assets) {
+      if (asset.status === 'pending' || asset.status === 'preparing') {
+        asset.status = 'canceled';
+        asset.error = 'Canceled by the user.';
+      }
     }
-  }
-  for (const jobId of jobIds) _jobToAsset.delete(jobId);
-  run.status = 'canceled';
-  touchRun(run);
-  return run;
+    run.status = 'canceled';
+    touchRun(run);
+    return run;
+  };
+  const scheduled = await scheduleRun(runId, teardown);
+  return scheduled || teardown();
 }
 
 /** Resume a failed or canceled run after the user repairs its blockers. */
