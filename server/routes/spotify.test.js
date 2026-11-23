@@ -54,6 +54,12 @@ describe('Spotify routes', () => {
     vi.clearAllMocks();
   });
 
+  it('saves credentials with Cache-Control: no-store', async () => {
+    const res = await request(makeApp()).post('/api/spotify/auth/credentials').send({ clientId: 'cid', clientSecret: 'shh' });
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
   it('derives the status redirect URI from the forwarded public origin', async () => {
     const response = await request(makeApp())
       .get('/api/spotify/status')
