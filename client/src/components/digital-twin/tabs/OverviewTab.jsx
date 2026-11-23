@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Heart,
@@ -44,6 +44,8 @@ import NextActionBanner from '../NextActionBanner';
 export default function OverviewTab({ status, settings, onRefresh, onSettingsChange }) {
   const navigate = useNavigate();
   const [showSettings, setShowSettings] = useState(false);
+  const settingsRef = useRef(null);
+  const revealSettingsRef = useRef(false);
   const [settingsForm, setSettingsForm] = useState(settings || {});
   const [saving, setSaving] = useState(false);
   const [completeness, setCompleteness] = useState(null);
@@ -68,6 +70,18 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
   useEffect(() => {
     if (!showSettings) setSettingsForm(settings || {});
   }, [settings, showSettings]);
+
+  // The bottom CoS status "Enable" opens a panel far above it; bring it into view.
+  const revealSettings = () => {
+    const panel = settingsRef.current;
+    panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    panel?.querySelector('input[type="checkbox"]')?.focus({ preventScroll: true });
+  };
+  useEffect(() => {
+    if (!showSettings || !revealSettingsRef.current) return;
+    revealSettingsRef.current = false;
+    revealSettings();
+  }, [showSettings]);
 
   useEffect(() => {
     loadCompleteness();
@@ -283,7 +297,7 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
 
         {/* Settings Panel */}
         {showSettings && (
-          <div className="mt-6 pt-6 border-t border-port-border">
+          <div ref={settingsRef} className="mt-6 pt-6 border-t border-port-border">
             <h3 className="text-sm font-medium text-gray-400 mb-4">Settings</h3>
             <div className="space-y-4">
               <label className="flex items-center gap-3">
@@ -641,7 +655,14 @@ export default function OverviewTab({ status, settings, onRefresh, onSettingsCha
               <AlertCircle className="w-5 h-5 text-port-warning" />
               <span className="text-white">Soul context injection is disabled</span>
               <button
-                onClick={() => setShowSettings(true)}
+                onClick={() => {
+                  if (showSettings) {
+                    revealSettings();
+                  } else {
+                    revealSettingsRef.current = true;
+                    setShowSettings(true);
+                  }
+                }}
                 className="ml-auto text-sm text-port-accent hover:text-white"
               >
                 Enable

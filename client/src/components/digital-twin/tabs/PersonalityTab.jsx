@@ -187,6 +187,14 @@ function RunDetail({ run }) {
   );
 }
 
+// Normalizes a settings payload to the form's value shapes (matches loadData).
+const optionsFrom = (s) => ({
+  scorerProviderId: s.scorerProviderId || '',
+  scorerModel: s.scorerModel || '',
+  historyCap: Number(s.historyCap ?? 200) || 200,
+  defaultAlignment: s.defaultIncludeAlignment ?? true
+});
+
 export default function PersonalityTab() {
   const providersResource = useProviderList();
   const providers = useMemo(() => providersResource.items.filter((p) => p.enabled), [providersResource.items]);
@@ -228,6 +236,9 @@ export default function PersonalityTab() {
   const [historyCap, setHistoryCap] = useState(200);
   const [defaultAlignment, setDefaultAlignment] = useState(true); // the SAVED default, distinct from this run's toggle
   const [savingSettings, setSavingSettings] = useState(false);
+  // Last server-confirmed options: a test run reads the server's saved scorer
+  // settings, so the Run button gates on these, not on the edited form.
+  const [savedOptions, setSavedOptions] = useState(null);
   const [settingsError, setSettingsError] = useState(false);
   const [historyError, setHistoryError] = useState(false);
 
@@ -252,6 +263,7 @@ export default function PersonalityTab() {
       setScorerProviderId(settingsData.scorerProviderId || '');
       setScorerModel(settingsData.scorerModel || '');
       setHistoryCap(settingsData.historyCap ?? 200);
+      setSavedOptions(optionsFrom(settingsData));
     }
     setHistoryLoading(false);
   };
@@ -321,8 +333,26 @@ export default function PersonalityTab() {
       })
       .catch(() => null);
     setSavingSettings(false);
-    if (saved) toast.success('Personality test settings saved');
+    if (saved) {
+      setSavedOptions(optionsFrom(saved));
+      toast.success('Personality test settings saved');
+    }
   };
+
+  const revertOptions = () => {
+    if (!savedOptions) return;
+    setScorerProviderId(savedOptions.scorerProviderId);
+    setScorerModel(savedOptions.scorerModel);
+    setHistoryCap(savedOptions.historyCap);
+    setDefaultAlignment(savedOptions.defaultAlignment);
+  };
+
+  const optionsDirty = !!savedOptions && (
+    scorerProviderId !== savedOptions.scorerProviderId
+    || scorerModel !== savedOptions.scorerModel
+    || (Number(historyCap) || 200) !== savedOptions.historyCap
+    || defaultAlignment !== savedOptions.defaultAlignment
+  );
 
   const toggleCompare = (runId) => {
     updateParams((p) => {
@@ -404,7 +434,7 @@ export default function PersonalityTab() {
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
         <button
           onClick={runTest}
-          disabled={!!running || selectedProviders.length === 0}
+          disabled={!!running || selectedProviders.length === 0 || optionsDirty || savingSettings}
           className="flex items-center justify-center gap-2 px-6 py-3 min-h-[48px] bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {running ? (
@@ -429,6 +459,12 @@ export default function PersonalityTab() {
           />
           Include twin alignment check
         </label>
+
+        {optionsDirty && (
+          <span className="text-sm text-port-warning" role="status">
+            Save or revert pending option changes before running
+          </span>
+        )}
 
         <button
           onClick={() => setShowOptions((v) => !v)}
@@ -502,6 +538,13 @@ export default function PersonalityTab() {
             className="px-4 py-2 min-h-[40px] text-sm bg-port-accent text-white rounded-lg font-medium hover:bg-port-accent/80 disabled:opacity-50"
           >
             {savingSettings ? 'Saving...' : 'Save Options'}
+          </button>
+          <button
+            onClick={revertOptions}
+            disabled={!optionsDirty || savingSettings}
+            className="ml-2 px-4 py-2 min-h-[40px] text-sm text-gray-300 border border-port-border rounded-lg hover:text-white hover:border-gray-500 disabled:opacity-50"
+          >
+            Revert
           </button>
         </div>
       )}
