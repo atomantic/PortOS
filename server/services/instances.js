@@ -402,7 +402,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       directions: ['outbound']
     };
     data.peers.push(entry);
-    console.log(`🌐 Peer added: ${entry.name} (${peerBaseUrl(entry)})`);
+    console.log(`🌐 Peer added: ${entry.name} (${entry.id})`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
@@ -596,7 +596,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // re-adopts the DNS name and the user can't revert to IP).
         peer.hostManual = true;
         hostChanged = true;
-        console.log(`🌐 Peer host ${peer.host ? `set to ${peer.host}` : 'cleared'}: ${peer.name}`);
+        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peer.name}`);
       }
     }
     // Per-(peer, category) schema-version gaps, populated by syncOrchestrator
@@ -1122,7 +1122,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     // normal case, not a forgery signal, and its host/port are already pinned
     // to the local forward by the `transport !== 'tailcat'` guards below.
     if (existing && !matchedByAddress && existing.transport !== 'tailcat' && existing.address !== address) {
-      console.warn(`⚠️ Peer announce instanceId matched but address mismatched (expected ${existing.address}, got ${address}) — ignoring host/port/name update`);
+      console.warn(`⚠️ Peer announce instanceId matched but address mismatched — ignoring host/port/name update`);
       existing.lastSeen = new Date().toISOString();
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
@@ -1148,12 +1148,12 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // existing.host check alone can't distinguish from "never set".
       if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
-        console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
+        console.log(`🌐 Peer host learned via announce: ${existing.name}`);
       }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
-      console.log(`🌐 Peer announced (existing): ${existing.name} (${address}:${port})`);
+      console.log(`🌐 Peer announced (existing): ${existing.name}`);
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
@@ -1186,7 +1186,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       directions: ['inbound']
     };
     data.peers.push(peer);
-    console.log(`🌐 Peer announced (new): ${peer.name} (${peerBaseUrl(peer)})`);
+    console.log(`🌐 Peer announced (new): ${peer.name} (${peer.id})`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return { created: true, peer };
   });
