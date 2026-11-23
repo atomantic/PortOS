@@ -79,8 +79,8 @@ beforeEach(() => {
 });
 
 describe('Blender Models behind the default-deny gate (#17874)', () => {
-  it('refuses a remote caller before any source write, build or Blender launch', async () => {
-    for (const workflow of workflows.slice(0, 5)) await expectRemoteRefusal(mounts, workflow);
+  it('refuses a remote caller before any route that writes, builds, publishes or launches Blender', async () => {
+    for (const workflow of workflows) await expectRemoteRefusal(mounts, workflow);
   });
 
   it('still runs every model route for a local connection and a delegated agent session', async () => {

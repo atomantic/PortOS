@@ -83,6 +83,33 @@ const replaceBuild = (model, buildId, change) => ({
   builds: (model.builds || []).map((build) => (build.id === buildId ? { ...build, ...change } : build)),
 });
 
+async function settleUnfinishedBuild({ id, buildId, entry, finishedAt, result, facts }) {
+  await store.mutateModel(id, (current) => replaceBuild(current, buildId, {
+    status: result.canceled ? 'canceled' : 'failed', finishedAt, error: result.error, blenderVersion: facts.start?.blender ?? null,
+  }), { includeDeleted: true });
+  registry.update(entry, { status: result.canceled ? 'canceled' : 'error', error: result.error });
+  console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId} ${result.canceled ? 'canceled' : `failed: ${result.error}`}`);
+}
+
+async function settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts }) {
+  const out = blenderModelBuildDir(id, buildId);
+  const glb = await lstat(join(out, 'model.glb')).catch(() => null);
+  const report = buildBlenderModelReport(facts, {
+    modelId: id, buildId, quality, startedAt, finishedAt, srcHash, glbBytes: glb?.isFile() ? glb.size : null,
+  });
+  await atomicWrite(join(out, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  await withBackupAssetPublication(() => store.mutateModel(id, (current) => ({
+    ...replaceBuild(current, buildId, {
+      status: 'complete', finishedAt, error: null, blenderVersion: report.blenderVersion,
+      counts: report.counts, publishable: report.publishable, title: report.describe?.title ?? null,
+    }),
+    describe: report.describe,
+  }), { includeDeleted: true }));
+  registry.update(entry, { status: 'done', counts: report.counts });
+  console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId}: ${report.counts.error} error(s), ${report.counts.warning} warning(s)`);
+}
+
+// Every outcome ends in a prune, so failed and canceled builds age out like completed ones.
 async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash }) {
   const out = blenderModelBuildDir(id, buildId);
   const facts = collectBlenderModelFacts();
@@ -102,29 +129,8 @@ async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash 
     await log.close();
     log = null;
     const finishedAt = new Date().toISOString();
-    if (!result.ok) {
-      await store.mutateModel(id, (current) => replaceBuild(current, buildId, {
-        status: result.canceled ? 'canceled' : 'failed', finishedAt, error: result.error,
-        blenderVersion: facts.facts().start?.blender ?? null,
-      }), { includeDeleted: true });
-      registry.update(entry, { status: result.canceled ? 'canceled' : 'error', error: result.error });
-      console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId} ${result.canceled ? 'canceled' : `failed: ${result.error}`}`);
-      return;
-    }
-    const glb = await lstat(join(out, 'model.glb')).catch(() => null);
-    const report = buildBlenderModelReport(facts.facts(), {
-      modelId: id, buildId, quality, startedAt, finishedAt, srcHash, glbBytes: glb?.isFile() ? glb.size : null,
-    });
-    await atomicWrite(join(out, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
-    await withBackupAssetPublication(() => store.mutateModel(id, (current) => ({
-      ...replaceBuild(current, buildId, {
-        status: 'complete', finishedAt, error: null, blenderVersion: report.blenderVersion,
-        counts: report.counts, publishable: report.publishable, title: report.describe?.title ?? null,
-      }),
-      describe: report.describe,
-    }), { includeDeleted: true }));
-    registry.update(entry, { status: 'done', counts: report.counts });
-    console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId}: ${report.counts.error} error(s), ${report.counts.warning} warning(s)`);
+    if (result.ok) await settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts: facts.facts() });
+    else await settleUnfinishedBuild({ id, buildId, entry, finishedAt, result, facts: facts.facts() });
   } catch (error) {
     console.error(`❌ Blender model ${id.slice(0, 15)} build ${buildId} failed: ${error.message}`);
     await log?.close();

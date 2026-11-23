@@ -208,6 +208,12 @@ describe('Blender Models: workspace, build, report, publish', () => {
     const kept = blender.rows.get(id).builds.map((entry) => entry.id);
     expect(kept.sort()).toEqual([first, ...later.slice(1)].sort());
     expect(readdirSync(join(workspace(id), 'builds')).sort()).toEqual(kept.sort());
+
+    // A failed build ages the oldest kept build out too.
+    blender.fake.control.crash = { message: 'RuntimeError: example failure' };
+    const { buildId: crashed } = await build(id);
+    expect(blender.rows.get(id).builds.map((entry) => entry.id).sort()).toEqual([first, ...later.slice(2), crashed].sort());
+    expect(readdirSync(join(workspace(id), 'builds'))).not.toContain(later[1]);
   });
 
   it('refuses a build in contained mode with the same 409 as films', async () => {
