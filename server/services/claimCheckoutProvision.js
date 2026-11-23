@@ -16,6 +16,7 @@
  */
 
 import { existsSync } from 'fs';
+import { rm } from 'fs/promises';
 import { join } from 'path';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
@@ -39,6 +40,31 @@ function claimCheckoutPath(app, issueNumber, worktreesRoot = PATHS.worktrees) {
 }
 
 /**
+ * Undo a failed add so the refusal's "nothing was claimed" holds. A killed or
+ * failed `-b` add can leave the new branch, a partial directory and a
+ * registration; the next attempt then refused on "already exists" and
+ * branch-reconcile kept the empty branch, so the issue could not be claimed
+ * here again. The directory was proven absent before the add, so whatever is
+ * there now is this add's debris. Best-effort: each step swallows its error.
+ */
+async function rollBackClaimCheckout(sourceWorkspace, worktreePath, branch, addError) {
+  const [{ listWorktrees, WORKTREE_ADD_TIMEOUT_MS }, { cleanupOrphanBranch }, { pathsEqual }] = await Promise.all([
+    import('./worktreeManager.js'), import('./worktree/create.js'), import('./worktree/paths.js'),
+  ]);
+  // Forced twice: a killed add leaves its registration locked as "initializing".
+  await execGit(['worktree', 'remove', '--force', '--force', worktreePath], sourceWorkspace,
+    { ignoreExitCode: true, timeout: WORKTREE_ADD_TIMEOUT_MS }).catch(() => null);
+  const registered = await listWorktrees(sourceWorkspace).then(
+    entries => entries.some(wt => pathsEqual(wt.path, worktreePath)), () => null);
+  // Git cannot remove a directory it no longer registers.
+  if (registered === false && existsSync(worktreePath)) {
+    await rm(worktreePath, { recursive: true, force: true })
+      .catch(error => console.log(`⚠️ Removing partial claim checkout ${worktreePath} failed: ${error.message}`));
+  }
+  await cleanupOrphanBranch(sourceWorkspace, branch, addError);
+}
+
+/**
  * Fetch the default branch and cut `branch` from it into the claim directory.
  * Refuses, touching nothing, when the branch or directory already exists here
  * or on origin: an existing claim branch is another run's claim.
@@ -46,7 +72,7 @@ function claimCheckoutPath(app, issueNumber, worktreesRoot = PATHS.worktrees) {
  * @returns {Promise<{ claimCheckout: { repoPath: string, worktreePath: string, branchName: string, baseBranch: string } }|{ refused: string }>}
  */
 export async function provisionClaimCheckout({ app, sourceWorkspace, branch, worktreesRoot = PATHS.worktrees }) {
-  const [{ getDefaultBranch }, { linkWorktreeDependencies }] = await Promise.all([
+  const [{ getDefaultBranch }, { addWorktreeWithRetry, linkWorktreeDependencies }] = await Promise.all([
     import('./git.js'), import('./worktreeManager.js'),
   ]);
   const issueNumber = branch.replace(/^claim\/issue-/, '');
@@ -77,9 +103,14 @@ export async function provisionClaimCheckout({ app, sourceWorkspace, branch, wor
   if (remoteCollision) return { refused: `${remoteCollision} already exists on origin` };
 
   await ensureDir(worktreesRoot);
-  const added = await execGit(['worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${baseBranch}`],
-    sourceWorkspace, { ignoreExitCode: true }).catch(error => ({ exitCode: -1, stderr: error.message }));
-  if (added.exitCode !== 0) return { refused: `git worktree add failed: ${String(added.stderr || '').trim().split('\n')[0]}` };
+  // The shared add carries the long worktree timeout and lock retry: a large
+  // repository's checkout outlasts execGit's 30s default under load.
+  const addError = await addWorktreeWithRetry(['worktree', 'add', '--no-track', '-b', branch, worktreePath, `origin/${baseBranch}`],
+    sourceWorkspace).then(() => null, error => error);
+  if (addError) {
+    await rollBackClaimCheckout(sourceWorkspace, worktreePath, branch, addError);
+    return { refused: `git worktree add failed: ${String(addError.message || '').trim().split('\n')[0]}` };
+  }
 
   const dependencies = await linkWorktreeDependencies(sourceWorkspace, worktreePath, {
     verifyRootLockfile: app.id !== PORTOS_APP_ID,

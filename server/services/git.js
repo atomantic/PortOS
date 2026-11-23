@@ -1697,10 +1697,29 @@ export async function readBranchLineage(dir, branch, head, target) {
 }
 
 /**
+ * How long ago `branch` was created, from the oldest entry of its reflog, in ms.
+ * Answers how long a branch with no commits of its own and no checkout has sat
+ * unused. null when unreadable or the reflog is empty.
+ *
+ * @returns {Promise<number|null>}
+ */
+export async function readBranchAgeMs(dir, branch, nowMs = Date.now()) {
+  if (!dir || !branch) return null;
+  const log = await execGit(['reflog', 'show', '--date=unix', '--format=%gd', `refs/heads/${branch}`, '--'], dir, { ignoreExitCode: true }).catch(() => null);
+  if (log?.exitCode !== 0) return null;
+  const seconds = Number(/@\{(\d+)\}$/.exec(log.stdout.trim().split('\n').filter(Boolean).at(-1) || '')?.[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.max(0, nowMs - seconds * 1000) : null;
+}
+
+/**
  * Whether `branch` is published: some configured remote has a remote-tracking
  * ref of the same name, or the branch's upstream resolves to an existing
- * remote-tracking ref (a branch may track one named differently). Local refs
- * only, so it is safe inside an ownership section. null when unreadable.
+ * remote-tracking ref (a branch may track one named differently). An upstream
+ * that is a remote's default branch (its `<remote>/HEAD` target) is not
+ * publication: `git worktree add -b x path origin/main` makes origin/main the
+ * new branch's upstream, and reading that as published held every merged
+ * claim checkout forever as `published-claim-unmerged`. Local refs only, so
+ * it is safe inside an ownership section. null when unreadable.
  *
  * @returns {Promise<boolean|null>}
  */
@@ -1709,15 +1728,18 @@ export async function readBranchPublished(dir, branch) {
   const lines = r => r.stdout.split('\n').map(line => line.trim()).filter(Boolean);
   const read = await Promise.all([
     execGit(['remote'], dir).then(lines),
-    execGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/'], dir).then(lines),
+    execGit(['for-each-ref', '--format=%(refname)%00%(symref)', 'refs/remotes/'], dir).then(lines),
     // A pattern also matches refs nested under it, so the exact ref is picked below.
     execGit(['for-each-ref', '--format=%(refname)%00%(upstream)', `refs/heads/${branch}`], dir).then(lines),
   ]).catch(() => null);
   if (!read) return null;
   const [remotes, remoteRefs, heads] = read;
-  const tracking = new Set(remoteRefs);
+  const refs = remoteRefs.map(line => line.split('\0'));
+  const tracking = new Set(refs.map(([ref]) => ref));
+  const remoteDefaults = new Set(refs.filter(([ref, target]) => ref.endsWith('/HEAD') && target).map(([, target]) => target));
   const upstream = heads.map(line => line.split('\0')).find(([ref]) => ref === `refs/heads/${branch}`)?.[1] || null;
-  return remotes.some(remote => tracking.has(`refs/remotes/${remote}/${branch}`)) || Boolean(upstream && tracking.has(upstream));
+  const publishedUpstream = Boolean(upstream && tracking.has(upstream) && !remoteDefaults.has(upstream));
+  return remotes.some(remote => tracking.has(`refs/remotes/${remote}/${branch}`)) || publishedUpstream;
 }
 
 /**
