@@ -136,7 +136,10 @@ describe('DataManager tombstone GC status resource', () => {
       refused: [],
     });
     render(<DataManager />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Clean up deleted records now' }));
+    const button = await screen.findByRole('button', { name: 'Clean up deleted records now' });
+    // Cleanup stays disabled until the status read lands; a click before that is a no-op.
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
     await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Pruned 3 decks / 1 author'));
     expect(toastMock).not.toHaveBeenCalledWith('Nothing is ready to clean up.');
   });
