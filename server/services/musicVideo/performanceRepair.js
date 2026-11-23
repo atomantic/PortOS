@@ -96,7 +96,7 @@ export async function startPerformanceRepair(projectId, sceneId, input) {
   const project = await getProject(projectId);
   const { scene, plan } = repairContext(project, sceneId, input);
   const { assertCurrentPerformanceTakes } = await import('./performanceShot.js');
-  const { resolveMasterAudioPath } = await import('./render.js');
+  const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   await assertCurrentPerformanceTakes(project, await resolveMasterAudioPath(project));
   const { getHistoryItem } = await import('../videoGen/local.js');
   const entry = await getHistoryItem(scene.videoHistoryId);

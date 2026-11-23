@@ -338,9 +338,8 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
     throw refuse(`A performance shot renders from its reference frame and the song — mode '${mode}' is not supported.`, 'MUSIC_VIDEO_PERFORMANCE_MODE_UNSUPPORTED');
   }
 
-  // Lazy: render.js pulls the whole render pipeline, which a cutaway
-  // submission (the common case) never needs.
-  const { resolveMasterAudioPath } = await import('./render.js');
+  // Lazy: a cutaway submission (the common case) never reads the master.
+  const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   const masterPath = await resolveMasterAudioPath(project);
   if (scene.performanceRepair) await assertCurrentPerformanceTakes(project, masterPath);
   const songDurationSec = await probeVideoDuration(masterPath);

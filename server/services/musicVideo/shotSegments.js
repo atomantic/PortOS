@@ -32,7 +32,7 @@ import { existsSync } from 'fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
 import { availableParallelism, tmpdir, totalmem } from 'os';
 import { join, sep } from 'path';
-import { PATHS, safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
+import { safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
@@ -44,7 +44,9 @@ import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideo/musicV
 import { projectFrameHold } from './frameHold.js';
 import { endingParts } from '../../lib/musicVideo/musicVideoEnding.js';
 import { buildSongAudioMix } from './clipSoundMix.js';
-import { buildMusicVideoFfmpegArgs, planMusicVideoRender, isProjectRenderActive } from './render.js';
+import { buildMusicVideoFfmpegArgs } from './renderFfmpegArgs.js';
+import { planMusicVideoRender } from './renderPlan.js';
+import { isProjectRenderActive } from './renderActivityState.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays, typographyOverlayWindows } from './compositionRender.js';
 import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
@@ -652,16 +654,6 @@ export const removeProjectSegments = (projectId) => {
   pendingShotCleanup.delete(projectId);
   return rm(shotSegmentDir(projectId), { recursive: true, force: true });
 };
-
-/** Boot sweep: partial files from renders a restart interrupted. */
-export async function sweepPartialSegments() {
-  const root = join(PATHS.data, SHOT_SEGMENT_DIR);
-  for (const project of await readdir(root).catch(() => [])) {
-    for (const name of await readdir(join(root, project)).catch(() => [])) {
-      if (name.endsWith('.partial.mp4')) await rm(join(root, project, name), { force: true }).catch(() => {});
-    }
-  }
-}
 
 /**
  * The shot panel's view of the cache: per shot, whether every section it plays
