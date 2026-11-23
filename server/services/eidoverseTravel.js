@@ -1,5 +1,7 @@
 /** Explicit guest travel over registered federation peers. No record sync or AI wake. */
 import { randomBytes } from 'node:crypto';
+import { parseCookie } from '../../lib/portosAuthCore.js';
+import { EIDOVERSE_GUEST_COOKIE_NAME } from '../lib/eidoverseGuestCookie.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { peerFetch } from '../lib/peerHttpClient.js';
@@ -8,6 +10,7 @@ import { isPairedPeer } from '../lib/peerPairing.js';
 import { readCallerInstanceId } from './sharing/peerPullAuthorization.js';
 import { eidoverseChatResultSchema } from '../lib/eidoverseValidation.js';
 import { getPeers } from './instances.js';
+import { instanceEvents } from './instanceEvents.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { ensureEidoverseHost } from './eidoverseHost.js';
 import { admitEidoverseGuest, revokeEidoverseGuest, ensureEidoverseWorldConfig, supportsEidoverseGuestEntry, getEidoverseWorldStatus } from './eidoverseWorld.js';
@@ -25,6 +28,8 @@ const closeSession = async (sessions, key) => {
   const session = sessions.get(key);
   sessions.delete(key);
   clearTimeout(session?.timer);
+  // An upgraded renderer socket is admitted once; the visit ending must end it.
+  for (const socket of session?.sockets ?? []) socket.destroy();
   await session?.connection?.close();
   if (session?.identity) await revokeEidoverseGuest(session.identity);
 };
@@ -141,13 +146,51 @@ export async function receiveEidoverseLeave(instanceId, { sessionId }) {
   return { success: true };
 }
 
+// The unexpired human visit a ticket addresses; agent visits never own a renderer.
+const liveGuestSession = (ticket) => {
+  const session = inbound.get(ticket);
+  return session && !session.agent && session.expiresAt > Date.now() ? session : null;
+};
+const isEnabledPeer = (peers, id) => peers.some((entry) => entry.id === id && entry.enabled !== false);
+const guestTicket = (req) => parseCookie(req.headers?.cookie, EIDOVERSE_GUEST_COOKIE_NAME);
+
+/**
+ * Does this request carry a live federated visitor's renderer ticket? Admits
+ * only the Eidoverse proxy (authorizeEidoverseProxyRequest); authGate never
+ * reads this cookie, so it opens no /api or /data route.
+ */
+export async function hasValidEidoverseGuestCookie(req) {
+  const ticket = guestTicket(req);
+  const session = liveGuestSession(ticket);
+  if (!session || !isEnabledPeer(await getPeers(), session.peerId)) return false;
+  // The visit may have ended while the registry was being read.
+  return liveGuestSession(ticket) === session;
+}
+
+/** Tie an admitted renderer socket to its visit. False when the visit is already over. */
+export function bindEidoverseGuestSocket(req, socket) {
+  const session = liveGuestSession(guestTicket(req));
+  if (!session) return false;
+  session.sockets ??= new Set();
+  session.sockets.add(socket);
+  socket.once('close', () => session.sockets.delete(socket));
+  return true;
+}
+
+// Disabling or removing a peer ends the visits it originated, not just new admissions.
+instanceEvents.on('peers:updated', (peers) => {
+  for (const [key, session] of inbound) {
+    if (isEnabledPeer(peers, session.peerId)) continue;
+    closeSession(inbound, key).catch(() => console.error('❌ Eidoverse guest session cleanup failed.'));
+  }
+});
+
 /** A bearer admission ticket grants only this visitor renderer identity. */
 export async function getEidoverseGuestDescriptor(ticket) {
   await requireAvailable();
-  const session = inbound.get(ticket);
-  if (!session || session.agent || session.expiresAt <= Date.now()) throw fail('This guest invitation has expired.', 404);
-  const peer = (await getPeers()).find((entry) => entry.id === session.peerId && entry.enabled !== false);
-  if (!peer) throw fail('The originating peer is no longer enabled.', 403);
+  const session = liveGuestSession(ticket);
+  if (!session) throw fail('This guest invitation has expired.', 404);
+  if (!isEnabledPeer(await getPeers(), session.peerId)) throw fail('The originating peer is no longer enabled.', 403);
   const host = await ensureEidoverseHost();
   return { identity: session.identity, host, expiresAt: session.expiresAt };
 }
