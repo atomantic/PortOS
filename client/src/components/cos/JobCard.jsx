@@ -25,17 +25,6 @@ const SCHEDULE_MODE_OPTIONS = [
   { value: 'cron', label: 'Cron' }
 ];
 
-export const TRIGGER_ACTION_OPTIONS = [
-  { value: 'log-only', label: 'Log Only' },
-  { value: 'spawn-agent', label: 'Spawn Agent' },
-  { value: 'create-task', label: 'Create Task' }
-];
-
-const SHELL_TRIGGER_ACTIONS = new Set(['spawn-agent', 'create-task']);
-export const SHELL_TRIGGER_ACTION_OPTIONS = TRIGGER_ACTION_OPTIONS.filter(
-  opt => !SHELL_TRIGGER_ACTIONS.has(opt.value)
-);
-
 export const JOB_TYPE_OPTIONS = [
   { value: 'agent', label: 'AI Agent' },
   { value: 'shell', label: 'Shell Command' }
@@ -378,7 +367,6 @@ export default function JobCard({
     };
     // Always initialize shell fields so switching type to 'shell' during editing works
     base.command = job.command || '';
-    base.triggerAction = job.triggerAction || 'log-only';
     if (job.id === 'job-daily-briefing') {
       base.config = { dailyJoke: false, dailyQuote: false, dailyImage: false, ...job.config };
     }
@@ -644,14 +632,7 @@ export default function JobCard({
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono h-20"
                     placeholder="Shell command"
                   />
-                  <select
-                    aria-label="Trigger action"
-                    value={editData.triggerAction}
-                    onChange={e => setEditData(d => ({ ...d, triggerAction: e.target.value }))}
-                    className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-                  >
-                    {SHELL_TRIGGER_ACTION_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                  </select>
+                  <span className="text-xs text-gray-500">Output and exit code are logged on the job card.</span>
                 </>
               ) : editData.type === 'script' ? (
                 <div className="space-y-1">
@@ -695,7 +676,6 @@ export default function JobCard({
                 {isAgentJobType(job.type) && job.providerId && (
                   <span>AI: <span className="text-gray-300">{providers?.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}{job.effort ? ` · ${job.effort}` : ''}</span></span>
                 )}
-                {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
                 <span>Created: <span className="text-gray-300">{formatDateNumeric(job.createdAt, '—')}</span></span>
               </div>
               {job.config && BRIEFING_CONFIG_OPTIONS.some(o => job.config[o.key]) && (
