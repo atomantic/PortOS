@@ -34,8 +34,8 @@ describe('vi.mock factory contract conventions', () => {
     // The spread factory is read too: its explicit key is checked, the spread itself is not.
     expect(drift(probe, src)).toEqual([
       'server/lib/__probe.test.js:1 — ./validateRequest.js mocks plantedDeadKey',
-      'server/lib/__probe.test.js:3 — ./validateRequest.js mocks spreadKey',
       'server/lib/__probe.test.js:3 — ./validateRequest.js duplicates the vi.mock at line 1, which this one replaces',
+      'server/lib/__probe.test.js:3 — ./validateRequest.js mocks spreadKey',
     ]);
   });
 
