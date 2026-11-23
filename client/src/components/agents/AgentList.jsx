@@ -26,6 +26,7 @@ export default function AgentList() {
   const [loadError, setLoadError] = useState(false);
   const [stats, setStats] = useState({ agents: 0, accounts: 0, schedules: 0, totalRuns: 0 });
   const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -161,6 +162,7 @@ export default function AgentList() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (submitting) return;
     const submitData = {
       ...formData,
       personality: {
@@ -169,9 +171,16 @@ export default function AgentList() {
         quirks: quirksText.split(',').map(t => t.trim()).filter(Boolean)
       }
     };
-    await createAgentPersonality(submitData);
-    resetForm();
-    fetchData();
+    setSubmitting(true);
+    try {
+      await createAgentPersonality(submitData);
+      resetForm();
+      fetchData();
+    } catch {
+      // request() already toasts; keep the form inputs for a retry.
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const updatePersonality = (field, value) => {
@@ -377,9 +386,10 @@ export default function AgentList() {
             <div className="flex gap-2">
               <button
                 type="submit"
-                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80"
+                disabled={submitting}
+                className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
               >
-                Create Agent
+                {submitting ? 'Creating...' : 'Create Agent'}
               </button>
               <button
                 type="button"

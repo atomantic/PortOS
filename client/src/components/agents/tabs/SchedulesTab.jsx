@@ -9,7 +9,9 @@ import {
 } from '../../../services/apiSchedules.js';
 import { getPlatformAccounts } from '../../../services/apiAccounts.js';
 import BrailleSpinner from '../../BrailleSpinner';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { FormField } from '../../ui/FormField';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { ACTION_TYPES, SCHEDULE_TYPES, CRON_PRESETS, INTERVAL_PRESETS } from '../constants';
 import { formatDateTime } from '../../../utils/formatters';
 import CronSchedulePicker from '../../CronSchedulePicker';
@@ -21,6 +23,9 @@ export default function SchedulesTab({ agentId }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [formData, setFormData] = useState({
     agentId: agentId,
     accountId: '',
@@ -81,14 +86,34 @@ export default function SchedulesTab({ agentId }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const created = await createAutomationSchedule(formData);
-    resetForm();
-    setSchedules(prev => [...prev.filter(s => s.id !== created.id), created]);
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const created = await createAutomationSchedule(formData);
+      resetForm();
+      if (created?.id) {
+        setSchedules(prev => [...prev.filter(s => s.id !== created.id), created]);
+      }
+    } catch {
+      // request() already toasts; keep the form inputs for a retry.
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleDelete = async (id) => {
-    await deleteAutomationSchedule(id);
-    setSchedules(prev => prev.filter(s => s.id !== id));
+  const handleDelete = (id) => {
+    if (deletingId) return;
+    confirmDelete(async () => {
+      setDeletingId(id);
+      try {
+        await deleteAutomationSchedule(id);
+        setSchedules(prev => prev.filter(s => s.id !== id));
+      } catch {
+        // request() already toasts; leave the schedule in the list.
+      } finally {
+        setDeletingId(null);
+      }
+    });
   };
 
   const handleToggle = async (id, enabled) => {
@@ -325,9 +350,10 @@ export default function SchedulesTab({ agentId }) {
           <div className="flex gap-2">
             <button
               type="submit"
-              className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80"
+              disabled={submitting}
+              className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
             >
-              Create Schedule
+              {submitting ? 'Creating...' : 'Create Schedule'}
             </button>
             <button
               type="button"
@@ -398,12 +424,27 @@ export default function SchedulesTab({ agentId }) {
                     >
                       {schedule.enabled ? 'Enabled' : 'Disabled'}
                     </button>
-                    <button
-                      onClick={() => handleDelete(schedule.id)}
-                      className="pointer-coarse:min-h-11 px-3 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30"
-                    >
-                      Delete
-                    </button>
+                    {isConfirming(schedule.id) || deletingId === schedule.id ? (
+                      <ConfirmButtonPair
+                        prompt="Delete?"
+                        busy={deletingId === schedule.id}
+                        busyText="Deleting"
+                        onConfirm={() => handleDelete(schedule.id)}
+                        onCancel={cancelDelete}
+                        ariaLabel="Confirm schedule deletion"
+                        confirmAriaLabel="Confirm delete schedule"
+                        cancelAriaLabel="Cancel schedule deletion"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => requestDelete(schedule.id)}
+                        disabled={deletingId != null}
+                        className="pointer-coarse:min-h-11 px-3 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

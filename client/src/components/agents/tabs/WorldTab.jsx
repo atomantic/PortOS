@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { X } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
@@ -303,7 +304,13 @@ export default function WorldTab({ agentId }) {
     const y = random ? undefined : (moveY !== '' ? parseInt(moveY, 10) : undefined);
 
     if (wsConnected && !random && x != null && y != null) {
-      await moltworldWsMove({ x, y, thought: moveThinking || undefined }).catch(() => null);
+      try {
+        await moltworldWsMove({ x, y, thought: moveThinking || undefined });
+      } catch {
+        setMoving(false);
+        fetchRateLimits();
+        return;
+      }
       setMoving(false);
       toast.success(`Move sent via WS to (${x}, ${y})`);
       refreshAfterAction();
@@ -326,7 +333,13 @@ export default function WorldTab({ agentId }) {
     setThinking(true);
 
     if (wsConnected) {
-      await moltworldWsThink(thought).catch(() => null);
+      try {
+        await moltworldWsThink(thought);
+      } catch {
+        setThinking(false);
+        fetchRateLimits();
+        return;
+      }
       setThinking(false);
       toast.success('Thought sent via WS');
       setThought('');
@@ -361,7 +374,13 @@ export default function WorldTab({ agentId }) {
     setSaying(true);
 
     if (wsConnected && sayTo) {
-      await moltworldWsInteract(sayTo, { message: sayMessage }).catch(() => null);
+      try {
+        await moltworldWsInteract(sayTo, { message: sayMessage });
+      } catch {
+        setSaying(false);
+        fetchRateLimits();
+        return;
+      }
       setSaying(false);
       toast.success('DM sent via WS');
       setSayMessage('');
@@ -395,7 +414,11 @@ export default function WorldTab({ agentId }) {
     if (params.y != null) params.y = parseInt(params.y, 10);
     if (params.z != null) params.z = parseInt(params.z, 10);
 
-    await moltworldAddToQueue({ agentId, actionType: newActionType, params }).catch(() => null);
+    try {
+      await moltworldAddToQueue({ agentId, actionType: newActionType, params });
+    } catch {
+      return;
+    }
     setShowAddForm(false);
     setNewActionParams({});
     toast.success('Action queued');
@@ -829,11 +852,12 @@ export default function WorldTab({ agentId }) {
                     </div>
                     {item.status === 'pending' && (
                       <button
+                        type="button"
+                        aria-label={`Cancel pending ${item.actionType?.replace('mw_', '') || 'action'}`}
                         onClick={() => handleRemoveFromQueue(item.id)}
-                        className="shrink-0 text-gray-500 hover:text-port-error text-sm"
-                        title="Cancel"
+                        className="inline-flex items-center justify-center shrink-0 text-gray-500 hover:text-port-error pointer-coarse:min-h-11 pointer-coarse:min-w-11"
                       >
-                        x
+                        <X size={14} aria-hidden="true" />
                       </button>
                     )}
                   </div>
