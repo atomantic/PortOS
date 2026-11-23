@@ -53,9 +53,13 @@ A bounded run cannot honestly rate the whole category, and when it was asked to
 slice the agent picked — a 20-point swing between consecutive runs was normal.
 Stored v1 reports stay readable; their `score` is read as that run's score.
 
-A category's score is derived server-side: the confidence-weighted mean (high
-1, medium 0.5) of its newest five eligible runs — **broad** discovery coverage,
+A category's score is derived server-side: the confidence- and recency-weighted
+mean (high 1, medium 0.5, each further halved per 14 days of age so remediated
+pre-fix runs stop pinning the figure) of its newest five eligible runs — **broad** discovery coverage,
 medium/high confidence, scored, and at most 30 days old — one run per UTC day.
+The pragmatic target band is **85–95**; the audit rubric tells agents not to
+chase 100/100 with speculative hardening. The `audit-slice-history` input shows each
+prior slice's score so a lane can re-verify a remediated slice that scored below 75.
 The breakdown shows how many runs fed the figure and the worst severity any of
 them found; the row's coverage, confidence, date, slice and summary describe the
 newest run. A newer partial run does not erase a fresh scored one. With no
