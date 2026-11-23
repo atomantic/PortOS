@@ -127,19 +127,6 @@ export const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
 export const RESOLVE_INDEXES = ['/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
 /**
- * Inputs of a served real-browser root that no recorded request names
- * (#17616): what the fixture's Vite run served is recorded file by file
- * (`startBrowserFixture`), but the global stylesheet's Tailwind build, its
- * theme tokens and the PostCSS config shape every rendered page without
- * each being requested. Paths are repository-relative; a directory stands
- * for its tree. Every served root also keys its own direct non-dot files
- * and the manifests above it (`servedTree`).
- */
-export const BROWSER_SERVED_SHARED_INPUTS = Object.freeze({
-  client: Object.freeze(['client/src/index.css', 'client/src/themes']),
-});
-
-/**
  * A test file call that serves or bundles files outside the browser
  * fixture's recorder. A suite that makes one keeps keying every handed
  * directory whole, served record or not: the record vouches only for what

@@ -13,7 +13,7 @@ import { escapeRegExp } from '../../server/lib/textUtils.js';
 import { MODULE_SOURCE_RE, createModuleGraph } from './moduleGraph.js';
 import { resolveDbTestFiles } from './dbTestFiles.js';
 import { clientBrowserSuiteReach, clientRunnerTestPredicate, measureRepoImportReach, serverRunnerTestPredicate } from './importReach.js';
-import { BROWSER_SERVED_SHARED_INPUTS } from './testMemo/constants.js';
+import { BROWSER_SERVED_SHARED_INPUTS } from './browserServedFiles.js';
 import {
   DOCKER_CONTAINMENT_LIVE_ENTRIES, LINUX_CONTAINMENT_ENTRIES, SUPERCOLLIDER_LIVE_ENTRIES, TEST_FILE_GLOBS,
   browserSuitesIn, isExecutable, isServerRunnerFile, isSharedClientDependency, isTestFile,

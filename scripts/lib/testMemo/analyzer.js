@@ -9,9 +9,10 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import { FIXTURE_OWNERS, getAlwaysRunTests } from '../ciPlanRules.js';
+import { BROWSER_SERVED_SHARED_INPUTS } from '../browserServedFiles.js';
 import { isGuardTest } from '../guardScanners.js';
 import {
-  BROWSER_SERVED_SHARED_INPUTS, DIRECTORY_INPUT_LIMIT, GIT_PACKAGE, GUARD_SUFFIX_REASON, IGNORED_INPUT_PREFIXES, JS_EXT, RECORD_DIGEST_LENGTH,
+  DIRECTORY_INPUT_LIMIT, GIT_PACKAGE, GUARD_SUFFIX_REASON, IGNORED_INPUT_PREFIXES, JS_EXT, RECORD_DIGEST_LENGTH,
   SKIP_TREE_DIRS, TEST_MEMO_ENV, TEST_MEMO_NEVER, UNRECORDED_SERVER_CALL, WORKSPACE_BASE_INPUTS, WORKSPACE_SELECTION_MODULES, WORKSPACE_SETUP_ENTRIES,
 } from './constants.js';
 import { collectBindings, evaluate, literalExports } from './evaluator.js';

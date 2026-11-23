@@ -15,6 +15,19 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+/**
+ * Inputs of a served real-browser root that no recorded request names
+ * (#17616): what the fixture's Vite run served is recorded file by file
+ * (`startBrowserFixture`), but the global stylesheet's Tailwind build, its
+ * theme tokens and the PostCSS config shape every rendered page without
+ * each being requested. Paths are repository-relative; a directory stands
+ * for its tree. Every served root also keys its own direct non-dot files
+ * and the manifests above it (`servedTree`).
+ */
+export const BROWSER_SERVED_SHARED_INPUTS = Object.freeze({
+  client: Object.freeze(['client/src/index.css', 'client/src/themes']),
+});
+
 /** The directory the memo runner names for served-file records; unset, the fixture records nothing. */
 export const SERVED_FILES_ENV = 'PORTOS_TEST_MEMO_SERVED_DIR';
 export const SERVED_FILES_VERSION = 1;
