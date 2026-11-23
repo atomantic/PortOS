@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../services/apiPersonalities.js', () => ({
   getAgentPersonalities: vi.fn(),
+  createAgentPersonality: vi.fn(),
 }));
 vi.mock('../../services/apiAccounts.js', () => ({
   getPlatformAccounts: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock('../../services/apiProviders.js', () => ({
   getProviders: vi.fn(),
 }));
 
-import { getAgentPersonalities } from '../../services/apiPersonalities.js';
+import { getAgentPersonalities, createAgentPersonality } from '../../services/apiPersonalities.js';
 import { getPlatformAccounts } from '../../services/apiAccounts.js';
 import { getScheduleStats, getAutomationSchedules } from '../../services/apiSchedules.js';
 import { getProviders } from '../../services/apiProviders.js';
@@ -48,5 +49,31 @@ describe('AgentList', () => {
 
     expect(await screen.findByRole('heading', { name: 'Social Agents' })).toBeInTheDocument();
     expect(getScheduleStats).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the create form when agent creation fails', async () => {
+    createAgentPersonality.mockRejectedValue(new Error('create failed'));
+    render(<MemoryRouter><AgentList /></MemoryRouter>);
+    await screen.findByRole('heading', { name: 'Social Agents' });
+    fireEvent.click(screen.getByRole('button', { name: '+ New Agent' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Example Agent' } });
+    const submit = screen.getByRole('button', { name: 'Create Agent' });
+    await act(async () => { fireEvent.click(submit); });
+    expect(submit).toBeEnabled();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Agent');
+    expect(screen.getByRole('heading', { name: 'Create New Agent' })).toBeInTheDocument();
+  });
+
+  it('wraps the page header and stacks the create form below sm', async () => {
+    render(<MemoryRouter><AgentList /></MemoryRouter>);
+    const heading = await screen.findByRole('heading', { name: 'Social Agents' });
+    expect(heading.parentElement.parentElement.className).toContain('flex-wrap');
+    expect(heading.parentElement.className).toContain('min-w-0');
+
+    fireEvent.click(screen.getByRole('button', { name: '+ New Agent' }));
+    const grid = screen.getByText('Name').closest('.grid');
+    expect(grid.className).toContain('grid-cols-1');
+    expect(grid.className).toContain('sm:grid-cols-2');
+    expect(screen.getByRole('button', { name: /Generate/ }).className).toContain('pointer-coarse:min-h-11');
   });
 });

@@ -46,6 +46,9 @@ describe('pixal3dMps path and install plan', () => {
   it('keeps the adapter and hashed installer on a patched Torch runtime', () => {
     const read = name => readFileSync(new URL(`../../../scripts/${name}`, import.meta.url), 'utf8');
     const lock = read('ml/requirements/requirements-pixal3d-mps.lock.txt');
+    expect(lock).toContain('opencv-python-headless==5.0.0.93');
+    expect(lock).not.toMatch(/^opencv-python==/m);
+    expect(lock).not.toMatch(/^gradio==/m);
     expect(lock).toContain(`torch==${PIXAL3D_MPS_TORCH_VERSION}`);
     expect(lock).toContain(`torchvision==${PIXAL3D_MPS_TORCHVISION_VERSION}`);
     expect(PIXAL3D_MPS_TORCH_VERSION.split('.').slice(0, 2).map(Number)).toEqual([2, expect.any(Number)]);

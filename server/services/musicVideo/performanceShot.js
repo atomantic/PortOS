@@ -53,7 +53,6 @@ import {
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
-import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';
 
 import { getTrack } from '../tracks/index.js';
 export const SHOT_INSTRUCTION_VERSION = 2;
@@ -365,9 +364,11 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // everything else a vocal stem leaves out are what drive its motion.
   const conditioningSource = musicDriven ? 'master'
     : project.performanceConditioningSource || (project.vocalStemFilename ? 'vocal-stem' : 'master');
-  const stemPath = conditioningSource === 'master' ? null : resolveVocalStemPath(project);
+  // Lazy: boot loads this module, and only a stem-conditioned take reads the stem.
+  const stems = conditioningSource === 'master' ? null : await import('./vocalStem.js');
+  const stemPath = stems ? stems.resolveVocalStemPath(project) : null;
   if (conditioningSource !== 'master' && !stemPath) throw refuse('Attach the selected singer stem before rendering', 'MUSIC_VIDEO_VOCAL_STEM_MISSING');
-  if (stemPath) await assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
+  if (stemPath) await stems.assertVocalStemMatchesSong(project, { masterPath, songSec: songDurationSec, probeStemSec: () => probeVideoDuration(stemPath) });
 
   const audioSha256 = await hashFile(masterPath);
   // #9266: the MASTER's loudness over this window, so a later re-master that
