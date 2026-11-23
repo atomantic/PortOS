@@ -182,7 +182,7 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
       )}
 
       {/* Live progress */}
-      {(running || baseline) && (
+      {(running || baseline || latest?.type === 'conflict') && (
         <div className="border border-port-border rounded p-3 space-y-2 bg-port-bg/40">
           <div className="flex items-center justify-between text-[11px]">
             <span className="uppercase tracking-wide text-gray-500">Progress</span>
