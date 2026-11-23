@@ -8,6 +8,10 @@
 # is installed. Dependencies match the foundation music generation stack with
 # OSV-clean pins (torch 2.15.0, transformers 5.22.2, diffusers 0.42.1,
 # accelerate 1.15.0, filelock >= 4.2.1, pillow 13.0.0).
+# Inference only: scripts/ml/generate_acestep.py runs ACEStepPipeline. Upstream also declares tensorboard,
+# tensorboardX, datasets, pytorch-lightning and matplotlib for its trainer; none is imported by
+# acestep.pipeline_ace_step at ACESTEP_PIN (static import-graph walk), so they are omitted. Re-check the graph
+# when bumping the pin.
 torch==2.15.0
 torchvision==0.29.2
 torchaudio==2.11.1
@@ -17,13 +21,10 @@ transformers==5.22.2
 huggingface-hub[hf_xet]==2.4.0
 sentencepiece==0.2.3
 peft==0.21.2
-datasets>=3.4.1
 librosa==0.11.0
 loguru==0.7.3
-matplotlib>=3.10.1
 numpy==2.4.6
 pypinyin==0.55.0
-pytorch-lightning>=2.5.1
 soundfile>=0.13.1
 tqdm>=4.67.1
 # The pinned ACE-Step LangSegment calls LanguageIdentifier.from_pickled_model,
@@ -35,8 +36,6 @@ spacy>=3.8.4
 cutlet
 fugashi[unidic-lite]
 click
-tensorboard
-tensorboardX
 filelock>=4.2.1
 pillow==13.0.0
 wheel
