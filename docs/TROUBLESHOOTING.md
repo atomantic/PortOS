@@ -346,10 +346,10 @@ node ./node_modules/pm2/bin/pm2 restart portos-cos
 ```
 
 **Prevention**: ordinary CoS worktrees share dependencies through symlinks, so
-use the workspace binaries from the primary checkout
-(`server/node_modules/.bin/vitest run --configLoader runner <files>`) and never install there. The
-`dependency-updates` scheduled task is the exception: its managed worktree gets
-no dependency symlinks, and any package-manager install stays in that worktree.
+use the primary checkout's binaries
+(`server/node_modules/.bin/vitest run --configLoader runner <files>`); never install.
+The `dependency-updates` task is the exception: its managed worktree gets no
+dependency symlinks, and any install stays in that worktree.
 
 ### Worktree Tests Fail on a Clean Tree in a Workspace-Link Repo (Stale Workspace Packages)
 
