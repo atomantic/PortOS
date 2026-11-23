@@ -25,10 +25,10 @@ function ReferenceImage({ model, slot, image }) {
   const [src, fallback] = image.filename ? referenceImageUrls(image.filename) : [];
   return (
     <li className="min-w-0 space-y-1.5 rounded border border-port-border p-2">
-      {image.filename && <a href={src} target="_blank" rel="noreferrer"><MediaImage src={src} fallbackSrc={fallback} alt={`${label} reference`} loading="lazy" className="max-h-96 w-full object-contain" /></a>}
+      {image.filename && <a href={src} target="_blank" rel="noreferrer" aria-label={`Open ${image.filename} full size`}><MediaImage src={src} fallbackSrc={fallback} alt={`${label} reference`} loading="lazy" className="max-h-96 w-full object-contain" /></a>}
       {image.status === 'rendering' && image.jobId && <MediaJobThumb jobId={image.jobId} label="Reference image" size="md" />}
       <Pill size="xs" tone={tone}>{label}</Pill>
-      {image.error && <p className="break-words text-xs text-port-error">{image.error}</p>}
+      {image.error && <p role="status" className="break-words text-xs text-port-error">{image.error}</p>}
       {image.note && <p className="break-words text-xs text-port-text-muted">{image.note}</p>}
       {image.filename && !redoing && (
         <div className="flex flex-wrap gap-1.5">

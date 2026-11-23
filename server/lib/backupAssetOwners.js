@@ -242,7 +242,13 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // build takes the lease.
     id: 'blender-model-builds',
     status: 'admitted',
-    modules: ['services/blenderModels/build.js', 'services/blenderModels/references.js'],
+    modules: ['services/blenderModels/build.js'],
+  },
+  {
+    // An approved reference is copied into src/refs/ and the row names that copy.
+    id: 'blender-model-references',
+    status: 'admitted',
+    modules: ['services/blenderModels/references.js'],
   },
   {
     // Publishing names a finished build whose bytes are already durable.
