@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from '../../ui/Toast';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import {
   getPlatformAccounts,
   moltworldRateLimits,
@@ -47,6 +49,9 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsError, setAccountsError] = useState(false);
   const [showAccountForm, setShowAccountForm] = useState(false);
+  const [accountSubmitting, setAccountSubmitting] = useState(false);
+  const [deletingAccountId, setDeletingAccountId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [accountForm, setAccountForm] = useState({
     platform: 'moltbook',
     name: '',
@@ -266,25 +271,43 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const handleAccountSubmit = async (e) => {
     e.preventDefault();
-    const result = await registerPlatformAccount({
-      agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
-    });
-    resetAccountForm();
-    fetchAccounts();
-
-    if (result.claimUrl) {
-      setTestResult({
-        accountId: result.id,
-        success: true,
-        message: 'Account registered! Visit the claim URL to activate.',
-        claimUrl: result.claimUrl
+    if (accountSubmitting) return;
+    setAccountSubmitting(true);
+    try {
+      const result = await registerPlatformAccount({
+        agentId, platform: accountForm.platform, name: accountForm.name, description: accountForm.description
       });
+      resetAccountForm();
+      fetchAccounts();
+
+      if (result?.claimUrl) {
+        setTestResult({
+          accountId: result.id,
+          success: true,
+          message: 'Account registered! Visit the claim URL to activate.',
+          claimUrl: result.claimUrl
+        });
+      }
+    } catch {
+      // request() already toasts; keep the form so a failed register can be retried.
+    } finally {
+      setAccountSubmitting(false);
     }
   };
 
-  const handleAccountDelete = async (id) => {
-    await deletePlatformAccount(id);
-    fetchAccounts();
+  const handleAccountDelete = (id) => {
+    if (deletingAccountId) return;
+    confirmDelete(async () => {
+      setDeletingAccountId(id);
+      try {
+        await deletePlatformAccount(id);
+        setAccounts((prev) => prev.filter((account) => account.id !== id));
+      } catch {
+        // request() already toasts; leave the account in the list.
+      } finally {
+        setDeletingAccountId(null);
+      }
+    });
   };
 
   const handleAccountTest = async (id) => {
@@ -671,8 +694,12 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                   />
                 </FormField>
                 <div className="flex gap-2">
-                  <button type="submit" className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80">
-                    Register Account
+                  <button
+                    type="submit"
+                    disabled={accountSubmitting}
+                    className="px-3 py-1.5 text-sm bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
+                  >
+                    {accountSubmitting ? 'Registering...' : 'Register Account'}
                   </button>
                   <button type="button" onClick={resetAccountForm} className="px-3 py-1.5 text-sm bg-port-border text-gray-300 rounded hover:bg-port-border/80">
                     Cancel
@@ -753,12 +780,27 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
                               Claimed
                             </button>
                           )}
-                          <button
-                            onClick={() => handleAccountDelete(account.id)}
-                            className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30"
-                          >
-                            Delete
-                          </button>
+                          {isConfirming(account.id) || deletingAccountId === account.id ? (
+                            <ConfirmButtonPair
+                              prompt="Delete?"
+                              busy={deletingAccountId === account.id}
+                              busyText="Deleting"
+                              onConfirm={() => handleAccountDelete(account.id)}
+                              onCancel={cancelDelete}
+                              ariaLabel="Confirm account deletion"
+                              confirmAriaLabel={`Confirm delete ${account.credentials?.username || 'account'}`}
+                              cancelAriaLabel="Cancel account deletion"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => requestDelete(account.id)}
+                              disabled={deletingAccountId != null}
+                              className="px-2 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
+                            >
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
