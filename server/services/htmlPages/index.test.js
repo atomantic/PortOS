@@ -53,6 +53,7 @@ import { listActiveRenders } from '../renderActivity.js';
 import { ensurePageFile, removeRunFiles, writePageFile } from './pageFiles.js';
 import { getMtplxServerStatus, runOnMtplxCheckpoint } from '../mtplxServerManager.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
+import { createRun, mutateRun } from './db.js';
 import { listRuns, listSelectableModels, pageFile, readRun, removeRun, resumeRun, startRuns } from './index.js';
 
 const goodPage = `<!doctype html><html><head><style>body{margin:0}</style></head><body><canvas></canvas><script>${'let a=1;'.repeat(200)}</script></body></html>`;
@@ -174,6 +175,20 @@ describe('startRuns', () => {
     await Promise.all(runs.map((r) => settled(r.id)));
     expect(peak).toBe(1);
   });
+
+  it('drains runs already created when a later createRun fails, then clears live activity', async () => {
+    generate.mockResolvedValue({ text: goodPage });
+    const persist = createRun.getMockImplementation();
+    createRun.mockImplementationOnce(persist).mockRejectedValueOnce(new Error('db write failed'));
+    await expect(startRuns({
+      models: [model, { ...model, modelId: 'example-coder:7b' }],
+      pages: PAGES.slice(0, 1),
+    })).rejects.toThrow('db write failed');
+    expect(store.size).toBe(1);
+    const [id] = [...store.keys()];
+    await settled(id);
+    await vi.waitFor(() => expect(listActiveRenders().filter((r) => r.kind === 'html-pages')).toHaveLength(0));
+  });
 });
 
 describe('other targets', () => {
@@ -244,6 +259,19 @@ describe('interrupted and deleted runs', () => {
     const runs = await listRuns();
     expect(runs.find((r) => r.id === 'stale')).toMatchObject({ status: 'failed', error: expect.stringContaining('restart') });
     expect(generate).not.toHaveBeenCalled();
+  });
+
+  it('omits a cut-off run deleted before markInterrupted and still returns the rest', async () => {
+    store.set('gone', { id: 'gone', status: 'queued', deleted: false, pages: [] });
+    store.set('kept', { id: 'kept', status: 'complete', deleted: false, pages: [{ theme: 'kept theme', passed: 1, total: 1 }] });
+    mutateRun.mockImplementationOnce(async () => {
+      const err = new Error('HTML pages run not found');
+      err.status = 404;
+      err.code = 'NOT_FOUND';
+      throw err;
+    });
+    const runs = await listRuns();
+    expect(runs.map((r) => r.id)).toEqual(['kept']);
   });
 
   it('stops a generating run when it is deleted and never stores its late page', async () => {
