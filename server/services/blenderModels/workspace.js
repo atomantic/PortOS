@@ -6,7 +6,7 @@
  *     builds/<buildId>/   one build's outputs, never rewritten: model.blend, model.glb,
  *                         report.json, build.log (backed up; pruned to the published
  *                         build and the newest five)
- *     renders/            regenerable previews (excluded from backups)
+ *     renders/            regenerable: reviews/<buildId>/ holds a build's review images (excluded from backups)
  *
  * Every path a request names is rebuilt from validated segments and re-checked
  * to sit inside the workspace with no symlink on the way (the shared

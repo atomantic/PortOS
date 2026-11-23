@@ -186,7 +186,9 @@ export default function VoiceWidget({ config, claimHeld }) {
       temperature: fastPath?.browser?.temperature ?? 0.7,
       topK: fastPath?.browser?.topK ?? 3,
     }).catch(() => {});
-  }, [enabled, fastPath?.enabled, fastPath?.browserLlm]);
+    // personalityRef is read inside, so the fields that shape the router prompt
+    // are listed explicitly to re-warm Nano when they change.
+  }, [enabled, fastPath?.enabled, fastPath?.browserLlm, personality?.name, personality?.speechStyle, fastPath?.browser?.temperature, fastPath?.browser?.topK]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -170,7 +170,12 @@ function makeFakeClient() {
     write: (msg) => {
       const frame = JSON.parse(msg.replace(/^data:\s*/, '').trim());
       frames.push(frame);
-      if (frame.type === 'complete' || frame.type === 'error' || frame.type === 'canceled') resolveDone(frame);
+      if (
+        frame.type === 'complete'
+        || frame.type === 'error'
+        || frame.type === 'canceled'
+        || frame.type === 'conflict'
+      ) resolveDone(frame);
     },
   };
   return { res, frames, done };
@@ -280,8 +285,11 @@ describe('startPolish runner', () => {
     expect((await local.getWorkWithBody(work.id)).body).toBe(revised);
 
     const snaps = await listSnapshots(work.id);
-    // Baseline + pre-cycle snapshots exist, newest-first.
+    // Baseline + pre-cycle snapshots exist, newest-first, each recording the starting draftVersionId.
     expect(snaps.length).toBeGreaterThanOrEqual(2);
+    for (const s of snaps) {
+      expect(s.draftVersionId).toBe(work.activeDraftVersionId);
+    }
 
     // The pre-cycle snapshot holds the ORIGINAL body — reverting restores it.
     const preCycle = snaps.find((s) => s.cycle === 1);
@@ -289,5 +297,199 @@ describe('startPolish runner', () => {
     const { body } = await revertToSnapshot(work.id, preCycle.id);
     expect(body).toBe(original);
     expect((await local.getWorkWithBody(work.id)).body).toBe(original);
+  });
+
+  it('pins kept revision writes to the starting draft when the author switches drafts mid-run', async () => {
+    const originalD1 = 'The knight stood at the gate. He explained, needlessly, that he was afraid. '.repeat(6);
+    const revisedD1 = 'The knight stood at the gate, afraid.';
+    const editedD2 = 'Brand-new second draft prose written while polish ran.';
+    const work = await seedWork(originalD1);
+    const d1 = work.activeDraftVersionId;
+    let d2 = null;
+
+    let evaluateCalls = 0;
+    runProsePass.mockImplementation(async (kind) => {
+      if (kind === 'evaluate') {
+        evaluateCalls += 1;
+        const issues = evaluateCalls === 1
+          ? [{ severity: 'major' }, { severity: 'major' }, { severity: 'major' }]
+          : [];
+        return { result: { issues, strengths: [], suggestions: [], themes: [], logline: 'x' } };
+      }
+      if (kind === 'cuts') {
+        // Author snapshots and switches to d2 while Polish is in flight.
+        const snapped = await local.snapshotDraft(work.id, { label: 'Draft 2' });
+        d2 = snapped.activeDraftVersionId;
+        await local.saveDraftBody(work.id, editedD2);
+        return { result: { findings: [], fatPercentage: 5, tightestPassage: null, loosestPassage: null } };
+      }
+      if (kind === 'revise') {
+        return { result: { revisedBody: revisedD1 } };
+      }
+      throw new Error(`unexpected kind ${kind}`);
+    });
+
+    startPolish(work.id, { cycles: 1 });
+    const { res, frames, done } = makeFakeClient();
+    attachClient(work.id, res);
+    const terminal = await done;
+
+    expect(terminal.type).toBe('complete');
+    expect(frames.find((f) => f.type === 'cycle')?.decision).toBe('keep');
+    expect(d2).toBeTruthy();
+    expect(d2).not.toBe(d1);
+
+    // d1 got the kept revision; d2 remained active and completely untouched.
+    const manifest = await local.getWork(work.id);
+    expect(manifest.activeDraftVersionId).toBe(d2);
+    expect(await local.getDraftBody(work.id, d1)).toBe(revisedD1);
+    expect(await local.getDraftBody(work.id, d2)).toBe(editedD2);
+
+    // Every snapshot records d1, not d2.
+    const snaps = await listSnapshots(work.id);
+    expect(snaps.every((s) => s.draftVersionId === d1)).toBe(true);
+  });
+
+  it('pins revert writes to the starting draft when the author switches drafts before re-evaluation', async () => {
+    const originalD1 = 'A clean, tight opening paragraph that says exactly what it needs to say.';
+    const worseD1 = 'Slop slop slop. '.repeat(40);
+    const editedD2 = 'Second draft that must never be clobbered by a d1 revert.';
+    const work = await seedWork(originalD1);
+    const d1 = work.activeDraftVersionId;
+    let d2 = null;
+
+    let evaluateCalls = 0;
+    runProsePass.mockImplementation(async (kind) => {
+      if (kind === 'evaluate') {
+        evaluateCalls += 1;
+        if (evaluateCalls === 1) {
+          return { result: { issues: [], strengths: [], suggestions: [], themes: [], logline: 'x' } };
+        }
+        // Switch to d2 during re-evaluation so the revert happens while d2 is active.
+        const snapped = await local.snapshotDraft(work.id, { label: 'Draft 2' });
+        d2 = snapped.activeDraftVersionId;
+        await local.saveDraftBody(work.id, editedD2);
+        return {
+          result: {
+            issues: Array.from({ length: 5 }, () => ({ severity: 'major' })),
+            strengths: [], suggestions: [], themes: [], logline: 'x',
+          },
+        };
+      }
+      if (kind === 'cuts') {
+        return { result: { findings: [], fatPercentage: 5, tightestPassage: null, loosestPassage: null } };
+      }
+      if (kind === 'revise') {
+        return { result: { revisedBody: worseD1 } };
+      }
+      throw new Error(`unexpected kind ${kind}`);
+    });
+
+    startPolish(work.id, { cycles: 1 });
+    const { res, frames, done } = makeFakeClient();
+    attachClient(work.id, res);
+    const terminal = await done;
+
+    expect(terminal.type).toBe('complete');
+    expect(frames.find((f) => f.type === 'cycle')?.decision).toBe('revert');
+    expect((await local.getWork(work.id)).activeDraftVersionId).toBe(d2);
+    expect(await local.getDraftBody(work.id, d1)).toBe(originalD1);
+    expect(await local.getDraftBody(work.id, d2)).toBe(editedD2);
+  });
+
+  it('aborts cleanly with a conflict SSE frame when the author edits the draft during revision', async () => {
+    const original = 'The knight stood at the gate. He explained, needlessly, that he was afraid. '.repeat(6);
+    const manualEdit = 'Author rewrote the opening by hand while Polish was thinking.';
+    const work = await seedWork(original);
+    const d1 = work.activeDraftVersionId;
+
+    runProsePass.mockImplementation(async (kind) => {
+      if (kind === 'evaluate') {
+        return { result: { issues: [{ severity: 'major' }], strengths: [], suggestions: [], themes: [], logline: 'x' } };
+      }
+      if (kind === 'cuts') {
+        return { result: { findings: [], fatPercentage: 5, tightestPassage: null, loosestPassage: null } };
+      }
+      if (kind === 'revise') {
+        // Author saves a manual edit to d1 before Polish persists its revision.
+        await local.saveDraftBody(work.id, manualEdit);
+        return { result: { revisedBody: 'Stale polish revision that must not overwrite manual prose.' } };
+      }
+      throw new Error(`unexpected kind ${kind}`);
+    });
+
+    const { runId } = startPolish(work.id, { cycles: 2 });
+    const { res, frames, done } = makeFakeClient();
+    attachClient(work.id, res);
+    const terminal = await done;
+
+    expect(terminal).toMatchObject({
+      type: 'conflict',
+      runId,
+      code: local.ERR_DRAFT_CONFLICT,
+      draftVersionId: d1,
+      cycle: 1,
+      phase: 'revise',
+    });
+    expect(terminal.abortedAt).toBeTruthy();
+    expect(frames.some((f) => f.type === 'complete' || f.type === 'error')).toBe(false);
+
+    // Stopped before re-evaluation or cycle 2 (only baseline evaluate, cuts, revise ran).
+    expect(runProsePass).toHaveBeenCalledTimes(3);
+    // Manual edit survived intact.
+    expect(await local.getDraftBody(work.id, d1)).toBe(manualEdit);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(isPolishActive(work.id)).toBe(false);
+  });
+
+  it('aborts cleanly with a conflict SSE frame when the author edits the draft during re-evaluation before revert', async () => {
+    const original = 'A clean, tight opening paragraph that says exactly what it needs to say.';
+    const worse = 'Slop slop slop. '.repeat(40);
+    const manualEdit = 'Author edited the draft manually while re-evaluation was running.';
+    const work = await seedWork(original);
+    const d1 = work.activeDraftVersionId;
+
+    let evaluateCalls = 0;
+    runProsePass.mockImplementation(async (kind) => {
+      if (kind === 'evaluate') {
+        evaluateCalls += 1;
+        if (evaluateCalls === 1) {
+          return { result: { issues: [], strengths: [], suggestions: [], themes: [], logline: 'x' } };
+        }
+        // Author edits d1 after Polish's tentative write and before revert runs.
+        await local.saveDraftBody(work.id, manualEdit);
+        return {
+          result: {
+            issues: Array.from({ length: 5 }, () => ({ severity: 'major' })),
+            strengths: [], suggestions: [], themes: [], logline: 'x',
+          },
+        };
+      }
+      if (kind === 'cuts') {
+        return { result: { findings: [], fatPercentage: 5, tightestPassage: null, loosestPassage: null } };
+      }
+      if (kind === 'revise') {
+        return { result: { revisedBody: worse } };
+      }
+      throw new Error(`unexpected kind ${kind}`);
+    });
+
+    const { runId } = startPolish(work.id, { cycles: 1 });
+    const { res, frames, done } = makeFakeClient();
+    attachClient(work.id, res);
+    const terminal = await done;
+
+    expect(terminal).toMatchObject({
+      type: 'conflict',
+      runId,
+      code: local.ERR_DRAFT_CONFLICT,
+      draftVersionId: d1,
+      cycle: 1,
+      phase: 'revert',
+    });
+    expect(frames.some((f) => f.type === 'complete' || f.type === 'cycle' || f.type === 'error')).toBe(false);
+    // Revert refused to clobber the author's manual edit.
+    expect(await local.getDraftBody(work.id, d1)).toBe(manualEdit);
   });
 });

@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from 'react-router';
-import { Activity, ArrowLeft, Box, Boxes, ClipboardCopy, FileCode, Hammer, Images, SlidersHorizontal, Square } from 'lucide-react';
+import { Activity, ArrowLeft, Box, Boxes, ClipboardCopy, Columns2, FileCode, Hammer, Images, SlidersHorizontal, Square } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -9,6 +9,7 @@ import { FilmApiContext } from '../components/musicVideo/blender/FilmApiContext.
 import BlenderFilesTab from '../components/musicVideo/blender/BlenderFilesTab.jsx';
 import BlenderModelTab from '../components/blenderModels/BlenderModelTab.jsx';
 import BlenderModelReferencesTab from '../components/blenderModels/BlenderModelReferencesTab.jsx';
+import BlenderModelCompareTab from '../components/blenderModels/BlenderModelCompareTab.jsx';
 import BlenderModelBuildsTab from '../components/blenderModels/BlenderModelBuildsTab.jsx';
 import BlenderModelSettingsTab from '../components/blenderModels/BlenderModelSettingsTab.jsx';
 import BlenderModelReadiness from '../components/blenderModels/BlenderModelReadiness.jsx';
@@ -24,6 +25,7 @@ import { copyToClipboard } from '../lib/clipboard.js';
 const TABS = [
   { id: 'model', label: 'Model', icon: Box },
   { id: 'references', label: 'References', icon: Images },
+  { id: 'compare', label: 'Compare', icon: Columns2 },
   { id: 'files', label: 'Files', icon: FileCode },
   { id: 'builds', label: 'Builds', icon: Activity },
   { id: 'settings', label: 'Settings', icon: SlidersHorizontal },
@@ -131,6 +133,7 @@ function BlenderModelPage({ id }) {
               onBuildChange={(next) => updateParams({ build: next })} />
           )}
           {tab === 'references' && <BlenderModelReferencesTab model={model} onOpenTab={openTab} />}
+          {tab === 'compare' && <BlenderModelCompareTab model={model} build={build} report={report.data} params={params} updateParams={updateParams} onOpenTab={openTab} />}
           {tab === 'files' && <BlenderFilesTab blender={model} copy={FILES_COPY} />}
           {tab === 'builds' && (
             <BlenderModelBuildsTab model={model} openBuildId={params.get('log')} onOpenLog={(next) => updateParams({ log: next }, { replace: true })}

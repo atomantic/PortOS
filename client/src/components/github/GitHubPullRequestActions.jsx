@@ -53,7 +53,7 @@ export default function GitHubPullRequestActions({ notification, onUpdated, busy
           <PullRequestReviewButton key={action} action={action} disabled={Boolean(busy)} busy={busy === action}
             onClick={() => { setReviewAction(action); setArmed(false); }} />
         ))}
-        {pr.mergeEligible && <MergeAction pullRequest={pr} idPrefix={id} armed={armed} merging={busy === 'merge'}
+        {pr.mergeEligible && notification.subjectStatus?.mergeState !== 'blocked' && <MergeAction pullRequest={pr} idPrefix={id} armed={armed} merging={busy === 'merge'}
           method={method} onMethodChange={setMethod} deleteBranch={deleteBranch} onDeleteBranchChange={setDeleteBranch}
           onArm={() => { setArmed(true); setReviewAction(null); }} onCancel={() => setArmed(false)} onConfirm={() => execute('merge')}
           disabled={Boolean(busy)} title="Merge this PR after checking its current head, reviews and CI" />}
