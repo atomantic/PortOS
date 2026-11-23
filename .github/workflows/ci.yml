@@ -280,7 +280,7 @@ jobs:
             vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
             vitest-client-${{ runner.os }}-
 
-      # Chrome is warmed by run-ci-tests.js only when this shard actually
+      # Chrome is warmed by the test runner only when this shard actually
       # launches a browser suite (#17750).
       - name: Restore the test memo
         id: test-memo
@@ -516,7 +516,7 @@ jobs:
         with:
           include-postgres: 'false'
 
-      # run-ci-tests.js reads the runner's Chrome tree into the page cache
+      # The test runner reads the runner's Chrome tree into the page cache
       # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
       - uses: ./.github/actions/setup-client
         with:
