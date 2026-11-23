@@ -45,7 +45,7 @@ const buildGroupTest = (packages) =>
 // instead of duplicating them into every individual page that uses drei.
 const DIRECT_MATCH_ONLY = { includeDependenciesRecursively: false };
 
-export const CHUNK_GROUPS = [
+const VENDOR_CHUNK_GROUPS = [
   // Core React dependencies
   { name: 'vendor-react', packages: ['react', 'react-dom', 'react-router'] },
   // Socket dependencies
@@ -74,4 +74,49 @@ export const CHUNK_GROUPS = [
   { name: 'vendor-charts', packages: ['recharts', 'd3-*', 'victory-*'] },
   // Terminal emulator (xterm) — Shell page only
   { name: 'vendor-term', packages: ['@xterm'] },
-].map((group) => ({ ...group, test: buildGroupTest(group.packages) }));
+].map((group) => ({
+  ...group,
+  test: buildGroupTest(group.packages),
+  // `output.codeSplitting.minSize` is the fallback for a group that omits
+  // `minSize`. These named vendor chunks must still emit when they are smaller
+  // than the shared-app floor; `0` is rolldown's own default and opts out of
+  // that fallback (#17620).
+  minSize: 0,
+}));
+
+// Application modules (anything that is not a dependency). Vendor groups keep
+// priority 0, so a node_modules module they name is never absorbed here.
+// `app-initial` is only the cold-load graph (`$initial`): one chunk instead of
+// a modulepreload per shared helper, without pulling a lazy route into the
+// shell. `app-shared` then folds helpers that two or more lazy entries share
+// into chunks of at least `minSize`, capped near `maxSize` so a coalesced
+// chunk stays under `chunkSizeWarningLimit`. Priority -20 loses to
+// `app-initial`, so a module the shell already loads is not duplicated into
+// the lazy shared chunks. Recursive capture stays off: a shared helper must
+// not drag a page-only dependency into every consumer.
+const APP_MODULE = /\.(?:jsx?|tsx?|mjs|cjs|json)(?:\?.*)?$/;
+
+const isAppModule = (id) =>
+  APP_MODULE.test(id) && !/[\\/]node_modules[\\/]/.test(id) && !id.startsWith('\0');
+
+const APP_CHUNK_GROUPS = [
+  {
+    name: 'app-initial',
+    test: isAppModule,
+    tags: ['$initial'],
+    priority: -10,
+    minSize: 0,
+    includeDependenciesRecursively: false,
+  },
+  {
+    name: 'app-shared',
+    test: isAppModule,
+    minShareCount: 2,
+    minSize: 15_000,
+    maxSize: 500_000,
+    priority: -20,
+    includeDependenciesRecursively: false,
+  },
+];
+
+export const CHUNK_GROUPS = [...VENDOR_CHUNK_GROUPS, ...APP_CHUNK_GROUPS];

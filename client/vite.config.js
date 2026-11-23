@@ -303,6 +303,11 @@ export default defineConfig(({ command, mode }) => {
           // `vite.chunkGroups.js`, so a group naming an uninstalled package fails
           // a test instead of silently grouping nothing.
           codeSplitting: {
+            // Floor for groups that don't set their own `minSize`. Vendor
+            // groups and `app-initial` set `minSize: 0` so they still emit;
+            // `app-shared` keeps this floor so leftover shared helpers coalesce
+            // instead of shipping as <2 KB HTTP/1.1 requests (#17620).
+            minSize: 15_000,
             // Pass every rolldown-recognized field through — not just
             // `name`/`test`. A narrower destructure here silently drops group
             // options like `includeDependenciesRecursively` before rolldown
