@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { REPO_ROOT } from '../../scripts/lib/guardCorpus.js';
+import { REPO_ROOT } from '../../../../scripts/lib/guardCorpus.js';
 
 const FORBIDDEN = {
   'server/services/socialAccounts.js': [/account\.username/],
