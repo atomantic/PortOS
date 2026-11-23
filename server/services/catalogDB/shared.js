@@ -315,3 +315,12 @@ export const HAS_LIVE_HOMING_REF = inSet('id', `SELECT r.cid FROM canonical_refs
 // At least one homing ref row exists (live OR dangling) — distinguishes
 // "orphaned" (has a ref, none resolve) from "unlinked" (no ref at all).
 export const HAS_ANY_HOMING_REF = inSet('id', `SELECT r.cid FROM canonical_refs r WHERE r.ref_kind IN (${HOMING_REF_KINDS_SQL})`);
+
+// Expands the requested ingredient ids ($1::text[]) into (requested_id, member_id)
+// pairs ONCE so callers can push `ingredient_id = ANY(...)` into the identity
+// views; joining on `= ANY(catalog_identity_member_ids(requested.id))` instead
+// blocks pushdown and nested-loops over the whole table (#17752).
+export const MEMBERS_CTE = `WITH members AS (
+  SELECT requested.id AS requested_id, member_id
+    FROM unnest($1::text[]) AS requested(id)
+    CROSS JOIN LATERAL unnest(catalog_identity_member_ids(requested.id)) AS member_id)`;

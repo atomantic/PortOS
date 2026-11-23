@@ -6,7 +6,7 @@ const ASSOCIATIONS = {
   refs: ['catalog_ingredient_refs', ['ingredient_id', 'ref_kind', 'ref_id', 'role']],
   media: ['catalog_ingredient_media', ['ingredient_id', 'media_key', 'kind']],
   relations: ['catalog_ingredient_relations', ['from_id', 'to_id', 'kind']],
-  revisions: ['catalog_ingredient_revisions', ['id']],
+  revisions: ['catalog_ingredient_revisions', ['ingredient_id', 'id']],
 };
 
 // The views project `(r).*` of their base table, so a column added to that

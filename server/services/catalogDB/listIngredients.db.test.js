@@ -242,6 +242,14 @@ describe.skipIf(!ready)('listIngredients identity read views (#12989)', () => {
     expect(pages).toEqual(all);
   });
 
+  it('skips card decoration queries when skipDecorations is set', async () => {
+    query.mockClear();
+    const { items } = await listIngredients({ tag: TAG, limit: 3, skipDecorations: true });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) expect(item).toMatchObject({ thumbnailKey: null, usage: {}, sharedIdentity: null });
+  });
+
   it('hydrates requested aliases and identity fences in three queries independent of batch size', async () => {
     const expected = new Map([
       [id('op-source'), { canonicalId: id('op-survivor'), reason: 'CATALOG_IDENTITY_RETAINED' }],

@@ -1362,8 +1362,8 @@ CREATE OR REPLACE VIEW catalog_identity_read_revisions AS
       SELECT jsonb_populate_record(NULL::catalog_ingredient_revisions, item) AS r, 3 AS priority
         FROM active o CROSS JOIN LATERAL jsonb_array_elements(COALESCE(o.plan->'survivor'->'revisions', '[]'::jsonb)) item
       
-    ) SELECT DISTINCT ON ((r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
-      FROM candidates ORDER BY (r).id, priority;
+    ) SELECT DISTINCT ON ((r).ingredient_id, (r).id) (r).*, priority IN (0, 3, 4) AS identity_retained
+      FROM candidates ORDER BY (r).ingredient_id, (r).id, priority;
 
 CREATE TABLE IF NOT EXISTS media_prompt_examinations (
       id TEXT PRIMARY KEY,

@@ -10,7 +10,7 @@
 
 import { query, withTransaction } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
-import { announceAssetsChanged, rowToMedia } from './shared.js';
+import { announceAssetsChanged, rowToMedia, MEMBERS_CTE } from './shared.js';
 import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalog/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
@@ -188,10 +188,11 @@ export async function listMediaForIngredients(ingredientIds, { preserveIdentity 
       SELECT m.*, false AS identity_retained FROM catalog_ingredient_media m
        WHERE m.ingredient_id <> catalog_resolve_ingredient_id(m.ingredient_id)) exported_media` : 'catalog_ingredient_media'}
       WHERE ingredient_id = ANY($1) AND deleted = false
-      ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC` : `SELECT m.*, requested.id AS requested_id FROM unnest($1::text[]) requested(id)
-      JOIN catalog_identity_read_media m ON m.ingredient_id = ANY(catalog_identity_member_ids(requested.id))
-      WHERE m.deleted = false
-      ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC`,
+      ORDER BY ingredient_id, (kind = 'portrait') DESC, created_at DESC` : `${MEMBERS_CTE}
+      SELECT m.*, members.requested_id FROM members
+      JOIN catalog_identity_read_media m ON m.ingredient_id = members.member_id
+      WHERE m.deleted = false AND m.ingredient_id = ANY(ARRAY(SELECT DISTINCT member_id FROM members))
+      ORDER BY m.ingredient_id, (m.kind = 'portrait') DESC, m.created_at DESC`,
     [ids],
   );
   const grouped = new Map(ids.map(id => [id, []]));
