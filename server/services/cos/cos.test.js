@@ -37,7 +37,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } from './cos.js';
-import { registerCosOrphanRecoveryHandlers } from './cosOrphanRecoveryHooks.js';
+import { registerCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { firstLine } from './cosTaskStore.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';

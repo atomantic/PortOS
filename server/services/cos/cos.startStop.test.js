@@ -101,7 +101,7 @@ vi.mock('../prWatcher.js', () => ({
 
 const { start, stop, getStatus, resumeDeferredCompletions } = await import('./cos.js');
 // The daemon reaches agent recovery only through the handlers bootHooks.js registers at boot.
-(await import('./cosOrphanRecoveryHooks.js')).registerCosOrphanRecoveryHandlers({
+(await import('../bootHookRegistry.js')).registerCosOrphanRecoveryHandlers({
   cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
   handleOrphanedTask: vi.fn(async () => {}),
 });

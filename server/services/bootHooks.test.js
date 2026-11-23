@@ -16,9 +16,9 @@ vi.mock('./loraTraining/index.js', () => ({ runTraining: () => 'training' }));
 const ENTRY = { topazUpscale: 'runVideoUpscale', ltxUpscale: 'runVideoUpscale', stitch: 'runVideoStitch', vertical: 'runVideoVertical', training: 'runTraining' };
 
 import { registerBootHooks } from './bootHooks.js';
-import { requireCosOrphanRecoveryHandlers } from './cos/cosOrphanRecoveryHooks.js';
-import { requireMergedBranchCleanup } from './mergedBranchCleanupHook.js';
-import { QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule, registerMediaRuntimeModules } from './mediaJobQueue/runtimeModuleRegistry.js';
+import {
+  QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule, registerMediaRuntimeModules, requireCosOrphanRecoveryHandlers, requireMergedBranchCleanup,
+} from './bootHookRegistry.js';
 
 describe('boot hook registration (#17499)', () => {
   // One ordered test: the registries are process-wide, so "before boot" must be observed first.

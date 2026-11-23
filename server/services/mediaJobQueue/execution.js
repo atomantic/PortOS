@@ -23,7 +23,7 @@ import {
   persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads,
 } from './persistence.js';
 import { ensureSseEntry, makeGenDispatcher } from './sse.js';
-import { loadMediaRuntimeModule } from './runtimeModuleRegistry.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 import {
   videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema,
   mergeVideoExecutionDiagnostics,
@@ -55,7 +55,7 @@ const chunkScaledWatchdog = ({ chunks }) => WATCHDOG_VIDEO_MS * Math.max(1, Numb
 // `params.mode`, falling back to `default`), the event bus its progress rides,
 // its idle-watchdog window, entry point and progress verb. Module loads stay
 // thunks so no static import edge is added (server/AGENTS.md, "Import scoping");
-// runtimes that import the queue back load through runtimeModuleRegistry.js.
+// runtimes that import the queue back load through bootHookRegistry.js.
 const MEDIA_JOB_RUNTIME = Object.freeze({
   video: {
     events: videoGenEvents,

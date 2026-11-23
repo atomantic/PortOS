@@ -263,7 +263,7 @@ export async function importFresh() {
   vi.resetModules();
   mediaJobQueue = await import('./index.js');
   // The fresh graph has a fresh runtime registry; these resolve to the mocks above, as bootHooks.js's loaders do at boot.
-  (await import('./runtimeModuleRegistry.js')).registerMediaRuntimeModules({
+  (await import('../bootHookRegistry.js')).registerMediaRuntimeModules({
     topazUpscale: () => import('../videoGen/topazJob.js'),
     ltxUpscale: () => import('../videoGen/upscaleJob.js'),
     stitch: () => import('../videoGen/stitchJob.js'),

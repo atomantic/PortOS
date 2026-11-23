@@ -137,11 +137,11 @@ const SELECTION_CUTS = [
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
   // #17499: lazy imports whose target statically imported the importer.
   ['services/cos/cos.js', 'services/agent/agentManagement.js',
-    'recovers orphans through handlers registerBootHooks() registers in cos/cosOrphanRecoveryHooks.js'],
+    'recovers orphans through handlers registerBootHooks() registers in bootHookRegistry.js'],
   ['services/git.js', 'services/prProbe.js',
     'reads the merged PR through the prView.js leaf'],
   ['services/git.js', 'services/branchReconcile.js',
-    'retires merged branches through the cleanup registerBootHooks() registers in mergedBranchCleanupHook.js'],
+    'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
   ['services/worktreeManager.js', /^services\/(?:git|prProbe|repoBranchSnapshot|branchReconcile)\.js$/,
     'only re-exports services/worktree/*, which keeps these reads as non-inverting lazy imports'],
   ['services/cos/cosClaimOwnership.js', 'services/branchReconcile.js',
@@ -150,7 +150,7 @@ const SELECTION_CUTS = [
     'resets watcher cooldowns through taskScheduleStore.js'],
 ];
 
-// Runtimes that import the queue back load through runtimeModuleRegistry.js (#17499).
+// Runtimes that import the queue back load through bootHookRegistry.js (#17499).
 const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
 const productionModulesIn = (dir) => readdirSync(abs(dir))
   .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
@@ -188,9 +188,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     for (const leaf of [
       'services/readinessSignal.js',
       'services/provider/providerRecoveryHooks.js',
-      'services/cos/cosOrphanRecoveryHooks.js',
-      'services/mergedBranchCleanupHook.js',
-      'services/mediaJobQueue/runtimeModuleRegistry.js',
+      'services/bootHookRegistry.js',
     ]) expect(importTargets(leaf), leaf).toEqual([]);
   });
 

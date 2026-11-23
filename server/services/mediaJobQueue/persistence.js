@@ -35,7 +35,7 @@ import {
   getRunningJob, findJob, listJobs, swimlanePositions, trackTerminalOperation, isTopazUpscale,
 } from './state.js';
 import { broadcastTerminalSse, closeArchivedJobSse } from './sse.js';
-import { loadMediaRuntimeModule } from './runtimeModuleRegistry.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // Boot restoration is the second way a job enters the queue, so it needs the
 // same routed-job normalization enqueueJob applies (#4683). A job written by a

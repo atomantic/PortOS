@@ -12,9 +12,7 @@
  * cleanup). A suite that runs one of those consumers calls it too, or registers
  * doubles in the leaf directly. Loaders stay lazy so the boot closure is unchanged.
  */
-import { registerCosOrphanRecoveryHandlers } from './cos/cosOrphanRecoveryHooks.js';
-import { registerMergedBranchCleanup } from './mergedBranchCleanupHook.js';
-import { registerMediaRuntimeModules } from './mediaJobQueue/runtimeModuleRegistry.js';
+import { registerCosOrphanRecoveryHandlers, registerMediaRuntimeModules, registerMergedBranchCleanup } from './bootHookRegistry.js';
 
 const agentManagement = () => import('./agent/agentManagement.js');
 

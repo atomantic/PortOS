@@ -13,7 +13,7 @@ import { readClaimOwnershipAgents } from './cos/cosClaimOwnershipState.js';
 import { readBranchCompletionHold } from './branchCompletionPolicy.js';
 import { listWorktrees } from './worktreeManager.js';
 import { deleteMergedBranches, deleteMergedRemoteBranches } from './git.js';
-import { registerMergedBranchCleanup } from './mergedBranchCleanupHook.js';
+import { registerMergedBranchCleanup } from './bootHookRegistry.js';
 
 // git.js reaches branch retirement only through the hook bootHooks.js fills at boot.
 const cleanupMerged = vi.fn();

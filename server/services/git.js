@@ -29,7 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { securityScanPRDisclosure } from '../lib/securityScanEvidence.js';
 import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 import { parseGitRemoteUrl } from '../lib/gitRemote.js';
-import { requireMergedBranchCleanup } from './mergedBranchCleanupHook.js';
+import { requireMergedBranchCleanup } from './bootHookRegistry.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit, execGitSafe };

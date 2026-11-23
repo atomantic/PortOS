@@ -136,7 +136,7 @@ import {
 } from '../persistent/persistentMindSupervisor.js';
 import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '../preflightTaskCard.js';
 import { cleanupZombieAgents } from './cosAgentLifecycle.js';
-import { requireCosOrphanRecoveryHandlers } from './cosOrphanRecoveryHooks.js';
+import { requireCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
 // `../persistent/persistentMindAdapter.js` is imported lazily where the daemon registers the
 // adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
