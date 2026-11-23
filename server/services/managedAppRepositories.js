@@ -57,10 +57,13 @@ function remoteIdentity(url) {
 // failed lookup degrades to that answer instead of to "unknown". In-memory
 // only: a restart simply asks again.
 const METADATA_FRESH_MS = 10 * 60_000;
+const COMPARE_FRESH_MS = 3 * 60_000;
 const metadataCache = new Map();
+const compareCache = new Map();
 
 export function resetRepositoryMetadataCache() {
   metadataCache.clear();
+  compareCache.clear();
 }
 
 const metadataLookupError = (error) => (/rate limit/i.test(error?.ghStderr || error?.message || '')
@@ -163,6 +166,12 @@ async function compareForkWithUpstream(checkout, repoPath) {
   const basehead = encodeURIComponent(`${upstreamOwner}:${branch}...${originOwner}:${branch}`);
   const forge = await resolveForgeForRepo(repoPath);
   const host = githubApiHost(checkout.origin.host);
+  // The compare endpoint is a core-quota read, and the Git tab plus the
+  // Eidoverse banner both ask for it on every visit. Ahead/behind does not
+  // move in the seconds between those mounts.
+  const compareKey = `${host}/${checkout.upstream.fullName}/${basehead}`;
+  const cachedCompare = compareCache.get(compareKey);
+  if (cachedCompare && Date.now() - cachedCompare.at < COMPARE_FRESH_MS) return cachedCompare.value;
   const raw = await execGh([
     'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
     `repos/${checkout.upstream.fullName}/compare/${basehead}`, '--jq',
@@ -175,13 +184,15 @@ async function compareForkWithUpstream(checkout, repoPath) {
   if (!parsed || !Number.isInteger(parsed.ahead) || !Number.isInteger(parsed.behind)) {
     return { available: false, ahead: null, behind: null, state: 'unknown', error: 'Could not compare the fork with canonical upstream' };
   }
-  return {
+  const value = {
     available: true,
     ahead: parsed.ahead,
     behind: parsed.behind,
     state: comparisonState(parsed.ahead, parsed.behind),
     error: null,
   };
+  compareCache.set(compareKey, { at: Date.now(), value });
+  return value;
 }
 
 async function inspectCheckout({ id, label, repoPath }) {
