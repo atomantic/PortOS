@@ -13,8 +13,8 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  * module widens the snapshot to cover everything under `data/digital-twin/`:
  *
  *   - identity.json        — LWW on updatedAt
- *   - chronotype.json      — deep union (derived markers, derivedAt tiebreak)
- *   - longevity.json       — deep union (derived markers, derivedAt tiebreak)
+ *   - chronotype.json      — signal-aware LWW on derivedAt
+ *   - longevity.json       — signal-aware LWW on derivedAt
  *   - feedback.json        — union of entries by id (stats/weights LWW)
  *   - taste-profile.json   — per-section union of responses (never lose answers)
  *   - meta.json            — union of documents/histories/personas, deep-union
@@ -31,9 +31,9 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  *   - social-accounts.json  — the user's own social accounts, union by id (LWW)
  *                            MINUS anything either side tombstoned (see below)
  *
- * Merge philosophy mirrors the rest of dataSync: union semantics, no data is
- * ever lost, and every field is key-presence guarded so an OLDER peer that only
- * sends the four legacy keys can't blank out taste/documents/autobiography. The
+ * Collection merges use union semantics, and every field is key-presence
+ * guarded so an older peer sending only the four legacy keys cannot blank out
+ * taste, documents or autobiography. The
  * snapshot is additive and ignore-if-unknown, so it needs no schemaVersions gate
  * (digitalTwin stays unversioned — see SNAPSHOT_CATEGORY_SCHEMA_KEYS).
  *
@@ -110,42 +110,6 @@ export function mergeObjectLWW(local, remote, timestampField = 'updatedAt') {
   return { merged: local, changed: false };
 }
 
-/**
- * Deep union for derived files (chronotype, longevity) where timestamps are
- * regenerated on every derivation: union nested marker objects (local wins
- * per-key), take remote for locally-missing/default scalars, newer timestamp.
- */
-export function mergeDeepUnion(local, remote, timestampField = 'derivedAt') {
-  if (!isPlainObject(remote)) return { merged: local, changed: false };
-  if (!isPlainObject(local)) return { merged: remote, changed: true };
-
-  const merged = { ...local };
-  let changed = false;
-
-  for (const [key, remoteVal] of Object.entries(remote)) {
-    if (key === timestampField) continue;
-    const localVal = local[key];
-
-    if (isPlainObject(remoteVal) && isPlainObject(localVal)) {
-      const mergedObj = { ...localVal };
-      for (const [k, v] of Object.entries(remoteVal)) {
-        if (!(k in mergedObj)) { mergedObj[k] = v; changed = true; }
-      }
-      merged[key] = mergedObj;
-      continue;
-    }
-    if (localVal === undefined || localVal === null) {
-      merged[key] = remoteVal; changed = true; continue;
-    }
-    if (localVal === 0 && remoteVal !== 0) { merged[key] = remoteVal; changed = true; }
-  }
-
-  const localTs = local[timestampField] || '';
-  const remoteTs = remote[timestampField] || '';
-  merged[timestampField] = remoteTs > localTs ? remoteTs : localTs;
-  return { merged, changed };
-}
-
 // Resolve the dedupe key for one record. A record that carries no usable value
 // under `keyField` must NOT fall through to a shared `undefined` Map key —
 // every such record would collide, collapsing the whole array down to one
@@ -206,9 +170,39 @@ function chronotypeObservedHasSignal(rec) {
 // overwrite a populated record. When both sides have signal (or both are
 // empty) it degrades to plain LWW.
 function signalAwareLWW(local, remote, hasSignal, timestampField) {
-  if (isPlainObject(remote) && hasSignal(remote) && !hasSignal(local)) return { merged: remote, changed: true };
-  if (isPlainObject(local) && hasSignal(local) && !hasSignal(remote)) return { merged: local, changed: false };
-  return mergeObjectLWW(local, remote, timestampField);
+  if (!isPlainObject(remote)) return { merged: local, changed: false };
+  if (!isPlainObject(local)) return { merged: remote, changed: true };
+  const localHasSignal = hasSignal(local);
+  const remoteHasSignal = hasSignal(remote);
+  const remoteWins = localHasSignal === remoteHasSignal
+    ? compareNewerWins(remote[timestampField], local[timestampField])
+    : remoteHasSignal;
+  return remoteWins ? { merged: remote, changed: true } : { merged: local, changed: false };
+}
+
+const hasEntries = (value) => isPlainObject(value) && Object.keys(value).length > 0;
+
+function chronotypeHasSignal({ geneticMarkers, caffeineMarkers, behavioralData }) {
+  return hasEntries(geneticMarkers) || hasEntries(caffeineMarkers) || hasEntries(behavioralData);
+}
+
+function longevityHasSignal({ longevityMarkers, cardiovascularMarkers, lifeExpectancy, timeHorizons }, defaultBaseline) {
+  if (hasEntries(longevityMarkers) || hasEntries(cardiovascularMarkers)) return true;
+  const { adjusted, baseline = defaultBaseline, longevityAdjustment, cardiovascularAdjustment } = lifeExpectancy ?? {};
+  const nonzero = (value) => Number.isFinite(value) && value !== 0;
+  if (nonzero(longevityAdjustment) || nonzero(cardiovascularAdjustment)) return true;
+  if (Number.isFinite(adjusted)) return adjusted !== baseline;
+  // Older snapshots may carry horizons without the expectancy they were derived from.
+  return hasEntries(timeHorizons);
+}
+
+// Derived fields describe the same inputs and must move together.
+function mergeChronotype(local, remote) {
+  return signalAwareLWW(local, remote, chronotypeHasSignal, 'derivedAt');
+}
+
+function mergeLongevity(local, remote, defaultBaseline) {
+  return signalAwareLWW(local, remote, (record) => longevityHasSignal(record, defaultBaseline), 'derivedAt');
 }
 
 /**
@@ -1019,8 +1013,21 @@ export async function applyDigitalTwinRemote(remoteData) {
 
   let count = 0;
   count += await applyMerge(IDENTITY_FILE, remoteData.identity, (l, r) => mergeObjectLWW(l, r, 'updatedAt'));
-  count += await applyMerge(CHRONOTYPE_FILE, remoteData.chronotype, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
-  count += await applyMerge(LONGEVITY_FILE, remoteData.longevity, (l, r) => mergeDeepUnion(l, r, 'derivedAt'));
+  if (isPlainObject(remoteData.chronotype) || isPlainObject(remoteData.longevity)) {
+    const { queueDerivedIdentityWrite, SSA_BASELINE_LIFE_EXPECTANCY } = await import('./identity/store.js');
+    if (isPlainObject(remoteData.chronotype)) {
+      count += await queueDerivedIdentityWrite(CHRONOTYPE_FILE, () =>
+        applyMerge(CHRONOTYPE_FILE, remoteData.chronotype, mergeChronotype)
+      );
+    }
+    if (isPlainObject(remoteData.longevity)) {
+      count += await queueDerivedIdentityWrite(LONGEVITY_FILE, () =>
+        applyMerge(LONGEVITY_FILE, remoteData.longevity, (local, remote) =>
+          mergeLongevity(local, remote, SSA_BASELINE_LIFE_EXPECTANCY)
+        )
+      );
+    }
+  }
   count += await applyFeedback(remoteData.feedback);
   count += await applyTaste(remoteData.taste);
   // Observed evidence (Phase 7): regenerated derived records — body is LWW on

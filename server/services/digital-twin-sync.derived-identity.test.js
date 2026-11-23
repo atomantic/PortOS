@@ -1,0 +1,128 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+
+vi.mock('../lib/paths.js', async (importOriginal) => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-twin-derived-sync-') });
+});
+vi.mock('./genome.js', () => ({ getGenomeSummary: vi.fn() }));
+vi.mock('./mortalLoomStore.js', () => ({ mlArrayIfEnabled: vi.fn(async () => null) }));
+
+const { cleanupTempDataRoots } = await import('../lib/mockPathsDataRoot.js');
+const { atomicWrite, PATHS } = await import('../lib/fileUtils.js');
+const { getGenomeSummary } = await import('./genome.js');
+const { applyDigitalTwinRemote } = await import('./digital-twin-sync.js');
+const { deriveChronotype, getChronotype, updateChronotypeBehavioral } = await import('./identity/chronotype.js');
+const { deriveLongevity, getLongevity } = await import('./identity/longevity.js');
+const { CHRONOTYPE_FILE, LONGEVITY_FILE, GOALS_FILE, IDENTITY_FILE } = await import('./identity/store.js');
+const { meatspaceEvents } = await import('./meatspaceEvents.js');
+
+const earlier = '2026-01-01T00:00:00.000Z';
+const later = '2026-01-02T00:00:00.000Z';
+const genome = {
+  uploaded: true,
+  savedMarkers: Object.fromEntries([
+    ['rs4753426', 'concern'],
+    ['rs762551', 'concern'],
+    ['rs2802292', 'beneficial'],
+    ['rs1333049', 'concern'],
+  ].map(([rsid, status]) => [rsid, { rsid, status, genotype: 'GG' }])),
+};
+const readJSON = async (path) => JSON.parse(await readFile(path, 'utf8'));
+
+beforeEach(async () => {
+  await rm(PATHS.digitalTwin, { recursive: true, force: true });
+  await mkdir(PATHS.digitalTwin, { recursive: true });
+  getGenomeSummary.mockReset().mockResolvedValue({ uploaded: false });
+});
+afterEach(() => vi.useRealTimers());
+afterAll(cleanupTempDataRoots);
+
+describe('derived Digital Twin peer sync', () => {
+  it('replaces newer idle defaults with coherent genome-derived snapshots and preserves the change event', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(earlier);
+    getGenomeSummary.mockResolvedValue(genome);
+    const chronotype = await updateChronotypeBehavioral({ preferredWakeTime: '10:00' });
+    const longevity = await deriveLongevity('2000-01-01');
+
+    await rm(CHRONOTYPE_FILE);
+    await rm(LONGEVITY_FILE);
+    vi.setSystemTime(later);
+    getGenomeSummary.mockResolvedValue({ uploaded: false });
+    await atomicWrite(GOALS_FILE, { birthDate: '2000-01-01' });
+    const idleChronotype = await getChronotype();
+    const idleLongevity = await getLongevity();
+    expect(idleChronotype.type).toBe('intermediate');
+    expect(idleLongevity.lifeExpectancy.adjusted).toBe(78.5);
+    expect(idleLongevity.timeHorizons).toBeTruthy();
+
+    const onLongevity = vi.fn();
+    meatspaceEvents.on('death-clock:changed', onLongevity);
+    try {
+      await expect(applyDigitalTwinRemote({ chronotype, longevity })).resolves.toEqual({ applied: true, count: 2 });
+      expect(await readJSON(CHRONOTYPE_FILE)).toEqual(chronotype);
+      expect(await readJSON(LONGEVITY_FILE)).toEqual(longevity);
+      expect(chronotype.recommendations.caffeineCutoff).toBe('12:00');
+      expect(longevity.lifeExpectancy.adjusted).toBe(79.5);
+      await expect(applyDigitalTwinRemote({ chronotype: idleChronotype, longevity: idleLongevity }))
+        .resolves.toEqual({ applied: false, count: 0 });
+      expect(onLongevity).toHaveBeenCalledOnce();
+    } finally {
+      meatspaceEvents.off('death-clock:changed', onLongevity);
+    }
+  });
+
+  it('propagates a behavioral edit wholesale using the actual instant of each derivation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime('2026-01-02T00:30:00.000Z');
+    const original = await updateChronotypeBehavioral({ preferredWakeTime: '06:00', preferredSleepTime: '21:00' });
+    vi.setSystemTime('2026-01-02T01:30:00.000Z');
+    const edited = await updateChronotypeBehavioral({ preferredWakeTime: '10:00', preferredSleepTime: '01:00' });
+    expect(edited.type).toBe('evening');
+    expect(edited.scores.composite).toBe(1);
+
+    await atomicWrite(CHRONOTYPE_FILE, { ...original, derivedAt: '2026-01-02T02:30:00+02:00' });
+    await expect(applyDigitalTwinRemote({ chronotype: edited })).resolves.toEqual({ applied: true, count: 1 });
+    expect(await getChronotype()).toEqual(edited);
+  });
+
+  it.each([
+    ['chronotype', CHRONOTYPE_FILE, deriveChronotype],
+    ['longevity', LONGEVITY_FILE, deriveLongevity],
+  ])('serializes %s sync behind an in-flight local derivation', async (key, path, derive) => {
+    const started = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    getGenomeSummary.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+      return genome;
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(earlier);
+    const localWrite = derive();
+    await started.promise;
+
+    const signal = key === 'chronotype' ? { geneticMarkers: { clockGene: {} } } : { longevityMarkers: { foxo3a: {} } };
+    const remote = { derivedAt: later, ...signal };
+    let sync;
+    try {
+      // A separate published file proves the sync has started while the derive is blocked.
+      const identity = { updatedAt: later };
+      sync = applyDigitalTwinRemote({ identity, [key]: remote });
+      await vi.waitFor(async () => expect(await readJSON(IDENTITY_FILE)).toEqual(identity));
+      await expect(readJSON(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      release.resolve();
+      await Promise.all([localWrite, sync]);
+    }
+    expect(await readJSON(path)).toEqual(remote);
+  });
+
+  it('rejects a behavioral edit on unreadable storage and leaves the bytes intact', async () => {
+    await writeFile(CHRONOTYPE_FILE, '{');
+    await expect(updateChronotypeBehavioral({ preferredWakeTime: '10:00' }))
+      .rejects.toMatchObject({ code: 'UNREADABLE_STORE' });
+    expect(await readFile(CHRONOTYPE_FILE, 'utf8')).toBe('{');
+  });
+});
