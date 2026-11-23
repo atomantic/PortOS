@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { stripVTControlCharacters } from 'node:util';
@@ -25,6 +25,7 @@ import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceT
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
 import { CI_GUARD_BUDGET_MS, describeGuardDurations, guardDurations, overBudgetGuards, readGuardLoads } from './lib/guardBudget.js';
 import { getAlwaysRunTests } from './lib/ciPlanRules.js';
+import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -469,6 +470,22 @@ function guardBudgetStatus(files, results, loads, { enforce }) {
   return 1;
 }
 
+/**
+ * Whether this run will launch the real browser, so CI warms Chrome's install
+ * into the page cache only then (#17750). The client shards used to read ~450 MiB
+ * on every push, including memo hits and happy-dom-only runs. The cross-workspace
+ * browser job (`PORTOS_CI_BROWSER_OWNER=browser`) launches it for any suite it runs.
+ */
+export function shouldWarmTestChrome({ scope, run, env = process.env }) {
+  if (!env.CI || run.length === 0) return false;
+  return env.PORTOS_CI_BROWSER_OWNER === 'browser' || (scope === 'client' && run.some(isClientBrowserSuite));
+}
+
+// The script is best-effort by contract (never fails the job); a spawn error is ignored the same way.
+function warmTestChrome() {
+  spawnSync('bash', [join(repoRoot, 'scripts', 'ci-warm-test-chrome.sh')], { stdio: 'inherit' });
+}
+
 async function main() {
   const scope = process.argv[2];
   if (!Object.hasOwn(TEST_SCOPES, scope)) {
@@ -566,6 +583,7 @@ async function main() {
     process.exitCode = 0;
     return;
   }
+  if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
   // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
   // hosted run enforces it, and only there do the guards run first as their own
   // Vitest pass, so a related or full selection's heavy suites do not stretch
