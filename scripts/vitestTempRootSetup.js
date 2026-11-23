@@ -109,8 +109,21 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, records, platform = process.platform } = {}) {
-  if (!root) return;
+/** Persist the diagnostics report for an explicit CI path; returns whether it was retained. */
+function persistProcessReport(reportPath, report) {
+  if (!reportPath) return { retained: false, failed: false };
+  try {
+    mkdirSync(dirname(reportPath), { recursive: true });
+    writeFileSync(reportPath, JSON.stringify(report));
+    return { retained: true, failed: false };
+  } catch {
+    console.error('❌ owned test process evidence could not be persisted');
+    return { retained: false, failed: true };
+  }
+}
+
+/** Terminate leaked test processes and report them; returns the count of unsettled ones. */
+function containRunProcesses(root, { contain, reportPath, records, platform }) {
   // A process a suite failed to tear down would outlive the run (#10840).
   const outcomes = [];
   let total = 0;
@@ -125,43 +138,33 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
       if (outcomes.length < 64) outcomes.push(outcome);
     },
   });
-  if (total || !inspected) {
-    const report = { version: 1, inspected, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
-    // Diagnostics are written only for an explicit CI path; local runs rely on stderr.
-    let retained = false;
-    if (reportPath) {
-      try {
-        mkdirSync(dirname(reportPath), { recursive: true });
-        writeFileSync(reportPath, JSON.stringify(report));
-        retained = true;
-      } catch {
-        console.error('❌ owned test process evidence could not be persisted');
-        unsettled++;
-      }
-    }
-    console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'stderr-only'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
-    for (const outcome of outcomes) console.warn(`⚠️ owned test process: ${Object.entries(outcome).map(([key, value]) => `${key}=${value}`).join(' ')}`);
-  }
-  if (unsettled) {
-    process.exitCode = 1;
-    console.error('❌ owned test process settlement unverified; retaining run temp root');
-    return;
-  }
-  let entries;
-  try {
-    entries = readdirSync(root);
-  } catch {
-    return;
-  }
-  entries = entries
-    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
-    .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
-    .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
-    .filter((name) => !isDotnetRegistrationCache(root, name))
-    // A rejected registration cache stays a leak even if the generic empty
-    // scan cannot read it; unknown cache contents must fail closed.
-    .filter((name) => name === DOTNET_REGISTRATION_CACHE || !isEffectivelyEmpty(join(root, name)));
+  if (!total && inspected) return unsettled;
+  const report = { version: 1, inspected, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
+  // Diagnostics are written only for an explicit CI path; local runs rely on stderr.
+  const { retained, failed } = persistProcessReport(reportPath, report);
+  if (failed) unsettled++;
+  console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'stderr-only'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
+  for (const outcome of outcomes) console.warn(`⚠️ owned test process: ${Object.entries(outcome).map(([key, value]) => `${key}=${value}`).join(' ')}`);
+  return unsettled;
+}
 
+// Ordered cheapest-first; each decides whether a root entry is not leaked fixture data.
+const IGNORED_TEMP_ENTRY_RULES = [
+  (_root, name) => name === OWNER_FILE || name === OWNERS_FILE,
+  (_root, name) => VITEST_INTERNAL_SCRATCH_DIR.test(name),
+  (_root, name) => TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)),
+  isDotnetRegistrationCache,
+  // A rejected registration cache stays a leak even if the generic empty
+  // scan cannot read it; unknown cache contents must fail closed.
+  (root, name) => name !== DOTNET_REGISTRATION_CACHE && isEffectivelyEmpty(join(root, name)),
+];
+
+function isIgnoredTempEntry(root, name) {
+  return IGNORED_TEMP_ENTRY_RULES.some(rule => rule(root, name));
+}
+
+/** Warn per leaked-entry group and fail the run when anything leaked. */
+function reportLeakedEntries(root, entries) {
   const owners = readTempRootOwners(root);
   const byPrefix = new Map();
   for (const name of entries) {
@@ -175,14 +178,29 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
     const by = files.size ? ` (created by ${[...files].join(', ')})` : '';
     console.warn(`⚠️ test temp leak: ${prefix} ×${count}${by}`);
   }
-  if (entries.length) {
-    // This runs in vitest.onClose, after the reporter's exit-code snapshot, and
-    // is the only place a run whose every assertion passed is made to fail.
-    // Name it so the nonzero exit never reads as unexplained (#12536).
-    console.error(`❌ test temp leak guard: failing the run with exit code 1 for ${entries.length} leaked ${entries.length === 1 ? 'entry' : 'entries'} under the run temp root`);
-    process.exitCode = 1;
-  }
+  if (!entries.length) return;
+  // This runs in vitest.onClose, after the reporter's exit-code snapshot, and
+  // is the only place a run whose every assertion passed is made to fail.
+  // Name it so the nonzero exit never reads as unexplained (#12536).
+  console.error(`❌ test temp leak guard: failing the run with exit code 1 for ${entries.length} leaked ${entries.length === 1 ? 'entry' : 'entries'} under the run temp root`);
+  process.exitCode = 1;
+}
 
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, options = {}) {
+  if (!root) return;
+  const { contain = killTestProcessesUnder, reportPath, records, platform = process.platform } = options;
+  if (containRunProcesses(root, { contain, reportPath, records, platform })) {
+    process.exitCode = 1;
+    console.error('❌ owned test process settlement unverified; retaining run temp root');
+    return;
+  }
+  let names;
+  try {
+    names = readdirSync(root);
+  } catch {
+    return;
+  }
+  reportLeakedEntries(root, names.filter(name => !isIgnoredTempEntry(root, name)));
   try {
     rmSync(root, { recursive: true, force: true });
   } catch (err) {
