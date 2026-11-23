@@ -152,7 +152,7 @@ describe('VoiceWidget accessibility', () => {
     const speaker = within(widget).getByRole('button', { name: /speaker/ });
     expect(speaker).not.toBeDisabled();
     expect(speaker).toHaveAttribute('aria-pressed', 'true');
-    expect(within(widget).getByRole('button', { name: /hands-free|push-to-talk/ })).toHaveAttribute('aria-pressed');
+    expect(within(widget).getByRole('button', { name: /^(hands-free|push-to-talk)$/ })).toHaveAttribute('aria-pressed');
     expect(within(widget).getByRole('button', { name: 'Start hands-free listening' })).toHaveAttribute('aria-pressed', 'false');
   });
 
