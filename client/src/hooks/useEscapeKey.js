@@ -4,12 +4,12 @@
  * Use when: Non-modal dismissables (in-context popovers/cards); Modal owns Esc for true modals.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEscLayer } from '../components/ui/Modal.jsx';
 
 /**
  * Call `handler` when Escape is pressed, but only while `active` is truthy.
- * Listener is attached/removed with `active`, so a closed popover/card doesn't
- * keep a global keydown handler around. Use for non-modal dismissables (the
+ * The layer is registered/removed with `active`, so a closed popover/card
+ * holds no Esc claim. Use for non-modal dismissables (the
  * Modal component already owns Esc for true modals). A child control can
  * consume Escape with preventDefault() to dismiss its own layer first.
  *
@@ -18,12 +18,8 @@ import { useEffect, useRef } from 'react';
  * keydown listener on each render — only `active` flips the subscription.
  */
 export default function useEscapeKey(active, handler) {
-  const handlerRef = useRef(handler);
-  handlerRef.current = handler;
-  useEffect(() => {
-    if (!active) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape' && !e.defaultPrevented) handlerRef.current(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [active]);
+  // Join Modal's shared innermost-first Esc stack: Modal's listeners are
+  // installed at module load and swallow Escape, so a runtime window listener
+  // here would always lose to an enclosing Modal/Drawer.
+  useEscLayer(Boolean(active), handler);
 }
