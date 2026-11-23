@@ -756,6 +756,84 @@ describe('fableLoom production service', () => {
     expect(snapshots.at(-1)).toMatchObject({ status: 'canceled', cancelRequested: true });
   });
 
+  // Completes stage 0 so the next stage (several assets) is the one under test.
+  async function reachMultiAssetStage() {
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 4; i += 1) {
+      const active = run.assets.filter((asset) => asset.jobId && asset.status === 'queued');
+      if (active.length > 1) break;
+      for (const asset of active) {
+        queueMocks.mediaJobEvents.emit('completed', { id: asset.jobId, result: { filename: `${asset.jobId}.out` } });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    return run;
+  }
+
+  it('revokes a job whose enqueue resolves after cancel and enqueues nothing further', async () => {
+    let release;
+    let nextJobId = 100;
+    queueMocks.enqueueJob.mockImplementation(() => new Promise((resolve) => {
+      release = () => resolve({ jobId: `late-${nextJobId++}`, position: 1, status: 'queued' });
+    }));
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
+
+    const canceling = cancelEpisodeProductionBatch(run.id);
+    expect(run.cancelRequested).toBe(true);
+    release();
+    const canceled = await canceling;
+
+    expect(canceled.status).toBe('canceled');
+    expect(queueMocks.cancelJob).toHaveBeenCalledWith('late-100');
+    expect(queueMocks.enqueueJob).toHaveBeenCalledTimes(1);
+    expect(run.assets.some((asset) => asset.status === 'queued' || asset.status === 'running')).toBe(false);
+    expect(run.assets.every((asset) => !asset.jobId || asset.jobId !== 'late-100' || asset.status !== 'queued')).toBe(true);
+  });
+
+  it('cancels sibling jobs when one asset in a stage fails and lets resume advance', async () => {
+    const run = await reachMultiAssetStage();
+    const queued = run.assets.filter((asset) => asset.status === 'queued');
+    expect(queued.length).toBeGreaterThan(1);
+    const [failing, ...siblings] = queued;
+
+    queueMocks.mediaJobEvents.emit('failed', { id: failing.jobId, error: 'boom' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(run.status).toBe('failed');
+    for (const sibling of siblings) {
+      expect(queueMocks.cancelJob).toHaveBeenCalledWith(sibling.jobId);
+      expect(sibling.status).toBe('canceled');
+    }
+    expect(run.assets.some((asset) => ['queued', 'running', 'preparing'].includes(asset.status))).toBe(false);
+
+    const enqueuedBefore = queueMocks.enqueueJob.mock.calls.length;
+    resumeEpisodeProductionBatch(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queueMocks.enqueueJob.mock.calls.length).toBeGreaterThan(enqueuedBefore);
+  });
+
+  it('cancels already-enqueued siblings when enqueueJob throws mid-stage', async () => {
+    let calls = 0;
+    queueMocks.enqueueJob.mockImplementation(() => {
+      calls += 1;
+      if (calls === 3) throw new Error('queue exploded');
+      return { jobId: `job-${calls}`, position: 1, status: 'queued' };
+    });
+    const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    queueMocks.mediaJobEvents.emit('completed', { id: 'job-1', result: { filename: 'job-1.png' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(calls).toBe(3);
+    expect(run.status).toBe('failed');
+    expect(queueMocks.cancelJob).toHaveBeenCalledWith('job-2');
+    expect(run.assets.some((asset) => ['queued', 'running', 'preparing'].includes(asset.status))).toBe(false);
+  });
+
   it('resumes a canceled run after resetting unfinished assets', async () => {
     const run = await startEpisodeProductionBatch('loom-1', 'ep-1', { mode: 'current_canon' });
     await cancelEpisodeProductionBatch(run.id);
