@@ -50,10 +50,31 @@ function remoteIdentity(url) {
   };
 }
 
+// A repository's fork topology almost never changes, yet every Git tab view
+// asked GitHub again, and a throttled or offline forge then blanked the
+// upstream identity the page had already shown. Successful answers are reused
+// inside the fresh window and kept as the last-known answer after it, so a
+// failed lookup degrades to that answer instead of to "unknown". In-memory
+// only: a restart simply asks again.
+const METADATA_FRESH_MS = 10 * 60_000;
+const metadataCache = new Map();
+
+export function resetRepositoryMetadataCache() {
+  metadataCache.clear();
+}
+
+const metadataLookupError = (error) => (/rate limit/i.test(error?.ghStderr || error?.message || '')
+  ? 'GitHub API rate limit reached, so the canonical upstream repository is not known yet'
+  : 'GitHub did not answer, so the canonical upstream repository is not known yet');
+
 async function githubRepositoryMetadata(repoPath, origin) {
-  if (!origin?.fullName || !isGithubHost(origin.host)) return null;
-  const forge = await resolveForgeForRepo(repoPath);
+  if (!origin?.fullName || !isGithubHost(origin.host)) return { metadata: null, error: null };
   const host = githubApiHost(origin.host);
+  const key = `${host}/${origin.fullName.toLowerCase()}`;
+  const cached = metadataCache.get(key);
+  if (cached && Date.now() - cached.at < METADATA_FRESH_MS) return { metadata: cached.metadata, error: null };
+  const forge = await resolveForgeForRepo(repoPath);
+  let failure = null;
   const raw = await execGh([
     'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
     `repos/${origin.fullName}`, '--jq',
@@ -64,9 +85,18 @@ async function githubRepositoryMetadata(repoPath, origin) {
   ], GH_TIMEOUT_MS, {
     cwd: repoPath,
     env: forge?.env || process.env,
-  }).catch(() => null);
+  }).catch((error) => {
+    failure = error;
+    return null;
+  });
   const parsed = safeJSONParse(raw, null);
-  return parsed && typeof parsed.fullName === 'string' ? parsed : null;
+  if (parsed && typeof parsed.fullName === 'string') {
+    metadataCache.set(key, { metadata: parsed, at: Date.now() });
+    return { metadata: parsed, error: null };
+  }
+  if (cached) return { metadata: cached.metadata, error: null };
+  console.log(`⏭️ GitHub repository lookup for ${origin.fullName} unavailable: ${(failure?.ghStderr || failure?.message || 'unparseable response').split('\n')[0]}`);
+  return { metadata: null, error: metadataLookupError(failure) };
 }
 
 /**
@@ -87,7 +117,7 @@ export async function resolveRepositoryTopology(repoPath) {
     };
   }
 
-  const [metadata, upstreamUrl] = await Promise.all([
+  const [{ metadata, error: lookupError }, upstreamUrl] = await Promise.all([
     githubRepositoryMetadata(repoPath, origin),
     readRemoteUrl('upstream', repoPath).catch(() => null),
   ]);
@@ -120,7 +150,7 @@ export async function resolveRepositoryTopology(repoPath) {
     upstream: upstream ? { ...upstream, branch: defaultBranch } : null,
     isFork,
     available: Boolean(upstream),
-    error: upstream ? null : 'Could not determine the canonical upstream repository',
+    error: upstream ? null : lookupError || 'Could not determine the canonical upstream repository',
   };
 }
 
@@ -161,7 +191,7 @@ async function inspectCheckout({ id, label, repoPath }) {
     return {
       id, label, present: false, branch: null, head: null, shortHead: null, clean: null,
       origin: null, upstream: null, localVsOrigin: null, forkVsUpstream: null,
-      remoteFresh: false, remoteError: 'Checkout not found',
+      remoteFresh: false, remoteError: 'Checkout not found', upstreamError: null,
     };
   }
 
@@ -183,12 +213,15 @@ async function inspectCheckout({ id, label, repoPath }) {
   // app's Git tab; the Eidoverse page now runs it on every visit, where an
   // ungated fetch would cost two `git fetch`es per mount (twice that under
   // React StrictMode) for an answer that cannot have changed.
+  // `remoteError` speaks only for the origin fetch: a successful fetch means
+  // the displayed origin revision is current even when GitHub could not say
+  // which repository is canonical, which is reported apart as `upstreamError`.
   const fetchResult = !topology.origin.hasOrigin
     ? { fresh: false, error: topology.error }
     : isFetchFresh(repoPath)
-      ? { fresh: true, error: topology.error }
+      ? { fresh: true, error: null }
       : await fetchOrigin(repoPath).then(
-        () => ({ fresh: true, error: topology.error }),
+        () => ({ fresh: true, error: null }),
         () => ({ fresh: false, error: 'Could not refresh the origin repository' }),
       );
 
@@ -226,6 +259,7 @@ async function inspectCheckout({ id, label, repoPath }) {
     localVsOrigin: countsResult ? parseRevisionCounts(countsResult) : null,
     remoteFresh: fetchResult.fresh,
     remoteError: fetchResult.error,
+    upstreamError: topology.origin.hasOrigin ? topology.error : null,
   };
   return { ...checkout, forkVsUpstream: await compareForkWithUpstream(checkout, repoPath) };
 }

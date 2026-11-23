@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import {
   getPlatformAccounts,
   getAgentRateLimits,
@@ -65,6 +68,8 @@ export default function ToolsTab({ agentId, agent }) {
 
   // Drafts state
   const [drafts, setDrafts] = useState([]);
+  const [deletingDraftId, setDeletingDraftId] = useState(null);
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const [draftsError, setDraftsError] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState(null);
 
@@ -373,11 +378,21 @@ export default function ToolsTab({ agentId, agent }) {
     toast.success(`Loaded ${draft.type} draft`);
   };
 
-  const handleDeleteDraft = async (draftId) => {
-    await deleteAgentDraft(agentId, draftId);
-    if (activeDraftId === draftId) setActiveDraftId(null);
-    loadDrafts();
-    toast.success('Draft deleted');
+  const handleDeleteDraft = (draftId) => {
+    if (deletingDraftId) return;
+    confirmDelete(async () => {
+      setDeletingDraftId(draftId);
+      try {
+        await deleteAgentDraft(agentId, draftId);
+        if (activeDraftId === draftId) setActiveDraftId(null);
+        setDrafts((prev) => prev.filter((draft) => draft.id !== draftId));
+        toast.success('Draft deleted');
+      } catch {
+        // request() already toasts; leave the draft in the list.
+      } finally {
+        setDeletingDraftId(null);
+      }
+    });
   };
 
   const getCooldownMs = (action) => {
@@ -756,13 +771,29 @@ export default function ToolsTab({ agentId, agent }) {
                               {isPublished ? `Published ${formatDateTime(draft.publishedAt || draft.updatedAt)}` : formatDateTime(draft.createdAt)}
                             </p>
                           </div>
-                          <button
-                            onClick={() => handleDeleteDraft(draft.id)}
-                            className="text-gray-600 hover:text-port-error ml-2 shrink-0 text-sm"
-                            title="Delete draft"
-                          >
-                            x
-                          </button>
+                          {isConfirming(draft.id) || deletingDraftId === draft.id ? (
+                            <ConfirmButtonPair
+                              prompt="Delete?"
+                              busy={deletingDraftId === draft.id}
+                              busyText="Deleting"
+                              onConfirm={() => handleDeleteDraft(draft.id)}
+                              onCancel={cancelDelete}
+                              ariaLabel="Confirm draft deletion"
+                              confirmAriaLabel="Confirm delete draft"
+                              cancelAriaLabel="Cancel draft deletion"
+                              className="ml-2 shrink-0"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              aria-label={`Delete draft ${draft.title || draft.content?.substring(0, 40) || ''}`.trim()}
+                              onClick={() => requestDelete(draft.id)}
+                              disabled={deletingDraftId != null}
+                              className="inline-flex items-center justify-center text-gray-600 hover:text-port-error ml-2 shrink-0 pointer-coarse:min-h-11 pointer-coarse:min-w-11 disabled:opacity-50"
+                            >
+                              <Trash2 size={14} aria-hidden="true" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
-import { build } from 'vite';
+import { build, createLogger } from 'vite';
 
 import { CHUNK_GROUPS } from '../../vite.chunkGroups.js';
 import viteConfig from '../../vite.config.js';
@@ -47,7 +47,7 @@ describe('vite chunk groups', () => {
   // `vendor-three` shipped that way against the removed `three-fenestra` (#5725).
   it('only names packages that are actually installed', () => {
     const missing = CHUNK_GROUPS.flatMap(({ name, packages }) =>
-      packages.filter((pkg) => !isInstalled(pkg)).map((pkg) => `${name} -> ${pkg}`));
+      (packages ?? []).filter((pkg) => !isInstalled(pkg)).map((pkg) => `${name} -> ${pkg}`));
     expect(LOCKED_PACKAGES.length).toBeGreaterThan(0);
     expect(missing).toEqual([]);
   });
@@ -152,6 +152,68 @@ describe('vite chunk groups', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Cold boot is HTTP/1.1 (six connections per origin). Shared helpers must
+  // coalesce, and the lazy vendor chunks must stay out of index.html (#17620).
+  it('sets a shared-app size floor below every vendor group', () => {
+    const resolved = viteConfig({ command: 'build', mode: 'production' });
+    const { minSize, groups } = resolved.build.rolldownOptions.output.codeSplitting;
+    expect(minSize).toBe(15_000);
+    const initial = groups.find((group) => group.name === 'app-initial');
+    const shared = groups.find((group) => group.name === 'app-shared');
+    expect(initial.tags).toEqual(['$initial']);
+    expect(initial.priority).toBeLessThan(0);
+    expect(shared.minShareCount).toBe(2);
+    expect(shared.minSize).toBe(15_000);
+    expect(shared.priority).toBeLessThan(initial.priority);
+    for (const group of groups) {
+      if (!group.name.startsWith('vendor-')) continue;
+      expect(group.priority ?? 0).toBeGreaterThan(initial.priority);
+      expect(group.minSize).toBe(0);
+    }
+    expect(groups.map((group) => group.name)).toEqual(CHUNK_GROUPS.map((group) => group.name));
+  });
+
+  it('keeps the cold-boot preload set small and free of lazy vendors', async () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'portos-chunk-boot-'));
+    const warnings = [];
+    const logger = createLogger('warn', { allowClearScreen: false });
+    const record = (msg) => {
+      warnings.push(String(msg));
+    };
+    logger.warn = record;
+    logger.warnOnce = record;
+    try {
+      await build({
+        configFile: resolve(CLIENT_DIR, 'vite.config.js'),
+        root: CLIENT_DIR,
+        logLevel: 'warn',
+        customLogger: logger,
+        build: { outDir, emptyOutDir: true },
+      });
+      const html = readFileSync(join(outDir, 'index.html'), 'utf8');
+      const preloads = [...html.matchAll(/<link\b[^>]*>/g)]
+        .map((match) => match[0])
+        .filter((tag) => /\brel="modulepreload"/.test(tag))
+        .map((tag) => tag.match(/\bhref="([^"]+)"/)[1]);
+      expect(preloads.length).toBeLessThanOrEqual(12);
+      const lazyVendor = /\/vendor-(?:three(?:-loaders)?|charts|term)-/;
+      for (const href of preloads) {
+        expect(href, href).not.toMatch(lazyVendor);
+        const file = join(outDir, href.replace(/^\//, ''));
+        const bytes = statSync(file).size;
+        const name = href.split('/').pop();
+        // Rolldown's runtime, Vite's preload helper, and the shell wrapper that
+        // calls `app-initial` are bundler plumbing, not shared app utilities.
+        if (bytes < 2048) expect(name, name).toMatch(/^(?:rolldown-runtime|preload-helper|client)-/);
+      }
+      const jsCount = readdirSync(join(outDir, 'assets')).filter((name) => name.endsWith('.js')).length;
+      expect(jsCount).toBeLessThanOrEqual(600);
+      expect(warnings, warnings.join('\n')).toEqual([]);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   it('keeps package names from bleeding across the separator', () => {
     // A declared name must match a whole path segment: `react` must not swallow

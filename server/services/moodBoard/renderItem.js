@@ -30,7 +30,7 @@ const deps = {
   imageParams: (settings, route, common) => queueableImageParams(settings, route, common, {
     what: 'board notes', code: 'MOOD_BOARD_RENDER_UNAVAILABLE',
   }),
-  emit: (payload) => import('../socket.js')
+  emit: (payload) => import('../socketIo.js')
     .then(({ getIo }) => getIo()?.emit('mood-board:item-render', payload))
     .catch((err) => console.error(`❌ mood-board item-render emit failed: ${err.message}`)),
 };
