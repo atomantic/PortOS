@@ -57,7 +57,6 @@ import { whichFirst } from '../lib/processEnv.js'
 import { runStreamingCommand } from '../lib/streamingSpawn.js'
 import * as ollamaManager from './ollamaManager.js'
 import { importModelFromHfSafetensors } from './ollamaSafetensorsImport.js'
-import { importModelFromGguf as importOllamaGguf, resolveLocalModel as resolveOllamaLocalModel } from './ollamaDiskImport.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { localModelInventoryRow } from '../lib/modelInventory.js'
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js'
@@ -1556,7 +1555,7 @@ async function tryLocalImport(to, model, targetId, resolved, mode, onProgress) {
   const verb = mode === 'link' ? 'Linking' : 'Copying'
   onProgress({ event: 'start', message: `${verb} ${name} onto ${to} (no download)…` })
   const r = to === 'ollama'
-    ? await importOllamaGguf({ name, ggufPath: resolved.ggufPath, mode })
+    ? await (await import('./ollamaDiskImport.js')).importModelFromGguf({ name, ggufPath: resolved.ggufPath, mode })
     : await lmStudioManager.importModelFromGguf({ lmstudioId: name, ggufPath: resolved.ggufPath, projectorPath: resolved.projectorPath, mode })
   if (!r.success) {
     onProgress({ event: 'start', message: `Local import of ${model.id} failed (${r.error}); re-pulling…` })
@@ -1617,7 +1616,8 @@ export async function migrateBackend(to, { mode = 'link', onProgress = () => {} 
   const results = []
   for (const model of sourceModels) {
     const { targetId, exact } = mapModelToBackend(from, model.id, to)
-    const resolved = await (from === 'ollama' ? resolveOllamaLocalModel : lmStudioManager.resolveLocalModel)(model.id).catch(() => null)
+    const resolveLocal = from === 'ollama' ? (await import('./ollamaDiskImport.js')).resolveLocalModel : lmStudioManager.resolveLocalModel
+    const resolved = await resolveLocal(model.id).catch(() => null)
 
     // 1) Fast path — link/copy the GGUF locally (no download) when we can.
     const imported = await tryLocalImport(to, model, targetId, resolved, mode, onProgress)
