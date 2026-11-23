@@ -127,6 +127,11 @@ describe('CoS Schedule Routes', () => {
       expect(maintenance.updateMaintenanceStep).toHaveBeenCalledWith('maint-1', 'step-2', settings);
       expect((await request(app).patch(url).send({ ...settings, effort: 'invalid' })).status).toBe(400);
       expect((await request(app).patch(url).send({ ...settings, completed: {} })).status).toBe(400);
+      const withOptions = { ...settings, executionOptions: { serviceTier: 'fast' } };
+      maintenance.updateMaintenanceStep.mockResolvedValue({ id: 'maint-1' });
+      expect((await request(app).patch(url).send(withOptions)).status).toBe(200);
+      expect(maintenance.updateMaintenanceStep).toHaveBeenLastCalledWith('maint-1', 'step-2', withOptions);
+      expect((await request(app).patch(url).send({ ...settings, executionOptions: { serviceTier: 'warp' } })).status).toBe(400);
       maintenance.updateMaintenanceStep.mockResolvedValue(null);
       expect((await request(app).patch(url).send(settings)).status).toBe(404);
     });
