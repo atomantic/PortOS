@@ -24,8 +24,8 @@ export const LOCAL_RUNTIME_MANAGE_URLS = Object.freeze({
 // Default ports of the two local backends; an endpoint-only provider aimed at one on this instance maps to it.
 const BACKEND_DEFAULT_PORT = { 11434: 'ollama', 1234: 'lmstudio' };
 
-// MIRROR of `isOllamaProvider` in services/ollamaManager.js — keep in lockstep.
-// Inlined so this module stays free of the manager's module graph.
+// Name/id/default-port shape only. Locality is the caller's concern: `ollamaManager.isOllamaProvider` layers
+// an `isLocalInstanceEndpoint` check on top of `localRuntimeKind`, which this module must not import back.
 const isOllamaShape = (provider) =>
   provider?.id === 'ollama' ||
   /ollama/i.test(provider?.name || '') ||

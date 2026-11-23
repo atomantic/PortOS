@@ -39,6 +39,8 @@ import {
   OLLAMA_AGENT_MIN_CONTEXT, OLLAMA_CONTEXT_ENV_VAR, managedOllamaBaseUrl, normalizeOllamaBaseUrl, resolveOllamaContextLength, withOllamaContextEnv
 } from '../lib/ollamaContext.js'
 import { compareSemver } from '../lib/versionUtils.js'
+import { isLocalInstanceEndpoint } from '../lib/localEndpoint.js'
+import { localRuntimeKind } from '../lib/modelPinMembership.js'
 import { createSingleFlight } from '../lib/singleFlight.js'
 import { isSafeHfRepoRelativePath } from '../lib/hfCache.js'
 import { assessDownloadPreflight, diskInsufficientError, DOWNLOAD_VERDICTS } from '../lib/downloadPreflight.js'
@@ -1188,11 +1190,30 @@ async function clearLaunchEnv() {
     : failed({ applied: false, reason: 'start-failed', error: started.error })
 }
 
+/**
+ * Whether `provider` is backed by the daemon THIS instance manages. A provider with an
+ * endpoint must resolve to a local one: a federated/tailnet "Ollama (Peer)" record is a
+ * remote daemon, and treating it as local would try to launch `ollama serve` here.
+ */
 function isOllamaProvider(provider) {
-  const endpoint = String(provider?.endpoint || '')
-  return provider?.id === 'ollama' ||
-    /ollama/i.test(provider?.name || '') ||
-    /(^|[/:])(?:localhost|127\.0\.0\.1|\[::1\]):11434\b/i.test(endpoint)
+  const endpoint = provider?.endpoint
+  if (endpoint && !isLocalInstanceEndpoint(endpoint)) return false
+  if (localRuntimeKind(provider) === 'ollama') return true
+  // A custom OLLAMA_URL / OLLAMA_HOST port is not the default 11434 the kind check knows.
+  return Boolean(endpoint) && sameDaemonOrigin(endpoint, getBaseUrl())
+}
+
+function sameDaemonOrigin(endpoint, baseUrl) {
+  const origin = (value) => {
+    const parsed = safeUrl(String(value || '').replace(/\/v\d+\/?$/, ''))
+    return parsed ? `${parsed.protocol}//${parsed.host}` : null
+  }
+  const a = origin(endpoint)
+  return a !== null && a === origin(baseUrl)
+}
+
+function safeUrl(value) {
+  try { return new URL(value) } catch { return null }
 }
 
 async function ensureProviderReady(provider, options = {}) {
