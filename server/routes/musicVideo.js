@@ -509,7 +509,8 @@ router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
 // a missing stem with Demucs first; older master-only callers retain Whisper.
 router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
-  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
+  const retime = retimeSong ? (await import('../services/musicVideo/songRevision.js')).retimeRevisedSong : null;
+  res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong, retime }));
 }));
 
 router.post('/:id/lyrics/verify', asyncHandler(async (req, res) => {

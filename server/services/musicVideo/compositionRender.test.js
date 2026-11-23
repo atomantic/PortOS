@@ -11,6 +11,7 @@ import { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome } fro
 import { beatSnapClips, buildMusicVideoFfmpegArgs, resolveSceneClips } from './render.js';
 import { composedLyricWindows, projectTypographyPlan, renderableCues, sectionCardCues } from './composition.js';
 import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
+import { stageLyricOverlay } from './lyricOverlayStage.js';
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
@@ -144,7 +145,7 @@ describe.skipIf(!canRun)('music-video typography overlay with real Chrome and ff
     };
     const windows = composedLyricWindows(project, 4);
     const overlays = await renderTypographyOverlays({ jobId: 'job-lyrics', cues: [], style: {}, width: w, height: h, fps: FPS, durationSec: 4,
-      lyrics: { project, windows } });
+      lyrics: { project, windows, stage: stageLyricOverlay } });
     expect(overlays).toEqual([{ path: expect.stringContaining('lyrics-overlay-0.mov'), startSec: 1, durationSec: 69 / FPS }]); // 1s to 1.85s + the 2s tail, snapped out to whole frames
     const raw = frames(overlays[0].path, 'rgba');
     const frameBytes = w * h * 4;

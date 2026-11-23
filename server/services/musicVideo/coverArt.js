@@ -22,7 +22,6 @@
 import { randomUUID } from 'crypto';
 import { basename } from 'path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
@@ -31,12 +30,13 @@ import { composeCoverArt, normalizeCoverDesign } from './coverArtCompose.js';
 import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
 import { buildCoverDesignPrompt, parseCoverDesign } from './coverArtDesign.js';
 import { musicVideoEvents } from './events.js';
-import { getProject, mutateProjectRecord } from './projects.js';
+import { getProject } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { projectPublishKit, releaseKitFiles } from './publishKit.js';
+import { releaseKitFiles } from './publishKit.js';
 import { getSettings } from '../settings.js';
-import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
-import { RENDER_TARGET } from '../../lib/renderTargets.js';
+import { artistStyleFor, coverError, defaultImageRoute, defaultTag, projectCoverArt, songCoverDesign, sourcePath, writeCoverArt, __setCoverArtSharedDepsForTests } from './coverArtShared.js';
+
+export { defaultImageRoute, projectCoverArt, songCoverDesign, sourcePath };
 
 const MAX_GENERATED = 12;
 const LIVE_JOB = new Set(['queued', 'running', 'canceling']);
@@ -48,7 +48,6 @@ const SOURCE_PX = 1024;
 const defaults = {
   compose: composeCoverArt,
   getSettings: async () => getSettings(),
-  getPlatforms: async () => (await import('./publish/platforms.js')).getPublishPlatforms(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
   defaultRoute: async (settings) => defaultImageRoute(settings),
   imageParams: async (settings, route, common) => (await import('./castAndSetsService.js')).imageJobParams(settings, route, common),
@@ -57,76 +56,15 @@ const defaults = {
   runner: async () => import('../promptRunner.js'),
   fonts: listCoverFonts,
   registerFonts: registerCoverFonts,
-  artistStyle: async (name) => (await import('./publish/artistStyles.js')).artistStyleFor(name),
 };
 let deps = { ...defaults };
-export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...overrides }; }
-
-/**
- * The install's own image generator for music videos: the Music Video render
- * default, else the PortOS image default (local, Codex, Grok, …). Null when
- * that backend cannot take a queued job or its cloud toggle is off.
- */
-export async function defaultImageRoute(settings) {
-  const { resolveRenderTargetConfig } = await import('../imageGen/cloudProviderConfig.js');
-  const resolved = resolveRenderTargetConfig(settings, RENDER_TARGET.MUSIC_VIDEO, { usableInstallFallback: true });
-  if (!QUEUEABLE_IMAGE_MODES.includes(resolved.mode) || (resolved.cloud && !resolved.cloud.enabled)) return null;
-  return { mode: resolved.mode, model: null };
+export function __setCoverArtDepsForTests(overrides) {
+  deps = { ...defaults, ...overrides };
+  __setCoverArtSharedDepsForTests(overrides);
 }
-
-const coverError = (status, code, message) => new ServerError(message, { status, code });
-export const projectCoverArt = (project) => {
-  const art = projectPublishKit(project).coverArt;
-  return art && typeof art === 'object' ? art : {};
-};
 
 function publish(projectId, project) {
   musicVideoEvents.emit('cover-art', { projectId, project });
-}
-
-const writeCoverArt = (projectId, update) => mutateProjectRecord(projectId, (current) => {
-  const kit = projectPublishKit(current);
-  const art = projectCoverArt(current);
-  return { project: { ...current, publishKit: { ...kit, coverArt: { ...art, ...update(art) } } } };
-});
-
-/** A source's file on disk: a thumbnail this kit cut, or a gallery image. */
-export function sourcePath(project, source) {
-  const name = basename(String(source?.filename || ''));
-  if (source?.kind === 'thumbnail') {
-    const kit = projectPublishKit(project);
-    const held = [kit.coverArt, kit.youtubeThumbnail, ...(kit.youtubeThumbnailTests || [])]
-      .filter(asset => asset?.source?.kind === 'thumbnail').map(asset => asset.source.filename);
-    if (![...(kit.thumbnails || []), ...(kit.frames || []), ...held].includes(name)) throw coverError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
-    const path = safeUnder(PATHS.videoThumbnails, name);
-    if (path) return path;
-  } else if (source?.kind === 'image') {
-    const path = resolveGalleryImage(name);
-    if (path) return path;
-  }
-  throw coverError(422, 'PUBLISH_ASSET_MISSING', `The cover source image is missing (${name || 'none'})`);
-}
-
-/** The artist tag: what the director set, else the DistroKid account under Where you post. */
-async function defaultTag() {
-  const platforms = await deps.getPlatforms().catch(() => null);
-  return trimTo(platforms?.distrokid?.account, 24) || '';
-}
-
-/**
- * The design a song's lettering is set in, or null for the plain look. A song
- * with no design of its own takes the artist's saved style and keeps it as its
- * design, so the Lettering preview and every later re-set show what was
- * rendered. `tag` is the artist on the cover (default: the last cover's, else
- * the DistroKid account).
- */
-export async function songCoverDesign(projectId, art, { tag } = {}) {
-  if (art.design) return art.design;
-  const style = await deps.artistStyle(tag ?? art.tag ?? await defaultTag()).catch(() => null);
-  if (!style?.design) return null;
-  await writeCoverArt(projectId, (current) => (current.design ? {} : { design: style.design }));
-  console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: lettering starts from the artist style (${style.name})`);
-  return style.design;
 }
 
 /**
@@ -180,7 +118,7 @@ export async function designCoverArt(projectId, { direction = '', providerId = n
   const previous = art.design ? { design: art.design, imagePrompt: art.imagePrompt || '' } : null;
   const fonts = await deps.fonts();
   // A fresh design starts from the artist's saved style, when they have one.
-  const artistStyle = previous ? null : await deps.artistStyle(art.tag ?? await defaultTag()).catch(() => null);
+  const artistStyle = previous ? null : await artistStyleFor(art.tag ?? await defaultTag()).catch(() => null);
   const prompt = buildCoverDesignPrompt(project, { direction: trimTo(direction, 1500), previous, artistStyle: artistStyle?.design || null, fonts });
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source: 'music-video-cover-design' });
   const drafted = parseCoverDesign(text, { fonts });

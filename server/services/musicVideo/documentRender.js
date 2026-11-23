@@ -50,7 +50,7 @@ import { songClipSound } from '../../lib/musicVideo/musicVideoClipSound.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideo/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideo/musicVideoAspect.js';
 import { lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
-import { documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
+import { availableDocumentDirectory, documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
@@ -866,4 +866,23 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
 export async function sweepDocumentScratch() {
   const { MUSIC_VIDEO_SCRATCH_DIR } = await import('../htmlComposition/index.js');
   await rm(join(PATHS.data, MUSIC_VIDEO_SCRATCH_DIR), { recursive: true, force: true });
+}
+
+/**
+ * Whether the project's composition document can play in the viewer's browser:
+ * `{ native: true, data }` for the unmodified shipped layered template, else
+ * `{ native: false, reason }`. Authored or customized documents stay in the
+ * isolated preview worker.
+ */
+export async function documentNativePlayback(project) {
+  const dir = await availableDocumentDirectory(project);
+  if (!dir) return { native: false, reason: 'no-document' };
+  const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
+  const result = await shippedLayeredDocument(dir);
+  if (!result.shipped) return { native: false, reason: result.reason, ...(result.file ? { file: result.file } : {}), ...(result.upgradable ? { upgradable: true } : {}) };
+  const durationSec = documentSongDuration(project);
+  const data = buildDocumentData(project, {
+    frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(durationSec, 24), songDurationSec: durationSec,
+  });
+  return { native: true, data };
 }

@@ -17,7 +17,7 @@ const defaults = {
   getTrack: async (...args) => getTrack(...args),
   cloneProject,
   proposeShotRevisions: async (...args) => (await import('./planner.js')).proposeShotRevisions(...args),
-  startRetime: async (id) => (await import('./lyricAlignJob.js')).startLyricAlign(id, { retimeSong: true }),
+  startRetime: async (id) => (await import('./lyricAlignJob.js')).startLyricAlign(id, { retimeSong: true, retime: retimeRevisedSong }),
 };
 
 // The director's choice of the new song is the request to re-time it; a start

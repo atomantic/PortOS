@@ -20,7 +20,6 @@ import { requireProject } from './requireProject.js';
 import { activeLyricAlign as activeByProject, getActiveLyricVerifyJobId } from './lyricJobRegistry.js';
 
 const reviewableRevision = (project) => project.songRevision?.status === 'selected' && Boolean(project.songRevision.baseline);
-const retimeRevisedSongLazy = async (...args) => (await import('./songRevision.js')).retimeRevisedSong(...args);
 
 // jobId -> job; projectId -> running jobId
 const alignJobs = new Map();
@@ -58,6 +57,8 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
   if (retimeSong && !reviewableRevision(project)) {
     throw new ServerError('This version has no revised song to re-time.', { status: 409, code: 'SONG_REVISION_CONFLICT' });
   }
+  // The re-time pipeline lives in songRevision.js, which sits above this module and hands it in.
+  if (retimeSong && typeof retime !== 'function') throw new ServerError('A song re-time needs its retime handler.', { status: 500, code: 'RETIME_HANDLER_MISSING' });
   if (cues.length === 0 && !retimeSong) throw new ServerError('Add lyric lines before aligning words.', { status: 400, code: 'NO_LYRICS' });
   if (cueId && !cues.some((cue) => cue.id === cueId)) {
     throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
@@ -76,7 +77,7 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
     try {
       broadcastSse(job, { type: 'progress', stage: 'preparing' });
       const run = retimeSong
-        ? (id, options) => (retime || retimeRevisedSongLazy)(id, { ...options, align })
+        ? (id, options) => retime(id, { ...options, align })
         : align;
       const project = await run(projectId, {
         cueId,

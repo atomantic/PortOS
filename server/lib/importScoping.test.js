@@ -186,6 +186,17 @@ const SELECTION_CUTS = [
     'presents an autonomous run through the processPins.js leaf'],
   ['services/musicVideo/processPins.js', /^services\/musicVideo\/(?:projects\.js|castAndSetsService\.js|autonomousService\.js|autonomous\/autonomousRunStore\.js)$/,
     'owns the process pins without the stage orchestrators or the project store'],
+  // #17579: sibling pairs inside musicVideo/ are one-way, not hidden behind lazy import().
+  ['services/musicVideo/compositionDocument.js', 'services/musicVideo/documentRender.js',
+    'leaves the native-playback verdict to documentRender.js, which sits above it'],
+  ['services/musicVideo/compositionRender.js', /^services\/musicVideo\/(?:compositionDocument|lyricPlaythrough)\.js$/,
+    'receives the lyric overlay stager from lyricOverlayStage.js through its caller'],
+  ['services/musicVideo/youtubeThumbnail.js', 'services/musicVideo/coverArt.js',
+    'shares the cover helpers through the coverArtShared.js leaf'],
+  ['services/musicVideo/blender/song.js', 'services/musicVideo/blender/owner.js',
+    'builds the song context while blender/owner.js owns the workspace write'],
+  ['services/musicVideo/lyricAlignJob.js', 'services/musicVideo/songRevision.js',
+    'runs the re-time handler songRevision.js and the route hand in'],
 ];
 
 // Runtimes that import the queue back load through bootHookRegistry.js (#17499).

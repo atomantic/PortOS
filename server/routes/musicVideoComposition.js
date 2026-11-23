@@ -11,7 +11,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { musicVideoCodeGenerateSchema, musicVideoDocumentDirectoryImportSchema, musicVideoDocumentFileQuerySchema, musicVideoDocumentTemplateSchema, musicVideoDocumentCandidateSchema, musicVideoMixedMediaRegenerateSchema } from '../lib/musicVideo/musicVideoRouteValidation.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
-import { DOCUMENT_ZIP_MAX_BYTES, detachDocument, discardGeneratedDocument, documentMimeType, documentNativePlayback, exportDocumentZip, importDocumentDirectory, importDocumentTemplate, importDocumentZip, upgradeDocumentEngine, readDocumentManifest, resolveDocumentFile } from '../services/musicVideo/compositionDocument.js';
+import { DOCUMENT_ZIP_MAX_BYTES, detachDocument, discardGeneratedDocument, documentMimeType, exportDocumentZip, importDocumentDirectory, importDocumentTemplate, importDocumentZip, upgradeDocumentEngine, readDocumentManifest, resolveDocumentFile } from '../services/musicVideo/compositionDocument.js';
 import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
@@ -118,6 +118,8 @@ router.get('/:id/composition/document/export', asyncHandler(async (req, res) => 
 
 // Whether the document is the unmodified shipped template, whose scenes may play in the page itself.
 router.get('/:id/composition/document/playback', asyncHandler(async (req, res) => {
+  // Lazy: documentRender.js drags in the render stack, which only a playback probe needs.
+  const { documentNativePlayback } = await import('../services/musicVideo/documentRender.js');
   res.json(await documentNativePlayback(await requireProject(req.params.id)));
 }));
 

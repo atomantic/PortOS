@@ -5,7 +5,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('mv-clone-test-') }));
 vi.mock('./catalogLinks.js', () => ({ queueProjectCatalogLinkSync: vi.fn() }));
-vi.mock('./blender/song.js', async original => {
+vi.mock('./blender/owner.js', async original => {
   const actual = await original();
   return { ...actual, writeBlenderSong: vi.fn(actual.writeBlenderSong) };
 });
@@ -14,7 +14,7 @@ vi.mock('../sharing/recordEvents.js', () => ({ emitRecordUpdated: vi.fn(), emitR
 const projects = await import('./projects.js');
 const filmActions = await import('./projectFilmActions.js');
 const file = await import('./projectsFile.js');
-const { writeBlenderSong } = await import('./blender/song.js');
+const { writeBlenderSong } = await import('./blender/owner.js');
 const { blenderSrcDir, blenderSongFile, blenderWorkspaceDir } = await import('./blender/workspace.js');
 const { emitRecordUpdated } = await import('../sharing/recordEvents.js');
 afterAll(cleanupTempDataRoots);
