@@ -271,7 +271,7 @@ export const TOOLING_TESTS = [
 // Paths whose edit can break a tooling test with no import edge reaching it: the
 // scripts and workflows themselves, every dependency manifest, the Vitest configs,
 // and the Vitest environment modules the real configs load in the fixtures' child runs.
-export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|ownedBrowserDiagnostics|runTempRoot)\.js$)/;
+export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|runTempRoot)\.js$)/;
 
 export const toolingTestsFor = (changedFiles, trackedSet) => (
   changedFiles.some((path) => TOOLING_OWNER_RE.test(path)) ? TOOLING_TESTS.filter((path) => trackedSet.has(path)) : []);
@@ -552,7 +552,7 @@ const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   'scripts/lib/vitestWatch.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
-  'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+  'server/lib/mockPathsDataRoot.js',
 ]);
 const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
   'server/package.json', 'server/package-lock.json',

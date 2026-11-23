@@ -1,4 +1,3 @@
-import { observeOwnedBrowsers } from './ownedBrowserDiagnostics.js';
 import { builtinEnvironments } from 'vitest/runtime';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,36 +12,27 @@ export default {
   viteEnvironment: 'ssr',
   async setup(global, options) {
     const node = await builtinEnvironments.node.setup(global, options);
-    const disposeObservations = observeOwnedBrowsers(() => global.__vitest_worker__?.filepath);
-    try {
-      const prior = process.env.PORTOS_MEDIA_MODELS_FILE;
-      const root = prior ? null : mkdtempSync(join(tmpdir(), 'portos-suite-media-'));
-      if (root) process.env.PORTOS_MEDIA_MODELS_FILE = join(root, 'media-models.json');
-      return {
-        async teardown() {
+    const prior = process.env.PORTOS_MEDIA_MODELS_FILE;
+    const root = prior ? null : mkdtempSync(join(tmpdir(), 'portos-suite-media-'));
+    if (root) process.env.PORTOS_MEDIA_MODELS_FILE = join(root, 'media-models.json');
+    return {
+      async teardown() {
+        try {
           try {
-            try {
-              await global.__portosCleanupGitTemplates?.();
-              if (global.__portosReleaseGitSupervisor) await global.__portosReleaseGitSupervisor();
-              else await global.__portosGitSupervisorCleanup?.();
-            } finally {
-              disposeObservations();
-              if (root) {
-                if (prior === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
-                else process.env.PORTOS_MEDIA_MODELS_FILE = prior;
-                rmSync(root, { recursive: true, force: true });
-              }
-            }
+            await global.__portosCleanupGitTemplates?.();
+            if (global.__portosReleaseGitSupervisor) await global.__portosReleaseGitSupervisor();
+            else await global.__portosGitSupervisorCleanup?.();
           } finally {
-            await node.teardown(global);
+            if (root) {
+              if (prior === undefined) delete process.env.PORTOS_MEDIA_MODELS_FILE;
+              else process.env.PORTOS_MEDIA_MODELS_FILE = prior;
+              rmSync(root, { recursive: true, force: true });
+            }
           }
-        },
-      };
-    } catch (error) {
-      // setup can fail before Vitest receives our teardown owner. Preserve that
-      // original error while ending any partial diagnostic subscription.
-      disposeObservations();
-      throw error;
-    }
+        } finally {
+          await node.teardown(global);
+        }
+      },
+    };
   },
 };

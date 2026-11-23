@@ -19,23 +19,21 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies }
 import { browserSuiteCanRun, chromeWithH264, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 const { it, drain } = ownTestBodies(vitestIt);
-const lifecycle = vi.hoisted(() => ({ diagnostics: null, chromeProcess: null, fixtureWritersSettled: false }));
-vi.mock('node:fs/promises', async original => {
-  const actual = await original();
-  return { ...actual, rm: (...args) => lifecycle.diagnostics
-    ? lifecycle.diagnostics.remove(actual.rm, ...args) : actual.rm(...args) };
-});
+const lifecycle = vi.hoisted(() => ({ ownedChildren: [], chromeProcess: null, fixtureWritersSettled: false }));
 vi.mock('../../lib/childProcess.js', async original => {
   const actual = await original();
   return { ...actual, spawn(...args) {
     const child = actual.spawn(...args);
-    lifecycle.diagnostics?.track(child, args[1]);
+    const arg = args[1]?.find?.(value => value.startsWith('--user-data-dir=') && value.includes('portos-composition-browser-'));
+    if (arg) {
+      const owned = { profile: arg.slice('--user-data-dir='.length), closed: false };
+      child.once('close', () => { owned.closed = true; });
+      lifecycle.ownedChildren.push(owned);
+    }
     return child;
   } };
 });
-const { createOwnedBrowserDiagnostics } = await import('../../test/ownedBrowserDiagnostics.js');
-lifecycle.diagnostics = createOwnedBrowserDiagnostics();
-const ownedChildren = lifecycle.diagnostics.children;
+const ownedChildren = lifecycle.ownedChildren;
 
 // This suite measures encoder pixels; the actual operator boundary is exercised in musicVideoProductionReview.browser.test.js.
 vi.mock('./productionReview.js', async original => ({ ...await original(), assertProductionApproval: () => {} }));
@@ -71,7 +69,6 @@ const { findFfmpeg } = await import('../../lib/ffmpeg.js');
 const { _cleanupTestBrowser, _createTestArtifactsRoot, _waitForTestChrome, _testBrowserCleanupSettled, _testChromeCaptureArgs } = await import('../htmlComposition/testBrowserCleanup.js');
 
 afterAll(() => {
-  lifecycle.diagnostics.dispose();
   if (!lifecycle.chromeProcess || (lifecycle.fixtureWritersSettled && _testBrowserCleanupSettled(lifecycle.chromeProcess))) cleanupTempDataRoots();
 });
 
@@ -116,8 +113,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     try {
       await drain();
       for (const owned of ownedChildren) {
-        expect(owned.closed, `owned capture child closed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(true);
-        expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown; ${lifecycle.diagnostics.describe(owned)}`).toBe(false);
+        expect(owned.closed, `owned capture child closed before fixture teardown`).toBe(true);
+        expect(existsSync(owned.profile), `owned capture profile removed before fixture teardown`).toBe(false);
       }
       lifecycle.fixtureWritersSettled = true;
     } finally { await closeFixture(); }
@@ -1405,8 +1402,8 @@ describe.skipIf(!canRun)('layered template with real Chrome and ffmpeg', () => {
     } finally { testSignal = originalSignal; }
     expect(ownedChildren).toHaveLength(before + 1);
     const owned = ownedChildren.at(-1);
-    expect(owned.closed, lifecycle.diagnostics.describe(owned)).toBe(true);
-    expect(existsSync(owned.profile), lifecycle.diagnostics.describe(owned)).toBe(false);
+    expect(owned.closed).toBe(true);
+    expect(existsSync(owned.profile)).toBe(false);
     expect(existsSync(`${outputPath}.silent.mp4`)).toBe(false);
     expect(browser.isConnected()).toBe(true);
   }, 30000);
