@@ -129,6 +129,8 @@ describe('ollamaManager residency status', () => {
 })
 
 describe('ollamaManager.isOllamaProvider locality', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
   it('rejects remote Ollama providers so no local daemon is launched for them', async () => {
     const { isOllamaProvider, ensureProviderReady } = await loadManager()
     for (const endpoint of ['http://peer-host.example.ts.net:11434/v1', 'http://192.0.2.10:11434/v1']) {
@@ -155,7 +157,6 @@ describe('ollamaManager.isOllamaProvider locality', () => {
     vi.stubEnv('OLLAMA_URL', 'http://127.0.0.1:12345')
     const { isOllamaProvider } = await loadManager()
     expect(isOllamaProvider({ id: 'custom', type: 'api', endpoint: 'http://127.0.0.1:12345/v1' })).toBe(true)
-    vi.unstubAllEnvs()
   })
 })
 
