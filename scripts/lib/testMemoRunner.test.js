@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
   clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
-  recordTestMemo, seedVitestDependencies, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
+  SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
@@ -677,6 +677,55 @@ describe('planTestMemo and recordTestMemo', () => {
     const slices = (path, repoRoot) => [1, 2].map((index) => vitestShardSlice(files, { repoRoot, scope: 'server', index, count: 2, path }));
     expect(slices(win32, 'D:\\a\\repo')).toEqual(slices(posix, '/repo'));
     expect(slices(posix, '/repo').flat().sort()).toEqual([...files].sort());
+  });
+
+  it('pins heavy server suites onto two shards and leaves every other file on the hash slice', () => {
+    const heavy = Object.keys(SERVER_HEAVY_SHARD_OWNERS);
+    const extras = ['server/lib/a.test.js', 'server/lib/b.test.js', 'scripts/plain.test.js'];
+    const files = [...heavy, ...extras];
+    const shardOf = (slice) => serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: slice, count: 2 });
+    const slices = [shardOf(1), shardOf(2)];
+    expect(slices.flat().sort()).toEqual([...files].sort());
+    expect(new Set(slices.flat()).size).toBe(files.length);
+    for (const [file, owner] of Object.entries(SERVER_HEAVY_SHARD_OWNERS)) {
+      expect(slices[owner - 1], file).toContain(file);
+      expect(slices[owner % 2], file).not.toContain(file);
+    }
+    for (const extra of extras) {
+      const onFirst = vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }).includes(extra);
+      expect(slices[onFirst ? 0 : 1], extra).toContain(extra);
+    }
+    expect(serverShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 })).toEqual(
+      vitestShardSlice(files, { repoRoot: '/repo', scope: 'server', index: 2, count: 4 }),
+    );
+    expect(serverShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 })).toEqual(
+      vitestShardSlice(extras, { repoRoot: '/repo', scope: 'server', index: 1, count: 2 }),
+    );
+    // Measured seconds from #17618, plus shard 1's 7s Smoke-boot step outside Vitest.
+    const seconds = {
+      'server/test/guards/repo.guard.test.js': 9.1,
+      'server/scripts/run-local-code-review.test.js': 7,
+      'scripts/pregate.test.js': 25.1,
+      'scripts/setup-image-video.test.js': 19.5,
+      'scripts/lib/testMemo.test.js': 15,
+      'scripts/vitestTempRoot.test.js': 14,
+      'scripts/generate_ltx2.test.js': 13.8,
+      'scripts/vitestSiblingSweep.test.js': 12.3,
+      'scripts/update-headless-recovery.test.js': 11.4,
+      'server/services/updateExecutor.deferred.test.js': 11.1,
+      'server/test/guards/modules.guard.test.js': 9.6,
+      'server/test/guards/runtime.guard.test.js': 10,
+      'scripts/ci-test-plan.test.js': 33.1,
+      'scripts/run-ci-tests.test.js': 33.2,
+      'server/services/repoRepairCompletion.test.js': 27,
+      'scripts/runCiTestsClientFixture.test.js': 20.2,
+      'scripts/lib/testMemoRunner.test.js': 11.4,
+    };
+    expect(Object.keys(seconds).sort()).toEqual(heavy.sort());
+    const pinned = (owner) => heavy.filter((file) => SERVER_HEAVY_SHARD_OWNERS[file] === owner)
+      .reduce((sum, file) => sum + seconds[file], 0);
+    const smokeBootSec = 7;
+    expect(Math.abs((pinned(1) + smokeBootSec) - pinned(2))).toBeLessThanOrEqual(15);
   });
 
   it('partitions all four Windows slices exactly like Vitest\'s sequencer', () => {

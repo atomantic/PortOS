@@ -124,7 +124,7 @@ export function toRunnerPath(scope, path) {
  * This runner's slice of the job matrix. `CI_SHARD` is `<index>/<count>`
  * (ci.yml); a single shard is no shard, so the one-runner invocation stays
  * identical to a local `npm run test:ci`. The slice is taken by the runner
- * itself (scripts/lib/testMemoRunner.js vitestShardSlice), never by Vitest:
+ * itself (scripts/lib/testMemoRunner.js serverShardSlice), never by Vitest:
  * each shard subtracts a different memo state, and a `--shard` applied after
  * that subtraction could leave a file to no shard at all.
  */
