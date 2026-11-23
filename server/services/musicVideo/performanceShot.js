@@ -39,7 +39,6 @@ import { basename, join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoDuration, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
-import { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } from '../../lib/audioFingerprint.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import {
   clipRelativeCues,
@@ -148,7 +147,7 @@ function legacyMasterLookup(project, masterPath) {
     for (const candidate of await listCandidates()) {
       candidate.sha256 ??= await hashFile(candidate.path).catch(() => '');
       if (candidate.sha256 !== sha256) continue;
-      envelope = await computeRmsEnvelope(candidate.path);
+      envelope = await (await import('../../lib/audioFingerprint.js')).computeRmsEnvelope(candidate.path);
       break;
     }
     envelopes.set(sha256, envelope);
@@ -201,6 +200,8 @@ async function reviewPerformanceTakes(project, masterPath, { decode = true } = {
   const oldEnvelope = legacyMasterLookup(project, masterPath);
   const windowUnchanged = async (instruction) => {
     if (!decode) return true;
+    // Lazy: boot loads this module, and only a lip-synced take compares windows.
+    const { compareWindowFingerprint, computeRmsEnvelope, windowFingerprint } = await import('../../lib/audioFingerprint.js');
     let fingerprint = instruction.audio?.windowFingerprint;
     if (!fingerprint) {
       const envelope = await oldEnvelope(instruction.audio?.sha256);
@@ -372,6 +373,7 @@ export async function preparePerformanceShot({ musicVideo, backend, sourceImageP
   // #9266: the MASTER's loudness over this window, so a later re-master that
   // leaves these bars alone keeps the take. Best-effort — a take without one
   // falls back to the old-master lookup, and then to whole-file staleness.
+  const { computeRmsEnvelope, windowFingerprint } = await import('../../lib/audioFingerprint.js');
   const windowFingerprintRecord = await computeRmsEnvelope(masterPath)
     .then((envelope) => windowFingerprint(envelope, { startSec: plan.windowStartSec, endSec: plan.windowEndSec }))
     .catch((err) => {
