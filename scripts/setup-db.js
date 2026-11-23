@@ -10,6 +10,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
 import { createRequire } from 'module';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -113,10 +114,20 @@ function hasCompose() {
 // exists but schema not yet applied) would falsely report "ready" and the
 // app would boot against an unmigrated database. `-X` skips the user's
 // .psqlrc so a custom prompt or echo setting can't pollute stdout.
+// Homebrew's postgresql@17 formula is keg-only on macOS, so its psql is not on
+// PATH unless the user exported it. Probed per call (not cached at load) so a
+// keg installed by `db.sh setup-native` is found by the verification step that
+// runs right after it. Mirrors scripts/db.sh and server/services/dbAdmin.js.
+const PSQL_KEG_PATHS = ['/opt/homebrew/opt/postgresql@17/bin/psql', '/usr/local/opt/postgresql@17/bin/psql'];
+function resolvePsqlBinary() {
+  if (process.platform !== 'darwin') return 'psql';
+  return PSQL_KEG_PATHS.find((candidate) => existsSync(candidate)) ?? 'psql';
+}
+
 function isPortOSDbReady(port = PG_PORT_NATIVE) {
   try {
     const output = execFileSync(
-      'psql',
+      resolvePsqlBinary(),
       [
         '-X',
         '-h', PG_HOST,
@@ -154,8 +165,9 @@ function isRunningServerStale(port = PG_PORT_NATIVE) {
   try {
     const prefix = execFileSync('brew', ['--prefix', 'postgresql@17'], { stdio: 'pipe' }).toString().trim();
     const installed = pgVersionNum(execFileSync(join(prefix, 'bin', 'pg_config'), ['--version'], { stdio: 'pipe' }).toString());
+    const kegPsql = join(prefix, 'bin', 'psql');
     const running = Number(execFileSync(
-      'psql',
+      existsSync(kegPsql) ? kegPsql : resolvePsqlBinary(),
       ['-X', '-h', PG_HOST, '-p', String(port), '-U', PG_USER, '-d', PG_DATABASE, '-tAc', 'SHOW server_version_num'],
       { stdio: 'pipe', env: PG_CHILD_ENV },
     ).toString().trim());
