@@ -30,11 +30,11 @@ import { videoStreamingModeFromRecord } from '../../lib/videoStreamingMode.js';
 import { falExtraReferenceLimit } from '../../lib/falVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../../server/lib/runwaySpecialVideoModels.js';
-import { useVideoGenBackendCaps } from '../../hooks/useVideoGenBackendCaps.js';
-import { useVideoGenFieldState } from '../../hooks/useVideoGenFieldState.js';
-import { useVideoGenSubmitFlow } from '../../hooks/useVideoGenSubmitFlow.js';
-import { useVideoGenUrlPrefill, readVideoGenIncoming } from '../../hooks/useVideoGenUrlPrefill.js';
-import { useVideoGenValidation } from '../../hooks/useVideoGenValidation.js';
+import { useVideoGenBackendCaps } from './useVideoGenBackendCaps.js';
+import { useVideoGenFieldState } from './useVideoGenFieldState.js';
+import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
+import { useVideoGenUrlPrefill, readVideoGenIncoming } from './useVideoGenUrlPrefill.js';
+import { useVideoGenValidation } from './useVideoGenValidation.js';
 
 // A Remix is an editing starting point. A fixed sampler profile (for example,
 // MiniMax H3) cannot honor a negative prompt, steps, or CFG override, so

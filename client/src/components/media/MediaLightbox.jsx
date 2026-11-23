@@ -17,7 +17,7 @@ import FilmLookPane, { useFilmLookDraft } from './FilmLookPane.jsx';
 import FilmLookPreview from './FilmLookPreview.jsx';
 import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
-import { useSwipeNav } from '../../hooks/useSwipeNav';
+import { useSwipeNav } from './useSwipeNav';
 import { isEditableTarget, onActivateKeyDown } from '../../lib/a11yKeyboard';
 import { i2vReferenceModeLabel } from '../../lib/videoReferenceModes';
 import useFocusTrap from '../../hooks/useFocusTrap.js';

@@ -3,7 +3,6 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { PROCESS_OWNERS_DIR } from './lib/testProcessAttribution.js';
 import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
@@ -14,8 +13,8 @@ export function setup({ vitest }) {
   // Vitest runs global teardown before closing its worker pool. Its close hook
   // runs after pool.close(), so live runner workers are not mistaken for leaks.
   vitest.onClose(async () => {
-    if (root && process.platform !== 'win32') await waitForVitestWatchdog(root);
-    cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH });
+    const records = root && process.platform !== 'win32' ? await waitForVitestWatchdog(root) : undefined;
+    cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, records });
   });
 }
 
@@ -95,7 +94,7 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, platform = process.platform } = {}) {
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, records, platform = process.platform } = {}) {
   if (!root) return;
   // A process a suite failed to tear down would outlive the run (#10840).
   const outcomes = [];
@@ -103,6 +102,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
   let unsettled = 0;
   let inspected = true;
   const processes = platform === 'win32' ? 0 : contain(root, {
+    records,
     onInspection: value => { inspected = value; if (!value) unsettled++; },
     onOutcome: outcome => {
       total++;
@@ -139,7 +139,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
     return;
   }
   entries = entries
-    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE && name !== PROCESS_OWNERS_DIR)
+    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isDotnetRegistrationCache(root, name))

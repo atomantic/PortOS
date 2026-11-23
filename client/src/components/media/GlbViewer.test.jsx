@@ -69,7 +69,7 @@ vi.mock('@react-three/drei', () => ({
 vi.mock('../../hooks/useClonedGltf', () => ({ GltfPrimitive: () => null }));
 
 import { useGLTF } from '@react-three/drei';
-import GlbViewer, { cloneGlbSceneWithOpaqueMaterials, isolateGlbNode } from './GlbViewer';
+import GlbViewer, { cloneGlbSceneWithOpaqueMaterials, highlightGlbNodes, isolateGlbNode } from './GlbViewer';
 
 const openControls = () => fireEvent.click(screen.getByLabelText('Preview display settings'));
 
@@ -408,5 +408,24 @@ describe('isolateGlbNode', () => {
     const { scene, baseMeshes, shade } = twoParts();
     expect(isolateGlbNode(scene, 'nope').box).toBeNull();
     expect([shown(shade), ...baseMeshes.map(shown)]).toEqual([true, true, true]);
+  });
+});
+
+describe('highlightGlbNodes', () => {
+  it('tints only the named nodes, each its own color, and puts the shared materials back', () => {
+    const scene = new Group();
+    const shared = new MeshStandardMaterial();
+    const [box, lid, knob] = ['box', 'lid', 'knob'].map((name) => {
+      const mesh = new Mesh(new BoxGeometry(1, 1, 1), shared);
+      mesh.userData.name = name;
+      scene.add(mesh);
+      return mesh;
+    });
+    const restore = highlightGlbNodes(scene, ['box', 'lid']);
+    expect(knob.material).toBe(shared);
+    expect(shared.emissive.getHex()).toBe(0);
+    expect(new Set([box, lid].map((mesh) => mesh.material.emissive.getHex())).size).toBe(2);
+    restore();
+    expect([box, lid, knob].every((mesh) => mesh.material === shared)).toBe(true);
   });
 });

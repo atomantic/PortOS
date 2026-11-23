@@ -39,6 +39,8 @@ import {
 } from './workspace.js';
 
 const BUILDS_KEPT = 5;
+// How long a build may look for parts passing through each other; poses past it are reported as unmeasured.
+const SWEEP_SECONDS = Object.freeze({ draft: 120, full: 600 });
 
 // Reserved synchronously before a start awaits, so two requests cannot both start a build.
 const starting = new Set();
@@ -166,7 +168,7 @@ async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash 
     registry.update(entry, { status: 'running' });
     const result = await runBlenderModelDriver({
       tool,
-      job: { mode: 'build', workspace: blenderModelWorkspaceDir(id), src: blenderModelSrcDir(id), out, quality },
+      job: { mode: 'build', workspace: blenderModelWorkspaceDir(id), src: blenderModelSrcDir(id), out, quality, sweepSeconds: SWEEP_SECONDS[quality] },
       signal: entry.abort.signal,
       onEvent: (event) => collector.add(event),
       onLog: log.write,

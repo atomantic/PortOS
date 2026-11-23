@@ -20,6 +20,8 @@ const BUILD_LIMITS = Object.freeze({ wallSeconds: 30 * 60, memoryBytes: 16 * GIB
 // bake.test.js fails when py/ holds a driver-side file this list does not stage.
 const STAGED_DRIVER_FILES = Object.freeze([
   ['portos_model_driver.py', new URL('./py/portos_model_driver.py', import.meta.url)],
+  ['portos_model_motion.py', new URL('./py/portos_model_motion.py', import.meta.url)],
+  ['portos_model_poses.py', new URL('./py/portos_model_poses.py', import.meta.url)],
   ['portos_bake.py', new URL('./py/portos_bake.py', import.meta.url)],
   ['portos_model/bake.py', new URL('./py/portos_model/bake.py', import.meta.url)],
   ['portos_model/package.py', new URL('./py/portos_model/package.py', import.meta.url)],
@@ -34,7 +36,7 @@ export const BLENDER_MODEL_NEEDS_TRUSTED_LOCAL = 'A Blender model build runs the
 export const requireBlenderModelTool = () => requireTrustedLocalBlender(BLENDER_MODEL_NEEDS_TRUSTED_LOCAL);
 
 /**
- * Run one job: `{ mode: 'build', workspace, src, out, quality }`, or
+ * Run one job: `{ mode: 'build', workspace, src, out, quality, sweepSeconds }`, or
  * `{ mode: 'review', blend, out, size, views, looks }` (see review.js), or
  * `{ mode: 'bake', blend, out, set, size, samples, device }` and
  * `{ mode: 'bake-export', blend, glb, out, sets }` (see bake.js).

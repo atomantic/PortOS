@@ -1,10 +1,12 @@
-import { Suspense } from 'react';
-import { Box, Download, ExternalLink, FolderPlus, Upload } from 'lucide-react';
+import { Suspense, useMemo, useState } from 'react';
+import { Box, Download, ExternalLink, Eye, FolderPlus, Upload } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import Pill from '../ui/Pill';
 import ListLoadError from '../ui/ListLoadError';
+import BlenderModelPose from './BlenderModelPose.jsx';
 import { lazyWithReload } from '../../utils/lazyWithReload';
 import { blenderModelAssetUrl, blenderModelBuildFileUrl } from '../../services/apiBlenderModels.js';
+import { defaultPose, movedPose, poseClips } from '../../lib/blenderModelPose.js';
 import { blenderModelBuilds, formatMeters, shownBlenderModelBuild } from '../../lib/blenderModels.js';
 import { formatCount, formatDateTime } from '../../utils/formatters.js';
 import { buttonCls, inputCls, labelCls, primaryCls } from '../musicVideo/blender/blenderStyles.js';
@@ -12,7 +14,9 @@ import { buttonCls, inputCls, labelCls, primaryCls } from '../musicVideo/blender
 const GlbViewer = lazyWithReload(() => import('../media/GlbViewer'));
 const SEVERITIES = [['error', 'Errors', 'error'], ['warning', 'Warnings', 'warning'], ['note', 'Notes', 'muted']];
 
-function Findings({ report }) {
+const NO_CONTROLS = [];
+
+function Findings({ report, onShowPose }) {
   const groups = SEVERITIES.map(([severity, label, tone]) => ({ label, tone, items: report.findings.filter((finding) => finding.severity === severity) }))
     .filter((group) => group.items.length);
   return (
@@ -24,10 +28,16 @@ function Findings({ report }) {
           <h3 className="text-xs"><Pill size="xs" tone={tone}>{label} · {formatCount(items.length)}</Pill></h3>
           <ul aria-label={label} className="min-w-0 space-y-1 text-xs">
             {items.map((finding) => (
-              <li key={finding.code} className="min-w-0 break-words">
+              // One per code, except an overlap, which is one per pair of parts.
+              <li key={`${finding.code}:${finding.pose ? finding.subjects.join('|') : ''}`} className="min-w-0 break-words">
                 {finding.message}
-                {finding.subjects?.length > 0 && (
+                {finding.subjects?.length > 0 && !finding.pose && (
                   <span className="text-port-text-muted">: {finding.subjects.join(', ')}{finding.more ? ` and ${formatCount(finding.more)} more` : ''}</span>
+                )}
+                {finding.pose && (
+                  <button type="button" className={`${buttonCls} ml-2`} onClick={() => onShowPose(finding)}>
+                    <Eye size={14} aria-hidden="true" /> Show pose<span className="sr-only"> of {finding.subjects.join(' and ')}</span>
+                  </button>
                 )}
               </li>
             ))}
@@ -110,6 +120,13 @@ function EmptyModel({ model, onOpenTab }) {
  */
 export default function BlenderModelTab({ model, reportRead, build, part, onPartChange, onBuildChange, onOpenTab }) {
   const { state, pending } = model;
+  const [posed, setPosed] = useState(null);
+  const motion = reportRead.data?.checks.motion ?? null;
+  const controls = motion?.controls ?? NO_CONTROLS;
+  // A pose belongs to the build it was set on.
+  const shown = posed?.buildId === build?.id ? posed : null;
+  const values = useMemo(() => shown?.values ?? defaultPose(controls), [shown, controls]);
+  const clips = useMemo(() => (controls.length ? poseClips(controls, values) : undefined), [controls, values]);
   if (!build) return <EmptyModel model={model} onOpenTab={onOpenTab} />;
   const report = reportRead.data;
   const published = state.publishedBuildId === build.id;
@@ -119,6 +136,13 @@ export default function BlenderModelTab({ model, reportRead, build, part, onPart
   const hasGlb = !report || report.checks.glbBytes != null;
   // An unknown or unbuilt part in the URL isolates nothing.
   const isolated = part && report?.describe?.parts.some((entry) => entry.id === part) && !report.checks.parts.missing.includes(part) ? part : null;
+
+  const setPose = (next, highlight) => setPosed({ buildId: build.id, values: next, highlight });
+  const showPose = (finding) => {
+    setPose({ ...defaultPose(controls), ...finding.pose }, finding.subjects);
+    // Both parts have to be on show.
+    if (part) onPartChange(null);
+  };
 
   return (
     <div className="@container min-w-0">
@@ -150,7 +174,7 @@ export default function BlenderModelTab({ model, reportRead, build, part, onPart
           </div>
           {hasGlb ? (
             <Suspense fallback={<BrailleSpinner text="Loading 3D viewer" />}>
-              <GlbViewer src={glb} downloadHref={published ? blenderModelAssetUrl(state.id) : undefined} isolateNode={isolated} className="mx-auto w-full max-w-[max(20rem,calc(100dvh-16rem))]" />
+              <GlbViewer src={glb} downloadHref={published ? blenderModelAssetUrl(state.id) : undefined} isolateNode={isolated} pose={clips} highlightNodes={shown?.highlight} className="mx-auto w-full max-w-[max(20rem,calc(100dvh-16rem))]" />
             </Suspense>
           ) : <p className="rounded-xl border border-dashed border-port-border p-4 text-sm">This build wrote no model.glb, so there is nothing to show.</p>}
         </div>
@@ -161,8 +185,12 @@ export default function BlenderModelTab({ model, reportRead, build, part, onPart
             <>
               {report.describe?.title && <p className="flex items-center gap-1.5 text-sm"><Box size={14} aria-hidden="true" /> {report.describe.title}</p>}
               <Measurements checks={report.checks} />
+              {controls.length > 0 && hasGlb && (
+                <BlenderModelPose motion={motion} values={values} highlight={shown?.highlight} canReset={!!shown}
+                  onMove={(id, value) => setPose(movedPose(controls, values, id, value), shown?.highlight)} onReset={() => setPosed(null)} />
+              )}
               <PartList report={report} part={isolated} onPartChange={onPartChange} />
-              <Findings report={report} />
+              <Findings report={report} onShowPose={showPose} />
             </>
           )}
         </div>

@@ -120,7 +120,7 @@ describe('Blender Models: workspace, build, report, publish', () => {
     expect(record).toMatchObject({ status: 'complete', publishable: true, counts: { error: 0, warning: 0 }, quality: 'draft', title: 'Desk lamp' });
     expect(blender.fake.control.jobs[0]).toMatchObject({
       mode: 'build', quality: 'draft', src: join(workspace(id), 'src'), out: join(workspace(id), 'builds', buildId),
-      staged: ['job.json', 'portos_bake.py', 'portos_model/bake.py', 'portos_model/package.py', 'portos_model/parts.py', 'portos_model/wear.py', 'portos_model_driver.py'],
+      staged: ['job.json', 'portos_bake.py', 'portos_model/bake.py', 'portos_model/package.py', 'portos_model/parts.py', 'portos_model/wear.py', 'portos_model_driver.py', 'portos_model_motion.py', 'portos_model_poses.py'], sweepSeconds: 120,
     });
 
     const built = await report(id, buildId);

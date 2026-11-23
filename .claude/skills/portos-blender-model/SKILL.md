@@ -35,8 +35,9 @@ decides proportions; a close-up plate decides its own mechanism. `GET /api/blend
 ## The contract
 
 ```python
-def describe(ctx) -> dict:   # {"title", "sizeMeters": {"x", "y", "z"}, "triangleBudget", "parts": [{"id", "label", "parent"?}], "controls"?: []}
+def describe(ctx) -> dict:   # {"title", "sizeMeters": {"x", "y", "z"}, "triangleBudget", "parts": [{"id", "label", "parent"?}], "controls"?: [], "actions"?: [], "allowContact"?: []}
 def build(ctx) -> None:      # one mesh object per declared part, named exactly by its id
+def pose(ctx, action, t) -> dict:   # only with actions: {controlId: 0-1} at t (0 to 1)
 ```
 
 - Meters, Z up, front facing -Y, standing on Z = 0 and centered on X = Y = 0 (review cameras frame that box). `sizeMeters` is the bounding box you intend; the build is held to it.
@@ -45,7 +46,32 @@ def build(ctx) -> None:      # one mesh object per declared part, named exactly 
 - Apply scale (or build at size); never mirror with a negative scale.
 - The scene starts empty for every build. `ctx`: `workspace`, `src`, `out_dir`, `quality` (`draft` or `full`: use it to
   trade segment counts for speed), `log(message)`.
-- `controls` is stored but has no behavior yet.
+
+### Moving parts
+
+Declare a control for every part that moves; never animate or add bones yourself.
+
+```python
+"controls": [
+    {"id": "lid", "label": "Lid", "type": "hinge", "partId": "lid",          # hinge | slide | wheel
+     "origin": [0, 0.1, 0.15], "axis": [-1, 0, 0],                           # world, meters, where the real pin is
+     "min": 0, "max": 110, "default": 0},                                    # degrees (hinge, wheel) or meters (slide)
+    {"id": "clip", "label": "Clip", "type": "slide", "partId": "clip", "origin": [0, -0.1, 0.05], "axis": [1, 0, 0],
+     "min": 0, "max": 0.1, "default": 0, "dependsOn": [{"control": "lid", "atMost": 0.02}]},   # only moves on a shut lid
+],
+"actions": [{"id": "open", "label": "Open", "seconds": 1}],   # needs pose(ctx, action, t)
+"allowContact": [["pin", "hinge_plate"]],                     # parts meant to touch; listed in the report
+```
+
+- Every control is 0–1 over `min`–`max`. Build the model **at its defaults**: that is the pose the checks call rest.
+- A part takes the parts declared under it along. Two controls on one part stack in declared order.
+- Ids are 1–48 letters, digits, `.`, `_` or `-`. A hinge spans at most 360°, a wheel 720°. `dependsOn` limits are 0–1.
+- PortOS builds one bone and one linear one-second `control:<id>` clip per control (`action:<id>` per action), then
+  sweeps: every control in 0.05 steps, related pairs in a 0.1 grid, every action frame. Parts that pass through each
+  other are `sweep-overlap` errors with the pose that shows it. Fix the axis, clearance or range; use `allowContact`
+  only for real contact. Leave a hair of clearance between parts as built: a pair that touches as built is not checked
+  (`sweep-rest-overlap`).
+
 - Optional `bake`: `{"size": 1024|2048|4096, "samples": N, "sets": [{"id", "partIds": [...]}]}` (see Baking below).
 
 ## Baking worn materials and fine detail
@@ -73,7 +99,7 @@ too heavy for the viewers. Ask for a bake in `describe()` and let the textures c
    `blender-model:changed` event or read the state until that build's `status` leaves `running`.
 2. Read `GET /api/blender-models/:id/builds/:buildId/files/report.json`. A failed build has `error` in the record and the
    traceback in `build.log`. Fix every `error` finding (`part-missing`, `bounds-oversized`, `triangles-over-budget`,
-   `scale-negative`, `reimport-*` …), then the warnings, and build again. The numbers in `checks` say by how much.
+   `scale-negative`, `sweep-overlap`, `control-*`, `reimport-*` …), then the warnings, and build again. The numbers in `checks` say by how much.
 3. Compare. Each completed build is rendered from fixed views (`GET …/:id` lists `reviews`; wait for the `review` job).
    Look at `sheet-textured.jpg` and `sheet-clay.jpg` beside every image in `src/refs/`, then plan a second pass:
    `POST /api/blender-models/:id/differences` `{ "text", "partId"?, "referenceId"? }` for each thing missing or wrong.

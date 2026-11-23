@@ -5,10 +5,13 @@
  *
  * Each finding is `{ severity, code, message, subjects?, values? }` with
  * severity `error`, `warning` or `note`; one finding per code, its `subjects`
- * naming the parts, meshes or axes it is about. A build with any error is kept
- * and marked; only a build without errors can be published.
+ * naming the parts, meshes or axes it is about (motion.js adds one
+ * `sweep-overlap` per pair of parts, with the `pose` that shows it). A build
+ * with any error is kept and marked; only a build without errors can be
+ * published.
  */
 import { BLENDER_MODEL_BAKE_UV_OVERLAP_MAX, planBlenderModelBake } from './bakePlan.js';
+import { motionChecks } from './motion.js';
 import { reviewFrameMeters } from './reviewCameras.js';
 
 export const BLENDER_MODEL_SEVERITIES = Object.freeze(['error', 'warning', 'note']);
@@ -23,14 +26,18 @@ const SUBJECTS_LISTED = 50;
 const PART_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const AXES = ['x', 'y', 'z'];
 
+// Reported once per control, action or scope; read by motion.js.
+const MOTION_EVENTS = new Set(['control', 'control-skipped', 'action', 'sweep-scope', 'sweep-rest', 'sweep-overlap', 'reimport-control']);
+
 /** Collects the events of one driver run; `facts()` is what `buildBlenderModelReport` reads. */
 export function collectBlenderModelFacts() {
-  const facts = { start: null, parts: [], described: null, meshes: [], bakeSets: [], scene: null, saved: null, reimport: null, done: null };
+  const facts = { start: null, parts: [], described: null, meshes: [], bakeSets: [], scene: null, saved: null, reimport: null, done: null, sweep: null, motion: [] };
   return {
     add(event) {
       if (event.event === 'part') facts.parts.push({ id: event.id, label: event.label, parent: event.parent });
       else if (event.event === 'mesh') facts.meshes.push(event);
       else if (event.event === 'bakeSet') facts.bakeSets.push(event);
+      else if (MOTION_EVENTS.has(event.event)) facts.motion.push(event);
       else if (event.event in facts) facts[event.event] = event;
     },
     facts: () => facts,
@@ -195,7 +202,6 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     if (!described.sizeMeters) add('error', 'describe-size-invalid', 'describe(ctx) must return sizeMeters {x, y, z}, each a positive number of meters');
     if (described.triangleBudget == null) add('error', 'describe-budget-invalid', 'describe(ctx) must return triangleBudget, a whole number of triangles');
     if (!facts.parts.length) add('error', 'parts-none', 'describe(ctx) declared no parts');
-    if (!described.controlsValid) add('warning', 'controls-invalid', 'controls must be a list of objects (at most 16 KiB); it was not stored');
   }
   const parts = partChecks(facts, add);
   if (facts.scene && facts.scene.meshes === 0) add('error', 'meshes-none', 'build(ctx) created no mesh objects');
@@ -203,6 +209,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
   const bounds = boundsCheck(facts, add);
   const triangles = triangleCheck(facts, add);
   const transforms = transformChecks(facts, add);
+  const motion = motionChecks(facts, add);
   if (facts.scene) {
     add('note', 'materials', `${facts.scene.materials ?? 0} material(s) and ${facts.scene.images ?? 0} image(s)`, {
       values: { materials: facts.scene.materials, images: facts.scene.images },
@@ -221,12 +228,12 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     blenderVersion: facts.start?.blender ?? null,
     describe: described ? {
       title: described.title, sizeMeters: described.sizeMeters, triangleBudget: described.triangleBudget,
-      parts: facts.parts, controls: described.controls,
+      parts: facts.parts, controls: described.controls ?? null, actions: described.actions ?? null,
     } : null,
     checks: {
       parts, bounds, triangles, transforms,
       materials: facts.scene?.materials ?? null, images: facts.scene?.images ?? null, actions: facts.scene?.actions ?? null,
-      glbBytes, reimport, bake: bakeCheck,
+      glbBytes, reimport, motion, bake: bakeCheck,
     },
     findings: findings.sort((a, b) => order(a) - order(b)),
     counts,

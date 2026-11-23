@@ -1,5 +1,6 @@
 /**
- * Request schemas for the Blender Models routes (routes/blenderModels.js): records, source files, builds and publishing.
+ * Schemas for Blender Models: the requests of routes/blenderModels.js (records, source files, builds, publishing), and the
+ * moving parts a model's describe() declares.
  *
  * Source paths follow the Blender workspace rules shared with films (`MUSIC_VIDEO_BLENDER_SOURCE_PATH`); the
  * text byte cap is re-checked on the encoded text in the service, so the schema only bounds the JSON body.
@@ -88,3 +89,32 @@ export const patchBlenderModelDifferenceSchema = z.object({
   text: differenceText.optional(), ...differenceLinks, status: z.enum(['open', 'fixed', 'accepted']).optional(),
   reason: oneLine.trim().max(300).optional(), buildId: buildId.optional(),
 }).strict().refine((patch) => Object.keys(patch).some((key) => key !== 'buildId'), 'nothing to change');
+
+// Moving parts a model's describe() declares (#17878). An id also names a Blender bone and action (63 characters with `control:`).
+const motionId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,47}$/, 'id must be 1-48 letters, digits, ".", "_" or "-", starting with a letter or digit');
+const motionLabel = z.string().trim().min(1).max(80);
+const position = z.tuple([meters, meters, meters]);
+const joint = z.number().finite().min(-10_000).max(10_000);
+// Degrees a hinge or wheel may span: more would put too much of a turn between two keys of its one-second action.
+const MAX_SPAN = { hinge: 360, wheel: 720, slide: Infinity };
+
+export const blenderModelControlSchema = z.object({
+  id: motionId,
+  label: motionLabel,
+  type: z.enum(['hinge', 'slide', 'wheel']),
+  partId,
+  origin: position,
+  axis: position.refine((axis) => Math.hypot(...axis) >= 1e-9, 'axis has no direction'),
+  min: joint,
+  max: joint,
+  default: joint,
+  dependsOn: z.array(z.object({ control: motionId, atLeast: fraction.optional(), atMost: fraction.optional() }).strict()
+    .refine((dep) => dep.atLeast !== undefined || dep.atMost !== undefined, 'a dependency needs atLeast or atMost')
+    .refine((dep) => (dep.atLeast ?? 0) <= (dep.atMost ?? 1), 'atLeast is above atMost')).max(16).optional(),
+}).strict()
+  .refine((control) => control.min < control.max && control.default >= control.min && control.default <= control.max, 'needs min < max with default between them')
+  .refine((control) => control.max - control.min <= MAX_SPAN[control.type], 'a hinge spans at most 360 degrees, a wheel 720');
+
+export const blenderModelActionSchema = z.object({ id: motionId, label: motionLabel.optional(), seconds: z.number().positive().max(60) }).strict();
+
+export const blenderModelAllowContactSchema = z.tuple([partId, partId]);

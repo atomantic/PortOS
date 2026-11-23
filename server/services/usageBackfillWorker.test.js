@@ -5,7 +5,13 @@ import { tmpdir } from 'os';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-worker-' });
-vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const readJSONFileSpy = vi.hoisted(() => vi.fn());
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const proxy = makeProxy(actual);
+  readJSONFileSpy.mockImplementation((...args) => actual.readJSONFile(...args));
+  return new Proxy(proxy, { get: (target, key, receiver) => (key === 'readJSONFile' ? readJSONFileSpy : Reflect.get(target, key, receiver)) });
+});
 afterAll(cleanup);
 const { __resetUsageClaims, __resetUsageIndexCache, listAgyConversations, readMeasuredUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const { scanHistoricalUsage } = await import('./usageBackfillWorker.js');
@@ -209,6 +215,20 @@ describe('historical usage worker', () => {
       measured: [expect.objectContaining({ tokensIn: 7, tokensOut: 3, cacheReadTokens: 2, source: 'measured' })], siblings: [] })]);
     expect((await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true, reconciledRunIds: ['bridge'] })).corrections).toEqual([]);
     expect(snapshotUsageClaims()).toEqual(expect.objectContaining({ codexHighWater: [] }));
+  });
+
+  it('never reads metadata for runs the parent already reconciled on a reported-only pass', async () => {
+    const metadata = { providerId: 'claude-api-example', model: 'example-model',
+      startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:10:00Z',
+      success: true, selfContainedUsage: true, usageSessionDeferred: true,
+      reportedUsage: { tokensIn: 7, tokensOut: 3 } };
+    await writeRun('done', metadata);
+    await writeRun('pending', metadata);
+    readJSONFileSpy.mockClear();
+    const result = await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true, reconciledRunIds: ['done'] });
+    const readPaths = readJSONFileSpy.mock.calls.map(([path]) => path);
+    expect(readPaths).toEqual([join(root, 'pending', 'metadata.json')]);
+    expect(result.corrections.map((c) => c.runId)).toEqual(['pending']);
   });
 
   it('skips an unreconciled self-contained run instead of swapping an estimate for a session it cannot own', async () => {

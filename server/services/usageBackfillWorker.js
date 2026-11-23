@@ -3,6 +3,8 @@ import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
 import { readJSONFile, tryReadFile } from '../lib/fileUtils.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+
 import {
   isSelfContainedRun,
   mergeUsageClaims,
@@ -15,6 +17,8 @@ import {
   transcriptFamily,
   WINDOW_SLACK_MS
 } from './usageReconciler.js';
+
+const METADATA_READ_CONCURRENCY = 32;
 
 export const listUsageRunIds = async (runsDir) => readdir(runsDir, { withFileTypes: true })
   .then((entries) => entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name))
@@ -154,9 +158,15 @@ export async function scanHistoricalUsage({
   const candidates = [];
   const settled = [];
 
-  for (const runId of runIds ?? await listUsageRunIds(runsDir)) {
+  // A reported-only pass never reconsiders a run the parent already settled, so
+  // those runs' metadata is not even read (boot scans every historical run).
+  const scanIds = (runIds ?? await listUsageRunIds(runsDir))
+    .filter((runId) => !(reportedOnly && reconciled.has(runId)));
+  const metadataList = await mapWithConcurrency(scanIds, METADATA_READ_CONCURRENCY,
+    (runId) => readJSONFile(join(runsDir, runId, 'metadata.json'), null));
+  for (const [index, runId] of scanIds.entries()) {
     const metadataPath = join(runsDir, runId, 'metadata.json');
-    const metadata = await readJSONFile(metadataPath, null);
+    const metadata = metadataList[index];
     if (!metadata || !metadata.providerId
       || typeof metadata.startTime !== 'string' || typeof metadata.endTime !== 'string'
       || !Number.isFinite(Date.parse(metadata.startTime)) || !Number.isFinite(Date.parse(metadata.endTime))) continue;

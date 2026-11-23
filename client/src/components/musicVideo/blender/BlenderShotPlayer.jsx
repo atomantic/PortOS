@@ -1,6 +1,6 @@
 import { Music, VolumeX } from 'lucide-react';
 import { useEffect } from 'react';
-import useShotSongSync from '../../../hooks/useShotSongSync.js';
+import useShotSongSync from './useShotSongSync.js';
 import useSoloPlayback from '../../../hooks/useSoloPlayback.js';
 import { useLocalStorageBool } from '../../../hooks/useLocalStorageBool.js';
 import { useFilmApi } from './FilmApiContext.jsx';
