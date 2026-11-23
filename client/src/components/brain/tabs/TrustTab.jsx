@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
 import { getBrainInbox, getBrainSettings } from '../../../services/apiBrain.js';
 import {
