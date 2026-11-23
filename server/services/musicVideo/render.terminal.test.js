@@ -280,6 +280,28 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     await tick();
   });
 
+  it('persists the project and frees the render slot before the terminal SSE frame (#17924)', async () => {
+    const pid = 'order-1';
+    prime(pid);
+    const atFrame = [];
+    broadcastSse.mockImplementation((job, frame) => {
+      if (['canceled', 'error'].includes(frame.type)) atFrame.push({ type: frame.type, wrote: writesOf(pid).length, active: getActiveRenderJobId(pid) });
+    });
+    try {
+      const { jobId } = await renderMusicVideo(pid);
+      const proc = lastProc();
+      proc.emit('spawn');
+      expect(cancelRender(jobId)).toBe(true);
+      proc.emit('close', 255, null);
+      await tick();
+      expect(atFrame).toEqual([{ type: 'canceled', wrote: expect.any(Number), active: null }]);
+      expect(atFrame[0].wrote).toBeGreaterThanOrEqual(1); // terminal write already persisted
+      expect(writesOf(pid).at(-1)).toEqual(expect.objectContaining({ renderingOn: null }));
+    } finally {
+      broadcastSse.mockReset();
+    }
+  });
+
   it('settles as canceled when cancellation arrives just before a clean close', async () => {
     const pid = 'cancel-success';
     prime(pid);

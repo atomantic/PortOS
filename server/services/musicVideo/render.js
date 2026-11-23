@@ -255,10 +255,13 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   });
   // `written`: the success path already committed the row inside its backup lease.
   // `settled`: the success path's own write outcome (see settleRenderProject).
-  const finish = async (patch, { written = false, settled } = {}) => {
+  const finish = async (patch, { written = false, settled, frame } = {}) => {
     releaseProjectRender(projectId);
     if (!written) settled = (await writeSettled(patch)).settled;
     emitRenderSettled(projectId, job, settled);
+    // Terminal frame goes out only after the row is persisted and the lock released: a client that
+    // refetches on it must not read a stale `rendering` status or hit 409 RENDER_IN_PROGRESS.
+    if (frame) broadcastSse(job, frame);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null, ...(settled === false ? { abandoned: true } : {}) });
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
@@ -328,8 +331,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     if (!result.ok) {
       job.status = 'error';
       job.lastError = SETTLE_FAILED_MESSAGE;
-      broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
-      await finish({ status: 'failed' }, { written: true });
+      await finish({ status: 'failed' }, { written: true, frame: { type: 'error', error: SETTLE_FAILED_MESSAGE } });
       return;
     }
     const { settled } = result;
@@ -351,8 +353,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video ${renderer.label} render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     if (!historyCommitted) await unlink(outputPath).catch(() => {});
-    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-    await finish({ status: canceled ? priorStatus : 'failed' });
+    await finish({ status: canceled ? priorStatus : 'failed' }, { frame: { type: canceled ? 'canceled' : 'error', error: reason } });
   });
   return { jobId };
 }
@@ -392,9 +393,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
   const cached = all.filter((segment) => existsSync(segment.path)).length;
   console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
   const { signal } = job.overlayAbort;
-  const finish = (status, settled) => {
+  const finish = (status, settled, frame) => {
     releaseProjectRender(projectId);
     emitRenderSettled(projectId, job, settled);
+    if (frame) broadcastSse(job, frame);
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
     return status;
@@ -439,8 +441,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     if (!result.ok) {
       job.status = 'error';
       job.lastError = SETTLE_FAILED_MESSAGE;
-      broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
-      finish('failed');
+      finish('failed', undefined, { type: 'error', error: SETTLE_FAILED_MESSAGE });
       return;
     }
     const { settled } = result;
@@ -458,10 +459,9 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     if (!historyCommitted) await unlink(outputPath).catch(() => {});
-    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     const status = canceled ? priorStatus : 'failed';
     await writeSettled(status, { renderError: canceled ? null : reason.slice(0, 2000) });
-    finish(status);
+    finish(status, undefined, { type: canceled ? 'canceled' : 'error', error: reason });
   });
   return { jobId };
 }
@@ -575,13 +575,13 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       const log = canceled ? console.log : console.error;
       log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       if (unlinkOutput) await unlink(outputPath).catch(() => {});
-      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      releaseProjectRender(projectId);
       // A cancel restores the pre-render status (so a cancelled re-render of a
       // 'complete' project stays 'complete'); a real failure marks it 'failed'.
       const targetStatus = canceled ? priorStatus : 'failed';
       await writeSettled(targetStatus, { renderError: canceled ? null : reason.slice(0, 2000) });
+      releaseProjectRender(projectId);
       emitRenderSettled(projectId, job);
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
       closeJobAfterDelay(jobs, jobId);
       permit.finish();
     };
@@ -745,8 +745,9 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               permit.markUnsettled();
               job.status = 'error';
               job.lastError = SETTLE_FAILED_MESSAGE;
-              broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
+              releaseProjectRender(projectId);
               emitRenderSettled(projectId, job);
+              broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
               return;
             }
             const { settled } = result;
@@ -759,9 +760,10 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             job.status = 'error';
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
-            broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
             await writeSettled('failed', { renderError: job.lastError.slice(0, 2000) });
+            releaseProjectRender(projectId);
             emitRenderSettled(projectId, job);
+            broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
           } finally {
             releaseProjectRender(projectId);
             closeJobAfterDelay(jobs, jobId);
