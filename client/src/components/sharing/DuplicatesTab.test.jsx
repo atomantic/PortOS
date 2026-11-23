@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { retypeSettled } from '../../test/settledInput';
 
@@ -114,6 +114,36 @@ describe('DuplicatesTab', () => {
       { survivorId: 'u-new', loserId: 'u-old', fieldChoices: { starterPrompt: 'survivor' } },
       expect.anything(),
     ));
+  });
+
+  it('exposes fieldset legends, a per-field resolution group, and aria-pressed choice state', async () => {
+    previewUniverseMerge.mockResolvedValue({
+      conflicts: [{ field: 'starterPrompt', survivorValue: 'A', loserValue: 'B' }],
+      cascade: { seriesToRepoint: [], loserCollectionItemCount: 0 },
+    });
+    aiResolveUniverseMerge.mockResolvedValue({
+      merged: { starterPrompt: 'Unified A+B' }, skipped: [], llm: { provider: 'codex', model: null }, runId: 'r1',
+    });
+    const user = userEvent.setup();
+    render(<DuplicatesTab />);
+    await waitFor(() => expect(screen.getByText(/2 copies/)).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /Merge…/ }));
+
+    expect(await screen.findByRole('group', { name: 'Keep (survivor)' })).toBeInTheDocument();
+    const group = await screen.findByRole('group', { name: 'Resolution for starterPrompt' });
+    const survivorBtn = within(group).getByRole('button', { name: 'Keep survivor' });
+    const foldedBtn = within(group).getByRole('button', { name: 'Use folded' });
+    expect(survivorBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(foldedBtn).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(foldedBtn);
+    expect(foldedBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(survivorBtn).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(screen.getByRole('button', { name: /Merge with AI/ }));
+    const aiBtn = await within(group).findByRole('button', { name: 'AI merged' });
+    expect(aiBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(foldedBtn).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('Merge with AI populates an editable override and ships it as fieldOverrides on submit', async () => {
