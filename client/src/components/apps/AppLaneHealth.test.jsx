@@ -44,4 +44,5 @@ it('explains an app without a tracker, reports a failed load, and retries on ref
   fireEvent.click(screen.getByRole('button', { name: 'Refresh lane health' }));
   await waitFor(() => expect(screen.getByText(/No audit lane filed an issue in the last 60 days/)).toBeInTheDocument());
   expect(getAppLaneHealth).toHaveBeenCalledTimes(3);
+  expect(getAppLaneHealth.mock.calls.map(([, options]) => options)).toEqual([undefined, { refresh: true }, { refresh: true }]);
 });

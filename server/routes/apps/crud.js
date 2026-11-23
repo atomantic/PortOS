@@ -24,6 +24,7 @@ import * as appsService from '../../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest } from '../../lib/validateRequest.js';
+import { refreshQuerySchema } from '../../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { usesPm2 } from '../../services/appProcessTypes.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
@@ -102,9 +103,10 @@ router.get('/:id/quality-history', loadApp, asyncHandler(async (req, res) => {
 }));
 
 // GET /api/apps/:id/lane-health - What became of each audit lane's filed issues
-// (#12088): a forge read on request, never cached into the app record.
+// (#12088): a forge read on request, cached briefly in memory (`?refresh=1` bypasses), never stored on the app record.
 router.get('/:id/lane-health', loadApp, asyncHandler(async (req, res) => {
-  res.json(await getAppLaneHealth(req.loadedApp));
+  const { refresh } = validateRequest(refreshQuerySchema, req.query);
+  res.json(await getAppLaneHealth(req.loadedApp, { refresh: refresh === '1' || refresh === 'true' }));
 }));
 
 // POST /api/apps/:id/quality-snapshot - Land this app's numeric snapshot as
