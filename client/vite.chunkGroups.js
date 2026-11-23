@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 // Vendor chunk groups for rolldown's `output.codeSplitting.groups` (Vite 8).
 //
 // Declared as package NAMES rather than as hand-written regexes so the grouping
@@ -95,9 +97,16 @@ const VENDOR_CHUNK_GROUPS = [
 // the lazy shared chunks. Recursive capture stays off: a shared helper must
 // not drag a page-only dependency into every consumer.
 const APP_MODULE = /\.(?:jsx?|tsx?|mjs|cjs|json)(?:\?.*)?$/;
+// Anchor to this checkout. A build that loads vite.config.js with a scratch
+// root (the bundle-report fixture) is not the PortOS graph and must keep its
+// own single entry chunk.
+const REPO_ROOT = resolve(import.meta.dirname, '..');
+// Escape each segment on its own. Replacing separators after escaping the
+// whole path also rewrites the backslash in `\.`, so `github.com` never matches.
+const IN_REPO = new RegExp(`^${REPO_ROOT.split(/[\\/]/).map(escapeRegex).join('[\\\\/]')}[\\\\/]`);
 
 const isAppModule = (id) =>
-  APP_MODULE.test(id) && !/[\\/]node_modules[\\/]/.test(id) && !id.startsWith('\0');
+  APP_MODULE.test(id) && IN_REPO.test(id) && !/[\\/]node_modules[\\/]/.test(id) && !id.startsWith('\0');
 
 const APP_CHUNK_GROUPS = [
   {
