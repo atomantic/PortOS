@@ -517,6 +517,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     liveModelsByMode: {
       [IMAGE_GEN_MODE.AGY]: backend.agy.models,
       [IMAGE_GEN_MODE.RUNWAY]: backend.runwayImageModels,
+      [IMAGE_GEN_MODE.FAL]: backend.falCatalog?.models,
     },
   });
   const textOnlyCloudModel = !remoteTargetActive && isCloudMode

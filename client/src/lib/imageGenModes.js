@@ -63,11 +63,17 @@ import {
   MOSS_IMAGE_MODEL_ID,
 } from '../../../server/lib/imageRuntimeRemedies.js';
 import {
+  FAL_FEATURED_EDIT_MODEL_IDS,
+  FAL_FEATURED_IMAGE_MODEL_IDS,
   FAL_IMAGE_DEFAULT_MODEL,
   FAL_IMAGE_FAMILIES,
   FAL_IMAGE_MODEL_IDS,
+  FAL_IMAGE_MODEL_OPTIONS,
   falImageFamily,
+  falImageModelChoices,
+  falImageModelGroups,
   falImagePriceLabel,
+  isPlausibleFalEndpointId,
 } from '../../../server/lib/falImageModels.js';
 import {
   HIGGSFIELD_IMAGE_DEFAULT_MODEL,
@@ -96,13 +102,19 @@ export {
   CLOUD_IMAGE_GEN_MODES,
   CODEX_IMAGEGEN_DEFAULT_EFFORT,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
-  // The curated fal.ai image catalog — the ONLY ids a fal `cloudModel` or
-  // `imageGen.fal.model` may name (the server 400s anything else), so every
-  // fal model picker is built from these rather than a free-text field.
+  // Curated fal.ai image families are priced exactly. The picker also offers
+  // every listed text-to-image and image-to-image endpoint. A plausible
+  // endpoint id can be saved; the server still refuses an id that is neither
+  // curated nor in the loaded list before a paid call.
+  FAL_FEATURED_EDIT_MODEL_IDS,
+  FAL_FEATURED_IMAGE_MODEL_IDS,
   FAL_IMAGE_DEFAULT_MODEL,
   FAL_IMAGE_FAMILIES,
   FAL_IMAGE_MODEL_IDS,
+  FAL_IMAGE_MODEL_OPTIONS,
   falImageFamily,
+  falImageModelChoices,
+  falImageModelGroups,
   falImagePriceLabel,
   // The curated Higgsfield image catalog — same contract as the fal.ai one above.
   HIGGSFIELD_IMAGE_DEFAULT_MODEL,
@@ -115,6 +127,7 @@ export {
   GOOGLE_IMAGE_MODEL_IDS,
   googleImageFamily,
   googleImagePriceLabel,
+  isPlausibleFalEndpointId,
   // The ratios grok's image tools accept — the Settings default-ratio picker.
   GROK_ASPECT_RATIOS,
   // Backends that support image-to-image, ordered best-first: what the i2i-only
@@ -186,15 +199,6 @@ export const IMAGE_PIN_MODES = Object.freeze([
 ]);
 
 export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
-
-// The fal.ai model picker rows — one per catalog family, keyed by its
-// text-to-image endpoint (the provider switches to the family's /edit endpoint
-// on its own whenever a render carries input images), labeled with its price
-// because each choice is a different cost per image.
-export const FAL_IMAGE_MODEL_OPTIONS = Object.freeze(FAL_IMAGE_FAMILIES.map((family) => Object.freeze({
-  id: family.textEndpoint,
-  label: `${family.label} (${falImagePriceLabel(family)}, up to ${family.maxInputImages} refs)`,
-})));
 
 // The Higgsfield picker rows — one per family, keyed by its text-to-image
 // endpoint; the provider switches to the edit endpoint when a render carries images.

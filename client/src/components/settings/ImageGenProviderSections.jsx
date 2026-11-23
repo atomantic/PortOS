@@ -1,5 +1,7 @@
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
+import { useFalImageCatalog } from '../../hooks/useFalImageCatalog.js';
 import RunwayCatalogStatus from '../imageGen/RunwayCatalogStatus.jsx';
+import FalCatalogStatus from '../imageGen/FalCatalogStatus.jsx';
 /**
  * Media settings — the per-provider sections (External SD API, Local
  * runtimes, Codex CLI, Grok CLI, Agy CLI, fal.ai). Every field is read from
@@ -62,6 +64,7 @@ const FIELD_LABEL_CLASS = 'block text-xs font-medium text-gray-400 mb-1';
 
 export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, higgsfieldCredential, googleCredential, runwayCredential, localRuntime, onStatusRecheck }) {
   const runwayCatalog = useRunwayCatalog(mediaTab === 'runway');
+  const falCatalog = useFalImageCatalog(mediaTab === 'fal');
   const { values, set } = form;
   const {
     mode, sdapiUrl, pythonPath, localModelId, localVideoModelId,
@@ -632,9 +635,14 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           <h2 className="text-lg font-semibold">fal.ai Imagegen</h2>
         </div>
         <p className="text-xs text-gray-500">
-          Render through fal.ai&rsquo;s hosted image models. Renders with reference or source images
-          go to the chosen model&rsquo;s edit endpoint, so mood-board references condition the result.
-          Every render is billed to your fal.ai account; the gallery records each image&rsquo;s estimated cost.
+          Render through fal.ai&rsquo;s hosted image models. Featured models are listed first, and the
+          picker also offers every text-to-image and image-to-image model fal.ai currently lists.
+          Both endpoints of a known family stay selectable. Edit and Refine, and an Image Gen
+          render that already has a source image, lead with Nano Banana Pro edit and Seedream 4.5 edit.
+          A render with reference or source images still uses that family&rsquo;s edit endpoint when the
+          text model is pinned, so a mood board keeps conditioning. Every render is billed to your
+          fal.ai account. Curated models record
+          an estimated cost; other listed models are priced by fal.ai.
         </p>
         {/* Key presence comes from the shared credential inventory — the key
             itself is write-only and lives on the Defaults tab with the fal.ai
@@ -671,10 +679,12 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
               />
             </FormField>
             <p className="text-xs text-gray-500">
-              Prices are fal.ai&rsquo;s published per-image rates (Nano Banana charges more at 4K; FLUX.2 bills
-              output plus reference megapixels). Renders can pick a different model per queue item on the
-              Image Gen page, and each surface can pin one under Defaults.
+              Prices on curated models are fal.ai&rsquo;s published rates (Nano Banana charges more at 4K; FLUX.2 bills
+              output plus reference megapixels). A listed model outside that set has no PortOS price.
+              Renders can pick a different model per queue item on the Image Gen page, and each surface
+              can pin one under Defaults.
             </p>
+            <FalCatalogStatus catalog={falCatalog} />
             <ParallelLimitField
               id={falImageParallelId}
               label="Parallel image render limit"

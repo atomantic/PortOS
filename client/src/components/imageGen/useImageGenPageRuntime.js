@@ -25,6 +25,7 @@ import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog';
+import { useFalImageCatalog } from '../../hooks/useFalImageCatalog.js';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import toast from '../ui/Toast';
 import {
@@ -80,6 +81,7 @@ function useImageGenBackendRuntime() {
   const localBackendPending = statusLoading && !remoteTargetActive;
   const agy = useAgyModels(isAgyMode);
   const { imageModels: runwayImageModels } = useRunwayCatalog(effectiveMode === IMAGE_GEN_MODE.RUNWAY);
+  const falCatalog = useFalImageCatalog(effectiveMode === IMAGE_GEN_MODE.FAL);
 
   const refreshStatus = useCallback((mode, localModelId) => {
     const requestToken = ++statusRequestToken.current;
@@ -123,6 +125,7 @@ function useImageGenBackendRuntime() {
     localBackendPending,
     agy,
     runwayImageModels,
+    falCatalog,
     refreshStatus,
     setSelectedMode,
     configureBackends,

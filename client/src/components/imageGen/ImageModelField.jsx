@@ -26,6 +26,7 @@ export function imageModeHasModel(mode, { showLocal = true } = {}) {
 export default function ImageModelField({
   id, mode, value = null, onChange, className = '', ariaLabel, disabled = false,
   commit = 'blur', falDefaultLabel = 'Default (Settings)', showLocal = true, inline = false, label = 'Model',
+  editing = false,
 }) {
   const isLocal = showLocal && mode === IMAGE_GEN_MODE.LOCAL;
   const { models, installDefault } = useLocalImageModels(isLocal);
@@ -44,7 +45,7 @@ export default function ImageModelField({
     );
   } else if (mode === IMAGE_GEN_MODE.FAL) {
     control = (
-      <FalModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
+      <FalModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled} editing={editing}
         defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
     );
   } else if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {

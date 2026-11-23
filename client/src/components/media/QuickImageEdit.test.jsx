@@ -22,6 +22,7 @@ vi.mock('../imageGen/GalleryImagePicker', () => ({
 }));
 
 import QuickImageEdit from './QuickImageEdit';
+import { FAL_FEATURED_EDIT_MODEL_IDS } from '../../lib/imageGenBackends';
 
 describe('QuickImageEdit', () => {
   beforeEach(() => {
@@ -174,6 +175,31 @@ describe('QuickImageEdit', () => {
     fireEvent.click(screen.getByRole('button', { name: /edit/i }));
     await waitFor(() => expect(generateImage).toHaveBeenCalled());
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it('offers the featured edit models and sends a chosen one without changing the default render', async () => {
+    generateImage.mockResolvedValue({ position: 1 });
+    render(<QuickImageEdit item={{ filename: 'a.png' }} />);
+    const editWith = screen.getByLabelText('Edit with');
+    expect([...editWith.options].map((option) => option.value)).toEqual(['', ...FAL_FEATURED_EDIT_MODEL_IDS]);
+    fireEvent.change(screen.getByLabelText('What should change?'), { target: { value: 'red coat' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: /^edit$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenCalled());
+    expect(generateImage.mock.calls[0][0].mode).toBeUndefined();
+    expect(generateImage.mock.calls[0][0].cloudModel).toBeUndefined();
+    fireEvent.change(editWith, { target: { value: FAL_FEATURED_EDIT_MODEL_IDS[0] } });
+    await waitFor(() => expect(previewImagePrompt).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'fal', cloudModel: FAL_FEATURED_EDIT_MODEL_IDS[0],
+    }), expect.anything()));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^edit$/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    await waitFor(() => expect(generateImage).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'fal',
+      cloudModel: FAL_FEATURED_EDIT_MODEL_IDS[0],
+      prompt: 'red coat',
+      quickEdit: true,
+    }), { silent: true }));
   });
 
   it('forwards generateParams and calls onDone with result and edit metadata', async () => {

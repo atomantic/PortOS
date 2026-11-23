@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
+import { FAL_FEATURED_EDIT_MODEL_IDS } from '../../lib/imageGenBackends';
 
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
@@ -38,8 +39,13 @@ it.each(['image', 'endImage'])('refines an unselected %s take with optional shot
 
   fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
   fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Change the hat' } });
+  fireEvent.change(screen.getByLabelText('Edit with'), { target: { value: FAL_FEATURED_EDIT_MODEL_IDS[1] } });
   fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
-  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: 'Change the hat' });
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, {
+    referenceImageId: 'candidate.png',
+    refine: 'Change the hat',
+    imageTarget: { mode: 'fal', cloudModel: FAL_FEATURED_EDIT_MODEL_IDS[1] },
+  });
 
   rerender(<SceneFrames {...props} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} generatingFrame generatingEndFrame />);
   expect(candidate().getByRole('button', { name: 'Refine take' }).disabled).toBe(true);
