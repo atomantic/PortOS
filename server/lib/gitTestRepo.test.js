@@ -1,10 +1,11 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { chmod, mkdtemp, readFile, rm, writeFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from './execGit.js';
+import { absorbCompilerTimeoutHold, releaseWindowsGitSupervisorForTests } from './windowsGitProcess.js';
 import {
   makeGitSandbox,
   attachBareOrigin,
@@ -283,5 +284,57 @@ describe('resetGitWorktreeSandbox', () => {
     expect(worktreeEntries).toHaveLength(1);
     expect((await execGit(['branch', '--format=%(refname:short)'], dest)).stdout.trim()).toBe('main');
     expect((await execGit(['rev-parse', 'HEAD'], dest)).stdout.trim()).toBe(initialHead);
+  });
+});
+
+const compilerHold = reasons => Object.assign(new Error('Git work settlement is held'), {
+  code: 'GIT_SETTLEMENT_HELD', settlement: 'held', settlementReasons: reasons,
+});
+
+describe('compiler timeout fixture teardown', () => {
+  let previousCleanup;
+  beforeEach(() => {
+    previousCleanup = globalThis.__portosGitSupervisorCleanup;
+  });
+  afterEach(() => {
+    if (previousCleanup) globalThis.__portosGitSupervisorCleanup = previousCleanup;
+    else delete globalThis.__portosGitSupervisorCleanup;
+  });
+
+  it('absorbs only a compiler-unconfirmed hold', () => {
+    expect(absorbCompilerTimeoutHold(compilerHold(['compiler-unconfirmed']))).toBe(true);
+    expect(absorbCompilerTimeoutHold(compilerHold(['compiler-unconfirmed', 'work-unconfirmed']))).toBe(false);
+    expect(absorbCompilerTimeoutHold(compilerHold(['work-unconfirmed']))).toBe(false);
+    expect(absorbCompilerTimeoutHold(new Error('other'))).toBe(false);
+  });
+
+  it('does not fail template teardown twice after a compiler timeout', async () => {
+    const cleanup = vi.fn(async () => { throw compilerHold(['compiler-unconfirmed']); });
+    globalThis.__portosGitSupervisorCleanup = cleanup;
+    const dirs = globalThis.__portosGitTemplateDirs ?? [];
+    const kept = dirs.splice(0, dirs.length);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await expect(globalThis.__portosCleanupGitTemplates()).resolves.toBeUndefined();
+      await expect(releaseWindowsGitSupervisorForTests()).resolves.toBeUndefined();
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(log.mock.calls.map(args => args.join(' ')).join('\n')).toContain('compiler timed out');
+    } finally {
+      log.mockRestore();
+      dirs.push(...kept);
+    }
+  });
+
+  it('still fails template teardown when Git work itself is unconfirmed', async () => {
+    globalThis.__portosGitSupervisorCleanup = async () => { throw compilerHold(['work-unconfirmed']); };
+    const dirs = globalThis.__portosGitTemplateDirs ?? [];
+    const kept = dirs.splice(0, dirs.length);
+    try {
+      await expect(globalThis.__portosCleanupGitTemplates()).rejects.toMatchObject({
+        code: 'GIT_SETTLEMENT_HELD', settlementReasons: ['work-unconfirmed'],
+      });
+    } finally {
+      dirs.push(...kept);
+    }
   });
 });
