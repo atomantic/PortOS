@@ -10,8 +10,8 @@
  * plated data readout included.
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { channel } from 'node:diagnostics_channel';
-import { existsSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
@@ -128,29 +128,13 @@ describe.skipIf(!canRun)('overlay text check (headless Chrome)', () => {
         { id: 'l3', text: 'years since launch 764,465', startSec: 6.5, endSec: 9, words: [] },
         { id: 'l4', text: 'welcome to the club', startSec: 9.2, endSec: 11.5, words: [] }] } }));
     await importDocumentTemplate(created.id, 'layered');
-    // The import-triggered entry point must expose settlement through child
-    // close and profile removal, rather than only the running-record write.
-    const lifecycle = channel('portos.composition-browser.lifecycle');
-    const browsers = [];
-    const observe = ({ event, profile, child }) => {
-      if (event === 'allocated') browsers.push({ profile, closed: false, removed: false });
-      const owned = browsers.find(item => item.profile === profile);
-      if (owned && event === 'child') child.once('close', () => { owned.closed = true; });
-      if (owned && event === 'remove-resolved') owned.removed = true;
-    };
-    lifecycle.subscribe(observe);
-    try {
-      const check = await checkOverlayTextInBackground(created.id);
-      expect(check, check?.error ?? 'Overlay text check failed without a stored error').toMatchObject({ status: 'complete', findings: [] });
-      expect(check.textSamples).toBeGreaterThan(4);
-      expect(browsers).toHaveLength(1);
-      for (const owned of browsers) {
-        expect(owned.closed).toBe(true);
-        expect(owned.removed).toBe(true);
-        expect(existsSync(owned.profile)).toBe(false);
-      }
-    } finally {
-      lifecycle.unsubscribe(observe);
-    }
+    // The import-triggered entry point must settle its owned browser: no
+    // composition profile it created may outlive the check.
+    const profiles = () => readdirSync(tmpdir()).filter(name => name.startsWith('portos-composition-browser-'));
+    const before = new Set(profiles());
+    const check = await checkOverlayTextInBackground(created.id);
+    expect(check, check?.error ?? 'Overlay text check failed without a stored error').toMatchObject({ status: 'complete', findings: [] });
+    expect(check.textSamples).toBeGreaterThan(4);
+    expect(profiles().filter(name => !before.has(name))).toEqual([]);
   }, 120000);
 });

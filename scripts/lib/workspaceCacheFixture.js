@@ -70,7 +70,7 @@ function checkout(host, name, workspace, configName, dependencies) {
   if (workspace === 'server') {
     // Both configs load this environment relative to themselves. Copy its
     // Node-only support closure intact so setup and teardown run in this checkout.
-    for (const file of ['test/dbRunExclusivity.js', 'test/mediaRegistryEnvironment.js', 'test/ownedBrowserDiagnostics.js', 'lib/mockPathsDataRoot.js']) {
+    for (const file of ['test/dbRunExclusivity.js', 'test/mediaRegistryEnvironment.js', 'lib/mockPathsDataRoot.js']) {
       mkdirSync(dirname(join(root, file)), { recursive: true });
       copyFileSync(join(REPO, 'server', file), join(root, file));
     }
