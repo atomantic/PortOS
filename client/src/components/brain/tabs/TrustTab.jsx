@@ -10,7 +10,6 @@ import {
   Settings
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 
 import {
@@ -20,7 +19,7 @@ import {
 import ConfidenceBadge from '../ConfidenceBadge';
 import { timeAgo } from '../../../utils/formatters';
 
-export default function TrustTab({ onRefresh }) {
+export default function TrustTab() {
   const [entries, setEntries] = useState([]);
   const [counts, setCounts] = useState({});
   const [settings, setSettings] = useState(null);
