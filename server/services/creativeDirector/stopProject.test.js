@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('agentManagement', () => import('../agent/agentManagement.js'));
 
 const getProjectMock = vi.fn();
 const updateProjectMock = vi.fn(async () => ({}));

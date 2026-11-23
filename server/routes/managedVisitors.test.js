@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import express from 'express';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -9,6 +10,9 @@ import { request } from '../lib/testHelper.js';
 import { createTailcatIngressServer } from '../services/tailcatIngress.js';
 import { Server } from 'socket.io';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
+
+registerLateBoundService('managedVisitors', () => import('../services/managedVisitors.js'));
+
 const shared = vi.hoisted(() => ({ enabled: false, broker: null }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => shared.enabled, extractToken: req => req.headers.authorization?.slice(7),
   verifySession: async token => token === 'owner-session',

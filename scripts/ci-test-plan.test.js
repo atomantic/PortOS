@@ -62,6 +62,7 @@ const REAL_TREE_SOURCES = [
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
   'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'server/lib/eidoversePort.js', 'server/services/eidoverse.js', 'server/services/catalog/catalogSync.js', 'server/services/musicVideo/documentRender.js',
   'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
 let realTreeInputs;
@@ -880,6 +881,33 @@ it('requests DB verification for the real deck, model pin and backup source cont
   for (const source of sources) {
     expect(buildCiTestPlan([source], inputs), source).toMatchObject({ full: false, db: true });
   }
+});
+
+describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
+  const planFor = (source) => buildCiTestPlan([source], realTree());
+
+  it.each(['server/lib/eidoversePort.js', 'server/services/eidoverse.js'])('plans no DB job and no browser suite for %s', (source) => {
+    expect(planFor(source)).toMatchObject({ full: false, db: false, browserFiles: [] });
+  });
+
+  it('plans the DB job but no media or vault browser suite for the catalog sync service', () => {
+    const plan = planFor('server/services/catalog/catalogSync.js');
+    expect(plan).toMatchObject({ full: false, db: true });
+    expect(plan.browserFiles.filter((suite) => !/catalog/i.test(suite))).toEqual([]);
+  });
+
+  it('still selects real direct and transitive dependents', () => {
+    const inputs = realTree();
+    const render = 'server/services/musicVideo/documentRender.js';
+    expect(planFor(render).browserFiles).toEqual(expect.arrayContaining([
+      'server/services/musicVideo/documentRender.browser.test.js', 'server/services/musicVideo/documentVignette.browser.test.js',
+    ]));
+    // Reached only through a lazy import, several modules below the suite.
+    expect(inputs.browserDependencies['server/services/musicVideo/documentVignette.browser.test.js']).toContain('server/services/htmlComposition/index.js');
+    expect(inputs.dbDependencies).toEqual(expect.arrayContaining([
+      'server/services/catalog/catalogSync.js', 'server/services/syncCursors.js', 'server/services/instanceFeatures.js',
+    ]));
+  });
 });
 
 it('follows DB-only deferred dependencies through the pre-install CLI and preserves conservative and unrelated plans', () => {

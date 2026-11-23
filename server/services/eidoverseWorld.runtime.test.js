@@ -2,6 +2,10 @@ import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { createHash } from 'node:crypto';
 import { homedir, hostname, userInfo } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
+
+registerLateBoundService('eidoverse', () => import('./eidoverse.js'));
+registerLateBoundService('eidoverseWorld', () => import('./eidoverseWorld.js'));
 
 const mocks = vi.hoisted(() => ({
   persistedState: null,

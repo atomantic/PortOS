@@ -28,6 +28,7 @@ import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/p
 import { isSelfManagedPrActive } from '../lib/selfManagedPrAuthors.js';
 import { listWorktrees } from './worktreeManager.js';
 import { getBranches } from './git.js';
+import { loadLateBoundService } from '../lib/lateBoundServices.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -583,7 +584,7 @@ async function escalatePrFailure(entry, binding, { failure, headMoved }, { app }
   try {
     const ownerPolicy = await currentHandoffOwnerPolicy(binding, { recovery: true });
     if (ownerPolicy) return await holdForOwner(app, entry, binding, ownerPolicy.ownerBlocked);
-    const { spawnReviewLoopFollowUp } = await import('./agent/agentWorktreeCleanup.js');
+    const { spawnReviewLoopFollowUp } = await loadLateBoundService('agentWorktreeCleanup');
     const recovery = await spawnReviewLoopFollowUp({
       originalAgentId: entry.sourceAgentId || null,
       originalTask: entry.sourceTask,

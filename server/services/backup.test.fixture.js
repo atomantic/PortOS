@@ -110,7 +110,7 @@ vi.mock('./backupDatabaseReset.js', () => ({
 }));
 // restorePostgres lazily imports the orchestrator to rewind peer cursors (#8710).
 const rewindPostgresSyncCursors = vi.hoisted(() => vi.fn().mockResolvedValue(2));
-vi.mock('./syncOrchestrator.js', () => ({
+vi.mock('./syncCursors.js', () => ({
   rewindPostgresSyncCursors,
 }));
 

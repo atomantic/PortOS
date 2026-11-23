@@ -26,7 +26,6 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { getProject, updateProject, updatePlanStep, recordRun, updateRun } from './local.js';
 import { enqueuePlanTask } from './agentBridge.js';
-import { dispatchCreativeTool } from '../creative/toolRegistry.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 // Import the modules that DECLARE these, not the `seriesAutopilot.js` barrel that
 // forwards them (#5920): a barrel re-entry from outside the package pulls the whole
@@ -37,6 +36,7 @@ import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { blockedStageReason, closeDeliverableStreak, exhaustedDeliverableStreak } from './deliverableGate.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 // The registry tool that runs Series Autopilot as a plan step. A long-running
 // step whose dispatch returns a run handle (a `runId`, not a media `jobId`)
@@ -424,11 +424,12 @@ async function runPlanStep(project, step) {
   // Outside the request lifecycle — catch so a throw becomes a settle, never an
   // unhandled rejection.
   const targetAbility = project.directive?.constraints?.targetAbility;
-  const dispatch = await dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
-    projectId,
-    ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
-    ...(targetAbility ? { targetAbility } : {}),
-  })
+  const dispatch = await loadLateBoundService('creativeToolRegistry')
+    .then(({ dispatchCreativeTool }) => dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
+      projectId,
+      ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
+      ...(targetAbility ? { targetAbility } : {}),
+    }))
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
   return settlePlanStepDispatch(projectId, resolvedStep, run?.runId, dispatch);
 }

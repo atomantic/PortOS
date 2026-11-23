@@ -3,13 +3,8 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { parseGitHubUrl } from '../lib/repoUrl.js';
 import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUPS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
-import {
-  assertEidoverseInstalled,
-  DEFAULT_EIDOVERSE_WORLDS_REPO,
-  getEidoverseStatus,
-  normalizeEidoverseWorldsRepo,
-  setEidoverseWorldsOrigin,
-} from './eidoverse.js';
+import { DEFAULT_EIDOVERSE_WORLDS_REPO, normalizeEidoverseWorldsRepo } from '../lib/eidoverseWorldsRepo.js';
+import { loadLateBoundService } from '../lib/lateBoundServices.js';
 import { getSettingsWithStatus, updateSettingsWith } from './settings.js';
 import { recordUserAction } from './userActions.js';
 
@@ -183,6 +178,10 @@ export const resolveInstanceFeatures = (settings = {}, { corrupt = false, detect
   })
 );
 
+// Late-bound: the many suites that read one feature flag must not depend on the
+// Eidoverse install and world runtime graph (#17896).
+const eidoverseService = () => loadLateBoundService('eidoverse');
+
 const configuredEidoverseRepo = (settings) => {
   const configured = settings?.instanceFeatures?.eidoverse?.worldsRepoUrl;
   if (typeof configured !== 'string') return DEFAULT_EIDOVERSE_WORLDS_REPO;
@@ -193,13 +192,13 @@ const configuredEidoverseRepo = (settings) => {
 };
 
 export async function assertConfiguredEidoverseInstalled() {
-  const { settings } = await getSettingsWithStatus();
+  const [{ settings }, { assertEidoverseInstalled }] = await Promise.all([getSettingsWithStatus(), eidoverseService()]);
   return assertEidoverseInstalled({ worldsRepoUrl: configuredEidoverseRepo(settings) });
 }
 
 const attachSetupStatus = async (features, settings) => {
   const [eidoverse, portosOrigin] = await Promise.all([
-    getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) }),
+    eidoverseService().then(({ getEidoverseStatus }) => getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) })),
     getOriginInfo(),
   ]);
   const upstream = 'anima-research';
@@ -248,6 +247,7 @@ export async function updateEidoverseWorldsRepo(worldsRepoUrl, worldsBranch) {
 
 export async function updateEidoverseWorldsSource(worldsRepoUrl, worldsBranch) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
+  const { setEidoverseWorldsOrigin } = await eidoverseService();
   await setEidoverseWorldsOrigin(normalizedRepoUrl, worldsBranch);
   return updateEidoverseWorldsRepo(normalizedRepoUrl, worldsBranch);
 }
@@ -325,7 +325,7 @@ export async function updateInstanceFeature(featureId, enabled) {
   if (featureId === 'eidoverse') {
     // Use the same admission/readiness path as boot. A saved toggle remains
     // saved even if the external runtime needs repair; never install here.
-    const { reconcileEidoverseRuntime } = await import('./eidoverseRuntime.js');
+    const { reconcileEidoverseRuntime } = await loadLateBoundService('eidoverseRuntime');
     await reconcileEidoverseRuntime()
       .catch((error) => console.error(`⚠️ Eidoverse startup deferred: ${error.message}`));
   }

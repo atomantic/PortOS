@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
+
+registerLateBoundService('agentWorktreeCleanup', () => import('./agent/agentWorktreeCleanup.js'));
 
 // ─── mocks (must precede the import under test) ──────────────────────────────
 

@@ -10,7 +10,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
 import { MAX_CONSECUTIVE_MISSED_DELIVERABLES } from '../../lib/creativeDirectorPresets.js';
+
+registerLateBoundService('creativeToolRegistry', () => import('../creative/toolRegistry.js'));
 
 // ---- pure derivation (no mocks needed) -------------------------------------
 import { deriveNextPlanAction, lastRenderedVideoJobId, resolvePlanStepArgs } from './planAdvance.js';
@@ -468,7 +471,8 @@ describe('advanceAfterPlanStepSettled — runAutopilot plan step', () => {
     await advanceAfterPlanStepSettled('cd-1');
     // Emit the terminal frame the live autopilot run would broadcast.
     ap.autopilotEvents.emit('ser-1', { type: 'complete', runId: 'r1', steps: 7, craftGapIssues: 1 });
-    await flush();
+    // Step b loads its tool registry late, so the settle takes more than one flush.
+    await vi.waitFor(() => expect(read().status).toBe('complete'));
     const p = read();
     expect(p.plan.steps[0].status).toBe('done');
     // The complete frame's qualifier counters land in the step result.

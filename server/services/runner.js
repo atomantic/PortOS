@@ -14,6 +14,7 @@ import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } fr
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
+import { getClaudeSettingsEnv } from '../lib/claudeSettingsEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
@@ -483,7 +484,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // Restricted Claude image reads ignore settings files. Carry only the user's
   // configured environment forward so Bedrock/gateway authentication still works.
   const visionSettingsEnv = vision && toolFree && isClaude
-    ? await import('./agent/agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
+    ? await getClaudeSettingsEnv()
     : null;
   const childEnv = buildCliChildEnv({
     before: visionSettingsEnv,

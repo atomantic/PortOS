@@ -1952,7 +1952,7 @@ describe('syncOrchestrator', () => {
     });
 
     it('zeroes memory and every Catalog kind for every peer, leaving brain and checksum state', async () => {
-      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      const { rewindPostgresSyncCursors } = await import('./syncCursors.js');
       expect(await rewindPostgresSyncCursors()).toBe(2);
       expect(store['peer-inst-1']).toEqual({
         brainSeq: 42, memorySeq: '0', catalogSeqs: ZERO_CATALOG,
@@ -1962,7 +1962,7 @@ describe('syncOrchestrator', () => {
     });
 
     it('keeps the rewind when a sync that read cursors before it finishes afterwards', async () => {
-      const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+      const { rewindPostgresSyncCursors } = await import('./syncCursors.js');
       const peer = { ...mockPeer, syncCategories: { memory: true } };
       mockFetch.mockImplementation(async (url) => {
         if (url.includes('/api/memory/sync')) {

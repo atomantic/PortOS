@@ -31,6 +31,8 @@ import { allowSocketRequest, authGate, hostControlRouteGate, socketAuthGate } fr
 // seam `pipeline/episodeVideo.js` starts a CD project through. Arm it before
 // the first pipeline request, including when the CD router has never loaded.
 import './services/creativeDirector/completionHook.js';
+// Side-effect import (#17896): binds every late-bound service name to its module.
+import './services/serviceLoaders.js';
 import './services/localModelObservations.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';

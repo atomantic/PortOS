@@ -31,6 +31,7 @@
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { parseCityState } from '../lib/cityState.js';
 import {
   encryptValue, decryptValue, ensureVaultKey, isVaultKeyConfigured, maskValue,
 } from '../lib/vaultCrypto.js';
@@ -174,7 +175,6 @@ async function draftScrubNeedles(row) {
   const { decryptForScrub } = await import('./privacyDraftErasure.js');
   const needles = decryptForScrub([row.value_enc]);
   if (row.type === 'address') {
-    const { parseCityState } = await import('./privacyScan.js');
     const { city, state } = parseCityState(needles[0]);
     if (city) needles.push(city);
     if (city && state) needles.push(`${city}, ${state}`);

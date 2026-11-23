@@ -14,8 +14,9 @@ import { createApp, getAllApps, notifyAppsChanged, updateApp } from './apps.js';
 import { getAppStatusStrict } from './pm2.js';
 import { EIDOVERSE_PORT, EIDOVERSE_PROCESS_NAME } from '../lib/eidoversePort.js';
 import { eidoverseStartCommand } from '../lib/eidoverseStartCommand.js';
+import { DEFAULT_EIDOVERSE_WORLDS_REPO, normalizeEidoverseWorldsRepo } from '../lib/eidoverseWorldsRepo.js';
 
-export const DEFAULT_EIDOVERSE_WORLDS_REPO = 'https://github.com/atomantic/eidoverse-worlds';
+export { DEFAULT_EIDOVERSE_WORLDS_REPO, normalizeEidoverseWorldsRepo };
 export const EIDOVERSE_VIDEO_REPO = 'https://github.com/anima-research/eidoverse-video';
 export { EIDOVERSE_PORT, EIDOVERSE_PROCESS_NAME };
 // The loaded world and asset runtime exceeds the generic command-app 500M cap.
@@ -104,19 +105,6 @@ async function installPinnedBun(command, env, { platform = process.platform, arc
   } finally {
     await rm(work, { recursive: true, force: true });
   }
-}
-
-export function normalizeEidoverseWorldsRepo(worldsRepoUrl) {
-  const parsed = parseGitHubUrl(worldsRepoUrl);
-  if (!parsed) {
-    throw new ServerError('Choose a valid GitHub repository for Eidoverse Worlds.', {
-      status: 400,
-      code: 'EIDOVERSE_REPO_INVALID',
-    });
-  }
-  return /^git@github\.com:/i.test(String(worldsRepoUrl).trim())
-    ? `git@github.com:${parsed.owner}/${parsed.repo}.git`
-    : `https://github.com/${parsed.owner}/${parsed.repo}`;
 }
 
 export function getEidoversePaths(worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO) {

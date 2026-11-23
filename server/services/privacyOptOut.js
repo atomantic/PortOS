@@ -50,7 +50,8 @@ import {
   listBrokers, getBroker, listBrokerCases, transitionCase,
 } from './privacyBrokers.js';
 import { listScanEligibleValues } from './privacyVault.js';
-import { buildSearchVectors, parseCityState, probeBroker } from './privacyScan.js';
+import { buildSearchVectors, probeBroker } from './privacyScan.js';
+import { parseCityState } from '../lib/cityState.js';
 import { createDraft, approveDraft } from './messageDrafts.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';

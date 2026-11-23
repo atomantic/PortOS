@@ -340,3 +340,37 @@ export function moduleImports(src, { jsx = true } = {}) {
   scan(tokens);
   return { statics, deferred, mocked, computed };
 }
+
+// Vitest registry calls that can hand a suite the real module behind a mock, or replace its mock later.
+const MOCK_ESCAPES = new Set(['doMock', 'unmock', 'doUnmock', 'importActual', 'importMock']);
+export const MOCK_CALL_RE = /\b(?:mock|doMock|unmock|doUnmock|importActual|importMock)\b/;
+
+/**
+ * Every Vitest module-registry call in `src`, for a selector that wants to
+ * know which modules a suite can never load: `{ calls, opaque }`.
+ *
+ * A call is `{ method, spec, sealed }`. `sealed` marks `vi.mock('<literal>',
+ * () => …)`: the call is hoisted above every import and its parameterless
+ * arrow cannot receive `importOriginal`, so the real module stays unloaded.
+ * `opaque` is true when a call names its module by an expression, or an escape
+ * appears in any other shape (destructured, aliased), since it may name any module.
+ */
+export function moduleMockCalls(src, { jsx = true } = {}) {
+  const calls = [];
+  let opaque = false;
+  const scan = (stream) => stream.forEach((token, i) => {
+    if (token.t === 'tpl') { token.exprs.forEach(scan); return; }
+    if (token.t !== 'id' || (token.v !== 'mock' && !MOCK_ESCAPES.has(token.v))) return;
+    const punct = (offset, value) => stream[i + offset]?.t === 'p' && stream[i + offset].v === value;
+    const viMember = punct(-1, '.') && stream[i - 2]?.t === 'id' && stream[i - 2].v === 'vi';
+    const isCall = viMember && punct(1, '(');
+    if (token.v === 'mock' && !isCall) return;
+    const spec = isCall ? literalArgument(stream[i + 2]) : null;
+    if (spec === null || !(punct(3, ',') || punct(3, ')'))) { opaque = true; return; }
+    const arrow = stream[i + 4]?.t === 'id' && stream[i + 4].v === 'async' ? 5 : 4;
+    const sealed = token.v === 'mock' && punct(3, ',') && punct(arrow, '(') && punct(arrow + 1, ')') && punct(arrow + 2, '=>');
+    calls.push({ method: token.v, spec, sealed });
+  });
+  scan(tokenize(src, new Set(), { jsx }));
+  return { calls, opaque };
+}

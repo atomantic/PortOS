@@ -1,4 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
+
+registerLateBoundService('eidoverse', () => import('./eidoverse.js'));
+registerLateBoundService('eidoverseRuntime', () => import('./eidoverseRuntime.js'));
 
 const mock = vi.hoisted(() => ({
   settings: {},
@@ -58,8 +62,6 @@ vi.mock('../lib/gitRemote.js', () => ({
 }));
 
 vi.mock('./eidoverse.js', () => ({
-  DEFAULT_EIDOVERSE_WORLDS_REPO: 'https://github.com/anima-research/eidoverse-worlds',
-  normalizeEidoverseWorldsRepo: vi.fn((url) => url),
   getEidoverseStatus: vi.fn(async ({ worldsRepoUrl } = {}) => ({
     installed: mock.eidoverseInstalled,
     worldsRepoUrl,
@@ -116,7 +118,7 @@ describe('instance features', () => {
       setup: {
         installed: false,
         bunAvailable: true,
-        worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
+        worldsRepoUrl: 'https://github.com/atomantic/eidoverse-worlds',
         sourceOwners: { self: 'example-owner', upstream: 'anima-research' },
       },
     });

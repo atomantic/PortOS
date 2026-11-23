@@ -18,6 +18,7 @@ import { isHostControlRoute } from '../lib/hostControlRoutes.js';
 import { derivePeerAuthToken, PEER_AUTH_HEADER, PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 import { isPairedPeer } from '../lib/peerPairing.js';
 import { loadData as loadInstances } from './instanceIdentity.js';
+import { loadLateBoundService } from '../lib/lateBoundServices.js';
 
 // Paths that bypass the auth gate even when a password is set:
 //   - /api/auth/status, /api/auth/whoami, /api/auth/login → the login UI
@@ -167,7 +168,7 @@ export const authGate = async (req, res, next) => {
   // App credentials authorize only this exact local broker namespace, whether
   // or not the optional instance password is configured. Never exempt its admin API.
   if (/^\/api\/managed-visitors\/v1(?:\/|$)/i.test(req.path)) {
-    const { authenticateManagedVisitorRequest } = await import('./managedVisitors.js');
+    const { authenticateManagedVisitorRequest } = await loadLateBoundService('managedVisitors');
     req.managedVisitorAuth = await authenticateManagedVisitorRequest(req);
     return next();
   }
