@@ -98,7 +98,7 @@ vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
 vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
-vi.mock('../../hooks/useVoiceUiSync', () => ({
+vi.mock('./useVoiceUiSync', () => ({
   useVoiceUiSync: vi.fn(),
   pushUiIndexAfterAction: vi.fn(),
 }));

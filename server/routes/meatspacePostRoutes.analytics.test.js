@@ -7,27 +7,27 @@ import { request } from '../lib/testHelper.js';
 // (#5690). Mocking the declaring modules proves the route is wired to them —
 // with the meatspacePost.js mock stubbing only what the router itself still
 // touches, so a re-added re-export would not silently satisfy these.
-vi.mock('../services/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
-vi.mock('../services/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
-vi.mock('../services/meatspacePostAdaptive.js', () => ({
+vi.mock('../services/meatspace/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostAdaptive.js', () => ({
   resolveDrillConfig: vi.fn(),
   getAdaptivePreview: vi.fn(),
 }));
-vi.mock('../services/meatspacePost.js', () => ({
+vi.mock('../services/meatspace/meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
   updatePostConfig: vi.fn(),
   generateDrill: vi.fn(),
   getPostReviewReps: vi.fn(),
 }));
-vi.mock('../services/meatspacePostDrillCache.js', () => ({
+vi.mock('../services/meatspace/meatspacePostDrillCache.js', () => ({
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(),
   getCachedDrill: vi.fn(() => null),
   triggerReplenish: vi.fn(),
 }));
 
-import { getPostStats } from '../services/meatspacePostStats.js';
-import { getPostRecommendations } from '../services/meatspacePostRecommendations.js';
+import { getPostStats } from '../services/meatspace/meatspacePostStats.js';
+import { getPostRecommendations } from '../services/meatspace/meatspacePostRecommendations.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

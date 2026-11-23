@@ -6,11 +6,11 @@ vi.mock('../brain.js', () => ({
   captureThought: vi.fn(async () => ({ inboxLog: { id: 'inbox-1' }, message: 'ok' })),
   getInboxLog: vi.fn(async () => []),
 }));
-vi.mock('../meatspaceAlcohol.js', () => ({
+vi.mock('../meatspace/meatspaceAlcohol.js', () => ({
   logDrink: vi.fn(async () => ({ standardDrinks: 1, dayTotal: 1 })),
   getAlcoholSummary: vi.fn(async () => ({ today: 0 })),
 }));
-vi.mock('../meatspaceNicotine.js', () => ({
+vi.mock('../meatspace/meatspaceNicotine.js', () => ({
   logNicotine: vi.fn(async () => ({ totalMg: 1, dayTotal: 1 })),
   getNicotineSummary: vi.fn(async () => ({ today: 0 })),
 }));
@@ -21,7 +21,7 @@ const addWorkoutMock = vi.fn(async ({ date, type, durationMinutes, intensity, no
   intensity: intensity ?? null,
   notes: notes ?? null,
 }));
-vi.mock('../meatspaceHealth.js', () => ({
+vi.mock('../meatspace/meatspaceHealth.js', () => ({
   addBodyEntry: vi.fn(async () => ({ date: '2026-04-17' })),
   addWorkout: (...args) => addWorkoutMock(...args),
 }));

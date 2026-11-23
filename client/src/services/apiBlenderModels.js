@@ -42,6 +42,10 @@ export const buildBlenderModel = (id, quality, options) =>
 export const cancelBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/builds/${encodeURIComponent(buildId)}/cancel`, json('POST', {}, options));
 
+// Cancel one set's bake while a full build runs; the build then ends canceled.
+export const cancelBlenderModelBake = (id, buildId, setId, options) =>
+  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/bakes/${encodeURIComponent(setId)}/cancel`, json('POST', {}, options));
+
 export const openBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/builds/${encodeURIComponent(buildId)}/open`, json('POST', {}, options));
 
@@ -59,6 +63,35 @@ export const getBlenderModelBuildLog = (id, buildId, options) => readBuildFile(i
 // model.glb, model.blend, report.json or build.log of one build, for a viewer, a download link or fetch().
 export const blenderModelBuildFileUrl = (id, buildId, name) =>
   `/api${base(id)}/builds/${encodeURIComponent(buildId)}/files/${encodeURIComponent(name)}`;
+
+const reviewBase = (id, buildId) => `${base(id)}/builds/${encodeURIComponent(buildId)}/review`;
+
+// Renders the fixed views and saved cameras of a completed build again. Needs Blender in Trusted local mode (409 otherwise).
+export const renderBlenderModelReview = (id, buildId, options) => request(reviewBase(id, buildId), json('POST', {}, options));
+
+export const cancelBlenderModelReview = (id, buildId, options) => request(`${reviewBase(id, buildId)}/cancel`, json('POST', {}, options));
+
+const readReviewFile = (id, buildId, name, options) => request(`${reviewBase(id, buildId)}/${encodeURIComponent(name)}`, options);
+
+export const getBlenderModelReviewLog = (id, buildId, options) => readReviewFile(id, buildId, 'review.log', { responseType: 'text', ...options });
+
+// `<view>-<look>.png` or `sheet-<look>.jpg`; `version` (the review's renderedAt) keeps a re-render from showing a cached image.
+export const blenderModelReviewFileUrl = (id, buildId, name, version) => `/api${reviewBase(id, buildId)}/${encodeURIComponent(name)}?v=${encodeURIComponent(version)}`;
+
+export const addBlenderModelCamera = (id, camera, options) => request(`${base(id)}/cameras`, json('POST', camera, options));
+
+export const updateBlenderModelCamera = (id, cameraId, patch, options) => request(`${base(id)}/cameras/${encodeURIComponent(cameraId)}`, json('PATCH', patch, options));
+
+export const removeBlenderModelCamera = (id, cameraId, options) => request(`${base(id)}/cameras/${encodeURIComponent(cameraId)}`, { method: 'DELETE', ...options });
+
+export const addBlenderModelDifference = (id, difference, options) => request(`${base(id)}/differences`, json('POST', difference, options));
+
+// Closing (`status` fixed or accepted) records `buildId`, or the newest completed build.
+export const updateBlenderModelDifference = (id, differenceId, patch, options) =>
+  request(`${base(id)}/differences/${encodeURIComponent(differenceId)}`, json('PATCH', patch, options));
+
+export const removeBlenderModelDifference = (id, differenceId, options) =>
+  request(`${base(id)}/differences/${encodeURIComponent(differenceId)}`, { method: 'DELETE', ...options });
 
 // The published build's GLB (model/gltf-binary).
 export const blenderModelAssetUrl = (id) => `/api${base(id)}/asset`;

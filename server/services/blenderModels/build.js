@@ -10,6 +10,11 @@
  * one and the newest five. Explicit actions only; nothing here runs at boot
  * except marking a build the restart interrupted as failed.
  *
+ * A full build whose describe() asks for a texture bake continues after the
+ * driver saves model.blend: bake.js bakes each set (a job of its own, a child of
+ * the build's slot) and a last driver run exports the GLB from the baked
+ * images. A draft build skips baking and its report says so.
+ *
  * Backup admission: the driver writes the build's bytes in place while its row
  * says `running`, so only the commit that names the finished build takes the
  * lease. Pruning drops builds from the row before it removes their folders.
@@ -18,33 +23,27 @@ import { lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { atomicWrite } from '../../lib/fileCore.js';
-import { trackedRenderMap } from '../renderActivity.js';
 import { blenderRefusal } from '../blenderWorkspace/containment.js';
-import { createBlenderJobRegistry } from '../blenderWorkspace/jobRegistry.js';
 import { openBlenderJobLogFile } from '../blenderWorkspace/jobLog.js';
 import { walkSourceTree } from '../blenderWorkspace/sourceTree.js';
 import { hashSourceEntries } from '../blenderWorkspace/treeHash.js';
+import { planBlenderModelBake } from './bakePlan.js';
+import { bakeBlenderModelSets, blenderModelBakeSetDir, exportableSets } from './bake.js';
 import { requireBlenderModelTool, runBlenderModelDriver } from './driver.js';
+import { activeJobs, cancelJob, ownerOf, registry, trackJob, __resetBlenderModelJobsForTests } from './jobs.js';
 import { buildBlenderModelReport, collectBlenderModelFacts } from './report.js';
+import { pruneBlenderModelReviews, startBlenderModelReview } from './review.js';
 import * as store from './store.js';
 import {
   BLENDER_MODEL_BUILD_ID, assertBlenderModelId, blenderModelBuildDir, blenderModelBuildsDir, blenderModelSrcDir, blenderModelWorkspaceDir, newBlenderModelBuildId,
 } from './workspace.js';
 
 const BUILDS_KEPT = 5;
+// How long a build may look for parts passing through each other; poses past it are reported as unmeasured.
+const SWEEP_SECONDS = Object.freeze({ draft: 120, full: 600 });
 
-const registry = createBlenderJobRegistry({ keyOf: (owner) => owner.id, label: 'Blender model', keptPerOwner: 10 });
 // Reserved synchronously before a start awaits, so two requests cannot both start a build.
 const starting = new Set();
-// model id → the promise of its running build, so a delete can wait for it to settle.
-const settling = new Map();
-// Counts toward system activity, so the unattended updater does not restart through a build.
-const inFlight = trackedRenderMap('blender-model', { noun: 'Blender model build' });
-
-const ownerOf = (id) => ({ id, emit: () => store.announceBlenderModel(id) });
-
-export const listBlenderModelJobs = (id) => registry.list(ownerOf(id));
-const activeBuild = (id) => registry.active(ownerOf(id))[0] ?? null;
 
 /** Build ids that survive pruning: published, running, and the newest BUILDS_KEPT. */
 function keptBlenderModelBuildIds(model) {
@@ -69,13 +68,13 @@ export async function pruneBlenderModelBuilds(id) {
     return { ...current, builds: current.builds.filter((build) => kept.has(build.id)) };
   }, { includeDeleted: true });
   const names = await readdir(blenderModelBuildsDir(id)).catch(() => []);
-  if (!names.length) return;
   // Read after the listing: a build's row entry is committed before its folder exists.
   const named = new Set(((await store.getModel(id, { includeDeleted: true }))?.builds || []).map((build) => build.id));
   for (const name of names) {
     if (!BLENDER_MODEL_BUILD_ID.test(name) || named.has(name)) continue;
     await rm(blenderModelBuildDir(id, name), { recursive: true, force: true });
   }
+  await pruneBlenderModelReviews(id, named);
 }
 
 const replaceBuild = (model, buildId, change) => ({
@@ -91,17 +90,23 @@ async function settleUnfinishedBuild({ id, buildId, entry, finishedAt, result, f
   console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId} ${result.canceled ? 'canceled' : `failed: ${result.error}`}`);
 }
 
-async function settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts }) {
+// What the Builds tab shows of a build's bake; null when describe() asked for none.
+const bakeSummary = (bake) => (bake ? {
+  size: bake.size, samples: bake.samples, skipped: bake.skipped,
+  sets: bake.sets.length, reused: bake.sets.filter((set) => set.reused).length,
+} : null);
+
+async function settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts, bake }) {
   const out = blenderModelBuildDir(id, buildId);
   const glb = await lstat(join(out, 'model.glb')).catch(() => null);
   const report = buildBlenderModelReport(facts, {
-    modelId: id, buildId, quality, startedAt, finishedAt, srcHash, glbBytes: glb?.isFile() ? glb.size : null,
+    modelId: id, buildId, quality, startedAt, finishedAt, srcHash, glbBytes: glb?.isFile() ? glb.size : null, bake,
   });
   await atomicWrite(join(out, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   await withBackupAssetPublication(() => store.mutateModel(id, (current) => ({
     ...replaceBuild(current, buildId, {
       status: 'complete', finishedAt, error: null, blenderVersion: report.blenderVersion,
-      counts: report.counts, publishable: report.publishable, title: report.describe?.title ?? null,
+      counts: report.counts, publishable: report.publishable, title: report.describe?.title ?? null, bake: bakeSummary(report.checks.bake),
     }),
     describe: report.describe,
   }), { includeDeleted: true }));
@@ -109,10 +114,53 @@ async function settleCompletedBuild({ id, buildId, quality, entry, startedAt, fi
   console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId}: ${report.counts.error} error(s), ${report.counts.warning} warning(s)`);
 }
 
+// The build is done whatever happens here; a review that cannot start is requested again from Compare.
+async function reviewCompletedBuild(id, buildId, signal) {
+  // An older build's review still rendering gives way to this one.
+  for (const entry of activeJobs(id, 'review')) {
+    entry.abort.abort();
+    await entry.done;
+  }
+  await startBlenderModelReview(id, buildId, { signal })
+    .catch((error) => console.log(`🧊 Blender model ${id.slice(0, 15)} build ${buildId} was not rendered for review: ${error.message}`));
+}
+
+/**
+ * The stages after a full build saved model.blend and left the GLB to them: bake each set of a valid plan, then
+ * export from the baked images. Resolves `{ bake, failure }`; a failure is `{ canceled, error }` and ends the build.
+ */
+async function bakeAndExport({ id, buildId, tool, entry, log, collector, out }) {
+  const { signal } = entry.abort;
+  const facts = collector.facts();
+  const plan = planBlenderModelBake(facts.described?.bake ?? null, facts.parts.map((part) => part.id));
+  let sets = [];
+  if (!plan.problems.length) {
+    const model = await store.getModel(id, { includeDeleted: true });
+    const outcome = await bakeBlenderModelSets({
+      id, buildId, tool, signal, log, plan, builds: model?.builds ?? [], facts: new Map(facts.bakeSets.map((fact) => [fact.id, fact])),
+    });
+    if (outcome.canceled) return { failure: { canceled: true, error: outcome.byBake ? `The bake of set ${outcome.setId} was canceled` : 'Canceled' } };
+    if (outcome.error) return { failure: { canceled: false, error: outcome.error } };
+    ({ sets } = outcome);
+  }
+  const result = await runBlenderModelDriver({
+    tool,
+    job: {
+      mode: 'bake-export', blend: join(out, 'model.blend'), glb: join(out, 'model.glb'), out,
+      sets: exportableSets(sets).map((set) => ({ id: set.id, partIds: set.partIds, dir: blenderModelBakeSetDir(id, buildId, set.id) })),
+    },
+    signal,
+    onEvent: (event) => collector.add(event),
+    onLog: log.write,
+  });
+  if (result.traceback) for (const line of result.traceback.split('\n')) log.write(line);
+  return { bake: { sets }, failure: result.ok ? null : { canceled: result.canceled, error: result.error } };
+}
+
 // Every outcome ends in a prune, so failed and canceled builds age out like completed ones.
 async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash }) {
   const out = blenderModelBuildDir(id, buildId);
-  const facts = collectBlenderModelFacts();
+  const collector = collectBlenderModelFacts();
   let log = null;
   try {
     await mkdir(out, { recursive: true });
@@ -120,17 +168,29 @@ async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash 
     registry.update(entry, { status: 'running' });
     const result = await runBlenderModelDriver({
       tool,
-      job: { mode: 'build', workspace: blenderModelWorkspaceDir(id), src: blenderModelSrcDir(id), out, quality },
+      job: { mode: 'build', workspace: blenderModelWorkspaceDir(id), src: blenderModelSrcDir(id), out, quality, sweepSeconds: SWEEP_SECONDS[quality] },
       signal: entry.abort.signal,
-      onEvent: (event) => facts.add(event),
+      onEvent: (event) => collector.add(event),
       onLog: log.write,
     });
     if (result.traceback) for (const line of result.traceback.split('\n')) log.write(line);
+    let outcome = result;
+    let bake = null;
+    // The driver left the GLB to the bake stages (full quality, describe().bake).
+    if (result.ok && collector.facts().saved?.deferred) {
+      const stages = await bakeAndExport({ id, buildId, tool, entry, log, collector, out });
+      bake = stages.bake ?? null;
+      if (stages.failure) outcome = { ...stages.failure, ok: false };
+    }
     await log.close();
     log = null;
     const finishedAt = new Date().toISOString();
-    if (result.ok) await settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts: facts.facts() });
-    else await settleUnfinishedBuild({ id, buildId, entry, finishedAt, result, facts: facts.facts() });
+    const facts = collector.facts();
+    if (outcome.ok) {
+      await settleCompletedBuild({ id, buildId, quality, entry, startedAt, finishedAt, srcHash, facts, bake });
+      await reviewCompletedBuild(id, buildId, entry.abort.signal);
+    }
+    else await settleUnfinishedBuild({ id, buildId, entry, finishedAt, result: outcome, facts });
   } catch (error) {
     console.error(`❌ Blender model ${id.slice(0, 15)} build ${buildId} failed: ${error.message}`);
     await log?.close();
@@ -148,7 +208,7 @@ async function runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash 
  */
 export async function startBlenderModelBuild(id, { quality = 'draft' } = {}) {
   assertBlenderModelId(id);
-  if (starting.has(id) || activeBuild(id)) throw blenderRefusal('This model is already building. Cancel it or wait for it to finish.', 'BLENDER_MODEL_BUILD_RUNNING', 409);
+  if (starting.has(id) || activeJobs(id, 'build').length) throw blenderRefusal('This model is already building. Cancel it or wait for it to finish.', 'BLENDER_MODEL_BUILD_RUNNING', 409);
   starting.add(id);
   try {
     const tool = await requireBlenderModelTool();
@@ -163,14 +223,8 @@ export async function startBlenderModelBuild(id, { quality = 'draft' } = {}) {
     const build = { id: buildId, status: 'running', quality, srcHash, startedAt, finishedAt: null, blenderVersion: tool.version ?? null, counts: null, publishable: false, error: null };
     await store.mutateModel(id, (current) => ({ ...current, builds: [...(current.builds || []), build] }));
     const entry = registry.create(ownerOf(id), { kind: 'build', buildId, quality });
-    inFlight.set(buildId, id);
-    const done = runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash })
-      .catch((error) => console.error(`❌ Blender model build ${buildId} did not settle: ${error.message}`))
-      .finally(() => {
-        settling.delete(id);
-        inFlight.delete(buildId);
-      });
-    settling.set(id, done);
+    trackJob(id, buildId, runBuild({ id, buildId, quality, tool, entry, startedAt, srcHash })
+      .catch((error) => console.error(`❌ Blender model build ${buildId} did not settle: ${error.message}`)));
     return { job: { ...entry.job }, build };
   } finally {
     starting.delete(id);
@@ -178,18 +232,7 @@ export async function startBlenderModelBuild(id, { quality = 'draft' } = {}) {
 }
 
 /** Cancel a running build; false when it is not running. */
-export function cancelBlenderModelBuild(id, buildId) {
-  const entry = registry.active(ownerOf(id)).find(({ job }) => job.buildId === buildId);
-  if (!entry) return false;
-  entry.abort.abort();
-  return true;
-}
-
-/** Cancel whatever `id` is building and wait for it to settle (a delete calls this first). */
-export async function settleBlenderModelBuilds(id) {
-  for (const entry of registry.active(ownerOf(id))) entry.abort.abort();
-  await settling.get(id);
-}
+export const cancelBlenderModelBuild = (id, buildId) => cancelJob(id, 'build', buildId);
 
 /** A build `startBlenderModelBuild` left running when PortOS stopped is failed on boot; nothing is restarted. */
 export async function recoverInterruptedBlenderModelBuilds() {
@@ -211,8 +254,6 @@ export async function recoverInterruptedBlenderModelBuilds() {
 
 /** Test seam: forget every job and reservation. */
 export function __resetBlenderModelBuildsForTests() {
-  registry.reset();
+  __resetBlenderModelJobsForTests();
   starting.clear();
-  settling.clear();
-  for (const buildId of [...inFlight.keys()]) inFlight.delete(buildId);
 }

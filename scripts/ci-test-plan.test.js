@@ -60,8 +60,9 @@ const REAL_TREE_SOURCES = [
   'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js',
   'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
-  'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
-  'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx',
+  'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx',
+  'client/src/components/musicVideo/ProductionReviewPanel.jsx',
   'server/lib/eidoversePort.js', 'server/services/eidoverse.js', 'server/services/catalog/catalogSync.js', 'server/services/musicVideo/documentRender.js',
   'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
@@ -117,10 +118,10 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-    'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
+    'scripts/lib/vitestWatch.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
-    'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+    'server/lib/mockPathsDataRoot.js',
   ];
   const server = [
     'server/package.json', 'server/package-lock.json',
@@ -130,7 +131,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const client = [
     'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
     'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-    'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js',
     'scripts/dev-start.js', 'scripts/publish-client-build.js',
     'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
     'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
@@ -1290,7 +1291,7 @@ describe('CI test impact planner', () => {
     }
   });
 
-  it('selects the touched feature across server and client without pulling unrelated tests', () => {
+  it('scopes feature-directory matching to its own workspace without pulling unrelated or cross-workspace tests (#17895)', () => {
     const plan = buildCiTestPlan([
       '.changelog/NEXT.md',
       'server/services/sprites/animationTracks.js',
@@ -1307,7 +1308,7 @@ describe('CI test impact planner', () => {
       full: false,
       reason: 'targeted features: sprites',
       server: { mode: 'related' },
-      client: { mode: 'files' },
+      client: { mode: 'skip', files: [], sources: [] },
       db: false,
       lint: { mode: 'files' },
       build: false,
@@ -1321,11 +1322,139 @@ describe('CI test impact planner', () => {
       'server/services/sprites/atlasLayout.test.js',
       'server/services/taskPromptDefaults.test.js',
     ]);
-    expect(plan.client.files).toEqual([
-      'client/src/components/sprites/WalkWorkflow.test.jsx',
-      'client/src/services/apiSprites.test.js',
-    ]);
     expect(plan.server.files).not.toContain('server/services/auth.test.js');
+    expect(plan.client.files).toEqual([]);
+  });
+
+  describe('workspace-scoped featureDirectory matching (#17895)', () => {
+    it('keeps a client-only feature edit out of server, DB and unrelated browser suites while preserving pathContractTests', () => {
+      const source = 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx';
+      const paritySuite = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
+      const unrelatedServer = 'server/services/musicVideo/projects.test.js';
+      const unrelatedDb = 'server/services/musicVideo/projects.db.test.js';
+      const unrelatedBrowser = 'server/services/musicVideo/documentRender.browser.test.js';
+      const clientFeatureTest = 'client/src/components/musicVideo/DocumentTemplateCanvas.test.jsx';
+      const trackedFiles = [...TRACKED, source, clientFeatureTest, paritySuite, unrelatedServer, unrelatedDb, unrelatedBrowser];
+
+      const plan = buildCiTestPlan([source], {
+        trackedFiles,
+        pathContractTests: { [source]: [clientFeatureTest, paritySuite] },
+      });
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: false,
+        build: true,
+        smoke: false,
+        browserFiles: [paritySuite],
+        client: { mode: 'related', sources: [source] },
+        server: { mode: 'files', sources: [] },
+      });
+      expect(plan.client.files).toContain(clientFeatureTest);
+      expect(plan.server.files).toEqual([paritySuite, 'server/services/taskPromptDefaults.test.js']);
+      expect(plan.server.files).not.toContain(unrelatedServer);
+      expect(plan.server.files).not.toContain(unrelatedBrowser);
+    });
+
+    it('keeps a server-only feature edit from selecting client feature or singular-name tests', () => {
+      const appRoute = 'server/routes/apps/crud.js';
+      const appServerTest = 'server/routes/apps/crud.test.js';
+      const trackedFiles = [...TRACKED, appRoute, appServerTest];
+
+      const plan = buildCiTestPlan([appRoute], { trackedFiles });
+      expect(plan).toMatchObject({
+        full: false,
+        build: false,
+        smoke: true,
+        client: { mode: 'skip', files: [], sources: [] },
+        server: { mode: 'related', sources: [appRoute] },
+      });
+      expect(plan.server.files).toContain(appServerTest);
+      expect(plan.client.files).not.toContain('client/src/App.test.jsx');
+      expect(githubPlanOutput(plan).client_mode).toBe('skip');
+    });
+
+    it('retains cross-workspace selection through clientDependencies, clientTestDependencies and pathContractTests', () => {
+      const sharedLib = 'server/lib/sprites/sharedGeometry.js';
+      const serverFeatureTest = 'server/routes/sprites.test.js';
+      const clientFeatureTest = 'client/src/components/sprites/WalkWorkflow.test.jsx';
+      const clientApiTest = 'client/src/services/apiSprites.test.js';
+      const clientConsumerTest = 'client/src/components/catalog/CatalogCard.test.jsx';
+      const trackedFiles = [...TRACKED, sharedLib];
+
+      // Imported by client production code (clientDependencies): sharedLib is a client source too.
+      const sharedPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [sharedLib],
+      });
+      expect(sharedPlan).toMatchObject({
+        full: false,
+        build: true,
+        server: { mode: 'related', sources: [sharedLib] },
+        client: { mode: 'related', sources: [sharedLib] },
+      });
+      expect(sharedPlan.server.files).toContain(serverFeatureTest);
+      expect(sharedPlan.client.files).toEqual(expect.arrayContaining([clientFeatureTest, clientApiTest]));
+
+      // Imported only by a client test fixture (clientTestDependencies): runs only that consumer, not client feature tests.
+      const testDepPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [],
+        clientTestDependencies: { [clientConsumerTest]: [sharedLib] },
+      });
+      expect(testDepPlan).toMatchObject({
+        full: false,
+        build: false,
+        client: { mode: 'files', files: [clientConsumerTest], sources: [] },
+      });
+
+      // Explicit basename contract (pathContractTests): selects only the named client test.
+      const contractPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [],
+        pathContractTests: { [sharedLib]: [clientApiTest] },
+      });
+      expect(contractPlan).toMatchObject({
+        full: false,
+        build: false,
+        client: { mode: 'files', files: [clientApiTest], sources: [] },
+      });
+    });
+
+    it('plans DocumentTemplateCanvas.jsx on the real tree with only documentTemplateParity and always-run server guards', () => {
+      const source = 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx';
+      const paritySuite = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
+      const inputs = realTree();
+      const plan = buildCiTestPlan([source], inputs);
+      const expectedServerFiles = [
+        paritySuite,
+        ...splitByRunner(getAlwaysRunTests(inputs.trackedFiles)).server,
+      ].sort();
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: false,
+        build: true,
+        smoke: false,
+        browserFiles: [paritySuite],
+        client: { mode: 'related', sources: [source] },
+        server: { mode: 'files', files: expectedServerFiles, sources: [] },
+      });
+    });
+
+    it('plans server/services/catalog/catalogSync.js on the real tree with client_mode skip', () => {
+      const source = 'server/services/catalog/catalogSync.js';
+      const plan = buildCiTestPlan([source], realTree());
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: true,
+        build: false,
+        smoke: true,
+        client: { mode: 'skip', files: [], sources: [] },
+      });
+      expect(githubPlanOutput(plan).client_mode).toBe('skip');
+    });
   });
 
   it('uses Vitest related mode for flat modules whose impact is defined by imports', () => {
@@ -2448,7 +2577,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     }
   });
 
-  it('selects every music-video browser suite when a client component they mount changes', () => {
+  it('selects only the music-video browser suites that mount ProductionReviewPanel when it changes', () => {
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
     const inputs = realTree();
     // Keep the real source/import walk, with a bounded test corpus. Unrelated
@@ -2458,18 +2587,18 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
-    // Server-only media suites do not mount the changed client component. The title-card suite is
-    // not among them: it lives in server/lib/musicVideo/ (#16561), so the musicVideo feature selects it.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js',
-      'server/services/federatedMedia/sourceAudio.browser.test.js',
-      'server/services/greyboxRender.browser.test.js',
-      'server/services/fableLoom/static-player/player.browser.test.js',
-      'server/services/codeAnimation/export.realBrowser.test.js',
-      'server/services/htmlComposition/index.test.js'];
+    // Only the three route suites mount ProductionReviewPanel.jsx (via pathContractTests);
+    // server-only musicVideo render/publish/title-card suites do not mount it (#17895).
+    const mountedSuites = [
+      'server/routes/musicVideoProductionReview.browser.test.js',
+      'server/routes/musicVideoRichAuthoring.browser.test.js',
+      'server/routes/musicVideoSongRevision.browser.test.js',
+    ];
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => suite.includes('/musicVideo') && !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).toEqual(mountedSuites);
     expect(plan.browserFiles).not.toContain('server/routes/catalogGreyboxViewer.browser.test.js');
-    for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
+    expect(plan.browserFiles).not.toContain('server/lib/musicVideo/musicVideoTitleCard.browser.test.js');
+    expect(plan.browserFiles).not.toContain('server/services/musicVideo/documentRender.browser.test.js');
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 

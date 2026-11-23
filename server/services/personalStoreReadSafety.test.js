@@ -78,17 +78,17 @@ beforeAll(async () => {
   ({ updateCharacterFields } = await import('./character.js'));
   ({ markDriverHandled } = await import('./dailyDriver.js'));
   ({ confirmEvent } = await import('./dailyReview.js'));
-  ({ updateBirthDate } = await import('./meatspace.js'));
-  ({ addCustomDrink, logDrink } = await import('./meatspaceAlcohol.js'));
-  ({ addActivity, addLifeEvent } = await import('./meatspaceCalendar.js'));
-  ({ addCustomProduct, logNicotine } = await import('./meatspaceNicotine.js'));
-  ({ setKochLevel } = await import('./meatspacePostMorse.js'));
+  ({ updateBirthDate } = await import('./meatspace/meatspace.js'));
+  ({ addCustomDrink, logDrink } = await import('./meatspace/meatspaceAlcohol.js'));
+  ({ addActivity, addLifeEvent } = await import('./meatspace/meatspaceCalendar.js'));
+  ({ addCustomProduct, logNicotine } = await import('./meatspace/meatspaceNicotine.js'));
+  ({ setKochLevel } = await import('./meatspace/meatspacePostMorse.js'));
   ({ saveStoredPostSession, saveStoredTrainingRun } = await import('./postRunStore.js'));
   ({ aggregateTwinEvidence } = await import('./twinEnrichment.js'));
   ({ listJournals, _clearObsidianLocationsCacheForTest } = await import('./brainJournal.js'));
-  ({ updatePostConfig } = await import('./meatspacePost.js'));
-  ({ createMemoryItem } = await import('./meatspacePostMemory.js'));
-  ({ applySessionToReviewSchedule } = await import('./meatspacePostReview.js'));
+  ({ updatePostConfig } = await import('./meatspace/meatspacePost.js'));
+  ({ createMemoryItem } = await import('./meatspace/meatspacePostMemory.js'));
+  ({ applySessionToReviewSchedule } = await import('./meatspace/meatspacePostReview.js'));
   ({ recordUserAction } = await import('./userActions.js'));
   ({ getDigitalTwinSnapshot, applyDigitalTwinRemote } = await import('./digital-twin-sync.js'));
 });
@@ -100,11 +100,11 @@ const cases = [
   ['alcohol daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logDrink({ name: 'Example', oz: 12, abv: 5, date: '2026-01-02' })],
   ['nicotine daily log', () => join(PATHS.meatspace, 'daily-log.json'), () => logNicotine({ product: 'Example', mgPerUnit: 1, date: '2026-01-02' })],
   ['blood pressure', () => join(PATHS.meatspace, 'health-metrics.json'), async () => {
-    const { addBloodPressureReading } = await import('./meatspaceHealth.js');
+    const { addBloodPressureReading } = await import('./meatspace/meatspaceHealth.js');
     return addBloodPressureReading({ date: '2026-01-02', systolic: 120, diastolic: 80 });
   }],
   ['workouts', () => join(PATHS.meatspace, 'workouts.json'), async () => {
-    const { addWorkout } = await import('./meatspaceHealth.js');
+    const { addWorkout } = await import('./meatspace/meatspaceHealth.js');
     return addWorkout({ date: '2026-01-02', type: 'Example exercise' });
   }],
   ['POST config', () => join(PATHS.meatspace, 'post-config.json'), () => updatePostConfig({ enabled: true })],

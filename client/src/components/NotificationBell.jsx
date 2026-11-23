@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo } from 'react';
-import { useEngagementReminderToast } from '../hooks/useEngagementReminderToast';
-import { useNotifications } from '../hooks/useNotifications';
+import { useEngagementReminderToast } from './useEngagementReminderToast';
+import { useNotifications } from './useNotifications';
 import NotificationDropdown from './NotificationDropdown';
 
 const NotificationContext = createContext(null);

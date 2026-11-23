@@ -6,7 +6,7 @@
  * optional daily-review `sourceKey`; mutations replace only matching entries, and
  * legacy entries get no backfill because their provenance cannot be assigned safely.
  */
-import { meatspaceEvents } from '../meatspaceEvents.js';
+import { meatspaceEvents } from '../meatspace/meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFileStrict, readJSONFile } from '../../lib/fileUtils.js';

@@ -14,7 +14,7 @@ import {
   lifeEventSchema,
   lifeEventUpdateSchema,
 } from '../lib/meatspaceValidation.js';
-import * as calendarService from '../services/meatspaceCalendar.js';
+import * as calendarService from '../services/meatspace/meatspaceCalendar.js';
 import { parseIndexParam } from '../lib/queryValidation.js';
 
 const router = Router();

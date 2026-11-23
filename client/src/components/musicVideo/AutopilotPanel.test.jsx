@@ -45,8 +45,8 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
 }));
 
 import AutopilotPanel from './AutopilotPanel.jsx';
-import useMusicVideoKickoff from '../../hooks/useMusicVideoKickoff.js';
-import useMusicVideoProduction from '../../hooks/useMusicVideoProduction.js';
+import useMusicVideoKickoff from './stages/useMusicVideoKickoff.js';
+import useMusicVideoProduction from './stages/useMusicVideoProduction.js';
 import * as api from '../../services/apiMusicVideo.js';
 
 const IDLE_PRODUCTION = { busy: false, start: vi.fn(), resume: vi.fn(), stop: vi.fn(), cancel: vi.fn() };

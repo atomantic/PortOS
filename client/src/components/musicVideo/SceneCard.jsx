@@ -7,7 +7,7 @@ import { MUSIC_VIDEO_VISUAL_LAYERS, sceneHasAuthoredSpan, sceneVisualLayer } fro
 import { isEndFrameImageEffect } from '../../lib/musicVideoImageEffects.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { sceneAttention, selectedFrameReadiness } from '../../lib/musicVideoSceneAttention.js';
-import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
+import useSceneClipPlayback from './useSceneClipPlayback.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import TabPills from '../ui/TabPills.jsx';
 import SceneFrames from './SceneFrames.jsx';

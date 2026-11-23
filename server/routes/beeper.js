@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
-import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+import { beeperSocketEvents } from '../services/beeper/beeperSocketEvents.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper, ServerError } from '../lib/errorHandler.js';
@@ -19,12 +19,12 @@ import {
   beeperPastedTokenSchema,
 } from '../lib/mediaValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
-import { completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth } from '../services/beeperOAuth.js';
-import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
+import { getBeeperStatus, checkBeeperConnection } from '../services/beeper/beeperStatus.js';
+import { completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth } from '../services/beeper/beeperOAuth.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeper/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, reconcileOutboxEntry, listOutboxEntries, sendOutboxEntry,
-} from '../services/beeperOutbox.js';
+} from '../services/beeper/beeperOutbox.js';
 import {
   listConversations,
   getConversation,
@@ -34,14 +34,14 @@ import {
   purgeConversation,
   setConversationArchived,
   setConversationLowPriority,
-} from '../services/beeperConversations.js';
+} from '../services/beeper/beeperConversations.js';
 import {
   backfillAttachments,
   ensureAttachmentBytes,
   getAttachment,
   getAttachmentSummary,
   setAttachmentKeep,
-} from '../services/beeperAttachments.js';
+} from '../services/beeper/beeperAttachments.js';
 
 const router = Router();
 

@@ -10,7 +10,8 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { streamAttachment } from '../lib/streamAttachment.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
-  blenderModelBuildSchema, blenderModelFileQuerySchema, blenderModelFileWriteSchema, blenderModelPublishSchema,
+  createBlenderModelCameraSchema, createBlenderModelDifferenceSchema, patchBlenderModelCameraSchema, patchBlenderModelDifferenceSchema,
+  blenderModelBuildSchema, blenderModelReviewSchema, blenderModelFileQuerySchema, blenderModelFileWriteSchema, blenderModelPublishSchema,
   blenderModelCloseupSchema, blenderModelPartsBriefSchema, blenderModelReferenceImageSchema, blenderModelReferenceReviewSchema,
   blenderModelReferenceSourceSchema, blenderModelReferenceWordsSchema, blenderModelWorkspaceSchema, createBlenderModelSchema, patchBlenderModelSchema,
 } from '../lib/blenderModelsValidation.js';
@@ -19,6 +20,9 @@ const router = Router();
 const models = () => import('../services/blenderModels/models.js');
 const references = () => import('../services/blenderModels/references.js');
 const builds = () => import('../services/blenderModels/build.js');
+const bakes = () => import('../services/blenderModels/bake.js');
+const reviews = () => import('../services/blenderModels/review.js');
+const compare = () => import('../services/blenderModels/compare.js');
 
 router.get('/', asyncHandler(async (_req, res) => {
   const { listBlenderModels } = await models();
@@ -91,20 +95,31 @@ router.post('/:id/builds/:buildId/cancel', asyncHandler(async (req, res) => {
   res.json({ ok: cancelBlenderModelBuild(req.params.id, req.params.buildId) });
 }));
 
+// One set's bake while a full build runs; canceling it ends that build, and an earlier build's baked set stays as it was.
+router.post('/:id/builds/:buildId/bakes/:setId/cancel', asyncHandler(async (req, res) => {
+  const { requireBlenderModel } = await models();
+  const { cancelBlenderModelBake } = await bakes();
+  await requireBlenderModel(req.params.id);
+  res.json({ ok: cancelBlenderModelBake(req.params.id, req.params.buildId, req.params.setId) });
+}));
+
 router.post('/:id/builds/:buildId/open', asyncHandler(async (req, res) => {
   const { openBlenderModelBuild } = await models();
   res.json(await openBlenderModelBuild(req.params.id, req.params.buildId));
 }));
 
-// model.glb, model.blend, report.json or build.log of one build, for review before publishing.
-router.get('/:id/builds/:buildId/files/:name', asyncHandler(async (req, res) => {
-  const { getBlenderModelBuildFile } = await models();
-  const { absolute, type } = await getBlenderModelBuildFile(req.params.id, req.params.buildId, req.params.name);
+function sendWorkspaceFile(res, { absolute, type }) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
   res.setHeader('Cache-Control', 'private, no-cache');
   res.type(type);
   res.sendFile(absolute, { dotfiles: 'deny' });
+}
+
+// model.glb, model.blend, report.json or build.log of one build, for review before publishing.
+router.get('/:id/builds/:buildId/files/:name', asyncHandler(async (req, res) => {
+  const { getBlenderModelBuildFile } = await models();
+  sendWorkspaceFile(res, await getBlenderModelBuildFile(req.params.id, req.params.buildId, req.params.name));
 }));
 
 router.post('/:id/publish', asyncHandler(async (req, res) => {
@@ -172,6 +187,57 @@ router.post('/:id/references/:referenceId/images', asyncHandler(async (req, res)
 router.post('/:id/references/:referenceId/images/:imageId/review', asyncHandler(async (req, res) => {
   const input = validateRequest(blenderModelReferenceReviewSchema, req.body ?? {});
   await (await references()).reviewBlenderModelReference(req.params.id, req.params.referenceId, req.params.imageId, input);
+  await sendState(req, res);
+}));
+
+// Comparing a build with its references (#17877): review renders, cameras and differences.
+router.post('/:id/builds/:buildId/review', asyncHandler(async (req, res) => {
+  validateRequest(blenderModelReviewSchema, req.body ?? {});
+  res.status(202).json(await (await reviews()).startBlenderModelReview(req.params.id, req.params.buildId));
+}));
+
+router.post('/:id/builds/:buildId/review/cancel', asyncHandler(async (req, res) => {
+  const { requireBlenderModel } = await models();
+  await requireBlenderModel(req.params.id);
+  res.json({ ok: (await reviews()).cancelBlenderModelReview(req.params.id, req.params.buildId) });
+}));
+
+// <view>-<look>.png, sheet-<look>.jpg, review.json or review.log of one build's review.
+router.get('/:id/builds/:buildId/review/:name', asyncHandler(async (req, res) => {
+  sendWorkspaceFile(res, await (await reviews()).resolveBlenderModelReviewFile(req.params.id, req.params.buildId, req.params.name));
+}));
+
+router.post('/:id/cameras', asyncHandler(async (req, res) => {
+  const input = validateRequest(createBlenderModelCameraSchema, req.body ?? {});
+  await (await compare()).addBlenderModelCamera(req.params.id, input);
+  await sendState(req, res, 201);
+}));
+
+router.patch('/:id/cameras/:cameraId', asyncHandler(async (req, res) => {
+  const input = validateRequest(patchBlenderModelCameraSchema, req.body ?? {});
+  await (await compare()).updateBlenderModelCamera(req.params.id, req.params.cameraId, input);
+  await sendState(req, res);
+}));
+
+router.delete('/:id/cameras/:cameraId', asyncHandler(async (req, res) => {
+  await (await compare()).removeBlenderModelCamera(req.params.id, req.params.cameraId);
+  await sendState(req, res);
+}));
+
+router.post('/:id/differences', asyncHandler(async (req, res) => {
+  const input = validateRequest(createBlenderModelDifferenceSchema, req.body ?? {});
+  await (await compare()).addBlenderModelDifference(req.params.id, input);
+  await sendState(req, res, 201);
+}));
+
+router.patch('/:id/differences/:differenceId', asyncHandler(async (req, res) => {
+  const input = validateRequest(patchBlenderModelDifferenceSchema, req.body ?? {});
+  await (await compare()).updateBlenderModelDifference(req.params.id, req.params.differenceId, input);
+  await sendState(req, res);
+}));
+
+router.delete('/:id/differences/:differenceId', asyncHandler(async (req, res) => {
+  await (await compare()).removeBlenderModelDifference(req.params.id, req.params.differenceId);
   await sendState(req, res);
 }));
 

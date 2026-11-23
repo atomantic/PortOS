@@ -73,5 +73,5 @@ Make repeat calls no-ops rather than re-registrations — re-`schedule()`ing an
 existing event resets `nextRunAt` a full interval out, so an unrelated toggle
 would keep pushing the next run away — serialize overlapping calls on one
 tail, and log transitions only, so an install that has never enabled the
-feature still narrates nothing. `server/services/beeperArming.js` is the
+feature still narrates nothing. `server/services/beeper/beeperArming.js` is the
 worked example.

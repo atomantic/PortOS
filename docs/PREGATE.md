@@ -116,14 +116,13 @@ change the POSIX signal behavior.
 Test process containment keeps signal delivery separate from verified
 termination. After worker-pool closure, the runner gives its Vitest watchdog
 a brief window to exit on IPC disconnect. Owned children that require
-containment get a bounded report in `.cache/test-process-diagnostics/`. The CI
-launcher also retains `processes.json` in its attempt diagnostics. Reports contain
-repository-relative suite names, bounded worker IDs and fixed
-lifecycle/settlement categories, never raw process arguments, environments,
-PIDs or private paths. Suite attribution is captured at child construction and
-matched by a hash of the PID and birth identity. Children that bypass the
-observer (including grandchildren whose parent already exited) remain
-explicitly unattributed. Unknown/unconfirmed settlement retains the run root
+containment are logged to stderr; the CI launcher passes
+`PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH` to retain a bounded `processes.json` in
+its attempt diagnostics. Reports contain
+fixed process-kind/settlement categories, never raw process arguments,
+environments, PIDs or private paths. Clean teardown takes a single post-close
+process-table inventory (the run owner's exit hook skips it once the root is
+removed). Unknown/unconfirmed settlement retains the run root
 and fails the run; a successful signal alone does not authorize removal.
 Interrupted-run sweeps read the process table only when a root has a dead or
 long-unknown owner, and retain roots while their deferred escalation is pending.

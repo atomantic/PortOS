@@ -8,11 +8,11 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { readLocalDailyLog } from '../services/meatspaceDailyLog.js';
-import * as meatspaceService from '../services/meatspace.js';
-import * as alcoholService from '../services/meatspaceAlcohol.js';
-import * as nicotineService from '../services/meatspaceNicotine.js';
-import * as healthService from '../services/meatspaceHealth.js';
+import { readLocalDailyLog } from '../services/meatspace/meatspaceDailyLog.js';
+import * as meatspaceService from '../services/meatspace/meatspace.js';
+import * as alcoholService from '../services/meatspace/meatspaceAlcohol.js';
+import * as nicotineService from '../services/meatspace/meatspaceNicotine.js';
+import * as healthService from '../services/meatspace/meatspaceHealth.js';
 import { getGoals } from '../services/identity.js';
 
 const router = Router();

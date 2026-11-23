@@ -7,7 +7,7 @@
  */
 
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { commitClinicalBloodImport } from './meatspaceHealth.js';
+import { commitClinicalBloodImport } from './meatspace/meatspaceHealth.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 
 // === LOINC Code → Key Mapping ===

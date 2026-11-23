@@ -3,21 +3,17 @@
  * redirects temp APIs before Vitest creates its module-transform cache.
  * The server's exclusive capture projects share this single global owner.
  */
-import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { PROCESS_OWNERS_DIR } from './lib/testProcessAttribution.js';
-import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { describeOwnedBrowserObservation, describeStageFixtureRoot, readOwnedBrowserObservations } from '../server/test/ownedBrowserDiagnostics.js';
-import { OWNER_FILE, PENDING_FILE, killTestProcessesUnder, verifyPendingTestProcesses, waitForVitestWatchdog } from './lib/vitestStaleRunRoots.js';
+import { OWNER_FILE, killTestProcessesUnder, waitForVitestWatchdog } from './lib/vitestStaleRunRoots.js';
 
 export function setup({ vitest }) {
   const root = process.env.PORTOS_TEST_TEMP_ROOT;
   // Vitest runs global teardown before closing its worker pool. Its close hook
   // runs after pool.close(), so live runner workers are not mistaken for leaks.
   vitest.onClose(async () => {
-    if (root && process.platform !== 'win32') await waitForVitestWatchdog(root);
-    cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, durable: true });
+    const records = root && process.platform !== 'win32' ? await waitForVitestWatchdog(root) : undefined;
+    cleanupRunTempRoot(root, { reportPath: process.env.PORTOS_TEST_PROCESS_DIAGNOSTICS_PATH, records });
   });
 }
 
@@ -47,10 +43,26 @@ const TOOLCHAIN_CACHE_PREFIXES = new Set([
   '.org.chromium.Chromium.',
 ]);
 
-// Written by server/lib/mockPathsDataRoot.js (`<dir>\t<test file>` per root it
-// minted), plus optional bounded composition snapshots. The decoder reaches
-// only Node builtins and the existing owner writer, never a service graph.
+// Written by server/lib/mockPathsDataRoot.js: one `<dir>\t<test file>` line per
+// root it minted. Read bounded so a runaway file cannot stall teardown.
 const OWNERS_FILE = '.leak-owners';
+const OWNERS_READ_LIMIT = 256 * 1024;
+
+function readTempRootOwners(root) {
+  const owners = new Map();
+  let fd;
+  try {
+    fd = openSync(join(root, OWNERS_FILE), 'r');
+    const buffer = Buffer.alloc(OWNERS_READ_LIMIT);
+    const text = buffer.toString('utf8', 0, readSync(fd, buffer, 0, OWNERS_READ_LIMIT, 0));
+    for (const line of text.split('\n')) {
+      const [dir, owner] = line.split('\t');
+      if (dir && owner) owners.set(dir, owner);
+    }
+  } catch { /* diagnostics only; a missing or unreadable sidecar just drops attribution */ }
+  if (fd !== undefined) closeSync(fd);
+  return owners;
+}
 const DOTNET_REGISTRATION_CACHE = 'system-commandline-sentinel-files';
 
 function isDotnetRegistrationCache(root, name) {
@@ -97,7 +109,7 @@ export function isEffectivelyEmpty(path) {
   return children.every((child) => isEffectivelyEmpty(join(path, child)));
 }
 
-export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, durable = false, platform = process.platform, verifyPending = verifyPendingTestProcesses } = {}) {
+export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { contain = killTestProcessesUnder, reportPath, records, platform = process.platform } = {}) {
   if (!root) return;
   // A process a suite failed to tear down would outlive the run (#10840).
   const outcomes = [];
@@ -105,6 +117,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
   let unsettled = 0;
   let inspected = true;
   const processes = platform === 'win32' ? 0 : contain(root, {
+    records,
     onInspection: value => { inspected = value; if (!value) unsettled++; },
     onOutcome: outcome => {
       total++;
@@ -112,24 +125,21 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
       if (outcomes.length < 64) outcomes.push(outcome);
     },
   });
-  const pendingVerified = platform === 'win32' || verifyPending(root);
-  if (!pendingVerified) unsettled++;
-  if (total || !inspected || !pendingVerified) {
-    const report = { version: 1, inspected, pendingVerified, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
-    const retainedPath = join(fileURLToPath(new URL('../.cache/test-process-diagnostics/', import.meta.url)), `${randomUUID()}.json`);
-    const destinations = reportPath ? [reportPath, ...(durable ? [retainedPath] : [])] : [retainedPath];
-    let retained = true;
-    try {
-      for (const destination of destinations) {
-        mkdirSync(dirname(destination), { recursive: true });
-        writeFileSync(destination, JSON.stringify(report));
+  if (total || !inspected) {
+    const report = { version: 1, inspected, boundary: 'pool-closed', total, terminated: processes, unsettled, capped: total > outcomes.length, processes: outcomes };
+    // Diagnostics are written only for an explicit CI path; local runs rely on stderr.
+    let retained = false;
+    if (reportPath) {
+      try {
+        mkdirSync(dirname(reportPath), { recursive: true });
+        writeFileSync(reportPath, JSON.stringify(report));
+        retained = true;
+      } catch {
+        console.error('❌ owned test process evidence could not be persisted');
+        unsettled++;
       }
-    } catch {
-      retained = false;
-      console.error('❌ owned test process evidence could not be persisted');
-      unsettled++;
     }
-    console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'unavailable'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
+    console.warn(`⚠️ test process leak: signal/settlement evidence=${retained ? 'retained' : 'stderr-only'} inspected=${inspected}; found=${total} terminated=${processes} unsettled=${unsettled}`);
     for (const outcome of outcomes) console.warn(`⚠️ owned test process: ${Object.entries(outcome).map(([key, value]) => `${key}=${value}`).join(' ')}`);
   }
   if (unsettled) {
@@ -144,7 +154,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
     return;
   }
   entries = entries
-    .filter((name) => name !== OWNER_FILE && name !== PENDING_FILE && name !== OWNERS_FILE && name !== PROCESS_OWNERS_DIR)
+    .filter((name) => name !== OWNER_FILE && name !== OWNERS_FILE)
     .filter((name) => !VITEST_INTERNAL_SCRATCH_DIR.test(name))
     .filter((name) => !TOOLCHAIN_CACHE_PREFIXES.has(groupLeakPrefix(name)))
     .filter((name) => !isDotnetRegistrationCache(root, name))
@@ -152,7 +162,7 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
     // scan cannot read it; unknown cache contents must fail closed.
     .filter((name) => name === DOTNET_REGISTRATION_CACHE || !isEffectivelyEmpty(join(root, name)));
 
-  const { owners, observations, state } = readOwnedBrowserObservations(root);
+  const owners = readTempRootOwners(root);
   const byPrefix = new Map();
   for (const name of entries) {
     const prefix = groupLeakPrefix(name);
@@ -165,16 +175,6 @@ export function cleanupRunTempRoot(root = process.env.PORTOS_TEST_TEMP_ROOT, { c
     const by = files.size ? ` (created by ${[...files].join(', ')})` : '';
     console.warn(`⚠️ test temp leak: ${prefix} ×${count}${by}`);
   }
-  const composition = entries.filter(name => name.startsWith('portos-composition-browser-'));
-  for (const [index, name] of composition.slice(0, 8).entries()) {
-    console.warn(`⚠️ composition profile ${index + 1}: ${describeOwnedBrowserObservation(observations.get(name), state)}`);
-  }
-  if (composition.length > 8) console.warn(`⚠️ composition profile provenance capped: ${composition.length - 8} additional entries`);
-  const stages = entries.filter(name => name.startsWith('portos-code-animation-stages-'));
-  for (const [index, name] of stages.slice(0, 8).entries()) {
-    console.warn(`⚠️ stage fixture ${index + 1}: ${describeStageFixtureRoot(join(root, name), observations.get(name), state)}`);
-  }
-  if (stages.length > 8) console.warn(`⚠️ stage fixture provenance capped: ${stages.length - 8} additional entries`);
   if (entries.length) {
     // This runs in vitest.onClose, after the reporter's exit-code snapshot, and
     // is the only place a run whose every assertion passed is made to fail.

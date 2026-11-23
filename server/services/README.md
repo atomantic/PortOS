@@ -4,6 +4,23 @@ Domain services own multi-step workflows over models, settings, and shared
 infrastructure. Import the narrow service module needed by a caller; the
 image-generation paths below are useful entry points when tracing render jobs.
 
+## Subdirectory map
+
+A domain with five or more cohesive modules lives in its own named subdirectory (see `portos-add-module`). Import the specific module (no barrels).
+
+| Directory | Owns |
+| --- | --- |
+| `meatspace/` | MeatSpace health, alcohol/nicotine/substance logs, calendar, daily log and the POST cognitive-training services (`meatspace*.js`). |
+| `beeper/` | Beeper mirror: OAuth/credentials, client, sync, conversations, outbox, scheduler, attachments, tribe linking (`beeper*.js`). |
+| `agent/`, `cos/` | CoS agent lifecycle, spawning state and the Chief-of-Staff task/tool services. |
+| `musicVideo/`, `videoGen/`, `imageGen/`, `audioGen/`, `film/`, `videoTimeline/` | Media generation and music-video render pipelines. |
+| `pipeline/`, `storyboards/`, `writersRoom/`, `creativeDirector/`, `fableLoom/` | Story and creative production workflows. |
+| `catalog/`, `catalogDB/`, `catalogIdentity/`, `universeBuilder/` | Creative catalog, ingredients and universe records. |
+| `voice/` | Voice pipeline (STT/TTS, tools, config). |
+| `provider/`, `backup/`, `sharing/`, `identity/`, `worktree/`, `branchReconcile/` | Provider execution, backups, sharing, identity, worktree and branch maintenance. |
+
+Remaining flat `brain*` and `eidoverse*` clusters are candidates for the same treatment.
+
 | Module | Responsibility |
 | --- | --- |
 | `nativeUsageDayStore.js` | Persisted per-app `day -> model -> counts` store: max-merge folds that survive app pruning, `coverageStart`, incremental lookback, fence-aware refresh. |

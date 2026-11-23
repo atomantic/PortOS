@@ -1,0 +1,229 @@
+/**
+ * Hook for the Music Video Cast & Sets check-in: applies pushed project updates and exposes start,
+ * regenerate, resume, approve, skip and `runToCheckpoint`.
+ *
+ * The Cast & Sets check-in before the plan: applies the project pushed on `music-video:cast-and-sets`
+ * / `music-video:dev-artifact` and exposes start / regenerate(notes?) / resume / approve / skip, plus
+ * `runToCheckpoint(project)` (start if absent, resolve at review/approved/skipped/failed — or
+ * `interrupted` by a restart, which would otherwise never settle) for the kickoff and `cancelWait()`
+ * to abandon that wait. Use when: The Music Video autopilot card and sheet viewer.
+ */
+
+import { useEffect, useRef, useState } from 'react';
+import toast from '../../ui/Toast';
+import socket from '../../../services/socket';
+import { subscribeVisibility } from '../../../hooks/useVisibilityEvent';
+import {
+  getMusicVideoProject,
+  linkMusicVideoCastAndSetsToCatalog,
+  rebuildMusicVideoCatalogGuide,
+  startMusicVideoCastAndSets,
+  editMusicVideoCastAndSetsImage,
+  selectMusicVideoCastAndSetsImage,
+  acceptMusicVideoCastAndSetsImageEdit,
+  discardMusicVideoCastAndSetsImageEdit,
+  regenerateMusicVideoCastAndSets,
+  editMusicVideoCastAndSetsDirection,
+  editMusicVideoCastAndSetsDirectionText,
+  applyMusicVideoCastAndSetsFeedback,
+  renderMusicVideoCastAndSetsFeedback,
+  refreshMusicVideoCastAndSetsFeedbackRenderer,
+  removeMusicVideoCastAndSetsImageFeedback,
+  removeMusicVideoCastAndSetsFeedback,
+  resumeMusicVideoCastAndSets,
+  acknowledgeMusicVideoCastAndSetsImage,
+  inspectMusicVideoCastAndSetsImages,
+  approveMusicVideoCastAndSets,
+  reconfirmMusicVideoCastAndSets,
+  skipMusicVideoCastAndSets,
+  discardMusicVideoCastAndSets,
+} from '../../../services/apiMusicVideo.js';
+
+// Where a stage stops needing the server: the autopilot continues past an
+// approved or skipped one, and waits for the director at `review` or `failed`.
+const CHECKPOINTS = new Set(['review', 'approved', 'skipped', 'failed']);
+// A working stage a server restart unpinned (`interrupted`) will never reach a
+// checkpoint on its own — it waits for the director's Resume. A kickoff watching
+// it must stop watching, not wait forever (#9940).
+const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.interrupted === true;
+
+/**
+ * The Cast & Sets check-in (runs before the shot plan). The server does the
+ * work — direction, reference images, the sheet — and pushes every step over
+ * `music-video:cast-and-sets` (and artifact edits over
+ * `music-video:dev-artifact`); this hook applies the project it pushes (no
+ * polling) and exposes the director's actions.
+ *
+ * `runToCheckpoint(project)` is the autopilot kickoff's step: it starts the
+ * check-in when there is none and resolves with the project once the stage
+ * reaches a checkpoint (`review`, `approved`, `skipped`, `failed`, or
+ * `interrupted` by a restart), or null when it could not start or the wait was
+ * abandoned with `cancelWait()` (the kickoff's Cancel).
+ *
+ * Returns `{ busy, refresh, start, regenerate, regenerateImages, editDirection, editDirectionText, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
+ */
+export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
+  const projectId = project?.id || null;
+  const [busy, setBusy] = useState(false);
+  const replaceRef = useRef(replaceProject);
+  const refreshRef = useRef(null);
+  const snapshotRevision = useRef(0);
+  const waiter = useRef(null);
+  useEffect(() => {
+    replaceRef.current = replaceProject;
+  }, [replaceProject]);
+  useEffect(() => {
+    snapshotRevision.current += 1;
+  }, [project]);
+
+  useEffect(() => {
+    if (!projectId) return undefined;
+    let active = true;
+    let pending = null;
+    const applyProject = (next) => {
+      snapshotRevision.current += 1;
+      replaceRef.current?.(next);
+      const w = waiter.current;
+      if (w && w.projectId === projectId && reachedCheckpoint(next.castAndSets)) {
+        waiter.current = null;
+        w.resolve(next);
+      }
+    };
+    const onStage = (data) => {
+      if (data?.projectId !== projectId || !data.project) return;
+      applyProject(data.project);
+    };
+    const onArtifact = (data) => {
+      if (data?.projectId === projectId && data.project) applyProject(data.project);
+    };
+    // Recover events missed while disconnected or hidden, once per transition.
+    // A newer socket snapshot or a project switch wins over an in-flight read.
+    const refresh = () => {
+      if (pending) return pending;
+      const revision = snapshotRevision.current;
+      pending = getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false).finally(() => { pending = null; });
+      return pending;
+    };
+    // A card read already saw a newer stage. Start after that read, and make
+    // any earlier reconnect/visibility response ineligible to replace it.
+    const refreshCurrent = (minRevision = 0) => {
+      const revision = ++snapshotRevision.current;
+      return getMusicVideoProject(projectId, { silent: true }).then((next) => {
+        if (minRevision && (!Number.isFinite(next?.castAndSets?.revision) || next.castAndSets.revision < minRevision)) return false;
+        if (active && next?.id === projectId && revision === snapshotRevision.current) { applyProject(next); return true; }
+        return false;
+      }).catch(() => false);
+    };
+    refreshRef.current = { projectId, refresh: refreshCurrent };
+    socket.on('music-video:cast-and-sets', onStage);
+    socket.on('music-video:dev-artifact', onArtifact);
+    socket.on('connect', refresh);
+    let visibility = document.visibilityState;
+    const unsubscribeVisibility = subscribeVisibility((next) => {
+      const changed = visibility !== next;
+      visibility = next;
+      if (changed && next === 'visible') refresh();
+    });
+    return () => {
+      active = false;
+      if (refreshRef.current?.refresh === refreshCurrent) refreshRef.current = null;
+      unsubscribeVisibility();
+      socket.off('music-video:cast-and-sets', onStage);
+      socket.off('music-video:dev-artifact', onArtifact);
+      socket.off('connect', refresh);
+      // A kickoff waiting on this project ends rather than hanging.
+      if (waiter.current?.projectId === projectId) {
+        waiter.current.resolve(null);
+        waiter.current = null;
+      }
+    };
+  }, [projectId]);
+
+  const refresh = (minRevision) => (refreshRef.current?.projectId === projectId ? refreshRef.current.refresh(minRevision) : Promise.resolve(false));
+
+  const call = (request, success) => {
+    const revision = snapshotRevision.current;
+    setBusy(true);
+    return request()
+      .then((res) => {
+        if (res?.project && revision === snapshotRevision.current) {
+          snapshotRevision.current += 1;
+          replaceRef.current?.(res.project);
+        }
+        if (success) toast.success(success);
+        return res;
+      })
+      .catch((err) => { toast.error(err?.message || 'Cast & Sets request failed'); return null; })
+      .finally(() => setBusy(false));
+  };
+
+  const linkCatalog = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Cast & Sets now follows the catalog');
+  const rebuildCatalogGuide = () => call(() => rebuildMusicVideoCatalogGuide(projectId, { silent: true }), 'Guide rebuilt from the catalog');
+  const remapCatalogReferences = () => call(() => linkMusicVideoCastAndSetsToCatalog(projectId, { silent: true }), 'Shot references moved to their catalog images');
+  const start = () => !project?.castAndSets || project.castAndSets.source === 'catalog'
+    ? linkCatalog() : call(() => startMusicVideoCastAndSets(projectId, {}, { silent: true }));
+  const regenerate = (notes) => call(() => regenerateMusicVideoCastAndSets(projectId, notes ? { notes } : {}, { silent: true }), 'Regenerating with your notes');
+  const regenerateImages = (keys) => call(() => regenerateMusicVideoCastAndSets(projectId, { keys }, { silent: true }), keys.length === 1 ? 'Re-rendering that image' : 'Re-rendering those images');
+  const useImage = (input) => call(() => selectMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Primary image selected — review the updated check-in');
+  const editImage = (input) => call(() => editMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Rendering an image edit for comparison');
+  const acceptImageEdit = (input) => call(() => acceptMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }), 'Image edit accepted — review the updated check-in');
+  const discardImageEdit = (input) => call(() => discardMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }));
+  const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
+  const editDirectionText = (edits) => call(() => editMusicVideoCastAndSetsDirectionText(projectId, edits, { silent: true }), 'Direction text saved');
+  const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Preparing your feedback without rendering images');
+  const renderFeedback = (input) => call(() => renderMusicVideoCastAndSetsFeedback(projectId, input, { silent: true }), 'Starting the reviewed feedback plan');
+  const refreshFeedbackRenderer = (input) => call(() => refreshMusicVideoCastAndSetsFeedbackRenderer(projectId, input, { silent: true }), 'Refreshing the image renderer');
+  const removeFeedback = (feedbackId) => call(() => removeMusicVideoCastAndSetsFeedback(projectId, feedbackId, { silent: true }));
+  const removeImageFeedback = (input) => call(() => removeMusicVideoCastAndSetsImageFeedback(projectId, input, { silent: true }));
+  const resume = () => call(() => resumeMusicVideoCastAndSets(projectId, { silent: true }));
+  const reinspectImages = (keys) => call(() => inspectMusicVideoCastAndSetsImages(projectId, keys ? { keys } : {}, { silent: true }), 'Vision re-check finished');
+  const acknowledgeImage = (input) => call(() => acknowledgeMusicVideoCastAndSetsImage(projectId, input, { silent: true }), 'Image review acknowledged');
+  const approvalOptions = (basis) => ({ silent: true, ...(project?.castAndSets?.source === 'catalog' ? { catalogBasis: typeof basis === 'string' ? basis : project.castAndSets.catalogCheckin?.basis } : {}) });
+  const approve = (basis) => call(() => approveMusicVideoCastAndSets(projectId, approvalOptions(basis)), 'Cast & Sets approved');
+  const reconfirm = (basis) => call(() => reconfirmMusicVideoCastAndSets(projectId, approvalOptions(basis)), 'Cast & Sets kept approved');
+  const skip = () => call(() => skipMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets check-in skipped');
+  const discard = () => call(() => discardMusicVideoCastAndSets(projectId, { silent: true }), 'Cast & Sets cleared — build it again when your story and guides are ready');
+  // A sheet in review must be cleared before a fresh build; any other idle sheet rebuilds in place.
+  const rebuildFromStory = (status) => call(async () => {
+    if (status === 'review') await discardMusicVideoCastAndSets(projectId, { silent: true });
+    return startMusicVideoCastAndSets(projectId, {}, { silent: true });
+  }, 'Rebuilding Cast & Sets from your story');
+
+  const runToCheckpoint = (target) => {
+    if (!target?.id) return Promise.resolve(null);
+    const status = target.castAndSets?.status;
+    if (reachedCheckpoint(target.castAndSets)) return Promise.resolve(target);
+    const reached = new Promise((resolve) => { waiter.current = { projectId: target.id, resolve }; });
+    // A stage already underway just needs watching; otherwise start one.
+    if (status) return reached;
+    return linkMusicVideoCastAndSetsToCatalog(target.id, { silent: true })
+      .then((res) => {
+        if (res?.project) {
+          replaceRef.current?.(res.project);
+          if (reachedCheckpoint(res.project.castAndSets) && waiter.current?.projectId === target.id) {
+            waiter.current.resolve(res.project);
+            waiter.current = null;
+          }
+        }
+        return reached;
+      })
+      .catch((err) => {
+        waiter.current = null;
+        toast.error(err?.message || 'Could not start the Cast & Sets check-in');
+        return null;
+      });
+  };
+
+  // Stop a kickoff's wait without touching the stage: the server keeps working.
+  const cancelWait = () => {
+    const w = waiter.current;
+    if (!w) return;
+    waiter.current = null;
+    w.resolve(null);
+  };
+
+  return { busy, refresh, start, linkCatalog, rebuildCatalogGuide, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, editDirectionText, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+}

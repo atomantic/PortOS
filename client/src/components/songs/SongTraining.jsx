@@ -33,7 +33,7 @@ import {
   memorizationPercent,
   hideLevelFor,
 } from '../../lib/songProgress.js';
-import useSongTraining from '../../hooks/useSongTraining.js';
+import useSongTraining from './useSongTraining.js';
 import useMounted from '../../hooks/useMounted.js';
 import MicProcessingHint from './MicProcessingHint.jsx';
 import ScoreSheet from './ScoreSheet.jsx';

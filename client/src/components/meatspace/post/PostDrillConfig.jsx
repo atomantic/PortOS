@@ -113,9 +113,9 @@ const MATH_TYPES = Object.keys(DRILL_META);
 const MATH_STRING_FIELDS = new Set(['family']);
 
 // LLM drill config meta for all 14 generatable types.
-// `defaults.count` mirrors the server (`server/services/meatspacePostLlm.js`,
+// `defaults.count` mirrors the server (`server/services/meatspace/meatspacePostLlm.js`,
 // `config.count || N`); `defaults.timeLimitSec` follows the DEFAULT_CONFIG
-// pattern in `server/services/meatspacePost.js`.
+// pattern in `server/services/meatspace/meatspacePost.js`.
 // `defaults.enabled` is `true` only for the 5 drills the server's DEFAULT_CONFIG
 // already ships enabled — the 9 newly-exposed drills default to `false` so they
 // are opt-in (enabling one and saving is what pulls it into POST sessions),
@@ -174,7 +174,7 @@ function seedLlmDrillTypes(saved) {
 }
 
 // Deterministic cognitive drills (no LLM). Field ranges mirror the server
-// clamps in server/services/meatspacePostCognitive.js and the Zod bounds in
+// clamps in server/services/meatspace/meatspacePostCognitive.js and the Zod bounds in
 // server/lib/postValidation.js. `defaults` mirror the server DEFAULT_CONFIG so
 // the launcher and generators agree.
 //
@@ -587,7 +587,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   // null. Held as the type alone — the drill payload is rebuilt from the CURRENT
   // draft config on render, so editing `n` and reopening shows the new lag.
   const [howItWorksType, setHowItWorksType] = useState(null);
-  // Opt-in daily reminder — off by default; see server/services/meatspacePostReminder.js.
+  // Opt-in daily reminder — off by default; see server/services/meatspace/meatspacePostReminder.js.
   const [reminderEnabled, setReminderEnabled] = useState(
     () => config?.reminder?.enabled === true
   );

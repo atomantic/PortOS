@@ -3,7 +3,7 @@
  *
  * Object utilities. `isPlainObject(v)`: the project standard for "is this a `{...}`-shaped value?" (non-null, non-array `object`), gating JSON sanitizers, deep-merge recursion and LLM-response shape guards; `Date`, `Map` and class instances
  * also return `true` (matching every call site it replaced, which runs on `JSON.parse` output or LLM payloads).
- * `deepMerge` is the shared deep-merge (promoted from `services/voice/config.js` after being reinvented in `services/meatspacePost.js` and `routes/loras.js#POST /auth/civitai`). Semantics: both base[k] and patch[k] plain objects → recurse;
+ * `deepMerge` is the shared deep-merge (promoted from `services/voice/config.js` after being reinvented in `services/meatspace/meatspacePost.js` and `routes/loras.js#POST /auth/civitai`). Semantics: both base[k] and patch[k] plain objects → recurse;
  * arrays are REPLACED as leaf values; primitives, null and any non-plain-object patch[k] overwrite verbatim; a non-plain-object patch is returned directly unless `undefined` (then `base` unchanged, so an optional patch keeps defaults);
  * a null/undefined/non-object `base` is an empty object (`deepMerge(undefined, { a: 1 })` → `{ a: 1 }`). Does NOT mutate `base`.
  */

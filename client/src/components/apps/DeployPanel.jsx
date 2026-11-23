@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Rocket, X, ChevronDown, Loader2 } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import Modal from '../ui/Modal';
-import { useAppDeploy } from '../../hooks/useAppDeploy';
+import { useAppDeploy } from './useAppDeploy';
 
 const FLAG_OPTIONS = [
   { value: '--ios', label: 'iOS' },

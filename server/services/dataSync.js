@@ -6,7 +6,7 @@
  * No data is ever lost — unique records from both sides are kept (union semantics).
  */
 
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { isDeepStrictEqual } from 'util';
@@ -21,8 +21,8 @@ import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
   queueDailyLogWrite,
-} from './meatspaceDailyLog.js';
-import { queueConfigWrite, queueHealthWrite } from './meatspaceWriteQueues.js';
+} from './meatspace/meatspaceDailyLog.js';
+import { queueConfigWrite, queueHealthWrite } from './meatspace/meatspaceWriteQueues.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,

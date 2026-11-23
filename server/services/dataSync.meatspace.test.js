@@ -24,11 +24,11 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 const dataSync = await import('./dataSync.js');
-const health = await import('./meatspaceHealth.js');
+const health = await import('./meatspace/meatspaceHealth.js');
 const { rowIdentityKeys } = await import('../lib/meatspaceRowIdentity.js');
 // The content key every machine derives for a row without createdAt.
 const legacyRowId = (row) => rowIdentityKeys(row).at(-1);
-const { queueConfigWrite, queueHealthWrite } = await import('./meatspaceWriteQueues.js');
+const { queueConfigWrite, queueHealthWrite } = await import('./meatspace/meatspaceWriteQueues.js');
 
 const MEATSPACE_DIR = join(tempRoot, 'meatspace');
 const fileOf = (name) => join(MEATSPACE_DIR, name);

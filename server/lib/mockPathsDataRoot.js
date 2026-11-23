@@ -1,7 +1,7 @@
 /**
  * Shared `vi.mock` factory for the "PATHS.data → temp dir" pattern.
  *
- * Best-effort bounded `recordTempRootOwner` sidecar observations and shared Vitest helpers for
+ * Best-effort `recordTempRootOwner` leak-owner sidecar and shared Vitest helpers for
  * `PATHS.data → temp dir`, no-peer record creation guards, deterministic federation-identity doubles
  * (`mockTestIdentity`), and `ownFixtureWork()` for setup/test/Git/write settlement, bounded phase
  * timings and cleanup failure retention; `ownTestBodies(it)` → `{ it, drain }`, which owns each test
@@ -36,8 +36,7 @@
  * target the default re-rooting wouldn't produce — it merges last.
  */
 
-import { channel } from 'node:diagnostics_channel';
-import { appendFileSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs';
+import { appendFileSync, mkdtempSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, isAbsolute, join, relative, sep } from 'path';
 
@@ -55,24 +54,16 @@ export function createTempDataRoot(prefix = 'portos-test-') {
  * Sidecar the run-wide leak guard (`scripts/vitestTempRootSetup.js`) reads so a
  * leaked `<prefix>XXXXXX` directory is reported with the test file that minted
  * it. A random-suffixed name alone cannot identify its creator (#10404).
- * The 8 MiB budget admits at most one small concurrent append per worker.
+ * One `<dir>\t<test file>` line per root; the reader bounds how much it loads.
  */
 const TEMP_ROOT_OWNERS_FILE = '.leak-owners';
-export function recordTempRootOwner(dir, { owner, observation } = {}) {
+export function recordTempRootOwner(dir) {
   try {
     const runRoot = process.env.PORTOS_TEST_TEMP_ROOT;
-    const source = owner ?? globalThis.__vitest_worker__?.filepath;
-    if (!runRoot || !source) return 'unavailable';
-    const file = join(runRoot, TEMP_ROOT_OWNERS_FILE);
-    const row = `${basename(dir)}\t${observation ? source : basename(source)}${observation ? `\t${observation}` : ''}\n`;
-    if (observation) {
-      if (Buffer.byteLength(row) > 1024) return 'capped';
-      try { if (statSync(file).size >= 8 * 1024 * 1024) return 'capped'; }
-      catch (error) { if (error.code !== 'ENOENT') return 'unavailable'; }
-    }
-    appendFileSync(file, row);
-    return 'written';
-  } catch { return 'unavailable'; /* diagnostics only; never recreate a missing run root */ }
+    const source = globalThis.__vitest_worker__?.filepath;
+    if (!runRoot || !source) return;
+    appendFileSync(join(runRoot, TEMP_ROOT_OWNERS_FILE), `${basename(dir)}\t${basename(source)}\n`);
+  } catch { /* diagnostics only; never recreate a missing run root */ }
 }
 
 /**
@@ -99,13 +90,11 @@ export function recordTempRootOwner(dir, { owner, observation } = {}) {
  * @returns {string} absolute path to this prefix's temp root
  */
 const lazyRoots = new Map();
-const rootLifecycle = channel('portos.composition-browser.lifecycle');
 export function lazyTempDataRoot(prefix = 'portos-test-') {
   let root = lazyRoots.get(prefix);
   if (!root) {
     root = createTempDataRoot(prefix);
     lazyRoots.set(prefix, root);
-    rootLifecycle.publish({ event: 'allocated', profile: root });
   }
   return root;
 }
@@ -115,14 +104,7 @@ export function cleanupTempDataRoots() {
   // Retries cover ENOTEMPTY/EBUSY from a just-killed child (a test Chrome's
   // helpers) still flushing into the root while it is being removed.
   for (const root of lazyRoots.values()) {
-    rootLifecycle.publish({ event: 'remove-start', profile: root });
-    try {
-      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-      rootLifecycle.publish({ event: 'remove-resolved', profile: root });
-    } catch (error) {
-      rootLifecycle.publish({ event: 'remove-rejected', profile: root, code: error.code });
-      throw error;
-    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
   lazyRoots.clear();
 }

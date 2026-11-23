@@ -17,7 +17,7 @@ vi.mock('../../../services/apiAccounts.js', () => ({
 vi.mock('../../../services/apiAgents.js', () => ({
   getAgentActivityTimeline: vi.fn(),
 }));
-vi.mock('../../../hooks/useMoltworldWs', () => ({
+vi.mock('./useMoltworldWs', () => ({
   default: () => ({ connectionStatus: wsState.connectionStatus, feedItems: [], presence: [], connect: vi.fn(), disconnect: vi.fn() }),
 }));
 vi.mock('../../../services/socket', () => ({

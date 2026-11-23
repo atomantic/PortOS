@@ -18,7 +18,7 @@ import {
   healthRowParamSchema,
   healthDayParamSchema,
 } from '../lib/meatspaceValidation.js';
-import * as healthService from '../services/meatspaceHealth.js';
+import * as healthService from '../services/meatspace/meatspaceHealth.js';
 
 const router = Router();
 

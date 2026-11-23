@@ -29,7 +29,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
-import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCancelPending, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { encodeFileContactSheetAtTimes } from '../htmlComposition/encode.js';
@@ -382,7 +382,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
       // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
       graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
       plainEncode = composition ? null : await filterGraphViaFile(ffmpeg, buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, frameGrid: composed, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect }).args, graphPath);
-      job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration };
+      job = { id: jobId, projectId, excerptId, status: 'running', clients: [], process: null, totalDuration, overlayAbort: new AbortController() };
       jobs.set(jobId, job);
       projectExcerptRenders.set(projectId, jobId);
     } catch (err) {
@@ -508,8 +508,11 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
               await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
               return;
             }
+            if (isMusicVideoRenderCancelPending(job)) {
+              await settleFailure(true, 'Render cancelled');
+              return;
+            }
             if (finishing) {
-              job.overlayAbort = new AbortController();
               const { signal: finishSignal } = job.overlayAbort;
               try {
                 await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal: finishSignal, label: 'Music-video excerpt film look',
@@ -519,9 +522,14 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
                 await settleFailure(finishSignal.aborted, finishSignal.aborted ? 'Render cancelled' : `Film look pass failed: ${err.message}`);
                 return;
               }
-              job.overlayAbort = null;
+            }
+            if (isMusicVideoRenderCancelPending(job)) {
+              await settleFailure(true, 'Render cancelled');
+              return;
             }
             try {
+              // Checked and set synchronously: past here a cancel is refused.
+              job.committing = true;
               job.status = 'complete';
               const contactSheetFilename = await buildContactSheet();
               const persisted = await finalize({ status: 'complete', filename, contactSheetFilename, error: null, jobId: null });
@@ -554,7 +562,6 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
       return { jobId, excerptId };
     }
 
-    job.overlayAbort = new AbortController();
     const { signal } = job.overlayAbort;
     // Clamp each cue's capture start to the excerpt window: a title-card cue
     // (#8985) can span a whole song section, and capturing it from its TRUE
@@ -568,11 +575,15 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then(async (overlays) => {
       signal.throwIfAborted();
-      job.overlayAbort = null;
       const layered = buildMusicVideoFfmpegArgs(clips, audioPath, outputPath, { audioDurationSec, overlays, frameGrid: true, excerpt: { startSec, endSec: endClamped }, soundBed, grade: composed ? project.composition?.grade : null, beats: project.audioAnalysis?.beats, aspect: canvasAspect });
-      startEncode(await filterGraphViaFile(ffmpeg, layered.args, graphPath), 0.5);
+      const encode = await filterGraphViaFile(ffmpeg, layered.args, graphPath);
+      if (isMusicVideoRenderCancelPending(job)) {
+        await unlink(graphPath).catch(() => {});
+        throw signal.reason ?? new Error('Render cancelled');
+      }
+      startEncode(encode, 0.5);
     }).catch(async (err) => {
-      const canceled = signal.aborted;
+      const canceled = isMusicVideoRenderCancelPending(job);
       job.status = canceled ? 'canceled' : 'error';
       const reason = canceled ? 'Render cancelled' : `Typography overlay failed: ${err.message}`;
       job.lastError = reason;

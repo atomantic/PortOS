@@ -29,7 +29,7 @@ vi.mock('../services/tribeOutreach.js', () => ({
   generateOutreachDraft: vi.fn(),
 }));
 
-vi.mock('../services/beeperTribe.js', () => ({
+vi.mock('../services/beeper/beeperTribe.js', () => ({
   linkParticipant: vi.fn(),
   unlinkParticipant: vi.fn(),
   createPersonAndLinkParticipant: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock('../services/beeperTribe.js', () => ({
 
 import * as tribe from '../services/tribe.js';
 import * as tribeOutreach from '../services/tribeOutreach.js';
-import * as beeperTribe from '../services/beeperTribe.js';
+import * as beeperTribe from '../services/beeper/beeperTribe.js';
 
 const PERSON_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';

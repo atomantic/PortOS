@@ -3,21 +3,21 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/meatspaceDailyLog.js', () => ({ readLocalDailyLog: vi.fn() }));
-vi.mock('../services/meatspace.js', () => ({ getConfig: vi.fn() }));
-vi.mock('../services/meatspaceAlcohol.js', () => ({ getCustomDrinks: vi.fn() }));
-vi.mock('../services/meatspaceNicotine.js', () => ({ getCustomProducts: vi.fn() }));
-vi.mock('../services/meatspaceHealth.js', () => ({
+vi.mock('../services/meatspace/meatspaceDailyLog.js', () => ({ readLocalDailyLog: vi.fn() }));
+vi.mock('../services/meatspace/meatspace.js', () => ({ getConfig: vi.fn() }));
+vi.mock('../services/meatspace/meatspaceAlcohol.js', () => ({ getCustomDrinks: vi.fn() }));
+vi.mock('../services/meatspace/meatspaceNicotine.js', () => ({ getCustomProducts: vi.fn() }));
+vi.mock('../services/meatspace/meatspaceHealth.js', () => ({
   getBloodTests: vi.fn(), getEpigeneticTests: vi.fn(), getEyeExams: vi.fn(),
 }));
 vi.mock('../services/identity.js', () => ({ getGoals: vi.fn() }));
 
 import meatspaceExportRoutes from './meatspaceExportRoutes.js';
-import { readLocalDailyLog } from '../services/meatspaceDailyLog.js';
-import { getConfig } from '../services/meatspace.js';
-import { getCustomDrinks } from '../services/meatspaceAlcohol.js';
-import { getCustomProducts } from '../services/meatspaceNicotine.js';
-import { getBloodTests, getEpigeneticTests, getEyeExams } from '../services/meatspaceHealth.js';
+import { readLocalDailyLog } from '../services/meatspace/meatspaceDailyLog.js';
+import { getConfig } from '../services/meatspace/meatspace.js';
+import { getCustomDrinks } from '../services/meatspace/meatspaceAlcohol.js';
+import { getCustomProducts } from '../services/meatspace/meatspaceNicotine.js';
+import { getBloodTests, getEpigeneticTests, getEyeExams } from '../services/meatspace/meatspaceHealth.js';
 import { getGoals } from '../services/identity.js';
 
 function makeApp() {

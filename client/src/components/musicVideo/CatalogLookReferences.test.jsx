@@ -15,7 +15,7 @@ vi.mock('./LookReferencesPanel.jsx', () => ({ default: () => null }));
 vi.mock('./VisualSpecPanel.jsx', () => ({ default: () => null }));
 vi.mock('./CameoRosterPanel.jsx', () => ({ default: () => null }));
 vi.mock('./VideoCastLinks.jsx', () => ({ VideoCastLinksDisclosure: () => null }));
-vi.mock('../../hooks/useMusicVideoCastingChanges.js', () => ({ default: () => ({}) }));
+vi.mock('./stages/useMusicVideoCastingChanges.js', () => ({ default: () => ({}) }));
 
 const makeProject = () => ({
   id: 'mv-test', concept: { universeId: 'universe-shared', subjects: [

@@ -51,20 +51,20 @@ vi.mock('../services/musicVideo/promotionPlan.js', () => ({
   planMusicVideoPromotion: vi.fn(async () => ({ planKey: 'example-plan', steps: [] })),
   promotionPlanSteps: vi.fn(async () => ({ planKey: 'example-plan', steps: [] })),
 }));
-vi.mock('../services/meatspacePostLlm.js', () => ({
+vi.mock('../services/meatspace/meatspacePostLlm.js', () => ({
   generateLlmDrill: vi.fn(async () => ({ type: 'word-association', questions: [{ prompt: 'example' }] })),
   scoreLlmDrill: vi.fn(async () => ({ score: 1 })),
 }));
-vi.mock('../services/meatspacePostRhetoric.js', () => ({
+vi.mock('../services/meatspace/meatspacePostRhetoric.js', () => ({
   evaluateRhetoricAttempt: vi.fn(async () => ({ score: 1 })),
 }));
-vi.mock('../services/meatspacePostDrillCache.js', () => ({
+vi.mock('../services/meatspace/meatspacePostDrillCache.js', () => ({
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(() => ['compound-chain']),
   getCachedDrill: vi.fn(() => null),
   triggerReplenish: vi.fn(),
 }));
-vi.mock('../services/meatspacePostAdaptive.js', async (importOriginal) => ({
+vi.mock('../services/meatspace/meatspacePostAdaptive.js', async (importOriginal) => ({
   ...await importOriginal(),
   resolveDrillConfig: vi.fn(async (_type, config) => ({ config: config ?? {}, adaptive: null, progression: null })),
 }));
@@ -74,10 +74,10 @@ import meatspaceRoutes from './meatspacePostRoutes.js';
 import { __setCoverArtDepsForTests } from '../services/musicVideo/coverArt.js';
 import { createProject } from '../services/musicVideo/projects.js';
 import { planMusicVideoPromotion, promotionPlanSteps } from '../services/musicVideo/promotionPlan.js';
-import { generateLlmDrill, scoreLlmDrill } from '../services/meatspacePostLlm.js';
-import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
-import { requestCacheFill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
-import * as postService from '../services/meatspacePost.js';
+import { generateLlmDrill, scoreLlmDrill } from '../services/meatspace/meatspacePostLlm.js';
+import { evaluateRhetoricAttempt } from '../services/meatspace/meatspacePostRhetoric.js';
+import { requestCacheFill, triggerReplenish } from '../services/meatspace/meatspacePostDrillCache.js';
+import * as postService from '../services/meatspace/meatspacePost.js';
 
 let projectId;
 const picker = { providerId: cliProvider.id, model: 'example-model' };

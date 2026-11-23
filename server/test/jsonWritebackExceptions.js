@@ -58,12 +58,12 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Authoritative rebuild: theme extraction replaces the cache from source evidence without retaining prior fields."
   },
   {
-    "key": "meatspaceDailyLog.js :: DAILY_LOG_FILE",
+    "key": "meatspace/meatspaceDailyLog.js :: DAILY_LOG_FILE",
     "reason": "No non-strict write-back: UI reads stay tolerant, but mutateDailyLog is the only writer and always reads with strict: true before atomicWrite.",
     "issue": "#8032"
   },
   {
-    "key": "meatspacePostDrillCache.js :: CACHE_FILE",
+    "key": "meatspace/meatspacePostDrillCache.js :: CACHE_FILE",
     "reason": "Cache-only: a lost drill cache costs one refill."
   },
   {

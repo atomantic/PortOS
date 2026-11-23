@@ -4,20 +4,20 @@ import { request } from '../lib/testHelper.js';
 
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+import { beeperSocketEvents } from '../services/beeper/beeperSocketEvents.js';
 
-vi.mock('../services/beeperStatus.js', () => ({
+vi.mock('../services/beeper/beeperStatus.js', () => ({
   getBeeperStatus: vi.fn(),
   checkBeeperConnection: vi.fn(),
 }));
-vi.mock('../services/beeperOAuth.js', () => ({
+vi.mock('../services/beeper/beeperOAuth.js', () => ({
   startBeeperOAuth: vi.fn(),
   completeBeeperOAuth: vi.fn(),
   connectWithPastedToken: vi.fn(),
   disconnectBeeper: vi.fn(),
 }));
-vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
-vi.mock('../services/beeperOutbox.js', () => ({
+vi.mock('../services/beeper/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
+vi.mock('../services/beeper/beeperOutbox.js', () => ({
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
   discardOutboxEntry: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock('../services/beeperOutbox.js', () => ({
   listOutboxEntries: vi.fn(),
   clearOutboxBreaker: vi.fn(),
 }));
-vi.mock('../services/beeperConversations.js', () => ({
+vi.mock('../services/beeper/beeperConversations.js', () => ({
   listConversations: vi.fn(),
   getConversation: vi.fn(),
   listMessages: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('../services/beeperConversations.js', () => ({
   setConversationArchived: vi.fn(),
   setConversationLowPriority: vi.fn(),
 }));
-vi.mock('../services/beeperAttachments.js', () => ({
+vi.mock('../services/beeper/beeperAttachments.js', () => ({
   backfillAttachments: vi.fn(),
   ensureAttachmentBytes: vi.fn(),
   getAttachment: vi.fn(),
@@ -54,14 +54,14 @@ vi.mock('../lib/uploads.js', async (importOriginal) => ({
 }));
 
 import beeperRoutes from './beeper.js';
-import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
+import { getBeeperStatus, checkBeeperConnection } from '../services/beeper/beeperStatus.js';
 import {
   completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth,
-} from '../services/beeperOAuth.js';
-import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
+} from '../services/beeper/beeperOAuth.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeper/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
-} from '../services/beeperOutbox.js';
+} from '../services/beeper/beeperOutbox.js';
 import {
   listConversations,
   getConversation,
@@ -71,17 +71,17 @@ import {
   purgeConversation,
   setConversationArchived,
   setConversationLowPriority,
-} from '../services/beeperConversations.js';
+} from '../services/beeper/beeperConversations.js';
 import {
   backfillAttachments,
   ensureAttachmentBytes,
   getAttachment,
   getAttachmentSummary,
   setAttachmentKeep,
-} from '../services/beeperAttachments.js';
+} from '../services/beeper/beeperAttachments.js';
 import { serveLocalFile } from '../lib/uploads.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
-import { BeeperApiError } from '../services/beeperClient.js';
+import { BeeperApiError } from '../services/beeper/beeperClient.js';
 
 const buildApp = () => {
   const app = express();
@@ -428,7 +428,7 @@ describe('the token value never reaches a response or a log line', () => {
 });
 
 // The outbox routes (#36). The service's own gates are covered in
-// `services/beeperOutbox.test.js`; this pins the HTTP contract the composer
+// `services/beeper/beeperOutbox.test.js`; this pins the HTTP contract the composer
 // codes against — validation, the coded 4xx map, and `retryable: false` on
 // every write path so a client can never turn one refusal into two messages.
 describe('POST /api/beeper/outbox — step one, create the entry', () => {

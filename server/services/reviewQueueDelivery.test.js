@@ -4,7 +4,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const mock = vi.hoisted(() => ({ buildQueue: vi.fn(), getNotifications: vi.fn(), getPostConfig: vi.fn() }));
-vi.mock('./meatspacePost.js', () => ({ getPostConfig: mock.getPostConfig }));
+vi.mock('./meatspace/meatspacePost.js', () => ({ getPostConfig: mock.getPostConfig }));
 vi.mock('./cos/cosState.js', () => ({ getDomainAutonomyMode: vi.fn().mockResolvedValue('execute') }));
 vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn().mockResolvedValue({ withinBudget: true }),

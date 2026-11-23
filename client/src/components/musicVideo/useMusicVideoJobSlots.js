@@ -6,13 +6,13 @@ import {
   getMusicVideoProject,
   prepareMusicVideoSong,
 } from '../../services/apiMusicVideo.js';
-import useMusicVideoYoutubeImport from '../../hooks/useMusicVideoYoutubeImport.js';
-import useMusicVideoMidiJob from '../../hooks/useMusicVideoMidiJob.js';
-import useMusicVideoLyricAlign from '../../hooks/useMusicVideoLyricAlign.js';
-import useMusicVideoVocalSeparation, { separatedStemPatch } from '../../hooks/useMusicVideoVocalSeparation.js';
-import useMusicVideoRenderJob from '../../hooks/useMusicVideoRenderJob.js';
-import useMusicVideoPublishing from '../../hooks/useMusicVideoPublishing.js';
-import useMusicVideoModelSettings from '../../hooks/useMusicVideoModelSettings.js';
+import useMusicVideoYoutubeImport from './useMusicVideoYoutubeImport.js';
+import useMusicVideoMidiJob from './useMusicVideoMidiJob.js';
+import useMusicVideoLyricAlign from './useMusicVideoLyricAlign.js';
+import useMusicVideoVocalSeparation, { separatedStemPatch } from './useMusicVideoVocalSeparation.js';
+import useMusicVideoRenderJob from './useMusicVideoRenderJob.js';
+import useMusicVideoPublishing from './useMusicVideoPublishing.js';
+import useMusicVideoModelSettings from './useMusicVideoModelSettings.js';
 
 // Word-anchored shots follow their words on the server when lyric timing changes (#14820), so take their new spans.
 export const wordAnchoredShots = (project) => ((project?.scenes || []).some((scene) => scene.lyricAnchor)

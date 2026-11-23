@@ -35,6 +35,15 @@ const sink = vi.hoisted(() => ({
   reviewBlenderModelReference: vi.fn(async () => {}),
   startBlenderModelBuild: vi.fn(async () => ({ job: { id: 'bj-example' } })),
   cancelBlenderModelBuild: vi.fn(() => true),
+  cancelBlenderModelBake: vi.fn(() => true),
+  startBlenderModelReview: vi.fn(async () => ({ job: { id: 'bj-example' } })),
+  cancelBlenderModelReview: vi.fn(() => true),
+  addBlenderModelCamera: vi.fn(async () => {}),
+  updateBlenderModelCamera: vi.fn(async () => {}),
+  removeBlenderModelCamera: vi.fn(async () => {}),
+  addBlenderModelDifference: vi.fn(async () => {}),
+  updateBlenderModelDifference: vi.fn(async () => {}),
+  removeBlenderModelDifference: vi.fn(async () => {}),
 }));
 
 vi.mock('../services/auth.js', async (importOriginal) => ({
@@ -63,6 +72,21 @@ vi.mock('../services/blenderModels/build.js', () => ({
   cancelBlenderModelBuild: sink.cancelBlenderModelBuild,
 }));
 
+vi.mock('../services/blenderModels/bake.js', () => ({
+  cancelBlenderModelBake: sink.cancelBlenderModelBake,
+}));
+vi.mock('../services/blenderModels/review.js', () => ({
+  startBlenderModelReview: sink.startBlenderModelReview,
+  cancelBlenderModelReview: sink.cancelBlenderModelReview,
+}));
+vi.mock('../services/blenderModels/compare.js', () => ({
+  addBlenderModelCamera: sink.addBlenderModelCamera,
+  updateBlenderModelCamera: sink.updateBlenderModelCamera,
+  removeBlenderModelCamera: sink.removeBlenderModelCamera,
+  addBlenderModelDifference: sink.addBlenderModelDifference,
+  updateBlenderModelDifference: sink.updateBlenderModelDifference,
+  removeBlenderModelDifference: sink.removeBlenderModelDifference,
+}));
 vi.mock('../services/blenderModels/references.js', () => ({
   updateBlenderModelReferenceSource: sink.updateBlenderModelReferenceSource,
   createBlenderModelPartsBrief: sink.createBlenderModelPartsBrief,
@@ -93,10 +117,19 @@ const workflows = [
   ['post', `${MODEL}/references/overall/render`, {}, sink.renderBlenderModelReference, 202],
   ['post', `${MODEL}/references/overall/images`, { filename: 'a.png' }, sink.useBlenderModelReferenceImage, 201],
   ['post', `${MODEL}/references/overall/images/img-1/review`, { decision: 'approve' }, sink.reviewBlenderModelReference, 200],
+  ['post', `${MODEL}/builds/${BUILD}/review`, {}, sink.startBlenderModelReview, 202],
+  ['post', `${MODEL}/cameras`, { label: 'Front', referenceId: 'overall', view: 'front' }, sink.addBlenderModelCamera, 201],
+  ['patch', `${MODEL}/cameras/camera-1`, { label: 'Front' }, sink.updateBlenderModelCamera, 200],
+  ['delete', `${MODEL}/cameras/camera-1`, undefined, sink.removeBlenderModelCamera, 200],
+  ['post', `${MODEL}/differences`, { text: 'Missing bolts' }, sink.addBlenderModelDifference, 201],
+  ['patch', `${MODEL}/differences/difference-1`, { status: 'fixed' }, sink.updateBlenderModelDifference, 200],
+  ['delete', `${MODEL}/differences/difference-1`, undefined, sink.removeBlenderModelDifference, 200],
+  ['post', `${MODEL}/builds/${BUILD}/review/cancel`, {}, sink.cancelBlenderModelReview, 200],
   // Records and cancellation: nothing here chooses or starts what runs.
   ['post', '/api/blender-models', { name: 'Example model' }, sink.createBlenderModel, 201],
   ['patch', MODEL, { name: 'Renamed example' }, sink.updateBlenderModel, 200],
   ['post', `${MODEL}/builds/${BUILD}/cancel`, {}, sink.cancelBlenderModelBuild, 200],
+  ['post', `${MODEL}/builds/${BUILD}/bakes/metal/cancel`, {}, sink.cancelBlenderModelBake, 200],
   ['delete', MODEL, undefined, sink.deleteBlenderModel, 200],
 ];
 

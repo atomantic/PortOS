@@ -360,7 +360,7 @@ router.post('/features/eidoverse/host', asyncHandler(async (_req, res) => {
 // has no business loading with every settings request.
 const BEEPER_FEATURE_GROUP = 'comms';
 async function reconcileBeeperArming(reason, options = {}) {
-  const { reconcileBeeperIngestion } = await import('../services/beeperArming.js');
+  const { reconcileBeeperIngestion } = await import('../services/beeper/beeperArming.js');
   // The flag is already persisted, so a reconcile failure must not turn a saved
   // toggle into a 500.
   await reconcileBeeperIngestion({ reason, ...options })
@@ -397,7 +397,7 @@ async function reconcileDockerContainmentOnToggle(result) {
 // `reconcileBeeperArming` above is: this is a rare save, and the scheduler
 // module reaches the whole Beeper service graph.
 async function restartBeeperSchedulerForIntervalChange(reason) {
-  const { restartBeeperScheduler } = await import('../services/beeperScheduler.js');
+  const { restartBeeperScheduler } = await import('../services/beeper/beeperScheduler.js');
   await restartBeeperScheduler()
     .catch((err) => console.error(`❌ Beeper scheduler restart (${reason}) failed: ${err.message}`));
 }
@@ -651,7 +651,7 @@ const saveSettingsPatch = async (body, slicePatch) => {
     // registered event is holding the stale `intervalMs`
     // `createSettingsGatedSyncScheduler.js` locked in at `schedule()` time, so
     // restart explicitly to pick up what was just persisted.
-    const { isBeeperSchedulerRegistered } = await import('../services/beeperScheduler.js');
+    const { isBeeperSchedulerRegistered } = await import('../services/beeper/beeperScheduler.js');
     const wasSchedulerRegisteredBeforeReconcile = isBeeperSchedulerRegistered();
     await reconcileBeeperArming('sync-toggle');
     if (nextBeeperEnabled && beeperIntervalChanged && wasSchedulerRegisteredBeforeReconcile) {

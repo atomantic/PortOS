@@ -360,7 +360,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 const HOISTED = [
   ['routes/imageGen.multipart.test.js', './imageGen.js',
     'the route graph costs ~30s to transform cold, which a beforeAll charges to hookTimeout'],
-  ['services/beeperOutboxHumanGate.test.js', './cos/cosToolRegistry.js',
+  ['services/beeper/beeperOutboxHumanGate.test.js', '../cos/cosToolRegistry.js',
     'the CoS tool registry costs ~35s to transform cold, which an it() charges to testTimeout'],
   ['routes/settings.secretsStrip.test.js', './settings.js',
     'warms the graph once so each vi.resetModules() re-import costs under a second'],
@@ -414,7 +414,7 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
   // Positive control: the regex must actually FIND a registration in a file
   // that has one, or every row above would pass by comparing against -1.
   it('recognizes a test registration in a file that plainly has one', () => {
-    const src = readFileSync(abs('services/beeperOutboxHumanGate.test.js'), 'utf-8');
+    const src = readFileSync(abs('services/beeper/beeperOutboxHumanGate.test.js'), 'utf-8');
     expect(src.search(FIRST_REGISTRATION)).toBeGreaterThan(-1);
     expect(FIRST_REGISTRATION.test("  it('does a thing', () => {")).toBe(true);
     expect(FIRST_REGISTRATION.test('beforeAll(async () => {')).toBe(true);
@@ -528,15 +528,14 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  // Measured at 1,433 after boot recovery of the music-video render pipeline
-  // moved behind registerBootHooks() (#17692). The cap keeps 40 modules of
+  // Measured at 1,417 after deferring the sync orchestrator and the safetensors
+  // importer (#18091). The cap stays at 1,448, which leaves 31 modules of
   // headroom so a few independent PRs can each add a boot-reachable leaf and
   // still merge. A boot-reachable addition that would cross this cap has to
   // defer or offset that import in the same change; do not raise the cap to
   // absorb it.
-  it('loads at most 1,473 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1473);
-    expect(closure.files.size).toBeLessThanOrEqual(1473 - 25);
+  it('loads at most 1,448 local modules before boot', () => {
+    expect(closure.files.size).toBeLessThanOrEqual(1448);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);

@@ -136,8 +136,8 @@ const noBackEdgeRules = (graph) => [
   },
   {
     why: 'meatspacePost.js is the raw data layer; the analytics and policy layers read it, never the reverse (#5690)',
-    from: ['meatspacePost.js'],
-    to: ['meatspacePostStats.js', 'meatspacePostRecommendations.js', 'meatspacePostAdaptive.js'],
+    from: ['meatspace/meatspacePost.js'],
+    to: ['meatspace/meatspacePostStats.js', 'meatspace/meatspacePostRecommendations.js', 'meatspace/meatspacePostAdaptive.js'],
   },
 ];
 

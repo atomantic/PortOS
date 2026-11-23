@@ -5,13 +5,13 @@ import { request } from '../lib/testHelper.js';
 // Mock only the morse service — the other POST services this router imports are
 // unused by these routes, but the module graph still loads them, so stub the
 // morse one and let the rest import normally.
-vi.mock('../services/meatspacePostMorse.js', () => ({
+vi.mock('../services/meatspace/meatspacePostMorse.js', () => ({
   appendMorseRound: vi.fn(),
   getMorseProgress: vi.fn(),
   setKochLevel: vi.fn(),
 }));
 
-import * as morseService from '../services/meatspacePostMorse.js';
+import * as morseService from '../services/meatspace/meatspacePostMorse.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

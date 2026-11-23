@@ -18,7 +18,7 @@ import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS, sleep } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import { listCompletedTaskSummaries } from './cos/cosTaskRepository.js';
-import { getBirthDateStrict } from './meatspace.js';
+import { getBirthDateStrict } from './meatspace/meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
 import { createSignalContext } from './characterSignals.js';

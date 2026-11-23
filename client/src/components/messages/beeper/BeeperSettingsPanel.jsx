@@ -3,7 +3,7 @@ import { Save, Loader2, MessageCircle, ShieldCheck, ShieldAlert, RefreshCw, Cloc
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
-import { useBeeperSettings } from '../../../hooks/useBeeperSettings';
+import { useBeeperSettings } from './useBeeperSettings';
 import useMounted from '../../../hooks/useMounted';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import BeeperOutboxBreakerBanner from './BeeperOutboxBreakerBanner';

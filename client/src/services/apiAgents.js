@@ -397,9 +397,9 @@ export const updateCosTaskInterval = (taskType, settings, options = {}) => reque
 // Manual maintenance runs — the Schedule tab's "Run maintenance now" (server:
 // services/maintenanceRun.js).
 export const getMaintenanceRuns = (options) => request('/cos/schedule/maintenance-runs', options);
-export const startMaintenanceRun = ({ appId, providerId, model, effort = null, mode = 'file-issues', prCompletion, claimBetweenAudits = true, claimHandler, taskTypes, explicitCheck, auditDepth }, options = {}) => request('/cos/schedule/maintenance-runs', {
+export const startMaintenanceRun = ({ appId, providerId, model, effort = null, mode = 'file-issues', prCompletion, claimBetweenAudits = true, claimHandler, taskTypes, explicitCheck, auditDepth, executionOptions }, options = {}) => request('/cos/schedule/maintenance-runs', {
   method: 'POST',
-  body: JSON.stringify({ appId, providerId, model, effort, mode, prCompletion, claimBetweenAudits, claimHandler, taskTypes, explicitCheck, auditDepth }),
+  body: JSON.stringify({ appId, providerId, model, effort, mode, prCompletion, claimBetweenAudits, claimHandler, taskTypes, explicitCheck, auditDepth, executionOptions }),
   ...options
 });
 export const stopMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/stop`, { method: 'POST', ...options });

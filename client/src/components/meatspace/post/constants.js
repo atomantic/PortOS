@@ -9,7 +9,7 @@ export { LLM_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
 // established client name.
 export { POST_SUPPORTED_MEMORY_TYPES as MEMORY_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
 // Deterministic cognitive drills (no LLM), backed by generators in
-// server/services/meatspacePostCognitive.js.
+// server/services/meatspace/meatspacePostCognitive.js.
 export { COGNITIVE_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
 
 // Cognitive drills that have a progressive difficulty ladder — reaction-time is
@@ -40,7 +40,7 @@ export function cognitiveRungPending(type, drillConfig, cognitiveProgress) {
 /**
  * The config a cognitive drill will ACTUALLY run with — not necessarily the one
  * stored in POST config. Mirrors the server's override in `resolveDrillConfig`
- * (server/services/meatspacePost.js): while a laddered drill is progressive
+ * (server/services/meatspace/meatspacePost.js): while a laddered drill is progressive
  * (the shipped default), the rung's config wins over the manual knobs.
  *
  * This matters for anything that DESCRIBES a drill to the user rather than just
@@ -448,7 +448,7 @@ export const getDifficultyColor = (difficulty) => {
 };
 
 // Balanced (signal-detection) accuracy for n-back questions (issue #2094).
-// Re-exported from the leaf both server/services/meatspacePost.js and this
+// Re-exported from the leaf both server/services/meatspace/meatspacePost.js and this
 // file used to carry separate copies of.
 export { nBackBalancedAccuracy } from '../../../../../server/lib/postScoring.js';
 

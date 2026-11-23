@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams, useLocation } from 'react-rout
 import toast from '../ui/Toast';
 import PageSkeleton from '../ui/PageSkeleton';
 import { unfoldToAnchor } from '../../lib/unfoldToAnchor.js';
-import useMusicVideoProductionReview from '../../hooks/useMusicVideoProductionReview.js';
+import useMusicVideoProductionReview from './useMusicVideoProductionReview.js';
 import usePrevizJobs from '../../hooks/usePrevizJobs.js';
 import useMusicVideoBlender from '../../hooks/useMusicVideoBlender.js';
 import useHydratedPreviewRoute from '../../hooks/useHydratedPreviewRoute.js';

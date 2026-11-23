@@ -5,9 +5,15 @@
  *
  * Each finding is `{ severity, code, message, subjects?, values? }` with
  * severity `error`, `warning` or `note`; one finding per code, its `subjects`
- * naming the parts, meshes or axes it is about. A build with any error is kept
- * and marked; only a build without errors can be published.
+ * naming the parts, meshes or axes it is about (motion.js adds one
+ * `sweep-overlap` per pair of parts, with the `pose` that shows it). A build
+ * with any error is kept and marked; only a build without errors can be
+ * published.
  */
+import { BLENDER_MODEL_BAKE_UV_OVERLAP_MAX, planBlenderModelBake } from './bakePlan.js';
+import { motionChecks } from './motion.js';
+import { reviewFrameMeters } from './reviewCameras.js';
+
 export const BLENDER_MODEL_SEVERITIES = Object.freeze(['error', 'warning', 'note']);
 
 // Declared size vs built bounds, per axis, as a fraction of the declared size.
@@ -20,13 +26,18 @@ const SUBJECTS_LISTED = 50;
 const PART_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const AXES = ['x', 'y', 'z'];
 
+// Reported once per control, action or scope; read by motion.js.
+const MOTION_EVENTS = new Set(['control', 'control-skipped', 'action', 'sweep-scope', 'sweep-rest', 'sweep-overlap', 'reimport-control']);
+
 /** Collects the events of one driver run; `facts()` is what `buildBlenderModelReport` reads. */
 export function collectBlenderModelFacts() {
-  const facts = { start: null, parts: [], described: null, meshes: [], scene: null, saved: null, reimport: null, done: null };
+  const facts = { start: null, parts: [], described: null, meshes: [], bakeSets: [], scene: null, saved: null, reimport: null, done: null, sweep: null, motion: [] };
   return {
     add(event) {
       if (event.event === 'part') facts.parts.push({ id: event.id, label: event.label, parent: event.parent });
       else if (event.event === 'mesh') facts.meshes.push(event);
+      else if (event.event === 'bakeSet') facts.bakeSets.push(event);
+      else if (MOTION_EVENTS.has(event.event)) facts.motion.push(event);
       else if (event.event in facts) facts[event.event] = event;
     },
     facts: () => facts,
@@ -56,7 +67,10 @@ function partChecks(facts, add) {
   if (undeclared.length) add('warning', 'mesh-undeclared', 'A mesh object is not a declared part', listed(undeclared));
   const reparented = declared.filter((part) => meshes.has(part.id) && (meshes.get(part.id).parent ?? null) !== (part.parent ?? null)).map((part) => part.id);
   if (reparented.length) add('warning', 'part-parent-mismatch', 'A part\'s Blender parent is not the parent it declares', listed(reparented));
-  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented };
+  // Where a saved camera aims when it names a part.
+  const centers = Object.fromEntries(ids.filter((id) => meshes.get(id)?.min && meshes.get(id)?.max)
+    .map((id) => [id, AXES.map((_, axis) => round((meshes.get(id).min[axis] + meshes.get(id).max[axis]) / 2))]));
+  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented, centers };
 }
 
 function boundsCheck(facts, add) {
@@ -71,6 +85,11 @@ function boundsCheck(facts, add) {
   if (over.length) add('error', 'bounds-oversized', `The model is more than ${BOUNDS_ERROR * 100}% larger than its declared size`, { subjects: over, values });
   if (under.length) add('error', 'bounds-undersized', `The model is more than ${BOUNDS_ERROR * 100}% smaller than its declared size`, { subjects: under, values });
   if (drift.length) add('warning', 'bounds-drift', `The model is ${BOUNDS_WARNING * 100}-${BOUNDS_ERROR * 100}% off its declared size`, { subjects: drift, values });
+  // Review cameras frame the declared box standing on Z = 0 around X = Y = 0, not the mesh.
+  const half = reviewFrameMeters(declared) / 2;
+  const center = { x: 0, y: 0, z: declared.z / 2 };
+  const outside = AXES.filter((axis, index) => facts.scene.min[index] < center[axis] - half || facts.scene.max[index] > center[axis] + half);
+  if (outside.length) add('warning', 'review-out-of-frame', 'Part of the model falls outside its review views; stand it on Z = 0, centered on X = Y = 0', { subjects: outside });
   return values;
 }
 
@@ -114,11 +133,66 @@ function reimportChecks(facts, add) {
   };
 }
 
+const GLB_IMAGES_PER_SET = 3;
+
+// A baked set the report shows: what it was baked from, how, and each image's size and brightest byte.
+const bakedSetSummary = (set) => ({
+  id: set.id, partIds: set.partIds, hash: set.hash, size: set.size, samples: set.samples, reused: set.reused, reusedFrom: set.reusedFrom,
+  device: set.device, uvOverlap: set.uvOverlap, unwrapped: set.unwrapped, skipped: set.skipped, images: set.images,
+});
+
+/**
+ * describe().bake against what the bake stages did (`bake.sets`, see bake.js). A draft build skips baking and says so.
+ * An image that is missing, a set that is all black and a UV overlap over the limit are errors; the build is kept.
+ */
+function bakeChecks(facts, { quality, bake }, add) {
+  const asked = facts.described?.bake ?? null;
+  if (asked == null) return null;
+  const plan = planBlenderModelBake(asked, facts.parts.map((part) => part.id));
+  const summary = { size: plan.size, samples: plan.samples, skipped: null, sets: [] };
+  if (quality !== 'full') {
+    add('note', 'bake-skipped-draft', 'A draft build skips baking, so this GLB has no baked textures. Build full to bake them.');
+    return { ...summary, skipped: 'draft' };
+  }
+  for (const problem of plan.problems) add('error', problem.code, problem.message, problem.subjects ? { subjects: problem.subjects } : {});
+  if (plan.problems.length) return { ...summary, skipped: 'invalid' };
+  const sets = bake?.sets ?? [];
+  summary.sets = sets.map(bakedSetSummary);
+  if (!sets.length) {
+    add('error', 'bake-not-run', 'The build asked for a bake but no set was baked');
+    return summary;
+  }
+  const unprepared = sets.filter((set) => set.skipped === 'not-prepared').map((set) => set.id);
+  if (unprepared.length) add('error', 'bake-set-unprepared', 'A bake set could not be prepared: a part in it is not a mesh object', listed(unprepared));
+  const overlapping = sets.filter((set) => set.uvOverlap != null && set.uvOverlap > BLENDER_MODEL_BAKE_UV_OVERLAP_MAX);
+  if (overlapping.length) {
+    add('error', 'bake-uv-overlap', `More than ${BLENDER_MODEL_BAKE_UV_OVERLAP_MAX * 100}% of a set's UV area is covered twice, so it was not baked; give its parts separate UV islands`, {
+      ...listed(overlapping.map((set) => set.id)), values: Object.fromEntries(overlapping.map((set) => [set.id, round(set.uvOverlap, 4)])),
+    });
+  }
+  const baked = sets.filter((set) => set.skipped === null);
+  const images = baked.flatMap((set) => set.images.map((image) => ({ ...image, label: `${set.id}/${image.file}` })));
+  const missing = images.filter((image) => image.bytes == null).map((image) => image.label);
+  if (missing.length) add('error', 'bake-image-missing', 'A baked set wrote no image file', listed(missing));
+  const black = images.filter((image) => image.bytes != null && image.max === 0).map((image) => image.label);
+  if (black.length) add('error', 'bake-all-black', 'A baked image has no pixel above black, so its set did not bake', listed(black));
+  const reused = baked.filter((set) => set.reused).length;
+  add('note', 'bake-sets', `${baked.length} baked set(s) at ${plan.size} px, ${plan.samples} samples; ${reused} reused from an earlier build`, {
+    values: { size: plan.size, samples: plan.samples, sets: baked.length, reused },
+  });
+  const expected = baked.filter((set) => set.images.every((image) => image.bytes != null)).length * GLB_IMAGES_PER_SET;
+  if (facts.reimport?.images != null && facts.reimport.images < expected) {
+    add('warning', 'bake-glb-images', 'The re-imported GLB has fewer images than the baked sets', { values: { expected, reimported: facts.reimport.images } });
+  }
+  return summary;
+}
+
 /**
  * The report for one finished driver run. `glbBytes` is the GLB's size on disk
  * as the server found it (null: missing), which overrides what the driver said.
+ * `bake` is `{ sets }` from the bake stage, absent when none ran.
  */
-export function buildBlenderModelReport(facts, { modelId, buildId, quality, startedAt, finishedAt, srcHash, glbBytes }) {
+export function buildBlenderModelReport(facts, { modelId, buildId, quality, startedAt, finishedAt, srcHash, glbBytes, bake = null }) {
   const findings = [];
   const add = (severity, code, message, extra = {}) => findings.push({ severity, code, message, ...extra });
 
@@ -128,7 +202,6 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     if (!described.sizeMeters) add('error', 'describe-size-invalid', 'describe(ctx) must return sizeMeters {x, y, z}, each a positive number of meters');
     if (described.triangleBudget == null) add('error', 'describe-budget-invalid', 'describe(ctx) must return triangleBudget, a whole number of triangles');
     if (!facts.parts.length) add('error', 'parts-none', 'describe(ctx) declared no parts');
-    if (!described.controlsValid) add('warning', 'controls-invalid', 'controls must be a list of objects (at most 16 KiB); it was not stored');
   }
   const parts = partChecks(facts, add);
   if (facts.scene && facts.scene.meshes === 0) add('error', 'meshes-none', 'build(ctx) created no mesh objects');
@@ -136,6 +209,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
   const bounds = boundsCheck(facts, add);
   const triangles = triangleCheck(facts, add);
   const transforms = transformChecks(facts, add);
+  const motion = motionChecks(facts, add);
   if (facts.scene) {
     add('note', 'materials', `${facts.scene.materials ?? 0} material(s) and ${facts.scene.images ?? 0} image(s)`, {
       values: { materials: facts.scene.materials, images: facts.scene.images },
@@ -144,6 +218,7 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
   if (glbBytes == null) add('error', 'export-missing', 'The build wrote no model.glb');
   const reimport = glbBytes == null ? null : reimportChecks(facts, add);
   if (glbBytes != null && !reimport) add('error', 'reimport-missing', 'The GLB was not re-imported, so it was not verified');
+  const bakeCheck = bakeChecks(facts, { quality, bake }, add);
 
   const counts = Object.fromEntries(BLENDER_MODEL_SEVERITIES.map((severity) => [severity, findings.filter((finding) => finding.severity === severity).length]));
   const order = (finding) => BLENDER_MODEL_SEVERITIES.indexOf(finding.severity);
@@ -153,12 +228,12 @@ export function buildBlenderModelReport(facts, { modelId, buildId, quality, star
     blenderVersion: facts.start?.blender ?? null,
     describe: described ? {
       title: described.title, sizeMeters: described.sizeMeters, triangleBudget: described.triangleBudget,
-      parts: facts.parts, controls: described.controls,
+      parts: facts.parts, controls: described.controls ?? null, actions: described.actions ?? null,
     } : null,
     checks: {
       parts, bounds, triangles, transforms,
       materials: facts.scene?.materials ?? null, images: facts.scene?.images ?? null, actions: facts.scene?.actions ?? null,
-      glbBytes, reimport,
+      glbBytes, reimport, motion, bake: bakeCheck,
     },
     findings: findings.sort((a, b) => order(a) - order(b)),
     counts,

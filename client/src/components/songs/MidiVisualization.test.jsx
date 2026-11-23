@@ -1,7 +1,7 @@
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MidiVisualization from './MidiVisualization.jsx';
-import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
+import { __clearMidiNotesCache } from './useMidiNotes.js';
 
 // Mock the synth-preview hook so the transport button's label is driven by a
 // synchronous React state flip, not the real async audio lifecycle (#2775).
@@ -13,7 +13,7 @@ import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
 // async behavior (optimistic set, `.catch` revert, `onEnded` reset, teardown) is
 // covered directly in useMidiPlayer.test.jsx, and the player lib in
 // midiPlayback.test.js — mocking here loses no coverage.
-vi.mock('../../hooks/useMidiPlayer.js', async () => {
+vi.mock('./useMidiPlayer.js', async () => {
   const { useState, useCallback } = await import('react');
   // Named `use*` so the rules-of-hooks lint recognizes it as a hook.
   const useMidiPlayer = (data) => {

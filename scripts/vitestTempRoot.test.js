@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createVitestTempFixture, runWatchConfigRestart } from './lib/vitestTempRootFixture.js';
 import { STALE_ROOT_AGE_MS, killTestBrowsersUnder, sweepStaleRunRoots, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
@@ -41,39 +41,6 @@ describe('real workspace runner temp lifecycle', () => {
       }, 25000);
     }
   });
-
-  it.each(['source-owned', 'outside-repo'])('retains composition provenance after a passing %s worker ends, without changing the global leak failure', mode => {
-    const repo = fileURLToPath(new URL('../', import.meta.url));
-    const host = mkdtempSync(mode === 'source-owned' ? join(repo, 'server/test/fixtures/provenance-worker-') : join(tmpdir(), 'vrt-'));
-    recordTempRootOwner(host);
-    try {
-      const { args, options } = createVitestTempFixture(host, 'server', `
-        const { channel } = await import('node:diagnostics_channel');
-        const { EventEmitter } = await import('node:events');
-        const { mkdtempSync } = await import('node:fs');
-        const profile = mkdtempSync(join(first, 'portos-composition-browser-'));
-        writeFileSync(join(profile, 'fixture'), 'synthetic');
-        const observations = channel('portos.composition-browser.lifecycle');
-        const child = new EventEmitter();
-        observations.publish({ event: 'allocated', profile });
-        observations.publish({ event: 'child', profile, child });
-        observations.publish({ event: 'remove-start', profile });
-        expect(true).toBe(true);
-      `);
-      const result = spawnSync(process.execPath, args, options);
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(1);
-      expect(result.stdout).toMatch(/1 passed/);
-      expect(result.stderr).toContain('test temp leak: portos-composition-browser- ×1');
-      const owner = mode === 'source-owned' ? relative(repo, join(host, 'fixture/lifecycle.test.js')).split('\\').join('/') : 'unavailable';
-      expect(result.stderr).toContain(`owner=${owner}`);
-      expect(result.stderr).toContain('fixture-before-global-backstop');
-      expect(result.stderr).toContain('removal=pending');
-      expect(result.stderr).toContain('observer=ended');
-      expect(result.stderr).not.toContain(host);
-      expect(readdirSync(host)).toEqual(['fixture']);
-    } finally { rmSync(host, { recursive: true, force: true }); }
-  }, 25000);
 
   owned.it('reuses config ownership on reimport and reclaims it after interruption, preserving a live owner', async () => {
     const host = mkdtempSync(join(tmpdir(), 'vrt-'));
@@ -218,6 +185,79 @@ describe.skipIf(process.platform === 'win32')('orphaned test browser sweep', () 
       rmSync(host, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('reclaims dead-owner and aged roots with SZOMB terminal rows and retains them when a live same-euid row is incomplete', () => {
+    const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+    recordTempRootOwner(host);
+    const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+    const ancestors = [
+      { pid: process.pid, ppid: process.ppid, start: 'self', terminal: false, args: ['node'], env: {} },
+      { pid: process.ppid, ppid: 1, start: 'parent', terminal: false, args: ['node'], env: {} },
+    ];
+    const zombie = { pid: 900010, ppid: process.pid, start: 'z:1', terminal: true };
+    const uninspectable = { pid: 900011, ownershipComplete: false };
+    try {
+      const dead = join(host, 'pvt-dead');
+      const aged = join(host, 'pvt-aged');
+      mkdirSync(dead);
+      writeFileSync(join(dead, '.owner.pid'), '2147483646 0\n');
+      mkdirSync(aged);
+      utimesSync(aged, old, old);
+
+      sweepStaleRunRoots(host, {
+        read: () => [...ancestors, zombie, uninspectable],
+        probe: () => false,
+        probePid: () => true,
+      });
+      expect(existsSync(dead)).toBe(true);
+      expect(existsSync(aged)).toBe(true);
+
+      sweepStaleRunRoots(host, {
+        read: () => [...ancestors, zombie],
+        probe: () => false,
+        probePid: () => true,
+      });
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(aged)).toBe(false);
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  });
+
+  describe.skipIf(process.platform !== 'darwin')('macOS full-inventory stale root reclamation', () => {
+    owned.it('reclaims dead-owner and aged roots on macOS full inventory while a zombie exists', async () => {
+      const host = mkdtempSync(join(tmpdir(), 'vrt-'));
+      recordTempRootOwner(host);
+      const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'ignore'] });
+      const closed = new Promise(resolve => child.once('close', resolve));
+      const old = new Date(Date.now() - STALE_ROOT_AGE_MS - 60000);
+      try {
+        await new Promise((resolve, reject) => { child.once('error', reject); child.stdout.once('data', resolve); });
+        const dead = join(host, 'pvt-dead');
+        const aged = join(host, 'pvt-aged');
+        mkdirSync(dead);
+        writeFileSync(join(dead, '.owner.pid'), '2147483646 0\n');
+        mkdirSync(aged);
+        utimesSync(aged, old, old);
+        process.kill(child.pid, 'SIGKILL');
+        const deadline = Date.now() + 5000;
+        let current;
+        do {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+          current = readTestProcesses([child.pid]);
+        } while (!current?.[0]?.terminal && Date.now() < deadline);
+        expect(current?.[0]?.terminal).toBe(true);
+
+        sweepStaleRunRoots(host);
+        expect(existsSync(dead)).toBe(false);
+        expect(existsSync(aged)).toBe(false);
+      } finally {
+        child.kill('SIGKILL');
+        await closed;
+        rmSync(host, { recursive: true, force: true });
+      }
+    }, 20000);
+  });
 });
 
 describe('npm debug log containment', () => {

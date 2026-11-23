@@ -11,11 +11,11 @@ vi.mock('./universeBuilder.js', () => ({
 }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => 1) }));
 vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => ({ total: 2, scraps: 1 })) }));
-vi.mock('./meatspacePost.js', () => ({
+vi.mock('./meatspace/meatspacePost.js', () => ({
   getPostSessions: vi.fn(async () => { calls.sessions += 1; return [{ date: '2026-07-17' }]; }),
 }));
-vi.mock('./meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => []) }));
-vi.mock('./meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => ({ currentStreak: 4, totalLogged: 9 })) }));
+vi.mock('./meatspace/meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => []) }));
+vi.mock('./meatspace/meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => ({ currentStreak: 4, totalLogged: 9 })) }));
 vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn(async () => ({ goals: [] })) }));
 vi.mock('./memoryBackend.js', () => ({
   countMemories: vi.fn(async () => { calls.memories += 1; return 42; }),
