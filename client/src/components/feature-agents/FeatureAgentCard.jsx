@@ -79,8 +79,8 @@ export default function FeatureAgentCard({ agent, onStart, onPause, onResume, on
         {confirmingDelete ? (
           <ConfirmButtonPair
             prompt="Delete?"
-            confirmText="Yes"
-            cancelText="No"
+            confirmText="Delete"
+            cancelText="Cancel"
             onConfirm={() => { onDelete(agent.id); setConfirmingDelete(false); }}
             onCancel={() => setConfirmingDelete(false)}
             largeTouchTargets

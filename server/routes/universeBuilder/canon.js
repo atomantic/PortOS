@@ -21,13 +21,14 @@ import {
 } from '../../services/universeCastIntegrity.js';
 import { characterAugmentProposeSchema, characterAugmentApplySchema } from '../../lib/characterAugmentValidation.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../../services/canonUsage.js';
+import { BIBLE_KINDS } from '../../lib/storyBible.js';
 import { mapServiceError, lockParamsSchema } from './shared.js';
 
 const router = Router();
 
 const extractCanonSchema = z.object({
   corpus: z.string().trim().min(1).max(200_000),
-  kinds: z.array(z.string().trim().min(1)).optional(),
+  kinds: z.array(z.enum(BIBLE_KINDS)).max(BIBLE_KINDS.length).optional(),
   parallel: z.boolean().optional(),
   providerOverride: z.string().trim().max(64).optional(),
 });

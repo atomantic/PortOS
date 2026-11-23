@@ -187,8 +187,8 @@ export default function SchedulesTab({ agentId }) {
 
   return (
     <div className="p-4">
-      <div className="flex justify-between items-center mb-4">
-        <div>
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+        <div className="min-w-0">
           <h2 className="text-lg font-semibold text-white">Automation Schedules</h2>
           {stats && (
             <p className="text-sm text-gray-400">
@@ -198,7 +198,7 @@ export default function SchedulesTab({ agentId }) {
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80"
+          className="shrink-0 pointer-coarse:min-h-11 px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80"
           disabled={filteredAccounts.length === 0}
         >
           {showForm ? 'Cancel' : '+ New Schedule'}
@@ -215,7 +215,7 @@ export default function SchedulesTab({ agentId }) {
         <form onSubmit={handleSubmit} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg">
           <h3 className="text-md font-semibold text-white mb-4">Create Schedule</h3>
 
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
             <FormField label="Account">
               <select
                 value={formData.accountId}
@@ -294,7 +294,7 @@ export default function SchedulesTab({ agentId }) {
           )}
 
           {formData.schedule.type === 'random' && (
-            <div className="grid grid-cols-2 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <FormField label="Min Interval">
                 <select
                   value={formData.schedule.randomWindow?.minMs}
@@ -381,8 +381,8 @@ export default function SchedulesTab({ agentId }) {
                 key={schedule.id}
                 className={`p-4 bg-port-card border rounded-lg ${schedule.enabled ? 'border-port-border' : 'border-port-border/50 opacity-60'}`}
               >
-                <div className="flex items-start justify-between">
-                  <div>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xl">{actionType?.icon || '📅'}</span>
                       <h3 className="font-semibold text-white">
@@ -406,17 +406,17 @@ export default function SchedulesTab({ agentId }) {
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => handleRunNow(schedule.id)}
                       disabled={runningId === schedule.id}
-                      className="px-3 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
+                      className="pointer-coarse:min-h-11 px-3 py-1 text-xs bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                     >
                       {runningId === schedule.id ? 'Running...' : 'Run Now'}
                     </button>
                     <button
                       onClick={() => handleToggle(schedule.id, !schedule.enabled)}
-                      className={`px-3 py-1 text-xs rounded ${
+                      className={`pointer-coarse:min-h-11 px-3 py-1 text-xs rounded ${
                         schedule.enabled
                           ? 'bg-port-success/20 text-port-success'
                           : 'bg-port-border text-gray-400'
@@ -440,7 +440,7 @@ export default function SchedulesTab({ agentId }) {
                         type="button"
                         onClick={() => requestDelete(schedule.id)}
                         disabled={deletingId != null}
-                        className="px-3 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
+                        className="pointer-coarse:min-h-11 px-3 py-1 text-xs bg-port-error/20 text-port-error rounded hover:bg-port-error/30 disabled:opacity-50"
                       >
                         Delete
                       </button>

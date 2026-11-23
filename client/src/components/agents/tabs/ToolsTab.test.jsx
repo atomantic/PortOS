@@ -126,4 +126,43 @@ describe('ToolsTab action failures', () => {
     expect(screen.queryByText('Example draft')).toBeNull();
     expect(getAgentDrafts).toHaveBeenCalledTimes(loads);
   });
+
+  it('wraps the feed toolbar and sizes compact actions for coarse pointers', async () => {
+    render(<ToolsTab agentId="agent-1" agent={{ id: 'agent-1', aiConfig: {} }} />);
+    const browse = await screen.findByRole('button', { name: 'Browse Feed' });
+    expect(browse.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: 'Find Relevant' }).className).toContain('pointer-coarse:min-h-11');
+    expect(browse.parentElement.parentElement.className).toContain('flex-wrap');
+    expect(screen.getByLabelText('Sort feed').className).toContain('min-w-0');
+    const composer = screen.getByLabelText('Submolt').parentElement;
+    expect(composer.className).toContain('flex-wrap');
+    expect(screen.getByLabelText('Submolt').className).toContain('min-w-0');
+    expect(screen.getByRole('button', { name: 'Generate Post' }).className).not.toContain('whitespace-nowrap');
+  });
+});
+
+describe('ToolsTab account loading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAgentRateLimits.mockResolvedValue({});
+    getAgentSubmolts.mockResolvedValue([]);
+    getAgentDrafts.mockResolvedValue([]);
+  });
+
+  it('shows a retryable error instead of "No active Moltbook account" when the account read fails', async () => {
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([{ id: 'account-1', status: 'active', credentials: { username: 'example-user' } }]);
+
+    render(<ToolsTab agentId="agent-1" agent={{ id: 'agent-1', aiConfig: {} }} />);
+
+    expect(await screen.findByText(/Could not load Moltbook account — network unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('No active Moltbook account')).not.toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', 'moltbook', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('example-user')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Moltbook account/)).not.toBeInTheDocument();
+  });
 });

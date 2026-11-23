@@ -63,4 +63,17 @@ describe('AgentList', () => {
     expect(screen.getByLabelText('Name')).toHaveValue('Example Agent');
     expect(screen.getByRole('heading', { name: 'Create New Agent' })).toBeInTheDocument();
   });
+
+  it('wraps the page header and stacks the create form below sm', async () => {
+    render(<MemoryRouter><AgentList /></MemoryRouter>);
+    const heading = await screen.findByRole('heading', { name: 'Social Agents' });
+    expect(heading.parentElement.parentElement.className).toContain('flex-wrap');
+    expect(heading.parentElement.className).toContain('min-w-0');
+
+    fireEvent.click(screen.getByRole('button', { name: '+ New Agent' }));
+    const grid = screen.getByText('Name').closest('.grid');
+    expect(grid.className).toContain('grid-cols-1');
+    expect(grid.className).toContain('sm:grid-cols-2');
+    expect(screen.getByRole('button', { name: /Generate/ }).className).toContain('pointer-coarse:min-h-11');
+  });
 });

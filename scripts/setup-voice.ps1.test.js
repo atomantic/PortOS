@@ -28,6 +28,12 @@ function Invoke-WebRequest {
     elseif ($Uri -like '*.onnx') { Set-Content -Path $OutFile -Value 'onnx-v1' -NoNewline }
     else { Set-Content -Path $OutFile -Value 'whisper-v1' -NoNewline }
 }
+function Expand-Archive {
+    param($Path, $DestinationPath, [switch]$Force)
+    if ($env:EXPAND_FAIL) { throw 'bad archive' }
+    New-Item -ItemType Directory -Force -Path (Join-Path $DestinationPath 'piper') | Out-Null
+    Set-Content -Path (Join-Path $DestinationPath 'piper/piper.exe') -Value 'x' -NoNewline
+}
 . (Join-Path $env:REPO_ROOT 'scripts/setup-voice.ps1')
 `;
 
@@ -77,6 +83,18 @@ describe.skipIf(!PS)('setup-voice.ps1 model provisioning', () => {
     const retry = run();
     expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
     expect(inspectVoiceAsset('piper', onnx()).state).toBe('verified');
+  });
+
+  it.each([
+    ['download', { CURL_FAIL_MATCH: 'piper_windows' }],
+    ['extraction', { EXPAND_FAIL: '1' }],
+  ])('removes the Piper zip from TEMP when the %s fails', (_label, fail) => {
+    const tmp = join(home, 'tmp');
+    mkdirSync(tmp);
+    rmSync(join(home, '.portos/voice/piper/piper.exe'));
+    const failed = run({ TEMP: tmp, ...fail });
+    expect(failed.status).not.toBe(0);
+    expect(readdirSync(tmp)).toEqual([]);
   });
 
   it('repairs a poisoned ONNX that has no sidecar', () => {

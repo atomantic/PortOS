@@ -12,7 +12,7 @@ import {
   NON_READ_CALLEES, PATH_JOIN, PATH_LIKE_LITERAL, READ_CALLEES, SOURCE_READERS, SPAWN_CALLEES,
 } from './constants.js';
 import {
-  bindingValue, collectBindings, evaluate, evaluateArgs, importsNamed, mocksModule, namedImports, namedInImportList, replacedSources, widestPathExpression,
+  bindingValue, collectBindings, evaluate, evaluateArgs, importsNamed, mockedSpecifiers, namedImports, namedInImportList, replacedSources, widestPathExpression,
 } from './evaluator.js';
 import { CLIMBS, isCryptoModule, isGuardModule, normalizeRel, openReadReason, unfollowedReason, variableCombinations } from './pathValues.js';
 import { packageNameOf } from './specifiers.js';
@@ -74,12 +74,14 @@ function emptyFacts(src) {
 function fileContext(src, tokens, match, { fileRel, cwdRel, replaced, exportedConstant }, facts) {
   const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens, match), bindingValues: new Map(), resolving: new Set() };
   ctx.imports = namedImports(tokens, match);
-  ctx.mocksSpecifier = (spec) => mocksModule(tokens, match, (mocked) => mocked === spec, []);
+  // Asked once per imported constant a read names; a whole-file scan each time cost the planner seconds (#17617).
+  let mocked = null;
+  ctx.mocksSpecifier = (spec) => (mocked ??= mockedSpecifiers(tokens, match)).has(spec);
   ctx.exportedConstant = exportedConstant && ((spec, name) => (
     ctx.mocksSpecifier(spec) ? null : exportedConstant(spec, name)
   ));
   // A source this file or the workspace setup (`replaced`) mocks is trusted for nothing.
-  const own = replacedSources(src, fileRel);
+  const own = replacedSources(src, fileRel, { tokens, match });
   ctx.replaced = { fs: own.fs || replaced?.fs === true, crypto: own.crypto || replaced?.crypto === true, guard: own.guard || replaced?.guard === true };
   ctx.guarded = importsNamed(tokens, match, 'pathWithin', (spec) => isGuardModule(fileRel, spec));
   ctx.delimiter = importsNamed(tokens, match, 'delimiter', (spec) => spec === 'path' || spec === 'node:path');

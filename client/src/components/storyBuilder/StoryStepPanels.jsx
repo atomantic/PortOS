@@ -334,7 +334,7 @@ function IssuesPanel({ session, series, issues, issuesState, issuesError, retryI
   const toggleIssue = async (issueId, next) => {
     setBusyId(issueId);
     const res = await setStoryIssueLock(session.id, issueId, next, { silent: true })
-      .catch((err) => { toast.error(err?.message || 'Failed'); return null; });
+      .catch((err) => { toast.error(err?.message || `Could not ${next ? 'mark issue done' : 'reopen issue'}. Try again.`); return null; });
     setBusyId(null);
     if (res) { toast.success(next ? 'Issue marked done' : 'Issue reopened'); onChanged(); }
   };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
@@ -64,6 +64,8 @@ export default function ToolsTab({ agentId, agent }) {
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState(null);
 
+  const [accountError, setAccountError] = useState(null);
+
   // Drafts state
   const [drafts, setDrafts] = useState([]);
   const [deletingDraftId, setDeletingDraftId] = useState(null);
@@ -74,24 +76,35 @@ export default function ToolsTab({ agentId, agent }) {
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
 
-  // Auto-resolve the moltbook account for this agent
-  useEffect(() => {
-    let live = true;
-    getPlatformAccounts(agentId, 'moltbook').then(data => {
-      if (!live) return;
-      const active = data.filter(a => a.status === 'active');
+  // Auto-resolve the moltbook account for this agent. A failed read sets
+  // accountError so it never falls through into the "no account" onboarding copy.
+  const accountRequestRef = useRef(0);
+  const loadAccount = useCallback(async () => {
+    const requestId = ++accountRequestRef.current;
+    setLoading(true);
+    setAccountError(null);
+    setSelectedAccountId('');
+    setAccountName('');
+    const result = await getPlatformAccounts(agentId, 'moltbook', { silent: true })
+      .then(data => ({ data }), error => ({ error }));
+    if (requestId !== accountRequestRef.current) return;
+    if (result.error) {
+      console.warn('⚠️ Failed to resolve moltbook account: ' + result.error.message);
+      setAccountError(result.error);
+    } else {
+      const active = result.data.filter(a => a.status === 'active');
       if (active.length > 0) {
         setSelectedAccountId(active[0].id);
         setAccountName(active[0].credentials?.username || '');
       }
-      setLoading(false);
-    }).catch(err => {
-      if (!live) return;
-      console.warn('⚠️ Failed to resolve moltbook account: ' + err.message);
-      setLoading(false);
-    });
-    return () => { live = false; };
+    }
+    setLoading(false);
   }, [agentId]);
+
+  useEffect(() => {
+    loadAccount();
+    return () => { accountRequestRef.current += 1; };
+  }, [loadAccount]);
 
   // Load rate limits when account resolves
   useEffect(() => {
@@ -391,6 +404,10 @@ export default function ToolsTab({ agentId, agent }) {
     return <div className="p-4"><BrailleSpinner text="Loading tools" /></div>;
   }
 
+  if (accountError) {
+    return <div className="p-4"><ListLoadError what="Moltbook account" error={accountError} onRetry={loadAccount} /></div>;
+  }
+
   if (!selectedAccountId) {
     return (
       <div className="p-4 text-center py-12 text-gray-400">
@@ -406,7 +423,7 @@ export default function ToolsTab({ agentId, agent }) {
       <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-port-card border border-port-border rounded-lg">
         <span className="text-sm text-gray-400">Account: <span className="text-white font-medium">{accountName}</span></span>
         {rateLimits && (
-          <div className="flex gap-3 ml-auto">
+          <div className="flex flex-wrap gap-2 ml-auto min-w-0">
             {Object.entries(rateLimits).map(([action, rl]) => {
               const cooldownMs = getCooldownMs(action);
               const isCooling = cooldownMs > 0;
@@ -434,14 +451,14 @@ export default function ToolsTab({ agentId, agent }) {
           <div className="space-y-4">
             {/* Feed Browser */}
             <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-semibold text-white">Feed Browser</h3>
-                <div className="flex gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 className="font-semibold text-white min-w-0">Feed Browser</h3>
+                <div className="flex flex-wrap gap-2 min-w-0">
                   <select
                     aria-label="Sort feed"
                     value={feedSort}
                     onChange={(e) => setFeedSort(e.target.value)}
-                    className="px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
+                    className="min-w-0 px-2 py-1 text-sm bg-port-bg border border-port-border rounded text-white"
                   >
                     <option value="hot">Hot</option>
                     <option value="new">New</option>
@@ -451,14 +468,14 @@ export default function ToolsTab({ agentId, agent }) {
                   <button
                     onClick={handleBrowseFeed}
                     disabled={feedLoading}
-                    className="px-3 py-1 text-sm bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 px-3 py-1 text-sm bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                   >
                     {feedLoading ? <BrailleSpinner text="Loading" /> : 'Browse Feed'}
                   </button>
                   <button
                     onClick={handleFindRelevant}
                     disabled={feedLoading}
-                    className="px-3 py-1 text-sm bg-port-accent-2/20 text-port-accent-2 rounded hover:bg-port-accent-2/30 disabled:opacity-50"
+                    className="pointer-coarse:min-h-11 px-3 py-1 text-sm bg-port-accent-2/20 text-port-accent-2 rounded hover:bg-port-accent-2/30 disabled:opacity-50"
                   >
                     Find Relevant
                   </button>
@@ -519,15 +536,15 @@ export default function ToolsTab({ agentId, agent }) {
 
             {/* Engage Now */}
             <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
                   <h3 className="font-semibold text-white">Autonomous Engage</h3>
                   <p className="text-xs text-gray-500">Find relevant posts, vote, and AI-generate comments</p>
                 </div>
                 <button
                   onClick={handleEngage}
                   disabled={engaging}
-                  className="px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
+                  className="shrink-0 pointer-coarse:min-h-11 px-4 py-2 bg-port-success text-white rounded hover:bg-port-success/80 disabled:opacity-50"
                 >
                   {engaging ? 'Engaging...' : 'Engage Now'}
                 </button>
@@ -565,15 +582,15 @@ export default function ToolsTab({ agentId, agent }) {
 
             {/* Check Posts (Monitor) */}
             <div className="bg-port-card border border-port-border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
                   <h3 className="font-semibold text-white">Check Posts</h3>
                   <p className="text-xs text-gray-500">Check engagement on published posts, upvote comments, and reply</p>
                 </div>
                 <button
                   onClick={handleCheckPosts}
                   disabled={checking}
-                  className="px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
+                  className="shrink-0 pointer-coarse:min-h-11 px-4 py-2 bg-port-accent-2 text-white rounded hover:bg-port-accent-2/80 disabled:opacity-50"
                 >
                   {checking ? 'Checking...' : 'Check Posts'}
                 </button>
@@ -632,12 +649,12 @@ export default function ToolsTab({ agentId, agent }) {
             <div className="bg-port-card border border-port-border rounded-lg p-4">
               <h3 className="font-semibold text-white mb-3">Post Composer</h3>
 
-              <div className="flex gap-2 mb-3">
+              <div className="flex flex-wrap gap-2 mb-3">
                 <select
                   aria-label="Submolt"
                   value={selectedSubmolt}
                   onChange={(e) => setSelectedSubmolt(e.target.value)}
-                  className="px-3 py-2 bg-port-bg border border-port-border rounded text-white flex-1"
+                  className="min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded text-white flex-1 basis-40"
                 >
                   <option value="general">general</option>
                   {submolts.map(s => {
@@ -650,7 +667,7 @@ export default function ToolsTab({ agentId, agent }) {
                 <button
                   onClick={handleGeneratePost}
                   disabled={generating}
-                  className="px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50 whitespace-nowrap"
+                  className="shrink-0 pointer-coarse:min-h-11 px-4 py-2 bg-port-accent text-white rounded hover:bg-port-accent/80 disabled:opacity-50"
                 >
                   {generating ? 'Generating...' : 'Generate Post'}
                 </button>

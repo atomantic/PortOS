@@ -1,13 +1,16 @@
 /**
  * Drag-to-resize split-pane width persisted to `localStorage`.
  *
- * Returns `{ containerRef, width, maxWidth, onMouseDown, reset }` and caps the drag at `maxFraction`
+ * Returns `{ containerRef, width, maxWidth, onMouseDown, onKeyDown, reset }` and caps the drag at `maxFraction`
  * of the measured container. Use when: A desktop sidebar/split pane with a draggable divider
  * (WorkEditor's storyboard sidebar).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
+
+const KEY_STEP = 24;
+const KEY_STEP_LARGE = 64;
 
 // useSidebarResize — drag-to-resize state for a desktop split pane whose width
 // is persisted to localStorage.
@@ -116,5 +119,27 @@ export default function useSidebarResize({
     persist(defaultWidth);
   }, [defaultWidth, persist]);
 
-  return { containerRef, width, maxWidth, onMouseDown, reset };
+  // Keyboard-operable splitter (ARIA window-splitter pattern). The sidebar is
+  // on the right, so ArrowLeft moves the divider left and WIDENS it.
+  const onKeyDown = useCallback((e) => {
+    const { minWidth: min, maxFraction: frac } = configRef.current;
+    const containerWidth = containerRef.current?.getBoundingClientRect().width ?? 0;
+    const max = containerWidth ? Math.max(min + 1, containerWidth * frac) : Math.max(min + 1, widthRef.current);
+    const step = e.shiftKey ? KEY_STEP_LARGE : KEY_STEP;
+    let next;
+    if (e.key === 'ArrowLeft') next = widthRef.current + step;
+    else if (e.key === 'ArrowRight') next = widthRef.current - step;
+    else if (e.key === 'Home') next = min;
+    else if (e.key === 'End') next = max;
+    else if (e.key === 'Enter' || e.key === ' ') next = defaultWidth;
+    else return;
+    e.preventDefault();
+    next = Math.min(max, Math.max(min, next));
+    widthRef.current = next;
+    setMaxWidth(max);
+    setWidth(next);
+    persist(next);
+  }, [defaultWidth, persist]);
+
+  return { containerRef, width, maxWidth, onMouseDown, onKeyDown, reset };
 }

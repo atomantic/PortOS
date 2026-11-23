@@ -175,4 +175,42 @@ describe('WorldTab activity history', () => {
     expect(screen.getByRole('button', { name: 'Move Here' })).toBeEnabled();
     expect(moltworldExplore).not.toHaveBeenCalled();
   });
+
+  it('wraps world headers and sizes compact actions for coarse pointers', async () => {
+    render(<WorldTab agentId="agent-1" />);
+    const history = await screen.findByRole('heading', { name: 'Activity History' });
+    expect(history.parentElement.className).toContain('flex-wrap');
+    const refresh = screen.getAllByRole('button', { name: 'Refresh' })[0];
+    expect(refresh.className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByLabelText('Filter history').className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('button', { name: '+ Add' }).className).toContain('pointer-coarse:min-h-11');
+    expect(screen.getByRole('heading', { name: 'Action Queue' }).parentElement.className).toContain('flex-wrap');
+  });
+});
+
+describe('WorldTab account loading', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    moltworldStatus.mockResolvedValue(null);
+    moltworldRateLimits.mockResolvedValue(null);
+    moltworldGetQueue.mockResolvedValue([]);
+    getAgentActivityTimeline.mockResolvedValue([]);
+  });
+
+  it('shows a retryable error instead of "No active Moltworld account" when the account read fails', async () => {
+    getPlatformAccounts
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue([{ id: 'acct-1', status: 'active', credentials: { username: 'example' } }]);
+
+    render(<WorldTab agentId="agent-1" />);
+
+    expect(await screen.findByText(/Could not load Moltworld account — network unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('No active Moltworld account')).not.toBeInTheDocument();
+    expect(getPlatformAccounts).toHaveBeenLastCalledWith('agent-1', 'moltworld', { silent: true });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Retry' })); });
+
+    expect(await screen.findByText('Activity History')).toBeInTheDocument();
+    expect(screen.queryByText(/Could not load Moltworld account/)).not.toBeInTheDocument();
+  });
 });
