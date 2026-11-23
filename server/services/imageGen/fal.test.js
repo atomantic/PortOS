@@ -277,12 +277,52 @@ describe('imageGen/fal — generateImage', () => {
     const { calls } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro' });
     await expect(fal.generateImage({ model: 'fal-ai/not-curated', prompt: 'x' }))
       .rejects.toMatchObject({ status: 400, code: 'FAL_IMAGE_MODEL_UNKNOWN' });
+    expect(calls.some((call) => String(call.url).includes('queue.fal.run'))).toBe(false);
+    const beforeKeyCheck = calls.length;
     getSettingsMock.mockResolvedValue({});
     const prevEnv = process.env.FAL_KEY;
     delete process.env.FAL_KEY;
     await expect(fal.generateImage({ prompt: 'x' })).rejects.toMatchObject({ status: 400, code: 'FAL_NOT_CONFIGURED' });
     if (prevEnv !== undefined) process.env.FAL_KEY = prevEnv;
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(beforeKeyCheck);
+  });
+
+  it('submits a listed model from its schema and refuses references that schema cannot take', async () => {
+    const falCatalog = await import('../falImageModelCatalog.js');
+    const assertSpy = vi.spyOn(falCatalog, 'assertFalImageModelAvailable').mockResolvedValue();
+    const schemaSpy = vi.spyOn(falCatalog, 'falImageInputSchema');
+    try {
+      schemaSpy.mockResolvedValue({
+        prompt: true, images: null, imageSize: { kind: 'pixels' }, seed: false, outputFormat: null, aspectRatio: null, resolution: null,
+      });
+      const { submits, calls } = fakeFal({ endpoint: 'fal-ai/flux/schnell', output: await noiseImage(16, 16) });
+      const job = await fal.generateImage({ model: 'fal-ai/flux/schnell', prompt: 'harbour', width: 800, height: 600 });
+      expect((await waitForTerminal(job.jobId)).type).toBe('completed');
+      expect(submits()[0].url).toBe('https://queue.fal.run/fal-ai/flux/schnell');
+      expect(submits()[0].body).toEqual({ prompt: 'harbour', image_size: { width: 800, height: 600 } });
+      const sidecar = JSON.parse(await readFile(join(FAKE_IMAGES_DIR, `${job.jobId}.metadata.json`), 'utf8'));
+      expect(sidecar.model).toBe('fal-ai/flux/schnell');
+      expect(sidecar.modelFamily).toBeUndefined();
+      expect(sidecar.estimatedCostUsd).toBeNull();
+
+      schemaSpy.mockResolvedValue({
+        prompt: true, images: null, imageSize: null, seed: false, outputFormat: null,
+      });
+      await writeFile(join(FAKE_IMAGES_DIR, 'ref.png'), await noiseImage(16, 16));
+      const paidBefore = calls.filter((call) => String(call.url).includes('queue.fal.run')).length;
+      await expect(fal.generateImage({
+        model: 'fal-ai/flux/schnell', prompt: 'harbour', referenceImagePaths: ['ref.png'],
+      })).rejects.toMatchObject({ status: 400, code: 'FAL_IMAGE_REFERENCES_UNSUPPORTED' });
+      schemaSpy.mockResolvedValue({
+        prompt: true, images: { field: 'image_urls', multiple: true, maxItems: 10, required: true }, imageSize: null, seed: false, outputFormat: null,
+      });
+      await expect(fal.generateImage({ model: 'fal-ai/flux/schnell', prompt: 'harbour' }))
+        .rejects.toMatchObject({ status: 400, code: 'FAL_IMAGE_REFERENCES_REQUIRED' });
+      expect(calls.filter((call) => String(call.url).includes('queue.fal.run'))).toHaveLength(paidBefore);
+    } finally {
+      assertSpy.mockRestore();
+      schemaSpy.mockRestore();
+    }
   });
 
   it('keeps provider failure details in the job response and out of logs, with no output or cancel', async () => {

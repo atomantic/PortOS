@@ -15,6 +15,7 @@ import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
 import SceneResearchSeed from './SceneResearchSeed.jsx';
 import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
+import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS } from '../../lib/imageGenBackends';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
@@ -58,6 +59,9 @@ function FramePrompt({ id, label, value, help = FRAME_PROMPT_HELP, ...props }) {
 }
 
 const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End frame' };
+const REFINE_EDIT_MODELS = FAL_FEATURED_EDIT_MODEL_IDS
+  .map((id) => FAL_IMAGE_MODEL_OPTIONS.find((row) => row.id === id))
+  .filter(Boolean);
 // Both render from the current prompt and Casting look; only Re-render replaces the selected frame (takes.js `replaceSelection`).
 const NEW_TAKE_HINT = 'Renders another candidate and adds it to the takes below. The frame in use stays selected until you pick a new take.';
 const RERENDER_HINT = 'Renders this frame again from the current Casting look and swaps it in as the selected frame. The old frame stays in the takes.';
@@ -111,6 +115,7 @@ export default function SceneFrames({
   const [refining, setRefining] = useState(null);
   const [instruction, setInstruction] = useState('');
   const [includeReferences, setIncludeReferences] = useState(true);
+  const [editWith, setEditWith] = useState('');
   const openRefine = (which, imageId) => {
     setRefining((current) => current?.which === which && current.imageId === imageId ? null : { which, imageId });
     setInstruction('');
@@ -167,7 +172,12 @@ export default function SceneFrames({
     const refine = (e) => {
       e.preventDefault();
       if (!instruction.trim() || !refineImageId || refineLocked) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: refineImageId, refine: instruction, ...(includeReferences ? {} : { includeReferences: false }) }));
+      const payload = { referenceImageId: refineImageId, refine: instruction, ...(includeReferences ? {} : { includeReferences: false }) };
+      const base = withTarget(payload);
+      // A fal Render on already leads its model list with these edit endpoints.
+      // Any other renderer offers them here, and a pick sends only this refine to that model.
+      const editTarget = framePick !== 'fal' && editWith ? { mode: 'fal', cloudModel: editWith } : null;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, editTarget ? { ...base, imageTarget: editTarget } : base);
       setRefining(null);
       setInstruction('');
     };
@@ -252,7 +262,18 @@ export default function SceneFrames({
               Include shot reference images
             </label>
             <p className="text-xs text-port-text-muted">{includeReferences ? 'Sends this image plus the shot’s references, including mood-board and greybox images.' : 'Sends only the image to refine with your instruction.'}</p>
-            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} enabled={shown} />}
+            {framePick !== 'fal' && (
+              <div className="flex min-w-0 items-center gap-2">
+                <label htmlFor={id(`${which}-edit-with`)} className="shrink-0 text-xs text-port-text-muted">Edit with</label>
+                <select id={id(`${which}-edit-with`)} value={editWith} onChange={(e) => setEditWith(e.target.value)}
+                  disabled={refineLocked} className={`${SELECT} min-w-0 flex-1`} title="Featured fal.ai edit models for this refine. Current image render keeps the shot's renderer.">
+                  <option value="">Current image render</option>
+                  {REFINE_EDIT_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+                </select>
+              </div>
+            )}
+            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} enabled={shown}
+              imageTarget={framePick !== 'fal' && editWith ? { mode: 'fal', cloudModel: editWith } : imageTarget} />}
           </form>
           {project && includeReferences && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={refineImageId} />}
         </>)}
@@ -309,7 +330,7 @@ export default function SceneFrames({
         )}
       </div>
       <SceneFrameRenderTarget id={id('frame-render')} value={framePick} options={frameOptions} project={project}
-        disabled={!!generatingFrame || !!generatingEndFrame} onChange={setFramePick} onOptionsChange={setFrameOptions} />
+        editing={refining != null} disabled={!!generatingFrame || !!generatingEndFrame} onChange={setFramePick} onOptionsChange={setFrameOptions} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />
       {project && <SceneResearchSeed project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />}
       <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />

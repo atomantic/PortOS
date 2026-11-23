@@ -8,11 +8,14 @@ vi.mock('../../hooks/useLocalImageModels.js', () => ({
 vi.mock('../../hooks/useRunwayCatalog.js', () => ({
   useRunwayCatalog: () => ({ imageModels: [{ id: 'gen4_image', label: 'Gen-4 Image' }] }),
 }));
+vi.mock('../../hooks/useFalImageCatalog.js', () => ({
+  useFalImageCatalog: () => ({ models: [], bundled: true, stale: true, truncated: false, refresh: () => Promise.resolve() }),
+}));
 
 import SceneFrameRenderTarget, {
   frameRenderTargetOverrides, lastFrameRenderTarget, rememberFrameRenderTarget,
 } from './SceneFrameRenderTarget.jsx';
-import { FAL_IMAGE_MODEL_OPTIONS } from '../../lib/imageGenBackends';
+import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS } from '../../lib/imageGenBackends';
 
 beforeEach(() => localStorage.clear());
 
@@ -92,5 +95,17 @@ describe('frame Render on control', () => {
     fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'runway' } });
     fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gen4_image' } });
     expect(frameRenderTargetOverrides('runway', lastFrameRenderTarget().options)).toEqual({ mode: 'runway', cloudModel: 'gen4_image' });
+  });
+
+  it('leads the fal model list with the edit endpoints while a refine is open', () => {
+    render(
+      <SceneFrameRenderTarget id="refine-frame" value="fal" options={{}} project={{ imageMode: 'fal' }}
+        editing onChange={() => {}} onOptionsChange={() => {}} />,
+    );
+    const model = screen.getByLabelText('Model');
+    expect([...model.querySelectorAll('optgroup[label="Edit / refine"] option')].map((option) => option.value))
+      .toEqual([...FAL_FEATURED_EDIT_MODEL_IDS]);
+    expect([...model.querySelectorAll('optgroup[label="Featured"] option')].map((option) => option.value))
+      .not.toContain(FAL_FEATURED_EDIT_MODEL_IDS[0]);
   });
 });

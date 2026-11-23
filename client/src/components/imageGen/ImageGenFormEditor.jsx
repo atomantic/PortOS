@@ -17,10 +17,14 @@ import LoraPicker from './LoraPicker';
 import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import FalCatalogStatus from './FalCatalogStatus.jsx';
 
 export default function ImageGenFormEditor({ form, backend, generation }) {
   const { fields, catalogs, settings, derived, actions, loraTest, cloudModelPicker } = form;
   const { effectiveMode, isLocalMode, isAgyMode, remoteTarget } = backend;
+  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
+  // An edit (a source image or references) leads the fal.ai list with its featured edit endpoints.
+  const falEditing = isFalMode && (form.images?.initImage?.source != null || derived.populatedRefs?.length > 0);
   const {
     modelDownload,
     hfTokenPresent,
@@ -156,7 +160,9 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             runtimeStatus={isLocalMode ? backend.status : null}
             onRuntimeRemedy={backend.openRuntimeInstall}
             {...cloudModelPicker.controlProps}
+            cloudModelEditing={falEditing}
           />
+          {isFalMode && backend.falCatalog && <FalCatalogStatus catalog={backend.falCatalog} />}
           {isAgyMode && backend.agy.error && (
             <p role="status" className="text-xs text-port-warning">
               {backend.agy.error} — renders will use the model saved in Settings → Image Gen.

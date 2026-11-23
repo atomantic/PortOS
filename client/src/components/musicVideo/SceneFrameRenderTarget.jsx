@@ -55,7 +55,7 @@ export function lastFrameRenderTarget() {
  * project pin uses.
  */
 export default function SceneFrameRenderTarget({
-  id, value, onChange, options = {}, onOptionsChange, project = null, disabled = false,
+  id, value, onChange, options = {}, onOptionsChange, project = null, disabled = false, editing = false,
 }) {
   const setModel = (modelId) => {
     const next = { modelId: modelId || null };
@@ -68,7 +68,7 @@ export default function SceneFrameRenderTarget({
         title="Where this shot's frames render. Only this shot; the project image service stays as it is."
         onChange={(next) => { onChange(next); onOptionsChange?.({}); rememberFrameRenderTarget(next, {}); }} />
       <ImageModelField id={`${id}-model`} mode={value} value={options.modelId || null} disabled={disabled}
-        commit="change" inline className={`${COMPACT_SELECT} flex-1`} onChange={setModel} />
+        editing={editing} commit="change" inline className={`${COMPACT_SELECT} flex-1`} onChange={setModel} />
     </div>
   );
 }

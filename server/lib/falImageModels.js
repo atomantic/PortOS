@@ -12,14 +12,17 @@
  *
  * A dependency-free leaf (like `imageGenCapabilities.js`, which reads the
  * per-model reference caps from here) so the Settings model picker and the
- * Image Gen page offer exactly the ids the server accepts — `cloudModel` for a
- * fal render is validated against THIS list, never passed through as free
- * text, because every id is a different price.
+ * Image Gen page share one description of every curated family. Curated ids
+ * are the ones PortOS prices exactly. A listed text-to-image or
+ * image-to-image endpoint fal.ai currently offers is also submittable: its
+ * body comes from that endpoint's OpenAPI (`buildListedFalImageRequest`) and
+ * its price is unknown until fal.ai bills it. An implausible id is refused
+ * before a paid call.
  *
- * Every family is a text-to-image endpoint plus its `/edit` sibling. The user
- * picks a FAMILY (either endpoint id names it); the provider routes to the
- * edit endpoint whenever the render carries any input image, so mood-board
- * references reach a model that actually conditions on them.
+ * Every curated family is a text-to-image endpoint plus its `/edit` sibling.
+ * Both ids stay selectable. When the chosen id is one of those families, the
+ * provider still routes a render that carries any input image to the edit
+ * sibling, so a mood board pinned to the text endpoint keeps conditioning.
  *
  * Input schemas and prices were read from fal.ai's per-endpoint OpenAPI
  * (`fal.ai/api/openapi/queue/openapi.json?endpoint_id=…`), the pricing API
@@ -92,6 +95,21 @@ export const FAL_IMAGE_FAMILIES = Object.freeze([
     pricing: Object.freeze({ unit: 'image', usd: 0.08, resolutionMultipliers: Object.freeze({ '0.5K': 0.75, '2K': 1.5, '4K': 2 }) }),
   }),
   Object.freeze({
+    id: 'seedream-v4.5',
+    label: 'Seedream 4.5',
+    textEndpoint: 'fal-ai/bytedance/seedream/v4.5/text-to-image',
+    editEndpoint: 'fal-ai/bytedance/seedream/v4.5/edit',
+    maxInputImages: 10,
+    // Width and height must be between 1920 and 4096, or the total pixels
+    // between 2560×1440 and 4096×4096. fal.ai rescales anything outside that
+    // band, so the requested geometry is sent as-is and only its aspect ratio
+    // is guaranteed. Same rule as Seedream 5.0 Lite.
+    sizing: FAL_IMAGE_SIZING.PIXELS,
+    seed: true,
+    outputFormat: null,
+    pricing: Object.freeze({ unit: 'image', usd: 0.04 }),
+  }),
+  Object.freeze({
     id: 'seedream-v5-lite',
     label: 'Seedream 5.0 Lite',
     textEndpoint: 'fal-ai/bytedance/seedream/v5/lite/text-to-image',
@@ -127,10 +145,42 @@ export const FAL_IMAGE_FAMILIES = Object.freeze([
 /** What a fal render uses when neither the request nor Settings names a model. */
 export const FAL_IMAGE_DEFAULT_MODEL = FAL_IMAGE_FAMILIES[0].textEndpoint;
 
-/** Every endpoint id a `cloudModel` / `imageGen.fal.model` may name. */
+/** Every curated endpoint id (text and edit). Listed models outside this set are still submittable. */
 export const FAL_IMAGE_MODEL_IDS = Object.freeze(
   FAL_IMAGE_FAMILIES.flatMap((f) => [f.textEndpoint, f.editEndpoint]),
 );
+
+/**
+ * Endpoints the picker leads with, in this order, even when the live list
+ * omits them. Order is independent of `FAL_IMAGE_FAMILIES` so Nano Banana Pro
+ * can stay the shipped default (`FAL_IMAGE_FAMILIES[0]`) without leading the menu.
+ */
+export const FAL_FEATURED_IMAGE_MODEL_IDS = Object.freeze([
+  'fal-ai/bytedance/seedream/v4.5/text-to-image',
+  'fal-ai/nano-banana-pro',
+  'fal-ai/nano-banana-pro/edit',
+  'fal-ai/bytedance/seedream/v4.5/edit',
+]);
+
+/**
+ * The featured edit endpoints, in the order an edit or refine should offer them.
+ * A fresh render keeps the full featured order; these lead only while that
+ * action is open, or while Image Gen already has a source or reference image.
+ */
+export const FAL_FEATURED_EDIT_MODEL_IDS = Object.freeze([
+  'fal-ai/nano-banana-pro/edit',
+  'fal-ai/bytedance/seedream/v4.5/edit',
+]);
+
+// At least one slash, so a bare vendor id (`gpt-5.6-luna`) is not a fal endpoint.
+const FAL_ENDPOINT_ID = /^[a-z0-9][a-z0-9._-]{0,80}(?:\/[a-z0-9][a-z0-9._-]{0,80}){1,8}$/;
+
+/** True for an id that could be a fal.ai endpoint. Not proof the account can run it. */
+export function isPlausibleFalEndpointId(modelId) {
+  if (typeof modelId !== 'string') return false;
+  const id = modelId.trim();
+  return id.length > 0 && id.length <= 200 && FAL_ENDPOINT_ID.test(id);
+}
 
 /**
  * The smallest reference cap across the catalog — the mode-level
@@ -186,6 +236,13 @@ function resolutionTier(w, h, tiers) {
 
 const align = (n, step) => Math.max(step, Math.round(n / step) * step);
 
+/** Fold a negative prompt into the text fal.ai receives. None of these models have a negative field. */
+export function appendFalAvoid(prompt, negativePrompt) {
+  const text = String(prompt ?? '').trim();
+  const avoid = typeof negativePrompt === 'string' && negativePrompt.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
+  return `${text}${avoid}`;
+}
+
 // fal.ai's megapixel is binary — its own worked example bills a 1024×1024
 // output as exactly one megapixel and a 1920×1080 one as two.
 export const FAL_MEGAPIXEL = 1024 * 1024;
@@ -232,10 +289,9 @@ export function buildFalImageRequest({
   if (!family) return null;
   const refs = (Array.isArray(imageUrls) ? imageUrls : []).filter(Boolean).slice(0, family.maxInputImages);
   const endpointId = refs.length ? family.editEndpoint : family.textEndpoint;
-  const avoid = typeof negativePrompt === 'string' && negativePrompt.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
   // `num_images` is left at every endpoint's default of 1 (FLUX.2 [pro] has
   // no such field at all) — one PortOS render is one image.
-  const body = { prompt: `${String(prompt).trim()}${avoid}` };
+  const body = { prompt: appendFalAvoid(prompt, negativePrompt) };
   if (refs.length) body.image_urls = refs;
   if (family.outputFormat) body.output_format = family.outputFormat;
   // A negative seed is PortOS's "random" sentinel — let fal.ai pick one.
@@ -261,3 +317,215 @@ export function buildFalImageRequest({
     estimatedCostUsd: estimateFalImageCostUsd(family, { resolution, outputPixels, inputMegapixels: refs.length ? inputMegapixels : 0 }),
   };
 }
+
+const SCHEMA_DEPTH = 8;
+const KNOWN_RESOLUTION_TIERS = Object.freeze(['0.5K', '1K', '2K', '4K']);
+
+function resolveNode(spec, node, depth) {
+  if (!node || typeof node !== 'object' || depth > SCHEMA_DEPTH) return null;
+  if (typeof node.$ref === 'string') {
+    const name = node.$ref.split('/').pop();
+    const target = spec?.components?.schemas?.[name];
+    return target ? resolveNode(spec, target, depth + 1) : null;
+  }
+  if (Array.isArray(node.allOf)) {
+    const merged = { type: 'object', properties: {}, required: [] };
+    for (const part of node.allOf) {
+      const resolved = resolveNode(spec, part, depth + 1);
+      if (!resolved) continue;
+      if (resolved.properties) Object.assign(merged.properties, resolved.properties);
+      if (Array.isArray(resolved.required)) merged.required.push(...resolved.required);
+      if (Array.isArray(resolved.enum)) merged.enum = [...(merged.enum || []), ...resolved.enum];
+      if (resolved.type) merged.type = resolved.type;
+    }
+    return merged;
+  }
+  return node;
+}
+
+function branchesOf(spec, node, depth) {
+  const resolved = resolveNode(spec, node, depth);
+  if (!resolved) return [];
+  const list = resolved.anyOf || resolved.oneOf;
+  if (Array.isArray(list)) return list.flatMap((branch) => branchesOf(spec, branch, depth + 1));
+  return [resolved];
+}
+
+function findRequestSchema(spec) {
+  for (const item of Object.values(spec?.paths || {})) {
+    const schema = item?.post?.requestBody?.content?.['application/json']?.schema;
+    if (schema) return schema;
+  }
+  return null;
+}
+
+/**
+ * The fields PortOS knows how to fill, read from a fal queue OpenAPI document.
+ * A pixel `image_size` counts only when a resolved object branch declares both
+ * `width` and `height` — a bare `$ref` or a named enum (`square_hd`) is not
+ * enough, and this does not guess one. Returns null when the document has no
+ * prompt, which is the signal to refuse before a paid call.
+ */
+export function falInputSchemaFromOpenApi(spec) {
+  const input = resolveNode(spec, findRequestSchema(spec), 0);
+  const properties = input?.properties;
+  if (!properties?.prompt) return null;
+  const required = new Set(Array.isArray(input.required) ? input.required : []);
+  const imageKey = ['image_urls', 'image_url', 'image'].find((key) => properties[key]);
+  let images = null;
+  if (imageKey) {
+    const branches = branchesOf(spec, properties[imageKey], 0);
+    const arrayBranch = branches.find((branch) => branch?.type === 'array' || branch?.items);
+    const multiple = imageKey === 'image_urls' || Boolean(arrayBranch);
+    const declared = Number.isInteger(arrayBranch?.maxItems) ? arrayBranch.maxItems : null;
+    images = {
+      field: imageKey,
+      multiple,
+      maxItems: multiple ? (declared ?? 14) : 1,
+      required: required.has(imageKey),
+    };
+  }
+  const sizeBranches = properties.image_size ? branchesOf(spec, properties.image_size, 0) : [];
+  const imageSize = sizeBranches.some((branch) => branch?.properties?.width && branch?.properties?.height)
+    ? { kind: 'pixels' }
+    : null;
+  const ratioEnums = properties.aspect_ratio
+    ? branchesOf(spec, properties.aspect_ratio, 0).flatMap((branch) => branch?.enum || [])
+    : [];
+  const ratios = [...new Set(ratioEnums.filter((value) => typeof value === 'string' && /^\d+:\d+$/.test(value)))];
+  const aspectRatio = ratios.length ? { ratios } : null;
+  const tierEnums = properties.resolution
+    ? branchesOf(spec, properties.resolution, 0).flatMap((branch) => branch?.enum || [])
+    : [];
+  const tiers = KNOWN_RESOLUTION_TIERS.filter((tier) => tierEnums.includes(tier));
+  const resolution = tiers.length ? { tiers } : null;
+  const seed = properties.seed
+    ? branchesOf(spec, properties.seed, 0).some((branch) => branch?.type === 'integer' || branch?.type === 'number')
+    : false;
+  const formatEnums = properties.output_format
+    ? branchesOf(spec, properties.output_format, 0).flatMap((branch) => branch?.enum || [])
+    : [];
+  return {
+    prompt: true,
+    images,
+    imageSize,
+    aspectRatio,
+    resolution,
+    seed,
+    outputFormat: formatEnums.includes('png') ? 'png' : null,
+  };
+}
+
+const aspectReady = (schema) => Array.isArray(schema.aspectRatio?.ratios) && schema.aspectRatio.ratios.length > 0;
+
+/**
+ * Request body for a listed model PortOS does not price. `estimatedCostUsd`
+ * stays null — the gallery says the price is unknown rather than inventing one.
+ * Returns null when the id is implausible or the schema has no prompt.
+ */
+export function buildListedFalImageRequest({
+  modelId, schema, prompt = '', negativePrompt = '', width, height, imageUrls = [], seed,
+}) {
+  if (!isPlausibleFalEndpointId(modelId) || !schema?.prompt) return null;
+  const refs = (Array.isArray(imageUrls) ? imageUrls : []).filter(Boolean);
+  const acceptsImages = Boolean(schema.images);
+  const requiresImages = Boolean(schema.images?.required);
+  const cap = schema.images ? Math.max(1, schema.images.maxItems || (schema.images.multiple ? 14 : 1)) : 0;
+  const capped = acceptsImages ? refs.slice(0, schema.images.multiple ? cap : 1) : [];
+  const body = { prompt: appendFalAvoid(prompt, negativePrompt) };
+  if (capped.length) {
+    body[schema.images.field] = schema.images.multiple ? capped : capped[0];
+  }
+  if (schema.outputFormat) body.output_format = schema.outputFormat;
+  const seedNum = typeof seed === 'number' ? seed : (typeof seed === 'string' && seed.trim() ? Number(seed) : NaN);
+  if (schema.seed && Number.isInteger(seedNum) && seedNum >= 0) body.seed = seedNum;
+
+  const dims = validDims(width, height);
+  let resolution = null;
+  if (dims && aspectReady(schema)) {
+    body.aspect_ratio = nearestRatio(dims.w, dims.h, schema.aspectRatio.ratios);
+    if (schema.resolution) {
+      resolution = resolutionTier(dims.w, dims.h, schema.resolution.tiers);
+      body.resolution = resolution;
+    }
+  } else if (dims && schema.imageSize?.kind === 'pixels') {
+    body.image_size = { width: dims.w, height: dims.h };
+  }
+  return {
+    family: null,
+    endpointId: modelId.trim(),
+    body,
+    resolution,
+    estimatedCostUsd: null,
+    acceptsImages,
+    requiresImages,
+  };
+}
+
+function falEndpointChoice(endpointId) {
+  const family = falImageFamily(endpointId);
+  const edit = family.editEndpoint === endpointId;
+  return Object.freeze({
+    id: endpointId,
+    label: `${family.label}${edit ? ' · edit' : ' · text to image'} (${falImagePriceLabel(family)}${edit ? `, up to ${family.maxInputImages} refs` : ''})`,
+    featured: FAL_FEATURED_IMAGE_MODEL_IDS.includes(endpointId),
+    known: true,
+    category: edit ? 'image-to-image' : 'text-to-image',
+  });
+}
+
+function orderFalChoices(rows) {
+  const featured = FAL_FEATURED_IMAGE_MODEL_IDS.map((id) => rows.find((row) => row.id === id)).filter(Boolean);
+  return [...featured, ...rows.filter((row) => !FAL_FEATURED_IMAGE_MODEL_IDS.includes(row.id))];
+}
+
+/**
+ * Optgroups for a fal picker. `editing` lifts the featured edit endpoints into
+ * their own leading group so an edit or refine does not bury them under the
+ * text-to-image rows. The same id is never listed twice.
+ */
+export function falImageModelGroups(choices, { editing = false } = {}) {
+  const rows = (Array.isArray(choices) ? choices : []).filter((row) => row && typeof row.id === 'string');
+  const editIds = editing ? new Set(FAL_FEATURED_EDIT_MODEL_IDS) : new Set();
+  const edit = editing
+    ? FAL_FEATURED_EDIT_MODEL_IDS.map((id) => rows.find((row) => row.id === id)).filter(Boolean)
+    : [];
+  const featured = rows.filter((row) => row.featured && !editIds.has(row.id));
+  const rest = rows.filter((row) => !row.featured && !editIds.has(row.id));
+  const labeled = featured.length > 0 || edit.length > 0;
+  return [
+    edit.length ? { label: 'Edit / refine', models: edit } : null,
+    featured.length ? { label: 'Featured', models: featured } : null,
+    rest.length ? { label: labeled ? 'All image models' : null, models: rest } : null,
+  ].filter(Boolean);
+}
+
+/**
+ * Picker rows. Curated endpoints (with their prices) always win over a live
+ * display name for the same id. Live-only plausible ids are appended.
+ * Featured endpoints lead, in `FAL_FEATURED_IMAGE_MODEL_IDS` order.
+ */
+export function falImageModelChoices(live = []) {
+  const byId = new Map();
+  for (const family of FAL_IMAGE_FAMILIES) {
+    for (const endpointId of [family.textEndpoint, family.editEndpoint]) {
+      byId.set(endpointId, falEndpointChoice(endpointId));
+    }
+  }
+  for (const row of Array.isArray(live) ? live : []) {
+    const id = typeof row?.id === 'string' ? row.id.trim() : '';
+    if (!isPlausibleFalEndpointId(id) || byId.has(id)) continue;
+    const label = typeof row.label === 'string' && row.label.trim() ? row.label.trim() : id;
+    byId.set(id, Object.freeze({
+      id,
+      label,
+      featured: false,
+      known: false,
+      category: row.category === 'image-to-image' ? 'image-to-image' : 'text-to-image',
+    }));
+  }
+  return Object.freeze(orderFalChoices([...byId.values()]));
+}
+
+/** Curated rows in picker order, featured first. Cold start uses this before the live list loads. */
+export const FAL_IMAGE_MODEL_OPTIONS = Object.freeze(falImageModelChoices());

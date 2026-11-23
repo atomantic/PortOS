@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ImageGenControls from './ImageGenControls';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { FAL_FEATURED_EDIT_MODEL_IDS, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const MODELS = [{ id: 'z-image-turbo', name: 'Z-Image-Turbo', runner: 'z_image' }];
 
@@ -13,6 +13,27 @@ const baseProps = (overrides = {}) => ({
   modelId: 'z-image-turbo',
   onResolutionChange: vi.fn(),
   ...overrides,
+});
+
+describe('ImageGenControls — fal edit highlight', () => {
+  it('leads with the featured edit endpoints only while editing', () => {
+    const props = {
+      ...baseProps({ mode: IMAGE_GEN_MODE.FAL, models: [], modelId: '', showModel: false }),
+      cloudModels: FAL_IMAGE_MODEL_OPTIONS,
+      cloudModel: '',
+      onCloudModelChange: vi.fn(),
+      cloudModelLabel: 'fal.ai model',
+    };
+    const { container, rerender } = render(<ImageGenControls {...props} />);
+    expect(container.querySelector('optgroup[label="Edit / refine"]')).toBeNull();
+    expect([...container.querySelectorAll('optgroup[label="Featured"] option')].map((option) => option.value).slice(0, 2))
+      .toEqual(['fal-ai/bytedance/seedream/v4.5/text-to-image', 'fal-ai/nano-banana-pro']);
+    rerender(<ImageGenControls {...props} cloudModelEditing />);
+    expect([...container.querySelectorAll('optgroup[label="Edit / refine"] option')].map((option) => option.value))
+      .toEqual([...FAL_FEATURED_EDIT_MODEL_IDS]);
+    expect([...container.querySelectorAll('optgroup[label="Featured"] option')].map((option) => option.value))
+      .not.toContain(FAL_FEATURED_EDIT_MODEL_IDS[0]);
+  });
 });
 
 describe('ImageGenControls — custom dimensions', () => {

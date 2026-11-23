@@ -17,7 +17,7 @@ import { VIDEO_GEN_MODES, QUEUEABLE_IMAGE_MODES, IMAGE_GEN_MODES } from './gener
 import { GOOGLE_PROJECT_ID_PATTERN, GOOGLE_LOCATION_PATTERN } from './googleCloudConfig.js';
 import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { RUNWAY_IMAGE_MODEL_IDS, RUNWAY_IMAGE_RESOLUTIONS } from './runwayImageModels.js';
-import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
+import { isPlausibleFalEndpointId } from './falImageModels.js';
 import { HIGGSFIELD_IMAGE_MODEL_IDS } from './higgsfieldImageModels.js';
 import { GOOGLE_IMAGE_MODEL_IDS } from './googleImageModels.js';
 import { MAX_IMAGE_EDGE } from './imageLimits.js';
@@ -270,12 +270,15 @@ export const imageGenRunwaySettingsSchema = z.object({
 
 // fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
 // it is the fal.ai credential the video backend already owns (write-only via
-// PUT /api/settings/credentials/fal). `model` must name a catalog endpoint
-// (lib/falImageModels.js): each id is a different price, so free text is
-// refused rather than persisted and discovered at render time.
+// PUT /api/settings/credentials/fal). `model` must be a plausible fal.ai
+// endpoint id. Curated ids are priced exactly; any other plausible id is kept
+// and confirmed against the loaded image list before a paid render.
 export const imageGenFalSettingsSchema = z.object({
   enabled: z.boolean().optional(),
-  model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
+  model: z.preprocess(
+    (v) => (v === '' || v == null ? undefined : v),
+    z.string().trim().max(200).refine(isPlausibleFalEndpointId, 'Choose a fal.ai image endpoint').optional(),
+  ),
   parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),

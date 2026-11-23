@@ -201,15 +201,20 @@ describe('resolveCloudProviderConfig — fal.ai', () => {
     expect(overridden.providerParams).toEqual({ model: 'fal-ai/bytedance/seedream/v5/lite/edit' });
   });
 
-  it('refuses a per-render model outside the catalog instead of paying for a guess', () => {
+  it('accepts a plausible live endpoint and refuses an implausible override', () => {
     const settings = settingsWith({ fal: { enabled: true } });
     expect(() => resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.FAL, { model: 'gpt-5.6-luna' }))
       .toThrow(expect.objectContaining({ status: 400, code: 'FAL_IMAGE_MODEL_UNKNOWN' }));
+    expect(resolveCloudProviderConfig(settings, IMAGE_GEN_MODE.FAL, { model: 'fal-ai/flux/schnell' }).modelId)
+      .toBe('fal-ai/flux/schnell');
   });
 
-  it('degrades a hand-edited saved model outside the catalog to the shipped default', () => {
-    const cloud = resolveCloudProviderConfig(settingsWith({ fal: { enabled: true, model: 'fal-ai/unknown' } }), IMAGE_GEN_MODE.FAL);
+  it('keeps a plausible saved endpoint and degrades an implausible one to the shipped default', () => {
+    expect(resolveCloudProviderConfig(settingsWith({ fal: { enabled: true, model: 'fal-ai/unknown' } }), IMAGE_GEN_MODE.FAL).modelId)
+      .toBe('fal-ai/unknown');
+    const cloud = resolveCloudProviderConfig(settingsWith({ fal: { enabled: true, model: 'gpt-5.6-luna' } }), IMAGE_GEN_MODE.FAL);
     expect(cloud.modelId).toBe(FAL_IMAGE_DEFAULT_MODEL);
+    expect(cloud.jobParams).toEqual({ mode: IMAGE_GEN_MODE.FAL, model: 'fal-ai/nano-banana-pro' });
   });
 
   it('is disabled until the toggle is on', () => {
