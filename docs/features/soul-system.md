@@ -16,19 +16,21 @@ LLMs can embody specific personas, but creating comprehensive identity documents
 
 ## Features
 
-### Five-Tab Interface
+### Section Groups (19 sections)
+
+The Digital Twin page groups its 19 sections (`client/src/components/digital-twin/constants.js`) into five navigation groups: **Profile**, **Sources**, **Assessment**, **Presence**, and **Legacy**. This guide covers the five core document-workflow tabs:
 
 1. **Overview Tab**: Dashboard showing soul health score, document counts, test scores, enrichment progress, and quick actions
-2. **Documents Tab**: Sidebar-based document editor for managing soul markdown files by category (core, audio, behavioral, enrichment)
+2. **Documents Tab**: Sidebar-based document editor for managing soul markdown files by category (core, audio, behavioral, enrichment, entertainment, professional, lifestyle, social, creative)
 3. **Test Tab**: Multi-model behavioral testing against 14 predefined tests, with side-by-side result comparison
-4. **Enrich Tab**: Guided questionnaire across 10 categories that generates soul document content from answers
+4. **Enrich Tab**: Guided questionnaire across 14 categories that generates soul document content from answers
 5. **Export Tab**: Export soul for use in external LLMs (System Prompt, AGENTS.md, JSON, individual files)
 
 ### CoS Integration
 
 - Soul context automatically injected into agent prompts when enabled
 - Settings control `autoInjectToCoS` and `maxContextTokens`
-- API-provider CoS agents receive it in their briefing (built by `agentPromptBuilder.js`; there is no editable briefing template)
+- API-provider CoS agents receive it in their briefing (built by `server/services/agent/agentPromptBuilder.js`; there is no editable briefing template)
 
 ## Directory Structure
 
@@ -64,6 +66,7 @@ data/digital-twin/
 - **non_negotiables**: Principles and boundaries that define your limits
 - **decision_heuristics**: Mental models and shortcuts for making choices
 - **error_intolerance**: What your digital twin should never do
+- **personality_assessments**: Personality Assessments (scale-question enabled)
 
 ## Validation & Analysis
 

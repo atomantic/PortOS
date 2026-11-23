@@ -10,7 +10,8 @@ import {
   digitalTwinMetaSchema,
   digitalTwinSettingsSchema,
   testHistoryEntrySchema,
-  valuesTestHistoryEntrySchema
+  valuesTestHistoryEntrySchema,
+  importDataInputSchema
 } from './digitalTwinValidation.js';
 
 describe('digitalTwinMetaSchema', () => {
@@ -225,5 +226,17 @@ describe('persona trait-blending schema', () => {
     expect(createPersonaInputSchema.safeParse({ name: 'A', instructions: 'go', traitAdjustments: { formality: 2 } }).success).toBe(true);
     expect(updatePersonaInputSchema.safeParse({ traitAdjustments: null }).success).toBe(true);
     expect(updatePersonaInputSchema.safeParse({ traitAdjustments: { verbosity: 3 } }).success).toBe(true);
+  });
+});
+
+describe('importDataInputSchema source enum', () => {
+  const base = { data: 'x', providerId: 'p', model: 'm' };
+  it('accepts every implemented import source', () => {
+    for (const source of ['goodreads', 'spotify', 'letterboxd', 'ical']) {
+      expect(importDataInputSchema.safeParse({ ...base, source }).success).toBe(true);
+    }
+  });
+  it('rejects the unbuilt lastfm source at the route boundary', () => {
+    expect(importDataInputSchema.safeParse({ ...base, source: 'lastfm' }).success).toBe(false);
   });
 });

@@ -16,7 +16,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { FormField } from '../ui/FormField';
 import TwinProviderPicker from './TwinProviderPicker.jsx';
 
-import { ENRICHMENT_CATEGORIES } from './constants';
+import { ENRICHMENT_CATEGORIES, iconBadgeClasses } from './constants';
 
 /**
  * List-based enrichment component for books, movies, music
@@ -192,8 +192,8 @@ export default function ListEnrichment({
         </button>
 
         <div className="flex items-center gap-3 sm:gap-4">
-          <div className={`p-2.5 sm:p-3 rounded-lg bg-${config?.color || 'blue'}-500/20 shrink-0`}>
-            <Icon className={`w-5 h-5 sm:w-6 sm:h-6 text-${config?.color || 'blue'}-400`} />
+          <div className={`p-2.5 sm:p-3 rounded-lg ${iconBadgeClasses(config?.color || 'blue').bg} shrink-0`}>
+            <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${iconBadgeClasses(config?.color || 'blue').text}`} />
           </div>
           <div className="min-w-0">
             <h2 className="text-lg sm:text-xl font-bold text-white">{config?.label}</h2>

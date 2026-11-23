@@ -71,6 +71,28 @@ describe('OverviewTab failed reads', () => {
   });
 });
 
+describe('OverviewTab completeness failure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getDigitalTwinTraits.mockResolvedValue({ traits: {} });
+    getDigitalTwinConfidence.mockResolvedValue({ confidence: { overall: 0.5 } });
+    getDigitalTwinGaps.mockResolvedValue({ gaps: [] });
+    getProviders.mockResolvedValue({ providers: [{ id: 'example', enabled: true }] });
+  });
+
+  it('shows a retryable error, not a dead-end message, when the completeness read fails', async () => {
+    getDigitalTwinCompleteness
+      .mockRejectedValueOnce(new Error('completeness offline'))
+      .mockResolvedValueOnce({ score: 100, found: 1, total: 1, missing: [] });
+    renderTab();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load completeness analysis.*completeness offline/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('100%')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('OverviewTab CoS status Enable', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -240,7 +240,6 @@ export const calculateConfidenceInputSchema = z.object({
 export const importSourceEnum = z.enum([
   'goodreads',
   'spotify',
-  'lastfm',
   'letterboxd',
   'ical'
 ]);
