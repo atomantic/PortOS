@@ -4,7 +4,6 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { exportNames, mask, mockDrift, unusedAllowed } from '../../../../scripts/lib/mockContractScan.js';
 import { readText, REPO_ROOT as ROOT, workingTreeFiles } from '../../../../scripts/lib/guardCorpus.js';
@@ -16,11 +15,11 @@ const ALLOWED = new Map([
 ]);
 
 const used = new Set();
-const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used });
+const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used, readFile: readText });
 
 function trackedTests() {
   return workingTreeFiles(ROOT, ['server', 'scripts', 'lib', 'autofixer'])
-    .filter((f) => /\.test\.[cm]?js$/.test(f) && existsSync(join(ROOT, f)));
+    .filter((f) => /\.test\.[cm]?js$/.test(f));
 }
 
 describe('vi.mock factory contract conventions', () => {

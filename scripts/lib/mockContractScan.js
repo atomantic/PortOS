@@ -51,9 +51,14 @@ function isTextApostrophe(source, at) {
 
 /** Blank comments and string/template text (keeping `${}` code), preserving offsets. */
 export function mask(source) {
-  const out = source.split('');
+  // Blanked spans arrive in ascending, non-overlapping order, so the result is the
+  // untouched text between them plus each span with everything but newlines spaced.
+  const parts = [];
+  let copied = 0;
   const blank = (from, to) => {
-    for (let k = from; k < to; k += 1) if (out[k] !== '\n') out[k] = ' ';
+    if (to <= from) return;
+    parts.push(source.slice(copied, from), source.slice(from, to).replace(/[^\n]/g, ' '));
+    copied = to;
   };
   // Scans code from `i`; in expression mode returns at the `}` closing a `${`.
   const scan = (start, inExpression) => {
@@ -114,7 +119,8 @@ export function mask(source) {
     return i;
   };
   scan(0, false);
-  return out.join('');
+  parts.push(source.slice(copied));
+  return parts.join('');
 }
 
 function resolveModule(fromFile, specifier) {
@@ -127,10 +133,10 @@ function resolveModule(fromFile, specifier) {
 }
 
 /** Static export names of a module, following `export * from`. */
-export function exportNames(file, seen = new Set(), names = new Set()) {
+export function exportNames(file, { readFile = (path) => readFileSync(path, 'utf8'), seen = new Set(), names = new Set() } = {}) {
   if (seen.has(file)) return names;
   seen.add(file);
-  const raw = readFileSync(file, 'utf8');
+  const raw = readFile(file);
   const source = mask(raw);
   for (const m of source.matchAll(/\bexport\s+(?:async\s+)?function\s*\*?\s*([\w$]+)/g)) names.add(m[1]);
   for (const m of source.matchAll(/\bexport\s+(?:const|let|var|class)\s+([\w$]+)/g)) names.add(m[1]);
@@ -153,7 +159,7 @@ export function exportNames(file, seen = new Set(), names = new Set()) {
     if (m[1]) { names.add(m[1]); continue; }
     const start = m.index + m[0].length;
     const target = resolveModule(file, raw.slice(start, raw.indexOf(m[2], start)));
-    if (target) exportNames(target, seen, names);
+    if (target) exportNames(target, { readFile, seen, names });
   }
   return names;
 }
@@ -250,7 +256,7 @@ const lineAt = (source, index) => source.slice(0, index).split('\n').length;
  * `<duplicate>` as the key for the first two) that excused a violation are added to
  * `used`, so callers can fail on entries the scan no longer needs (see `unusedAllowed`).
  */
-export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set() }) {
+export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set(), readFile }) {
   // Most test files mock nothing; masking one is the scan's whole cost.
   if (!rawSource.includes('vi.mock(')) return [];
   const masked = mask(rawSource);
@@ -275,7 +281,7 @@ export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used
     } else firstLine.set(target, line);
     const opens = factoryObjects(masked, m.index + m[0].length);
     if (opens.length === 0) continue;
-    if (!exportCache.has(target)) exportCache.set(target, exportNames(target));
+    if (!exportCache.has(target)) exportCache.set(target, exportNames(target, { readFile }));
     const exported = exportCache.get(target);
     for (const open of opens) {
       for (const { key, at } of literalKeys(rawSource, masked, open)) {

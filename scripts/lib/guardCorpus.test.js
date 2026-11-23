@@ -115,6 +115,10 @@ describe('guard corpus pathspec parity with git (#16996)', () => {
     expect(corpus.derive('kind', 'key', () => 2)).toBe(1);
   });
 
+  it('reports a path that descends through a file as absent', () => {
+    expect(createGuardCorpus(REPO_ROOT).lstat('package.json/index.js')).toBeNull();
+  });
+
   it('caches reads only inside this repository', () => {
     const outside = join(root, 'outside.txt');
     writeFileSync(outside, 'one');
