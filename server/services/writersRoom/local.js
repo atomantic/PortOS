@@ -696,6 +696,8 @@ export async function deleteWork(id) {
 
 // ---------- draft body / version snapshots ----------
 
+export const ERR_DRAFT_CONFLICT = 'DRAFT_CONFLICT';
+
 function buildDraftMeta(text, base = {}) {
   return {
     ...base,
@@ -712,13 +714,28 @@ export function saveDraftBody(workId, body, options) {
   return queueWorkWrite(workId, () => saveDraftBodyNow(workId, body, options));
 }
 
-function saveDraftBodyNow(workId, body, { referencedIngredientIds, draftId } = {}) {
+function saveDraftBodyNow(workId, body, { referencedIngredientIds, draftId, expectedContentHash } = {}) {
   return withBackupAssetPublication(async () => {
     const manifest = await getWork(workId);
     const targetId = draftId ?? manifest.activeDraftVersionId;
     if (!targetId) throw badRequest('Work has no active draft');
     const draftIdx = manifest.drafts.findIndex((d) => d.id === targetId);
     if (draftIdx < 0) throw notFound(draftId ? 'Draft version' : 'Active draft');
+    // Optimistic concurrency guard: evaluated inside queueWorkWrite so a
+    // concurrent manual save or peer merge cannot interleave between the check
+    // and the overwrite. Omitted (`undefined`) skips the check for callers that
+    // intentionally overwrite; any supplied value (including null/empty) fails
+    // closed against the persisted hash.
+    if (expectedContentHash !== undefined) {
+      const currentHash = manifest.drafts[draftIdx].contentHash;
+      if (typeof currentHash !== 'string' || currentHash !== expectedContentHash) {
+        throw new ServerError('Draft was modified concurrently — refusing to overwrite', {
+          status: 409,
+          code: ERR_DRAFT_CONFLICT,
+          context: { draftId: targetId, expectedContentHash, actualContentHash: currentHash ?? null },
+        });
+      }
+    }
     const text = String(body ?? '');
     await atomicWrite(wrDraftPath(workId, targetId), text);
     const meta = buildDraftMeta(text, manifest.drafts[draftIdx]);

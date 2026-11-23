@@ -306,7 +306,13 @@ function buildSuitePlan(changedFiles, {
   }
   const clientDependencySet = new Set(clientDependencies || []);
   const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
-  const features = uniqueSorted(jsSources.map(featureDirectory).filter(Boolean));
+  const serverSources = jsSources.filter(isServerRunnerFile);
+  const clientSources = jsSources.filter(isClientSource);
+  const hasServerSource = serverSources.length > 0;
+  const hasClientSource = clientSources.length > 0;
+  const serverFeatures = uniqueSorted(serverSources.map(featureDirectory).filter(Boolean));
+  const clientFeatures = uniqueSorted(clientSources.map(featureDirectory).filter(Boolean));
+  const features = uniqueSorted([...serverFeatures, ...clientFeatures]);
   const selectedTests = [
     ...directTests,
     ...fixtureTests,
@@ -342,8 +348,17 @@ function buildSuitePlan(changedFiles, {
     selectedTests.push(...namedTests);
   }
 
+  // Scope feature-directory matching by workspace (#17895): a client-only
+  // component edit must not select server/DB/browser suites, and a server-only
+  // service edit must not fan out client tests. Cross-workspace edges stay
+  // explicit through pathContractTests, clientDependencies and clientTestDependencies.
   for (const testFile of trackedFiles.filter(isTestFile)) {
-    if (features.some((feature) => pathMatchesFeature(testFile, feature))) {
+    const runner = runnerForTest(testFile);
+    if ((runner === 'server' || runner === 'db')
+      && serverFeatures.some((feature) => pathMatchesFeature(testFile, feature))) {
+      selectedTests.push(testFile);
+    } else if (runner === 'client'
+      && clientFeatures.some((feature) => pathMatchesFeature(testFile, feature))) {
       selectedTests.push(testFile);
     }
   }
@@ -354,12 +369,6 @@ function buildSuitePlan(changedFiles, {
     .filter((path) => trackedSet.has(path));
   const serverFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'server'));
   const clientFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'client'));
-
-  const hasServerSource = jsSources.some(isServerRunnerFile);
-  const hasClientSource = jsSources.some(isClientSource);
-
-  const serverSources = jsSources.filter(isServerRunnerFile);
-  const clientSources = jsSources.filter(isClientSource);
 
   // Feature-name matches, basename contracts, direct tests and guards are
   // additive explicit selectors; they never replace import-graph traversal. A
