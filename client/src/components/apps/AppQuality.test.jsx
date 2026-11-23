@@ -177,20 +177,40 @@ describe('AppQuality snapshot publishing', () => {
     expect(screen.getByRole('menuitem', { name: 'Publish snapshot now' })).toBeInTheDocument();
   });
 
-  it('reports the pull request that carries the snapshot into the repo', async () => {
-    publishAppQualitySnapshot.mockResolvedValue({
-      success: true, published: true, hash: 'abc1234def', path: '.quality.json',
-      prUrl: 'https://github.com/example/app/pull/42',
-    });
+  const publish = async result => {
+    publishAppQualitySnapshot.mockResolvedValue({ success: true, path: '.quality.json', ...result });
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
-
     fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Publish snapshot now' }));
-
     await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
-      'Quality snapshot pull request opened; it merges immediately'));
+  };
+  const prUrl = 'https://github.com/example/app/pull/42';
+
+  it.each([
+    [{ merged: true, queuedMerge: false }, 'Quality snapshot pull request merged'],
+    [{ merged: false, queuedMerge: true }, 'Quality snapshot pull request opened; queued to merge when checks pass'],
+    [{ merged: false, queuedMerge: false }, 'Quality snapshot pull request opened; review or merge manually'],
+  ])('reports the actual outcome of the snapshot pull request %j', async (outcome, message) => {
+    await publish({ published: true, hash: 'abc1234def', prUrl, ...outcome });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(message));
+  });
+
+  it.each([
+    ['publish-pr-unreadable', /state of the quality snapshot pull request/],
+    ['ownership-unreadable', /who owns the quality snapshot branch/],
+    ['publish-branch-unreadable', /Could not read the quality snapshot branch/],
+    ['non-snapshot-changes', /changes beyond the snapshot file/],
+  ])('explains the deferred publication reason %s', async (reason, text) => {
+    await publish({ published: false, deferredPublication: true, reason });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(text)));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an owner message for any other deferred reason', async () => {
+    await publish({ published: false, deferredPublication: true, reason: 'branch-owned-by-agent' });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(
+      'Quality snapshot publication deferred while another task owns the publish branch'));
   });
 
   it('explains a refusal instead of claiming a commit that never happened', async () => {
