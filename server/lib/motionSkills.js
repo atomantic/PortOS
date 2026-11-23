@@ -162,6 +162,7 @@ async function* readTar(source, wants) {
     const base = cString(header, 0, 100);
     const name = pax.path ?? longName ?? (prefix ? `${prefix}/${base}` : base);
     const entrySize = pax.size !== undefined ? Number(pax.size) : size;
+    if (!Number.isSafeInteger(entrySize) || entrySize < 0) throw new Error('Corrupt tar header: bad pax size');
     pax = {};
     longName = null;
     const type = typeflag === '0' ? 'file' : typeflag === '5' ? 'directory' : typeflag === '2' ? 'symlink' : typeflag === '1' ? 'hardlink' : 'special';
@@ -216,7 +217,10 @@ async function extractSkills(pack, archivePath, stageDir) {
     const [skill, ...rest] = name.slice(at + marker.length).split('/');
     return wanted.has(skill) ? { skill, rel: rest.join('/') } : null;
   };
-  const source = createReadStream(archivePath).pipe(createGunzip());
+  const file = createReadStream(archivePath);
+  const source = createGunzip();
+  file.on('error', error => source.destroy(error));
+  file.pipe(source);
   const gunzipFailure = new Promise((_, reject) => source.on('error', reject));
   gunzipFailure.catch(() => {});
   const extract = async () => {
@@ -230,7 +234,13 @@ async function extractSkills(pack, archivePath, stageDir) {
       await writeFile(target, entry.data);
     }
   };
-  await Promise.race([extract(), gunzipFailure]);
+  try {
+    await Promise.race([extract(), gunzipFailure]);
+  } finally {
+    // readTar stops at the end-of-archive marker, so release the handles explicitly before the temp dir is removed.
+    file.destroy();
+    source.destroy();
+  }
   for (const skill of pack.skills) {
     const info = await stat(join(stageDir, skill, 'SKILL.md')).catch(() => null);
     if (!info?.isFile() || info.size === 0) throw new Error(`${skill} has no non-empty SKILL.md in ${pack.source}@${pack.revision.slice(0, 7)}`);
