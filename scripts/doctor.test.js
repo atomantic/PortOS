@@ -19,7 +19,6 @@ import {
   closeProbeResources,
   collectFacts,
   defaultProbes,
-  ecosystemPorts,
   formatReport,
   isPortFree,
   pgHostClass,
