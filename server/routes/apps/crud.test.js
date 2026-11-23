@@ -95,13 +95,18 @@ describe('Apps CRUD Routes', () => {
     exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
     const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
     expect(result.status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined, undefined);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30, {}, undefined, undefined, undefined);
     expect(appsService.getAppById).not.toHaveBeenCalled();
     const repository = 'a'.repeat(64);
     expect((await request(app).get(`/api/apps/quality-federation?repository=${repository}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(200);
-    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository, undefined);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, repository, undefined, undefined);
     await request(app).get('/api/apps/quality-federation?categories=security,privacy').set('X-PortOS-Instance-Id', 'peer');
-    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, undefined, ['security', 'privacy']);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, undefined, ['security', 'privacy'], undefined);
+    const other = 'b'.repeat(64);
+    expect((await request(app).get(`/api/apps/quality-federation?repositories=${repository},${other}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(200);
+    expect(exportPortosQuality).toHaveBeenLastCalledWith('peer', 90, {}, undefined, undefined, [repository, other]);
+    expect((await request(app).get(`/api/apps/quality-federation?repository=${repository}&repositories=${other}`).set('X-PortOS-Instance-Id', 'peer')).status).toBe(400);
+    expect((await request(app).get(`/api/apps/quality-federation?repositories=${Array.from({ length: 101 }, (_, index) => index.toString(16).padStart(64, '0')).join(',')}`)).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?repository=invalid')).status).toBe(400);
     expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
     exportPortosQuality.mockResolvedValue(null);
@@ -322,6 +327,10 @@ describe('Apps CRUD Routes', () => {
       appsService.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', type: 'ios-native' });
       const detail = await request(app).get('/api/apps/portos-default?includeQuality=true');
       expect(detail.body.quality).toEqual({ score: 75 });
+      expect(enrichAppsWithQuality).toHaveBeenLastCalledWith(
+        [expect.objectContaining({ id: 'portos-default' })],
+        expect.objectContaining({ freshPeerPull: true }),
+      );
       const history = await request(app).get('/api/apps/portos-default/quality-history?days=90');
       expect(history.status).toBe(200);
       expect(getAppQualityHistory).toHaveBeenCalledWith({ id: 'portos-default', name: 'PortOS', type: 'ios-native' }, 90);

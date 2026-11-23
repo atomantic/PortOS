@@ -15,7 +15,7 @@ import { tryReadFile } from '../lib/jsonIo.js';
 import { CONSOLIDATED_AUDIT_DOMAINS } from '../lib/auditDomains.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';
-import { collectAppQuality, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
+import { collectAppQuality, collectAppsQualityBatch, qualityRecord, readQualityRecords, readReleaseQuality } from './appQualityFederation.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt, deepDiscoveryComplete = false }, deps = {}) {
@@ -95,19 +95,24 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
   // One unreadable checkout (git spawn failure, timeout) must cost that app its release
   // records, never the whole list — same posture as the peer collect below.
   const releases = await Promise.all(apps.map(app => readReleaseQuality(deps, app).catch(() => [])));
-  return Promise.all(apps.map(async (app, index) => {
-    const [shared, inapplicable] = await Promise.all([
-      collectAppQuality(app, 30, deps).catch(() => ({ records: [], federation: { failed: true } })),
-      deps.resolveApplicability ? deps.resolveApplicability(app).catch(() => ({})) : {},
-    ]);
+  // One peer round-trip for the list. A per-app collect made every dashboard
+  // load wait out a sleeping peer once per app.
+  const [shared, applicability] = await Promise.all([
+    collectAppsQualityBatch(apps, 30, deps).catch(() => null),
+    Promise.all(apps.map(app => (deps.resolveApplicability ? deps.resolveApplicability(app).catch(() => ({})) : {}))),
+  ]);
+  const failedPeerPull = { records: [], federation: { failed: true } };
+  return apps.map((app, index) => {
+    const peerQuality = shared?.[index] || failedPeerPull;
+    const inapplicable = applicability[index];
     return { ...app,
       quality: result ? { ...summarizeAppQuality(dailyQualityRecords([
         ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
-        ...shared.records, ...releases[index],
-      ]), now, { inapplicable }), federation: shared.federation }
+        ...peerQuality.records, ...releases[index],
+      ]), now, { inapplicable }), federation: peerQuality.federation }
         : { ...summarizeAppQuality(), unavailable: true },
     };
-  }));
+  });
 }
 
 /** Takes the full app record: the repo path is what locates a managed app's `.quality.json`. */
