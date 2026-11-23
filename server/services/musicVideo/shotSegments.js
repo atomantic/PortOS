@@ -830,9 +830,7 @@ function updateFilmLooks(dir, change) {
     const looks = await readFilmLooks(dir);
     if (change(looks) === false) return;
     await mkdir(dir, { recursive: true });
-    const tmp = join(dir, `${LOOKS_FILE}.${randomUUID()}.tmp`);
-    await writeFile(tmp, JSON.stringify({ looks }, null, 2));
-    await rename(tmp, join(dir, LOOKS_FILE));
+    await atomicWrite(join(dir, LOOKS_FILE), { looks });
   });
   const settled = run.catch((err) => console.warn(`⚠️ Music-video film look list not saved: ${err.message}`));
   lookWrites.set(dir, settled);

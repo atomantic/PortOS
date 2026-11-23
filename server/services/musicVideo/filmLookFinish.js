@@ -22,7 +22,7 @@
  * draws it over the look for each frame's song time.
  */
 
-import { copyFile, link, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -353,7 +353,7 @@ export async function applyFilmLookFinish(options) {
   if (!shotLooks || look !== undefined || !pinned) return finishFilmLookWindow(options);
   if (!filmLookFinishNeeded(project, { shotLooks: true })) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
-  const { findFfmpeg, probeVideoGeometry, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, installEncodedVideo, probeVideoGeometry, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const geometry = await probeVideoGeometry(path);
@@ -379,7 +379,8 @@ export async function applyFilmLookFinish(options) {
     const mux = await runFfmpegProcess({ bin: ffmpeg, signal, args: ['-hide_banner', '-loglevel', 'error', '-i', silent, '-i', path, '-map', '0:v:0', '-map', '1:a?', '-c', 'copy', '-movflags', '+faststart', '-y', finished] });
     if (!mux.ok) throw new ServerError(`Film look mux failed: ${mux.reason}`, { status: 500, code: 'FILM_LOOK_FINISH_MUX' });
     signal?.throwIfAborted();
-    await rename(finished, path);
+    const installed = await installEncodedVideo(finished, path, 'film look');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'FILM_LOOK_FINISH_INSTALL' });
     onProgress?.(1);
     return true;
   } finally {
@@ -392,7 +393,7 @@ async function finishFilmLookWindow({ project, look: lookInput, path, jobId, sig
   const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
   if ((!look || isFilmLookNeutral(look)) && !windowOnly && !titleCardVisible(normalizeTitleCard(titleCard))) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
-  const { findFfmpeg, runFfmpegProcess, probeVideoCodecSignature, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, installEncodedVideo, runFfmpegProcess, probeVideoCodecSignature, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const ffmpeg = await findFfmpeg();
@@ -495,7 +496,8 @@ async function finishFilmLookWindow({ project, look: lookInput, path, jobId, sig
     page = null;
     signal?.throwIfAborted();
     if (windowOnly) {
-      await rename(silent, path);
+      const installed = await installEncodedVideo(silent, path, 'film look');
+      if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'FILM_LOOK_FINISH_INSTALL' });
       onProgress?.(1);
       return true;
     }
@@ -509,7 +511,8 @@ async function finishFilmLookWindow({ project, look: lookInput, path, jobId, sig
       signal?.throwIfAborted();
       throw new ServerError(`Film look mux failed: ${mux.reason}`, { status: 500, code: 'FILM_LOOK_FINISH_MUX' });
     }
-    await rename(finished, path);
+    const installed = await installEncodedVideo(finished, path, 'film look');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'FILM_LOOK_FINISH_INSTALL' });
     onProgress?.(1);
     const timing = encoded?.timing;
     const perFrame = key => timing?.frames ? (timing[key] / timing.frames).toFixed(1) : 'unavailable';

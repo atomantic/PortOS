@@ -11,7 +11,7 @@
  * its look in the page, so there the outro page draws it too (`withFilmLook`).
  */
 
-import { copyFile, link, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PATHS } from '../../lib/paths.js';
@@ -175,7 +175,7 @@ export async function renderStatsOutroClip({ project, outputPath, width, height,
 export async function appendStatsOutro({ project, path, jobId, signal, onProgress, withFilmLook = false }) {
   if (!endingParts(project).length) return 0;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid outro job id');
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, installEncodedVideo, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
   const geometry = await probeVideoGeometry(path);
@@ -203,7 +203,8 @@ export async function appendStatsOutro({ project, path, jobId, signal, onProgres
       signal?.throwIfAborted();
       throw new ServerError(`Outro join failed: ${join2.reason}`, { status: 500, code: 'STATS_OUTRO_JOIN' });
     }
-    await rename(joined, path);
+    const installed = await installEncodedVideo(joined, path, 'outro');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'STATS_OUTRO_INSTALL' });
     onProgress?.(1);
     console.log(`🎞️ Music-video outro [${jobId.slice(0, 8)}]: ${durationSec}s ending after the song`);
     return durationSec;
