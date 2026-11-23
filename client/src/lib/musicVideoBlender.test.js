@@ -274,6 +274,18 @@ describe('blenderAgentBrief', () => {
     expect(empty).toContain('No src/film.py yet');
   });
 
+  it('lists each shot\'s motion references with the strip an agent can look at', () => {
+    const state = blenderFilmState();
+    state.motionReferences = { s010: [
+      { id: 'mr-a', filename: 'example-walk.mp4', inSec: 1, outSec: 5, speed: 2, note: 'read the footfall order', missing: false, strip: { path: '/srv/portos/data/music-video/mv-test/blender/renders/s010/references/mr-a.jpg', current: true } },
+      { id: 'mr-b', filename: 'gone.mp4', inSec: 0, outSec: 2, speed: 1, note: '', missing: true, strip: null },
+    ] };
+    const brief = blenderAgentBrief({ projectId: 'mv-test', state });
+    expect(brief).toContain('s010: example-walk.mp4 1-5s at 2x ("read the footfall order"); strip /srv/portos/data/music-video/mv-test/blender/renders/s010/references/mr-a.jpg');
+    expect(brief).toContain('s010: gone.mp4 0-2s at 1x; video missing');
+    expect(blenderAgentBrief({ projectId: 'mv-test', state: blenderFilmState() })).not.toContain('Motion references (timing only');
+  });
+
   it('directs standalone authoring to its film workspace and permits the supported lead-in timing', () => {
     const brief = blenderAgentBrief({ projectId: 'film-test', standalone: true, state: { settings: {} } });
     expect(brief).toContain('Workspace on this machine: data/code-animation/films/film-test');

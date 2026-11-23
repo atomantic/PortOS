@@ -961,6 +961,13 @@ export const cancelMusicVideoBlenderJobs = (id, options = {}) => request(`${blen
 export const assembleMusicVideoBlenderCut = (id, body, options = {}) => request(`${blenderPath(id)}/cut`, blenderJson('POST', body, options));
 export const saveMusicVideoBlenderShotNote = (id, shotId, body, options = {}) =>
   request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/note`, blenderJson('PUT', body, options));
+// Replaces a shot's motion references (timing-only clips, at most three) → the film state.
+// Body: { references: [{ id?, filename, inSec, outSec, speed, note }] }.
+export const saveMusicVideoBlenderMotionReferences = (id, shotId, references, options = {}) =>
+  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references`, blenderJson('PUT', { references }, options));
+// Tiles one reference on a contact sheet's grid (`sheet`: its media path; omitted, the newest) → { file, path, every, columns, tiles, available }.
+export const makeMusicVideoBlenderMotionStrip = (id, shotId, refId, body = {}, options = {}) =>
+  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references/${encodeURIComponent(refId)}/strip`, blenderJson('POST', body, options));
 export const openMusicVideoBlenderShot = (id, shotId, options = {}) =>
   request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/open`, blenderJson('POST', null, options));
 // A file under the workspace's renders/ folder (shot video, frame, still, cut), for a media element's src.

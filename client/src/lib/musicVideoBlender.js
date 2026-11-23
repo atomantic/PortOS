@@ -13,11 +13,12 @@
  */
 import { formatCount, formatTimecode } from '../utils/formatters.js';
 import {
-  MUSIC_VIDEO_BLENDER_SETTING_LIMITS, MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS,
+  MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS, MUSIC_VIDEO_BLENDER_SETTING_LIMITS, MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS,
   blenderEffectiveOptions, blenderOptionValueProblem, blenderRenderWanted, blenderShotsReady, summarizeBlenderShots,
 } from '../../../server/lib/musicVideo/musicVideoBlender.js';
 
 export { blenderEffectiveOptions, blenderShotsReady, summarizeBlenderShots };
+export const blenderMotionReferenceLimits = MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS;
 export const BLENDER_SOURCE_PATH = MUSIC_VIDEO_BLENDER_SOURCE_PATH;
 export const BLENDER_TEXT_EXTENSIONS = MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS.map((extension) => `.${extension}`);
 
@@ -460,6 +461,11 @@ export function blenderAgentBrief({ projectId, state, standalone = false }) {
   const optionsLine = options.length
     ? `Film options now: ${options.map((option) => `${option.key}=${JSON.stringify(option.value)}`).join(', ')}.`
     : 'Film options: none declared.';
+  // A reference is for timing only; the strip is a contact-sheet-shaped image the agent can look at.
+  const referenceLines = shots.flatMap((shot) => (state?.motionReferences?.[shot.id] || []).map((ref) => {
+    const where = ref.missing ? 'video missing' : ref.strip ? `strip ${ref.strip.current ? '' : '(out of date) '}${ref.strip.path}` : 'no strip yet (POST its /strip)';
+    return `  ${shot.id}: ${ref.filename} ${ref.inSec}-${ref.outSec}s at ${ref.speed}x${ref.note ? ` ("${ref.note}")` : ''}; ${where}`;
+  }));
   return [
     standalone ? 'You are authoring a standalone PortOS Code Animation film, with an optional soundtrack.' : 'You are authoring a Blender film for a PortOS music video.',
     '',
@@ -488,12 +494,13 @@ export function blenderAgentBrief({ projectId, state, standalone = false }) {
     `Render settings: ${settings.width || '?'}x${settings.height || '?'} at ${settings.fps || '?'} fps, ${engineLabel(settings.engine)}; preview scale ${settings.previewScale ?? '?'} with ${settings.previewSamples ?? '?'} samples; final ${settings.finalSamples ?? '?'} samples.`,
     optionsLine,
     `Now: ${stateLine}`,
+    ...(referenceLines.length ? ['', 'Motion references (timing only; they never enter a render, a cut or an out-of-date check). Look at each strip beside the shot\'s contact sheet: same columns, same time step scaled by the speed.', ...referenceLines] : []),
     '',
     'Review loop: edit src/ -> sync -> stills -> preview shots -> preview cut -> director notes -> finals -> final render.',
     standalone ? 'Assemble a final cut after every final shot is current and covers the full timeline; it becomes the accepted Media History output.' : 'The final render still needs the art guide, verified lyric timing and an approved storyboard.',
     '',
     `Routes (base ${base}; from a terminal session use node scripts/portos-api.js):`,
-    '  GET    (base)                 the full state: settings, tool, workspace, manifest, renders, cuts, jobs, notes',
+    '  GET    (base)                 the full state: settings, tool, workspace, manifest, renders, cuts, jobs, notes, motionReferences',
     '  PUT    /settings              partial settings; film option values as {"options": {"<key>": value}} (null clears one back to its default)',
     '  POST   /workspace             {"template":"starter"} scaffolds src/ when there is no film.py',
     '  GET    /files                 list src/',
@@ -507,6 +514,8 @@ export function blenderAgentBrief({ projectId, state, standalone = false }) {
     '  POST   /jobs/<jobId>/cancel   cancel one job;  POST /cancel  cancel every job of this project',
     '  POST   /cut                   {"quality": "preview"|"final", "animatic"?, "filmLook"?} assemble a work-in-progress cut with the song',
     '  PUT    /shots/<shotId>/note   {"text"?, "status"?: "todo"|"wip"|"review"|"approved"}',
+    '  PUT    /shots/<shotId>/motion-references   {"references": [{"id"?, "filename", "inSec", "outSec", "speed": 0.25..4, "note"?}]} replaces the shot\'s list (at most 3; filename is a Media History video)',
+    '  POST   /shots/<shotId>/motion-references/<refId>/strip   {"sheet"?: media path of a contact sheet} tiles the reference on that sheet\'s grid -> {"file", "path"}',
     '  POST   /shots/<shotId>/open   open the saved .blend in Blender',
     '  GET    /media?path=<p>        a file under renders/ (mp4, png, jpg, log)',
     '  GET    /usage                 what the workspace takes on disk;  POST /frames/clear  remove the frames of finished renders (their videos stay)',

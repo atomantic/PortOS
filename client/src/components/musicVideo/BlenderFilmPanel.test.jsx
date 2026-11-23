@@ -26,6 +26,8 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   cancelMusicVideoBlenderJobs: vi.fn(),
   assembleMusicVideoBlenderCut: vi.fn(),
   saveMusicVideoBlenderShotNote: vi.fn(),
+  saveMusicVideoBlenderMotionReferences: vi.fn(),
+  makeMusicVideoBlenderMotionStrip: vi.fn(),
   openMusicVideoBlenderShot: vi.fn(),
   getMusicVideoBlenderLog: vi.fn(),
   getMusicVideoBlenderUsage: vi.fn(),
@@ -39,7 +41,7 @@ import toast from '../ui/Toast';
 import {
   assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace, getMusicVideoBlender, getMusicVideoBlenderFile,
   getMusicVideoBlenderLog, getMusicVideoBlenderUsage, listMusicVideoBlenderFiles, renderMusicVideoBlender, saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings,
-  saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
+  saveMusicVideoBlenderShotNote, saveMusicVideoBlenderMotionReferences, makeMusicVideoBlenderMotionStrip, syncMusicVideoBlender,
 } from '../../services/apiMusicVideo.js';
 import { blenderFilmProject, blenderFilmState, blenderShot } from '../../test/blenderFilmFixture.js';
 
@@ -77,6 +79,43 @@ beforeEach(() => {
   getMusicVideoBlender.mockResolvedValue(blenderFilmState());
   listMusicVideoBlenderFiles.mockResolvedValue({ files: [] });
   getMusicVideoBlenderUsage.mockResolvedValue({ sourceBytes: 4096, rendersBytes: 3 * GIB, frameBytes: 2 * GIB, frameFiles: 2160, clearableBytes: 2 * GIB, removedShots: [] });
+});
+
+describe('BlenderFilmPanel: motion references', () => {
+  const sheet = { file: 's010/sheets/sheet-0-102-e6.jpg', firstFrame: 0, lastFrame: 102, every: 6, columns: 6, tiles: 18, stale: false, createdAt: '2026-10-01T10:12:00.000Z' };
+  const reference = { id: 'mr-a', filename: 'example-walk.mp4', inSec: 1, outSec: 5, speed: 2, note: 'read the footfall order', missing: false,
+    strip: { file: 's010/references/mr-a.jpg', path: '/srv/example/mr-a.jpg', every: 6, columns: 6, tiles: 18, sheet: 'sheet-0-102-e6.jpg', current: true } };
+  const withReferences = (references) => {
+    const state = blenderFilmState();
+    state.renders.s010.sheets = [sheet];
+    state.motionReferences = { s010: references };
+    getMusicVideoBlender.mockResolvedValue(state);
+  };
+
+  it('shows the strip above the sheet and saves an edited reference as the whole list', async () => {
+    withReferences([reference]);
+    saveMusicVideoBlenderMotionReferences.mockResolvedValue(blenderFilmState());
+    await renderPanel();
+    const refs = within(detail('s010')).getByRole('region', { name: 'Motion references' });
+    expect(within(refs).getByAltText('Motion reference strip: example-walk.mp4').getAttribute('src')).toContain('path=s010%2Freferences%2Fmr-a.jpg');
+    expect(within(refs).queryByRole('button', { name: /Line up with this sheet/ })).not.toBeInTheDocument();
+    fireEvent.change(within(refs).getByLabelText('Speed'), { target: { value: '3' } });
+    fireEvent.click(within(refs).getByRole('button', { name: 'Save reference' }));
+    expect(saveMusicVideoBlenderMotionReferences).toHaveBeenCalledWith('mv-test', 's010',
+      [{ id: 'mr-a', filename: 'example-walk.mp4', inSec: 1, outSec: 5, speed: 3, note: 'read the footfall order' }], { silent: true });
+    await act(async () => {});
+  });
+
+  it('offers to line a stale strip up with the newest sheet and says when the video is gone', async () => {
+    withReferences([{ ...reference, strip: { ...reference.strip, sheet: 'sheet-0-50-e3.jpg', current: false } }, { ...reference, id: 'mr-b', filename: 'gone.mp4', missing: true, strip: null }]);
+    makeMusicVideoBlenderMotionStrip.mockResolvedValue({ file: 's010/references/mr-a.jpg' });
+    await renderPanel();
+    const refs = within(detail('s010')).getByRole('region', { name: 'Motion references' });
+    fireEvent.click(within(refs).getByRole('button', { name: /Line up with this sheet/ }));
+    expect(makeMusicVideoBlenderMotionStrip).toHaveBeenCalledWith('mv-test', 's010', 'mr-a', { sheet: 's010/sheets/sheet-0-102-e6.jpg' }, { silent: true });
+    expect(within(refs).getByText(/no longer in Media History; the shot still renders/)).toBeInTheDocument();
+    await act(async () => {});
+  });
 });
 
 describe('BlenderFilmPanel: shots', () => {

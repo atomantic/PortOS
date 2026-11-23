@@ -14,6 +14,7 @@ import { hashBlenderSources } from './hashing.js';
 import { blenderFilmProblems, readBlenderManifest } from './manifest.js';
 import { readBlenderRenders } from './renderIndex.js';
 import { listBlenderJobs } from './jobs.js';
+import { readBlenderMotionReferences } from './motionReferences.js';
 
 export const BLENDER_NEEDS_TRUSTED_LOCAL = 'A Blender film renders on the GPU and writes into the project workspace, so it needs Blender in Trusted local mode. Switch the execution mode under Blender execution (Code Animation > Production, or this panel\'s Settings) and run the execution check.';
 
@@ -106,6 +107,7 @@ async function buildBlenderState(owner) {
     cuts: await cutsState(owner, renders),
     jobs: listBlenderJobs(owner),
     notes: record.notes,
+    motionReferences: await readBlenderMotionReferences(owner, record, manifest),
   };
 }
 
