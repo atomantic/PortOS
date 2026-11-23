@@ -66,7 +66,9 @@ describe('native setup inherited endpoint', () => {
 
 // Run the actual CLI body with synthetic configuration and subprocesses. No
 // imports execute, no install .env is read, and no database can be contacted.
-async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false, platform = 'linux', runningVersionNum = '170012' } = {}) {
+const KEG_PSQL = '/opt/homebrew/opt/postgresql@17/bin/psql';
+
+async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady = true, running = true, hostBinding = '127.0.0.1', hostPort = 5561, dotEnv = {}, exportedMode, exportedEnv = {}, hostAuth = 'ok', pgMissing = false, platform = 'linux', runningVersionNum = '170012', psqlOnPath = true, kegPsql = false } = {}) {
   const clients = [];
   const savedEnv = { PGMODE: mode, EXAMPLE_SETTING: 'preserved', ...dotEnv };
   const initialEnv = { ...savedEnv };
@@ -97,6 +99,7 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         } };
       },
       parseEnvFile: () => savedEnv,
+      existsSync: (candidate) => kegPsql && candidate === KEG_PSQL,
       upsertEnvKey: (_path, key, value) => { savedEnv[key] = value; },
       createInterface: () => { throw new Error('Setup must not prompt to switch backends'); },
       resolveBashBinary: () => 'bash',
@@ -110,8 +113,11 @@ async function runSetup({ mode = 'docker', unavailable, tty = false, nativeReady
         childEnvs.push(options?.env);
         const invocation = [command, ...args].join(' ');
         if (invocation === unavailable) throw new Error('Synthetic unavailable dependency');
-        if (command === 'psql' && args.includes('SHOW server_version_num')) return `${provisioned ? '170012' : runningVersionNum}\n`;
-        if (command === 'psql') return nativeReady || provisioned ? '1\n' : '';
+        const isPsql = command === 'psql' || command === KEG_PSQL;
+        if (command === 'psql' && !psqlOnPath) throw Object.assign(new Error('spawnSync psql ENOENT'), { code: 'ENOENT' });
+        if (command === KEG_PSQL && !kegPsql) throw Object.assign(new Error('spawnSync keg psql ENOENT'), { code: 'ENOENT' });
+        if (isPsql && args.includes('SHOW server_version_num')) return `${provisioned ? '170012' : runningVersionNum}\n`;
+        if (isPsql) return nativeReady || provisioned ? '1\n' : '';
         if (invocation === 'brew --prefix postgresql@17') return '/opt/homebrew/opt/postgresql@17\n';
         if (invocation === '/opt/homebrew/opt/postgresql@17/bin/pg_config --version') return 'PostgreSQL 17.12 (Homebrew)\n';
         if (command === 'bash' && args[1] === 'setup-native') {
@@ -310,6 +316,19 @@ describe('setup preserves the selected database', () => {
   ])('on macOS, a running server at %s against an installed 17.12 runs setup-native: %s', async (runningVersionNum, expectSetup) => {
     const result = await runSetup({ mode: 'native', nativeReady: true, platform: 'darwin', runningVersionNum });
     expect(result.exitCode).toBe(0);
+    expect(result.calls.some((call) => call.includes('setup-native'))).toBe(expectSetup);
+  });
+  // Homebrew's postgresql@17 keeps psql off PATH on macOS. With only the keg
+  // binary present, the probe must use it (not bare 'psql') so both the fast
+  // path and the post-setup-native verification pass instead of exiting 1.
+  it.each([
+    ['fast path with a running keg', { nativeReady: true }, false],
+    ['fresh setup-native with the keg installed', { nativeReady: false }, true],
+  ])('on macOS with keg-only psql, %s', async (_label, overrides, expectSetup) => {
+    const result = await runSetup({ mode: 'native', platform: 'darwin', psqlOnPath: false, kegPsql: true, ...overrides });
+    expect(result.exitCode).toBe(0);
+    expect(result.calls.filter(([command]) => command === 'psql')).toHaveLength(0);
+    expect(result.calls.some(([command]) => command === KEG_PSQL)).toBe(true);
     expect(result.calls.some((call) => call.includes('setup-native'))).toBe(expectSetup);
   });
   // Pairs with scripts/ecosystemEnv.test.js "mode precedence matches setup" (#10758).
