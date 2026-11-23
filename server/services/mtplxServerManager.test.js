@@ -489,9 +489,17 @@ describe('mtplxServerManager', () => {
       expect(execPm2Calls.filter((a) => a[0] === 'start')).toHaveLength(starts);
     });
 
-    it('stops MTPLX again afterwards when it was not running before, even when fn throws', async () => {
-      await expect(runOnMtplxCheckpoint('Example/Other-MTP', async () => { throw new Error('page failed'); })).rejects.toThrow('page failed');
+    it('stops MTPLX again afterwards when it was not running before, even when fn throws, and keeps the saved launch line', async () => {
+      const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
+      settingsStore = { localLlm: { mtplx: { launch: saved } } };
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', async () => {
+        // The switch itself persists its own line while the bench runs.
+        expect(settingsStore.localLlm.mtplx.launch.model).toBe('Example/Other-MTP');
+        throw new Error('page failed');
+      })).rejects.toThrow('page failed');
       expect(pm2State?.status).not.toBe('online');
+      // The next on-demand start serves the operator's pack, not the bench one.
+      expect(settingsStore.localLlm.mtplx.launch).toEqual(saved);
     });
   });
 

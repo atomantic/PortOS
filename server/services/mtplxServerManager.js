@@ -825,7 +825,7 @@ export async function runOnMtplxCheckpoint(model, fn) {
     return await fn(switched.servedModelId);
   } finally {
     if (switched.previous !== undefined) {
-      await onDemand.runStart(() => restoreAfterCheckpoint(switched.previous)).catch((err) => {
+      await onDemand.runStart(() => restoreAfterCheckpoint(switched)).catch((err) => {
         console.error(`❌ MTPLX: could not put the previous checkpoint back after ${model}: ${err.message}`);
       });
     }
@@ -845,8 +845,11 @@ async function switchToCheckpoint(model) {
       : 'MTPLX was started outside PortOS, so PortOS will not stop it to switch checkpoints';
     throw new ServerError(why, { status: 409, code: 'MTPLX_SWITCH_REFUSED' });
   }
-  // `null` previous = MTPLX was not running, so it is stopped again afterwards.
+  // `null` previous = MTPLX was not running, so it is stopped again afterwards. Every launch persists
+  // its line as the saved launch, so the saved one is kept to write back: otherwise the next on-demand
+  // start would serve the bench pack instead of the operator's choice.
   const previous = status.running ? status.config : null;
+  const savedLaunch = previous ? null : (await onDemand.savedLaunch().catch(() => null))?.raw ?? null;
   const port = previous?.port ?? DEFAULT_PORT;
   console.log(`🚄 MTPLX: switching to ${model}${previous?.model ? ` (from ${previous.model})` : ''}`);
   if (previous) {
@@ -858,15 +861,16 @@ async function switchToCheckpoint(model) {
     : started.online ? { ready: true } : await onDemand.waitForReady(started.endpoint);
   if (!ready.ready) {
     if (!started.failure) await stopMtplxServer().catch(() => {});
-    if (previous) await restorePrevious(previous, null);
+    await restoreAfterCheckpoint({ previous, savedLaunch, stopped: true });
     throw new ServerError(`MTPLX could not serve ${model}: ${ready.reason}`, { status: 503, code: 'MTPLX_SWITCH_FAILED' });
   }
-  return { servedModelId: await servedModelIdAt(started.endpoint), previous };
+  return { servedModelId: await servedModelIdAt(started.endpoint), previous, savedLaunch };
 }
 
-async function restoreAfterCheckpoint(previous) {
-  await stopMtplxServer();
+async function restoreAfterCheckpoint({ previous, savedLaunch, stopped = false }) {
+  if (!stopped) await stopMtplxServer();
   if (previous) await restorePrevious(previous, null);
+  else if (savedLaunch) await persistDaemonLaunchConfig({ key: 'mtplx', label: 'MTPLX', launch: savedLaunch });
 }
 
 /**
