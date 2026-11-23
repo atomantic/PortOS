@@ -26,9 +26,9 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
   expect(screen.getAllByText('Stale · partial')).not.toHaveLength(0);
   expect(screen.getByText(/1\/18 applicable categories contribute/)).toBeInTheDocument();
-  expect(screen.queryByText(/Equal-weight mean/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Recency-weighted equal-weight mean/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
-  expect(screen.getByRole('tooltip')).toHaveTextContent(/Equal-weight mean/);
+  expect(screen.getByRole('tooltip')).toHaveTextContent(/Recency-weighted equal-weight mean/);
   // Metrics-only visitors never see the run or schedule forms until they ask.
   expect(screen.queryByText('Runner')).not.toBeInTheDocument();
   expect(screen.queryByText('Schedule form')).not.toBeInTheDocument();
@@ -245,4 +245,23 @@ it('uses responsive classes for mobile cards and desktop table layout', async ()
   expect(tbody).toHaveClass('block', 'sm:table-row-group');
   const row = within(tbody).getByRole('row');
   expect(row).toHaveClass('grid', 'grid-cols-[1fr_auto]', 'sm:table-row');
+});
+
+it('never flags healthy categories as below the composite and shows the target-met pill', async () => {
+  const app = { id: 'example', quality: { score: 93, categories: [
+    { id: 'ux', label: 'UX', score: 90, coverage: 'broad', confidence: 'high' },
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByText('Target met (85+)')).toBeInTheDocument();
+  const rowFor = name => screen.getAllByRole('row').find(row => within(row).queryByRole('rowheader')?.textContent === name);
+  expect(rowFor('UX').className).not.toContain('bg-port-warning/10');
+  expect(rowFor('Security').className).toContain('bg-port-warning/10');
+});
+
+it('omits the target-met pill below the healthy threshold', async () => {
+  render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: 70, categories: [] } }} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.queryByText('Target met (85+)')).not.toBeInTheDocument();
 });

@@ -7,6 +7,7 @@ import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatCount } from '../../utils/formatters';
 import { enabledProcessProviderFilter } from '../../utils/providers';
 import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun, setMaintenanceRunArchived } from '../../services/apiAgents';
+import { QUALITY_HEALTHY_THRESHOLD } from '../../../../server/lib/auditDomains.js';
 
 const RUN_EVENTS = ['cos:maintenance:updated'];
 
@@ -51,7 +52,7 @@ export default function AppQualityRunner({ app, children }) {
     if (selection === 'missing') return needsCheck(category);
     if (selection === BELOW_COMPOSITE) {
       return isApplicable(category) && compositeScore != null && category.score != null
-        && category.coverage !== 'not-applicable' && category.score < compositeScore;
+        && category.coverage !== 'not-applicable' && category.score < QUALITY_HEALTHY_THRESHOLD && category.score < compositeScore;
     }
     return category.id === selection;
   });
@@ -60,7 +61,7 @@ export default function AppQualityRunner({ app, children }) {
   const emptySelectionMessage = selection === BELOW_COMPOSITE
     ? compositeScore == null
       ? 'No overall composite score is available, so below-score checks cannot be selected.'
-      : `No applicable checks currently score below the overall composite score of ${compositeScore}/100.`
+      : `No applicable checks currently score below the target of ${QUALITY_HEALTHY_THRESHOLD}/100 and the overall score of ${compositeScore}/100.`
     : selection === 'all'
       ? 'No applicable checks are available.'
       : 'No checks need evidence. Recent unavailable assessments and categories that do not apply to this repository are excluded.';
@@ -104,7 +105,7 @@ export default function AppQualityRunner({ app, children }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
       <label htmlFor="quality-checks">Checks
         <select id="quality-checks" className="block w-full bg-port-bg border border-port-border rounded p-2" value={selection} disabled={busy} onChange={event => setSelection(event.target.value)}>
-          <option value="missing">Missing or outdated evidence</option><option value={BELOW_COMPOSITE}>Below composite score</option><option value="all">All applicable categories</option>
+          <option value="missing">Missing or outdated evidence</option><option value={BELOW_COMPOSITE}>Below target (&lt; 85)</option><option value="all">All applicable categories</option>
           {categories.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
         </select>
       </label>

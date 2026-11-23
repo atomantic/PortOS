@@ -69,6 +69,19 @@ it('runs only applicable scored categories below the overall composite as a batc
   expect(startMaintenanceRun.mock.lastCall[0]).not.toHaveProperty('explicitCheck');
 });
 
+it('excludes categories already at the healthy target from the below-target batch', async () => {
+  startMaintenanceRun.mockResolvedValue({ run: { id: 'run-target', status: 'running', steps: [] } });
+  const categories = [
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high' },
+    { id: 'ux', label: 'UX', score: 90, coverage: 'broad', confidence: 'high' },
+  ];
+  render(<MemoryRouter initialEntries={['/apps/example/quality?qualityCheck=below-composite']}>
+    <AppQualityRunner app={{ ...app, quality: { score: 95, categories } }} />
+  </MemoryRouter>);
+  fireEvent.click(await findEnabledByRole('button', { name: 'Run now' }));
+  await waitFor(() => expect(startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ taskTypes: ['security'] }), { silent: true }));
+});
+
 it('explains when the composite score is unavailable for below-score selection', async () => {
   render(<MemoryRouter initialEntries={['/apps/example/quality?qualityCheck=below-composite']}>
     <AppQualityRunner app={{ ...app, quality: { score: null, categories: app.quality.categories } }} />

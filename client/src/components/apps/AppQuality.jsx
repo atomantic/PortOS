@@ -10,6 +10,7 @@ import { formatDateShort } from '../../utils/formatters';
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
 import InfoTooltip from '../ui/InfoTooltip';
+import { QUALITY_HEALTHY_THRESHOLD } from '../../../../server/lib/auditDomains.js';
 import OverflowMenu from '../ui/OverflowMenu';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -113,9 +114,11 @@ export default function AppQuality({ app, detail = false }) {
           <div className="min-w-0">
             <h3 className="flex flex-wrap items-center gap-1.5 font-semibold text-white">
               {label}
+              {score != null && score >= QUALITY_HEALTHY_THRESHOLD && <span className="rounded-full border border-port-success/40 bg-port-success/10 px-2 py-0.5 text-xs font-medium text-port-success">Target met ({QUALITY_HEALTHY_THRESHOLD}+)</span>}
               <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
-                <p>Equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
+                <p>Recency-weighted equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
                 <p className="mt-1.5">Each run rates only the slice it deep-reviewed, as the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
+                <p className="mt-1.5">Target: 85–95 is healthy. Categories at {QUALITY_HEALTHY_THRESHOLD}+ are not flagged; chasing 100/100 invites over-engineering.</p>
                 {federation && <p className="mt-1.5">Unified score: the recent runs per category across this install and sync peers with the same repository, one per day. Offline peers do not contribute.</p>}
                 {score == null && !hasAssessments && <p className="mt-1.5">Maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively.</p>}
               </InfoTooltip>
@@ -174,7 +177,7 @@ export default function AppQuality({ app, detail = false }) {
                   <CategoryRow
                     key={category.id}
                     category={category}
-                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
+                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < QUALITY_HEALTHY_THRESHOLD && category.score < score}
                     runLink={panelLink('run', category.id)}
                   />
                 ))}
