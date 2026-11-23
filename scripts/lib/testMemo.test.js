@@ -393,11 +393,14 @@ describe('floor key', () => {
       const tree = {
         ...SERVED,
         'client/src/Panel.jsx': "import './Panel.css';\nimport { nav } from '../../server/lib/nav.js';\nexport const Panel = nav;\n",
-        'client/src/Panel.css': "@import './panelTokens.css';\n.panel { color: red; }\n",
+        'client/src/Panel.css': "@import './panelTokens.css';\n@import url(./panelLayout.css);\n.panel { color: red; }\n",
         'client/src/panelTokens.css': '.token { color: blue; }\n',
+        'client/src/panelLayout.css': '.layout { display: grid; }\n',
         'client/src/index.css': '@import "tailwindcss";\n',
-        'client/src/themes/tokens.js': 'export const tokens = 1;\n',
-        'client/postcss.config.js': 'export default {};\n',
+        'client/src/themes/tokens.js': "import { palette } from '../palette.js';\nexport const tokens = palette;\n",
+        'client/src/palette.js': 'export const palette = 1;\n',
+        'client/postcss.config.js': "import plugins from './postcssPlugins.js';\nexport default { plugins };\n",
+        'client/postcssPlugins.js': 'export default {};\n',
         'client/src/pages/HtmlPages.jsx': 'export const HtmlPages = 1;\n',
         'server/lib/nav.js': 'export const nav = 1;\n',
         [test]: browserTest(FIXTURE),
@@ -422,8 +425,9 @@ describe('floor key', () => {
         }
         // The served component, its CSS and what that CSS imports, a module served from outside
         // the root, the global stylesheet, theme tokens, the PostCSS config and the lockfile move it.
-        for (const rel of ['client/src/Panel.jsx', 'client/src/Panel.css', 'client/src/panelTokens.css', 'server/lib/nav.js', 'client/src/index.css',
-          'client/src/themes/tokens.js', 'client/postcss.config.js', 'client/package-lock.json']) {
+        // So do the never-served modules a theme module or the PostCSS config imports.
+        for (const rel of ['client/src/Panel.jsx', 'client/src/Panel.css', 'client/src/panelTokens.css', 'client/src/panelLayout.css', 'server/lib/nav.js',
+          'client/src/index.css', 'client/src/themes/tokens.js', 'client/src/palette.js', 'client/postcss.config.js', 'client/postcssPlugins.js', 'client/package-lock.json']) {
           expect(recordedKey(edit(rel)).key, rel).not.toBe(baseline.key);
         }
         // Never the whole-tree key of the same suite.

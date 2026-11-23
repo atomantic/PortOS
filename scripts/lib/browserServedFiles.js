@@ -35,17 +35,19 @@ export const runningTestFile = () => {
  * a page: each module id it loads or transforms (query stripped, virtual
  * modules skipped), and each request a file under `publicDir` or `root`
  * answers, which covers static assets no module hook sees. `/@fs/` requests
- * name the file directly. Recording only adds to a set and never changes
- * what is served.
+ * name the file directly. Files under `ignore` (the fixture's private temp
+ * directory, where Vite keeps its pre-bundled dependencies: products of the
+ * installed packages, which the lockfile keys) are left out. Recording only
+ * adds to a set and never changes what is served.
  */
-export function servedFilesRecorder({ root, publicDir }) {
+export function servedFilesRecorder({ root, publicDir, ignore = [] }) {
   const files = new Set();
+  const within = (base, path) => path === base || path.startsWith(`${base}${sep}`);
   const note = (id) => {
     if (typeof id !== 'string' || id.includes('\0')) return;
     const path = id.replace(/[?#].*$/, '');
-    if (isAbsolute(path)) files.add(path);
+    if (isAbsolute(path) && !ignore.some((dir) => within(dir, path))) files.add(path);
   };
-  const within = (base, path) => path === base || path.startsWith(`${base}${sep}`);
   const noteRequest = (url) => {
     let pathname;
     try { pathname = decodeURIComponent(new URL(url, 'http://fixture.invalid').pathname); } catch { return; }
@@ -58,7 +60,7 @@ export function servedFilesRecorder({ root, publicDir }) {
     for (const base of [publicDir, root]) {
       if (!base) continue;
       const candidate = resolve(base, `.${pathname}`);
-      if (within(base, candidate) && isFile(candidate)) files.add(candidate);
+      if (within(base, candidate) && isFile(candidate)) note(candidate);
     }
   };
   return {
@@ -79,13 +81,19 @@ export function servedFilesRecorder({ root, publicDir }) {
  * The recorder for one fixture's Vite config, or null when the memo runner
  * did not ask (`SERVED_FILES_ENV`) or no test file is running. `write()`
  * stores one record per fixture, so several fixtures of a file never race.
+ * `temp` is the fixture's private directory, left out of the record.
  */
-export const servedFilesRecording = (config, env, testFile) => {
+export const servedFilesRecording = (config, env, testFile, temp = null) => {
   const dir = env[SERVED_FILES_ENV];
   if (!dir || !testFile) return null;
   const root = resolve(config.root ?? process.cwd());
   const publicDir = config.publicDir === false ? null : resolve(root, config.publicDir ?? 'public');
-  const recorder = servedFilesRecorder({ root, publicDir });
+  const ignore = [];
+  if (temp) {
+    ignore.push(resolve(temp));
+    try { ignore.push(realpathSync(temp)); } catch { /* a missing temp holds nothing to ignore */ }
+  }
+  const recorder = servedFilesRecorder({ root, publicDir, ignore });
   return {
     plugin: recorder.plugin,
     write: () => {
@@ -103,8 +111,10 @@ export const servedFilesRecording = (config, env, testFile) => {
  * fixtures. Paths are compared after resolving symlinks, so a worktree path
  * and the real path Vite reports agree. A record for a test or root outside
  * the repository, or of another shape, is ignored, which keys that root
- * whole; a served file outside the repository or under `node_modules` (an
- * installed package, keyed by its lockfile) or no longer present is dropped.
+ * whole. A served file under `node_modules` (an installed package, keyed by
+ * its lockfile, wherever a linked install resolves) or no longer present is
+ * dropped. Any other file outside the repository is one no key can hash, so
+ * the test gets no served record at all and keeps its root keyed whole.
  */
 export function readServedFiles(dir, repoRoot) {
   const out = new Map();
@@ -119,6 +129,8 @@ export function readServedFiles(dir, repoRoot) {
     const rel = resolved === null ? null : relative(repo, resolved).split(sep).join('/');
     return rel === null || rel === '' || rel.startsWith('..') || isAbsolute(rel) ? null : rel;
   };
+  const installed = (path) => [path, real(path) ?? ''].some((form) => form.split(/[\\/]/).includes('node_modules'));
+  const unkeyable = new Set();
   for (const name of names) {
     let record;
     try { record = JSON.parse(readFileSync(join(dir, name), 'utf8')); } catch { continue; }
@@ -129,10 +141,12 @@ export function readServedFiles(dir, repoRoot) {
     const entry = out.get(test) ?? { roots: new Set(), files: new Set() };
     entry.roots.add(root);
     for (const file of record.files) {
+      if (typeof file !== 'string' || installed(file)) continue;
       const rel = toRepo(file);
-      if (rel !== null && !rel.split('/').includes('node_modules') && isFile(join(repo, rel))) entry.files.add(rel);
+      if (rel !== null) { if (isFile(join(repo, rel))) entry.files.add(rel); } else if (real(file) !== null) unkeyable.add(test);
     }
     out.set(test, entry);
   }
+  for (const test of unkeyable) out.delete(test);
   return new Map([...out].map(([test, { roots, files }]) => [test, { roots: [...roots].sort(), files: [...files].sort() }]));
 }

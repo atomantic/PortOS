@@ -228,13 +228,14 @@ function foldDataTree(into, dir, data) {
 }
 
 const SERVED_ROOT_MANIFESTS = ['package.json', 'package-lock.json', 'postcss.config.js', 'postcss.config.cjs', 'postcss.config.mjs'];
-const CSS_REFERENCE = /@(?:import|plugin|config|reference)\s+(?:url\(\s*)?(['"])([^'"]+)\1/g;
+const CSS_REFERENCE = /@(?:import|plugin|config|reference)\s+(?:url\(\s*(['"]?)([^'")\s]+)\1\s*\)|(['"])([^'"]+)\3)/g;
 
 /** The files a CSS file pulls in by a relative `@import`/`@plugin`/`@config`/`@reference`, which no request names. */
 function cssReferences(a, rel) {
   const text = a.fs.read(rel)?.toString('utf8') ?? '';
   const out = [];
-  for (const [, , spec] of text.matchAll(CSS_REFERENCE)) {
+  for (const [, , unquoted, , quoted] of text.matchAll(CSS_REFERENCE)) {
+    const spec = unquoted ?? quoted;
     if (!spec.startsWith('.')) continue;
     const target = normalizeRel(posix.join(posix.dirname(rel), spec.replace(/[?#].*$/, '')));
     if (!target.startsWith('..') && a.fs.kind(target) === 'file') out.push(target);
@@ -255,13 +256,16 @@ function cssReferences(a, rel) {
  * for them). Served modules are not walked: as with the recorded key, a
  * module the run never served cannot change what Chrome rendered, and the
  * importer that gains an edge to it is itself served, so its bytes move the
- * key. Their unresolved names and installed versions are kept.
+ * key. Their unresolved names and installed versions are kept. The other
+ * inputs (a PostCSS config, theme modules) were never served, so nothing
+ * vouches for what they import: their relative imports are followed whole.
  */
 function servedTree(a, dir, servedFiles) {
   const files = new Set();
   const absent = new Set();
   const packages = new Map();
-  const pending = [...servedFiles, ...(tree(a, dir, /^[^.]/) ?? [])];
+  const served = new Set(servedFiles);
+  const pending = [...served, ...(tree(a, dir, /^[^.]/) ?? [])];
   for (const input of BROWSER_SERVED_SHARED_INPUTS[dir] ?? []) {
     const kind = a.fs.kind(input);
     if (kind === 'file') pending.push(input);
@@ -282,6 +286,7 @@ function servedTree(a, dir, servedFiles) {
     if (rel.endsWith('.css')) { pending.push(...cssReferences(a, rel)); continue; }
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (!served.has(rel)) pending.push(...f.edgeTargets);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packages.set(name, version);
   }

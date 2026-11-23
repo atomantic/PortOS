@@ -358,7 +358,7 @@ export async function startBrowserFixture({
       if (!config.optimizeDeps?.entries?.length) {
         throw new Error('viteConfig must set optimizeDeps.entries to the rendered source files, or Vite scans the whole app');
       }
-      recording = servedFilesRecording(config, env, testFile);
+      recording = servedFilesRecording(config, env, testFile, temp);
       // The fixture serves a static synthetic page. A file change elsewhere in
       // the shared client tree (other suites, an editor, a sibling agent) must
       // not push an HMR update or full reload that remounts the page mid-test
