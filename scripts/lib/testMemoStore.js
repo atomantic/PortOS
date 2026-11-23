@@ -34,7 +34,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -58,7 +58,7 @@ export function resolveMemoDir(env = process.env, home = homedir(), pathDelimite
 }
 
 /** The directories a store reads, in precedence order; the first is where it writes. */
-const dirsOf = (dir) => (Array.isArray(dir) ? dir : [dir]).filter(Boolean);
+export const memoDirs = (dir) => (Array.isArray(dir) ? dir : [dir]).filter(Boolean);
 
 const entryPath = (dir, key) => join(dir, 'entries', key.slice(0, 2), `${key}.json`);
 const recordPath = (dir, workspace, test) => join(dir, 'records', workspace, `${createHash('sha256').update(test).digest('hex')}.json`);
@@ -82,7 +82,7 @@ function writeJsonAtomic(path, value) {
 /** The green entry for `key` when it names `test` in `workspace` and is young enough; null on any miss or corruption. */
 export function readMemoEntry(dir, key, { test, workspace, now = Date.now() }) {
   if (!KEY_PATTERN.test(String(key))) return null;
-  for (const root of dirsOf(dir)) {
+  for (const root of memoDirs(dir)) {
     const entry = readJson(entryPath(root, key));
     if (!entry || entry.test !== test || entry.workspace !== workspace || typeof entry.verifiedAt !== 'string') continue;
     const age = now - Date.parse(entry.verifiedAt);
@@ -93,7 +93,7 @@ export function readMemoEntry(dir, key, { test, workspace, now = Date.now() }) {
 }
 
 export function writeMemoEntry(dir, key, { test, workspace, source, commit }) {
-  const [root] = dirsOf(dir);
+  const [root] = memoDirs(dir);
   if (!root || !KEY_PATTERN.test(String(key))) return;
   writeJsonAtomic(entryPath(root, key), { test, workspace, verifiedAt: new Date().toISOString(), source, commit: commit ?? null });
 }
@@ -129,7 +129,7 @@ const validServed = (served) => (served && Array.isArray(served.roots) && served
 export function readMemoRecord(dir, workspace, test) {
   let record = null;
   let newest = null;
-  for (const root of dirsOf(dir)) {
+  for (const root of memoDirs(dir)) {
     const candidate = readJson(recordPath(root, workspace, test));
     if (!validRecord(candidate, test)) continue;
     const recorded = stamp(candidate, 'recordedAt') ?? -Infinity;
@@ -149,7 +149,7 @@ export function readMemoRecord(dir, workspace, test) {
  * sorted when given. Writes go to the store's first directory.
  */
 export function writeMemoRecord(dir, workspace, test, modules, digestOf = () => null, served = null) {
-  const [root] = dirsOf(dir);
+  const [root] = memoDirs(dir);
   if (!root) return;
   const sorted = [...modules].sort();
   const digests = sorted.map((rel) => digestOf(rel));
@@ -172,7 +172,9 @@ const listDir = (path) => {
  * An entry is copied when the target lacks one that is younger, a record when
  * the target's is missing or older; unreadable or foreign files are skipped,
  * and expired entries are left behind (they are misses anyway, and copying
- * them would only grow the cache). Returns the counts copied.
+ * them would only grow the cache). A workspace's parsed-facts file
+ * (`testMemo/factsCache.js`) is copied when the target has none, so the
+ * merged store's planner starts warm. Returns the counts copied.
  */
 export function mergeMemoStore(targetDir, sourceDir, { now = Date.now() } = {}) {
   const copied = { entries: 0, records: 0 };
@@ -200,6 +202,11 @@ export function mergeMemoStore(targetDir, sourceDir, { now = Date.now() } = {}) 
       writeJsonAtomic(recordPath(targetDir, workspace, record.test), record);
       copied.records += 1;
     }
+  }
+  for (const name of listDir(join(sourceDir, 'facts'))) {
+    if (!/^[\w-]+\.json$/.test(name) || existsSync(join(targetDir, 'facts', name))) continue;
+    mkdirSync(join(targetDir, 'facts'), { recursive: true });
+    copyFileSync(join(sourceDir, 'facts', name), join(targetDir, 'facts', name));
   }
   return copied;
 }
@@ -234,7 +241,7 @@ const removeFile = (path) => {
  */
 export function pruneMemoStore(dir, { now = Date.now(), maxAgeMs = MAX_ENTRY_AGE_MS, maxEntriesPerTest = MAX_ENTRIES_PER_TEST, testExists = null } = {}) {
   const counts = { entries: 0, records: 0, removedEntries: 0, removedRecords: 0 };
-  const [root] = dirsOf(dir);
+  const [root] = memoDirs(dir);
   if (!root) return counts;
   const exists = new Map();
   const live = (workspace, test) => {

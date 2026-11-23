@@ -52,11 +52,16 @@ const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
  * environment lines. They are lookup keys only; entries are written under
  * `key` alone. The caller owns the claim that the other run's cases include
  * this run's (`browserProfileAcceptedVerdicts`).
+ *
+ * `factsCache` (`createFactsCache`) answers `extractFileFacts` from an
+ * earlier run when a file's bytes, the setup's replaced sources and every
+ * cross-file constant it looked up are unchanged; null extracts every file.
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
   const host = { nodeVersion, platform, arch };
   const a = {
     fs,
+    factsCache,
     workspaceRel,
     toolVersion,
     listFiles,
@@ -400,9 +405,13 @@ function factsFor(a, rel) {
   const bytes = a.fs.read(rel);
   if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
   if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
-  const raw = extractFileFacts(bytes.toString('utf8'), {
-    fileRel: rel, cwdRel: a.workspaceRel, replaced: replacedBySetup(a), exportedConstant: (spec, name) => exportedConstant(a, rel, spec, name),
-  });
+  const replaced = replacedBySetup(a);
+  const extract = (lookup) => extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: a.workspaceRel, replaced, exportedConstant: lookup });
+  const lookup = (spec, name) => exportedConstant(a, rel, spec, name);
+  // Everything extraction reads besides the lookups, which the cache asks again (`factsCache.js`).
+  const raw = a.factsCache
+    ? a.factsCache.facts([rel, a.workspaceRel, replaced.fs, replaced.crypto, replaced.guard, sha256(bytes)], lookup, extract)
+    : extract(lookup);
   copyRawFacts(a, rel, raw, resolved);
   resolveFileFacts({ a, rel, resolved, executedSide: new Set(), oversizedData: [] }, raw);
   return resolved;
@@ -1045,8 +1054,8 @@ function recordedKeyVerdict(a, testRel, recorded, fixtures, baseClosure, served)
  * which lets related selection narrow it. `served` maps a test to the files
  * its real-browser fixture served (`analyzeTest`).
  */
-export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map(), served = new Map() }) {
-  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles });
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map(), served = new Map(), factsCache = null }) {
+  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, factsCache });
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
   for (const test of testFiles) {
