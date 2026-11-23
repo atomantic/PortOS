@@ -464,13 +464,36 @@ describe('floor key', () => {
         expect(relatedTests(keys, ['client/src/Panel.jsx'])).toEqual([test]);
       });
 
+      it('narrows suites using instrumented buildRecordedViteFixture, startRecordedViteServer and createRecordedStaticServer (#17894)', () => {
+        const buildSuite = [
+          "const dir = '/tmp/staging';",
+          'await buildRecordedViteFixture({ build, recordedRoot: client, temp: dir, config: { configFile: false, root: dir, css: { postcss: { plugins: [tailwind({ base: client })] } } } });',
+          'const staticFiles = createRecordedStaticServer(express);',
+          "app.use(staticFiles.serve(join(dir, 'dist')));",
+          'server = await staticFiles.start(app);',
+        ].join('\n');
+        const viteServerSuite = 'server = await startRecordedViteServer({ createServer, config: { configFile: false, root: client } });';
+        for (const [label, body] of [['buildRecordedViteFixture + createRecordedStaticServer', buildSuite], ['startRecordedViteServer', viteServerSuite]]) {
+          const baseline = recordedKey(tree, served, body);
+          expect(baseline.memoizable, label).toBe(true);
+          expect(recordedKey(edit('client/src/pages/HtmlPages.jsx'), served, body).key, label).toBe(baseline.key);
+          expect(recordedKey(edit('client/src/Panel.jsx'), served, body).key, label).not.toBe(baseline.key);
+          const keys = analyzed(tree, served, body);
+          expect(relatedTests(keys, ['client/src/pages/HtmlPages.jsx']), label).toEqual([]);
+          expect(relatedTests(keys, ['client/src/Panel.jsx']), label).toEqual([test]);
+        }
+      });
+
       it('falls back to the whole root without a record, for a root it does not name, a path outside the repository, or a server of the test\'s own', () => {
         const wholeTree = recordedKey(tree, null);
         const fallbacks = {
           'no served record': [null, FIXTURE],
           'another root': [{ roots: ['server/lib/static'], files: served.files }, FIXTURE],
           'a served path outside the repository': [{ roots: ['client'], files: [...served.files, '../elsewhere/x.js'] }, FIXTURE],
-          'a server the recorder never saw': [served, `${FIXTURE}\nconst other = await createServer({ configFile: false, root: client });`],
+          'an uninstrumented createServer()': [served, `${FIXTURE}\nconst other = await createServer({ configFile: false, root: client });`],
+          'an uninstrumented build()': [served, `${FIXTURE}\nawait build({ configFile: false, root: client });`],
+          'an uninstrumented express.static()': [served, `${FIXTURE}\napp.use(express.static(client));`],
+          'an uninstrumented .listen()': [served, `${FIXTURE}\napp.listen(0, '127.0.0.1');`],
           'a served import.meta.glob': [{ ...served, files: [...served.files, 'client/src/routes.js'] }, FIXTURE],
         };
         for (const [label, [record, body]] of Object.entries(fallbacks)) {

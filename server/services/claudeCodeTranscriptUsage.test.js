@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, utimes } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -76,6 +76,23 @@ describe('claude code transcript usage', () => {
     const { days, updatedAt } = await svc.readLocalTranscriptUsage();
     expect(days['2026-01-05']['model-x'].messages).toBe(2);
     expect(updatedAt).toBeTruthy();
+  });
+
+  it('an incremental refresh re-reads only recently written transcripts, across more files than one stat batch', async () => {
+    const day = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const stale = new Date(Date.now() - 30 * 86_400_000);
+    const staleDay = stale.toISOString().slice(0, 10);
+    for (let i = 0; i < 40; i++) {
+      const file = join(root, 'proj-b', `old-${i}.jsonl`);
+      await writeFile(file, line(`old-${i}`, 'model-old', `${staleDay}T00:00:00Z`, u(1)) + '\n');
+      await utimes(file, stale, stale);
+    }
+    await writeFile(join(root, 'proj-b', 'fresh.jsonl'), line('fresh', 'model-new', `${day}T00:00:00Z`, u(2)) + '\n');
+    await svc.refreshLocalTranscriptUsage({ root, force: true });
+    await svc.refreshLocalTranscriptUsage({ root, force: true });
+    const { days } = await svc.readLocalTranscriptUsage();
+    expect(days[staleDay]['model-old'].messages).toBe(40);
+    expect(days[day]['model-new'].messages).toBe(1);
   });
 
   it('refuses to overwrite a damaged store with a partial rescan', async () => {

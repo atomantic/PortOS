@@ -57,7 +57,8 @@ import {
   parseCodexRollout,
   parseAgyHistory,
   parseGrokChatHistory,
-  parseGrokTurns,
+  readGrokTurnsFromFile,
+  billGrokTurns,
   parseKimiSessionIndex,
   parseKimiWireLog,
   totalTranscriptTokens
@@ -493,13 +494,13 @@ async function readGrokSessions({ home, workspacePath, from, to, fold, reserveFr
       // A session whose log was last written before the window cannot have
       // billed anything inside it; summary.json/chat_history.jsonl are the same session.
       if ((await transcriptStat(updatesPath, from)).stale) continue;
-      const updatesText = await tryReadFile(updatesPath);
+      const read = await readGrokTurnsFromFile(updatesPath);
       // Sentinel, not truthiness: `turns > 0` means the session DID record
       // billed turns, so it is measured even when this run's window share is
       // zero. Falling through to the chars/4 estimate there would bill the
       // same session twice, once per shape.
-      const parsed = updatesText
-        ? parseGrokTurns(updatesText, { from, to, exclude: excludeFor(updatesPath) })
+      const parsed = read
+        ? billGrokTurns(read.turns, read.sessionId, { from, to, exclude: excludeFor(updatesPath) })
         : null;
       if (parsed?.turns) {
         reserveFrom(updatesPath, parsed);

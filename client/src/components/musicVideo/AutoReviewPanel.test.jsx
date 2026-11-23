@@ -31,7 +31,7 @@ vi.mock('../../hooks/useProviderModels.js', () => ({
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import * as api from '../../services/apiMusicVideo.js';
-import useMusicVideoAutoReview from '../../hooks/useMusicVideoAutoReview.js';
+import useMusicVideoAutoReview from './stages/useMusicVideoAutoReview.js';
 import AutoReviewPanel from './AutoReviewPanel.jsx';
 
 const baseProject = { id: 'mv-1', scenes: [{ sceneId: 's2', order: 0 }], autoReviews: [] };

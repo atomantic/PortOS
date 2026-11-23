@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import useMusicVideoProofReview from '../../hooks/useMusicVideoProofReview.js';
+import useMusicVideoProofReview from './useMusicVideoProofReview.js';
 import ProofReviewContent, { ProofRenderControls } from './ProofReviewContent.jsx';
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';

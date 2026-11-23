@@ -25,7 +25,7 @@ import { assertProductionApproval, nameShots, productionReviewBasis } from './pr
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -35,7 +35,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
-import { cancelMusicVideoRenderJob, isMusicVideoRenderCanceled } from './renderCancellation.js';
+import { cancelMusicVideoRenderJob, isMusicVideoRenderCancelPending, isMusicVideoRenderCanceled } from './renderCancellation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import { getProject, listProjects, updateProject, mutateProjectRecord } from './projects.js';
@@ -46,7 +46,7 @@ import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/mu
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { sweepCompositionScratch } from './compositionRender.js';
-import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
+import { applyFilmLookFinish, filmLookFinishNeeded, sweepFilmLookScratch } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
 import { coldOpenScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
@@ -255,10 +255,13 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
   });
   // `written`: the success path already committed the row inside its backup lease.
   // `settled`: the success path's own write outcome (see settleRenderProject).
-  const finish = async (patch, { written = false, settled } = {}) => {
+  const finish = async (patch, { written = false, settled, frame } = {}) => {
     releaseProjectRender(projectId);
     if (!written) settled = (await writeSettled(patch)).settled;
     emitRenderSettled(projectId, job, settled);
+    // Terminal frame goes out only after the row is persisted and the lock released: a client that
+    // refetches on it must not read a stale `rendering` status or hit 409 RENDER_IN_PROGRESS.
+    if (frame) broadcastSse(job, frame);
     if (options.productionRunId) musicVideoEvents.emit('document-render', { projectId, runId: options.productionRunId, attemptId: options.productionRenderAttemptId, jobId, status: patch.status === 'complete' ? 'completed' : 'failed', error: job.lastError || null, ...(settled === false ? { abandoned: true } : {}) });
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
@@ -328,8 +331,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     if (!result.ok) {
       job.status = 'error';
       job.lastError = SETTLE_FAILED_MESSAGE;
-      broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
-      await finish({ status: 'failed' }, { written: true });
+      await finish({ status: 'failed' }, { written: true, frame: { type: 'error', error: SETTLE_FAILED_MESSAGE } });
       return;
     }
     const { settled } = result;
@@ -351,8 +353,7 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video ${renderer.label} render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     if (!historyCommitted) await unlink(outputPath).catch(() => {});
-    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-    await finish({ status: canceled ? priorStatus : 'failed' });
+    await finish({ status: canceled ? priorStatus : 'failed' }, { frame: { type: canceled ? 'canceled' : 'error', error: reason } });
   });
   return { jobId };
 }
@@ -392,9 +393,10 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
   const cached = all.filter((segment) => existsSync(segment.path)).length;
   console.log(`🎬 Rendering music video [${jobId.slice(0, 8)}]: project=${projectId.slice(0, 8)} segments=${all.length} cached=${cached} duration=${plan.songSec.toFixed(2)}s`);
   const { signal } = job.overlayAbort;
-  const finish = (status, settled) => {
+  const finish = (status, settled, frame) => {
     releaseProjectRender(projectId);
     emitRenderSettled(projectId, job, settled);
+    if (frame) broadcastSse(job, frame);
     closeJobAfterDelay(jobs, jobId);
     options.maintenancePermit?.finish();
     return status;
@@ -439,8 +441,7 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     if (!result.ok) {
       job.status = 'error';
       job.lastError = SETTLE_FAILED_MESSAGE;
-      broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
-      finish('failed');
+      finish('failed', undefined, { type: 'error', error: SETTLE_FAILED_MESSAGE });
       return;
     }
     const { settled } = result;
@@ -458,10 +459,9 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     const log = canceled ? console.log : console.error;
     log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
     if (!historyCommitted) await unlink(outputPath).catch(() => {});
-    broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
     const status = canceled ? priorStatus : 'failed';
     await writeSettled(status, { renderError: canceled ? null : reason.slice(0, 2000) });
-    finish(status);
+    finish(status, undefined, { type: canceled ? 'canceled' : 'error', error: reason });
   });
   return { jobId };
 }
@@ -541,7 +541,7 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // A long filter graph goes to ffmpeg in this file, removed once ffmpeg exits.
     const graphPath = join(tmpdir(), `portos-music-video-${jobId}.filtergraph`);
     const plainEncode = await filterGraphViaFile(ffmpeg, args, graphPath);
-    const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration, audioRevision: audioRevisionOf(project) };
+    const job = { id: jobId, projectId, status: 'running', clients: [], process: null, totalDuration, overlayAbort: new AbortController(), audioRevision: audioRevisionOf(project) };
     jobs.set(jobId, job);
     projectRenders.set(projectId, jobId);
     handedOff = true; // the job lifecycle now owns the projectRenders entry
@@ -575,28 +575,31 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
       const log = canceled ? console.log : console.error;
       log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
       if (unlinkOutput) await unlink(outputPath).catch(() => {});
-      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      releaseProjectRender(projectId);
       // A cancel restores the pre-render status (so a cancelled re-render of a
       // 'complete' project stays 'complete'); a real failure marks it 'failed'.
       const targetStatus = canceled ? priorStatus : 'failed';
       await writeSettled(targetStatus, { renderError: canceled ? null : reason.slice(0, 2000) });
+      releaseProjectRender(projectId);
       emitRenderSettled(projectId, job);
+      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
       closeJobAfterDelay(jobs, jobId);
       permit.finish();
     };
 
+    // The job-lifetime abort signal covers every post-encode pass; a cancel that
+    // lands between passes is caught here before the next one starts.
     const runPostEncodePass = async (label, run) => {
-      job.overlayAbort = new AbortController();
       const { signal } = job.overlayAbort;
+      if (isMusicVideoRenderCancelPending(job)) {
+        await settleFailure(true, 'Render cancelled');
+        return false;
+      }
       try {
         await run(signal);
         return true;
       } catch (err) {
         await settleFailure(signal.aborted, signal.aborted ? 'Render cancelled' : `${label} failed: ${err.message}`);
         return false;
-      } finally {
-        job.overlayAbort = null;
       }
     };
 
@@ -609,6 +612,12 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
     // Seconds the cold open adds before the song, once it is cut in front.
     let leadSec = 0;
     const startEncode = (encode) => {
+      // A cancel can land in the window between job creation and the spawn.
+      if (isMusicVideoRenderCancelPending(job)) {
+        if (encode.file) unlink(encode.file).catch(() => {});
+        settleFailure(true, 'Render cancelled').catch((err) => console.error(`❌ Music-video render [${jobId.slice(0, 8)}] cancel settle failed: ${err.message}`));
+        return;
+      }
       const encodeTop = finishing ? 0.5 : 1;
       const encodeProgress = (fraction) => encodeTop * fraction;
       const dropGraphFile = () => (encode.file ? unlink(encode.file).catch(() => {}) : null);
@@ -664,6 +673,11 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             await settleFailure(canceled, canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`);
             return;
           }
+          // A cancel that raced a clean exit still wins over the post-encode passes.
+          if (isMusicVideoRenderCancelPending(job)) {
+            await settleFailure(true, 'Render cancelled');
+            return;
+          }
           // Grade the cold open and outro with the rest of the film.
           if (coldOpen && !await runPostEncodePass('Cold open', async (signal) => {
             const { prependColdOpen } = await import('./coldOpen.js');
@@ -686,8 +700,14 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
           // project stuck 'rendering' and projectRenders un-cleared (every later
           // render 409s). Wrap it so any failure still emits a terminal frame and
           // releases the slot.
+          if (isMusicVideoRenderCancelPending(job)) {
+            await settleFailure(true, 'Render cancelled');
+            return;
+          }
           let result;
           try {
+            // Checked and set synchronously: past here a cancel is refused.
+            job.committing = true;
             job.status = 'complete';
             const section = (project.audioAnalysis?.sections || [])
               .filter(section => Number.isFinite(section.energy) && section.startSec >= 0 && section.endSec > section.startSec && section.startSec < totalDuration)
@@ -725,8 +745,9 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
               permit.markUnsettled();
               job.status = 'error';
               job.lastError = SETTLE_FAILED_MESSAGE;
-              broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
+              releaseProjectRender(projectId);
               emitRenderSettled(projectId, job);
+              broadcastSse(job, { type: 'error', error: SETTLE_FAILED_MESSAGE });
               return;
             }
             const { settled } = result;
@@ -739,9 +760,10 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
             job.status = 'error';
             job.lastError = `Finalize failed: ${err.message}`;
             console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
-            broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
             await writeSettled('failed', { renderError: job.lastError.slice(0, 2000) });
+            releaseProjectRender(projectId);
             emitRenderSettled(projectId, job);
+            broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
           } finally {
             releaseProjectRender(projectId);
             closeJobAfterDelay(jobs, jobId);
@@ -767,6 +789,14 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
 // instance stamped is left alone — that render may still be running on the
 // peer this record synced from. A list failure propagates to the bootstrap
 // caller's logBootstrapFailure rather than reporting zero recovered.
+// Post-encode passes write `<partial>.look.mp4`, `.outro*.mp4`, `.hold.mp4`,
+// `.segments.txt`, ... beside the partial; an interrupted pass leaves them behind.
+async function sweepPartialSiblings(partial) {
+  const names = await readdir(PATHS.videos).catch(() => []);
+  await Promise.all(names.filter((name) => name.startsWith(`${partial}.`))
+    .map((name) => unlink(join(PATHS.videos, name)).catch(() => {})));
+}
+
 export async function recoverStuckMusicVideoRenders() {
   // No overlay capture survives a restart either; drop any scratch it left.
   await sweepCompositionScratch().catch((err) => {
@@ -779,6 +809,14 @@ export async function recoverStuckMusicVideoRenders() {
   // Nor the outro scene's staged page.
   await sweepStatsOutroScratch().catch((err) => {
     console.warn(`⚠️ Music Video recovery: could not remove stale outro scratch: ${err.message}`);
+  });
+  // Nor a film-look finishing pass's staged source copy.
+  await sweepFilmLookScratch().catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove stale film-look scratch: ${err.message}`);
+  });
+  // Nor a cinema package build that never reached publication.
+  await import('./dcp.js').then(({ sweepAbandonedDcpBuilds }) => sweepAbandonedDcpBuilds()).catch((err) => {
+    console.warn(`⚠️ Music Video recovery: could not remove abandoned cinema package builds: ${err.message}`);
   });
   // Nor a shot segment an interrupted render was writing (finished ones stay cached).
   await import('./shotSegmentPaths.js').then(({ sweepPartialSegments }) => sweepPartialSegments()).catch((err) => {
@@ -821,7 +859,10 @@ export async function recoverStuckMusicVideoRenders() {
       return false;
     });
     const partialPath = !finished || finished.has(partial) ? null : safeUnder(PATHS.videos, partial);
-    if (partialPath) await unlink(partialPath).catch(() => {});
+    if (partialPath) {
+      await unlink(partialPath).catch(() => {});
+      await sweepPartialSiblings(partial);
+    }
   }
   if (stuck.length > 0) console.log(`🎬 Music Video boot recovery: demoted ${recovered}/${stuck.length} stuck render(s)`);
   const blenderProjectIds = projects.filter((project) => project.composition?.mode === 'blender').map((project) => project.id);

@@ -239,6 +239,17 @@ describe('CoS Job Routes', () => {
       expect(autonomousJobs.createJob.mock.calls[0][0]).toMatchObject({ config, executionOptions });
     });
 
+    it('forwards weekdaysOnly to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Weekday review', type: 'agent', promptTemplate: 'x', weekdaysOnly: true });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob.mock.calls[0][0]).toMatchObject({ weekdaysOnly: true });
+    });
+
     it('rejects unknown config keys', async () => {
       const response = await request(app)
         .post('/api/cos/jobs')

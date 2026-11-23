@@ -350,7 +350,7 @@ router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
 }));
 
 router.patch('/schedule/maintenance-runs/:id/steps/:stepId', asyncHandler(async (req, res) => {
-  const body = validateRequest(maintenanceRunStartSchema.pick({ providerId: true, model: true, effort: true }), req.body || {});
+  const body = validateRequest(maintenanceRunStartSchema.pick({ providerId: true, model: true, effort: true, executionOptions: true }), req.body || {});
   const run = await updateMaintenanceStep(req.params.id, req.params.stepId, body);
   if (!run) throw new ServerError('Maintenance run or stage not found', { status: 404 });
   res.json({ run });

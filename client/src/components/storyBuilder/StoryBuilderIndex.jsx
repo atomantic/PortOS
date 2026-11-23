@@ -9,7 +9,7 @@ import Banner from '../ui/Banner';
 import TabPills from '../ui/TabPills';
 import useListResource from '../../hooks/useListResource';
 import useDrawerTab from '../../hooks/useDrawerTab';
-import useStoryImportIntake from '../../hooks/useStoryImportIntake';
+import useStoryImportIntake from './useStoryImportIntake';
 import { useCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { getCatalogType, payloadSnippet } from '../../lib/catalogTypes';
 import { formatCount } from '../../utils/formatters';

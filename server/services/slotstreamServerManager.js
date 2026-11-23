@@ -15,14 +15,14 @@
  * a PortOS-managed Ollama, so that port is refused.
  */
 
-import { chmod, mkdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { chmod, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { commandExists } from '../lib/commandExists.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { sleep } from '../lib/fileUtils.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import {
+  createDaemonLogFiles,
   createDaemonWatcher,
   createOnDemandDaemon,
   createPm2ExitTail,
@@ -63,26 +63,7 @@ export const SLOTSTREAM_UNSUPPORTED_REASON = 'Slotstream runs only on macOS with
 const slotstreamNoModelError = () => `Slotstream has no model weights cached, so its server would exit before it binds a port. A start never downloads weights — place a checkpoint directory in ${slotstreamCacheDir()}, then start it again.`;
 const SLOTSTREAM_OLLAMA_PORT_ERROR = `Port ${OLLAMA_COLLISION_PORT} is Ollama's default and a PortOS-managed Ollama already uses it. Point Slotstream at its dedicated loopback port (${DEFAULT_PORT}) instead.`;
 
-const DEFAULT_SLOTSTREAM_LOG_FILES = {
-  stdout: join(tmpdir(), 'portos-slotstream-out.log'),
-  stderr: join(tmpdir(), 'portos-slotstream-error.log'),
-};
-
-let slotstreamLogFiles = DEFAULT_SLOTSTREAM_LOG_FILES;
-
-const resetSlotstreamLogs = async () => {
-  const results = await Promise.all(
-    Object.entries(slotstreamLogFiles).map(([stream, path]) => (
-      writeFile(path, '')
-        .then(() => true)
-        .catch((error) => {
-          console.error(`❌ Slotstream: could not reset ${stream} startup log (${error?.code || 'unknown'}); bootstrap diagnosis disabled for this launch`);
-          return false;
-        })
-    )),
-  );
-  return results.every(Boolean);
-};
+const slotstreamLogs = createDaemonLogFiles(SLOTSTREAM_APP);
 
 let currentConfig = null;
 let lastExitError = null;
@@ -359,14 +340,14 @@ async function launchSlotstreamServer(options = {}) {
   clearJlistCache();
 
   console.log(`🌊 Slotstream starting on ${DEFAULT_HOST}:${port}${model ? ` (model ${model})` : ''} (memory ${plan.targetGb} GB${plan.auto ? ', auto' : ''})`);
-  const logsReset = await resetSlotstreamLogs();
+  const logsReset = await slotstreamLogs.reset();
   await execPm2([
     'start', binaryPath,
     '--name', SLOTSTREAM_APP,
     '--interpreter', 'none',
     '--no-autorestart',
-    '--output', slotstreamLogFiles.stdout,
-    '--error', slotstreamLogFiles.stderr,
+    '--output', slotstreamLogs.files().stdout,
+    '--error', slotstreamLogs.files().stderr,
     '--',
     ...args,
   ]);
@@ -459,10 +440,7 @@ export function _resetSlotstreamServerStateForTests({
 } = {}) {
   onDemand.setIdleMinutesOverrideForTests(idleMinutes);
   onDemand.setKeepLoadedOverrideForTests(keepLoaded);
-  slotstreamLogFiles = logFiles ? {
-    stdout: logFiles.stdout || DEFAULT_SLOTSTREAM_LOG_FILES.stdout,
-    stderr: logFiles.stderr || DEFAULT_SLOTSTREAM_LOG_FILES.stderr,
-  } : DEFAULT_SLOTSTREAM_LOG_FILES;
+  slotstreamLogs.setForTests(logFiles);
   currentConfig = null;
   daemon.resetLogs();
   lastExitError = null;

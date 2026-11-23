@@ -3,6 +3,9 @@
  * stop, status and health handling.
  */
 
+import { writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { getMemoryStats } from './memoryStats.js';
 import { localEndpointPort } from './localEndpoint.js';
 import { isLocalEndpointBusy, localEndpointsSharePort, onLocalEndpointSettled } from './localLlmConcurrency.js';
@@ -135,7 +138,7 @@ export function createDaemonWatcher({
   getAppStatus,
   getSavedProcessNames,
   execPm2,
-  getPortReleaseTimeoutMs,
+  getPortReleaseTimeoutMs = () => DEFAULT_PORT_RELEASE_TIMEOUT_MS,
   preserveConfigOnReadFailure = false,
   maxLogLines,
 }) {
@@ -199,6 +202,104 @@ export function createDaemonWatcher({
     snapshotLogs: logs.snapshot,
     waitForPortRelease,
   };
+}
+
+const DEFAULT_PORT_RELEASE_TIMEOUT_MS = 5000;
+
+/**
+ * Per-launch truncated PM2 `--output`/`--error` files. PM2 appends to its
+ * configured files across process deletion, so without a reset a dead launch's
+ * exit tail is diagnosed from the PREVIOUS launch's output.
+ *
+ * `reset()` resolves `false` when either file could not be truncated, so the
+ * caller can disable log-based diagnosis for that launch instead of trusting
+ * stale text. `setForTests` swaps the paths (a falsy argument restores them).
+ *
+ * @param {string} appName PM2 app name, used to derive the file names
+ * @returns {{files: () => {stdout: string, stderr: string}, reset: () => Promise<boolean>, setForTests: (files?: {stdout?: string, stderr?: string}) => void}}
+ */
+export function createDaemonLogFiles(appName) {
+  const defaults = {
+    stdout: join(tmpdir(), `${appName}-out.log`),
+    stderr: join(tmpdir(), `${appName}-error.log`),
+  };
+  let current = defaults;
+  return {
+    files: () => current,
+    reset: async () => {
+      const results = await Promise.all(
+        Object.entries(current).map(([stream, path]) => (
+          writeFile(path, '')
+            .then(() => true)
+            .catch((error) => {
+              console.error(`❌ ${appName}: could not reset ${stream} startup log (${error?.code || 'unknown'}); bootstrap diagnosis disabled for this launch`);
+              return false;
+            })
+        )),
+      );
+      return results.every(Boolean);
+    },
+    setForTests: (files) => {
+      current = files ? { stdout: files.stdout || defaults.stdout, stderr: files.stderr || defaults.stderr } : defaults;
+    },
+  };
+}
+
+// The injected sleeper is not required to be cancellable. A real timer is
+// cleared on abort so a multi-minute readiness budget does not keep running.
+const sleepOrAbort = (sleep, ms, signal) => {
+  if (!signal) return sleep(ms);
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', finish);
+      resolve();
+    }, ms);
+    const finish = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener('abort', finish, { once: true });
+  });
+};
+
+/**
+ * Block until the daemon answers, or until it is proven dead. Polls PM2
+ * alongside the endpoint, because "still loading" and "already died" look
+ * identical from the endpoint alone and cost wildly different amounts of time
+ * to wait out.
+ *
+ * @returns {Promise<{ready: boolean, reason: string|null, aborted?: boolean}>}
+ */
+export async function waitForDaemonReady({
+  endpoint,
+  label,
+  probe,
+  getStatusStrict,
+  clearStatusCache = () => {},
+  exitTail,
+  sleep,
+  timeoutMs,
+  pollMs,
+  signal,
+}) {
+  const aborted = () => (signal?.aborted
+    ? { ready: false, aborted: true, reason: `${label} readiness wait was aborted` }
+    : null);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const stopped = aborted();
+    if (stopped) return stopped;
+    if (await probe(endpoint)) return { ready: true, reason: null };
+    clearStatusCache();
+    const proc = await getStatusStrict();
+    if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
+      const tail = exitTail ? await exitTail(proc.status) : `PM2 status: ${proc.status}`;
+      return { ready: false, reason: `${label} exited while loading (${tail})` };
+    }
+    await sleepOrAbort(sleep, pollMs, signal);
+  }
+  return aborted() || { ready: false, reason: `${label} relaunched but never answered on its port` };
 }
 
 /**
@@ -371,49 +472,18 @@ export function createOnDemandDaemon({
     });
   };
 
-  /**
-   * Block until the relaunched daemon answers, or until it is proven dead.
-   * MTPLX's `waitForRelaunchedEndpoint`, generalized: poll PM2 alongside the
-   * endpoint, because "still loading" and "already died" look identical from
-   * the endpoint alone and cost wildly different amounts of time to wait out.
-   */
-  // The injected sleeper is not required to be cancellable. A real timer is
-  // cleared on abort so a multi-minute readiness budget does not keep running.
-  const sleepOrAbort = (ms, signal) => {
-    if (!signal) return sleep(ms);
-    if (signal.aborted) return Promise.resolve();
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        signal.removeEventListener('abort', finish);
-        resolve();
-      }, ms);
-      const finish = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      signal.addEventListener('abort', finish, { once: true });
-    });
-  };
-
-  const waitForReady = async (endpoint, { signal } = {}) => {
-    const aborted = () => (signal?.aborted
-      ? { ready: false, aborted: true, reason: `${label} readiness wait was aborted` }
-      : null);
-    const deadline = Date.now() + getRelaunchReadyTimeoutMs();
-    while (Date.now() < deadline) {
-      const stopped = aborted();
-      if (stopped) return stopped;
-      if (await probe(endpoint)) return { ready: true, reason: null };
-      clearStatusCache();
-      const proc = await getStatusStrict();
-      if (proc && ['errored', 'stopped', 'not_found'].includes(proc.status)) {
-        const tail = exitTail ? await exitTail(proc.status) : `PM2 status: ${proc.status}`;
-        return { ready: false, reason: `${label} exited while loading (${tail})` };
-      }
-      await sleepOrAbort(getRelaunchPollMs(), signal);
-    }
-    return aborted() || { ready: false, reason: `${label} relaunched but never answered on its port` };
-  };
+  const waitForReady = (endpoint, { signal } = {}) => waitForDaemonReady({
+    endpoint,
+    label,
+    probe,
+    getStatusStrict,
+    clearStatusCache,
+    exitTail,
+    sleep,
+    timeoutMs: getRelaunchReadyTimeoutMs(),
+    pollMs: getRelaunchPollMs(),
+    signal,
+  });
 
   const markUsed = () => markDaemonUsed(appName);
 

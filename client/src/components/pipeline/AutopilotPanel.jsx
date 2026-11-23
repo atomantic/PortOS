@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Rocket, Loader2, X, Sliders, PauseCircle, Play } from 'lucide-react';
 import toast from '../ui/Toast';
 import { usePipelineProgress } from '../../hooks/usePipelineProgress';
-import usePersistedOptions, { readBoolean, readInteger, readNumber } from '../../hooks/usePersistedOptions';
+import usePersistedOptions, { readBoolean, readInteger, readNumber } from './usePersistedOptions';
 import {
   startPipelineAutopilot,
   cancelPipelineAutopilot,

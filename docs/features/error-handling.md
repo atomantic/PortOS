@@ -124,7 +124,7 @@ deleted), so existing installs converge instead of carrying stale extension aler
 | `server/services/autoFixer.js` | Auto-fix task creation and deduplication |
 | `server/services/socket.js` | Socket.IO error event forwarding |
 | `server/routes/*.js` | All routes use asyncHandler wrapper |
-| `client/src/hooks/useErrorNotifications.js` | Client-side error event handler with toast notifications |
+| `client/src/components/useErrorNotifications.js` | Client-side error event handler with toast notifications |
 | `client/src/components/Layout.jsx` | Mounts error notification hook for app-wide coverage |
 
 ## Related Features

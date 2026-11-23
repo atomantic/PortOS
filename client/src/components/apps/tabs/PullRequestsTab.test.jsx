@@ -35,7 +35,7 @@ const { refreshSlot, refreshOptions } = vi.hoisted(() => ({
   refreshSlot: { active: false, pending: false, device: null, start: vi.fn(), cancel: vi.fn() },
   refreshOptions: {},
 }));
-vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
+vi.mock('../useForgeScopeRefresh', () => ({
   default: (options) => { refreshOptions.current = options; return refreshSlot; },
 }));
 const { getInstanceFeatures } = vi.hoisted(() => ({

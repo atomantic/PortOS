@@ -12,7 +12,9 @@ import { requireTrustedLocalBlender, runBlenderDriverScript } from '../blenderWo
 import { parseBlenderModelDriverLine } from './protocol.js';
 
 const DRIVER = 'portos_model_driver.py';
-const DRIVER_PATH = fileURLToPath(new URL('./py/portos_model_driver.py', import.meta.url));
+// The entry point and the modules it imports, staged side by side.
+const DRIVER_FILES = [DRIVER, 'portos_model_motion.py', 'portos_model_poses.py'];
+const driverPath = (name) => fileURLToPath(new URL(`./py/${name}`, import.meta.url));
 const GIB = 1024 ** 3;
 const BUILD_LIMITS = Object.freeze({ wallSeconds: 30 * 60, memoryBytes: 16 * GIB, diskBytes: 4 * GIB, maxFiles: 10_000 });
 
@@ -22,7 +24,7 @@ export const BLENDER_MODEL_NEEDS_TRUSTED_LOCAL = 'A Blender model build runs the
 export const requireBlenderModelTool = () => requireTrustedLocalBlender(BLENDER_MODEL_NEEDS_TRUSTED_LOCAL);
 
 /**
- * Run one job: `{ mode: 'build', workspace, src, out, quality }`, or
+ * Run one job: `{ mode: 'build', workspace, src, out, quality, sweepSeconds }`, or
  * `{ mode: 'review', blend, out, size, views, looks }` (see review.js).
  * Resolves `{ ok, canceled, error, traceback }` (see runBlenderDriverScript).
  */
@@ -30,7 +32,10 @@ export async function runBlenderModelDriver({ tool, job, signal, onEvent, onLog 
   return runBlenderDriverScript({
     tool,
     entrypoint: DRIVER,
-    files: [{ path: DRIVER, content: await readFile(DRIVER_PATH) }, { path: 'job.json', content: JSON.stringify(job) }],
+    files: [
+      ...await Promise.all(DRIVER_FILES.map(async (path) => ({ path, content: await readFile(driverPath(path)) }))),
+      { path: 'job.json', content: JSON.stringify(job) },
+    ],
     limits: BUILD_LIMITS,
     signal,
     parseLine: parseBlenderModelDriverLine,

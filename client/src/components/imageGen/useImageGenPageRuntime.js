@@ -15,10 +15,10 @@ import {
 } from '../../lib/imageGenBackends';
 import { clampImageEdge } from '../../lib/imageGenResolutions';
 import { useImageGenForm } from './useImageGenForm';
-import { useImageGenGallery } from '../../hooks/useImageGenGallery';
+import { useImageGenGallery } from './useImageGenGallery';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { useFederatedMediaTarget } from '../../hooks/useFederatedMediaTarget';
-import { useImageGenProgress } from '../../hooks/useImageGenProgress';
+import { useImageGenProgress } from './useImageGenProgress';
 import { useMediaCompletionRefresh } from '../../hooks/useMediaCompletionRefresh';
 import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
 import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus';
