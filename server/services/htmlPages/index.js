@@ -226,7 +226,14 @@ async function processRun(id) {
   const { controller } = liveRuns.get(id);
   let claim = null;
   try {
-    claim = await claimHeavyLocalJob({ kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS });
+    // Delete aborts this controller. Leave before taking the accelerator, and
+    // again as soon as the wait returns, so a deleted run does not hold the
+    // machine lock or the serial queue for the rest of the claim budget.
+    if (controller.signal.aborted) return;
+    claim = await claimHeavyLocalJob({
+      kind: 'html pages bench', id: `${run.backend}/${run.modelId}`, timeoutMs: CLAIM_WAIT_MS, signal: controller.signal,
+    });
+    if (controller.signal.aborted || claim.aborted) return;
     if (!claim.ok) throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
     await mutateRun(id, (c) => ({ ...c, status: 'generating', startedAt: new Date().toISOString() }));
     console.log(`🧩 HTML pages: ${run.modelId} on ${run.route?.providerName || runtimeLabel(run.backend)} — ${run.themes.length - run.pages.length} page(s)`);
@@ -267,7 +274,7 @@ async function processRun(id) {
       await generatePages((prompt) => generateViaProvider(run.route, prompt, controller.signal));
     } else if (isMtplxCheckpoint(run.backend, run.modelId)) {
       const { runOnMtplxCheckpoint } = await import('../mtplxServerManager.js');
-      await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)));
+      await runOnMtplxCheckpoint(run.modelId, (served) => generatePages(local(served || run.modelId)), { signal: controller.signal });
     } else {
       await generatePages(local(run.modelId));
     }
@@ -285,6 +292,7 @@ async function processRun(id) {
       };
     });
   } catch (err) {
+    if (controller.signal.aborted) return;
     console.log(`🧩 HTML pages: ${run.modelId} failed: ${err.message}`);
     await mutateRun(id, (c) => (c.deleted ? null : { ...c, status: 'failed', error: err.message, finishedAt: new Date().toISOString() })).catch(() => null);
   } finally {
