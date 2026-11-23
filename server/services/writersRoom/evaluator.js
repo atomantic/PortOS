@@ -21,7 +21,7 @@ import { listPlaces, mergeExtractedPlaces } from './places.js';
 import { listObjects, mergeExtractedObjects } from './objects.js';
 import { nowIso, badRequest, notFound } from './_shared.js';
 
-import { isValidAnalysisId, listAnalysisIds, loadAnalysis, saveAnalysis } from './analysisSnapshots.js';
+import { isValidAnalysisId, listAnalysisIds, loadAnalysis, saveAnalysis, withAnalysisLock } from './analysisSnapshots.js';
 
 export { recoverStuckAnalyses } from './analysisSnapshots.js';
 export { ANALYSIS_KINDS };
@@ -170,22 +170,24 @@ export async function attachSceneImage(workId, id, { sceneId, filename, jobId, p
   if (!isValidAnalysisId(id)) throw badRequest('Invalid analysis id');
   if (typeof sceneId !== 'string' || !sceneId.trim()) throw badRequest('sceneId required');
   if (typeof filename !== 'string' || !filename.trim()) throw badRequest('filename required');
-  const a = await loadAnalysis(workId, id);
-  if (!a) throw notFound('Analysis');
-  const next = {
-    ...a,
-    sceneImages: {
-      ...(a.sceneImages || {}),
-      [sceneId]: {
-        filename: filename.trim(),
-        jobId: typeof jobId === 'string' ? jobId : null,
-        prompt: typeof prompt === 'string' ? prompt : null,
-        generatedAt: nowIso(),
+  return withAnalysisLock(`${workId}:${id}`, async () => {
+    const a = await loadAnalysis(workId, id);
+    if (!a) throw notFound('Analysis');
+    const next = {
+      ...a,
+      sceneImages: {
+        ...(a.sceneImages || {}),
+        [sceneId]: {
+          filename: filename.trim(),
+          jobId: typeof jobId === 'string' ? jobId : null,
+          prompt: typeof prompt === 'string' ? prompt : null,
+          generatedAt: nowIso(),
+        },
       },
-    },
-  };
-  await saveAnalysis(workId, next);
-  return next;
+    };
+    await saveAnalysis(workId, next);
+    return next;
+  });
 }
 
 // Persist a scene→generated-image link on the analysis snapshot AND mirror the
