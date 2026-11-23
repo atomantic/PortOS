@@ -39,7 +39,7 @@ const {
   countWords, contentHash, buildSegmentIndex,
   listFolders, createFolder, deleteFolder,
   listWorks, countWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
-  saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
+  saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody, ERR_DRAFT_CONFLICT,
   listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
   renderWorkVoiceGuide,
@@ -358,6 +358,54 @@ describe('draft body and versioning', () => {
     expect(await getDraftBody(work.id, v1Id)).toBe('V1 text.');
     expect(await getDraftBody(work.id, v2Id)).toBe('V2 text.');
     expect(await getDraftBody(work.id, v3Id)).toBe('V3 text.');
+  });
+
+  it('saveDraftBody accepts matching expectedContentHash and rejects stale hashes with 409 DRAFT_CONFLICT', async () => {
+    const work = await createWork({ title: 'CAS Draft' });
+    const draftId = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Initial prose.');
+
+    // Matching hash succeeds.
+    const { manifest } = await saveDraftBody(work.id, 'Updated prose.', {
+      draftId,
+      expectedContentHash: contentHash('Initial prose.'),
+    });
+    expect(manifest.drafts[0].contentHash).toBe(contentHash('Updated prose.'));
+    expect(await getDraftBody(work.id, draftId)).toBe('Updated prose.');
+
+    // Stale hash is rejected with 409 DRAFT_CONFLICT and leaves disk + manifest intact.
+    await expect(saveDraftBody(work.id, 'Clobber attempt.', {
+      draftId,
+      expectedContentHash: contentHash('Initial prose.'),
+    })).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    // Explicit null/empty hash fails closed rather than bypassing the check.
+    await expect(saveDraftBody(work.id, 'Clobber attempt.', {
+      draftId,
+      expectedContentHash: null,
+    })).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    expect(await getDraftBody(work.id, draftId)).toBe('Updated prose.');
+    expect((await getWork(work.id)).drafts[0].contentHash).toBe(contentHash('Updated prose.'));
+  });
+
+  it('saveDraftBody with draftId writes only to that version even after active draft switches', async () => {
+    const work = await createWork({ title: 'Pinned Draft' });
+    const d1 = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Draft 1 prose.');
+    const snapped = await snapshotDraft(work.id, { label: 'Draft 2' });
+    const d2 = snapped.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Draft 2 prose.');
+
+    await saveDraftBody(work.id, 'Draft 1 revised.', {
+      draftId: d1,
+      expectedContentHash: contentHash('Draft 1 prose.'),
+    });
+
+    const latest = await getWork(work.id);
+    expect(latest.activeDraftVersionId).toBe(d2);
+    expect(await getDraftBody(work.id, d1)).toBe('Draft 1 revised.');
+    expect(await getDraftBody(work.id, d2)).toBe('Draft 2 prose.');
   });
 });
 
@@ -786,6 +834,24 @@ describe('per-work mutation serialization', () => {
     await expect(updateWork(work.id, { title: '' })).rejects.toThrow(/title required/i);
     await overlap(work.id, () => saveDraftBody(work.id, 'Final body'), () => [deleteWork(work.id)]);
     await expect(getWork(work.id)).rejects.toThrow(/not found/i);
+  });
+
+  it('verifies expectedContentHash inside queueWorkWrite against an in-flight overlapping save', async () => {
+    const work = await createWork({ title: 'Concurrent CAS' });
+    const d1 = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Baseline prose.');
+
+    await expect(overlap(
+      work.id,
+      () => saveDraftBody(work.id, 'Author manual edit.'),
+      () => [saveDraftBody(work.id, 'Stale async write.', {
+        draftId: d1,
+        expectedContentHash: contentHash('Baseline prose.'),
+      })],
+    )).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    expect(await getDraftBody(work.id, d1)).toBe('Author manual edit.');
+    expect((await getWork(work.id)).drafts[0].contentHash).toBe(contentHash('Author manual edit.'));
   });
 
 });

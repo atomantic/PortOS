@@ -60535,6 +60535,70 @@
       "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. Google API reference evidence; no claim about subscription consumption. Task cost applies only to this exact effort and v5.0.1 workload. Historical v4.3.2 rows and their retrieval dates are retained separately."
     },
     {
+      "id": "aa-web-v5.0.1-gemini-4-carbon-low",
+      "provider": "Google",
+      "model": "gemini-4-carbon",
+      "effort": "low",
+      "configuration": "Google Gemini 4 Carbon; thinking_level=low; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 54.2206114502924,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 exact intelligenceIndex value for low effort from the public model page chart payload."
+        }
+      },
+      "costPerTask": {
+        "value": 7.186577262951972,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task for low effort, from intelligenceIndexCostPerTask.cost.total in the public model page payload. Uses the publisher’s Google AI Studio reference token rates, not promotional billing or an Antigravity allowance."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cost applies to this effort and benchmark workload only. No historical v4.3.2 benchmark or subscription cost is inferred."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-carbon-medium",
+      "provider": "Google",
+      "model": "gemini-4-carbon",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Carbon; thinking_level=medium; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 58.2587824022788,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 exact intelligenceIndex value for medium effort from the public model page chart payload."
+        }
+      },
+      "costPerTask": {
+        "value": 6.585776867225546,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task for medium effort, from intelligenceIndexCostPerTask.cost.total in the public model page payload. Uses the publisher’s Google AI Studio reference token rates, not promotional billing or an Antigravity allowance."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cost applies to this effort and benchmark workload only. No historical v4.3.2 benchmark or subscription cost is inferred."
+    },
+    {
       "id": "aa-web-v5.0.1-gemini-4-carbon",
       "provider": "Google",
       "model": "gemini-4-carbon",
@@ -62540,6 +62604,38 @@
       "notes": "Retrieved 2026-11-12. Public Artificial Analysis benchmark evidence for the exact thinking level. Complements the earlier official API token-price observations. Scores and task costs apply to v5.0.1 only; no historical v4.3.2 task costs, latency, throughput, or Antigravity quota are inferred. No inference benchmarks run by PortOS."
     },
     {
+      "id": "aa-web-v5.0.1-gemini-4-argon-medium",
+      "provider": "Google",
+      "model": "gemini-4-argon",
+      "effort": "medium",
+      "configuration": "Google Gemini 4 Argon; thinking_level=medium; Artificial Analysis public evaluation",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 47.6040598289046,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 exact intelligenceIndex value for medium effort from the public model page chart payload."
+        }
+      },
+      "costPerTask": {
+        "value": 8.629243138175465,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-argon",
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task for medium effort, from intelligenceIndexCostPerTask.cost.total in the public model page payload. Uses the publisher’s Google AI Studio reference token rates, not promotional billing or an Antigravity allowance."
+        }
+      },
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Cost applies to this effort and benchmark workload only. No historical v4.3.2 benchmark or subscription cost is inferred. No Artificial Analysis score and paired cost found for Argon Low."
+    },
+    {
       "id": "aa-web-v5.0.1-gemini-4-argon",
       "provider": "Google",
       "model": "gemini-4-argon",
@@ -62583,7 +62679,7 @@
         }
       },
       "quota": null,
-      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. AA task cost uses its published $4/$20 reference tariff and cache accounting; do not interpret it as current introductory billing or rescale it. Google current pricing: https://aistudio.google.com/docs/pricing#gemini-4-argon. Low/medium AA scores and task costs were not found; no unsupported effort estimate is supplied. Historical v4.3.2 rows and their retrieval dates are retained separately."
+      "notes": "Exact public v5.0.1 payload collected at https://artificialanalysis.ai/models/gemini-4-argon on 2026-11-12. AA task cost uses its published $4/$20 reference tariff and cache accounting; do not interpret it as current introductory billing or rescale it. Google current pricing: https://aistudio.google.com/docs/pricing#gemini-4-argon. The original retrieval covered High; Medium is now recorded separately and no exact Low observation is available. Historical v4.3.2 rows and their retrieval dates are retained separately."
     },
     {
       "id": "aa-web-v5.0.1-gemini-3-8-flash-medium",
@@ -63312,23 +63408,23 @@
       "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": {
-        "value": 13.93,
+        "value": 19.7537767128559,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as captured by headline.timeToFirstAnswerToken in the public model page."
         }
       },
       "tokensPerSecond": {
-        "value": 97,
+        "value": 94.8554992863509,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, from headline.outputSpeed in the public model page."
         }
       },
       "quota": null,
-      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+      "notes": "Artificial Analysis reports rolling five-day endpoint performance across its Performance v3 workloads on the Google API. These are dated measurements, not Intelligence Index task durations."
     },
     {
       "id": "aa-performance-v3-gemini-4-neon-medium-google",
@@ -63344,23 +63440,23 @@
       "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": {
-        "value": 20.14,
+        "value": 24.7543654378012,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as captured by headline.timeToFirstAnswerToken in the public model page."
         }
       },
       "tokensPerSecond": {
-        "value": 101,
+        "value": 93.5252803758915,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, from headline.outputSpeed in the public model page."
         }
       },
       "quota": null,
-      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+      "notes": "Artificial Analysis reports rolling five-day endpoint performance across its Performance v3 workloads on the Google API. These are dated measurements, not Intelligence Index task durations."
     },
     {
       "id": "aa-performance-v3-gemini-4-neon-high-google",
@@ -63376,23 +63472,23 @@
       "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": {
-        "value": 40.64,
+        "value": 35.3824159220826,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as captured by headline.timeToFirstAnswerToken in the public model page."
         }
       },
       "tokensPerSecond": {
-        "value": 101,
+        "value": 99.366504683901,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, from headline.outputSpeed in the public model page."
         }
       },
       "quota": null,
-      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+      "notes": "Artificial Analysis reports rolling five-day endpoint performance across its Performance v3 workloads on the Google API. These are dated measurements, not Intelligence Index task durations."
     },
     {
       "id": "aa-performance-v3-gemini-4-neon-xhigh-google",
@@ -63408,23 +63504,23 @@
       "outputPerMillion": null,
       "reasoningPerMillion": null,
       "responseSeconds": {
-        "value": 56.51,
+        "value": 57.5052788677287,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as published in the model page FAQ."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 time to first answer token in seconds on the Google API, including thinking time, as captured by headline.timeToFirstAnswerToken in the public model page."
         }
       },
       "tokensPerSecond": {
-        "value": 110,
+        "value": 91.5344929195104,
         "source": {
           "url": "https://artificialanalysis.ai/models/gemini-4-neon",
-          "retrievedAt": "2026-11-19T07:17:28.560Z",
-          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, as displayed in Further details."
+          "retrievedAt": "2026-11-23T20:30:42.000Z",
+          "methodology": "Artificial Analysis Performance v3 end-to-end output tokens per second on the Google API, including reasoning tokens and full request duration, from headline.outputSpeed in the public model page."
         }
       },
       "quota": null,
-      "notes": "Artificial Analysis reports rolling endpoint performance across its Performance v3 workloads on the Google API."
+      "notes": "Artificial Analysis reports rolling five-day endpoint performance across its Performance v3 workloads on the Google API. These are dated measurements, not Intelligence Index task durations."
     },
     {
       "id": "aa-web-v5.0.1-inkling-2-mini",

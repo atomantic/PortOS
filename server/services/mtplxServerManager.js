@@ -22,8 +22,8 @@
  *     outside PortOS.
  */
 
-import { readFile, unlink, writeFile } from 'fs/promises';
-import { release, tmpdir } from 'os';
+import { readFile, unlink } from 'fs/promises';
+import { release } from 'os';
 import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -33,7 +33,7 @@ import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.
 import { compareMtplxVersions, describeMtplxRuntime, lockedMtplxVersion, readExternalMtplxVersion, mtplxManagedBinary, mtplxVenvDir, readManagedMtplxVersion, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
 import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
-import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
+import { createDaemonLogFiles, createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
 import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
 // `settings.js` is lazy-imported at its call sites below, never statically: it
 // eagerly resolves `fileUtils.PATHS` at module load, which drags PATHS into the
@@ -139,26 +139,7 @@ const MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR = `MTPLX's Python runtime has not bee
  * launch. PM2 appends to its configured files across process deletion, so
  * stable, app-specific paths are truncated before every start.
  */
-const DEFAULT_MTPLX_LOG_FILES = {
-  stdout: join(tmpdir(), 'portos-mtplx-out.log'),
-  stderr: join(tmpdir(), 'portos-mtplx-error.log'),
-};
-
-let mtplxLogFiles = DEFAULT_MTPLX_LOG_FILES;
-
-const resetMtplxLogs = async () => {
-  const results = await Promise.all(
-    Object.entries(mtplxLogFiles).map(([stream, path]) => (
-      writeFile(path, '')
-        .then(() => true)
-        .catch((error) => {
-          console.error(`❌ MTPLX: could not reset ${stream} startup log (${error?.code || 'unknown'}); bootstrap diagnosis disabled for this launch`);
-          return false;
-        })
-    )),
-  );
-  return results.every(Boolean);
-};
+const mtplxLogs = createDaemonLogFiles(MTPLX_APP);
 
 const isMtplxRuntimeBootstrapFailure = (output) => {
   const text = String(output ?? '');
@@ -579,14 +560,14 @@ async function launchMtplxServer(options = {}) {
   clearJlistCache();
 
   console.log(`🚄 MTPLX starting on ${DEFAULT_HOST}:${port}${model ? ` (model ${model})` : ' (MTPLX default model)'}${tuningArgs.length ? ` with ${tuningArgs.join(' ')}` : ''}`);
-  const logsReset = await resetMtplxLogs();
+  const logsReset = await mtplxLogs.reset();
   await execPm2([
     'start', binaryPath,
     '--name', MTPLX_APP,
     '--interpreter', 'none',
     '--no-autorestart',
-    '--output', mtplxLogFiles.stdout,
-    '--error', mtplxLogFiles.stderr,
+    '--output', mtplxLogs.files().stdout,
+    '--error', mtplxLogs.files().stderr,
     '--',
     ...args,
   ]);
@@ -961,10 +942,7 @@ export function _resetMtplxServerStateForTests({
 } = {}) {
   onDemand.setIdleMinutesOverrideForTests(idleMinutes);
   onDemand.setKeepLoadedOverrideForTests(keepLoaded);
-  mtplxLogFiles = logFiles ? {
-    stdout: logFiles.stdout || DEFAULT_MTPLX_LOG_FILES.stdout,
-    stderr: logFiles.stderr || DEFAULT_MTPLX_LOG_FILES.stderr,
-  } : DEFAULT_MTPLX_LOG_FILES;
+  mtplxLogs.setForTests(logFiles);
   currentConfig = null;
   daemon.resetLogs();
   lastExitError = null;

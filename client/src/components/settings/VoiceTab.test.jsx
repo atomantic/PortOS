@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import VoiceTab from './VoiceTab';
 import { getProviders } from '../../services/apiProviders';
+import toast from '../ui/Toast';
+
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 
 const voiceApi = vi.hoisted(() => ({
   getVoiceStatus: vi.fn(),
@@ -182,6 +185,76 @@ describe('VoiceTab TTS engine registry', () => {
   });
 });
 
+describe('VoiceTab Piper voice download guards', () => {
+  const piperVoices = [
+    { name: 'voice-a', label: 'Voice A', downloaded: false, path: '/a' },
+    { name: 'voice-b', label: 'Voice B', downloaded: false, path: '/b' },
+  ];
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue({ ...structuredClone(config), tts: { ...config.tts, engine: 'piper' } });
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({
+      engines: [
+        { id: 'piper', configKey: 'piper', label: 'Piper', description: 'CLI' },
+        { id: 'qwen3-tts', configKey: 'qwen3', label: 'Qwen3-TTS', description: 'x', aliases: ['qwen3'] },
+      ],
+    });
+    voiceApi.listVoices.mockImplementation(async (engine) => (engine === 'piper'
+      ? { voices: piperVoices }
+      : { voices: [{ name: 'warm-narrator', label: 'Warm Narrator' }] }));
+  });
+
+  it('does not overwrite the new engine voice list when a Piper download resolves after an engine switch', async () => {
+    const d = deferred();
+    voiceApi.fetchPiperVoice.mockReturnValue(d.promise);
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    await screen.findByRole('option', { name: /voice-b/ });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Voice' }), { target: { value: 'voice-a' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'TTS engine' }), { target: { value: 'qwen3-tts' } });
+    await screen.findByRole('option', { name: /Warm Narrator/ });
+    await act(async () => { d.resolve(); await new Promise((r) => setTimeout(r, 20)); });
+    await waitFor(() => expect(voiceApi.listVoices).toHaveBeenCalledWith('piper', { silent: true }));
+    expect(screen.getByRole('option', { name: /Warm Narrator/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /voice-b/ })).toBeNull();
+  });
+
+  it('keeps the latest requested voice downloading when an earlier download settles first', async () => {
+    const a = deferred();
+    const b = deferred();
+    voiceApi.fetchPiperVoice.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    await screen.findByRole('option', { name: /voice-b/ });
+    const select = screen.getByRole('combobox', { name: 'Voice' });
+    fireEvent.change(select, { target: { value: 'voice-a' } });
+    fireEvent.change(select, { target: { value: 'voice-b' } });
+    await act(async () => { a.resolve(); await new Promise((r) => setTimeout(r, 20)); });
+    expect(screen.getByRole('button', { name: 'Downloading voice-b…' }).disabled).toBe(true);
+    await act(async () => { b.resolve(); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Preview this voice' }).disabled).toBe(false));
+  });
+
+  it('performs no state updates or toasts after unmount when a download fails', async () => {
+    const d = deferred();
+    voiceApi.fetchPiperVoice.mockReturnValue(d.promise.then(() => { throw new Error('boom'); }));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { unmount } = render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    await screen.findByRole('option', { name: /voice-b/ });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Voice' }), { target: { value: 'voice-a' } });
+    unmount();
+    await act(async () => { d.resolve(); await new Promise((r) => setTimeout(r, 20)); });
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+});
+
 describe('VoiceTab LLM / code-agent pickers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -352,5 +425,32 @@ describe('VoiceTab FaceTime identity gating', () => {
     buttons().forEach((b) => expect(b).toBeDisabled());
     fireEvent.change(handle, { target: { value: '+15550100' } });
     buttons().forEach((b) => expect(b).toBeEnabled());
+  });
+});
+
+describe('VoiceTab initial load failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue(structuredClone(config));
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+  });
+
+  it('shows an alert with the error message and a working Retry when config fails', async () => {
+    voiceApi.getVoiceConfig.mockRejectedValueOnce(new Error('config boom'));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('config boom');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/config boom/)).toBeNull());
+    expect(voiceApi.getVoiceConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('still renders the form when only the status probe fails', async () => {
+    voiceApi.getVoiceStatus.mockRejectedValue(new Error('status down'));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByText(/Loading voice settings/)).toBeNull());
+    expect(screen.queryByText(/Could not load voice settings/)).toBeNull();
   });
 });

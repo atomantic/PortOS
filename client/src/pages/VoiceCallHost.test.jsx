@@ -16,6 +16,9 @@ vi.mock('../services/socket', () => {
   };
 });
 
+vi.mock('../services/apiVoice', () => ({ getVoiceConfig: vi.fn() }));
+
+import { getVoiceConfig } from '../services/apiVoice';
 import socket from '../services/socket';
 import VoiceCallHost from './VoiceCallHost';
 
@@ -83,6 +86,7 @@ const startSession = async (label = 'Attach call host') => {
 };
 
 beforeEach(() => {
+  getVoiceConfig.mockReset();
   vi.clearAllMocks();
   workletNodes.length = 0;
   socket.connected = true;
@@ -126,6 +130,21 @@ describe('VoiceCallHost', () => {
 
     expect((await screen.findByRole('alert')).textContent).toMatch(/Another tab owns the call host/);
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured BlackHole labels for matching and copy', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { blackHole16chLabel: 'Custom In', blackHole2chLabel: 'Custom Out' } });
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue([
+      { label: 'Custom In', kind: 'audioinput', deviceId: 'in-c' },
+      { label: 'Custom Out', kind: 'audiooutput', deviceId: 'out-c' },
+    ]);
+    navigator.mediaDevices.getUserMedia.mockRejectedValue(new Error('stop here'));
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    expect((await screen.findAllByText(/Custom In/)).length).toBeGreaterThan(0);
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled());
+    expect(navigator.mediaDevices.getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'in-c' });
   });
 
   it('reports the specific missing device rather than a generic failure', async () => {
@@ -518,8 +537,9 @@ describe('VoiceCallHost', () => {
       expect(track.stop).not.toHaveBeenCalled();
     });
 
-    it('never renders a tab that opened no device as attached to another tab\'s host', () => {
+    it('never renders a tab that opened no device as attached to another tab\'s host', async () => {
       render(<VoiceCallHost />, { wrapper: MemoryRouter });
+      await act(async () => {});
 
       act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening' }));
 

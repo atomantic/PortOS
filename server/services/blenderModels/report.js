@@ -8,6 +8,8 @@
  * naming the parts, meshes or axes it is about. A build with any error is kept
  * and marked; only a build without errors can be published.
  */
+import { reviewFrameMeters } from './reviewCameras.js';
+
 export const BLENDER_MODEL_SEVERITIES = Object.freeze(['error', 'warning', 'note']);
 
 // Declared size vs built bounds, per axis, as a fraction of the declared size.
@@ -56,7 +58,10 @@ function partChecks(facts, add) {
   if (undeclared.length) add('warning', 'mesh-undeclared', 'A mesh object is not a declared part', listed(undeclared));
   const reparented = declared.filter((part) => meshes.has(part.id) && (meshes.get(part.id).parent ?? null) !== (part.parent ?? null)).map((part) => part.id);
   if (reparented.length) add('warning', 'part-parent-mismatch', 'A part\'s Blender parent is not the parent it declares', listed(reparented));
-  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented };
+  // Where a saved camera aims when it names a part.
+  const centers = Object.fromEntries(ids.filter((id) => meshes.get(id)?.min && meshes.get(id)?.max)
+    .map((id) => [id, AXES.map((_, axis) => round((meshes.get(id).min[axis] + meshes.get(id).max[axis]) / 2))]));
+  return { declared: declared.length, built: facts.meshes.length, missing, undeclared, reparented, centers };
 }
 
 function boundsCheck(facts, add) {
@@ -71,6 +76,11 @@ function boundsCheck(facts, add) {
   if (over.length) add('error', 'bounds-oversized', `The model is more than ${BOUNDS_ERROR * 100}% larger than its declared size`, { subjects: over, values });
   if (under.length) add('error', 'bounds-undersized', `The model is more than ${BOUNDS_ERROR * 100}% smaller than its declared size`, { subjects: under, values });
   if (drift.length) add('warning', 'bounds-drift', `The model is ${BOUNDS_WARNING * 100}-${BOUNDS_ERROR * 100}% off its declared size`, { subjects: drift, values });
+  // Review cameras frame the declared box standing on Z = 0 around X = Y = 0, not the mesh.
+  const half = reviewFrameMeters(declared) / 2;
+  const center = { x: 0, y: 0, z: declared.z / 2 };
+  const outside = AXES.filter((axis, index) => facts.scene.min[index] < center[axis] - half || facts.scene.max[index] > center[axis] + half);
+  if (outside.length) add('warning', 'review-out-of-frame', 'Part of the model falls outside its review views; stand it on Z = 0, centered on X = Y = 0', { subjects: outside });
   return values;
 }
 

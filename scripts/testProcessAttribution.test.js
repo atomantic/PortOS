@@ -1,19 +1,14 @@
 import { channel } from 'node:diagnostics_channel';
 import { EventEmitter } from 'node:events';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { observeTestProcesses, processAttribution, processIdentity } from './lib/testProcessAttribution.js';
-import { killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses } from './lib/vitestStaleRunRoots.js';
+import { killTestProcessesUnder, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { cleanupRunTempRoot } from './vitestTempRootSetup.js';
-
-vi.mock('node:fs', async importOriginal => {
-  const actual = await importOriginal();
-  return { ...actual, appendFileSync: vi.fn(actual.appendFileSync) };
-});
 
 const originalExit = process.exitCode;
 afterEach(() => { process.exitCode = originalExit; vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -68,7 +63,7 @@ it('retains the root and an explicit diagnostic gap when process inspection fail
   } finally { rmSync(host, { recursive: true, force: true }); }
 });
 
-it.each(['persisted', 'write-failed'])('pool-close preserves a %s pending identity omitted from current ownership metadata', persistence => {
+it('pool-close keeps the root while a previously signalled child still holds a live identity', () => {
   const host = mkdtempSync(join(tmpdir(), 'process-pending-close-'));
   const root = mkdtempSync(join(host, 'pvt-'));
   const reportPath = join(host, 'processes.json');
@@ -78,18 +73,27 @@ it.each(['persisted', 'write-failed'])('pool-close preserves a %s pending identi
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   try {
-    if (persistence === 'write-failed') appendFileSync.mockImplementationOnce(() => { throw Object.assign(Error('synthetic full disk'), { code: 'ENOSPC' }); });
     sweepStaleRunRoots(host, { read: () => [...ancestors, child], probe: () => false, terminate: () => {} });
-    const partial = () => [...ancestors, { pid: child.pid, ppid: process.pid, start: child.start }];
-    sweepStaleRunRoots(host, { read: partial, probe: () => false, probePid: () => true });
     expect(existsSync(root)).toBe(true);
     cleanupRunTempRoot(root, { reportPath, platform: 'linux',
-      contain: (path, callbacks) => killTestProcessesUnder(path, { ...callbacks, read: partial, probe: () => false, probePid: () => true }),
-      verifyPending: path => verifyPendingTestProcesses(path, { read: partial, probePid: () => true }) });
+      contain: (path, callbacks) => killTestProcessesUnder(path, { ...callbacks, read: () => [...ancestors, child], probe: () => false,
+        kill: () => {}, probePid: () => true, settlementMs: 0 }) });
     expect(existsSync(root)).toBe(true);
     expect(process.exitCode).toBe(1);
-    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ pendingVerified: false, unsettled: 1 });
-    expect(verifyPendingTestProcesses(root, { read: () => [], probePid: () => false })).toBe(true);
+    expect(JSON.parse(readFileSync(reportPath, 'utf8'))).toMatchObject({ total: 1, unsettled: 1 });
+  } finally { rmSync(host, { recursive: true, force: true }); }
+});
+
+it('writes no diagnostics file when no report path is configured', () => {
+  const host = mkdtempSync(join(tmpdir(), 'process-no-report-'));
+  const root = mkdtempSync(join(host, 'pvt-'));
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    cleanupRunTempRoot(root, { platform: 'linux',
+      contain: (path, callbacks) => killTestProcessesUnder(path, { ...callbacks, read: () => null }) });
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('evidence=stderr-only'));
+    expect(existsSync(new URL('../.cache/test-process-diagnostics', import.meta.url))).toBe(false);
   } finally { rmSync(host, { recursive: true, force: true }); }
 });
 
@@ -178,7 +182,7 @@ it.each(['reader-error', 'malformed', 'wrong-shape', 'ancestry'])('fails closed 
         read: pids => readTestProcesses(pids, { platform: 'darwin', exec }) }) });
     const report = JSON.parse(readFileSync(reportPath, 'utf8'));
     expect(report).toMatchObject({ version: 1, boundary: 'pool-closed', inspected: false,
-      pendingVerified: true, total: 0, terminated: 0, unsettled: 1, processes: [] });
+      total: 0, terminated: 0, unsettled: 1, processes: [] });
     expect(exec).toHaveBeenCalledTimes(1);
     expect(kill).not.toHaveBeenCalled();
     expect(existsSync(root)).toBe(true);

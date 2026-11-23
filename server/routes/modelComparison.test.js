@@ -361,6 +361,49 @@ it('plots local Ornith and Qwen Coder with zero API charges and sourced quality 
   expect(result.body.observations.find(row => row.id === 'ornith-publisher-20261001-35b-swebench-verified').quality.value).toBe(75.6);
 });
 
+it('plots published Carbon and Argon effort pairs without filling the Argon Low workload gap', async () => {
+  const local = { ...observation, id: 'existing-local-research' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  const localPath = join(dir, 'model-comparison.json');
+  await writeFile(localPath, localContents);
+  const models = ['carbon', 'argon'].flatMap(model =>
+    ['low', 'medium', 'high'].map(effort => `gemini-4-${model}-${effort}`));
+  const antigravityApp = express();
+  antigravityApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'antigravity', name: 'Antigravity', command: 'agy', models },
+  ] }) }));
+  antigravityApp.use(errorMiddleware);
+
+  const result = await request(antigravityApp).get('/comparison');
+  expect(result.status).toBe(200);
+  const { currentComposite, composite, observations } = result.body;
+  const expected = [
+    ['carbon', 'low', 54.2206114502924, 7.186577262951972],
+    ['carbon', 'medium', 58.2587824022788, 6.585776867225546],
+    ['carbon', 'high', 60.025738829526, 7.755545745286556],
+    ['argon', 'medium', 47.6040598289046, 8.629243138175465],
+    ['argon', 'high', 50.4121935905389, 9.946608711550533],
+  ];
+  for (const [family, effort, score, cost] of expected) {
+    const model = `gemini-4-${family}`;
+    const row = currentComposite.rows.find(candidate => candidate.model === model && candidate.effort === effort);
+    expect(row.quality).toMatchObject({ value: score, estimated: false });
+    expect(row.costPerTask).toMatchObject({ value: cost, estimated: false });
+    expect(currentComposite.sources[row.costPerTask.sourceIds[0]].url).toBe(`https://artificialanalysis.ai/models/${model}`);
+    const legacy = composite.rows.find(candidate => candidate.model === model && candidate.effort === effort);
+    if (family === 'argon' && effort === 'high') {
+      expect(legacy.costPerTask).toMatchObject({ value: 1.99, estimated: false });
+    } else {
+      expect(legacy.costPerTask).toBeNull();
+    }
+  }
+  const argonLow = currentComposite.rows.find(row => row.model === 'gemini-4-argon' && row.effort === 'low');
+  expect(argonLow.quality).toMatchObject({ estimated: true });
+  expect(argonLow.costPerTask).toBeNull();
+  expect(observations).toContainEqual(local);
+  expect(await readFile(localPath, 'utf8')).toBe(localContents);
+});
+
 it('loads shipped Hydrogen effort scores and workload costs for an existing Antigravity install', async () => {
   await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
   const hydrogenApp = express();
