@@ -1,11 +1,13 @@
 /** Local operator subscriptions only; notifications never carry host keys or usage records. */
-const subscribers = new Set();
-const pendingEvents = new Set();
+import { getFleetLlmHostQueue, getFleetLlmHostStatus } from './fleetLlmHost.js';
+import {
+  fleetHostSubscribers as subscribers, noteFleetHostChanged, queueFleetHostEvent, resetFleetHostSignal,
+  getFleetHostRevision, getCachedFleetHostStatus, setCachedFleetHostStatus,
+} from './fleetHostSignal.js';
+
+export { noteFleetHostChanged };
 let timer = null;
-let flush = null;
 let generation = 0;
-let revision = 0;
-let cached = null;
 let reading = null;
 let previous = null;
 export const FLEET_HOST_OBSERVE_MS = 15_000;
@@ -13,46 +15,24 @@ export const FLEET_HOST_OBSERVE_MS = 15_000;
 // The observer and concurrent HTTP consumers share the same probe. A mutation
 // during a probe invalidates its answer and drains one fresh read before return.
 export function readFleetHostStatus({ refresh = false } = {}) {
-  if (refresh) cached = null;
-  if (!reading && cached && subscribers.size) {
-    const snapshot = cached;
-    return import('./fleetLlmHost.js').then(({ getFleetLlmHostQueue }) => ({ ...snapshot, queue: getFleetLlmHostQueue() }));
+  if (refresh) setCachedFleetHostStatus(null);
+  const snapshot = getCachedFleetHostStatus();
+  if (!reading && snapshot && subscribers.size) {
+    return Promise.resolve({ ...snapshot, queue: getFleetLlmHostQueue() });
   }
   if (!reading) {
     reading = (async () => {
       let started;
       let result;
       do {
-        started = revision;
-        const { getFleetLlmHostStatus } = await import('./fleetLlmHost.js');
+        started = getFleetHostRevision();
         result = await getFleetLlmHostStatus();
-      } while (started !== revision);
-      cached = result;
+      } while (started !== getFleetHostRevision());
+      setCachedFleetHostStatus(result);
       return result;
     })().finally(() => { reading = null; });
   }
   return reading;
-}
-
-export function noteFleetHostChanged({ usageOnly = false } = {}) {
-  if (!usageOnly) { revision += 1; cached = null; }
-  if (!subscribers.size) return;
-  pendingEvents.add(usageOnly ? 'fleet-host:usage:changed' : 'fleet-host:changed');
-  if (flush) return;
-  flush = setTimeout(() => {
-    flush = null;
-    const events = [...pendingEvents];
-    pendingEvents.clear();
-    for (const socket of subscribers) {
-      if (!socket.connected) continue;
-      try {
-        for (const event of events) socket.emit(event, {});
-      } catch (err) {
-        console.error(`❌ Fleet host notification failed: ${err.message}`);
-      }
-    }
-  }, 100);
-  flush.unref?.();
 }
 
 async function observe() {
@@ -63,7 +43,7 @@ async function observe() {
   if (previous !== null && previous !== signature) {
     // The sample is already cached; do not discard it and probe again.
     noteFleetHostChanged({ usageOnly: true });
-    pendingEvents.add('fleet-host:changed');
+    queueFleetHostEvent('fleet-host:changed');
   }
   previous = signature;
   timer = setTimeout(() => {
@@ -73,24 +53,24 @@ async function observe() {
   timer.unref?.();
 }
 
+export function releaseFleetHostSocket(socket) {
+  subscribers.delete(socket);
+  if (subscribers.size) return;
+  generation += 1;
+  clearTimeout(timer);
+  timer = null;
+  previous = null;
+  resetFleetHostSignal();
+}
+
+export function subscribeFleetHostSocket(socket) {
+  const first = subscribers.size === 0;
+  subscribers.add(socket);
+  if (first) observe().catch(err => console.error(`❌ Fleet host observation failed: ${err.message}`));
+}
+
 export function registerFleetHostSocket(socket) {
-  const release = () => {
-    subscribers.delete(socket);
-    if (subscribers.size) return;
-    generation += 1;
-    clearTimeout(timer);
-    clearTimeout(flush);
-    timer = null;
-    flush = null;
-    cached = null;
-    previous = null;
-    pendingEvents.clear();
-  };
-  socket.on('fleet-host:subscribe', () => {
-    const first = subscribers.size === 0;
-    subscribers.add(socket);
-    if (first) observe().catch(err => console.error(`❌ Fleet host observation failed: ${err.message}`));
-  });
-  socket.on('fleet-host:unsubscribe', release);
-  socket.on('disconnect', release);
+  socket.on('fleet-host:subscribe', () => subscribeFleetHostSocket(socket));
+  socket.on('fleet-host:unsubscribe', () => releaseFleetHostSocket(socket));
+  socket.on('disconnect', () => releaseFleetHostSocket(socket));
 }
