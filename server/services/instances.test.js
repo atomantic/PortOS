@@ -1311,6 +1311,32 @@ describe('instances.js', () => {
       expect(JSON.stringify(allowed.lastProbe)).not.toContain('loopback or link-local');
     });
 
+    it('keeps peer name, host, address and instanceId out of probe-failure logs', async () => {
+      const peer = makePeer({
+        id: 'peer-secret-id', instanceId: 'inst-secret-id', name: 'Secret Machine', host: 'secret-host.example-tailnet.ts.net', address: '192.0.2.77',
+      });
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      dns.lookup.mockRejectedValue(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const result = await probePeer(peer);
+        expect(result.status).toBe('offline');
+        const logged = [log, warn, error].flatMap((spy) => spy.mock.calls).flat().join('\n');
+        expect(logged).toContain('Probe failed for peer');
+        const rebind = makePeer({ name: 'Secret Machine', host: 'rebind-secret.example.com' });
+        dns.lookup.mockResolvedValueOnce([{ address: '127.0.0.1', family: 4 }]);
+        await probePeer(rebind);
+        expect([log, warn, error].flatMap((spy) => spy.mock.calls).flat().join('\n')).not.toMatch(/rebind-secret/);
+        expect(logged).not.toMatch(/Secret Machine|secret-host|192\.0\.2\.77|peer-secret-id|inst-secret-id/);
+      } finally {
+        log.mockRestore();
+        warn.mockRestore();
+        error.mockRestore();
+      }
+    });
+
     it('should mark peer online on successful probe', async () => {
       const peer = makePeer();
       const peers = [peer];

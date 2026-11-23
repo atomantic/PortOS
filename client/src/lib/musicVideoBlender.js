@@ -479,6 +479,7 @@ export function blenderAgentBrief({ projectId, state, standalone = false }) {
     `Workspace on this machine: ${workspace}`,
     '  src/film.py      the entry point you write (durable, backed up)',
     '  song.json        song context PortOS writes before every job: duration, beats, sections, lyric cues with word timings',
+    '  src/models/      3D models copied from the library (POST .../blender/models); in a shot: from portos_film import models; root, actions = models.load(ctx, "slug", height=1.8)',
     '  manifest.json    the last synced shot list',
     '  renders/         PortOS output, regenerable: never edit it',
     '',

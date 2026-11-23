@@ -71,6 +71,9 @@ export function VoiceTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
+  // Raw text of the Traits input while it has uncommitted edits; null means "show
+  // the saved list". Parsing per keystroke would drop typed commas and spaces.
+  const [traitsText, setTraitsText] = useState(null);
   const [status, setStatus] = useState(null);
   const [ttsEngines, setTtsEngines] = useState([]);
   const [ttsEngineError, setTtsEngineError] = useState(null);
@@ -189,11 +192,24 @@ export function VoiceTab() {
     return () => { live = false; };
   }, [fastBrowserLlm]);
 
+  const parseTraits = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
+
+  const commitTraits = () => {
+    if (traitsText === null) return;
+    patch('llm.personality.traits', parseTraits(traitsText));
+    setTraitsText(null);
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
-      const r = await updateVoiceConfig(cfg, { silent: true });
+      const payload = traitsText === null ? cfg : {
+        ...cfg,
+        llm: { ...cfg.llm, personality: { ...cfg.llm.personality, traits: parseTraits(traitsText) } },
+      };
+      const r = await updateVoiceConfig(payload, { silent: true });
       setCfg(r.config);
+      setTraitsText(null);
       const rec = r.reconciliation || {};
       if (rec.error) {
         toast.error(`Saved, but reconcile failed: ${rec.error}`, { duration: 12000 });
@@ -757,9 +773,9 @@ export function VoiceTab() {
             <FormField label="Traits (comma-separated)" hint="e.g. 'concise, warm, proactive'.">
               <input
                 type="text"
-                value={(cfg.llm.personality?.traits || []).join(', ')}
-                onChange={(e) => patch('llm.personality.traits',
-                  e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
+                value={traitsText ?? (cfg.llm.personality?.traits || []).join(', ')}
+                onChange={(e) => setTraitsText(e.target.value)}
+                onBlur={commitTraits}
                 className={inputCls}
               />
             </FormField>

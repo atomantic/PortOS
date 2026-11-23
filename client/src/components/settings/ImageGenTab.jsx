@@ -42,6 +42,7 @@ import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import ImageGenBackendSections from './ImageGenBackendSections';
 import ImageGenProviderSections, { PARALLEL_FALLBACK, clampParallel } from './ImageGenProviderSections';
 import ImageGenServiceSections from './ImageGenServiceSections';
+import { failureMessage } from '../messages/failureMessage';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -435,9 +436,10 @@ export function ImageGenTab() {
 
   const clearVideoCredential = async (id) => {
     setVideoCredentialBusy(`${id}-clearing`);
-    const row = await saveCredential(id, '', { silent: true }).catch(() => null);
+    let failure = null;
+    const row = await saveCredential(id, '', { silent: true }).catch((err) => { failure = err; return null; });
     setVideoCredentialBusy(null);
-    if (!row) { toast.error('Failed to clear key'); return; }
+    if (!row) { toast.error(failureMessage('Could not clear the saved key', failure)); return; }
     setCredentialRows((previous) => ({ ...previous, [id]: row }));
     toast.success('Saved key cleared. External credentials may still apply.');
   };

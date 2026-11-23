@@ -18,12 +18,13 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import SettingsLoadError from '../ui/SettingsLoadError';
 import ListLoadError from '../ui/ListLoadError';
 import { FormField } from '../ui/FormField';
+import { failureMessage } from './failureMessage';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { useGoogleAutoConfigProgress } from '../../hooks/useGoogleAutoConfigProgress';
 import { useGoogleAuthStatus } from '../../hooks/useGoogleAuthStatus';
 
 const TYPE_ICONS = { gmail: Mail, outlook: Globe, teams: MessageSquare };
-const TYPE_LABELS = { gmail: 'Gmail (API)', outlook: 'Outlook (Playwright)', teams: 'Teams (Playwright)' };
+const TYPE_LABELS = { gmail: 'Gmail (API)', outlook: 'Outlook (Browser)', teams: 'Teams (Browser)' };
 
 const DEFAULT_REPLY_TEMPLATE = `You are a professional email assistant. Draft a reply to the following email.
 
@@ -135,7 +136,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
         window.open(url, '_blank');
         toast.success('Complete authorization in the opened browser tab');
       })
-      .catch(() => toast.error('Failed to get auth URL'))
+      .catch(err => toast.error(failureMessage('Could not get the Google authorization URL', err)))
       .finally(() => setReauthorizing(false));
   };
 
@@ -144,17 +145,19 @@ export default function ConfigTab({ accounts, setAccounts }) {
       return toast.error('Both Client ID and Client Secret are required');
     }
     setSavingOAuth(true);
-    const saved = await saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
+    let failure = null;
+    const saved = await saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(err => { failure = err; return null; });
     setSavingOAuth(false);
-    if (!saved) return toast.error('Failed to save credentials');
+    if (!saved) return toast.error(failureMessage('Could not save credentials', failure, 'Check the Client ID and Secret and try again.'));
     toast.success('OAuth credentials saved');
     fetchGoogleAuth();
     handleReauthorize();
   };
 
   const handleAutoConfigStart = async () => {
-    const result = await startGoogleAutoConfig({ silent: true }).catch(() => null);
-    if (!result || result.error) return toast.error(result?.error || 'Failed to open browser');
+    let failure = null;
+    const result = await startGoogleAutoConfig({ silent: true }).catch(err => { failure = err; return null; });
+    if (!result || result.error) return toast.error(result?.error || failureMessage('Could not open the browser', failure, 'Make sure the PortOS browser is running.'));
     setAutoConfigStep('login');
     toast.success('Google Cloud Console opened in PortOS browser');
   };
@@ -177,7 +180,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleEnableGmailApi = () => {
     enableGmailApi({ silent: true })
       .then(r => toast.success(r.message))
-      .catch(() => toast.error('Failed to open Gmail API page'));
+      .catch(err => toast.error(failureMessage('Could not open the Gmail API page', err)));
   };
 
   const handleSaveConfig = async () => {
@@ -197,8 +200,9 @@ export default function ConfigTab({ accounts, setAccounts }) {
         voiceMode: config.voiceMode
       }
     };
-    const result = await updateSettings(patch, { silent: true }).catch(() => null);
-    if (!result) return toast.error('Failed to save config');
+    let failure = null;
+    const result = await updateSettings(patch, { silent: true }).catch(err => { failure = err; return null; });
+    if (!result) return toast.error(failureMessage('Could not save message config', failure));
     toast.success('Message config saved');
     setConfigDirty(false);
   };
@@ -212,9 +216,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    const result = await createMessageAccount(form, { silent: true }).catch(() => null);
+    let failure = null;
+    const result = await createMessageAccount(form, { silent: true }).catch(err => { failure = err; return null; });
     setSaving(false);
-    if (!result) return toast.error('Failed to create account');
+    if (!result) return toast.error(failureMessage('Could not create the account', failure));
     setShowForm(false);
     setForm({ name: '', type: 'gmail', email: '' });
     toast.success('Account created');
@@ -231,8 +236,9 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleToggle = async (account) => {
-    const result = await updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
-    if (!result) return toast.error('Failed to update account');
+    let failure = null;
+    const result = await updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(err => { failure = err; return null; });
+    if (!result) return toast.error(failureMessage('Could not update the account', failure));
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
   };
@@ -241,12 +247,13 @@ export default function ConfigTab({ accounts, setAccounts }) {
   // already-replied thread (#2796). Default-on for Gmail (absent === on).
   const handleToggleIngestSent = async (account) => {
     const next = account.syncConfig?.ingestSent === false; // flipping to enabled
+    let failure = null;
     const result = await updateMessageAccount(
       account.id,
       { syncConfig: { ...account.syncConfig, ingestSent: next } },
       { silent: true }
-    ).catch(() => null);
-    if (!result) return toast.error('Failed to update account');
+    ).catch(err => { failure = err; return null; });
+    if (!result) return toast.error(failureMessage('Could not update the account', failure));
     toast.success(next ? 'Reply detection enabled' : 'Reply detection disabled');
     setAccounts(prev => prev.map(a => a.id === account.id
       ? { ...a, syncConfig: { ...a.syncConfig, ingestSent: next } }
@@ -574,7 +581,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       onBlur={() => setConfirmClear(null)}
                       title="Clear cached messages for this account"
                     >
-                      {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Are you sure?' : 'Clear Cache'}
+                      {clearingCache === account.id ? 'Clearing...' : confirmClear === account.id ? 'Confirm clear cache' : 'Clear cache'}
                     </button>
                     <button
                       onClick={() => requestDelete(account.id)}
@@ -594,8 +601,8 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   <InlineConfirmRow
                     className="mt-2"
                     question="Remove this account? This cannot be undone."
-                    confirmText="Remove"
-                    confirmTitle="Remove account"
+                    confirmText="Delete account"
+                    confirmTitle="Delete account"
                     cancelTitle="Cancel"
                     onConfirm={() => confirmDelete(() => handleDelete(account.id))}
                     onCancel={cancelDelete}

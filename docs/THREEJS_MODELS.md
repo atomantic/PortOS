@@ -14,6 +14,21 @@ procedural Three.js scene with:
 - gallery-image lineage, run attribution, detail inventory, and honest
   single-view limitations.
 
+## Reference views
+
+A model has one primary gallery image plus up to five `referenceImages`
+(`{filename, role, label}`; roles `front`, `side`, `back`, `top`,
+`turnaround-sheet`, `close-up`, the last with a short "what this shows"
+label). They apply to create and refine. The prompt lists each with its role and
+states that the primary image wins on identity and color; disagreements go in
+the spec's limitations. API providers receive the primary then the references
+in order as attachments; CLI/TUI providers get the paths in the prompt. A
+provider declaring `maxImages` below the count is refused before the run, and a
+deleted gallery image gives a 409 naming it. On refine, an absent
+`referenceImages` keeps the stored list and `[]` clears it. Each run records
+the `images` it was sent. A record without the field reads as none; no
+migration. With no references the prompt and attachments are unchanged.
+
 ## Why this is native instead of an `img2threejs` dependency
 
 [hoainho/img2threejs](https://github.com/hoainho/img2threejs) is an Apache-2.0

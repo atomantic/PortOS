@@ -6,6 +6,7 @@ import { FormField } from '../ui/FormField';
 import { createCatalogType, updateCatalogType, deleteCatalogType } from '../../services/apiCatalogTypes';
 import { useCatalogTypes } from '../../hooks/useCatalogTypes.jsx';
 import { USER_TYPE_FIELD_KINDS } from '../../lib/catalogTypes';
+import { pluralize } from '../../lib/textUtils';
 
 /**
  * Catalog settings panel. Lists the built-in (system) ingredient types
@@ -157,7 +158,7 @@ export function CatalogTypesTab() {
               <div key={t.id} className="flex flex-wrap items-center justify-between gap-3 p-3 bg-port-bg border border-port-border rounded">
                 <div className="min-w-0">
                   <div className="text-white text-sm font-medium truncate">{t.label}</div>
-                  <div className="text-xs text-gray-500 font-mono">{t.id} · {(t.editorFields || []).length} field(s)</div>
+                  <div className="text-xs text-gray-500 font-mono">{t.id} · {pluralize((t.editorFields || []).length, 'field')}</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button type="button" onClick={() => startEdit(t)} disabled={editing !== null}

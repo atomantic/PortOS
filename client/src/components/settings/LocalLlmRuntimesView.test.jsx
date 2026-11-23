@@ -899,7 +899,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
 
     const projectorRow = (await screen.findByText('Vision projector')).closest('div').parentElement;
     fireEvent.click(within(projectorRow).getByRole('button', { name: /Delete/ }));
-    fireEvent.click(within(projectorRow).getByRole('button', { name: /Yes, delete/ }));
+    fireEvent.click(within(projectorRow).getByRole('button', { name: /Delete weights/ }));
 
     await waitFor(() => {
       expect(removeSpecDecodeModel).toHaveBeenCalledWith('vision-preset', 'projector', { silent: true });
@@ -967,7 +967,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /^Delete$/ })[0]);
     expect(removeSpecDecodeModel).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole('button', { name: /Yes, delete/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Delete weights/ }));
 
     await waitFor(() => {
       expect(removeSpecDecodeModel).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
@@ -983,7 +983,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     fireEvent.click((await screen.findAllByRole('button', { name: /^Delete$/ }))[0]);
     fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }));
 
-    expect(screen.queryByRole('button', { name: /Yes, delete/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete weights/ })).not.toBeInTheDocument();
     expect(removeSpecDecodeModel).not.toHaveBeenCalled();
   });
 

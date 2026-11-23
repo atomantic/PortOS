@@ -36,6 +36,7 @@ import {
   createTribePersonFromBeeper,
   unlinkBeeperParticipant,
 } from '../../../services/apiTribe.js';
+import { pluralize } from '../../../lib/textUtils';
 
 /**
  * The Beeper chat surface (#35): rail, pinned grid, conversation rows, thread
@@ -842,7 +843,7 @@ export default function BeeperChatSurface({
     // it forever in localStorage — nothing else ever clears an entry once its
     // conversation is gone from the list. Same shape `setDraft` uses.
     setDraft('');
-    toast.success(`Mirror purged — ${result.messagesRemoved} message(s), ${result.filesRemoved} attachment file(s) removed`);
+    toast.success(`Mirror purged — ${pluralize(result.messagesRemoved, 'message')}, ${pluralize(result.filesRemoved, 'attachment file')} removed`);
     // Only leave the thread the purge emptied; a reader who has since opened
     // another conversation stays on it.
     if (threadIdRef.current === id) clearSelection();

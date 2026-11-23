@@ -18,6 +18,8 @@ import {
 } from '../../services/apiDatabase.js';
 import socket from '../../services/socket';
 import { safeReadJsonSession, safeWriteJsonSession, safeRemoveSession } from '../../lib/safeStorage';
+import { pluralize } from '../../lib/textUtils';
+import { failureMessage } from '../messages/failureMessage';
 
 // Session-scoped: the cutover restarts this server, so the tab reloads or
 // reconnects mid-operation. Persisting only for the tab's lifetime keeps a
@@ -312,7 +314,7 @@ export function DatabaseTab() {
     setDbLoading(true);
     getDatabaseStatus({ silent: true })
       .then(setDbStatus)
-      .catch(() => toast.error('Failed to load database status'))
+      .catch((err) => toast.error(failureMessage('Could not load database status', err)))
       .finally(() => setDbLoading(false));
   }, []);
 
@@ -489,7 +491,7 @@ export function DatabaseTab() {
               {dbStatus?.connected ? 'Connected' : dbStatus ? 'Disconnected' : ''}
               {dbStatus?.memoryCount != null && ` — ${formatCount(dbStatus.memoryCount)} memories`}
               {dbStatus?.dbBytes != null && ` — ${formatBytes(dbStatus.dbBytes)}`}
-              {dbStatus?.tableCount != null && ` (${dbStatus.tableCount} tables)`}
+              {dbStatus?.tableCount != null && ` (${pluralize(dbStatus.tableCount, 'table')})`}
             </span>
           </div>
           <button

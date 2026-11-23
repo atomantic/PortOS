@@ -9,6 +9,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatDateTime } from '../../utils/formatters';
 import { useSyncSourceSettings } from '../../hooks/useSyncSourceSettings';
 import { getImessageStatus, checkImessageSetup, syncImessage } from '../../services/apiMessages.js';
+import { pluralize } from '../../lib/textUtils';
 
 // iMessage ingestion settings (#2151). Opt-in, machine-local ingestion of the
 // macOS Messages database (chat.db) into the Tribe touchpoint log + activity
@@ -37,8 +38,8 @@ export function IMessageSettingsPanel({ onSynced }) {
     const report = await checkImessageSetup({ silent: true }).catch(() => ({ ok: false, error: 'Setup check failed' }));
     setChecking(false);
     setSetup(report);
-    if (report?.ok) toast.success(`chat.db reachable — ${report.messageCount ?? 0} message(s)`);
-    else toast.error(report?.fullDiskAccessRequired ? 'Full Disk Access required' : 'chat.db not reachable');
+    if (report?.ok) toast.success(`Apple Messages reachable — ${pluralize(report.messageCount ?? 0, 'message')}`);
+    else toast.error(report?.fullDiskAccessRequired ? 'Full Disk Access required' : 'Apple Messages not reachable');
   };
 
   const handleSyncNow = async () => {
@@ -46,7 +47,7 @@ export function IMessageSettingsPanel({ onSynced }) {
     const result = await syncImessage({ silent: true }).catch(() => ({ ok: false, error: 'Sync failed' }));
     setSyncing(false);
     if (result?.ok) {
-      toast.success(`Synced: ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s)${result.hasMore ? ' — more history remains, run again' : ''}`);
+      toast.success(`Synced: ${pluralize(result.recorded, 'event')}, ${pluralize(result.touchpointsCreated, 'touchpoint')}${result.hasMore ? ' — more history remains, run again' : ''}`);
       setStatus((prev) => ({ ...(prev || {}), state: { ...(prev?.state || {}), cursorRowid: result.cursorRowid, lastResult: result, lastRunAt: new Date().toISOString() } }));
       onSynced?.();
     } else {
@@ -147,7 +148,7 @@ export function IMessageSettingsPanel({ onSynced }) {
             <h3 className="text-sm font-semibold text-white">{setup.ok ? 'Setup OK' : 'Setup blocked'}</h3>
           </div>
           {setup.ok ? (
-            <p className="text-sm text-gray-300">chat.db reachable at <code className="text-gray-400">{setup.dbPath}</code> — {setup.messageCount ?? 0} message(s).</p>
+            <p className="text-sm text-gray-300">Apple Messages reachable at <code className="text-gray-400">{setup.dbPath}</code> — {pluralize(setup.messageCount ?? 0, 'message')}.</p>
           ) : (
             <div className="text-sm text-gray-300 space-y-2">
               <p className="text-port-error">{setup.error}</p>

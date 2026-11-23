@@ -60,7 +60,7 @@ export function classifyPeerProbeFailure(err, { peer = null, tunnelError = null,
   if (code === 'ENOTFOUND') {
     return {
       class: PROBE_CLASS.DNS,
-      message: `DNS lookup failed for ${peer?.host || peer?.address || 'peer'} — is Tailscale MagicDNS up?`,
+      message: `DNS lookup failed for the peer host — is Tailscale MagicDNS up?`,
       httpStatus,
     };
   }

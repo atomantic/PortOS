@@ -944,7 +944,7 @@ export async function discardExercise(id) {
 }
 
 // Conflict-restore for an exercise sprint — see restoreBodylessRecord above.
-const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt', 'promotedAt', 'promotedDraftVersionId'];
+export const EXERCISE_RESTORABLE = ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt', 'promotedAt', 'promotedDraftVersionId'];
 export async function restoreExercise(id, patch) {
   return restoreBodylessRecord(id, patch, {
     queue: queueExerciseWrite,

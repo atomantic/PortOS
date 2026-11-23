@@ -48,6 +48,19 @@ export const musicVideoBlenderFileWriteSchema = z.object({
   content: z.string().max(MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES),
 }).strict();
 
+const modelSlug = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/, 'slug must be lowercase letters, digits, - or _');
+
+// Add a library model to the film; `slug` omitted lets the server name and de-duplicate it.
+export const musicVideoBlenderModelAddSchema = z.object({
+  kind: z.enum(['image-to-3d', 'threejs']),
+  id: z.string().min(1).max(120),
+  variant: z.enum(['mesh', 'rigged', 'animated']).optional(),
+  slug: modelSlug.optional(),
+  replace: z.boolean().optional(),
+}).strict();
+
+export const musicVideoBlenderModelSlugSchema = z.object({ slug: modelSlug }).strict();
+
 export const musicVideoBlenderSyncSchema = z.object({
   replaceScenes: z.boolean().optional(),
 }).strict();

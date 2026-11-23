@@ -25,6 +25,7 @@ import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS, NON_RECORD_SCHEM
 vi.mock('../instances.js', () => ({
   DEFAULT_SYNC_CATEGORIES: {},
   getPeers: vi.fn().mockResolvedValue([]),
+  peerLogLabel: () => 'peer',
   enqueueReciprocalSync: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
@@ -2590,6 +2591,8 @@ describe('peerSync', () => {
         // An asleep or offline peer is routine: stdout, not stderr.
         expect(logSpy.mock.calls.some(([line]) => /peerSync: push universe\/u1 .* unreachable/.test(line))).toBe(true);
         expect(warnSpy).not.toHaveBeenCalled();
+        const logged = [...logSpy.mock.calls, ...warnSpy.mock.calls].flat().join('\n');
+        expect(logged).not.toMatch(/Peer A|10\.0\.0\.2|peer-a/);
       } finally {
         logSpy.mockRestore();
         warnSpy.mockRestore();

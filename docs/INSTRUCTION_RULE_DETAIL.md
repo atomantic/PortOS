@@ -174,7 +174,7 @@ A rule may be retired after reassessing its value and feasibility, with concise 
 
 **Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It skips imports past two hops and browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](./PREGATE.md)).
 
-Use linked binaries (`server/node_modules/.bin/vitest run <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add` (pregate links too).
+Use linked binaries (`server/node_modules/.bin/vitest run --configLoader runner <files>`). Only the `dependency-updates` task's worktree has no symlinks and installs inside itself. A worktree PortOS did not create runs `node scripts/link-worktree-deps.js <primary-checkout> <worktree>` right after `git worktree add` (pregate links too).
 
 - **Network info**: LAN/Tailscale/public IPs, MACs, subnets, port forwards, gateways, VPN keys, `.env` secrets, DB passwords other than the `portos` dev fallback, API tokens, cookies, auth headers.
 

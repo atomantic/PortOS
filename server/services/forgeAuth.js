@@ -142,11 +142,14 @@ async function resolveConfiguredAccount(dir) {
  */
 async function getGhCommitIdentity(host, token, timeoutMs, signal) {
   const { code, stdout } = await spawnCli(
-    'gh', ['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | @tsv'],
+    'gh', ['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | tojson'],
     timeoutMs, signal, ghHostEnv(host, token)
   );
   if (code !== 0) return null;
-  const [id, login, name, email] = (stdout || '').trim().split('\t');
+  let fields;
+  try { fields = JSON.parse((stdout || '').trim()); } catch { return null; }
+  if (!Array.isArray(fields)) return null;
+  const [id, login, name, email] = fields;
   if (!id || !login) return null;
   const commitEmail = host === 'github.com' ? `${id}+${login}@users.noreply.github.com` : email;
   if (!commitEmail) return null;

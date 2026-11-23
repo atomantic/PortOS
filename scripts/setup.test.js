@@ -290,7 +290,7 @@ describe('the wrappers do not regrow their own pipeline', () => {
   });
 
   it('only the helper contains the slash-do install', () => {
-    expect(read('scripts/install-slashdo.js')).toContain('slash-do@');
+    expect(read('scripts/install-slashdo.js')).toContain('lib/slashdo/bin/cli.js');
     for (const file of [...WRAPPERS, 'scripts/setup.js']) {
       expect(read(file), file).not.toMatch(/slash-do@|(Get-Content|<)[^\n]*SLASHDO_VERSION/);
     }

@@ -71,14 +71,14 @@ describe('taskDataInputs', () => {
   it('renders the lane\'s recent audit slices, an empty history, and an unreadable store without a forge call', async () => {
     const resolveTracker = vi.fn();
     const listAuditSlices = vi.fn().mockResolvedValue([
-      { assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/auth, server/lib/commandSecurity.js' },
+      { assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services/auth, server/lib/commandSecurity.js', sliceScore: 60 },
       { assessedAt: '2026-09-03T10:00:00.000Z', slice: 'client/src/components/apps' },
     ]);
     const options = { app: APP, taskType: 'better-runtime-safety', dependencies: { resolveTracker, listAuditSlices } };
     const [section] = await resolveTaskDataInputs(['audit-slice-history'], options);
     expect(section.label).toBe('Recent audit slices');
-    expect(section.content).toContain('Recently audited by this lane (prefer other areas unless evidence points here):');
-    expect(section.content).toContain('- 2026-09-10: server/services/auth, server/lib/commandSecurity.js');
+    expect(section.content).toContain('Recently audited by this lane (rotate to uncovered areas, OR re-verify a slice that scored below 75 once its filed issues are closed):');
+    expect(section.content).toContain('- 2026-09-10 (score: 60): server/services/auth, server/lib/commandSecurity.js');
     expect(section.content).toContain('- 2026-09-03: client/src/components/apps');
     expect(listAuditSlices).toHaveBeenCalledWith('app-1', 'better-runtime-safety');
     expect(resolveTracker).not.toHaveBeenCalled();

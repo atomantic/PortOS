@@ -133,10 +133,10 @@ describe('scheduled audit measurement workflow', () => {
     ];
     expect(QUALITY_WINDOW_RUNS).toBe(5);
     const quality = summarizeAppQuality(records, now);
-    // (80·1 + 40·0.5 + 50·1 + 10·1 + 20·1) / 4.5
-    expect(quality).toMatchObject({ score: 40, ratedCategories: 1 });
+    // Confidence weights (1, 0.5, 1, 1, 1) each times 0.5^(ageDays/14): the newer runs weigh slightly more.
+    expect(quality).toMatchObject({ score: 42, ratedCategories: 1 });
     expect(quality.categories.find(c => c.id === 'security')).toMatchObject({
-      score: 40, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
+      score: 42, runScore: 60, slice: 'slice-0', coverage: 'partial', worstSeverity: 9, agentId: 'run-0', stale: false,
       window: { runs: 5, worstSeverity: 7 },
     });
     // No qualifying run: the row shows the newest run's own score beside its evidence label, and does not contribute.
@@ -160,12 +160,21 @@ describe('scheduled audit measurement workflow', () => {
     expect(parseAuditSlice(`AUDIT_SLICE: ${'x'.repeat(600)}`)).toHaveLength(500);
     expect(parseAuditSlice(null)).toBeNull();
 
-    const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services' }] });
-    expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services' }]);
+    const read = vi.fn().mockResolvedValue({ rows: [{ assessed_at: new Date('2026-09-10T10:00:00Z'), slice: 'server/services', report: { version: 2, sliceScore: 62 } }] });
+    expect(await readRecentAuditSlices('portos-default', 'react-lifecycle', { query: read })).toEqual([{ assessedAt: '2026-09-10T10:00:00.000Z', slice: 'server/services', sliceScore: 62 }]);
     expect(read.mock.calls[0][0]).toMatch(/slice IS NOT NULL/);
     expect(read.mock.calls[0][1]).toEqual(['portos-default', ['ui-lifecycle', 'react-lifecycle'], AUDIT_SLICE_HISTORY_RUNS]);
     await readRecentAuditSlices('portos-default', 'ui-runtime-bugs', { query: read });
     expect(read.mock.calls[1][1][1]).toEqual(['ui-runtime-bugs', 'app-bugs', 'ui-bugs', 'console-errors', 'ui-lifecycle', 'react-lifecycle']);
+  });
+
+  it('decays older runs with a 14-day half-life alongside confidence weights', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const mk = (daysAgo, score, agentId) => ({ category: 'security', agentId, assessedAt: new Date(now - daysAgo * 86400000).toISOString(),
+      report: { version: 2, category: 'security', slice: 's', sliceScore: score, worstSeverity: 1, coverage: 'broad', confidence: 'high', summary: 'x', scannedFiles: 1, totalFiles: 1 } });
+    const records = [mk(0, 90, 'a'), mk(14, 30, 'b')];
+    // weights 1 and 0.5 → (90 + 15) / 1.5 = 70
+    expect(summarizeAppQuality(records, now).categories.find(c => c.id === 'security').score).toBe(70);
   });
 
   // The same run reaches the window as the local row and again through the
@@ -177,7 +186,7 @@ describe('scheduled audit measurement workflow', () => {
     const older = { category: 'react-lifecycle', agentId: 'run-b', assessedAt: '2026-09-08T10:00:00Z', report: sliceReport({ category: 'react-lifecycle', sliceScore: 20 }) };
     const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
-    expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 50, window: { runs: 2 } });
+    expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 52, window: { runs: 2 } });
   });
 
   it('retains both same-day profile scores across snapshot serialization and counts their domain once', () => {

@@ -753,3 +753,15 @@ describe('conflictJournal — RESTORABLE_FIELDS parity with the wire shape', () 
     expect(Object.keys(wire()).filter((key) => !classified.has(key))).toEqual([]);
   });
 });
+
+describe('conflictJournal — Writers Room RESTORABLE_FIELDS parity with the restore helpers', () => {
+  it('writersRoomExercise restores exactly what restoreExercise writes (incl. promotion markers)', async () => {
+    const { EXERCISE_RESTORABLE } = await import('../services/writersRoom/local.js');
+    expect([...cj.RESTORABLE_FIELDS.writersRoomExercise].sort()).toEqual([...EXERCISE_RESTORABLE].sort());
+    expect(cj.RESTORABLE_FIELDS.writersRoomExercise).toEqual(expect.arrayContaining(['promotedAt', 'promotedDraftVersionId']));
+  });
+
+  it('writersRoomWork restores the custom voice exemplar passages updateWork accepts', () => {
+    expect(cj.RESTORABLE_FIELDS.writersRoomWork).toEqual(expect.arrayContaining(['voiceExemplars', 'voiceAntiExemplars']));
+  });
+});

@@ -39,9 +39,9 @@ export default function SpecDecodeWeightRow({ entry, progress, onDownload, onCan
           {entry.exists ? (
             isConfirming(entry.role) ? (
               <ConfirmButtonPair
-                prompt="Delete this file?"
+                prompt={`Delete ${label.toLowerCase()} weights?`}
                 confirmIcon={Trash2}
-                confirmText="Yes, delete"
+                confirmText="Delete weights"
                 busy={disabled}
                 onConfirm={() => confirmDelete(() => onDelete(entry.role))}
                 onCancel={cancelDelete}

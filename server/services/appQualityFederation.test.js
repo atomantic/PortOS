@@ -48,16 +48,16 @@ it('combines newest categories in app view and UTC history without changing othe
   const remote = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 80), row('performance', 60)]));
   const local = { ...deps([row('security', 20, '2026-09-09T10:00:00Z')]), peerFetch: vi.fn(async () => response(remote)) };
   const apps = await enrichAppsWithQuality([{ id: 'portos-default' }, { id: 'other' }], local);
-  // security rolls the peer's run (80) with the local one (20); performance is the peer's alone.
-  expect(apps[0].quality).toMatchObject({ score: 55, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
+  // security rolls the peer's run (80) with the older, decayed local one (20); performance is the peer's alone.
+  expect(apps[0].quality).toMatchObject({ score: 56, ratedCategories: 2, federation: { peers: 1, available: 1, unavailable: 0 } });
   expect(apps[0].quality.categories.find(c => c.id === 'security')).toMatchObject({ sourcePeerId: 'peer-a', agentId: null });
   expect(apps[1].quality.score).toBeNull();
   expect(local.peerFetch.mock.calls[0]).toEqual([expect.stringMatching(/^http:\/\/192\.0\.2\.1:5555\/api\/apps\/quality-federation\?days=30&repositories=[a-f0-9]{64}&categories=security%2C/),
     expect.objectContaining({ signal: expect.any(AbortSignal), redirect: 'error', maxBytes: 4194304 }), peer]);
   const history = await getAppQualityHistory({ id: 'portos-default' }, 30, local);
   expect(history.points.find(p => p.date === '2026-09-09').score).toBe(20);
-  expect(history.points.at(-1)).toMatchObject({ score: 55, ratedCategories: 2 });
-  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(55);
+  expect(history.points.at(-1)).toMatchObject({ score: 56, ratedCategories: 2 });
+  expect((await enrichAppsWithQuality([{ id: 'portos-default' }], local))[0].quality.score).toBe(56);
   expect((await exportPortosQuality(peer.instanceId, 30, local)).measurements.map(m => m.report.score)).toEqual([20]);
 });
 
