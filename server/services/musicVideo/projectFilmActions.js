@@ -39,8 +39,8 @@ export async function listProjectCompletion({ ingredientIds, matchesName } = {})
 
 /** Import a standalone film into a fresh, unanalyzed project; never starts work. */
 export async function createProjectFromFilm(input, sourceOwner, settings) {
-  const [{ copyBlenderFilm, removeBlenderFilmCopy }, { musicVideoFilmOwner }, { readBlenderManifest, writeBlenderManifest }, { writeBlenderSong }] = await Promise.all([
-    import('../film/fork.js'), import('./blender/owner.js'), import('../film/manifest.js'), import('./blender/song.js'),
+  const [{ copyBlenderFilm, removeBlenderFilmCopy }, { musicVideoFilmOwner, writeBlenderSong }, { readBlenderManifest, writeBlenderManifest }] = await Promise.all([
+    import('../film/fork.js'), import('./blender/owner.js'), import('../film/manifest.js'),
   ]);
   let target = null;
   return createProjectWith(input, {
@@ -80,7 +80,7 @@ export async function cloneProject(id, options = {}) {
   delete cloneOptions.blenderFilm;
   // A footage adaptation leaves the film behind: its shots become footage.
   const film = cloneOptions.variant === 'video-generation' ? null : await forkBlenderFilm(id);
-  const writeSong = film ? (await import('./blender/song.js')).writeBlenderSong : null;
+  const writeSong = film ? (await import('./blender/owner.js')).writeBlenderSong : null;
   return cloneProjectWith(id, { ...cloneOptions, id: film?.id ?? `mv-${randomUUID()}`, blenderFilm: Boolean(film) }, {
     // The copied song.json names the source project; publish the fork only after its own is written.
     finish: writeSong ? (project) => writeSong(project, normalizeBlenderRecord(project.blender).settings) : null,

@@ -59,12 +59,3 @@ async function songAudioPaths(project) {
 
 /** The exact song context a job receives, without writing the workspace. */
 export const getBlenderSong = async (project, settings) => buildBlenderSong(project, { fps: settings.fps, audio: await songAudioPaths(project) });
-
-
-/** Compatibility entry for workspace creation, which already holds the project. */
-export async function writeBlenderSong(project, settings) {
-  const [{ writeBlenderSong: writeSong }, { musicVideoFilmOwner }] = await Promise.all([
-    import('../../film/song.js'), import('./owner.js'),
-  ]);
-  return writeSong(musicVideoFilmOwner(project.id), settings);
-}

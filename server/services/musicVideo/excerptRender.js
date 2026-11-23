@@ -40,6 +40,8 @@ import { planMusicVideoRender, buildMusicVideoFfmpegArgs, excerptBoundaryTimes, 
 import { SOCIAL_VIDEO_ARGS } from './socialCuts.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
+// Lazy: the stager pulls the document preview stack, which only a composed lyric render needs, not the boot closure.
+const stageLyricOverlayLazy = async (...args) => (await import('./lyricOverlayStage.js')).stageLyricOverlay(...args);
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
 import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideo/musicVideoTitleCard.js';
@@ -562,7 +564,7 @@ async function beginExcerptRender({ projectId, stored, project, startSec, endSec
     const captureCues = cues.map((c) => ({ ...c, startSec: Math.max(c.startSec, startSec) }));
     renderTypographyOverlays({
       jobId, cues: captureCues, style, width: probe.canonW, height: probe.canonH, fps: probe.fps, durationSec: endClamped, signal,
-      lyrics: lyricWindows.length > 0 ? { project, windows: lyricWindows } : null,
+      lyrics: lyricWindows.length > 0 ? { project, windows: lyricWindows, stage: stageLyricOverlayLazy } : null,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: 0.5 * fraction }),
     }).then(async (overlays) => {
       signal.throwIfAborted();

@@ -17,7 +17,7 @@
  * it once the final render finishes, and boot recovery sweeps any a crash left.
  */
 
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { copyFile, mkdir, rm, writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { spawn } from '../../lib/childProcess.js';
@@ -178,23 +178,6 @@ export async function renderSongComposition({ project, directory, jobId, audioPa
 }
 
 /**
- * Stage the storyboard animatic's lyric overlay page (documentTemplates/lyricOverlay,
- * with the shared lyricType.js and its faces) in `dir`, drawing `project`'s lyrics
- * at the render's frame, so a composed render's words match the animatic's.
- */
-async function stageLyricOverlay(dir, project, { width, height, fps, durationSec }) {
-  const [{ readLyricOverlayDocumentFiles }, { lyricOverlayDocumentData }] = await Promise.all([
-    import('./compositionDocument.js'), import('./lyricPlaythrough.js'),
-  ]);
-  for (const [rel, file] of await readLyricOverlayDocumentFiles()) {
-    await mkdir(dirname(join(dir, rel)), { recursive: true });
-    await copyFile(file.abs, join(dir, rel));
-  }
-  const data = lyricOverlayDocumentData(project, { width, height, fps, durationSec });
-  await writeFile(join(dir, 'portos-mv.js'), `window.PORTOS_MV = ${JSON.stringify(data).replace(/</g, '\\u003c')};\n`);
-}
-
-/**
  * The frame windows the overlay capture draws, per page (`doc` for the timed
  * text cues, `lyrics` for the sung lyrics), in the order renderTypographyOverlays
  * emits its clips. Each window is snapped outward to the output frame grid and
@@ -220,7 +203,9 @@ export function typographyOverlayWindows({ cues, lyricWindows = [], fps, duratio
 /**
  * Render the overlay clips on a `width`×`height`, `fps` frame: the timed text
  * `cues` (already filtered by renderableCues) on the typography page, and, when
- * `lyrics` is `{ project, windows }` (composedLyricWindows), the sung lyrics in
+ * `lyrics` is `{ project, windows, stage }` (composedLyricWindows; `stage` is
+ * lyricOverlayStage.js's stageLyricOverlay, injected because it sits above this
+ * module), the sung lyrics in
  * the shared lyric type over those windows. Resolves `[{ path, startSec,
  * durationSec }]`, typography clips first, each set in time order.
  * `window` limits the capture to one segment's frames (typographyOverlayWindows).
@@ -237,7 +222,7 @@ export async function renderTypographyOverlays({ jobId, cues, style, width, heig
         if (cues.some((c) => c.card || c.titleCard)) await copyFile(LYRIC_FONT_SOURCE, join(dir, LYRIC_FONT_FILE));
         if (cues.some((c) => c.titleCard?.font === 'mono')) await copyFile(sharedFont(TITLE_CARD_MONO_FONT_FILE), join(dir, TITLE_CARD_MONO_FONT_FILE));
       }
-      : (dir) => stageLyricOverlay(dir, lyrics.project, { width, height, fps, durationSec }),
+      : (dir) => lyrics.stage(dir, lyrics.project, { width, height, fps, durationSec }),
   }));
   if (pages.length === 0) return [];
   const ffmpeg = await findFfmpeg();

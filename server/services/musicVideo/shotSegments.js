@@ -49,6 +49,7 @@ import { planMusicVideoRender } from './renderPlan.js';
 import { isProjectRenderActive } from './renderActivityState.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays, typographyOverlayWindows } from './compositionRender.js';
+import { stageLyricOverlay } from './lyricOverlayStage.js';
 import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
 import { applyFilmLookFinish } from './filmLookFinish.js';
 import { getMusicVideoOutroStats, renderStatsOutroClip } from './statsOutro.js';
@@ -406,7 +407,7 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   try {
     const overlays = needsOverlay ? await renderTypographyOverlays({
       jobId, cues: segment.cues, style: plan.style, width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.totalDuration,
-      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window,
+      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows, stage: stageLyricOverlay } : null, window: segment.window,
       sceneId: segment.sceneId, signal,
       onProgress: (f) => onProgress?.(f * 0.5),
     }) : [];
