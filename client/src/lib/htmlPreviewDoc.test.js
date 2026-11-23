@@ -4,17 +4,13 @@ import { previewDocument } from './htmlPreviewDoc.js';
 const policy = (doc) => /http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(doc)?.[1] ?? '';
 
 describe('previewDocument', () => {
-  it('puts the policy first inside <head> and keeps the doctype and the page untouched', () => {
-    const page = '<!doctype html><html lang="en"><head><title>x</title></head><body><script>run()</script></body></html>';
+  it.each([
+    '<!doctype html><html lang="en"><head><title>x</title></head><body><p>hi</p></body></html>',
+    '<html><body>hi</body></html>',
+    '<div>hi</div>',
+  ])('puts the policy before the supplied markup in standards mode for %s', (page) => {
     const out = previewDocument(page);
-    expect(out.startsWith('<!doctype html>')).toBe(true);
-    expect(out.indexOf('Content-Security-Policy')).toBeLessThan(out.indexOf('<title>'));
-    expect(out.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, '')).toBe(page);
-  });
-
-  it('adds a head when the page has none, and wraps a bare fragment', () => {
-    expect(previewDocument('<html><body>hi</body></html>')).toMatch(/<html><head><meta [^>]*><\/head><body>hi<\/body><\/html>/);
-    expect(previewDocument('<div>hi</div>')).toMatch(/^<!doctype html><html><head><meta [^>]*><\/head><body><div>hi<\/div><\/body><\/html>$/);
+    expect(out.replace(/^<!doctype html><meta http-equiv="Content-Security-Policy"[^>]*>/, '')).toBe(page);
   });
 
   it('refuses network access while still allowing inline script and style', () => {

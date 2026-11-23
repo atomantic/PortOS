@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Code2, Copy, Eye } from 'lucide-react';
 import MarkdownOutput from '../cos/MarkdownOutput';
 import { copyToClipboard } from '../../lib/clipboard';
+import { previewDocument } from '../../lib/htmlPreviewDoc.js';
 
 // Languages whose fenced blocks can be rendered as a live preview. `htm`/`xml`/
 // `svg` round out the common ways a model labels markup it expects to render.
@@ -94,16 +95,11 @@ function CodeBlock({ lang, code, closed }) {
         </div>
       </div>
       {showPreview ? (
-        // Minimal sandbox: allow-scripts so the markup's JS runs, allow-forms so
-        // demo forms submit within the frame. Deliberately omit allow-same-origin
-        // (can't reach this page's DOM/cookies/storage), allow-popups (no
-        // window.open spam), and allow-modals (no blocking alert/prompt loops the
-        // user can only escape by closing the tab) — none are needed to render a
-        // page, and all widen the nuisance surface of untrusted model output.
         <iframe
           title="HTML preview"
-          sandbox="allow-scripts allow-forms"
-          srcDoc={code}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
+          srcDoc={previewDocument(code)}
           className="w-full h-72 md:h-96 bg-white"
         />
       ) : (
