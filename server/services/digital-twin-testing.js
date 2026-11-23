@@ -44,7 +44,7 @@ export async function runTests(providerId, model, testIds = null, personaId = nu
   // When a persona is selected the embodied context is flavored with that
   // persona's instructions, so the suite measures how the twin behaves *as*
   // that persona (P7 "per-persona testing"); with none it tests the base twin.
-  const soulContext = await getDigitalTwinForPrompt(personaId ? { personaId } : {});
+  const soulContext = await getDigitalTwinForPrompt({ respectAutoInject: false, ...(personaId ? { personaId } : {}) });
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {

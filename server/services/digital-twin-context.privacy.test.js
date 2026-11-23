@@ -57,4 +57,18 @@ describe('getDigitalTwinForPrompt privacy gate', () => {
     expect(out).toBe('');
     expect(getPrivacyTwinContext).not.toHaveBeenCalled();
   });
+
+  it('respectAutoInject:false still assembles context (and honors includePrivacyContext) when autoInject is off', async () => {
+    loadMeta.mockResolvedValue(metaWith({ autoInjectToCoS: false, includePrivacyContext: true }));
+    getPrivacyTwinContext.mockResolvedValue('# Identity Facts (Privacy Vault)\nSkylar Example');
+    const out = await getDigitalTwinForPrompt({ respectAutoInject: false });
+    expect(getPrivacyTwinContext).toHaveBeenCalledTimes(1);
+    expect(out).toContain('Skylar Example');
+
+    getPrivacyTwinContext.mockClear();
+    loadMeta.mockResolvedValue(metaWith({ autoInjectToCoS: false, includePrivacyContext: false }));
+    const out2 = await getDigitalTwinForPrompt({ respectAutoInject: false });
+    expect(getPrivacyTwinContext).not.toHaveBeenCalled();
+    expect(out2).not.toContain('Privacy Vault');
+  });
 });

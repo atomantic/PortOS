@@ -1444,6 +1444,21 @@ Forgets the budget and recommends lodging that exceeds it.
       expect(result).toBe('');
     });
 
+    it('should still return soul content with respectAutoInject:false when autoInjectToCoS is false', async () => {
+      const meta = makeMeta({
+        documents: [makeDocMeta({ id: 'doc-1', filename: 'SOUL.md', weight: 10 })],
+        settings: { autoInjectToCoS: false, maxContextTokens: 4000 }
+      });
+      await saveMeta(meta);
+      readFile.mockImplementation(async (filePath) => {
+        if (filePath.includes('meta.json')) return JSON.stringify(meta);
+        return 'Soul content';
+      });
+
+      expect(await getDigitalTwinForPrompt()).toBe('');
+      expect(await getDigitalTwinForPrompt({ respectAutoInject: false })).toContain('Soul content');
+    });
+
     it('should respect maxTokens limit', async () => {
       const longContent = 'x'.repeat(20000);
       const meta = makeMeta({

@@ -55,10 +55,13 @@ function buildPersonaPreamble(persona, baseTraits) {
 }
 
 export async function getDigitalTwinForPrompt(options = {}) {
-  const { maxTokens = 4000, personaId } = options;
+  // respectAutoInject: the autoInjectToCoS setting gates CoS agent injection
+  // only. User-triggered twin workflows (test suites, dynamic test generation,
+  // enrichment) pass false so they keep seeing the twin when it is unchecked.
+  const { maxTokens = 4000, personaId, respectAutoInject = true } = options;
   const meta = await loadMeta();
 
-  if (!meta.settings.autoInjectToCoS) {
+  if (respectAutoInject && !meta.settings.autoInjectToCoS) {
     return '';
   }
 
