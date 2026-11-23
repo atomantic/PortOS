@@ -300,6 +300,7 @@ const noPayload = () => ({});
 // omitted means forward the first argument unchanged.
 const SIMPLE_BRIDGES = [
   { emitter: modelLifecycleEvents, event: 'image-to-3d:changed', channel: 'image-to-3d:changed' },
+  { emitter: modelLifecycleEvents, event: 'blender-model:changed', channel: 'blender-model:changed' },
   { emitter: modelLifecycleEvents, event: 'threejs-model:changed', channel: 'threejs-model:changed' },
   { emitter: modelLifecycleEvents, event: 'html-page-run:changed', channel: 'html-page-run:changed' },
   { emitter: meatspaceEvents, event: 'death-clock:changed', channel: 'meatspace:death-clock:changed' },

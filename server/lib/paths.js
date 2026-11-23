@@ -76,6 +76,8 @@ export const PATHS = {
   sprites: join(INSTALL_ROOT, 'data/sprites'),
   // Image-to-3D (#2952): per-record GLB meshes (image-to-3d/<id>/model.glb); records live in Postgres (image_to_3d_models).
   imageTo3d: join(INSTALL_ROOT, 'data/image-to-3d'),
+  // Blender Models (#17874): per-model workspaces (blender-models/<id>/{src,builds,renders}/); records live in Postgres (blender_models).
+  blenderModels: join(INSTALL_ROOT, 'data/blender-models'),
   // Persisted audio renders (voice-over lines), distinct from the in-memory voice-agent synthesis path (services/voice/, which streams over Socket.IO).
   audio: join(INSTALL_ROOT, 'data/audio'),
   // Uploaded + generated background music tracks, separate from `audio/` so a track is reusable across issues.

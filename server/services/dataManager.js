@@ -65,6 +65,7 @@ export const CATEGORIES = {
   'backup-admission': { label: 'Backup Admission', description: 'Active publication and snapshot ownership — reconcile through backup recovery', archivable: false, deletable: false },
   // data/backup/ also holds the backup service's state.json and .archive-* staging; the purge is archives-only.
   'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true, purgeScope: 'category', purgeFilter: name => ARCHIVE_FILENAME.test(name) },
+  'blender-models': { label: 'Blender Models', description: 'Blender model workspaces — authored src/ code (the only copy) and immutable builds; records live in Postgres', archivable: false, deletable: false },
   'brain': { label: 'Brain', description: 'Brain items and sync log', archivable: true, deletable: false },
   // The Beeper attachment byte mirror (#37) — the only thing the Beeper feature
   // writes to `data/`; every other Beeper record is Postgres. Not archivable:

@@ -139,7 +139,7 @@ import { recoverStuckAnalyses } from './writersRoom/analysisSnapshots.js';
 import { recoverStuckGeneratingStages, recoverStuckAutoRuns, recoverStuckAutopilots } from './pipeline/recovery.js';
 import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
 import { requireMusicVideoRecovery } from './bootHookRegistry.js';
-import { recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
+import { recoverInterruptedBlenderModels, recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
 import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
@@ -517,6 +517,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // cold-bootstrap provider call.
   recoverInterruptedThreejsModels().catch(err => logBootstrapFailure('❌ Three.js model recovery failed', err));
   recoverInterruptedImageTo3dModels().catch(err => logBootstrapFailure('❌ Image-to-3D model recovery failed', err));
+  recoverInterruptedBlenderModels().catch(err => logBootstrapFailure('❌ Blender model recovery failed', err));
   // Arm the managed-model-server idle reaper. Timer only — it reads timestamps
   // and may stop a PM2 process, and makes no AI provider call, so it is safe
   // under AGENTS.md's "No cold-bootstrap LLM calls". Off in practice until the

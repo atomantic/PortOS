@@ -83,6 +83,24 @@ export const mediaDdl = [
     )`,
     `CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE`,
 
+    // Blender Models (issue #17874). An operator-authored Blender Python model
+    // (src/model.py) built into checked, versioned GLB builds. Name, status and
+    // timestamps are mirrored columns; the build index, the published build id
+    // and the last describe() live in JSONB. The source, builds and renders stay
+    // on disk at data/blender-models/<id>/. Machine-local (never federated), like
+    // image_to_3d_models; soft deletes keep recovery additive.
+    `CREATE TABLE IF NOT EXISTS blender_models (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_blender_models_live_updated ON blender_models (updated_at DESC) WHERE deleted = FALSE`,
+
     // HTML Pages bench runs: one local model's generated pages for the fixed
     // creative brief, kept as a reference gallery. The record, generated HTML
     // included (at most five bounded pages), lives in JSONB. Soft deletes keep

@@ -1,0 +1,129 @@
+# Blender Models
+
+A **Blender model** is a reusable 3D asset made from Python you (or a coding agent) write. PortOS runs the script
+in Blender, measures what it built, exports a GLB, imports that GLB back into an empty scene and measures it again.
+Every build is kept with a report; you publish the build you want, and its GLB is what other parts of PortOS use.
+
+This page covers the server engine (issue #17874, part of the Blender Models epic #17869). The 3D page lane, reference
+sheets, joints and texture baking arrive in later phases.
+
+## Trust and requirements
+
+A model script is the operator's own code and runs with this machine's privileges, exactly like a
+[Blender film](./music-video-blender.md). So:
+
+- Builds need the operator-checked Blender in **Trusted local** mode (Code Animation > Production > Blender execution).
+  In contained mode a build is refused with `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL`, the same answer films give.
+  PortOS never changes the execution mode.
+- Every write (source files, the starter, builds, publish, open in Blender) needs operator authority: a local
+  connection on a password-free install, or a signed-in session or `PORTOS_API_TOKEN` agent when a password is set.
+  A LAN/tailnet peer is refused.
+- Nothing runs at boot. A build left running when PortOS stopped is marked failed on the next start, never restarted.
+- Records and files are machine-local; they do not federate.
+
+## Workspace
+
+```
+data/blender-models/<id>/
+  src/                 your code; entry point src/model.py (plus any modules and assets you add) — backed up
+  builds/<buildId>/    one build, never rewritten — backed up
+    model.blend          the built scene
+    model.glb            the export
+    report.json          checks and findings
+    build.log            everything Blender and the script printed
+  renders/             regenerable previews — excluded from backups
+```
+
+`src/` follows the same file rules as a film workspace: text sources (`.py`, `.js`, `.mjs`, `.json`, `.txt`, `.md`)
+are read and written through the API; binary assets (images, HDRIs, fonts, `.glb`, `.obj`, `.blend`) are placed on
+disk and listed but never sent through the API. Symlinks, dotfiles and paths deeper than six folders are ignored.
+
+## The model contract
+
+```python
+def describe(ctx) -> dict:
+    return {
+        "title": "Desk lamp",
+        "sizeMeters": {"x": 0.22, "y": 0.22, "z": 0.52},   # the intended bounding box
+        "triangleBudget": 2000,
+        "parts": [
+            {"id": "base", "label": "Weighted base"},
+            {"id": "stem", "label": "Stem", "parent": "base"},
+        ],
+        "controls": [],   # optional; stored now, given behavior by the joints phase (#17878)
+    }
+
+def build(ctx) -> None:
+    ...  # one mesh object per declared part, named by its id
+```
+
+- Build in **meters**, **Z up**, with the model's **front facing -Y**.
+- A part id is 1–64 letters, digits, `.`, `_` or `-`, starting with a letter or digit. `parent` names another part;
+  set the Blender object's parent to match.
+- `ctx` carries `workspace`, `src`, `out_dir` (this build's folder), `quality` (`draft` or `full`) and `log(message)`.
+- Each build starts from an empty factory scene, so `build` creates everything it needs.
+
+`POST /api/blender-models/:id/workspace` copies a working starter (`src/model.py`, a three-part desk lamp). Read it
+before writing your own.
+
+## What a build checks
+
+`report.json` holds the numbers and a list of findings. Each finding is `error`, `warning` or `note`; a build with any
+error is kept and marked, and only a build without errors can be published.
+
+| Check | Finding codes |
+|---|---|
+| describe() shape | `describe-missing`, `describe-size-invalid`, `describe-budget-invalid`, `parts-none`, `part-id-invalid`, `part-duplicate`, `part-parent-unknown` (errors); `controls-invalid`, `parts-truncated` (warnings) |
+| Parts vs meshes | `part-missing`, `meshes-none` (errors); `mesh-undeclared`, `part-parent-mismatch`, `meshes-truncated` (warnings) |
+| Size, per axis against `sizeMeters` | `bounds-oversized`, `bounds-undersized` (over 10%, errors); `bounds-drift` (2–10%, warning) |
+| Triangles (modifiers applied) against `triangleBudget` | `triangles-over-budget` (error) |
+| Transforms | `scale-negative` (error); `scale-unapplied` (warning) |
+| Materials and images | `materials` (note with both counts) |
+| Export | `export-missing` (error) |
+| GLB re-imported into an empty scene | `reimport-missing`, `reimport-mesh-count`, `reimport-triangles`, `reimport-bounds` (errors); `reimport-materials`, `reimport-actions` (warnings) |
+
+`checks` records the counts behind each: declared and built parts with the missing and undeclared names, declared
+and actual size with the error per axis, triangles against the budget, the meshes with unapplied or negative scale,
+material, image and action counts, the GLB size, and the re-import's object, mesh, triangle, material, image and
+action counts and bounds.
+
+## Builds, publishing and retention
+
+- One build runs per model. A build never changes the published build: a canceled, crashed or flagged build is
+  recorded and kept, and the published GLB stays what it was.
+- Publishing sets `publishedBuildId`. The published GLB is served by `GET /api/blender-models/:id/asset` as
+  `model/gltf-binary`.
+- PortOS keeps the published build, any running build and the newest five; the rest are removed after each build and
+  each publish.
+- Deleting a model soft-deletes the record and removes `builds/` and `renders/`; your `src/` stays on disk.
+
+## API
+
+| Method and path | What it does |
+|---|---|
+| `GET /api/blender-models` | List live models |
+| `POST /api/blender-models` `{ name }` | Create a model (201, its state) |
+| `GET /api/blender-models/:id` | The record plus `workspace` (path, `hasModel`, file count, `srcHash`, `srcChanged`), `tool` readiness and `jobs` |
+| `PATCH /api/blender-models/:id` `{ name }` | Rename |
+| `DELETE /api/blender-models/:id` | Soft-delete (cancels a running build first) |
+| `POST /api/blender-models/:id/workspace` | Copy the starter `src/model.py` (409 once it exists) |
+| `GET /api/blender-models/:id/files` | List `src/` |
+| `GET` / `PUT` / `DELETE /api/blender-models/:id/file?path=` | Read, write (`{ path, content }`) or delete one source file |
+| `POST /api/blender-models/:id/builds` `{ quality? }` | Start a build (202, `{ job, build }`) |
+| `POST /api/blender-models/:id/builds/:buildId/cancel` | Cancel a running build |
+| `GET /api/blender-models/:id/builds/:buildId/files/:name` | `model.glb`, `model.blend`, `report.json` or `build.log` |
+| `POST /api/blender-models/:id/builds/:buildId/open` | Open the build's `.blend` in Blender (embedded scripts stay off) |
+| `POST /api/blender-models/:id/publish` `{ buildId }` | Publish a completed build without errors |
+| `GET /api/blender-models/:id/asset` | The published GLB |
+
+Every change announces `blender-model:changed` `{ id }` over Socket.IO (record writes, source writes, build job
+start and finish); the client re-reads the model. Nothing polls.
+
+## Internals
+
+- `server/services/blenderModels/`: `store.js` (PostgreSQL `blender_models`), `workspace.js` (paths and
+  containment), `driver.js` + `py/portos_model_driver.py`, `protocol.js` (the driver's `PORTOS_MODEL ` stdout
+  events), `report.js` (checks), `build.js` (the job, pruning, boot recovery) and `models.js` (records, source,
+  publish, asset, open).
+- `server/services/blenderWorkspace/` is shared with films: path containment, the `src/` tree, source hashing, the
+  Trusted local gate and driver launch, the in-memory job registry and the per-job log.
