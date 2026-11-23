@@ -10,7 +10,8 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -97,6 +98,32 @@ describe('runSetup step order', () => {
 
   // A CoS worktree's node_modules are symlinks into the primary checkout; a
   // setup run there would empty the primary's dependencies.
+  it('writes the v2 dependency receipt only after every workspace install succeeds', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-setup-receipt-'));
+    try {
+      const receipt = join(root, 'data', 'deps-hashes.json');
+      writeFileSync(join(root, 'package.json'), '{"name":"root","version":"0.0.0"}\n');
+      for (const label of ['client', 'server']) {
+        mkdirSync(join(root, label));
+        writeFileSync(join(root, label, 'package.json'), `{"name":"${label}"}\n`);
+        writeFileSync(join(root, label, 'package-lock.json'), `{"name":"${label}-lock"}\n`);
+      }
+      writeFileSync(join(root, 'package-lock.json'), '{"name":"root-lock"}\n');
+      expect(run({ failing: ['install server'], root }).code).not.toBe(0);
+      expect(existsSync(receipt)).toBe(false);
+      expect(run({ root }).code).toBe(0);
+      const hashes = JSON.parse(readFileSync(receipt, 'utf8'));
+      for (const label of ['root', 'client', 'server']) {
+        const dir = label === 'root' ? root : join(root, label);
+        const hash = createHash('sha256').update(readFileSync(join(dir, 'package.json'))).update('\0');
+        hash.update(readFileSync(join(dir, 'package-lock.json')));
+        expect(hashes[label]).toBe(`v2:${hash.digest('hex')}`);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to install through linked node_modules', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-setup-linked-'));
     try {
@@ -191,6 +218,10 @@ describe.skipIf(process.platform === 'win32')('node scripts/setup.js', () => {
         'setup-guide.js'
       ]);
       expect(f.logged().join('\n')).not.toContain('--prefix');
+      const hashes = JSON.parse(readFileSync(join(f.root, 'data', 'deps-hashes.json'), 'utf8'));
+      const hash = createHash('sha256').update(readFileSync(join(f.root, 'package.json'))).update('\0');
+      hash.update('<no-lockfile>');
+      expect(hashes.root).toBe(`v2:${hash.digest('hex')}`);
     } finally {
       rmSync(f.root, { recursive: true, force: true });
     }
