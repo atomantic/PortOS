@@ -49,11 +49,12 @@ export const openBlenderModelBuild = (id, buildId, options) =>
 export const publishBlenderModelBuild = (id, buildId, options) =>
   request(`${base(id)}/publish`, json('POST', { buildId }, options));
 
-export const getBlenderModelBuildReport = (id, buildId, options) =>
-  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/files/report.json`, options);
+const readBuildFile = (id, buildId, name, options) =>
+  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/files/${encodeURIComponent(name)}`, options);
 
-export const getBlenderModelBuildLog = (id, buildId, options) =>
-  request(`${base(id)}/builds/${encodeURIComponent(buildId)}/files/build.log`, { responseType: 'text', ...options });
+export const getBlenderModelBuildReport = (id, buildId, options) => readBuildFile(id, buildId, 'report.json', options);
+
+export const getBlenderModelBuildLog = (id, buildId, options) => readBuildFile(id, buildId, 'build.log', { responseType: 'text', ...options });
 
 // model.glb, model.blend, report.json or build.log of one build, for a viewer, a download link or fetch().
 export const blenderModelBuildFileUrl = (id, buildId, name) =>

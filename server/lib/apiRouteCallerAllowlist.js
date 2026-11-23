@@ -244,7 +244,6 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/apps/:id/forge-auth/refresh/:jobId/events',
     '/api/brain/youtube/ingest/:jobId/events',
     '/api/blender-models/:id/asset',
-    '/api/blender-models/:id/builds/:buildId/files/:name',
     '/api/browser/downloads',
     '/api/catalog/scraps/:id',
     '/api/continuous-video/:jobId/events',
