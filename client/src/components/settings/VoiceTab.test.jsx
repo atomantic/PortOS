@@ -96,7 +96,7 @@ describe('VoiceTab TTS engine registry', () => {
     await waitFor(() => expect(voiceApi.updateVoiceConfig).toHaveBeenCalled());
   });
 
-  it('labels a facetime service probe and omits it when absent', async () => {
+  it('labels a healthy facetime service probe without a false down badge', async () => {
     voiceApi.getVoiceStatus.mockResolvedValue({ services: { facetime: { ok: true, state: 'ready' } } });
     render(<MemoryRouter><VoiceTab /></MemoryRouter>);
     expect(await screen.findByText(/FaceTime Audio/)).toBeTruthy();
