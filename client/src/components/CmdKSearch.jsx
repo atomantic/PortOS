@@ -574,9 +574,9 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
                 placeholder="Go to page, run an action, or search Brain / Memory / Apps…"
                 className="w-full bg-transparent text-white placeholder-gray-500 outline-hidden text-sm"
                 role="combobox"
-                aria-expanded="true"
+                aria-expanded={focusable.length > 0}
                 aria-autocomplete="list"
-                aria-controls={listboxId}
+                aria-controls={focusable.length > 0 ? listboxId : undefined}
                 aria-activedescendant={activeResult ? optionId(activeResult) : undefined}
                 aria-label="Command palette"
               />
@@ -601,7 +601,31 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
         </div>
 
         {!captureMode && <div className="min-h-0 max-h-96 overflow-y-auto p-2">
-          <div id={listboxId} role="listbox" aria-label="Command palette results">
+          {loading && (
+            <div role="status" aria-live="polite" className="flex items-center justify-center gap-2 py-4 text-sm text-gray-400">
+              <Loader2 size={18} className="animate-spin" aria-hidden="true" />
+              <span>Searching…</span>
+            </div>
+          )}
+
+          {!loading && query.length >= 2 && searchResults.length === 0 && catalogHits.length === 0 && combined.commandCount === 0 && (
+            <div role="status" aria-live="polite" className="text-center text-sm text-gray-500 py-8">
+              No results for &ldquo;{query}&rdquo;
+            </div>
+          )}
+          {searchFailed && (
+            <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Search failed, so results may be missing.</div>
+          )}
+          {catalogFailed && (
+            <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Catalog search failed, so catalog matches may be missing.</div>
+          )}
+
+          {!loading && !query && combined.commandCount === 0 && (
+            <div className="text-center text-sm text-gray-600 py-8">
+              Start typing to go to a page, run an action, or search.
+            </div>
+          )}
+          {focusable.length > 0 && <div id={listboxId} role="listbox" aria-label="Command palette results">
             {renderGroup(
               <History size={14} />,
               'Recent destinations',
@@ -642,30 +666,6 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
               )
             )}
 
-            {loading && (
-              <div className="flex items-center justify-center py-4">
-                <Loader2 size={18} className="animate-spin text-gray-400" />
-              </div>
-            )}
-
-            {!loading && query.length >= 2 && searchResults.length === 0 && catalogHits.length === 0 && combined.commandCount === 0 && (
-              <div className="text-center text-sm text-gray-500 py-8">
-                No results for &ldquo;{query}&rdquo;
-              </div>
-            )}
-            {searchFailed && (
-              <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Search failed, so results may be missing.</div>
-            )}
-            {catalogFailed && (
-              <div role="alert" className="px-4 py-2 text-center text-xs text-port-error">Catalog search failed, so catalog matches may be missing.</div>
-            )}
-
-            {!loading && !query && combined.commandCount === 0 && (
-              <div className="text-center text-sm text-gray-600 py-8">
-                Start typing to go to a page, run an action, or search.
-              </div>
-            )}
-
             {!loading && searchResults.map((source) => {
               const SourceIcon = ICON_MAP[source.icon] ?? Search;
               const isExpanded = expandedSources.has(source.id);
@@ -687,7 +687,7 @@ export default function CmdKSearch({ open: controlledOpen, setOpen: controlledSe
                 </div>
               );
             })}
-          </div>
+          </div>}
           {!loading && searchResults.filter((source) => source.results.length > 3 && !expandedSources.has(source.id)).map((source) => (
             <button
               key={source.id}

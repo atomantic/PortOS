@@ -582,6 +582,11 @@ describe('CmdKSearch catalog lookup failure', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(300); });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByText(/No results for/)).toBeInTheDocument();
+    const status = screen.getByText(/No results for/).closest("[role=status]");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-expanded", "false");
+    expect(input).not.toHaveAttribute("aria-controls");
 
     vi.useRealTimers();
   });
