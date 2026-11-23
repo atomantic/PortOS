@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { createManagedVisitorBroker, managedVisitorContract } from '../services/managedVisitorBroker.js';
 import { request } from '../lib/testHelper.js';
+import { createTailcatIngressServer } from '../services/tailcatIngress.js';
+import { Server } from 'socket.io';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../lib/portosAuthCore.js';
 const shared = vi.hoisted(() => ({ enabled: false, broker: null }));
 vi.mock('../services/auth.js', () => ({ isAuthEnabled: async () => shared.enabled, extractToken: req => req.headers.authorization?.slice(7),
@@ -107,6 +109,22 @@ it('denies cross-origin provisioning and nonloopback broker callers even without
   await expect(authenticateManagedVisitorRequest(proxied, shared.broker)).rejects.toThrow(/local/);
   const localProxied = { socket: { remoteAddress: '127.0.0.1' }, headers: { authorization: authHeader(), [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::1' } };
   expect((await authenticateManagedVisitorRequest(localProxied, shared.broker)).appId).toBe(appId);
+});
+it('refuses Tailcat-proxied remote callers and DNS-rebound Hosts but keeps local callers working, password off and on', async () => {
+  const { server } = createTailcatIngressServer(app);
+  const io = new Server(server);
+  const ingress = server.listeners('request')[0];
+  const path = '/api/managed-visitors/v1/capabilities';
+  for (const enabled of [false, true]) {
+    shared.enabled = enabled;
+    const remote = await request(ingress).get(path).set('Authorization', authHeader()).set('X-Forwarded-For', '127.0.0.1').set('X-PortOS-Local', 'true');
+    expect(remote.status).toBe(403);
+    const rebound = await request(app).get(path).set('Authorization', authHeader()).set('Host', 'rebind.example.invalid').set('Origin', 'http://rebind.example.invalid');
+    expect(rebound.status).toBe(403);
+    expect((await request(app).get(path).set('Authorization', authHeader())).status).toBe(200);
+    expect((await request(app).get(path).set('Authorization', authHeader()).set(DEV_PROXY_CLIENT_ADDRESS_HEADER, '::1')).status).toBe(200);
+  }
+  io.close();
 });
 it('revokes malformed/private host outputs instead of forwarding or retrying uncertain operations', async () => {
   const auth = await shared.broker.authenticate(credentials.credential), visit = await shared.broker.admit(auth, admission);
