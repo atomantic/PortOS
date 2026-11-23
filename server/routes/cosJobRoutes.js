@@ -135,7 +135,7 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 router.post('/jobs', asyncHandler(async (req, res) => {
   const parsedJob = createCosJobSchema.safeParse(req.body);
   if (!parsedJob.success) failValidation(parsedJob);
-  const { name, description, category, type, interval, intervalMs, scheduledTime, scheduleAnchor, cronExpression, cronSchedule, enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, appId, taskMetadata, providerId, model, effort } = parsedJob.data;
+  const { name, description, category, type, interval, intervalMs, scheduledTime, scheduleAnchor, cronExpression, cronSchedule, enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, appId, taskMetadata, providerId, model, effort, executionOptions, config } = parsedJob.data;
 
   if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
@@ -155,7 +155,7 @@ router.post('/jobs', asyncHandler(async (req, res) => {
   // still created, just without it. Keep both lists in step.
   const job = await autonomousJobs.createJob({
     name, description, category, type, interval, intervalMs, scheduledTime, scheduleAnchor, cronExpression, cronSchedule,
-    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, appId, taskMetadata, providerId, model, effort
+    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, appId, taskMetadata, providerId, model, effort, executionOptions, config
   });
   res.json({ success: true, job });
 }));
@@ -165,7 +165,7 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
   const parsedJobUpdate = updateCosJobSchema.safeParse(req.body);
   if (!parsedJobUpdate.success) failValidation(parsedJobUpdate);
   const { name, description, category, type, interval, intervalMs, scheduledTime, scheduleAnchor, cronExpression, cronSchedule,
-    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, weekdaysOnly, appId, taskMetadata, providerId, model, effort } = parsedJobUpdate.data;
+    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, weekdaysOnly, appId, taskMetadata, providerId, model, effort, executionOptions, config } = parsedJobUpdate.data;
   if (cronExpression) {
     validateCronExpression(cronExpression);
   }
@@ -175,7 +175,7 @@ router.put('/jobs/:id', asyncHandler(async (req, res) => {
   // clears a field looks like it saved while the old value stays on disk.
   const job = await autonomousJobs.updateJob(req.params.id, {
     name, description, category, type, interval, intervalMs, scheduledTime, scheduleAnchor, cronExpression, cronSchedule,
-    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, weekdaysOnly, appId, taskMetadata, providerId, model, effort
+    enabled, priority, autonomyLevel, promptTemplate, dataInputs, formFields, formValues, command, triggerAction, weekdaysOnly, appId, taskMetadata, providerId, model, effort, executionOptions, config
   });
   if (!job) {
     throw new ServerError('Job not found', { status: 404, code: 'NOT_FOUND' });

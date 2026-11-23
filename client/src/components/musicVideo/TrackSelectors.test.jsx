@@ -131,6 +131,27 @@ describe('Music Video track choices', () => {
     expect(onChangeTrack).toHaveBeenLastCalledWith(tracks[1].id, { cleared: [] });
   });
 
+  // Uniquely catches the destructive alertdialog opening silently with focus stranded on the trigger.
+  it('moves focus to Cancel in the track-change alertdialog, traps Tab, and restores focus on Escape', () => {
+    const rich = { ...project, midiTranscription: { filename: 'x.mid' } };
+    render(<TrackPanel project={rich} tracks={tracks} trackName={trackName} youtube={youtube} onChangeTrack={vi.fn()} onProjectUpdated={vi.fn()} />);
+    const select = screen.getByRole('combobox', { name: 'Change track' });
+    select.focus();
+    fireEvent.change(select, { target: { value: tracks[1].id } });
+    const dialog = screen.getByRole('alertdialog');
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(document.getElementById(dialog.getAttribute('aria-describedby')).textContent).toContain('MIDI transcription');
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(cancel, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Change track' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Change track' }), { key: 'Tab', shiftKey: true });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(select).toHaveFocus();
+  });
+
   it('keeps timing revisions audio-only, excludes the current track, and waits for explicit preview', () => {
     render(<AudioTimingPanel project={project} tracks={tracks} onApplied={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Preview audio timing revision' }));

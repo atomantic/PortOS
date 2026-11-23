@@ -44,6 +44,8 @@ export function generatedJobTaskFields(generated) {
     provider: meta.provider,
     model: meta.model,
     effort: meta.effort,
+    // Per-job provider options (e.g. Codex service tier); cosTaskIntake maps it back onto metadata.
+    ...(meta.executionOptions !== undefined ? { executionOptions: meta.executionOptions } : {}),
   };
 }
 

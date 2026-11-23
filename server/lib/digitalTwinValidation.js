@@ -9,12 +9,12 @@ import {
   documentCategoryEnum,
   exportFormatEnum,
   enrichmentCategoryEnum,
+  listItemSchema,
   documentFilenameSchema,
   soulSettingsSchema,
   bigFiveSchema,
   valuedTraitSchema,
   communicationProfileSchema,
-  listItemSchema,
 } from './digitalTwinSchemas.js';
 
 export * from './digitalTwinSchemas.js';

@@ -21,8 +21,8 @@ vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () 
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));
 vi.mock('../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
 
-const { processEnrichmentAnswer, saveEnrichmentListDocument } = await import('./digital-twin-enrichment.js');
-const { DEFAULT_META, cache } = await import('./digital-twin-meta.js');
+const { processEnrichmentAnswer, saveEnrichmentListDocument, getEnrichmentListItems } = await import('./digital-twin-enrichment.js');
+const { DEFAULT_META, cache, loadMeta, updateSettings } = await import('./digital-twin-meta.js');
 const { ENRICHMENT_CATEGORIES } = await import('./digital-twin-constants.js');
 
 const category = 'values';
@@ -70,10 +70,30 @@ describe('enrichment write serialization (#14159)', () => {
     };
     const first = answer('Q1', 'Answer one');
     await turn();
-    await saveEnrichmentListDocument(category, '# Saved list\n', ['a', 'b']);
+    await saveEnrichmentListDocument(category, '# Saved list\n', [{ title: 'A' }, { title: 'B' }]);
     await first;
 
     expect(await readDoc()).toBe('# Saved list\n');
     expect((await readMeta()).enrichment.questionsAnswered[category]).toBe(2);
   });
+});
+
+it('preserves saved list items through a cold metadata load and settings save', async () => {
+  const items = [{ title: 'First book', note: 'A favorite' }, { title: 'Second book' }];
+  await saveEnrichmentListDocument('favorite_books', '# Favorite books\n', items);
+
+  const saved = await readMeta();
+  expect(saved.enrichment.listItems).toEqual({ favorite_books: items });
+  // A nested default distinguishes a successful parse from the raw fallback.
+  delete saved.settings.includePrivacyContext;
+  await writeFile(join(root, 'meta.json'), JSON.stringify(saved));
+  cache.meta.data = null;
+
+  expect((await loadMeta()).settings.includePrivacyContext).toBe(false);
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
+  await updateSettings({ maxContextTokens: 6000 });
+  expect((await readMeta()).enrichment.listItems).toEqual(saved.enrichment.listItems);
+
+  cache.meta.data = null;
+  expect(await getEnrichmentListItems('favorite_books')).toEqual(items);
 });

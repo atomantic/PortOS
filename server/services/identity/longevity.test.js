@@ -9,6 +9,7 @@ const birthDateYearsAgo = years => new Date(Date.now() - years * YEAR_MS).toISOS
 const h = vi.hoisted(() => ({ goalsData: null, longevityData: null }));
 
 vi.mock('./store.js', () => ({
+  queueDerivedIdentityWrite: (_file, work) => work(),
   editGoals: vi.fn(async fn => fn(h.goalsData)),
   mutateGoals: vi.fn(async fn => {
     h.goalsData = await fn(h.goalsData);
