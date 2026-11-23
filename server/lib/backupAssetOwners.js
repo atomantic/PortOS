@@ -245,6 +245,12 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/blenderModels/build.js'],
   },
   {
+    // An approved reference is copied into src/refs/ and the row names that copy.
+    id: 'blender-model-references',
+    status: 'admitted',
+    modules: ['services/blenderModels/references.js'],
+  },
+  {
     // Publishing names a finished build whose bytes are already durable.
     // Pruning and deletion drop builds from the row before removing their
     // folders; a source write or scaffold changes src/, which no row names.

@@ -62,3 +62,25 @@ export const blenderModelBuildFileUrl = (id, buildId, name) =>
 
 // The published build's GLB (model/gltf-binary).
 export const blenderModelAssetUrl = (id) => `/api${base(id)}/asset`;
+
+const referenceBase = (id, referenceId) => `${base(id)}/references/${encodeURIComponent(referenceId)}`;
+
+// Where reference images start from: `{ ingredientId?, images?, size?, imageMode?, imageModelId? }`.
+export const updateBlenderModelReferenceSource = (id, patch, options) => request(`${base(id)}/reference-source`, json('PATCH', patch, options));
+
+export const addBlenderModelCloseup = (id, mechanism, options) => request(`${base(id)}/references`, json('POST', { mechanism }, options));
+
+export const removeBlenderModelCloseup = (id, referenceId, options) => request(referenceBase(id, referenceId), { method: 'DELETE', ...options });
+
+// Built by the code that sends it; queues nothing. `refusal` says why a render would be refused.
+export const previewBlenderModelReference = (id, referenceId, body, options) => request(`${referenceBase(id, referenceId)}/preview`, json('POST', body, options));
+
+export const renderBlenderModelReference = (id, referenceId, words, options) => request(`${referenceBase(id, referenceId)}/render`, json('POST', { words }, options));
+
+// Puts an existing library image up for review instead of rendering one.
+export const attachBlenderModelReferenceImage = (id, referenceId, filename, options) => request(`${referenceBase(id, referenceId)}/images`, json('POST', { filename }, options));
+
+export const reviewBlenderModelReference = (id, referenceId, imageId, body, options) =>
+  request(`${referenceBase(id, referenceId)}/images/${encodeURIComponent(imageId)}/review`, json('POST', body, options));
+
+export const createBlenderModelPartsBrief = (id, options) => request(`${base(id)}/parts-brief`, json('POST', {}, options));

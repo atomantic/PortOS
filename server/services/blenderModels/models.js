@@ -19,6 +19,7 @@ import {
 } from '../blenderWorkspace/sourceTree.js';
 import { hashSourceEntries } from '../blenderWorkspace/treeHash.js';
 import { BLENDER_MODEL_NEEDS_TRUSTED_LOCAL } from './driver.js';
+import { presentBlenderModelReferences } from './references.js';
 import { listBlenderModelJobs, pruneBlenderModelBuilds, settleBlenderModelBuilds } from './build.js';
 import * as store from './store.js';
 import {
@@ -57,10 +58,12 @@ export async function getBlenderModelState(id) {
   const latest = [...(model.builds || [])].reverse().find((build) => build.status === 'complete') ?? null;
   return {
     ...model,
+    ...await presentBlenderModelReferences(model),
     workspace: {
       path: blenderModelWorkspaceDir(id),
       exists: (await lstat(blenderModelWorkspaceDir(id)).catch(() => null))?.isDirectory() === true,
       hasModel: entries.some((entry) => entry.path === 'model.py'),
+      hasPartsBrief: entries.some((entry) => entry.path === 'PARTS.md'),
       files: entries.length,
       srcHash: tree,
       // Whether the source moved on since the newest completed build.

@@ -9,6 +9,7 @@ const hooks = [
   [collectionOwned, () => import('../mediaCollectionCompletionHook.js').then(m => m.initMediaCollectionCompletionHook())],
   [tag('universeRun'), () => import('../universeBuilderCollectionHook.js').then(m => m.initUniverseBuilderCollectionHook())],
   [tag('catalogAttach'), () => import('../catalog/catalogImageAttachHook.js').then(m => m.initCatalogImageAttachHook())],
+  [tag('blenderModelReference'), () => import('../blenderModels/referenceImageHook.js').then(m => m.initBlenderModelReferenceHook())],
   [tag('writersRoom'), () => import('../writersRoomSceneImageHook.js').then(m => m.initWritersRoomSceneImageHook())],
   [tag('fableLoom'), () => import('../fableLoomSceneImageHook.js').then(m => m.initFableLoomSceneImageHook())],
   [tag('fableLoom'), () => import('../fableLoomSceneVideoHook.js').then(m => m.initFableLoomSceneVideoHook())],

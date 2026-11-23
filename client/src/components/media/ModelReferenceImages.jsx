@@ -4,9 +4,11 @@ import CatalogImagePreview from '../catalog/CatalogImagePreview';
 // listed in `images` with role 'edit-base'), a fallback with the reason a
 // backend cannot edit it, or `none` when an age or look has no image of its
 // own and the render generates fresh instead of editing the canonical portrait.
+// `intro` replaces the likeness wording for a host whose images are not a record's canon;
+// that host states its own refusals.
 // `onToggleLikeness(image, include)` lets the record's own images (those with a
 // `mediaKind`) be left out of or put back into the likeness guides.
-export default function ModelReferenceImages({ images, editBase, onOpenPreview, onToggleLikeness, inputProvenance = null }) {
+export default function ModelReferenceImages({ images, editBase, onOpenPreview, onToggleLikeness, inputProvenance = null, intro = null }) {
   if (!Array.isArray(images)) return null;
   const editing = images.some((image) => image.role === 'edit-base');
   const sentCount = images.filter((image) => image.status === 'included').length;
@@ -19,15 +21,15 @@ export default function ModelReferenceImages({ images, editBase, onOpenPreview, 
           : inputProvenance === 'cli-attachments' ? 'These images will be attached to the Codex session. Whether its image tool receives them is unconfirmed.'
             : inputProvenance ? 'These image paths will be provided to the CLI driver. Whether its image tool receives them is unconfirmed.' : editing
           ? `The render edits the ${editBase?.scope === 'form' ? 'first image' : 'portrait'}; the other images guide likeness.`
-          : 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
+          : intro || 'Render guides take priority; otherwise the portrait and canon images supply likeness.'}
       </p>
       {editBase?.status === 'none' && <p role="status" className="text-xs text-gray-400">{editBase.reason}</p>}
       {editBase?.status === 'fallback' && (
         <p role="status" className="text-xs text-port-warning">Not editing from the portrait: {editBase.reason}</p>
       )}
-      {blocked && <p className="text-xs text-port-warning">Restore unavailable canonical references or choose a supported renderer before generating this sheet.</p>}
+      {blocked && !intro && <p className="text-xs text-port-warning">Restore unavailable canonical references or choose a supported renderer before generating this sheet.</p>}
       {!blocked && sentCount === 0 && (
-        <p className="text-xs text-port-warning">No canonical reference images will be sent. This sheet will be generated from text only.</p>
+        <p className="text-xs text-port-warning">{intro ? 'No reference images will be sent.' : 'No canonical reference images will be sent.'} This sheet will be generated from text only.</p>
       )}
       {images.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

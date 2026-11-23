@@ -117,8 +117,8 @@ const viewableImage = (filename) => {
  * backend cannot edit, `editBase` reports why and the candidates resolve as
  * plain references, exactly as without a portrait.
  */
-export function resolveCharacterSheetReferences(candidates, mode, modelId, localModel, editBaseCandidate = null) {
-  const limit = Math.min(MAX_CAST_GUIDES, maxInputImages(mode, modelId) ?? MAX_CAST_GUIDES);
+export function resolveCharacterSheetReferences(candidates, mode, modelId, localModel, editBaseCandidate = null, maxGuides = MAX_CAST_GUIDES) {
+  const limit = Math.min(maxGuides, maxInputImages(mode, modelId) ?? maxGuides);
   const supported = mode !== IMAGE_GEN_MODE.LOCAL || localModel?.runner === RUNNER_FAMILIES.FLUX2
     || localModel?.pipelineClass === 'QwenImage21Pipeline';
   const seen = new Set();

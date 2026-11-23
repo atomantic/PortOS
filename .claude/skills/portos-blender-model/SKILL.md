@@ -28,6 +28,10 @@ No model yet: `POST /api/blender-models` `{ "name": "..." }`. No source yet: `PO
 copies a working three-part starter (a desk lamp). Read it before writing your own. Edit files in `src/` directly, or
 with `PUT /api/blender-models/:id/file` `{ path, content }`.
 
+Before modeling, look at every approved image in `src/refs/` and read `src/PARTS.md` when they exist. The overall sheet
+decides proportions; a close-up plate decides its own mechanism. `GET /api/blender-models/:id` lists them under
+`references` (review an image only after looking at it; `outOfDate` plates came from an earlier overall sheet).
+
 ## The contract
 
 ```python

@@ -25,6 +25,14 @@ const sink = vi.hoisted(() => ({
   deleteBlenderModelFile: vi.fn(async () => ({ path: 'model.py' })),
   publishBlenderModelBuild: vi.fn(async () => ({})),
   openBlenderModelBuild: vi.fn(async () => ({ opened: true })),
+  updateBlenderModelReferenceSource: vi.fn(async () => {}),
+  createBlenderModelPartsBrief: vi.fn(async () => {}),
+  addBlenderModelCloseup: vi.fn(async () => {}),
+  removeBlenderModelCloseup: vi.fn(async () => {}),
+  previewBlenderModelReference: vi.fn(async () => ({ sentPrompt: '' })),
+  renderBlenderModelReference: vi.fn(async () => ({ jobId: 'job-example' })),
+  useBlenderModelReferenceImage: vi.fn(async () => {}),
+  reviewBlenderModelReference: vi.fn(async () => {}),
   startBlenderModelBuild: vi.fn(async () => ({ job: { id: 'bj-example' } })),
   cancelBlenderModelBuild: vi.fn(() => true),
 }));
@@ -55,6 +63,17 @@ vi.mock('../services/blenderModels/build.js', () => ({
   cancelBlenderModelBuild: sink.cancelBlenderModelBuild,
 }));
 
+vi.mock('../services/blenderModels/references.js', () => ({
+  updateBlenderModelReferenceSource: sink.updateBlenderModelReferenceSource,
+  createBlenderModelPartsBrief: sink.createBlenderModelPartsBrief,
+  addBlenderModelCloseup: sink.addBlenderModelCloseup,
+  removeBlenderModelCloseup: sink.removeBlenderModelCloseup,
+  previewBlenderModelReference: sink.previewBlenderModelReference,
+  renderBlenderModelReference: sink.renderBlenderModelReference,
+  useBlenderModelReferenceImage: sink.useBlenderModelReferenceImage,
+  reviewBlenderModelReference: sink.reviewBlenderModelReference,
+}));
+
 import blenderModelsRoutes from './blenderModels.js';
 
 const MODEL = `/api/blender-models/${ID}`;
@@ -66,6 +85,14 @@ const workflows = [
   ['post', `${MODEL}/builds`, { quality: 'draft' }, sink.startBlenderModelBuild, 202],
   ['post', `${MODEL}/builds/${BUILD}/open`, {}, sink.openBlenderModelBuild, 200],
   ['post', `${MODEL}/publish`, { buildId: BUILD }, sink.publishBlenderModelBuild, 200],
+  ['patch', `${MODEL}/reference-source`, { size: '20 cm' }, sink.updateBlenderModelReferenceSource, 200],
+  ['post', `${MODEL}/parts-brief`, {}, sink.createBlenderModelPartsBrief, 201],
+  ['post', `${MODEL}/references`, { mechanism: 'hinge' }, sink.addBlenderModelCloseup, 201],
+  ['delete', `${MODEL}/references/closeup-1`, undefined, sink.removeBlenderModelCloseup, 200],
+  ['post', `${MODEL}/references/overall/preview`, {}, sink.previewBlenderModelReference, 200],
+  ['post', `${MODEL}/references/overall/render`, {}, sink.renderBlenderModelReference, 202],
+  ['post', `${MODEL}/references/overall/images`, { filename: 'a.png' }, sink.useBlenderModelReferenceImage, 201],
+  ['post', `${MODEL}/references/overall/images/img-1/review`, { decision: 'approve' }, sink.reviewBlenderModelReference, 200],
   // Records and cancellation: nothing here chooses or starts what runs.
   ['post', '/api/blender-models', { name: 'Example model' }, sink.createBlenderModel, 201],
   ['patch', MODEL, { name: 'Renamed example' }, sink.updateBlenderModel, 200],

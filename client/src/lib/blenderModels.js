@@ -6,7 +6,7 @@
 import { formatCount } from '../utils/formatters.js';
 
 export const BLENDER_MODEL_SKILL_NAME = 'portos-blender-model';
-export const BLENDER_MODEL_TABS = ['model', 'files', 'builds', 'settings'];
+export const BLENDER_MODEL_TABS = ['model', 'references', 'files', 'builds', 'settings'];
 export const BLENDER_EXECUTION_PATH = '/code-animation/production#blender-execution';
 
 export const BLENDER_MODEL_STATUS = Object.freeze({
@@ -45,6 +45,20 @@ export function formatMeters(size) {
   return `${['x', 'y', 'z'].map((axis) => Number(size[axis].toFixed(3))).join(' × ')} m`;
 }
 
+/** A reference image's URL and the one to try when it is not in the gallery folder. */
+export const referenceImageUrls = (filename) => ['images', 'image-refs'].map((root) => `/data/${root}/${encodeURIComponent(filename)}`);
+
+/** The brief's lines naming what the agent reads before modeling; none without references. */
+function referenceLines(state) {
+  const approved = (state.references || []).filter((slot) => slot.file);
+  return [
+    ...(state.referenceSource?.size ? [`Real size: ${state.referenceSource.size}`] : []),
+    ...(approved.length ? ['Approved reference images (look at each one before modeling):', ...approved.map((slot) => (
+      `  src/${slot.file}  ${slot.role === 'overall' ? 'overall sheet: six directions at one scale' : `close-up: ${slot.mechanism}`}${slot.outOfDate ? ' (out of date: made from an earlier overall sheet)' : ''}`))] : []),
+    ...(state.workspace?.hasPartsBrief ? ['Parts brief: src/PARTS.md (parts, joints, axes, which view wins). Read it first and keep it true.'] : []),
+  ];
+}
+
 const findingLine = (finding) => `  ${finding.severity}: ${finding.code}${finding.subjects?.length ? ` (${finding.subjects.join(', ')})` : ''}: ${finding.message}`;
 
 /**
@@ -70,6 +84,7 @@ export function blenderModelAgentBrief(state, { report = null } = {}) {
     `Workspace on this machine: ${state.workspace?.path || `data/blender-models/${state.id}`}`,
     '  src/model.py        the entry point you write (durable, backed up)',
     '  builds/<buildId>/   model.blend, model.glb, report.json, build.log: PortOS output, never edit it',
+    ...referenceLines(state),
     '',
     'Contract, in src/model.py (Python inside Blender 5 or later):',
     '  describe(ctx) -> {"title", "sizeMeters": {"x","y","z"}, "triangleBudget", "parts": [{"id","label","parent"?}], "controls"?: []}',
@@ -92,6 +107,9 @@ export function blenderModelAgentBrief(state, { report = null } = {}) {
     '  POST   /builds                               {"quality": "draft"|"full"} -> 202 {"job","build"}',
     '  POST   /builds/<buildId>/cancel              cancel a running build;  POST /builds/<buildId>/open  open its .blend in Blender',
     '  GET    /builds/<buildId>/files/<name>        model.glb, model.blend, report.json or build.log',
+    '  PATCH  /reference-source                     {"size","images","ingredientId"} what the sheets start from',
+    '  POST   /references                           {"mechanism"} add a close-up plate;  POST /parts-brief  create src/PARTS.md',
+    '  POST   /references/<refId>/images/<imageId>/review  {"decision": "approve"|"redo", "note"?} review an image you looked at',
     '  POST   /publish                              {"buildId"} publish a completed build without errors',
     'Every change is announced as blender-model:changed { id } over Socket.IO. Builds need Blender in Trusted local mode; never change the mode yourself.',
   ].join('\n');
