@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, uti
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, verifyPendingTestProcesses, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
+import { STALE_ROOT_AGE_MS, killTestProcessesUnder, sweepStaleRunRoots, waitForVitestWatchdog, writeOwnerFile } from './lib/vitestStaleRunRoots.js';
 import { observeTestProcesses } from './lib/testProcessAttribution.js';
 import { processAncestors, readTestProcesses, testProcessRoot, testProcessSettlement } from './lib/testOwnedProcesses.js';
 import { isProcessAlive } from '../server/test/processAlive.js';
@@ -201,24 +201,23 @@ describe('test process ownership boundaries', () => {
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
-  it('retains pending identities through partial inventories until terminal evidence permits root removal', () => {
+  it('keeps a root while its signalled child is still in the snapshot and removes it once gone', () => {
     const host = mkdtempSync(join(tmpdir(), 'recovery-pending-'));
     const root = join(host, 'pvt-owned'); mkdirSync(root);
     writeFileSync(join(root, '.owner.pid'), '999999 0\n');
     const ancestors = [{ pid: process.pid, ppid: process.ppid }, { pid: process.ppid, ppid: 1 }];
-    const child = { pid: 900001, ppid: 1, start: 'original', env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
+    const child = { pid: 900001, ppid: 1, start: 'original', args: ['node'], env: { NODE_ENV: 'test', PORTOS_TEST_TEMP_ROOT: root } };
     const terminate = vi.fn();
-    const sweep = records => sweepStaleRunRoots(host, { read: () => [...ancestors, ...records], probe: () => false, probePid: () => true, terminate });
+    const sweep = (records, probePid = () => true) => sweepStaleRunRoots(host, { read: () => [...ancestors, ...records], probe: () => false, probePid, terminate });
     try {
       sweep([child]);
       expect(terminate).toHaveBeenCalledTimes(1);
-      sweep([{ pid: child.pid, ppid: 1, start: child.start }]);
+      sweep([child]);
       expect(existsSync(root)).toBe(true);
-      sweep([]); // omitted rows plus a live PID remain unknown
+      sweep([{ pid: child.pid, ppid: 1, start: child.start }]); // partial inventory with a live PID stays unknown
       expect(existsSync(root)).toBe(true);
-      sweep([{ pid: child.pid, ppid: 1, start: 'replacement', args: ['node'], env: {} }]);
+      sweep([]);
       expect(existsSync(root)).toBe(false);
-      expect(terminate).toHaveBeenCalledTimes(1); // no signal to a replacement identity
     } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
@@ -237,7 +236,7 @@ describe('test process ownership boundaries', () => {
       sweepStaleRunRoots(host, { read, probe: () => ownerAlive });
       expect(kill).toHaveBeenCalledExactlyOnceWith(target.pid, 'SIGTERM');
       sweepStaleRunRoots(host, { read: () => null, probe: () => false, probePid: () => true });
-      expect(existsSync(root)).toBe(true); // unknown settlement cannot erase a prior pending stamp
+      expect(existsSync(root)).toBe(true); // no snapshot cannot prove the child gone
       sweepStaleRunRoots(host, { read: () => [...ancestors, { pid: target.pid, ppid: 1, start: target.start }], probe: () => false, probePid: () => true });
       expect(existsSync(root)).toBe(true); // a partial inventory cannot erase the still-live identity
       target.start = 'reused';
@@ -365,7 +364,6 @@ describe.skipIf(process.platform === 'win32')('real interrupted-run recovery', (
         expect(isProcessAlive(environmentOnly.pid)).toBe(false);
         expect(isProcessAlive(argumentOnly.pid)).toBe(false);
       }, { timeout: 5000 });
-      expect(verifyPendingTestProcesses(dead, { read })).toBe(true);
       sweepStaleRunRoots(host, { read }); // both individually verified descendants have settled
       expect(existsSync(dead)).toBe(false);
       expect(existsSync(live)).toBe(true);
