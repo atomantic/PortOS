@@ -447,6 +447,33 @@ describe.skipIf(!runDb)('beeperTribe (#34)', () => {
     expect(resynced.handle).toBe('@example_keeper');
   });
 
+  it('does not wipe a stored display name when a message-sender upsert omits senderName', async () => {
+    await makeAccount();
+    const conversationId = await makeConversation(`${nonce}-name-keep-chat`, { network: 'discord' });
+
+    await beeperTribe.upsertParticipant({
+      conversationId,
+      sourceUserId: 'name-keep-user-1',
+      displayName: 'Example Named Participant',
+      observedVia: 'participant-list',
+    });
+    const omitted = await beeperTribe.upsertParticipant({
+      conversationId,
+      sourceUserId: 'name-keep-user-1',
+      displayName: '',
+      observedVia: 'message-sender',
+    });
+    expect(omitted.displayName).toBe('Example Named Participant');
+
+    const renamed = await beeperTribe.upsertParticipant({
+      conversationId,
+      sourceUserId: 'name-keep-user-1',
+      displayName: 'Example Renamed Participant',
+      observedVia: 'message-sender',
+    });
+    expect(renamed.displayName).toBe('Example Renamed Participant');
+  });
+
   // ── #96: a manual link survives a purge + resweep ────────────────────────
   // The purge is the real one (`DELETE FROM beeper_conversations`), so the
   // participant row and its `tribe_person_id` cache genuinely cascade away;

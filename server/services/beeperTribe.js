@@ -265,7 +265,7 @@ export async function upsertParticipant({
     `INSERT INTO beeper_participants (conversation_id, source_user_id, display_name, handle, observed_via)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (conversation_id, source_user_id)
-     DO UPDATE SET display_name = EXCLUDED.display_name,
+     DO UPDATE SET display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), beeper_participants.display_name),
        handle = COALESCE(NULLIF(EXCLUDED.handle, ''), beeper_participants.handle),
        observed_via = EXCLUDED.observed_via, updated_at = NOW()`,
     [conversationId, sourceUserId, displayName, handle, observedVia],
