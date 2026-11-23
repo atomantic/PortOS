@@ -59,6 +59,7 @@ const config = defineConfig({
       PORTOS_CI_TEST_SELECTION: '',
       // Same for the memo store: a nested Vitest must point at its own directory or stay off.
       PORTOS_TEST_MEMO_DIR: '',
+      PORTOS_TEST_MEMO_READ_DIRS: '',
     },
     // 30s on every platform (#7951). Transform + import dominate tracked time, so a
     // test whose body is one `await import()` of a large graph is timed almost

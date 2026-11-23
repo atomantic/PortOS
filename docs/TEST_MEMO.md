@@ -298,6 +298,30 @@ verdict. The runner prints one line —
 (plus `U never-memoized guards not analyzed.` when U > 0: those are decided before
 any closure walk; and `Related selection used R digest records.` in a related
 plan) — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`.
+
+The planner checks a file's recorded key before anything else. Its floor
+key and static closure are computed only when that misses, or when related
+selection has no narrowing record for the file, so a warm memo does not
+walk the closures of the files it is about to skip (#17617). Every file
+that runs has had its floor key computed before Vitest starts, which the
+after-run comparison above relies on.
+
+A store can also be several directories: `PORTOS_TEST_MEMO_READ_DIRS` (a
+`path.delimiter` list) adds read-only ones after the usual directory. An
+entry is the first valid one across them, a record the newest by
+`recordedAt` (a tie keeps the earlier directory), and writes go to the
+first. Pull-request CI jobs use it to read the parked shard lineages in
+place ([CI seeding](#ci-seeding)).
+
+The store is bounded at the end of a run that may publish it
+(`pruneTestMemo`). A trusted CI run (not a pull request) removes unreadable
+and expired entries, keeps the newest three entries per `(workspace, test)`
+(`MAX_ENTRIES_PER_TEST`) and drops entries and records of test files the
+checkout no longer has: a test gets new entries only when it ran, which
+means its inputs had already moved past the older ones. Before #17617 a
+saved server lineage carried 213,086 entry files. The developer's store is
+shared by every worktree and branch, so a local run only removes expired
+entries, at most once a day (a `pruned-at` stamp in the store).
 When every selected file is memoized nothing is launched and the job exits 0.
 
 After a run that may record (every run but a pull request's), the runner
@@ -432,9 +456,12 @@ still run. Partitioning happens before memo lookup, so changing the memo's
 source shard cannot omit or duplicate a selected test. The server and client
 jobs restore each distinct full-run lineage once, counting the initial partition
 or family match. Their `merge-shards` input equals `FULL_SUITE_SHARDS` for the
-family and is pinned by `scripts/ci-test-memo-cache.test.js`. They fold the
-lineages in with `scripts/merge-test-memo.js`, keeping the newer record per test
-and every live entry. A shard records only its slice, and related selection
+family and is pinned by `scripts/ci-test-memo-cache.test.js`. A trusted run
+folds the lineages in with `scripts/merge-test-memo.js`, keeping the newer
+record per test and every live entry, because it records into that store and
+saves it. A pull request only reads and discards its store with the job, so it
+skips the copy and exports `PORTOS_TEST_MEMO_READ_DIRS` naming the parked
+lineages, which the runner reads in place with the same precedence. A shard records only its slice, and related selection
 narrows a test only through its own record. Each lineage restores to the path it
 was saved from because the cache version hashes that path. The job then moves
 it aside before the next restore. Each shard saves as soon as its own tests pass.
@@ -452,4 +479,6 @@ invalidates every key) and `PGDATABASE` is a keyed env var.
 
 `PORTOS_TEST_MEMO=off` turns reads and writes off together and
 restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
-never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.
+never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`;
+the workspace configs also clear `PORTOS_TEST_MEMO_READ_DIRS`, so a nested
+run never reads a pull-request job's parked lineages.

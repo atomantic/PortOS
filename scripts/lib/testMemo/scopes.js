@@ -360,9 +360,27 @@ function writesTo(arr, m, at) {
   return inAssignedPattern(arr, m, at);
 }
 
+/**
+ * Every identifier token of the file by name, `{ arr, m, at }` in each token array: the per-name
+ * questions below look at one name's occurrences instead of rescanning the file for each (#17617).
+ */
+function occurrencesOf(s, name) {
+  if (!s.occurrences) {
+    s.occurrences = new Map();
+    for (const { arr, m } of s.arrays) {
+      arr.forEach((token, at) => {
+        if (token.t !== 'id') return;
+        if (!s.occurrences.has(token.v)) s.occurrences.set(token.v, []);
+        s.occurrences.get(token.v).push({ arr, m, at });
+      });
+    }
+  }
+  return s.occurrences.get(name) ?? [];
+}
+
 /** True when `name` is written at a source offset `inside` accepts, other than at the token `declaration`. */
 function writtenIn(s, name, inside, declaration = null) {
-  return s.arrays.some(({ arr, m }) => arr.some((use, at) => use.t === 'id' && use.v === name && use !== declaration && inside(use.i) && writesTo(arr, m, at)));
+  return occurrencesOf(s, name).some(({ arr, m, at }) => arr[at] !== declaration && inside(arr[at].i) && writesTo(arr, m, at));
 }
 
 /** True when `arr[at]` is directly inside the parentheses of a `for` head. */
@@ -385,7 +403,13 @@ function inAssignedPattern(arr, m, at) {
 }
 
 const namedPattern = (name, after) => new RegExp(`(?:^|[^\\w$.])${name.replace(/[$]/g, '\\$&')}\\s*(?:${after})`, 'g');
-const hiddenUse = (s, name, after) => namedPattern(name, after).test(s.stringText);
+/** `compute()` once per file and `key`: the scope state it reads (text, tokens) never changes after `createScopes`. */
+const memoized = (s, key, compute) => {
+  s.memo ??= new Map();
+  if (!s.memo.has(key)) s.memo.set(key, compute());
+  return s.memo.get(key);
+};
+const hiddenUse = (s, name, after) => memoized(s, `use\0${after}\0${name}`, () => namedPattern(name, after).test(s.stringText));
 /** A write to `name` spelled inside a string or template: `eval("name = …")`, or code read as text. */
 const hiddenWrite = (s, name) => s.confused || hiddenUse(s, name, '=(?!=)|\\+\\+|--|[-+*/%|&^?]{1,3}=|\\)\\s*=(?!=)');
 
@@ -395,9 +419,11 @@ const hiddenWrite = (s, name) => s.confused || hiddenUse(s, name, '=(?!=)|\\+\\+
  * that happens to spell a call costs that file the resolution, nothing more.
  */
 function hiddenCall(s, name) {
-  const written = (s.ctx.src.match(namedPattern(name, '\\(')) ?? []).length;
-  const seen = s.arrays.reduce((count, { arr }) => count + arr.filter((token, at) => token.t === 'id' && token.v === name && isPunct(arr[at + 1], '(') && !isPunct(arr[at - 1], '.', '?.')).length, 0);
-  return written > seen;
+  return memoized(s, `call\0${name}`, () => {
+    const written = (s.ctx.src.match(namedPattern(name, '\\(')) ?? []).length;
+    const seen = occurrencesOf(s, name).filter(({ arr, at }) => isPunct(arr[at + 1], '(') && !isPunct(arr[at - 1], '.', '?.')).length;
+    return written > seen;
+  });
 }
 
 function hasDynamicScope(s, from, to) {
