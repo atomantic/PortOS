@@ -818,6 +818,12 @@ describe('Layout — keyboard navigation shell', () => {
     fireEvent.click(opener);
     expect(sidebar).not.toHaveAttribute('inert');
     expect(sidebar).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toBe(sidebar);
+    expect(sidebar).toHaveAttribute('aria-modal', 'true');
+    const mainWrapper = opener.closest('header').parentElement;
+    expect(mainWrapper).toHaveAttribute('inert');
+    expect(mainWrapper).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getAllByRole('button', { name: 'Close sidebar' })).toHaveLength(1);
     expect(sidebar.contains(document.activeElement)).toBe(true);
     const first = document.activeElement;
     fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
@@ -830,12 +836,16 @@ describe('Layout — keyboard navigation shell', () => {
     expect(opener).toHaveFocus();
     expect(opener).toHaveAttribute('aria-expanded', 'false');
     expect(sidebar).toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('role');
+    expect(sidebar).not.toHaveAttribute('aria-modal');
+    expect(mainWrapper).not.toHaveAttribute('inert');
+    expect(mainWrapper).not.toHaveAttribute('aria-hidden');
 
     fireEvent.click(opener);
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Close sidebar' }));
     expect(opener).toHaveFocus();
     fireEvent.click(opener);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Close sidebar' }).find(el => !sidebar.contains(el)));
+    fireEvent.click(screen.getByTestId('mobile-nav-scrim'));
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
   });
