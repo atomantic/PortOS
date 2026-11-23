@@ -434,6 +434,9 @@ jobs:
         with:
           node-version: \${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: |
+            client/package-lock.json
+            server/package-lock.json
 
       - name: Install client dependencies
         working-directory: ./client

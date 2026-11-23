@@ -23,7 +23,7 @@ const children = scripts.map((name) => spawn('npm', ['run', name], { stdio: 'inh
 let exiting = false;
 
 const stopAll = (signal) => {
-  for (const child of children) if (child.exitCode === null) child.kill(signal);
+  for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill(signal);
 };
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stopAll(signal));
 
