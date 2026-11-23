@@ -170,11 +170,11 @@ export default function useSseJobSlot({
     // user and let the caller reconcile its persisted state.
     cancelRequest(jobId, { silent: true })
       .then((res) => {
-        if (res?.ok !== false) return;
+        if (res?.ok !== false || !mounted.current) return;
         toast.error('This job can no longer be stopped — it may be finishing');
         onSettled?.('cancel-rejected', context);
       })
-      .catch((err) => toast.error(err?.message || 'Could not stop the job'));
+      .catch((err) => { if (mounted.current) toast.error(err?.message || 'Could not stop the job'); });
   };
 
   return {

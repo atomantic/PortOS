@@ -48,7 +48,7 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   const [noteBusyId, setNoteBusyId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [cancellingId, setCancellingId] = useState(null);
-  const cancellingRef = useRef(null);
+  const cancellingRef = useRef(new Set());
 
   // Reload the project the render was STARTED for, not whichever one is
   // currently selected — `job.start` below captures `projectId` as the slot's
@@ -99,8 +99,8 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
   // `{ ok: false }` means the server no longer tracks the job (already settled/cleared), so
   // reload the persisted record or the card stays on a dead "Checking render status" state.
   const cancelExcerpt = (excerptId) => {
-    if (cancellingRef.current === excerptId) return Promise.resolve();
-    cancellingRef.current = excerptId;
+    if (cancellingRef.current.has(excerptId)) return Promise.resolve();
+    cancellingRef.current.add(excerptId);
     setCancellingId(excerptId);
     return cancelMusicVideoExcerptRender(excerptId, { silent: true })
       .then((res) => {
@@ -109,7 +109,10 @@ export default function useMusicVideoExcerpts({ project, replaceProject } = {}) 
         toast.error('This draft render is no longer running — refreshed status');
       })
       .catch((err) => toast.error(err?.message || 'Failed to cancel the excerpt render'))
-      .finally(() => { cancellingRef.current = null; setCancellingId(null); });
+      .finally(() => {
+        cancellingRef.current.delete(excerptId);
+        setCancellingId((cur) => (cur === excerptId ? null : cur));
+      });
   };
 
   const deleteExcerpt = (excerptId) => {
