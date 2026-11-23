@@ -367,7 +367,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   [WRITERS_ROOM_DRAFT_BODY_CONFLICT_KIND]: ['body'],
   // Restored via `updateWork`. Excluded: structural fields, draft-version structure
   // (lineage-managed) and bridge links set by their own helpers.
-  writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode'],
+  writersRoomWork: ['title', 'kind', 'status', 'folderId', 'imageStyle', 'liveMode', 'voiceExemplars', 'voiceAntiExemplars'],
   // Restored via `restoreFolder`.
   writersRoomFolder: ['name', 'parentId', 'sortOrder'],
   // One taste reaction: rating + note/tags; `commissionId`/`runId` are structural keys.
@@ -383,7 +383,7 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // Authored story graph, playback config and render prefs; universe/series ids are structural links.
   fableLoom: ['name', 'logline', 'premise', 'styleNotes', 'format', 'playSettings', 'renderSettings', 'seriesPlan', 'productionStatus', 'protagonistCharacterId', 'protagonistWardrobeId', 'protagonistWardrobeLocked', 'participationMode', 'audienceCommunicationMedium', 'episodes'],
   // Restored via `restoreExercise`.
-  writersRoomExercise: ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt'],
+  writersRoomExercise: ['workId', 'prompt', 'durationSeconds', 'startingWords', 'endingWords', 'wordsAdded', 'appendedText', 'status', 'finishedAt', 'promotedAt', 'promotedDraftVersionId'],
   // `scenes[]` carries the bulk. Excluded: structural fields, derived
   // `renderHistoryId` and the machine-derived `audioAnalysis` beat cache.
   musicVideoProject: ['name', 'status', 'mode', 'trackId', 'uploadedAudioFilename', 'vocalStemFilename', 'concept', 'scenes'],
