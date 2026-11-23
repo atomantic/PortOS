@@ -78,6 +78,8 @@ export default function ToolsTab({ agentId, agent }) {
     const requestId = ++accountRequestRef.current;
     setLoading(true);
     setAccountError(null);
+    setSelectedAccountId('');
+    setAccountName('');
     const result = await getPlatformAccounts(agentId, 'moltbook', { silent: true })
       .then(data => ({ data }), error => ({ error }));
     if (requestId !== accountRequestRef.current) return;

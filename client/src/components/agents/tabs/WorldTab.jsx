@@ -183,6 +183,8 @@ export default function WorldTab({ agentId }) {
     const requestId = ++accountRequestRef.current;
     setLoading(true);
     setAccountError(null);
+    setAccountId(null);
+    setAccountName('');
     const result = await getPlatformAccounts(agentId, 'moltworld', { silent: true })
       .then(data => ({ data }), error => ({ error }));
     if (requestId !== accountRequestRef.current) return;

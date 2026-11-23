@@ -94,9 +94,9 @@ function AgentDetailContent() {
   const fetchPlatformAccounts = useCallback(() => {
     const requestId = ++platformRequestRef.current;
     const requestedAgentId = agentId;
-    setPlatformAccountsError(null);
     getPlatformAccounts(requestedAgentId, null, { silent: true }).then(accounts => {
       if (!mountedRef.current || requestId !== platformRequestRef.current) return;
+      setPlatformAccountsError(null);
       setPlatformAccounts(accounts);
     }, error => {
       if (!mountedRef.current || requestId !== platformRequestRef.current) return;
