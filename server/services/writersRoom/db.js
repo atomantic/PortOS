@@ -175,9 +175,11 @@ export async function writeFolder(folder) {
  */
 export async function deleteFolder(id) {
   await withTransaction(async (client) => {
-    const sel = await client.query(`SELECT data FROM writers_room_folders WHERE id = $1 FOR UPDATE`, [id]);
-    const current = sel.rows[0]?.data;
-    if (!current || current.deleted === true) return;
+    const sel = await client.query(`SELECT deleted, data FROM writers_room_folders WHERE id = $1 FOR UPDATE`, [id]);
+    const row = sel.rows[0];
+    const current = row?.data;
+    // A split-brain row (column FALSE, data.deleted true) must still be repairable (#17919).
+    if (!row || (row.deleted === true && current?.deleted === true)) return;
     const now = new Date().toISOString();
     await persistFolderTx(client, { ...current, deleted: true, deletedAt: now, updatedAt: now });
   });
@@ -505,9 +507,11 @@ async function persistWorkTx(client, manifest) {
  */
 export async function deleteWork(id) {
   await withTransaction(async (client) => {
-    const sel = await client.query(`SELECT data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [id]);
-    const current = sel.rows[0]?.data;
-    if (!current || current.deleted === true) return;
+    const sel = await client.query(`SELECT deleted, data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [id]);
+    const row = sel.rows[0];
+    const current = row?.data;
+    // A split-brain row (column FALSE, data.deleted true) must still be repairable (#17919).
+    if (!row || (row.deleted === true && current?.deleted === true)) return;
     const now = new Date().toISOString();
     await persistWorkTx(client, { ...current, drafts: undefined, deleted: true, deletedAt: now, updatedAt: now });
   });

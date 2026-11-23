@@ -262,6 +262,17 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect(await db.listFolderIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-folder-1', 'wr-folder-2']));
   });
 
+  it('deleteFolder/deleteWork repair a split-brain row (column FALSE, data.deleted true) (#17919)', async () => {
+    await db.writeFolder({ id: 'wr-folder-1', parentId: null, name: 'Zombie', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await db.writeWork(manifest('wr-work-1'));
+    await query(`UPDATE writers_room_folders SET data = data || '{"deleted": true}'::jsonb, deleted = FALSE WHERE id = 'wr-folder-1'`);
+    await query(`UPDATE writers_room_works SET data = data || '{"deleted": true}'::jsonb, deleted = FALSE WHERE id = 'wr-work-1'`);
+    await db.deleteFolder('wr-folder-1');
+    await db.deleteWork('wr-work-1');
+    expect((await query(`SELECT deleted FROM writers_room_folders WHERE id = 'wr-folder-1'`)).rows[0].deleted).toBe(true);
+    expect((await query(`SELECT deleted FROM writers_room_works WHERE id = 'wr-work-1'`)).rows[0].deleted).toBe(true);
+  });
+
   it('mergeFoldersFromSync inserts + LWW-resolves, pruneTombstonedFolders hard-removes old tombstones (#1645)', async () => {
     const folder = (extra = {}) => ({ id: 'wr-folder-1', parentId: null, name: 'Remote', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z', ...extra });
     expect(await db.mergeFoldersFromSync([folder()])).toEqual({ applied: true, count: 1 });
