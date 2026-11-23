@@ -140,8 +140,11 @@ export default function AppQualityScheduleForm({ app }) {
 
   const resetToDefaults = async () => {
     setBusy(true);
-    revision.current += 1;
+    // The app-change effect bumps this too, so a reset for the previous app
+    // that resolves after a switch is dropped instead of repainting the form.
+    const mine = ++revision.current;
     const result = await getAppQualitySchedule(app.id, { defaults: true }).catch(err => ({ failure: err }));
+    if (mine !== revision.current) return;
     setBusy(false);
     if (result?.failure) return toast.error(result.failure.message || 'Could not load the default schedule');
     setError('');
