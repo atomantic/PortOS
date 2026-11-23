@@ -492,3 +492,18 @@ it.each([false, true])('reveals tabs with reduced motion=%s without moving ances
   expect(ancestorScroll).not.toHaveBeenCalled();
   ancestorScroll.mockRestore();
 });
+
+describe('TabPills roving tabindex fallback', () => {
+  it('falls back to the first enabled tab when activeTab is unmatched or disabled', () => {
+    const { rerender } = render(<TabPills tabs={sampleTabs} activeTab="nope" onChange={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+    const tabs = [{ ...sampleTabs[0], disabled: true }, sampleTabs[1], sampleTabs[2]];
+    rerender(<TabPills tabs={tabs} activeTab="cast" onChange={() => {}} />);
+    expect(screen.getAllByRole('tab').map((t) => t.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it('keeps the underline focus ring inside the scroll strip', () => {
+    render(<TabPills tabs={sampleTabs} activeTab="cast" onChange={() => {}} />);
+    expect(screen.getAllByRole('tab')[0].className).toContain('focus-visible:outline-offset-[-2px]');
+  });
+});

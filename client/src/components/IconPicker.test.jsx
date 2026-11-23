@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import IconPicker from './IconPicker';
 import Drawer from './Drawer';
@@ -15,7 +15,7 @@ describe('IconPicker', () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
     render(<Drawer open title="Edit App" onClose={onClose}><Form /></Drawer>);
-    const trigger = screen.getByRole('button', { name: 'Icon picker' });
+    const trigger = screen.getByRole('button', { name: /^Icon:/ });
     trigger.focus();
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(trigger).not.toHaveAttribute('aria-controls');
@@ -40,7 +40,7 @@ describe('IconPicker', () => {
   it('updates the controlled value and restores focus when a choice is activated', async () => {
     const user = userEvent.setup();
     render(<Form />);
-    const trigger = screen.getByRole('button', { name: 'Icon picker' });
+    const trigger = screen.getByRole('button', { name: /^Icon:/ });
     await user.click(trigger);
     const choice = screen.getByRole('button', { name: 'web' });
     choice.focus();
@@ -53,11 +53,24 @@ describe('IconPicker', () => {
   it('dismisses by pointer without stealing focus from another form field', async () => {
     const user = userEvent.setup();
     const { container } = render(<Form />);
-    const trigger = screen.getByRole('button', { name: 'Icon picker' });
+    const trigger = screen.getByRole('button', { name: /^Icon:/ });
     await user.click(trigger);
     const next = screen.getByRole('button', { name: 'Next field' });
-    next.focus();
     fireEvent.click(container.querySelector('.fixed[aria-hidden="true"]'));
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    act(() => next.focus());
+    expect(next).toHaveFocus();
+  });
+
+  it('exposes the selected icon, pressed state, and closes on Tab-out', async () => {
+    const user = userEvent.setup();
+    render(<Form />);
+    const trigger = screen.getByRole('button', { name: 'Icon: package' });
+    await user.click(trigger);
+    expect(screen.getByRole('button', { name: 'package', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'web', pressed: false })).toBeInTheDocument();
+    const next = screen.getByRole('button', { name: 'Next field' });
+    act(() => next.focus());
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(next).toHaveFocus();
   });

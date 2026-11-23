@@ -205,3 +205,31 @@ describe('TagPicker combobox interactions', () => {
     expect(input.hasAttribute('aria-activedescendant')).toBe(false);
   });
 });
+
+describe('TagPicker a11y', () => {
+  it('owns options directly under the listbox', async () => {
+    listCatalogTags.mockResolvedValue({ items: [{ id: 'a', label: 'Alpha' }] });
+    const user = userEvent.setup();
+    render(<ControlledPicker onChange={vi.fn()} />);
+    await user.type(screen.getByRole('combobox'), 'Al');
+    const option = await screen.findByRole('option', { name: 'Alpha' });
+    expect(option.parentElement).toBe(screen.getByRole('listbox'));
+  });
+
+  it('restores input focus after removing a tag at maxTags and announces changes', async () => {
+    const user = userEvent.setup();
+    function Capped() {
+      const [v, setV] = useState(['a', 'b']);
+      return <TagPicker value={v} onChange={setV} maxTags={2} />;
+    }
+    render(<Capped />);
+    const input = screen.getByRole('combobox');
+    expect(input).toBeDisabled();
+    await user.click(screen.getByLabelText('Remove tag a'));
+    expect(input).not.toBeDisabled();
+    expect(input).toHaveFocus();
+    expect(screen.getByRole('status')).toHaveTextContent('Removed tag a');
+    await user.type(input, 'c{Enter}');
+    expect(screen.getByRole('status')).toHaveTextContent('Added tag c. Maximum of 2 tags reached');
+  });
+});
