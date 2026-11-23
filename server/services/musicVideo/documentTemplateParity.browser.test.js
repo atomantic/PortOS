@@ -9,6 +9,7 @@ import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
 import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { installTemplateParityDiagnostics } from '../../test/templateParityDiagnostics.js';
+import { buildRecordedViteFixture, createRecordedStaticServer } from '../../../scripts/lib/browserServedFiles.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
@@ -75,7 +76,12 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
     await phase('bundle', async () => {
       const { build } = await import(bundlers[0]); const { default: react } = await import(bundlers[1]); const { default: tailwind } = await import(bundlers[2]);
-      await build({ configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' });
+      await buildRecordedViteFixture({
+        build,
+        recordedRoot: client,
+        temp: dir,
+        config: { configFile: false, root: dir, publicDir: join(client, 'public'), plugins: [react()], css: { postcss: { plugins: [tailwind({ base: client })] } }, build: { outDir: join(dir, 'dist'), emptyOutDir: true }, logLevel: 'warn' },
+      });
     });
     await phase('media', async timeout => {
       const svg = '<svg width="960" height="540" xmlns="http://www.w3.org/2000/svg"><rect width="960" height="540" fill="#174280"/><path d="M0 0H180V540H0zM400 0H600V540H400zM820 0H960V540H820z" fill="#e96531"/><circle cx="650" cy="130" r="95" fill="#eaeaea"/><path d="M0 400H960V480H0z" fill="#32d96c"/></svg>';
@@ -87,6 +93,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
     await phase('server', async () => {
       const app = express();
+      const staticFiles = createRecordedStaticServer(express);
       app.get('/engine/portos-mv.js', (_req, res) => res.type('js').send(`window.PORTOS_MV=${JSON.stringify(engineData)};window.PORTOS_MV_EVENT_STATE=${narrativeFrameState.toString()};${documentRenderInitScripts(current).join('\n')}`));
       app.get('/engine/media/:file', (req, res) => {
         const scene = engineData.scenes.find(s => s.media?.src === `media/${req.params.file}`);
@@ -94,14 +101,14 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
         const name = req.params.file.endsWith('.webm') ? selected?.videoHistoryId === 'uniform' ? 'uniform.webm' : 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : selected?.referenceImageId || 'grid.png';
         res.sendFile(join(dir, name));
       });
-      app.use('/engine', express.static(join(templates, 'layered')), express.static(join(templates, 'shared')), express.static(join(root, 'server/lib/musicVideo')));
+      app.use('/engine', staticFiles.serve(join(templates, 'layered')), staticFiles.serve(join(templates, 'shared')), staticFiles.serve(join(root, 'server/lib/musicVideo')));
       app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: req.params.id === 'uniform' ? 'uniform.webm' : 'clip.webm', fps: 24, width: 240, height: 240, numFrames: 96 }));
       app.get('/api/music-video/:id/lyrics/overlay/preview', async (_req, res, next) => { await buildLyricPlaythroughPreview(current, { overlay: true }).then(value => res.json(value)).catch(next); });
       app.get('/data/images/:file', (req, res) => res.sendFile(join(dir, req.params.file)));
       app.get('/data/videos/:file', (req, res) => res.sendFile(join(dir, req.params.file === 'uniform.webm' ? 'uniform.webm' : 'clip.webm')));
       app.get('/song.wav', (_req, res) => res.sendFile(join(dir, 'song.wav')));
-      app.use(express.static(join(dir, 'dist')));
-      await new Promise((done, reject) => { server = app.listen(0, '127.0.0.1', done); server.once('error', reject); });
+      app.use(staticFiles.serve(join(dir, 'dist')));
+      server = await staticFiles.start(app);
     });
     await phase('browser', async () => {
       fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args: ['--force-color-profile=srgb'] } });

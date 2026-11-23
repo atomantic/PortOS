@@ -10,6 +10,7 @@ import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../test/browserFixture.js';
 import { createOwnedFixtureSetup } from '../test/ownedFixtureSetup.js';
+import { startRecordedViteServer } from '../../scripts/lib/browserServedFiles.js';
 import { browserSuiteCanRun, resolveClientBundler, resolveTestChrome } from '../lib/browserSuiteGate.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { greyboxSceneSchema } from '../lib/greyboxScene.js';
@@ -65,18 +66,22 @@ describe.skipIf(!canRun)('greybox captures in real Chrome', () => {
     const { createServer } = await import(pathToFileURL(requireClient.resolve('vite')).href);
     const { default: react } = await import(pathToFileURL(requireClient.resolve('@vitejs/plugin-react')).href);
     await phase('vite', async () => {
-      server = await createServer({
-        configFile: false, root: client, cacheDir: join(lazyTempDataRoot('portos-greybox-render-'), 'vite-cache'),
-        optimizeDeps: { entries: ['src/components/catalog/GreyboxCapture.jsx'], include: ['react', 'react-dom/client', 'three', '@react-three/fiber', '@react-three/drei'] },
-        plugins: [react(), { name: 'greybox-fixture', configureServer(server) {
-          server.middlewares.use('/greybox-test', async (_req, res) => {
-            res.setHeader('Content-Type', 'text/html');
-            res.end(await server.transformIndexHtml('/greybox-test', html.replace('<script src="/viewer.js"></script>', '<script type="module" src="/src/components/catalog/GreyboxCapture.jsx"></script>')));
-          });
-        } }],
-        server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
+      const cacheDir = join(lazyTempDataRoot('portos-greybox-render-'), 'vite-cache');
+      server = await startRecordedViteServer({
+        createServer,
+        temp: cacheDir,
+        config: {
+          configFile: false, root: client, cacheDir,
+          optimizeDeps: { entries: ['src/components/catalog/GreyboxCapture.jsx'], include: ['react', 'react-dom/client', 'three', '@react-three/fiber', '@react-three/drei'] },
+          plugins: [react(), { name: 'greybox-fixture', configureServer(viteServer) {
+            viteServer.middlewares.use('/greybox-test', async (_req, res) => {
+              res.setHeader('Content-Type', 'text/html');
+              res.end(await viteServer.transformIndexHtml('/greybox-test', html.replace('<script src="/viewer.js"></script>', '<script type="module" src="/src/components/catalog/GreyboxCapture.jsx"></script>')));
+            });
+          } }],
+          server: { host: '127.0.0.1', port: 0, watch: null, hmr: false },
+        },
       });
-      await server.listen();
     });
     await phase('browser', async () => { fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true } }); });
   }));

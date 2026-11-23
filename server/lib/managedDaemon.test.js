@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, reapIdleDaemons, _resetIdleDaemonsForTests } from './managedDaemon.js';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { createDaemonLogFiles, createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, waitForDaemonReady, reapIdleDaemons, _resetIdleDaemonsForTests } from './managedDaemon.js';
 
 const makeWatcher = (overrides = {}) => {
   let config = overrides.config ?? null;
@@ -98,6 +101,79 @@ describe('createPm2ExitTail', () => {
     });
 
     expect(await exitTail('stopped')).toBe('PM2 status: stopped');
+  });
+});
+
+describe('createDaemonWatcher port-release default', () => {
+  it('waits for port release without a caller-supplied timeout', async () => {
+    const { watcher, isPortInUse } = makeWatcher({ options: { getPortReleaseTimeoutMs: undefined } });
+    isPortInUse.mockResolvedValueOnce(true).mockResolvedValue(false);
+
+    await expect(watcher.waitForPortRelease(9000)).resolves.toBeUndefined();
+    expect(isPortInUse).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('waitForDaemonReady', () => {
+  const base = (over = {}) => ({
+    endpoint: 'http://127.0.0.1:9000/v1',
+    label: 'Example',
+    probe: vi.fn(async () => false),
+    getStatusStrict: vi.fn(async () => ({ status: 'online' })),
+    sleep: vi.fn(async () => {}),
+    timeoutMs: 50,
+    pollMs: 1,
+    ...over,
+  });
+
+  it('resolves ready as soon as the endpoint answers', async () => {
+    const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    expect(await waitForDaemonReady(base({ probe }))).toEqual({ ready: true, reason: null });
+  });
+
+  it.each(['errored', 'stopped', 'not_found'])('fails fast with the PM2 tail when the process is %s', async (status) => {
+    const exitTail = vi.fn(async (st) => `PM2 status: ${st} — oom`);
+    const opts = base({ getStatusStrict: vi.fn(async () => ({ status })), exitTail, timeoutMs: 60_000 });
+    const result = await waitForDaemonReady(opts);
+    expect(result).toEqual({ ready: false, reason: `Example exited while loading (PM2 status: ${status} — oom)` });
+    expect(opts.sleep).not.toHaveBeenCalled();
+  });
+
+  it('gives up with a never-answered reason once the budget elapses', async () => {
+    const result = await waitForDaemonReady(base({ sleep: () => new Promise((r) => setTimeout(r, 5)) }));
+    expect(result.ready).toBe(false);
+    expect(result.reason).toMatch(/never answered/);
+  });
+
+  it('stops when aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(await waitForDaemonReady(base({ signal: controller.signal }))).toMatchObject({ ready: false, aborted: true });
+  });
+});
+
+describe('createDaemonLogFiles', () => {
+  it('truncates both per-launch logs and reports success', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'daemon-logs-'));
+    try {
+      const logs = createDaemonLogFiles('example-daemon');
+      expect(logs.files().stdout).toMatch(/example-daemon-out\.log$/);
+      logs.setForTests({ stdout: join(dir, 'o.log'), stderr: join(dir, 'e.log') });
+      await writeFile(join(dir, 'o.log'), 'stale');
+      await writeFile(join(dir, 'e.log'), 'stale');
+      expect(await logs.reset()).toBe(true);
+      expect(await readFile(join(dir, 'o.log'), 'utf8')).toBe('');
+      expect(await readFile(join(dir, 'e.log'), 'utf8')).toBe('');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports false when a log cannot be reset', async () => {
+    const logs = createDaemonLogFiles('example-daemon');
+    logs.setForTests({ stdout: join(tmpdir(), 'no-such-dir-xyz', 'o.log'), stderr: join(tmpdir(), 'no-such-dir-xyz', 'e.log') });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await logs.reset()).toBe(false);
   });
 });
 

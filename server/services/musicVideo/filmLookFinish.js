@@ -34,6 +34,9 @@ import { admitFilmLookWeb, encodeFilmLookWeb } from './filmLookWebEncoder.js';
 
 export const FILM_LOOK_FINISH_SCRATCH_DIR = 'music-video-film-look';
 
+/** Boot recovery: no film-look pass survives a restart, so its staged source.mp4 scratch is stale. */
+export const sweepFilmLookScratch = () => rm(join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR), { recursive: true, force: true });
+
 /** Whether a footage render of `project` gets the finishing pass. */
 export const filmLookFinishNeeded = (project, { shotLooks = false } = {}) => !isFilmLookNeutral(project?.filmLook)
   || (shotLooks && (project?.scenes || []).some(scene => shotFilmLook(project, scene)));
