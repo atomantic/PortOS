@@ -91,8 +91,17 @@ const summarize = (run) => ({ ...run, pages: (run.pages || []).map(({ html, ...p
 /** Stored run summaries, newest first. A run still marked active that this process is not working on was cut off by a restart. */
 export async function listRuns() {
   const runs = await listStoredRuns();
-  const current = await Promise.all(runs.map((run) => (isCutOff(run) ? markInterrupted(run.id) : run)));
-  return current.map(summarize);
+  const current = await Promise.all(runs.map(async (run) => {
+    if (!isCutOff(run)) return run;
+    try {
+      return await markInterrupted(run.id);
+    } catch (err) {
+      // Soft-deleted between the list and the reconcile. Omit it; a 404 here must not fail the whole page.
+      if (err?.status === 404 || err?.code === 'NOT_FOUND') return null;
+      throw err;
+    }
+  }));
+  return current.filter(Boolean).map(summarize);
 }
 
 const markInterrupted = (id) => mutateRun(id, (current) => (ACTIVE.has(current.status)
@@ -135,13 +144,17 @@ export async function startRuns({ models = [], routes = [], pages }) {
     ...models.map((m) => ({ backend: m.backend, modelId: m.modelId, route: null })),
     ...resolvedRoutes.map((route) => ({ backend: 'provider', modelId: route.model || route.providerName, route })),
   ];
-  for (const target of targets) {
-    const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
-    enqueue(run.id);
-    runs.push(run);
+  try {
+    for (const target of targets) {
+      const run = await createRun({ ...target, pageCount: pages.length, themes: pages, prompts });
+      enqueue(run.id);
+      runs.push(run);
+    }
+  } finally {
+    // A later createRun can reject after earlier runs are already in queue and liveRuns. Drain those or they stay stuck (409 on resume, Live activity never clears).
+    if (runs.length) void drain();
   }
   console.log(`🧩 HTML pages: queued ${runs.length} run${runs.length === 1 ? '' : 's'} of ${pages.length} page${pages.length === 1 ? '' : 's'}`);
-  void drain();
   return runs;
 }
 
