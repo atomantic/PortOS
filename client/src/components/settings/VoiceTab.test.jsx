@@ -387,3 +387,30 @@ describe('VoiceTab personality traits input', () => {
       .toEqual(['concise', 'warm', 'very direct']);
   });
 });
+
+describe('VoiceTab initial load failures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    voiceApi.getVoiceConfig.mockResolvedValue(structuredClone(config));
+    voiceApi.getVoiceStatus.mockResolvedValue({ services: {} });
+    voiceApi.listVoiceEngines.mockResolvedValue({ engines: [] });
+    voiceApi.listVoices.mockResolvedValue({ engine: 'qwen3-tts', voices: [] });
+  });
+
+  it('shows an alert with the error message and a working Retry when config fails', async () => {
+    voiceApi.getVoiceConfig.mockRejectedValueOnce(new Error('config boom'));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('config boom');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/config boom/)).toBeNull());
+    expect(voiceApi.getVoiceConfig).toHaveBeenCalledTimes(2);
+  });
+
+  it('still renders the form when only the status probe fails', async () => {
+    voiceApi.getVoiceStatus.mockRejectedValue(new Error('status down'));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    await waitFor(() => expect(screen.queryByText(/Loading voice settings/)).toBeNull());
+    expect(screen.queryByText(/Could not load voice settings/)).toBeNull();
+  });
+});
