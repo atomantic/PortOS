@@ -489,6 +489,45 @@ describe('mtplxServerManager', () => {
       expect(execPm2Calls.filter((a) => a[0] === 'start')).toHaveLength(starts);
     });
 
+    it('leaves a managed daemon serving its unnamed default checkpoint alone', async () => {
+      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValueOnce({ models: null, error: 'mtplx models timed out' });
+      await startMtplxServer();
+      expect(settingsStore.localLlm.mtplx.launch.model).toBeNull();
+      execPm2Calls.length = 0;
+      const run = vi.fn();
+
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', run)).rejects.toMatchObject({
+        status: 409,
+        code: 'MTPLX_SWITCH_REFUSED',
+        message: expect.stringContaining('own default checkpoint'),
+      });
+      expect(execPm2Calls.map(([verb]) => verb)).not.toContain('delete');
+      expect(execPm2Calls.map(([verb]) => verb)).not.toContain('start');
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('preserves the readiness error when restoring the previous checkpoint throws', async () => {
+      await startMtplxServer();
+      execPm2Calls.length = 0;
+      vi.spyOn(openAiModelsProbe, 'probeOpenAiModels').mockImplementation(async () => ({
+        reachable: pm2State?.status === 'online' && !pm2State.args.includes('Example/Other-MTP'),
+      }));
+      vi.spyOn(platform, 'isPortInUse').mockImplementation(async () => {
+        if (!pm2State && execPm2Calls.some(([verb]) => verb === 'start')) throw new Error('restore port probe failed');
+        return false;
+      });
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const run = vi.fn();
+
+      await expect(runOnMtplxCheckpoint('Example/Other-MTP', run)).rejects.toMatchObject({
+        status: 503,
+        code: 'MTPLX_SWITCH_FAILED',
+        message: expect.stringContaining('MTPLX relaunched but never answered on its port'),
+      });
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining('restore port probe failed'));
+      expect(run).not.toHaveBeenCalled();
+    });
+
     it('stops MTPLX again afterwards when it was not running before, even when fn throws, and keeps the saved launch line', async () => {
       const saved = { port: 8000, model: 'Example/Qwen-MTP', tuning: { depth: 2 } };
       settingsStore = { localLlm: { mtplx: { launch: saved } } };
