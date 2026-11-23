@@ -15,6 +15,7 @@ import { withUnlistedOption } from '../../lib/withUnlistedOption';
 import ProviderModelSelector from '../ProviderModelSelector';
 import FormField from '../ui/FormField';
 import ListLoadError from '../ui/ListLoadError';
+import useMounted from '../../hooks/useMounted';
 import useListResource from '../../hooks/useListResource';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
 
@@ -72,6 +73,8 @@ export function VoiceTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
+  const [configError, setConfigError] = useState(null);
+  const mountedRef = useMounted();
   // Raw text of the Traits input while it has uncommitted edits; null means "show
   // the saved list". Parsing per keystroke would drop typed commas and spaces.
   const [traitsText, setTraitsText] = useState(null);
@@ -150,11 +153,23 @@ export function VoiceTab() {
     loadProviders();
   }, [loadProviders]);
 
+  // Config and status load independently: a failed status probe only degrades
+  // the status badges, and a failed config shows a retryable error row instead
+  // of an endless spinner. Silent: ListLoadError is the failure UI.
+  const loadConfig = useCallback(() => {
+    setLoading(true);
+    setConfigError(null);
+    getVoiceStatus({ silent: true })
+      .then((s) => { if (mountedRef.current) setStatus(s); })
+      .catch(() => { if (mountedRef.current) setStatus(null); });
+    return getVoiceConfig({ silent: true })
+      .then((config) => { if (mountedRef.current) setCfg(config); })
+      .catch((err) => { if (mountedRef.current) setConfigError(err instanceof Error ? err : new Error('Request failed')); })
+      .finally(() => { if (mountedRef.current) setLoading(false); });
+  }, [mountedRef]);
+
   useEffect(() => {
-    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
-      .then(([config, s]) => { setCfg(config); setStatus(s); })
-      .catch(() => toast.error('Failed to load voice settings'))
-      .finally(() => setLoading(false));
+    loadConfig();
     listVoiceEngines({ silent: true })
       .then((data) => {
         const engines = Array.isArray(data?.engines) ? data.engines : [];
@@ -165,7 +180,7 @@ export function VoiceTab() {
         setTtsEngines([]);
         setTtsEngineError('Could not load the TTS engine registry. The saved engine remains selected.');
       });
-  }, []);
+  }, [loadConfig]);
 
   // Functional setState form so sequential patch() calls in one event handler
   // compose correctly — each one sees the prior's result instead of cloning
@@ -301,6 +316,7 @@ export function VoiceTab() {
     }
   };
 
+  if (!loading && !cfg) return <ListLoadError what="voice settings" error={configError} onRetry={loadConfig} />;
   if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
 
   const facetime = cfg.facetime || {};
