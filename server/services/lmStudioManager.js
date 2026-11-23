@@ -13,7 +13,7 @@ import { readdir, stat, copyFile, link, rm, rmdir } from 'fs/promises'
 import { dirSize, ensureDir } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import {
-  dirIsMlx, selectPrimaryGguf, selectProjectorGguf, isShardedGguf, lmStudioPublisherRepo
+  dirIsMlx, selectPrimaryGguf, selectProjectorGguf, isShardedGguf, lmStudioPublisherRepo, quantFromGgufFilename
 } from '../lib/localLlmDisk.js'
 import { bufferedSpawn } from '../lib/bufferedSpawn.js'
 import { findCommandOnPath } from '../lib/processEnv.js'
@@ -732,18 +732,8 @@ function quantFromInstallId(modelId) {
   return colon ? colon[1] : null
 }
 
-function trailingGgufQuant(filename) {
-  const stem = String(filename || '').split('/').pop()
-    .replace(/\.gguf$/i, '')
-    .replace(/-\d{5}-of-\d{5}$/i, '')
-  // Same trailing-token rule as huggingFaceCatalog.quantFromFilename: UD-Q4_K_M
-  // and Q4_K_M are distinct, so a suffix match would evict the wrong file.
-  const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
-  return match?.[1] || null
-}
-
 function ggufMatchesQuant(filename, quant) {
-  const parsed = trailingGgufQuant(filename)
+  const parsed = quantFromGgufFilename(filename)
   return parsed != null && parsed.toLowerCase() === String(quant).toLowerCase()
 }
 

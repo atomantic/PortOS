@@ -186,3 +186,22 @@ export function lmStudioPublisherRepo(lmstudioId) {
 export function buildModelfile(ggufPath) {
   return `FROM ${ggufPath}\n`;
 }
+
+/**
+ * The quantization token a GGUF filename ends with (`UD-Q4_K_M`, `Q8_0`, `BF16`), or null.
+ * The quant must be its own trailing token — start-of-name or after a `-`/`_`/`.`
+ * separator. Without that boundary a repo's custom scheme suffix bleeds into a
+ * bogus standard quant (`BTL-3-Compact-AVQ2` → `Q2`), and the resulting
+ * `hf.co/<repo>:Q2` pull is rejected by Ollama. An unparseable quant is better as
+ * null: the install id then falls back to the bare repo. Multi-part shards
+ * (`…-00001-of-00002`) resolve to the quant before the shard suffix. `UD-Q4_K_M`
+ * and `Q4_K_M` are distinct, so callers must not suffix-match. `FP16` is
+ * deliberately NOT a token (only `F16`/`BF16`): Ollama rejects an `:FP16` tag.
+ */
+export function quantFromGgufFilename(filename) {
+  const stem = String(filename || '').trim().split('/').pop()
+    .replace(/\.gguf$/i, '')
+    .replace(/-\d{5}-of-\d{5}$/i, '')
+  const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
+  return match?.[1] || null
+}

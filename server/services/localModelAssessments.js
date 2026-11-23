@@ -163,7 +163,6 @@ export async function runtimeEndpoint(runtime) {
 }
 
 /**
- * The API key a bare endpoint runtime is served behind, or `''` for the usual
  * The API key a bare endpoint runtime is served behind, or `''` for an unauthenticated loopback
  * daemon (a key-gated vLLM answers 401 otherwise). Resolved like `providerReadiness.js`, keyed on the
  * same `localRuntimeKind` classifier.
@@ -356,12 +355,6 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
     try { onProgress({ scope: 'assessment', backend, modelId, ...frame }); }
     catch (err) { console.error(`❌ Local LLM: assessment progress listener failed: ${err.message}`); }
   };
-  if (isEmbeddingModel(modelId)) {
-    throw new ServerError(
-      `${modelId} is an embedding-only model — it has no chat endpoint to benchmark. Measure a generation model instead.`,
-      { status: 400, code: 'MODEL_NOT_ASSESSABLE', context: { backend, modelId } },
-    );
-  }
   // Same machine-wide claim as image/video/3D rendering: a contending job silently changes the
   // number being recorded, so refuse rather than record a corrupt reading.
   const claim = await claimHeavyLocalJob({ kind: 'local-model assessment', id: `${backend}/${modelId}`, timeoutMs: claimTimeoutMs });

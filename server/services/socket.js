@@ -2,7 +2,6 @@ import { catalogIdentityEvents } from './catalogIdentity/events.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
-import { registerFleetHostSocket } from './fleetHostNotify.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
@@ -276,6 +275,20 @@ function registerLifecycleHandlers(socket, _io) {
     detachItermSocket(socket);
     socket.removeAllListeners();
   });
+}
+
+// The fleet host observer statically imports the whole host service; load it on first use so it
+// stays out of the boot closure. One shared promise keeps handler order per socket.
+let fleetHostNotify = null;
+const loadFleetHostNotify = () => (fleetHostNotify ??= import('./fleetHostNotify.js'));
+const onFleetHost = (socket, event, method) => socket.on(event, () => {
+  loadFleetHostNotify().then(mod => mod[method](socket)).catch(err => console.error(`❌ Fleet host socket handler failed: ${err.message}`));
+});
+function registerFleetHostSocket(socket) {
+  onFleetHost(socket, 'fleet-host:subscribe', 'subscribeFleetHostSocket');
+  onFleetHost(socket, 'fleet-host:unsubscribe', 'releaseFleetHostSocket');
+  // A socket that never subscribed must not load the observer just to disconnect.
+  socket.on('disconnect', () => { if (fleetHostNotify) fleetHostNotify.then(mod => mod.releaseFleetHostSocket(socket)).catch(() => {}); });
 }
 
 const SOCKET_HANDLER_REGISTRARS = [

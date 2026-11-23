@@ -1,4 +1,4 @@
-import { noteFleetHostChanged } from './fleetHostNotify.js';
+import { noteFleetHostChanged } from './fleetHostSignal.js';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { detectSystemCapabilities } from '../lib/systemCapabilities.js';

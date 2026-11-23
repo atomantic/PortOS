@@ -136,6 +136,8 @@ const SELECTION_CUTS = [
     'keeps boot subscriptions in systemActivityWatchers.js'],
   ['services/pm2.js', 'services/readinessNotify.js',
     'notifies readiness subscribers through the readinessSignal.js leaf'],
+  ['services/fleetLlmHost.js', 'services/fleetHostNotify.js',
+    'signals host changes through the fleetHostSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
   // #17499: lazy imports whose target statically imported the importer.
@@ -281,6 +283,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   it('the leaves the cut entries import stay import-free', () => {
     for (const leaf of [
       'services/readinessSignal.js',
+      'services/fleetHostSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
       'services/socketIo.js',
@@ -310,6 +313,10 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
+  it('still sees the static edges fleetHostNotify.js keeps', () => {
+    expect(importTargets('services/fleetHostNotify.js')).toEqual(expect.arrayContaining(['services/fleetLlmHost.js', 'services/fleetHostSignal.js']));
+  });
+
   it('still sees the dynamic edges readinessNotify.js keeps', () => {
     expect(importTargets('services/readinessNotify.js')).toContain('services/systemHealthSnapshot.js');
   });
