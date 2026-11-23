@@ -14,6 +14,8 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 import PolishPanel from './PolishPanel';
+import toast from '../ui/Toast';
+import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import {
   getWritersRoomPolishStatus,
   listWritersRoomPolishSnapshots,
@@ -80,4 +82,34 @@ it('shows a load error with Retry — not the empty-snapshots copy — when the 
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(await screen.findByRole('button', { name: /revert/i })).toBeInTheDocument();
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('closes the stream, alerts, and preserves editor edits on a conflict SSE frame', async () => {
+  MockEventSource.reset();
+  vi.stubGlobal('EventSource', MockEventSource);
+  try {
+    getWritersRoomPolishStatus.mockResolvedValue({ active: false });
+    listWritersRoomPolishSnapshots.mockResolvedValue([]);
+    startWritersRoomPolish.mockResolvedValue({ runId: 'run-1', sseUrl: '/api/writers-room/works/work-1/polish/progress' });
+    const onBodyChanged = vi.fn();
+
+    render(<PolishPanel work={{ id: 'work-1' }} dirty={false} onBodyChanged={onBodyChanged} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /polish/i }));
+    });
+
+    const es = lastEventSource();
+    expect(es).toBeTruthy();
+    await act(async () => {
+      es.emit({ type: 'baseline', score: 90, wordCount: 50 });
+      es.emit({ type: 'conflict', code: 'DRAFT_CONFLICT', message: 'Draft was modified concurrently — refusing to overwrite' });
+    });
+
+    expect(es.closed).toBe(true);
+    expect(toast.error).toHaveBeenCalledWith('Draft was modified concurrently — refusing to overwrite');
+    expect(screen.getByRole('alert')).toHaveTextContent('Draft was modified concurrently — refusing to overwrite');
+    expect(onBodyChanged).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
