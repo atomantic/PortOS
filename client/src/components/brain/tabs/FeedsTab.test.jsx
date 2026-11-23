@@ -47,6 +47,32 @@ describe('FeedsTab loading', () => {
   });
 });
 
+describe('FeedsTab delete confirmation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getFeedItems.mockResolvedValue([]);
+    api.getFeeds.mockResolvedValue([{ id: 'feed-1', title: 'Example Feed', unreadCount: 0 }]);
+    api.removeFeed.mockResolvedValue({});
+  });
+
+  it('cancels via the in-flow InlineConfirmRow', async () => {
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove feed' }));
+    expect(screen.getByText('Remove this feed?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('Remove this feed?')).not.toBeInTheDocument();
+    expect(api.removeFeed).not.toHaveBeenCalled();
+  });
+
+  it('confirms removal', async () => {
+    render(<FeedsTab />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove feed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(api.removeFeed).toHaveBeenCalledWith('feed-1');
+    expect(await screen.findByText('No feeds subscribed yet.')).toBeInTheDocument();
+  });
+});
+
 describe('FeedsTab rejected mutations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
