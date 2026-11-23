@@ -808,6 +808,7 @@ describe('DataManager accessibility semantics (#17715)', () => {
     getDataCategory.mockReset().mockResolvedValue({ key: 'prompts', items: [] });
     const original = window.matchMedia;
     window.matchMedia = vi.fn().mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const originalScroll = Element.prototype.scrollIntoView;
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     try {
@@ -818,6 +819,7 @@ describe('DataManager accessibility semantics (#17715)', () => {
       expect(scroll).toHaveBeenCalledWith({ behavior, block: 'start' });
     } finally {
       window.matchMedia = original;
+      Element.prototype.scrollIntoView = originalScroll;
     }
   });
 });
