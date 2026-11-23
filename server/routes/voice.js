@@ -172,6 +172,7 @@ router.put('/config', asyncHandler(async (req, res) => {
     ttsVoice: next.tts?.[next.tts?.engine]?.voice,
     ttsRate: next.tts?.rate,
     hotkey: next.hotkey,
+    vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
     fastPath: next.llm?.fastPath || null,
   });
   res.json({ config: next, reconciliation });

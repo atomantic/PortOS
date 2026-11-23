@@ -574,6 +574,44 @@ describe('voice playback cancellation', () => {
     }
   });
 
+  describe('persisted vad thresholds', () => {
+    // 800ms of trailing silence: past the built-in 600ms turn end, short of a custom 2000ms.
+    const speakThenPause = async (vad) => {
+      const onSpeechEnd = vi.fn();
+      await voiceClient.startContinuous({ onSpeechEnd, vad });
+      const frame = FakeAudioWorkletNode.last.port.onmessage;
+      let now = 1700;
+      performance.now.mockImplementation(() => now);
+      frame({ data: new Float32Array(128) });
+      for (let i = 0; i < 40; i++) {
+        now += 5;
+        frame({ data: new Float32Array(128).fill(0.5) });
+      }
+      now += 20;
+      frame({ data: new Float32Array(128) });
+      now += 800;
+      frame({ data: new Float32Array(128) });
+      await voiceClient.stopContinuous();
+      return onSpeechEnd;
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+      });
+      vi.spyOn(performance, 'now').mockImplementation(() => 1000);
+    });
+
+    it('ends the turn after the built-in 600ms without overrides', async () => {
+      expect(await speakThenPause(undefined)).toHaveBeenCalled();
+    });
+
+    it('honors a longer vad.endOfSpeechMs', async () => {
+      expect(await speakThenPause({ endOfSpeechMs: 2000, minUtteranceMs: 250 })).not.toHaveBeenCalled();
+    });
+  });
+
   it('ignores VAD worklet frames and async submissions after owner disposal', async () => {
     const previousMediaDevices = navigator.mediaDevices;
     const track = { stop: vi.fn() };

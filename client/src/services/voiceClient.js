@@ -771,6 +771,9 @@ export const whenPlaybackDrained = () => playback.queue.then(() => !isTtsActive(
 // barge-in (voice:interrupt + cancelVoicePlayback) fires when the user talks over
 // the bot. Thresholds are auto-calibrated from ambient noise at startup.
 
+// Persisted voice.vad overrides (callbacks.vad); anything not a positive number keeps the built-in default.
+const vadThreshold = (override, fallback) => (Number.isFinite(override) && override > 0 ? override : fallback);
+
 const VAD = {
   minOnRms: 0.010,
   minOffRms: 0.005,
@@ -1012,11 +1015,11 @@ const handleFrame = (frame, capture) => {
 
   if (rms < vad.offRms) {
     if (!vad.silenceStartedAt) vad.silenceStartedAt = now;
-    if (now - vad.silenceStartedAt >= VAD.silenceMs) {
+    if (now - vad.silenceStartedAt >= vadThreshold(capture.callbacks?.vad?.endOfSpeechMs, VAD.silenceMs)) {
       const speechMs = vad.silenceStartedAt - vad.speechStartedAt;
       returnToIdle(vad);
       capture.callbacks?.onSpeechEnd?.();
-      if (speechMs >= VAD.minSpeechMs) {
+      if (speechMs >= vadThreshold(capture.callbacks?.vad?.minUtteranceMs, VAD.minSpeechMs)) {
         submitUtterance(capture).catch((err) => console.warn('[voice] submit failed:', err));
       } else {
         // Too short to submit — notify the widget so it leaves 'thinking'

@@ -59,6 +59,9 @@ const warnIfQuiet = (peak) => {
 // `config`. `claimHeld` returns, once, what happened while this chunk was
 // still loading: `{ start, dictation }`.
 export default function VoiceWidget({ config, claimHeld }) {
+  // Read at capture start so a settings change applies to the next turn without rebinding the mic.
+  const vadRef = useRef(config.vad);
+  vadRef.current = config.vad;
   const navigate = useNavigate();
   const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
   const [stage, setStage] = useState('idle');
@@ -452,6 +455,7 @@ export default function VoiceWidget({ config, claimHeld }) {
       if (isContinuous()) return;
       setStage('handsfree');
       await startContinuous({
+        vad: vadRef.current,
         onSpeechStart: () => {
           if (!disposedRef.current) setStage('capturing');
         },
