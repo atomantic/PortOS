@@ -101,7 +101,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     });
   }
   const { provider, modelSelection } = resolution;
-  let { selectedModel } = resolution;
   const privateSecurity = isPrivateSecurityTask(task);
   const executionProfile = task.metadata?.executionProfile;
   const publicReviewPosture = publicReviewPostureForProfile(executionProfile);
@@ -115,7 +114,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   const publicReviewBlock = await checkPublicReviewSpawnPreconditions({
     task,
     provider,
-    selectedModel,
+    selectedModel: resolution.selectedModel,
     publicReviewPosture,
     publicReview,
     publicReviewActions,
@@ -141,12 +140,21 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     category: 'github-inbox-account-unavailable',
   });
   const dispatchUseRunner = (publicReview || hasCredentialBootstrap(provider)) ? false : useRunner;
-  let publicReviewPromptData = null;
   // Workspace preparation may consume a reviewed-head pin in memory. The CAS
   // must compare the original persisted snapshot, not that intended patch.
   const expectedDispatchMetadata = structuredClone(task.metadata || {});
   const expectedDispatchStatus = task.status || null;
 
+  const dispatch = {
+    context, config, provider, modelSelection, privateSecurity, executionProfile,
+    publicReviewPosture, publicReview, publicReviewActions, publicReviewNoTools,
+    isTui, spawnHeadless, notificationAuth, dispatchUseRunner, instanceId,
+    expectedDispatchMetadata, expectedDispatchStatus, spawnViaRunner,
+  };
+
+  // Phase order is load-bearing: the shutdown race check precedes any durable
+  // registration, claim binding precedes the CAS persist, and `handedOff` flips
+  // only once the process launch is committed.
   return prepareAgentWorkspace({ agentId, task, onPrepared: async prep => {
     if (prep.outcome === 'deferred') {
       await context.cleanupOnError(prep.reason);
@@ -157,295 +165,328 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
       return null;
     }
-    const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree, claimCheckout } = prep;
+    const { worktreeInfo, claimCheckout } = prep;
     if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
       context.spawnWorktree = { branchName: worktreeInfo.branchName };
     }
     if (claimCheckout) context.spawnClaimCheckout = claimCheckout;
 
-    if (publicReview && !privateSecurity) {
-      const reviewInput = await loadPublicReviewSpawnInput({
-        scanKey: task.metadata?.pipeline?.reviewInputKey,
-        workspacePath,
-        actionsStage: publicReviewActions,
-        eligibleNumbers: task.metadata?.pipeline?.eligibility?.eligibleNumbers,
-        noToolReviewer: publicReviewNoTools,
-      });
-      if (reviewInput.block) return context.blockAndBail(reviewInput.block);
-      publicReviewPromptData = reviewInput.promptData;
-    }
+    const runtime = await prepareDispatchPromptAndRuntime(dispatch, prep, resolution.selectedModel);
+    if (runtime.exit) return runtime.exit.value;
+    const registered = await registerAndBindPreparedAgent(dispatch, prep, runtime);
+    if (registered.exit) return registered.exit.value;
+    const persisted = await persistInProgressDispatch(dispatch, prep);
+    if (persisted.exit) return persisted.exit.value;
+    return launchPreparedAgent(dispatch, prep, runtime, registered, persisted.dispatchedTask);
+  } });
+}
 
-    await import('../workspaceContext.js')
-      .then((ws) => ws.snapshotOnRepoSwitch(task.metadata?.app || null))
-      .catch((err) => {
-        emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
-      });
+// Loads public-review input, builds the prompt and plans execution options and
+// the local prompt budget. Returns the (possibly option-adjusted) selectedModel
+// explicitly instead of mutating the caller's binding.
+async function prepareDispatchPromptAndRuntime(d, prep, initialModel) {
+  const { context, config, provider, modelSelection, privateSecurity, publicReview, publicReviewActions, publicReviewNoTools, isTui, notificationAuth } = d;
+  const { task, agentId } = context;
+  const { workspacePath, worktreeInfo, claimCheckout } = prep;
+  let selectedModel = initialModel;
+  let publicReviewPromptData = null;
 
-    const leanMode = isOllamaClaudeProvider(provider);
-    const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
-    const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
-    const privatePrompt = privateSecurity
-      ? await import('../privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
-      : null;
-    const promptTrace = {};
-    const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
-      promptTrace,
-      claimDependencies: claimCheckout?.dependencies,
-      providerType: provider.type,
-      providerId: provider.id,
-      providerCommand: provider.command,
-      providerModel: selectedModel,
+  if (publicReview && !privateSecurity) {
+    const reviewInput = await loadPublicReviewSpawnInput({
+      scanKey: task.metadata?.pipeline?.reviewInputKey,
+      workspacePath,
+      actionsStage: publicReviewActions,
+      eligibleNumbers: task.metadata?.pipeline?.eligibility?.eligibleNumbers,
+      noToolReviewer: publicReviewNoTools,
+    });
+    if (reviewInput.block) return { exit: { value: await context.blockAndBail(reviewInput.block) } };
+    publicReviewPromptData = reviewInput.promptData;
+  }
+
+  await import('../workspaceContext.js')
+    .then((ws) => ws.snapshotOnRepoSwitch(task.metadata?.app || null))
+    .catch((err) => {
+      emitLog('warn', `Workspace auto-snapshot skipped for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
+    });
+
+  const leanMode = isOllamaClaudeProvider(provider);
+  const isLightContext = isTui || provider.type === PROVIDER_TYPES.CLI;
+  const splitSystemPrompt = isLightContext && isClaudeCommand(provider.command);
+  const privatePrompt = privateSecurity
+    ? await import('../privateSecurityAssessment.js').then(({ preparePrivateSecurityAssessment }) => preparePrivateSecurityAssessment(task, provider, selectedModel))
+    : null;
+  const promptTrace = {};
+  const promptResult = privateSecurity ? privatePrompt : await buildAgentPrompt(task, config, workspacePath, worktreeInfo, {
+    promptTrace,
+    claimDependencies: claimCheckout?.dependencies,
+    providerType: provider.type,
+    providerId: provider.id,
+    providerCommand: provider.command,
+    providerModel: selectedModel,
+    agentId,
+    leanMode,
+    split: splitSystemPrompt,
+  });
+  const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
+  const prompt = publicReview && !privateSecurity
+    ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
+    : basePrompt;
+  const storedPrompt = redactStoredPrivacyPrompt(prompt);
+  const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
+  const executionOptions = modelSelection.orchestrationExecutionOptions ?? task.metadata?.executionOptions;
+  let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
+  let executionAttribution;
+  if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
+    const { prepareExecutionOptions } = await import('../../lib/provider/providerExecutionOptions.js');
+    const prepared = await prepareExecutionOptions(provider, selectedModel, executionOptions, 'task', { cwd: workspacePath });
+    requestedProvider.executionOptions = prepared.provider.executionOptions;
+    requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;
+    requestedProvider.executionOptionAttribution = prepared.attribution;
+    executionAttribution = prepared.attribution;
+    selectedModel = prepared.provider.defaultModel || selectedModel;
+  }
+  if (notificationAuth.env) {
+    // This copy exists only for this launch. The stored provider and agent/run
+    // registration retain the original provider, with no inbox token added.
+    // Every CLI/TUI/runner composer already carries provider.envVars and skips
+    // its checkout credential lookup when this explicit token is present.
+    requestedProvider.envVars = { ...requestedProvider.envVars, ...notificationAuth.env };
+  }
+  const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
+    requestedProvider,
+    selectedModel,
+    requestedProvider.effort || null,
+  );
+  const localEndpoint = localEndpointOfProvider(provider);
+  const localPromptBudget = localEndpoint
+    ? planLocalPromptBudget({
+      prompt,
+      endpoint: localEndpoint,
+      baseDurationMs: await getTaskDurationEstimate(task.description, {
+          providerId: provider.id,
+          model: selectedModel,
+          effort: taskEffort,
+        })
+        .then((estimate) => estimate?.estimatedDurationMs ?? null)
+        .catch(() => null),
+    })
+    : null;
+  if (localPromptBudget?.longPrefill) {
+    emitLog('info', `🐢 Agent ${agentId} ${describeLocalPromptBudget(localPromptBudget)}`, {
       agentId,
-      leanMode,
-      split: splitSystemPrompt,
+      taskId: task.id,
+      promptTokens: localPromptBudget.promptTokens,
     });
-    const basePrompt = typeof promptResult === 'string' ? promptResult : promptResult.userPrompt;
-    const prompt = publicReview && !privateSecurity
-      ? `${basePrompt}\n\n${formatPublicReviewInputPrompt(publicReviewPromptData)}`
-      : basePrompt;
-    const storedPrompt = redactStoredPrivacyPrompt(prompt);
-    const systemPrompt = typeof promptResult === 'string' ? null : promptResult.systemPrompt;
-    const executionOptions = modelSelection.orchestrationExecutionOptions ?? task.metadata?.executionOptions;
-    let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
-    let executionAttribution;
-    if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
-      const { prepareExecutionOptions } = await import('../../lib/provider/providerExecutionOptions.js');
-      const prepared = await prepareExecutionOptions(provider, selectedModel, executionOptions, 'task', { cwd: workspacePath });
-      requestedProvider.executionOptions = prepared.provider.executionOptions;
-      requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;
-      requestedProvider.executionOptionAttribution = prepared.attribution;
-      executionAttribution = prepared.attribution;
-      selectedModel = prepared.provider.defaultModel || selectedModel;
-    }
-    if (notificationAuth.env) {
-      // This copy exists only for this launch. The stored provider and agent/run
-      // registration retain the original provider, with no inbox token added.
-      // Every CLI/TUI/runner composer already carries provider.envVars and skips
-      // its checkout credential lookup when this explicit token is present.
-      requestedProvider.envVars = { ...requestedProvider.envVars, ...notificationAuth.env };
-    }
-    const { provider: runProvider, effort: taskEffort } = await dropUnsupportedOllamaThinking(
-      requestedProvider,
-      selectedModel,
-      requestedProvider.effort || null,
-    );
-    const localEndpoint = localEndpointOfProvider(provider);
-    const localPromptBudget = localEndpoint
-      ? planLocalPromptBudget({
-        prompt,
-        endpoint: localEndpoint,
-        baseDurationMs: await getTaskDurationEstimate(task.description, {
-            providerId: provider.id,
-            model: selectedModel,
-            effort: taskEffort,
-          })
-          .then((estimate) => estimate?.estimatedDurationMs ?? null)
-          .catch(() => null),
-      })
-      : null;
-    if (localPromptBudget?.longPrefill) {
-      emitLog('info', `🐢 Agent ${agentId} ${describeLocalPromptBudget(localPromptBudget)}`, {
-        agentId,
-        taskId: task.id,
-        promptTokens: localPromptBudget.promptTokens,
-      });
-    }
+  }
+  return {
+    prompt, storedPrompt, systemPrompt, runProvider, selectedModel, taskEffort,
+    executionAttribution, localPromptBudget, leanMode,
+    injectedMemories: promptTrace.injectedMemories || [],
+    mergesOwnPr: promptTrace.mergesOwnPr === true,
+  };
+}
 
-    const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
-    const sourceWorkspace = claimCheckout ? claimCheckout.repoPath : worktreeInfo
-      ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
-      : null;
-    const prOpenedBy = promptOpensOwnPr(task, {
-      providerType: provider.type,
-      providerId: provider.id,
-      providerCommand: provider.command,
-      leanMode,
-      worktreeInfo,
-    });
-    const claimFlowTask = isClaimFlowTask(task);
-    const [forgeTarget, primaryCheckoutBaseline, auditSourceEvidence] = await Promise.all([
-      resolvedApp
-        ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
-        : resolveRepoForgeTarget(workspacePath),
-      sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
-      isAuditTaskType(resolveTaskHookType(task)) ? captureAuditSourceEvidence(workspacePath) : null,
-    ]);
-    const injectedMemories = promptTrace.injectedMemories || [];
-    let systemPromptFile = null;
-    const agentDir = join(AGENTS_DIR, agentId);
-    // A preparation that straddled SIGTERM must not write a durable owner the
-    // shutdown marker never saw: the next boot would charge it as a genuine
-    // orphan (#14170). The task stays pending; cleanup releases claim and tree.
-    if (isHostShuttingDown()) {
-      await context.cleanupOnError('PortOS is shutting down');
-      return null;
-    }
-    const { runId } = await withBackupAssetPublication(async () => {
-      if (!existsSync(agentDir)) {
-        await ensureDir(agentDir);
-      }
-      await writeFileGuarded(join(agentDir, 'prompt.txt'), storedPrompt);
-      if (systemPrompt) {
-        systemPromptFile = join(agentDir, 'system-prompt.md');
-        await writeFileGuarded(systemPromptFile, systemPrompt);
-      }
-      const { runId } = await createAgentRun({
-        agentId,
-        task,
-        model: selectedModel,
-        provider,
-        workspacePath,
-        appName: resolvedAppName,
-        injectedMemories,
-        executionOptions: executionAttribution,
-      });
-      await registerAgent(agentId, task.id, buildAgentRegistration({
-        task,
-        provider,
-        instanceId,
-        workspacePath,
-        sourceWorkspace,
-        repoIssueUrl: repoIssueUrlBase(forgeTarget),
-        primaryCheckoutBaseline,
-        auditSourceEvidence,
-        worktreeInfo,
-        explicitWorktree,
-        jiraBranchName,
-        providerEndpoint: providerBaseUrl(provider),
-        localPromptBudget,
-        leanMode,
-        prOpenedBy,
-        // Same decision that put merge admission in the prompt (#11435).
-        mergesOwnPr: promptTrace.mergesOwnPr === true,
-        claimFlowTask,
-        privacyFactsIncluded: storedPrompt !== prompt,
-        selectedModel,
-        effort: taskEffort,
-        modelSelection,
-        runId,
-        dispatchUseRunner,
-        executionMode,
-        publicReviewPosture,
-        resolvedAppName,
-        injectedMemories,
-      }));
-      return { runId };
-    });
+// Owns the shutdown race guard, the backup-bounded run/agent registration and
+// the claim-checkout ownership binding.
+async function registerAndBindPreparedAgent(d, prep, runtime) {
+  const { context, provider, modelSelection, publicReviewPosture, spawnHeadless, dispatchUseRunner, instanceId } = d;
+  const { task, agentId } = context;
+  const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree, claimCheckout } = prep;
+  const { prompt, storedPrompt, systemPrompt, selectedModel, taskEffort, executionAttribution, localPromptBudget, leanMode, injectedMemories, mergesOwnPr } = runtime;
 
-    if (claimCheckout) {
-      // The run now exists to own the checkout PortOS cut for it. Binding it is
-      // what the agent-cut flow does after `git worktree add`: it settles the
-      // pinned selection and records the checkout's physical generation.
-      const bound = await updateClaimOwnership({ agentId, action: 'bind', branch: claimCheckout.branchName })
-        .catch(error => ({ bound: false, reason: error.message }));
-      if (bound?.bound !== true) {
-        return context.blockAndBail({
-          reason: `PortOS could not bind its claim checkout ${claimCheckout.branchName} to this run (${bound?.reason || 'unreadable response'}); the unused checkout was removed.`,
-          category: 'worktree-failed',
-        });
-      }
-      const issueNumber = claimCheckout.branchName.replace(/^claim\/issue-/, '');
-      const { markAppIssueClaimed } = await import('../appIssues.js');
-      await markAppIssueClaimed(resolvedApp, issueNumber).catch(error => {
-        emitLog('warn', `⚠️ Claim markers for issue ${issueNumber} were not set: ${error.message}`, { agentId, taskId: task.id });
-      });
+  const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
+  const sourceWorkspace = claimCheckout ? claimCheckout.repoPath : worktreeInfo
+    ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
+    : null;
+  const prOpenedBy = promptOpensOwnPr(task, {
+    providerType: provider.type,
+    providerId: provider.id,
+    providerCommand: provider.command,
+    leanMode,
+    worktreeInfo,
+  });
+  const claimFlowTask = isClaimFlowTask(task);
+  const [forgeTarget, primaryCheckoutBaseline, auditSourceEvidence] = await Promise.all([
+    resolvedApp
+      ? resolveAppForgeTarget(resolvedApp, { repoPath: workspacePath }).then(r => r.target)
+      : resolveRepoForgeTarget(workspacePath),
+    sourceWorkspace ? capturePrimaryCheckoutState(sourceWorkspace) : null,
+    isAuditTaskType(resolveTaskHookType(task)) ? captureAuditSourceEvidence(workspacePath) : null,
+  ]);
+  let systemPromptFile = null;
+  const agentDir = join(AGENTS_DIR, agentId);
+  // A preparation that straddled SIGTERM must not write a durable owner the
+  // shutdown marker never saw: the next boot would charge it as a genuine
+  // orphan (#14170). The task stays pending; cleanup releases claim and tree.
+  if (isHostShuttingDown()) {
+    await context.cleanupOnError('PortOS is shutting down');
+    return { exit: { value: null } };
+  }
+  const { runId } = await withBackupAssetPublication(async () => {
+    if (!existsSync(agentDir)) {
+      await ensureDir(agentDir);
     }
-
-    emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${claimCheckout ? ` (claim checkout ${claimCheckout.branchName})` : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
-    const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
-    const updateResult = await updateTask(task.id, {
-      status: 'in_progress',
-      metadata: {
-        ...task.metadata,
-        totalSpawnCount: newSpawnCount,
-        lastSpawnedAt: new Date().toISOString(),
-        ...buildClaim(instanceId),
-      },
-    }, task.taskType || 'user', { expectedStatus: expectedDispatchStatus, expectedTask: { metadata: expectedDispatchMetadata } })
-      .catch(err => {
-        console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
-        return null;
-      });
-    if (updateResult?.error) {
-      if (!isExpectedUnpersistedMiss(task, updateResult.error)) emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+    await writeFileGuarded(join(agentDir, 'prompt.txt'), storedPrompt);
+    if (systemPrompt) {
+      systemPromptFile = join(agentDir, 'system-prompt.md');
+      await writeFileGuarded(systemPromptFile, systemPrompt);
     }
-    const holdUnpersistedDispatch = async reason => {
-      // A registered owner and prepared checkout now exist. A failed CAS is
-      // not authority to release a possibly changed claim or discard work.
-      context.claimAcquired = false;
-      context.spawnWorktree = null;
-      context.spawnClaimCheckout = null;
-      await context.cleanupOnError(reason);
-    };
-    if (updateResult?.statusChanged || (updateResult?.error
-      && (prep.cleanupReviewPinConsumed || !isExpectedUnpersistedMiss(task, updateResult.error)))) {
-      await holdUnpersistedDispatch(prep.cleanupReviewPinConsumed
-        ? 'Failed to persist reviewed-head launch admission; retained checkout requires revalidation'
-        : 'Failed to persist task dispatch; task or ownership changed');
-      return null;
-    }
-    if (!updateResult) {
-      await holdUnpersistedDispatch('Failed to update task status');
-      return null;
-    }
-
-    // Completion and its retry decision must see the dispatch that was actually
-    // persisted, including the incremented spawn count. Passing the pre-claim
-    // task lets finalization write the previous count back and refund a spawn.
-    // Unpersisted scheduled jobs retain their original task on the expected miss.
-    const dispatchedTask = !updateResult.error && !updateResult.statusChanged && updateResult.id === task.id && updateResult.metadata
-      ? { ...task, ...updateResult, taskType: task.taskType || 'user' } : task;
-    if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask,
-      { ...task, status: expectedDispatchStatus, metadata: expectedDispatchMetadata });
-
-    if (task.metadata?.autonomousJob && task.metadata?.jobId) {
-      cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
-    }
-    const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
-      ? await getClaudeSettingsEnv()
-      : {};
-    const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
-    const safetyProfile = publicReview ? executionProfile : null;
-    const cliConfig = !spawnHeadless
-      ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
-      : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
-    const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
-      ? securityScanGrantFromArgs(cliConfig.args)
-      : null;
-    if (executionAttribution) await updateAgent(agentId, { metadata: { executionOptions: executionAttribution } });
-    if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
-
-    emitLog('success', `Spawning agent for task ${task.id}`, {
+    const { runId } = await createAgentRun({
       agentId,
+      task,
       model: selectedModel,
-      mode: executionMode,
-      cli: cliConfig.command,
-      worktree: !!worktreeInfo,
+      provider,
+      workspacePath,
+      appName: resolvedAppName,
+      injectedMemories,
+      executionOptions: executionAttribution,
     });
+    await registerAgent(agentId, task.id, buildAgentRegistration({
+      task,
+      provider,
+      instanceId,
+      workspacePath,
+      sourceWorkspace,
+      repoIssueUrl: repoIssueUrlBase(forgeTarget),
+      primaryCheckoutBaseline,
+      auditSourceEvidence,
+      worktreeInfo,
+      explicitWorktree,
+      jiraBranchName,
+      providerEndpoint: providerBaseUrl(provider),
+      localPromptBudget,
+      leanMode,
+      prOpenedBy,
+      // Same decision that put merge admission in the prompt (#11435).
+      mergesOwnPr,
+      claimFlowTask,
+      privacyFactsIncluded: storedPrompt !== prompt,
+      selectedModel,
+      effort: taskEffort,
+      modelSelection,
+      runId,
+      dispatchUseRunner,
+      executionMode,
+      publicReviewPosture,
+      resolvedAppName,
+      injectedMemories,
+    }));
+    return { runId };
+  });
 
-    context.handedOff = true;
-    if (!spawnHeadless) {
-      return await spawnTuiAgent({
-        agentId,
-        task: dispatchedTask,
-        prompt,
-        workspacePath,
-        model: selectedModel,
-        provider: runProvider,
-        runId,
-        tuiConfig: cliConfig,
-        agentDir,
-        leanMode,
-        prOpenedBy,
-        useDurableRunner: dispatchUseRunner,
-        safetyProfile,
-        securityScanGrant,
-      });
+  if (claimCheckout) {
+    // The run now exists to own the checkout PortOS cut for it. Binding it is
+    // what the agent-cut flow does after `git worktree add`: it settles the
+    // pinned selection and records the checkout's physical generation.
+    const bound = await updateClaimOwnership({ agentId, action: 'bind', branch: claimCheckout.branchName })
+      .catch(error => ({ bound: false, reason: error.message }));
+    if (bound?.bound !== true) {
+      return { exit: { value: await context.blockAndBail({
+        reason: `PortOS could not bind its claim checkout ${claimCheckout.branchName} to this run (${bound?.reason || 'unreadable response'}); the unused checkout was removed.`,
+        category: 'worktree-failed',
+      }) } };
     }
-    if (dispatchUseRunner) {
-      return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, securityScanGrant });
-    }
-    return await spawnDirectly({
+    const issueNumber = claimCheckout.branchName.replace(/^claim\/issue-/, '');
+    const { markAppIssueClaimed } = await import('../appIssues.js');
+    await markAppIssueClaimed(resolvedApp, issueNumber).catch(error => {
+      emitLog('warn', `⚠️ Claim markers for issue ${issueNumber} were not set: ${error.message}`, { agentId, taskId: task.id });
+    });
+  }
+
+  emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${claimCheckout ? ` (claim checkout ${claimCheckout.branchName})` : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
+  return { runId, systemPromptFile, agentDir, prOpenedBy, executionMode };
+}
+
+// Marks the task in_progress through the optimistic CAS. A miss keeps the
+// registered owner and checkout (held for revalidation) rather than releasing.
+async function persistInProgressDispatch(d, prep) {
+  const { context, instanceId, expectedDispatchStatus, expectedDispatchMetadata } = d;
+  const { task, agentId } = context;
+  const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
+  const updateResult = await updateTask(task.id, {
+    status: 'in_progress',
+    metadata: {
+      ...task.metadata,
+      totalSpawnCount: newSpawnCount,
+      lastSpawnedAt: new Date().toISOString(),
+      ...buildClaim(instanceId),
+    },
+  }, task.taskType || 'user', { expectedStatus: expectedDispatchStatus, expectedTask: { metadata: expectedDispatchMetadata } })
+    .catch(err => {
+      console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
+      return null;
+    });
+  if (updateResult?.error) {
+    if (!isExpectedUnpersistedMiss(task, updateResult.error)) emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+  }
+  const holdUnpersistedDispatch = async reason => {
+    // A registered owner and prepared checkout now exist. A failed CAS is
+    // not authority to release a possibly changed claim or discard work.
+    context.claimAcquired = false;
+    context.spawnWorktree = null;
+    context.spawnClaimCheckout = null;
+    await context.cleanupOnError(reason);
+    return { exit: { value: null } };
+  };
+  if (updateResult?.statusChanged || (updateResult?.error
+    && (prep.cleanupReviewPinConsumed || !isExpectedUnpersistedMiss(task, updateResult.error)))) {
+    return holdUnpersistedDispatch(prep.cleanupReviewPinConsumed
+      ? 'Failed to persist reviewed-head launch admission; retained checkout requires revalidation'
+      : 'Failed to persist task dispatch; task or ownership changed');
+  }
+  if (!updateResult) {
+    return holdUnpersistedDispatch('Failed to update task status');
+  }
+
+  // Completion and its retry decision must see the dispatch that was actually
+  // persisted, including the incremented spawn count. Passing the pre-claim
+  // task lets finalization write the previous count back and refund a spawn.
+  // Unpersisted scheduled jobs retain their original task on the expected miss.
+  const dispatchedTask = !updateResult.error && !updateResult.statusChanged && updateResult.id === task.id && updateResult.metadata
+    ? { ...task, ...updateResult, taskType: task.taskType || 'user' } : task;
+  if (!updateResult.error && !updateResult.statusChanged) await bindCompletionTaskDispatch(agentId, dispatchedTask,
+    { ...task, status: expectedDispatchStatus, metadata: expectedDispatchMetadata });
+
+  if (task.metadata?.autonomousJob && task.metadata?.jobId) {
+    cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
+  }
+  return { dispatchedTask };
+}
+
+// Builds the CLI/TUI config, records attribution and hands the process to the
+// TUI, runner or direct spawner. `handedOff` flips immediately before launch.
+async function launchPreparedAgent(d, prep, runtime, registered, dispatchedTask) {
+  const { context, provider, publicReview, executionProfile, spawnHeadless, dispatchUseRunner, spawnViaRunner } = d;
+  const { task, agentId } = context;
+  const { workspacePath, worktreeInfo } = prep;
+  const { prompt, runProvider, selectedModel, taskEffort, executionAttribution, leanMode } = runtime;
+  const { runId, systemPromptFile, agentDir, prOpenedBy, executionMode } = registered;
+
+  const cliSettingsEnv = !publicReview && isClaudeCliProvider(provider)
+    ? await getClaudeSettingsEnv()
+    : {};
+  const maxConcurrentThreads = cloudSwarmThreadCapacity(runProvider, task.metadata?.swarmCount);
+  const safetyProfile = publicReview ? executionProfile : null;
+  const cliConfig = !spawnHeadless
+    ? buildTuiSpawnConfig(runProvider, selectedModel, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile })
+    : buildCliSpawnConfig(runProvider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort, maxConcurrentThreads, safetyProfile });
+  const securityScanGrant = dispatchUseRunner && resolveTaskHookType(task) === 'security' && isCodexProvider(runProvider)
+    ? securityScanGrantFromArgs(cliConfig.args)
+    : null;
+  if (executionAttribution) await updateAgent(agentId, { metadata: { executionOptions: executionAttribution } });
+  if (securityScanGrant) await updateAgent(agentId, { metadata: { securityScanGrant, taskAnalysisType: 'security' } });
+
+  emitLog('success', `Spawning agent for task ${task.id}`, {
+    agentId,
+    model: selectedModel,
+    mode: executionMode,
+    cli: cliConfig.command,
+    worktree: !!worktreeInfo,
+  });
+
+  context.handedOff = true;
+  if (!spawnHeadless) {
+    return await spawnTuiAgent({
       agentId,
       task: dispatchedTask,
       prompt,
@@ -453,10 +494,29 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       model: selectedModel,
       provider: runProvider,
       runId,
-      cliConfig,
+      tuiConfig: cliConfig,
       agentDir,
+      leanMode,
       prOpenedBy,
+      useDurableRunner: dispatchUseRunner,
       safetyProfile,
+      securityScanGrant,
     });
-  } });
+  }
+  if (dispatchUseRunner) {
+    return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, securityScanGrant });
+  }
+  return await spawnDirectly({
+    agentId,
+    task: dispatchedTask,
+    prompt,
+    workspacePath,
+    model: selectedModel,
+    provider: runProvider,
+    runId,
+    cliConfig,
+    agentDir,
+    prOpenedBy,
+    safetyProfile,
+  });
 }
