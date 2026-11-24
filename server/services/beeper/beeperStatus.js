@@ -22,6 +22,43 @@ import { resolveBeeperToken } from './beeperCredentials.js';
 import { getBeeperSweepProgress } from './beeperSweepProgress.js';
 
 const TOKEN_EXPIRY_WARNING_DAYS = 7;
+const PROBE_CACHE_TTL_MS = 5000;
+
+// Short-TTL + single-flight cache for `/v1/info` probes keyed by
+// `resolvedBaseUrl`. Keeps bursts of invalidation frames from stacking up
+// concurrent 3s probes while `checkBeeperConnection` remains live and uncached.
+const probeCache = new Map();
+const probeInFlight = new Map();
+
+export function __resetBeeperProbeCacheForTests() {
+  probeCache.clear();
+  probeInFlight.clear();
+}
+
+function getCachedProbe(baseUrl) {
+  const cached = probeCache.get(baseUrl);
+  if (cached && (Date.now() - cached.fetchedAt) < PROBE_CACHE_TTL_MS) {
+    return Promise.resolve(cached.probe);
+  }
+  const existing = probeInFlight.get(baseUrl);
+  if (existing) return existing;
+
+  const promise = probeBeeperInfo({ baseUrl })
+    .then((probe) => {
+      // Only cache if not invalidated while in flight (e.g. by checkBeeperConnection).
+      if (probeInFlight.get(baseUrl) === promise) {
+        probeCache.set(baseUrl, { probe, fetchedAt: Date.now() });
+      }
+      return probe;
+    })
+    .finally(() => {
+      if (probeInFlight.get(baseUrl) === promise) {
+        probeInFlight.delete(baseUrl);
+      }
+    });
+  probeInFlight.set(baseUrl, promise);
+  return promise;
+}
 
 // Expiry rides beside the token in the vault, shown without a network call. No
 // refresh grant exists, so `tokenExpired` is an actionable RE-CONNECT state distinct
@@ -100,7 +137,7 @@ export async function getBeeperStatus() {
 
   const [probe, accountsResult] = await Promise.all([
     credential.tokenConfigured
-      ? probeBeeperInfo({ baseUrl: resolvedBaseUrl })
+      ? getCachedProbe(resolvedBaseUrl)
       : Promise.resolve(null),
     listBeeperAccounts()
       .then((accounts) => ({ accounts, accountsError: null }))
@@ -163,7 +200,28 @@ export async function checkBeeperConnection() {
       status: 401, code: 'NOT_CONFIGURED', retryable: false,
     });
   }
-  const info = await getInfo({ baseUrl: await resolveBeeperBaseUrl() });
-  assertValidInfoResponse(info);
-  return { reachable: true, info };
+  const resolvedBaseUrl = await resolveBeeperBaseUrl();
+  // Live, uncached check: clear any cached/in-flight probe for this baseUrl
+  // so an explicit Retry never inherits a stale verdict.
+  probeCache.delete(resolvedBaseUrl);
+  probeInFlight.delete(resolvedBaseUrl);
+  const startedAt = Date.now();
+  try {
+    const info = await getInfo({ baseUrl: resolvedBaseUrl });
+    assertValidInfoResponse(info);
+    probeCache.set(resolvedBaseUrl, {
+      probe: {
+        reachable: true,
+        info,
+        error: null,
+        timedOut: false,
+        latencyMs: Date.now() - startedAt,
+      },
+      fetchedAt: Date.now(),
+    });
+    return { reachable: true, info };
+  } catch (err) {
+    probeCache.delete(resolvedBaseUrl);
+    throw err;
+  }
 }
