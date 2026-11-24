@@ -51,6 +51,7 @@ const {
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
 const { refreshOpenPullRequestStatus, retriageOpenThreads } = await import('./githubNotificationTriage.js');
+const { githubNotificationEvents } = await import('./githubNotificationEvents.js');
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cos/cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -664,6 +665,46 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const { rows: [change] } = await query('SELECT id FROM github_notification_audit_changes WHERE account_id = $1', [account.id]);
     await undoAuditChange(change.id);
     expect(tokenLookups()).toBe(1);
+  });
+
+  it('announces one change and bounds concurrent gh writes for a bulk clear, audit mute and audit undo', async () => {
+    const ids = ['731', '732', '733', '734', '735', '736', '737', '738'];
+    mockGh((args) => githubListing(args, ids.map((id) => thread(id, { owner: 'acme', repo: 'core', reason: 'ci_activity', type: 'CheckSuite', url: null }))));
+    await syncAccountNotifications(account.id);
+    await query(`UPDATE github_notifications SET unread = FALSE, read_on_github_at = NOW() WHERE account_id = $1`, [account.id]);
+    const actions = mockGh(() => listing([]));
+    let inFlight = 0;
+    let peak = 0;
+    const gate = vi.mocked(execGh).getMockImplementation();
+    vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
+      if (args[0] === 'auth') return gate(args, ...rest);
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      inFlight -= 1;
+      return gate(args, ...rest);
+    });
+    const changed = vi.fn();
+    githubNotificationEvents.on('changed', changed);
+    try {
+      expect(await clearFinishedNotifications({ accountId: account.id })).toEqual({ cleared: 8, failed: 0 });
+      expect(actions).toHaveLength(8);
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(5);
+      expect(changed).toHaveBeenCalledTimes(1);
+
+      await query(`UPDATE github_notifications SET state = 'open', unread = TRUE, decision = 'handled-by-pr-workflow' WHERE account_id = $1`, [account.id]);
+      await query(`INSERT INTO github_notification_audit_changes (account_id, kind, repo_full_name, detail) VALUES ($1, 'mute-handled', 'acme/core', $2::jsonb)`, [account.id, JSON.stringify({ threadIds: ids })]);
+      const { rows: [change] } = await query('SELECT id FROM github_notification_audit_changes WHERE account_id = $1', [account.id]);
+      peak = 0;
+      changed.mockClear();
+      await undoAuditChange(change.id);
+      expect(peak).toBeGreaterThan(1);
+      expect(peak).toBeLessThanOrEqual(5);
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally {
+      githubNotificationEvents.off('changed', changed);
+    }
   });
 
   it('reads managed-app remotes once per Autopilot PR pass, not once per pull request', async () => {
@@ -1833,20 +1874,23 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
   it('does not mark a thread done that was handed off after the Assist batch was read (#15173)', async () => {
     const login = account.login;
     const comment = `https://api.github.com/repos/${login}/hello/issues/comments/1`;
-    const threads = [thread('3301', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T11:00:00Z' }), thread('3302', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T10:00:00Z' })];
+    // Assist writes five threads at once, so the sixth waits for a slot and is
+    // re-checked only after the first write has started.
+    const ids = ['3301', '3302', '3303', '3304', '3305', '3306'];
+    const threads = ids.map((id, index) => thread(id, { owner: login, reason: 'mention', commentUrl: comment, updatedAt: `2026-10-01T1${5 - index}:00:00Z` }));
     const actions = mockGh((args) => githubListing(args, threads), {
-      [`repos/${login}/hello/pulls/3301`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
-      [`repos/${login}/hello/pulls/3302`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      ...Object.fromEntries(ids.map((id) => [`repos/${login}/hello/pulls/${id}`, { author: 'alice', association: 'NONE', state: 'open', merged: false }])),
       [`repos/${login}/hello/issues/comments/1`]: { author: 'alice', association: 'MEMBER', mentions: 1, body: 'thanks, nothing to do' },
       [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
     });
     await syncAccountNotifications(account.id);
     await updateAccount(account.id, { mode: 'assist' });
     vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'done' } });
-    interleaveAt('notifications/threads/3301', () => handOffRow('3302'));
+    interleaveAt('notifications/threads/3301', () => handOffRow('3306'));
     await syncAccountNotifications(account.id);
-    expect(actions).toEqual([['DELETE', 'notifications/threads/3301']]);
-    expect(await getNotification(account.id, '3302')).toMatchObject({ decision: 'handed-off', state: 'open' });
+    expect(actions.map(([, path]) => path).sort()).toEqual(ids.slice(0, 5).map((id) => `notifications/threads/${id}`));
+    expect(await getNotification(account.id, '3306')).toMatchObject({ decision: 'handed-off', state: 'open' });
   });
+
 
 });

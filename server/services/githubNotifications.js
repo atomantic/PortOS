@@ -18,6 +18,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { GITHUB_NOTIFICATION_CADENCES } from '../lib/githubValidation.js';
 import {
   linkHeaderHasNext,
@@ -198,7 +199,8 @@ async function runAutomation(account, env, automate) {
     ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
     : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
-    act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail, account, env }),
+    // emit: false, because syncAccountNow announces the whole pass once.
+    act: (threadId, action, detail, extra = {}) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail, account, env, emit: false, ...extra }),
   });
   return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns, ...(autopilot.merged ? { merged: autopilot.merged } : {}) };
 }
@@ -544,8 +546,9 @@ async function learnFromOperator(client, row, action) {
  * an automation's carry the decision behind it. A bulk caller passes `emit: false`
  * and announces the change once, and may pass the `account` and `env` it already
  * resolved so a per-thread loop does not respawn `gh auth token` for each thread.
+ * `evidencePatch` is merged into the row's evidence in the same write.
  */
-export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true, account: suppliedAccount, env: suppliedEnv } = {}) {
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true, evidencePatch = null, account: suppliedAccount, env: suppliedEnv } = {}) {
   const spec = ACTION_SPECS[action];
   const account = suppliedAccount || await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
@@ -567,9 +570,10 @@ export async function applyNotificationAction(accountId, threadId, action, { act
          unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,
          state = COALESCE($4::text, state),
          state_changed_at = CASE WHEN $4::text IS NULL THEN state_changed_at ELSE NOW() END,
+         evidence = evidence || $5::jsonb,
          updated_at = NOW()
        WHERE account_id = $1 AND thread_id = $2 RETURNING *, (${HAS_MUTE_SQL}) AS muted_in_portos`,
-      [account.id, threadId, action, spec.state],
+      [account.id, threadId, action, spec.state, toPgJson(evidencePatch || {})],
     );
     await client.query(
       'INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, $3, $4, $5::jsonb)',
@@ -580,6 +584,9 @@ export async function applyNotificationAction(accountId, threadId, action, { act
   if (emit) githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(row, new Map([[account.id, account]]));
 }
+
+// Concurrent gh writes per bulk action, matching the triage read fan-out.
+export const BULK_GH_CONCURRENCY = 5;
 
 const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNAVAILABLE']);
 
@@ -594,28 +601,40 @@ async function markThreadsDone(account, whereSql, { actor = 'operator', limit = 
      ORDER BY gh_updated_at DESC${limit ? ` LIMIT ${limit}` : ''}`,
     [account.id],
   );
+  if (!rows.length) return { cleared: 0, failed: 0, matched: 0 };
+  // Resolved once up front: an account gh cannot act as fails every row at once
+  // instead of spawning a doomed `gh` process per thread.
+  let env = suppliedEnv;
+  if (!env) {
+    try {
+      env = await requireAccountEnv(account);
+    } catch (error) {
+      console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+      return { cleared: 0, failed: rows.length, matched: rows.length };
+    }
+  }
   let cleared = 0;
   let failed = 0;
-  // Resolved lazily so an account gh cannot act as still fails per the loop below.
-  let env = suppliedEnv;
-  for (const [index, row] of rows.entries()) {
+  let accountFailed = false;
+  await mapWithConcurrency(rows, BULK_GH_CONCURRENCY, async (row) => {
+    if (accountFailed) {
+      failed += 1;
+      return;
+    }
     const detail = actor === 'automation' ? { decision: row.decision, rule: row.rule } : { decision: row.decision, bulk: 'finished' };
-    const error = await (async () => {
-      env ||= await requireAccountEnv(account);
+    try {
       await applyNotificationAction(account.id, row.thread_id, 'done', { actor, learn: false, emit: false, detail, account, env });
-    })().then(() => null, (failure) => failure);
-    if (!error) {
       cleared += 1;
-      continue;
+    } catch (error) {
+      failed += 1;
+      if (ACCOUNT_FAILURES.has(error.code)) {
+        if (!accountFailed) console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+        accountFailed = true;
+      } else {
+        console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
+      }
     }
-    if (ACCOUNT_FAILURES.has(error.code)) {
-      console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
-      failed += rows.length - index;
-      break;
-    }
-    console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
-    failed += 1;
-  }
+  });
   return { cleared, failed, matched: rows.length };
 }
 
