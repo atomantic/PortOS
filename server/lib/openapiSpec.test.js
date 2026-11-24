@@ -128,7 +128,7 @@ describe('buildInternalOpenApiSpec', () => {
     expect(processLogs.parameters.map((parameter) => parameter.name)).toEqual(
       expect.arrayContaining(['processName', 'lines', 'follow']),
     );
-    expect(processLogs.responses[400]['x-portos-error-codes']).toEqual(['INVALID_PROCESS_NAME', 'VALIDATION_ERROR']);
+    expect(processLogs.responses[400]['x-portos-error-codes']).toEqual(['INVALID_PROCESS_NAME', 'UNKNOWN_PROCESS', 'VALIDATION_ERROR']);
 
     const appLogs = spec.paths['/api/apps/{id}/logs'].get;
     expect(appLogs['x-portos-contract-status']).toBe('modeled');
