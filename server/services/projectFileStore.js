@@ -15,9 +15,13 @@ import {
 export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabel, logic }) {
   const sync = makeSyncKind(kind);
 
-  async function loadAll() {
+  async function loadStoredProjects() {
     const raw = await readJSONFile(file, [], { strict: true });
-    if (!Array.isArray(raw)) return [];
+    return Array.isArray(raw) ? raw : [];
+  }
+
+  async function loadAll() {
+    const raw = await loadStoredProjects();
     return logic.afterLoad ? raw.map((project) => logic.afterLoad(project)) : raw;
   }
 
@@ -131,6 +135,7 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
   }
 
   return {
+    loadStoredProjects,
     loadAll,
     saveAll,
     loadAllAndIndex,

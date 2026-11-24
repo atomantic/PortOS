@@ -238,7 +238,6 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.browser', path: '/browser', label: 'Browser', section: 'Dev Tools' },
   { id: 'nav.devtools.runner', path: '/devtools/runner', label: 'Code', section: 'Dev Tools' },
   { id: 'nav.devtools.datadog', path: '/devtools/datadog', label: 'DataDog', section: 'Dev Tools', feature: 'datadog', previousPaths: ['/datadog'] },
-  { id: 'nav.devtools.flows', path: '/devtools/flows', label: 'Flows', section: 'Dev Tools' },
   { id: 'nav.devtools.github', path: '/devtools/github', label: 'GitHub', section: 'Dev Tools' },
   // ⌘K / voice only — no sidebar row: tabs of the GitHub page.
   { id: 'nav.devtools.github-accounts', path: '/devtools/github/accounts', label: 'GitHub Accounts', section: 'Dev Tools' },

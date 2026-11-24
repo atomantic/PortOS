@@ -16,8 +16,12 @@ import { toPgJson } from '../lib/pgJson.js';
 const LARGE_PROJECT_RECORD_BYTES = 5 * 1024 * 1024;
 const MB = 1024 * 1024;
 
-export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic, largeRecordBytes = LARGE_PROJECT_RECORD_BYTES }) {
+export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel, logic, pageHeaderFields = [], largeRecordBytes = LARGE_PROJECT_RECORD_BYTES }) {
   if (!/^[a-z][a-z0-9_]*$/.test(table)) throw new Error(`Invalid project table: ${table}`);
+  const extraHeaderColumns = pageHeaderFields.map((field) => {
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(field)) throw new Error(`Invalid project page header field: ${field}`);
+    return `, data->'${field}' AS "${field}"`;
+  }).join('');
   const sync = makeSyncKind(kind);
   // Highest whole MB already logged per record, so a large record logs once per MB it grows, not on every edit.
   const loggedLargeMb = new Map();
@@ -85,7 +89,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
   // detail JSONB. Timestamp fallbacks need not match the mirrored SQL columns.
   async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
     const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
-    const { rows } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt", data->>'status' AS status, data->>'name' AS name
+    const { rows } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt", data->>'status' AS status, data->>'name' AS name${filter ? extraHeaderColumns : ''}
       FROM ${table}${where} ORDER BY created_at ASC`);
     const headers = filter ? rows.filter(filter) : rows;
     if (compare) headers.sort(compare);

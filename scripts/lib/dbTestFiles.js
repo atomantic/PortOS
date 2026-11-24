@@ -74,6 +74,7 @@ export const DB_TEST_INCLUDE = [
   'services/musicVideo/projectsDB.test.js',
   'routes/catalog.test.js',
   'routes/catalogOwnedPrimitive.db.test.js',
+  'routes/musicVideo.db.test.js',
   'routes/mindToolRecipes.db.test.js',
   'routes/decks.db.test.js',
   'services/decksSync.db.test.js',

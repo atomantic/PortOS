@@ -993,6 +993,20 @@ export const cosAgentFeedbackBodySchema = z.object({
   comment: nullishString,
 });
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
+
+const claimBranchSchema = z.string().min(1).max(200);
+export const claimOwnershipSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('bind'), agentId: z.string().min(1).max(200), branch: claimBranchSchema }),
+  z.object({ action: z.literal('release'), agentId: z.string().min(1).max(200), branch: claimBranchSchema, handoff: z.literal(true).optional() }),
+  z.object({
+    action: z.literal('check'),
+    appId: z.string().min(1).max(200),
+    branch: claimBranchSchema,
+    worktreePath: z.string().min(1).max(4096).optional(),
+    agentId: z.string().min(1).max(200).optional(),
+  }),
+]);
+
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
 export const cosScheduleTriggerBodySchema = z.object({

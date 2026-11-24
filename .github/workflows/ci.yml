@@ -150,6 +150,12 @@ jobs:
         shard: ${{ fromJSON(needs.impact.outputs.server_shards) }}
     permissions:
       contents: read
+    env:
+      PORTOS_CI_BROWSER_OWNER: unit
+      CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).server_mode }}
+      CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_files) }}
+      CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_sources) }}
+      CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -174,26 +180,31 @@ jobs:
         if: fromJSON(needs.impact.outputs.plan).slashdo
         run: git submodule update --init --depth 1 lib/slashdo || git submodule update --init lib/slashdo
 
+      - name: Check CTC test selection
+        id: ctc-selection
+        run: node scripts/run-ci-tests.js server --check-ctc
+
       # scripts/ml/align_lyrics_ctc_test.py skips its Viterbi cases without numpy
       # and still exits 0 (issue #15676). When the plan runs that suite, cache and
       # restore a venv with the repo's numpy pin and make the suite fail rather
       # than skip if no numpy interpreter resolves. Never touches system Python.
       - name: Cache CTC numpy virtualenv
         id: ctc-venv-cache
-        if: fromJSON(needs.impact.outputs.plan).server_mode == 'full' || (fromJSON(needs.impact.outputs.plan).server_mode == 'files' && contains(fromJSON(needs.impact.outputs.plan).server_files, 'scripts/align_lyrics_ctc.test.js'))
+        if: steps.ctc-selection.outputs.required == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ctc-venv
           key: ctc-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ml/requirements/requirements-acestep-mlx.txt') }}
 
       - name: Provide numpy for the CTC Viterbi tests
-        if: fromJSON(needs.impact.outputs.plan).server_mode == 'full' || (fromJSON(needs.impact.outputs.plan).server_mode == 'files' && contains(fromJSON(needs.impact.outputs.plan).server_files, 'scripts/align_lyrics_ctc.test.js'))
+        if: steps.ctc-selection.outputs.required == 'true'
         run: |
           if [ "${{ steps.ctc-venv-cache.outputs.cache-hit }}" != "true" ]; then
             pin="$(grep -m1 -E '^numpy==' scripts/ml/requirements/requirements-acestep-mlx.txt)"
             python3 -m venv "$RUNNER_TEMP/ctc-venv"
             "$RUNNER_TEMP/ctc-venv/bin/python" -m pip install --quiet "$pin"
           fi
+          "$RUNNER_TEMP/ctc-venv/bin/python" -I -c 'import numpy'
           echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
           echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
 
@@ -216,11 +227,6 @@ jobs:
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
-          PORTOS_CI_BROWSER_OWNER: unit
-          CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).server_mode }}
-          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_files) }}
-          CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_sources) }}
-          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           CI_EXPECT_SLASHDO_SUBMODULE: ${{ fromJSON(needs.impact.outputs.plan).slashdo }}
           # The always-run guards' time budget (each structural guard runner's checks,
           # and every other always-run file whole) fails the run only on the

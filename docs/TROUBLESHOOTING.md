@@ -477,11 +477,12 @@ npm run pm2:stop
 
 **Solution**:
 ```bash
-# Development: restart all dev apps, including Vite on :5554
+# Development
 npm run dev
 
-# Production: rebuild the client and restart production apps
+# Production: rebuild, then reload
 npm start
+npm run pm2:restart
 ```
 
 ## Database/Data Issues

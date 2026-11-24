@@ -677,11 +677,12 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       ].join('\n'));
       const guard = 'scripts/node-version-drift.guard.test.js';
       const runner = 'server/test/guards/repo.guard.test.js';
+      const scheduled = 'scripts/generate-prompt-stage-call-sites.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
-          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner, scheduled]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
       const over = `${guard} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
@@ -689,23 +690,27 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
-      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${over}`);
-      // The always-run guards ran alone, before the rest of the selection.
-      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+      expect(enforced.stderr).toContain(`❌ Guard over its time budget: ${over}`);
+      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${scheduled}`], [`../${other}`]]);
+
+      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
+      expect(slowScheduled.status).toBe(1);
+      expect(slowScheduled.stderr).toContain(`❌ Guard over its time budget: ${scheduled} 6.5s over the 4.0s per-guard budget.`);
 
       // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
       // it stays in the one normal pass with the rest of the selection and never fails the run.
       for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
-        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, 'test/guards/repo.guard.test.js'].sort()]);
-        expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${over}`);
-        expect(reported.stderr).not.toContain('Always-run guard over its time budget');
+        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(reported.stdout).toContain(`::warning title=Guard over its time budget::${over}`);
+        expect(reported.stderr).not.toContain('Guard over its time budget');
       }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Guards, slowest of 1: ${scheduled} 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
@@ -723,6 +728,47 @@ describe('ci.yml shard wiring', () => {
   // Composite actions expanded: these contracts hold for the steps GitHub runs.
   const CI_JOBS = readCiJobs();
   const runners = Object.entries(CI_JOBS).filter(([, body]) => /(?:run|watch)-ci-tests\.js/.test(body));
+
+  it('uses one server shard selection for both CTC NumPy setup steps', () => {
+    const steps = workflowJobs(WORKFLOW).server.split(/^ {6}- name: /m).slice(1);
+    const ctc = steps.filter(step => /^(Check CTC test selection|Cache CTC numpy virtualenv|Provide numpy for the CTC Viterbi tests)\n/.test(step));
+    expect(ctc).toHaveLength(3);
+    expect(ctc[0]).toContain('id: ctc-selection\n        run: node scripts/run-ci-tests.js server --check-ctc');
+    for (const step of ctc.slice(1)) expect(step).toContain("if: steps.ctc-selection.outputs.required == 'true'");
+    expect(ctc[2]).toContain("-I -c 'import numpy'");
+    expect(ctc[2]).toContain('CI_EXPECT_NUMPY_PYTHON=true');
+  });
+
+  it('requires NumPy for CTC in related, explicit and full plans on its owning shard', () => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-check-ctc-'));
+    const output = join(fixture, 'github_output');
+    const ctc = 'scripts/align_lyrics_ctc.test.js';
+    try {
+      const related = JSON.parse(execFileSync(process.execPath, [join(import.meta.dirname, 'ci-test-plan.js')], {
+        cwd: join(import.meta.dirname, '..'),
+        encoding: 'utf8', env: { ...process.env, CI_FORCE_FULL: 'false', CI_BASE_REF: 'main', CI_BASE_SHA: 'HEAD',
+          CI_CHANGED_FILES: '["server/lib/testHelper.js"]', GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+      }));
+      expect(related.server_mode).toBe('related');
+      expect(related.server_files).toContain(ctc);
+      const requiresNumpy = (mode, files, sources = [], shard = '1/1') => {
+        writeFileSync(output, '');
+        execFileSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', '--check-ctc'], {
+          env: { ...process.env, CI_TEST_MODE: mode, CI_TEST_FILES: JSON.stringify(files), CI_TEST_SOURCES: JSON.stringify(sources),
+            CI_SHARD: shard, GITHUB_OUTPUT: output, PORTOS_CI_BROWSER_OWNER: 'unit', PORTOS_BROWSER_TEST_PROFILE: undefined },
+        });
+        return readFileSync(output, 'utf8').trim();
+      };
+      expect(requiresNumpy(related.server_mode, related.server_files, related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('related', [], related.server_sources)).toBe('required=true');
+      expect(requiresNumpy('files', [ctc])).toBe('required=true');
+      expect(requiresNumpy('files', ['scripts/run-ci-tests.test.js'])).toBe('required=false');
+      expect(['1/2', '2/2'].map(shard => requiresNumpy('full', [], [], shard)).sort())
+        .toEqual(['required=false', 'required=true']);
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
 
   it('builds every test runner matrix from the planner and hands each slice to the runner', () => {
     expect(runners.map(([id]) => id).sort()).toEqual(['browser', 'client', 'database', 'server', 'windows-server']);

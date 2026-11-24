@@ -29,6 +29,10 @@ import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+// The manifest scan is selected on relevant diffs and in the full suite.
+// Give it the scheduled guard budget without making it run on unrelated PRs.
+const PROMPT_STAGE_GUARD = 'scripts/generate-prompt-stage-call-sites.test.js';
+
 /**
  * Vitest's own signature for a worker that never returned control at all — a
  * native process abort (Windows `STATUS_*` fail-fast codes such as
@@ -444,8 +448,8 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 }
 
 /**
- * Reports the always-run guards in `files` that ran over CI_GUARD_BUDGET_MS: each
- * structural guard runner's checks, and every other always-run file whole.
+ * Reports the guards in `files` that ran over CI_GUARD_BUDGET_MS: each
+ * structural guard runner's checks, and every other guard file whole.
  * With `enforce` (the scheduled hosted run) an over-budget guard returns 1,
  * naming each one; otherwise it is a warning annotation and returns 0. A guard
  * with no reading (it crashed, or ran nothing) is left to the test status,
@@ -455,10 +459,10 @@ function guardBudgetStatus(files, results, loads, { enforce }) {
   const watched = new Set(files);
   const timed = guardDurations(results.filter(({ file }) => watched.has(file)), loads);
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
-  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
+  if (slowest.length > 0) console.log(`⏱️ Guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
   if (over.length === 0) return 0;
-  const title = 'Always-run guard over its time budget';
+  const title = 'Guard over its time budget';
   const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-guard budget. Speed the check up (read the tree through scripts/lib/guardCorpus.js, which lists and reads it once per runner) rather than raising the budget.`;
   if (!enforce) {
     console.log(`⚠️ ${title}, reported only on this run (the scheduled hosted run enforces it): ${detail}`);
@@ -489,10 +493,11 @@ function warmTestChrome() {
 async function main() {
   const cliArgs = process.argv.slice(2);
   const checkRemaining = cliArgs.includes('--check-remaining');
-  const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining');
+  const checkCtc = cliArgs.includes('--check-ctc');
+  const positionalArgs = cliArgs.filter(arg => arg !== '--check-remaining' && arg !== '--check-ctc');
   const scope = positionalArgs[0];
-  if (positionalArgs.length !== 1 || !Object.hasOwn(TEST_SCOPES, scope) || cliArgs.some(arg => arg.startsWith('-') && arg !== '--check-remaining')) {
-    console.error('Usage: node scripts/run-ci-tests.js <server|client|db> [--check-remaining]');
+  if (positionalArgs.length !== 1 || !Object.hasOwn(TEST_SCOPES, scope) || (checkCtc && (scope !== 'server' || checkRemaining))) {
+    console.error('Usage: node scripts/run-ci-tests.js <server|client|db> [--check-remaining] or server --check-ctc');
     process.exit(2);
   }
   const workspace = workspaceOf(scope);
@@ -534,11 +539,19 @@ async function main() {
     if (profile !== undefined && !deferredOnly) throw Error('Browser profile selected no executable cases.');
     console.log(`No ${scope} tests selected.${deferredOnly ? ' Fidelity-only inputs require separate evidence.' : ''}`);
     if (checkRemaining) writeStepOutput('remaining', '0');
+    if (checkCtc) writeStepOutput('required', 'false');
     process.exitCode = 0;
     return;
   }
 
   const shard = parseShard(process.env.CI_SHARD);
+  if (checkCtc) {
+    // Related mode can reach beyond CI_TEST_FILES. Use its full candidate
+    // inventory, which the runner partitions before checking related reach.
+    const { slice } = planTestMemo({ scope, mode: mode === 'related' ? 'full' : mode, repoFiles, repoRoot, shard, memoDir: null });
+    writeStepOutput('required', String(slice.includes('scripts/align_lyrics_ctc.test.js')));
+    return;
+  }
   const label = mode === 'full' ? (shard ? `full suite shard ${process.env.CI_SHARD}` : 'full suite')
     : mode === 'files' ? 'selected tests' : 'related and contract tests';
   // process.exitCode, not process.exit(): the runner streams the child's
@@ -610,17 +623,19 @@ async function main() {
     return;
   }
   if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
-  // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
-  // hosted run enforces it, and only there do the guards run first as their own
-  // Vitest pass, so a related or full selection's heavy suites do not stretch
-  // their wall times. Every other run keeps them in the one pass with the rest
-  // of the selection and reports an over-budget guard as a warning.
+  // The scheduled run budgets the always-run guard pass and the prompt-stage
+  // scan separately. The scan parses the server tree and competes for CPU
+  // with the other scanners even when isolated from the broad test shard.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const guardRun = enforceGuardBudget ? plan.run.filter(test => alwaysRun.has(test)) : [];
-  const budgetWatched = enforceGuardBudget ? guardRun : plan.run.filter(test => alwaysRun.has(test));
-  const rest = plan.run.filter(test => !guardRun.includes(test));
-  const passes = guardRun.length > 0 && rest.length > 0
-    ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
+  const guardRun = plan.run.filter(test => alwaysRun.has(test));
+  const promptStageRun = plan.run.includes(PROMPT_STAGE_GUARD) ? [PROMPT_STAGE_GUARD] : [];
+  const passes = enforceGuardBudget
+    ? [
+      [guardRun, `${label}: always-run guards`, guardRun],
+      [promptStageRun, `${label}: prompt-stage guard`, promptStageRun],
+      [plan.run.filter(test => !alwaysRun.has(test) && test !== PROMPT_STAGE_GUARD), label, []],
+    ]
+    : [[plan.run, label, guardRun]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
   // What each real-Chromium fixture's Vite server served, for the records written below (#17616).
   let servedDir = null;
@@ -648,8 +663,9 @@ async function main() {
   };
   let status = 0;
   try {
-    for (const [index, [include, passLabel]] of passes.entries()) {
+    for (const [include, passLabel, budgetWatched] of passes) {
       if (interrupted) break;
+      if (include.length === 0) continue;
       const selection = writeSelectionFile({ scope, include, exclude: [] });
       process.env.PORTOS_CI_TEST_SELECTION = selection.path;
       const loadLog = join(selection.dir, 'guard-loads.jsonl');
@@ -660,7 +676,7 @@ async function main() {
         loads.push(...readGuardLoads(loadLog));
         rmSync(selection.dir, { recursive: true, force: true });
       }
-      if (index === 0 && budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, loads, { enforce: enforceGuardBudget }) || status;
+      if (budgetWatched.length > 0) status = guardBudgetStatus(budgetWatched, results, loads, { enforce: enforceGuardBudget }) || status;
     }
   } finally {
     delete process.env.PORTOS_GUARD_LOAD_LOG;

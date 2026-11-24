@@ -8,6 +8,12 @@ vi.mock('../../lib/childProcess.js', async () => {
 const { drainBrowserProcessGroup, observeBrowserProcessGroup, signalBrowserProcessGroup } = await import('./browserProcessGroup.js');
 const group = 12345;
 const snapshot = (...rows) => ({ stdout: [`${process.pid} 1 S`, ...rows].join('\n') });
+// Advance past the whole deadline so a regression reports its verdict instead of hanging.
+const verdictOf = async (drain, deadline = 500) => {
+  const verdict = drain.then(() => 'settled', error => error.message);
+  await vi.advanceTimersByTimeAsync(deadline);
+  return verdict;
+};
 let signal;
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
@@ -16,9 +22,10 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
-it('does not signal an empty or zombie-only owned group', async () => {
-  observation.read.mockResolvedValue(snapshot(`23456 ${group} Z`));
-  await drainBrowserProcessGroup(group, 500, 100);
+// `E` is the BSD ps flag for a process already in kernel exit (macOS `?E`).
+it.each([['zombie', ['Z']], ['exiting', ['?E', 'UEs']], ['exiting and zombie', ['?E', 'Z']]])('does not signal a group whose members are only %s', async (_, states) => {
+  observation.read.mockResolvedValue(snapshot(...states.map((state, i) => `${23456 + i} ${group} ${state}`)));
+  expect(await verdictOf(drainBrowserProcessGroup(group, 500, 100))).toBe('settled');
   expect(signal).not.toHaveBeenCalled();
   expect(observation.read).toHaveBeenCalledWith('ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat='], expect.objectContaining({ timeout: 500 }));
 });
@@ -103,6 +110,38 @@ it.each(['SIGTERM', 'SIGKILL'])('requires observed quiescence after failed %s, p
   expect(warning).toHaveBeenCalledExactlyOnceWith(`⚠️ Composition browser group quiesced after signal failure (code=EPERM, signal=${failedSignal}, phase=drain)`);
 });
 
+// #18434: macOS refuses a group signal with EPERM once every member has entered
+// kernel exit. Under load that exit can outlast the whole shutdown deadline.
+it.each(['SIGTERM', 'SIGKILL'])('settles when %s is refused because the remaining members are exiting', async refused => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  observation.read.mockResolvedValue(snapshot(`23456 ${group} S`));
+  signal.mockImplementation((_, name) => {
+    if (name !== refused) return true;
+    observation.read.mockResolvedValue(snapshot(`23456 ${group} ?E`));
+    throw Object.assign(new Error('/private'), { code: 'EPERM' });
+  });
+  expect(await verdictOf(drainBrowserProcessGroup(group, 500, 100))).toBe('settled');
+  expect(signal.mock.calls.at(-1)).toEqual([-group, refused]);
+  expect(warning).not.toHaveBeenCalled();
+});
+
+it('settles a shutdown refusal quietly when no live member is observed afterwards', async () => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const state = { error: 'none' };
+  signal.mockImplementation(() => { throw Object.assign(new Error('/private'), { code: 'EPERM' }); });
+  signalBrowserProcessGroup(group, 'SIGKILL', state, 'shutdown');
+  observation.read.mockResolvedValue(snapshot(`23456 ${group} ?E`));
+  expect(await verdictOf(drainBrowserProcessGroup(group, 500, 25, state))).toBe('settled');
+  expect(warning).not.toHaveBeenCalled();
+  expect(state).toMatchObject({ error: 'EPERM', failedSignal: 'SIGKILL', failedPhase: 'shutdown' });
+});
+
+it('still signals a live member beside exiting ones', async () => {
+  observation.read.mockResolvedValueOnce(snapshot(`23456 ${group} ?E`, `34567 ${group} S`)).mockResolvedValue(snapshot(`23456 ${group} ?E`));
+  expect(await verdictOf(drainBrowserProcessGroup(group, 500, 100))).toBe('settled');
+  expect(signal).toHaveBeenCalledExactlyOnceWith(-group, 'SIGTERM');
+});
+
 it('carries a shutdown failure into draining without another group signal', async () => {
   const state = { error: 'none' };
   signal.mockImplementation(() => { throw Object.assign(new Error('/private'), { code: 'EPERM' }); });
@@ -162,6 +201,18 @@ it.skipIf(process.platform === 'win32')('distinguishes an absent leader from a c
   expect(result).toContain('leader:other|parent:other|group:other|uid:other|ruid:other|live:0|zombies:0');
   expect(result).not.toMatch(/private|987654321|12345|77777/);
   expect(signal).not.toHaveBeenCalled();
+});
+
+it.skipIf(process.platform === 'win32')('reports members in kernel exit as exiting rather than live', async () => {
+  const uid = process.geteuid();
+  const ruid = process.getuid();
+  observation.read.mockResolvedValue({ stdout: [
+    `${process.pid} 1 1 ${uid} ${ruid} S`,
+    `${group} ${process.pid} ${group} ${uid} ${ruid} ?E`,
+    `23456 ${group} ${group} ${uid} ${ruid} UE`,
+    `34567 ${group} ${group} ${uid} ${ruid} S`,
+  ].join('\n') });
+  expect(await observeBrowserProcessGroup(group, 500)).toBe('leader:exiting|parent:same|group:same|uid:same|ruid:same|live:1|zombies:0|foreignUid:0|states:sleeping:1+exiting:2|capped:false');
 });
 
 it('keeps failed or incomplete diagnostic reads distinct from an empty group', async () => {

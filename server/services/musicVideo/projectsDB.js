@@ -25,6 +25,8 @@ const store = createProjectDbStore({
   logEmoji: '🎞️',
   logLabel: 'Music Video',
   logic,
+  // Keep the manual override's inputs available before the page is selected.
+  pageHeaderFields: ['completion', 'renderHistoryId'],
 });
 
 const { withLockedProject, rowToProject } = store;
@@ -32,6 +34,27 @@ const { withLockedProject, rowToProject } = store;
 export const {
   persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
+
+export async function listMidiSourceRows() {
+  // Keep the listProjects order: the first candidate wins a timestamp tie
+  // and fixes the track's position even if a later candidate replaces it.
+  const { rows } = await query(`
+    SELECT id, data->'id' AS "projectId", (data->'name')::text AS name,
+           data->'trackId' AS "trackId", data#>'{midiTranscription,filename}' AS filename,
+           (data#>'{midiTranscription,model}')::text AS model,
+           (data#>'{midiTranscription,createdAt}')::text AS "createdAt"
+      FROM music_video_projects
+      WHERE deleted = FALSE
+        AND data->'trackId' IS NOT NULL
+        AND data#>'{midiTranscription,filename}' IS NOT NULL
+      ORDER BY created_at ASC`);
+  // JSON text preserves explicit JSON null separately from an absent key (SQL NULL).
+  const optionalJson = value => value === null ? undefined : JSON.parse(value);
+  return rows.map(({ id, projectId, name, trackId, filename, model, createdAt }) => ({
+    id: projectId || id, name: optionalJson(name), trackId,
+    midiTranscription: { filename, model: optionalJson(model), createdAt: optionalJson(createdAt) },
+  }));
+}
 
 // Project links live in concept.subjects, including aliases kept by older records.
 // Read IDs first so an unrelated catalog write never pulls any project bodies.

@@ -29,7 +29,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
 import { addAudioLayer } from '../services/musicVideo/audioLayerUpload.js';
-import { listProjects, listProjectNames, listProjectPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listMidiSourceRows, listProjectPage, getProject, createProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, appendTakesAcrossScenes, mutateProjectRecord } from '../services/musicVideo/projects.js';
 import { updateProject as updateProjectEdit, previewProjectPacingRecut, recutProjectToPacing, markMediaPoolAssets } from '../services/musicVideo/projectBoardEdits.js';
 import { listProjectCompletion, cloneProject, refreshSongStyleFromSuno } from '../services/musicVideo/projectFilmActions.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
@@ -133,21 +133,15 @@ router.get('/names', asyncHandler(async (_req, res) => {
   res.json(await listProjectNames());
 }));
 
-// Bounded projection for the Tracks page MIDI read-through (#10203): the newest
-// MIDI transcription per linked track, without shipping every full project record.
-router.get('/midi-sources', asyncHandler(async (req, res) => {
+// Newest MIDI transcription per linked track for the Tracks page read-through.
+router.get('/midi-sources', asyncHandler(async (_req, res) => {
   const newest = new Map();
-  for (const p of await listProjects()) {
+  for (const p of await listMidiSourceRows()) {
     const midi = p.midiTranscription;
     if (!p.trackId || !midi?.filename) continue;
     const prev = newest.get(p.trackId);
     if (!prev || (midi.createdAt || '') > (prev.midiTranscription.createdAt || '')) {
-      newest.set(p.trackId, {
-        trackId: p.trackId,
-        id: p.id,
-        name: p.name,
-        midiTranscription: { filename: midi.filename, model: midi.model, createdAt: midi.createdAt },
-      });
+      newest.set(p.trackId, p);
     }
   }
   res.json([...newest.values()]);

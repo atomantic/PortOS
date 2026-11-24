@@ -68,12 +68,16 @@ describe('a11y conventions: routeHeadings', () => {
   const routedPageElements = (appFile) => {
     const appSrc = maskedSourceOf(appFile);
     const bindings = routeElementBindings(appSrc, appFile);
+    const headingByAncestor = new Map();
     const shelledByHeading = (node) => {
       for (let p = node.parent; p; p = p.parent) {
         if (p.name !== 'Route' || p.tag === null) continue;
-        const name = routeElementName(p.tag);
-        const binding = name && bindings.get(name);
-        if (binding && suppliesPageHeading(binding.file, binding.exportedName)) return true;
+        if (!headingByAncestor.has(p)) {
+          const name = routeElementName(p.tag);
+          const binding = name && bindings.get(name);
+          headingByAncestor.set(p, !!binding && suppliesPageHeading(binding.file, binding.exportedName));
+        }
+        if (headingByAncestor.get(p)) return true;
       }
       return false;
     };
@@ -96,6 +100,11 @@ describe('a11y conventions: routeHeadings', () => {
     }
     return [...elements.values()];
   };
+
+  // Only the tracked app is shared across assertions. Fixture walks use their
+  // own virtual sources, even when they reuse a path.
+  let appElements;
+  const routedAppElements = () => (appElements ??= routedPageElements('src/App.jsx'));
 
   const HEADINGLESS_ROUTE_ELEMENTS = new Set([
     'src/components/Layout.jsx',    // the app chrome — <Outlet/> children own the page h1
@@ -178,7 +187,7 @@ describe('a11y conventions: routeHeadings', () => {
       ]);
     });
 
-    const elements = routedPageElements('src/App.jsx');
+    const elements = routedAppElements();
     // Assert the walk really read the route table — a walker change that finds
     // no Route elements must not pass over an empty set.
     expect(elements.length, 'found no routed page elements in src/App.jsx — has the route table or its lazy-import idiom changed?').toBeGreaterThanOrEqual(90);
@@ -195,7 +204,7 @@ describe('a11y conventions: routeHeadings', () => {
     // The allowlists only shrink. An entry whose element was deleted/renamed —
     // or whose file now supplies a heading — is dead weight that quietly
     // re-exempts the next heading omission routed to that file.
-    const routed = new Map(routedPageElements('src/App.jsx').map((e) => [e.file, e]));
+    const routed = new Map(routedAppElements().map((e) => [e.file, e]));
     const stale = [...HEADINGLESS_ROUTE_ELEMENTS, ...ROUTE_HEADING_GAP_ALLOWLIST]
       .filter((file) => {
         const entry = routed.get(file);
@@ -225,12 +234,10 @@ describe('a11y conventions: routeHeadings', () => {
   // outline reflects the render order rather than the declaration order. The
   // chase is bounded and cycle-guarded by `path`; it is not deduped, because a
   // component rendered three times really does render three headings.
-  const outlineOfComponent = (file, componentName, path, depth) => {
+  const outlineOfComponent = (file, src, bodies, componentName, path, depth) => {
     if (depth >= MAX_HEADING_CHASE_DEPTH) return [];
     const key = `${file}#${componentName}`;
     if (path.has(key)) return [];
-    const src = maskedSourceOf(file);
-    const bodies = localComponentBodies(src);
     const body = bodies.get(componentName);
     if (!body) return [];
     const nextPath = new Set(path);
@@ -244,7 +251,7 @@ describe('a11y conventions: routeHeadings', () => {
         continue;
       }
       if (node.name && COMPONENT_TAG_NAME.test(node.name) && bodies.has(node.name)) {
-        out.push(...outlineOfComponent(file, node.name, nextPath, depth + 1));
+        out.push(...outlineOfComponent(file, src, bodies, node.name, nextPath, depth + 1));
       }
     }
     return out;
@@ -259,7 +266,7 @@ describe('a11y conventions: routeHeadings', () => {
     const src = maskedSourceOf(element.file);
     const componentName = element.exportedName === 'default' ? defaultExportName(src) : element.exportedName;
     if (!componentName) return null;
-    const own = outlineOfComponent(element.file, componentName, new Set(), 0);
+    const own = outlineOfComponent(element.file, src, localComponentBodies(src), componentName, new Set(), 0);
     if (element.shelled || !own.some((h) => h.level === 1)) {
       return [{ level: 1, file: element.file, line: 1 }, ...own];
     }
@@ -293,13 +300,16 @@ describe('a11y conventions: routeHeadings', () => {
     return offenders;
   };
 
+  let appHeadingOrderOffenders;
+  const routedAppHeadingOrderOffenders = () => (appHeadingOrderOffenders ??= headingOrderOffenders(routedAppElements()));
+
   it('keeps heading levels ordered on routed pages (#17334)', () => {
-    const elements = routedPageElements('src/App.jsx');
+    const elements = routedAppElements();
     // Probe first — a walker change that finds no Route elements must not pass
     // over an empty set.
     expect(elements.length, 'found no routed page elements in src/App.jsx — has the route table or its lazy-import idiom changed?').toBeGreaterThanOrEqual(90);
 
-    const offenders = headingOrderOffenders(elements);
+    const offenders = routedAppHeadingOrderOffenders();
     const unlisted = offenders.filter((o) => !HEADING_ORDER_ALLOWLIST.has(o.file));
     expect(unlisted, `Routed page headings increase by more than one level in document order — heading navigation expects the outline to climb one level at a time (WCAG 1.3.1/3.2.4):\n${unlisted.map((o) => `${o.file} — heading jump ${o.jump} at line ${o.line}`).join('\n')}`).toEqual([]);
   });
@@ -334,8 +344,7 @@ describe('a11y conventions: routeHeadings', () => {
     // The allowlist only shrinks. An entry whose page no longer jumps is dead
     // weight that quietly re-exempts the next heading omission routed to that
     // file — the same rule the heading-presence lists follow.
-    const elements = routedPageElements('src/App.jsx');
-    const jumping = new Set(headingOrderOffenders(elements).map((o) => o.file));
+    const jumping = new Set(routedAppHeadingOrderOffenders().map((o) => o.file));
     const stale = [...HEADING_ORDER_ALLOWLIST].filter((file) => !jumping.has(file));
     expect(stale, `heading-order exemption entries that no longer match a jumping routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
   });

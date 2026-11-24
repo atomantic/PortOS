@@ -1,7 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-// Git/filesystem are synthetic in this suite; real durable admission has its own boundary tests.
 const releasePreflight = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock('../releasePreflight.js', () => ({ releasePreflight }));
+vi.mock('../worktreeManager.js', async original => {
+  const actual = await original();
+  return { ...actual, listWorktrees: vi.fn(actual.listWorktrees) };
+});
 
 const store = { state: null, stateGate: null, readGate: null, saveGate: null, unreadable: false, stale: false, outbox: null };
 const deferred = () => {
@@ -30,6 +33,7 @@ const { claimContinuationAdmission, claimBranchAdmission } = await import('../..
 
 const { withStateLock, readAgentsStateForSafetyCheck, saveState } = await import('./cosState.js');
 const { cosEvents } = await import('./cosEvents.js');
+const { listWorktrees } = await import('../worktreeManager.js');
 
 const SOURCE = '/repos/app-x';
 const CHILD = '/repos/app-x/data/cos/worktrees/claim-issue-101';
@@ -123,8 +127,10 @@ describe('updateClaimOwnership', () => {
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({
       claimBranch: 'claim/issue-100', claimBranches: ['claim/issue-101'], claimSelectionPending: false,
     });
+    listWorktrees.mockRejectedValueOnce(new Error('worktree inventory unavailable'));
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch: 'claim/issue-101' }))
       .toEqual({ released: true, branch: 'claim/issue-101' });
+    expect(listWorktrees).toHaveBeenCalledWith(SOURCE);
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: ['claim/issue-101'] });
     expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
   });
@@ -152,6 +158,10 @@ describe('updateClaimOwnership', () => {
       expect(await bind('agent-swarm')).toEqual({ bound: true, branch });
       await execGit(['push', 'origin', branch], checkout);
       expect(await bind('agent-next')).toEqual(refused);
+      const before = structuredClone(store.state);
+      expect(await updateClaimOwnership({ agentId: 'agent-swarm', action: 'release', branch }))
+        .toEqual({ released: false, reason: 'checkout-present' });
+      expect(store.state).toEqual(before);
       // The checkout and local ref are gone, but origin still carries the PR head.
       await execGit(['worktree', 'remove', '--force', checkout], repo);
       await execGit(['branch', '-D', branch], repo);
@@ -166,6 +176,18 @@ describe('updateClaimOwnership', () => {
       expect(await bind('agent-unseeded')).toEqual(refused);
       expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
     } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
+  it('releases a live checkout for an explicit handoff', async () => {
+    const agentId = 'agent-epicrun', branch = 'claim/issue-101';
+    expect(await updateClaimOwnership({ agentId, action: 'bind', branch })).toEqual({ bound: true, branch });
+    listWorktrees.mockResolvedValueOnce([{ branch: `refs/heads/${branch}`, path: CHILD }]);
+    expect(await updateClaimOwnership({ agentId, action: 'release', branch }))
+      .toEqual({ released: false, reason: 'checkout-present' });
+    expect(await updateClaimOwnership({ agentId, action: 'release', branch, handoff: true }))
+      .toEqual({ released: true, branch });
+    expect(listWorktrees).toHaveBeenCalledTimes(1);
+    expect(store.state.agents[agentId].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: [branch] });
   });
 
   it('refuses an unknown or finished run without writing', async () => {
@@ -488,9 +510,13 @@ describe('checkReconcileOwnership reservation', () => {
     expect(await admit('agent-recon')).toEqual({ admitted: true });
     expect(await admit('agent-recon')).toEqual({ admitted: true });
     expect(store.state.agents['agent-recon'].metadata.claimBranches).toEqual(['claim/issue-101']);
+    // Assigned coordinators also persist the exact checkout reservation.
+    store.state.agents['agent-recon'].metadata.reconcileReservations = [{ branch: 'claim/issue-101', workspacePath: CHILD }];
 
     expect(await updateClaimOwnership({ agentId: 'agent-recon', action: 'release', branch: 'claim/issue-101' }))
       .toEqual({ released: true, branch: 'claim/issue-101' });
+    expect(listWorktrees).not.toHaveBeenCalled();
+    expect(store.state.agents['agent-recon'].metadata.reconcileReservations).toEqual([]);
     expect(await bind()).toEqual({ bound: true, branch: 'claim/issue-101' });
   });
 

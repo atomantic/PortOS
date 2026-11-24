@@ -3,13 +3,13 @@
  * Repairs missing or stale dependencies only in workspaces that own their tree.
  * Handles ENOTEMPTY npm bug by retrying with clean node_modules.
  */
-import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
+import { existsSync, rmSync, statSync } from 'fs';
 import { execFileSync } from 'child_process';
-import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { rebuildTrusted } from './trusted-rebuilds.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { dependencyHash, npmConfigHash, readDependencyHashes, saveDependencyHashes } from './lib/dependencyReceipts.js';
 import { dependencyWorkspaces, hasLinkedDependencies } from './lib/workspaceDependencies.js';
 // Node refuses to spawn npm's `.cmd` shim under `shell:false` (CVE-2024-27980),
 // so every npm spawn goes through this wrap. Safe to import before `npm install`
@@ -23,63 +23,7 @@ const npmSpawn = (args, options) => {
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Persisted dependency-input hashes (per workspace) from the last successful install.
-// Both package.json and package-lock.json select the installed tree.
-// A changed hash means an input moved since we last resolved the tree. An
-// in-place `npm install` over the existing node_modules could leave a stale /
-// duplicated tree (e.g. a react@18 copy lingering beside react@19 after a major
-// bump) — which builds fine but throws "Invalid hook call" at runtime. When the
-// hash changes we wipe node_modules first and reinstall from scratch instead.
-// This mirrors update.sh's pull-diff clean-reinstall for the manual
-// `git pull` + `npm start` path, which has no pull context to diff against.
-const HASH_FILE = join(ROOT, 'data', 'deps-hashes.json');
-
 export const WORKSPACES = dependencyWorkspaces(ROOT);
-
-function dependencyHash(dir) {
-  const pkgPath = join(dir, 'package.json');
-  if (!existsSync(pkgPath)) return null;
-  const lockPath = join(dir, 'package-lock.json');
-  // Legacy receipts hashed only package.json and cannot prove which lockfile
-  // was installed. The v2 prefix forces one reconciliation on upgrade.
-  const hash = createHash('sha256').update(readFileSync(pkgPath)).update('\0');
-  hash.update(existsSync(lockPath) ? readFileSync(lockPath) : '<no-lockfile>');
-  return `v2:${hash.digest('hex')}`;
-}
-
-function loadHashes() {
-  try {
-    return JSON.parse(readFileSync(HASH_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function saveHashes(hashes) {
-  try {
-    mkdirSync(dirname(HASH_FILE), { recursive: true });
-    writeFileSync(HASH_FILE, JSON.stringify(hashes, null, 2));
-  } catch (err) {
-    // Non-fatal — the worst case is we re-evaluate the hash next boot.
-    console.error(`⚠️  Could not persist deps hashes: ${err.message ?? err}`);
-  }
-}
-
-// Current v2 receipts for every workspace under `root`. setup.js calls this
-// after its install step so the next `npm start` does not treat a fresh tree
-// as stale. The digest matches `dependencyHash` above and the copy in
-// scripts/update.mjs (that updater cannot import this module).
-export function writeDependencyHashes(root) {
-  const hashes = {};
-  for (const { dir, label } of dependencyWorkspaces(root)) {
-    const hash = dependencyHash(dir);
-    if (hash != null) hashes[label] = hash;
-  }
-  const file = join(root, 'data', 'deps-hashes.json');
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(hashes, null, 2));
-  return hashes;
-}
 
 // Filesystem fallback for the no-baseline case (first run after this feature
 // lands, or a fresh manual checkout): npm writes node_modules/.package-lock.json
@@ -163,12 +107,15 @@ function main() {
     }
   }
 
-  const storedHashes = loadHashes();
+  const storedHashes = readDependencyHashes(ROOT);
   let hashesDirty = false;
   let needed = false;
 
   for (const { dir, label } of WORKSPACES) {
     const currentHash = dependencyHash(dir);
+    const currentConfig = npmConfigHash(dir);
+    const storedConfig = storedHashes.npmrc[label];
+    const configChanged = storedConfig !== undefined && storedConfig !== currentConfig;
     const nodeModulesMissing = !existsSync(join(dir, 'node_modules'));
     const storedHash = storedHashes[label];
     // With a stored baseline, a differing hash means a dependency input moved
@@ -176,9 +123,9 @@ function main() {
     // manual checkout), fall back to the install-marker mtime so a `git pull` +
     // `npm start` catches a changed manifest or lockfile over a present
     // node_modules instead of silently seeding the stale tree.
-    const depsChanged = storedHash != null
+    const depsChanged = configChanged || (storedHash != null
       ? currentHash != null && storedHash !== currentHash
-      : !nodeModulesMissing && dependenciesNewerThanInstall(dir);
+      : !nodeModulesMissing && dependenciesNewerThanInstall(dir));
 
     if (nodeModulesMissing || depsChanged) {
       if (depsChanged) {
@@ -191,6 +138,8 @@ function main() {
         console.log(`📦 Missing node_modules for ${label} — installing...`);
       }
       if (!installWorkspace(dir, label)) process.exit(1);
+      storedHashes.npmrc[label] = currentConfig;
+      hashesDirty = true;
       needed = true;
     }
 
@@ -221,6 +170,8 @@ function main() {
 
     console.log(`📦 Missing ${missing.map(p => p.split('/')[0]).join(', ')} in ${label} — reinstalling deps...`);
     if (!installWorkspace(dir, label)) process.exit(1);
+    storedHashes.npmrc[label] = npmConfigHash(dir);
+    hashesDirty = true;
     needed = true;
 
     const stillMissing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
@@ -230,7 +181,13 @@ function main() {
     }
   }
 
-  if (hashesDirty) saveHashes(storedHashes);
+  if (hashesDirty) {
+    try {
+      saveDependencyHashes(ROOT, storedHashes);
+    } catch (err) {
+      console.error(`⚠️  Could not persist deps hashes: ${err.message ?? err}`);
+    }
+  }
 
   if (needed) console.log('✅ Dependencies verified');
 }

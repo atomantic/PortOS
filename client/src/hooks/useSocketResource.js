@@ -77,7 +77,8 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
           });
           reconcile = false;
           invalidations = [];
-          await Promise.race([Promise.resolve().then(() => fetchRef.current(request)), aborted]).then(data => {
+          try {
+            const data = await Promise.race([Promise.resolve().then(() => fetchRef.current(request)), aborted]);
             if (!disposed && started === revision) {
               setState(previous => ({
                 key: resourceKey,
@@ -85,13 +86,18 @@ export function useSocketResource(fetchFn, { namespace, events, resourceKey = nu
                 loading: false, error: null
               }));
             }
-          }, error => {
+          } catch (error) {
             if (!disposed && started === revision) {
               setState(previous => ({ ...previous, loading: false, error }));
             }
-          });
+          }
           clearTimeout(timeout);
           activeRequest = null;
+          if (dirty && !disposed) {
+            // The superseding read must cover the dropped read's work too.
+            reconcile ||= request.reconcile;
+            invalidations = [...request.events, ...invalidations];
+          }
         } while (dirty && !disposed && visible());
         pending = null;
       });

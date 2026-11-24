@@ -31,10 +31,10 @@ describe('PM2 startup app sets', () => {
     }
   });
 
-  it('removes a stale Vite entry before production startup', () => {
+  it('lets npm start inspect PM2 before Vite retirement and keeps the explicit PM2 commands separate', () => {
     const start = packageScripts.start;
-    expect(start.indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);
-    expect(start.indexOf('pm2 delete portos-ui')).toBeLessThan(start.indexOf('node scripts/pm2-start.js'));
+    expect(start).not.toContain('pm2 delete portos-ui');
+    expect(start).toContain('node scripts/pm2-start.js');
 
     for (const command of ['pm2:start', 'pm2:restart']) {
       expect(packageScripts[command].indexOf('pm2 delete portos-ui')).toBeGreaterThan(-1);

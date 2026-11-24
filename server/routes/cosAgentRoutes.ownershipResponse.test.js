@@ -84,6 +84,26 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+it('keeps a claim checkout bound unless the HTTP release explicitly hands it off', async () => {
+  const agentId = 'synthetic-owner';
+  fixture.state.agents[agentId] = { id: agentId, status: 'running', workspacePath: '/synthetic/repo',
+    metadata: { claimBranches: [branch] } };
+  const release = options => fetch(`${fixture.apiBase}/api/cos/claim-ownership`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer synthetic-test-token', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'release', agentId, branch, ...options }),
+  });
+  const invalid = await release({ handoff: 'true' });
+  expect(invalid.status).toBe(400);
+  const retained = await release();
+  expect(retained.status).toBe(200);
+  expect(await retained.json()).toEqual({ released: false, reason: 'checkout-present' });
+  expect(fixture.state.agents[agentId].metadata.claimBranches).toEqual([branch]);
+  const released = await release({ handoff: true });
+  expect(released.status).toBe(200);
+  expect(await released.json()).toEqual({ released: true, branch });
+});
+
 it('requires a reserved release candidate and rejects caller-supplied paths at the HTTP boundary', async () => {
   const id = 'agent-synthetic';
   fixture.state.agents[id] = { id, status: 'running', startedAt: new Date().toISOString(),
