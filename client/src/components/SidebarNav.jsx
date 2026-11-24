@@ -29,7 +29,7 @@ import Logo from './Logo';
 import { NotificationBell } from './NotificationBell.jsx';
 import SidebarFlyout from './SidebarFlyout.jsx';
 import ThemeModeToggle from './ThemeModeToggle.jsx';
-import ThemeSwitcher from './ThemeSwitcher';
+import ThemeSwitcherGate from './ThemeSwitcherGate';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 
 const SECTION_PRESENTATION = {
@@ -855,7 +855,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                 <Search size={18} />
               </button>
               <ThemeModeToggle />
-              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
+              <ThemeSwitcherGate className={collapsed ? 'lg:hidden' : ''} />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationBell />
             </div>

@@ -20,7 +20,12 @@ import { emitLog } from '../cos/cosEvents.js';
 import { addTask, updateTask, getTaskById, getAllTasks } from '../cos/cosTaskStore.js';
 import { forceSpawnTask } from '../cos/cos.js';
 import { getAgents, getAgentRecord, getAgent, updateAgent, recordRepoStateVerification, recordCleanupOutcome } from '../cos/cosAgentLifecycle.js';
-import * as git from '../git.js';
+import { getBranch, getBranchComparison, getDefaultBranch, getRepoBranches, getStatusPorcelain } from '../git/status.js';
+import { push } from '../git/sync.js';
+import { createPR, generatePRDescription, requestCopilotReview, suggestPRTitle } from '../git/prs.js';
+import { deleteBranch, getWorktreeBranches } from '../git/cleanup.js';
+import { hasBranchMergeEvidence } from '../git/branchEvidence.js';
+import { resolveForgeForRepo } from '../forgeAuth.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { hasClaimFlowContract } from '../../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer, claimCheckoutOwnerReason } from '../../lib/claimContinuation.js';
@@ -34,7 +39,7 @@ import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../../lib/taskRetryH
 import { DELIVERY_RECOVERY_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { detectForgeCli } from '../../lib/gitForge.js';
+import { detectForgeCli, parsePullRequestUrl } from '../../lib/gitForge.js';
 import { normalizeForkHead } from '../../lib/forkHead.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified, prHeldForOperator } from '../../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
@@ -256,7 +261,7 @@ async function verifyClaimWorktreeRemoval({ sourceWorkspace, branch, capture, me
   }).catch(() => null);
   if (!current) return 'checkout-changed';
   if (!merged) {
-    const base = await git.getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
+    const base = await getDefaultBranch(sourceWorkspace, { strict: true, allowRemote: false }).catch(() => null);
     const [status, contained] = await Promise.all([
       execGit(['status', '--porcelain', '--untracked-files=all'], capture.path, { ignoreExitCode: true }).catch(() => null),
       base ? execGit(['merge-base', '--is-ancestor', capture.head, `refs/remotes/origin/${base}`], sourceWorkspace, { ignoreExitCode: true }).catch(() => null) : null,
@@ -434,7 +439,7 @@ async function probeWorktreePr(context, success) {
     return verifyPrClaim({ task: context.originalTask, workspacePath: worktreePath, success: true, prExpected: true, agentSummary })
       .catch(err => ({ ok: false, category: 'forge-unreachable', message: err.message }));
   }
-  const forge = await git.resolveForgeForRepo(worktreePath).catch(() => null);
+  const forge = await resolveForgeForRepo(worktreePath).catch(() => null);
   if (!forge) return { status: 'unavailable' };
   const found = await findPullRequestForBranch(worktreeBranch, { cwd: worktreePath, env: forge.env || null })
     .catch(() => ({ status: 'unavailable' }));
@@ -574,11 +579,11 @@ async function openWorktreePullRequest(context) {
   }
 
   const [pushResult, branchInfo] = await Promise.all([
-    git.push(worktreePath, worktreeBranch).then(() => true).catch(err => {
+    push(worktreePath, worktreeBranch).then(() => true).catch(err => {
       emitLog('warn', `🌳 Failed to push worktree branch ${worktreeBranch}: ${err.message}`, { agentId });
       return false;
     }),
-    git.getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
+    getRepoBranches(sourceWorkspace).catch(() => ({ baseBranch: null, devBranch: null }))
   ]);
 
   if (!pushResult) {
@@ -588,13 +593,13 @@ async function openWorktreePullRequest(context) {
   }
   let targetBranch = branchInfo.baseBranch;
   if (!targetBranch) {
-    targetBranch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null) || 'main';
+    targetBranch = await getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null) || 'main';
   }
-  const prTitle = await git.suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
+  const prTitle = await suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
 
-  const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput, context.securityScan, context.securityScanControl);
+  const prBody = await generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput, context.securityScan, context.securityScanControl);
 
-  const prResult = await git.createPR(worktreePath, {
+  const prResult = await createPR(worktreePath, {
     title: prTitle,
     body: prBody,
     base: targetBranch,
@@ -626,7 +631,7 @@ async function handlePrCreationFailure({ agentId, sourceWorkspace, worktreeBranc
   // Also delete the remote branch (it was pushed before PR creation).
   if (reason.includes('No commits between')) {
     emitLog('info', `🌳 No commits on ${worktreeBranch} vs ${targetBranch} — agent made no changes, cleaning up`, { agentId });
-    await git.deleteBranch(sourceWorkspace, worktreeBranch, { remote: true }).catch(err => {
+    await deleteBranch(sourceWorkspace, worktreeBranch, { remote: true }).catch(err => {
       emitLog('warn', `🌳 Remote branch delete failed for ${worktreeBranch}: ${err.message}`, { agentId });
       warnings.push(`Remote branch delete failed for ${worktreeBranch}: ${err.message}`);
     });
@@ -718,7 +723,7 @@ async function preRequestWorktreeReview({ agentId, worktreePath, warnings }, prR
   // latency optimization only — the follow-up requests Copilot at its turn
   // regardless, so a failed/absent pre-request is recoverable (no reviewer dropped).
   if (runsReviewLoop && copilotIsFirst) {
-    const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
+    const reviewResult = await requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
     if (reviewResult.success && reviewResult.skipped) {
       emitLog('info', `🤖 Skipping Copilot pre-request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
     } else if (reviewResult.success) {
@@ -768,7 +773,7 @@ async function queueWorktreeMerge({ agentId, worktreeBranch, originalTask, descr
     && !!originalTask?.metadata?.app;
   let queuedDeterministicMerge = false;
   if (canQueueDeterministicMerge) {
-    const parsedPr = git.parsePullRequestUrl(prResult.url);
+    const parsedPr = parsePullRequestUrl(prResult.url);
     try {
       const { queuePendingMerge } = await import('../prWatcher.js');
       queuedDeterministicMerge = await queuePendingMerge(originalTask.metadata.app, {
@@ -914,7 +919,7 @@ async function deleteMergedRemoteCopy(agentId, sourceWorkspace, branchName) {
     .catch(() => null);
   const pushedSha = tracked?.exitCode === 0 ? tracked.stdout.trim() : '';
   if (!pushedSha) return;
-  const hasMergeEvidence = await git.hasBranchMergeEvidence(sourceWorkspace, pushedSha, 'HEAD').catch(() => false);
+  const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, pushedSha, 'HEAD').catch(() => false);
   if (!hasMergeEvidence) {
     emitLog('warn', `🌳 origin/${branchName} (${pushedSha.slice(0, 7)}) has no established merge evidence in the checkout that received the branch — left in place for the repo-state audit`, { agentId, branchName });
     return;
@@ -963,7 +968,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   if (!sourceWorkspace || !branchName) return null;
 
   const survivingTree = !!(worktreePath && existsSync(worktreePath));
-  const target = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+  const target = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   // Same predicate `removeWorktree` used to decide whether to KEEP this branch, so
   // the two can't disagree and orphan it. `hasBranchMergeEvidence` (not a rev-list
   // count) because a rebase/squash-merged branch has new SHAs and would otherwise
@@ -971,7 +976,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   // flips only for a rejected call: resume starts clean on rejection, while the
   // predicate's internal probe failures still return false. The existence checks
   // below keep that negative evidence result from reviving an absent branch.
-  const hasMergeEvidence = await git.hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => true);
+  const hasMergeEvidence = await hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => true);
   // Nothing survived and nothing is unmerged — the common "run finished, branch
   // landed, tree already reaped" shape. Bail before spending any more git calls.
   if (hasMergeEvidence && !survivingTree) return null;
@@ -980,11 +985,11 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   // consulted on one of the two mutually exclusive paths below, so it costs a
   // single call per resolution.
   const commitsAhead = async () =>
-    (await git.getBranchComparison(sourceWorkspace, target, branchName).catch(() => null))?.ahead || 0;
+    (await getBranchComparison(sourceWorkspace, target, branchName).catch(() => null))?.ahead || 0;
 
   // 1. Adopt the surviving tree — but only if it is actually on the branch we're
   //    resuming; a half-cleaned or repurposed directory must not be handed over.
-  if (survivingTree && await git.getBranch(worktreePath).catch(() => null) === branchName) {
+  if (survivingTree && await getBranch(worktreePath).catch(() => null) === branchName) {
     if (!hasMergeEvidence) {
       emitLog('info', `🌳 Worktree ${worktreePath} survived on ${branchName} without established merge evidence — a retry can adopt it`, { branchName, worktreePath });
       return { branchName, worktreePath };
@@ -999,7 +1004,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
     // Same dirt classifier `removeWorktree` uses, so "worth preserving" and "worth
     // resuming" can't disagree: lockfile churn an agent never meant to commit is
     // not work, and a tree holding only that should start clean.
-    const porcelain = await git.getStatusPorcelain(worktreePath).catch(() => '');
+    const porcelain = await getStatusPorcelain(worktreePath).catch(() => '');
     const { classifyWorktreeDirt } = await import('../worktreeManager.js');
     if (!classifyWorktreeDirt(porcelain, { preserveLockfiles }).hasRealChanges) return null;
     emitLog('info', `🌳 Worktree ${worktreePath} survived on ${branchName} — a retry can adopt it and keep its uncommitted work`, { branchName, worktreePath });
@@ -1014,7 +1019,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   //    spawn at all — worse than restarting clean. The adoption path above already
   //    handled the dead agent's OWN worktree; anything else holding the branch is
   //    not ours to move.
-  const claimed = await git.getWorktreeBranches(sourceWorkspace).catch(() => null);
+  const claimed = await getWorktreeBranches(sourceWorkspace).catch(() => null);
   if (claimed?.has(branchName)) {
     emitLog('info', `🌳 Branch ${branchName} is still checked out in a preserved worktree — a retry can't attach to it, so it will start clean`, { branchName });
     return null;
@@ -1272,7 +1277,7 @@ async function handoffExistingDeliveryFollowUp({ agentId, task, persisted, metad
   const followUps = (queues.cos?.tasks || []).filter(candidate => candidate.id !== persisted.id
     && isTruthyMeta(candidate.metadata?.reviewLoopFollowUp)
     && candidate.metadata.sourceTaskId === persisted.id && candidate.metadata.sourceAgentId === agentId
-    && typeof metadata?.worktreeBranch === 'string' && !!git.parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
+    && typeof metadata?.worktreeBranch === 'string' && !!parsePullRequestUrl(candidate.metadata.reviewLoopPRUrl)
     && candidate.metadata.reviewLoopPRBranch === metadata.worktreeBranch
     && candidate.metadata.app === persisted.metadata?.app && !leavesPrForHuman(candidate)
     && ['pending', 'approved', 'in_progress', 'blocked', 'completed'].includes(candidate.status));
@@ -1643,7 +1648,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
     return resumeReviewLoopCoordinator(originalTask.id, prUrl, prBranch, reviewTarget);
   }
 
-  const parsedPr = git.parsePullRequestUrl(prUrl);
+  const parsedPr = parsePullRequestUrl(prUrl);
   // Copilot is GitHub-only. Classify with the shared detector rather than
   // `host !== 'github.com'` — a GitHub Enterprise host still has Copilot, and
   // misreading it as non-GitHub would strip the only reviewer and silently
@@ -1806,7 +1811,7 @@ async function runtimeResumePatch({ task, agentId, agentMetadata }) {
   if (!agentMetadata?.isWorktree || agentMetadata.isPersistentWorktree) return {};
   const branch = agentMetadata.worktreeBranch;
   const path = agentMetadata.workspacePath || join(PATHS.worktrees, agentId);
-  if (!branch || !existsSync(path) || await git.getBranch(path) !== branch) {
+  if (!branch || !existsSync(path) || await getBranch(path) !== branch) {
     throw new Error('Runtime verification checkout identity is unavailable; retain the prerequisite');
   }
   return { existingBranch: branch, resumeWorktreePath: path, resumedFromAgentId: agentId };

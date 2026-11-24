@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { existsSync } from 'fs';
-import { isRepo, notGitRepoMessage } from '../services/git.js';
+import { isRepo, notGitRepoMessage } from '../services/git/status.js';
 import { addTask, approveTask, challengeTask, deleteTask, findTaskWithSource, getAllTasks, getTaskById, getTaskView, reorderTasks, resolveTaskChallenge, resolveTaskChallengeWithRecheck, updateTask } from '../services/cos/cosTaskStore.js';
 import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
 import { forceSpawnTask } from '../services/cos/cos.js';

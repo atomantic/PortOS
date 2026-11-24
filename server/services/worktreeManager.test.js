@@ -41,8 +41,10 @@ vi.mock('../lib/gitStaleLock.js', () => ({ clearStaleGitLock: (...args) => clear
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 const getDefaultBranchMock = vi.fn().mockResolvedValue('main');
 const hasBranchMergeEvidenceMock = vi.fn().mockResolvedValue(false);
-vi.mock('./git.js', () => ({
+vi.mock('./git/status.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
+}));
+vi.mock('./git/branchEvidence.js', () => ({
   hasBranchMergeEvidence: (...args) => hasBranchMergeEvidenceMock(...args),
 }));
 const readMergedPrTipMock = vi.fn().mockResolvedValue(null);

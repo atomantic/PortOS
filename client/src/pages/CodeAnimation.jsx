@@ -22,11 +22,13 @@ import { useSocketResource } from '../hooks/useSocketResource';
 import toast from '../components/ui/Toast';
 import {
   buildCodeAnimationPrompt,
+  cancelCodeAnimationGeneration,
   generateCodeAnimationBrief,
   getCodeAnimationJob,
   getCodeAnimationOptions,
   startCodeAnimationGeneration,
 } from '../services/apiCodeAnimation.js';
+import useMounted from '../hooks/useMounted';
 import { listTracks } from '../services/apiTracks.js';
 import { uploadFile } from '../services/apiMedia.js';
 import { uuidv4 } from '../lib/uuid';
@@ -299,11 +301,15 @@ function FastCodeAnimation() {
   // The last built prompt, tagged with the brief it was built from.
   const [built, setBuilt] = useState(null);
   const [starting, setStarting] = useState(false);
+  const [cancelingJobId, setCancelingJobId] = useState('');
   const [job, setJob] = useState(null);
   const [effort, setEffort] = useState('');
   const [briefEffort, setBriefEffort] = useState('');
   const [pastedHtml, setPastedHtml] = useState('');
   const [preview, setPreview] = useState(null);
+  const mounted = useMounted();
+  const currentJobIdRef = useRef(jobId);
+  currentJobIdRef.current = jobId;
   const hydratedJobIdRef = useRef('');
   const locallyStartedJobIdRef = useRef('');
   const {
@@ -350,6 +356,7 @@ function FastCodeAnimation() {
   const videoRoom = (limits?.referenceImagesMax ?? 8) - draft.referenceImages.length >= (limits?.referenceVideoImageSlots ?? 3);
   const audioAccept = (options?.audioExtensions || ['mp3', 'wav', 'ogg', 'm4a']).map((ext) => `.${ext}`).join(',');
   const generating = job?.id === jobId && job.status === 'running';
+  const canceling = !!jobId && cancelingJobId === jobId;
   const canBuild = draft.concept.trim().length > 0 && !building && !uploading;
   // The writer needs a world or some words to be faithful to — it is not a
   // blank-slate idea generator.
@@ -531,6 +538,21 @@ function FastCodeAnimation() {
     setJob(started);
     setPreview(null);
     navigate(`/code-animation/${encodeURIComponent(started.id)}`);
+  };
+
+  const handleCancel = async () => {
+    if (!generating || canceling) return;
+    const targetId = job.id;
+    setCancelingJobId(targetId);
+    const updated = await cancelCodeAnimationGeneration(targetId, { silent: true }).catch((error) => {
+      toast.error(error.message || 'Could not cancel generation');
+      return null;
+    });
+    if (!mounted.current) return;
+    setCancelingJobId((current) => (current === targetId ? '' : current));
+    if (!updated) return;
+    if (currentJobIdRef.current === targetId) setJob(updated);
+    toast.success('Generation canceled');
   };
 
   // Fork a finished animation: keep its brief, extend its code. The new run is
@@ -815,6 +837,13 @@ function FastCodeAnimation() {
                 {starting || generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                 {generating ? 'Generating…' : 'Generate animation'}
               </button>
+              {generating && (
+                <button type="button" onClick={handleCancel} disabled={canceling} className={buttonSecondary}>
+                  {canceling ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                  {canceling ? 'Canceling…' : 'Cancel generation'}
+                </button>
+              )}
+              {job?.status === 'canceled' && <span role="status" className="text-xs text-port-warning">Generation canceled.</span>}
               {job?.status === 'failed' && <span className="text-xs text-port-error">Generation failed: {job.error}</span>}
               {job?.status === 'missing' && <span className="text-xs text-gray-500">That generation is no longer available.</span>}
             </div>

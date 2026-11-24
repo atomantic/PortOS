@@ -155,6 +155,10 @@ const SELECTION_CUTS = [
     'reads the merged PR through the prView.js leaf'],
   ['services/git.js', 'services/branchReconcile.js',
     'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
+  ['services/git/prs.js', 'services/prProbe.js',
+    'reads the merged PR through the prView.js leaf'],
+  ['services/git/cleanup.js', 'services/branchReconcile.js',
+    'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
   // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
   ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
     'recovers stuck renders through loaders registerBootHooks() registers in bootHookRegistry.js'],

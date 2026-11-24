@@ -25,7 +25,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => mockTaskScheduleStore(
 // The forge has no PR for an operator release; a receipt's merged-PR read
 // answers with `forge.delivery`.
 const forge = vi.hoisted(() => ({ delivery: null }));
-vi.mock('./git.js', async importOriginal => ({ ...await importOriginal(), resolveForgeForRepo: async () => ({ cli: 'gh', env: null }) }));
+vi.mock('./forgeAuth.js', async importOriginal => ({ ...await importOriginal(), resolveForgeForRepo: async () => ({ cli: 'gh', env: null }) }));
 vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(),
   isMergedPrHead: async () => false,
   probePrForBranch: async () => ({ readable: true, cli: 'gh', prState: null, prHead: null, prUrl: null }) }));

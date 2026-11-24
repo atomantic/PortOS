@@ -46,7 +46,8 @@ import { repositoryCleanupRecoveryMetadata } from '../cleanupOnlyCompletion.js';
 import { join, resolve } from 'path';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { addTask, updateTask, getTaskById } from '../cos/cosTaskStore.js';
-import * as git from '../git.js';
+import { getDefaultBranch } from '../git/status.js';
+import { hasBranchMergeEvidence } from '../git/branchEvidence.js';
 import { listWorktrees } from '../worktreeManager.js';
 import { listRemoteHeads, driveToMerge } from '../branchReconcile.js';
 import { isMergeHandoffEnabled } from '../../lib/mergeGateContract.js';
@@ -154,7 +155,7 @@ async function probeBranchMerged(repoPath, branch, target) {
     .catch(() => false);
   const [hasBranch, hasTarget] = await Promise.all([resolvable(branch), resolvable(target)]);
   if (!hasBranch || !hasTarget) return null;
-  return git.hasBranchMergeEvidence(repoPath, branch, target).catch(() => null);
+  return hasBranchMergeEvidence(repoPath, branch, target).catch(() => null);
 }
 
 /**
@@ -221,7 +222,7 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   // `allowRemote: false` — a bookkeeping question must not block on `git remote
   // set-head origin --auto`, the network call the default path can trigger.
   const probeDefaultBranch = () => (branchShouldBeGone
-    ? git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null)
+    ? getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null)
     : Promise.resolve(null));
 
   const [worktreePresent, localBranchPresent, remoteBranchPresent, defaultBranch, pr] = await Promise.all([
@@ -984,7 +985,7 @@ async function resolveCheckoutHold({ agentId, metadata, sourceWorkspace, branchN
 }
 
 async function containedInDefaultBranch(sourceWorkspace, head) {
-  const branch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
+  const branch = await getDefaultBranch(sourceWorkspace, { allowRemote: false, strict: true }).catch(() => null);
   if (!branch) return false;
   const result = await execGit(['merge-base', '--is-ancestor', head, `refs/remotes/origin/${branch}`], sourceWorkspace,
     { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null);

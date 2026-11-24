@@ -80,7 +80,7 @@ async function captureRepository(dir, ignored = new Set()) {
     paths(['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD']),
   ]);
   const links = await gitlinks(dir, head);
-  const { getDefaultBranch } = await import('./git.js');
+  const { getDefaultBranch } = await import('./git/status.js');
   const defaultBranch = links.size ? await getDefaultBranch(dir, { strict: true, allowRemote: false }) : null;
   // Only pins already on the parent's published default may omit clean children.
   // A local parent commit can introduce an otherwise clean, unpublished child commit.
@@ -185,7 +185,9 @@ async function preservedWork(contract, defaultBranch) {
 
 async function preservedSubmodules(contract, agentId) {
   const { redactRemoteUrlCredentials } = await import('../lib/gitRemote.js');
-  const { fetchOrigin, getDefaultBranch, findActiveAgentInWorkspace } = await import('./git.js');
+  const [{ fetchOrigin }, { getDefaultBranch }, { findActiveAgentInWorkspace }] = await Promise.all([
+    import('./git/fetch.js'), import('./git/status.js'), import('./git/cleanup.js'),
+  ]);
   const busy = dir => findActiveAgentInWorkspace(dir, { includePaused: true, failClosed: true, excludeAgentId: agentId });
   for (const child of contract.submodules || []) {
     const dir = await childDirectory(contract.repoPath, child.path);
@@ -213,7 +215,7 @@ async function verifyBoundRepoRepairCompletion(task, agentId, workspacePath) {
   const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
   const { getTaskById } = await import('./cos/cosTaskStore.js');
   const { checkUpdateRepoReadiness } = await import('./updateRepoReadiness.js');
-  const { fetchOrigin } = await import('./git.js');
+  const { fetchOrigin } = await import('./git/fetch.js');
   const contract = contractSchema.parse(task?.metadata?.repoRepairContract);
   const [owner, live, instanceId] = await Promise.all([getAgentRecord(agentId).then(structuredClone), getTaskById(task.id).then(structuredClone), getInstanceId()]);
   const binding = owner?.metadata?.completionTaskDispatch;

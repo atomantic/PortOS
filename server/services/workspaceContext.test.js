@@ -31,7 +31,7 @@ vi.mock('./apps.js', () => ({
   getAllApps: vi.fn(async () => mockApps)
 }));
 
-vi.mock('./git.js', () => ({
+vi.mock('./git/status.js', () => ({
   isRepo: vi.fn(async () => mockGit.isRepo),
   getBranch: vi.fn(async () => mockGit.branch),
   getStatus: vi.fn(async () => ({ clean: mockGit.clean, files: mockGit.files }))

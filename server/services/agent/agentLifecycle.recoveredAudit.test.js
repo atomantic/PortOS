@@ -98,7 +98,11 @@ vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn() }));
 vi.mock('../provider/providerStatus.js', () => ({ markProviderUsageLimit: vi.fn(), markProviderUnavailable: vi.fn() }));
 vi.mock('../updateChecker.js', () => ({ isUpdateInProgress: vi.fn(() => false) }));
 vi.mock('../jira.js', () => ({}));
-vi.mock('../git.js', () => ({}));
+vi.mock('../git/status.js', () => ({}));
+vi.mock('../git/branchEvidence.js', () => ({}));
+vi.mock('../git/sync.js', () => ({}));
+vi.mock('../git/prs.js', () => ({}));
+vi.mock('../git/cleanup.js', () => ({}));
 vi.mock('../brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn() }));
 vi.mock('../issueReconcile.js', () => ({ issueNumberFromRef: vi.fn() }));
 // handleAgentCompletion launches retirement from its finally block without

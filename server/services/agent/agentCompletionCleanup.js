@@ -44,7 +44,9 @@ import { applyStageExecution } from '../../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../../lib/agent/agentSentinel.js';
 import * as jiraService from '../jira.js';
-import * as git from '../git.js';
+import { getRepoBranches } from '../git/status.js';
+import { push, checkout } from '../git/sync.js';
+import { generatePRDescription, suggestPRTitle, createPR } from '../git/prs.js';
 import { isFalsyMeta, isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from '../codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
@@ -566,7 +568,7 @@ async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess
 
     const jiraTicketRef = await resolveJiraTicketRef(task.metadata);
 
-    await git.push(workspace, jiraBranch).catch(err => {
+    await push(workspace, jiraBranch).catch(err => {
       emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
     });
 
@@ -586,9 +588,9 @@ async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess
       });
     }
 
-    const { devBranch: dev, baseBranch: base } = await git.getRepoBranches(workspace).catch(() => ({ devBranch: null, baseBranch: null }));
+    const { devBranch: dev, baseBranch: base } = await getRepoBranches(workspace).catch(() => ({ devBranch: null, baseBranch: null }));
     const returnBranch = dev || base || 'main';
-    await git.checkout(workspace, returnBranch).catch(err => {
+    await checkout(workspace, returnBranch).catch(err => {
       emitLog('warn', `Failed to checkout back to ${returnBranch}: ${err.message}`, { agentId });
     });
   }
@@ -605,16 +607,16 @@ async function resolveJiraTicketRef({ jiraTicketId, jiraTicketUrl, jiraInstanceI
 }
 
 async function createJiraPullRequest({ agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer, scannerMetadata }) {
-  const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
+  const { baseBranch, devBranch } = await getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
   const targetBranch = devBranch || baseBranch || 'main';
 
-  const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer, scannerMetadata?.securityScan, scannerMetadata?.securityScanControl);
+  const jiraPrBody = await generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer, scannerMetadata?.securityScan, scannerMetadata?.securityScanControl);
   const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
 
-  const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
+  const baseTitle = await suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
   const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
 
-  const prResult = await git.createPR(workspace, {
+  const prResult = await createPR(workspace, {
     title: jiraPrTitle,
     body: jiraPrBodyWithRef,
     base: targetBranch,

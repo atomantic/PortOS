@@ -3,7 +3,7 @@ import { getSettings } from '../settings.js';
 import { BRAIN_SEARCH_TYPES, getBrainProjections } from '../brainSearchIndex.js';
 import { listContexts } from '../workspaceContext.js';
 import { previewLegacyExport, redactSecrets } from '../legacyExport.js';
-import { NAV_COMMANDS, resolveNavCommand } from '../../lib/navManifest.js';
+import { NAV_COMMANDS_WITH_SEARCH, resolveNavCommand } from '../../lib/navSearchMetadata.js';
 import { PII_REPLACEMENTS, redactPii } from '../../lib/piiRedactionPatterns.js';
 import {
   AGENT_CONTEXT_DEFAULT_SCOPES,
@@ -317,7 +317,7 @@ const semanticMcpToolsForConfig = async (config, readRecipeCatalog) =>
 
 export function createAgentContextContract({
   readSettings = getSettings,
-  navigationCommands = NAV_COMMANDS,
+  navigationCommands = NAV_COMMANDS_WITH_SEARCH,
   resolveNavigation = resolveNavCommand,
   listWorkspaceContexts = listContexts,
   brainSearchTypes = BRAIN_SEARCH_TYPES,

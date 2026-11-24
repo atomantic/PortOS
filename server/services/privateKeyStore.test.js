@@ -78,3 +78,42 @@ it('refuses a corrupt private store without overwriting keys or exposing parser 
   await expect(settings.updateSettings({ theme: 'light' })).rejects.toThrow('unsupported format');
   expect(await readFile(join(directory, 'private/api-keys.json'), 'utf8')).toBe('example-secret-invalid-json');
 });
+
+it('routes secrets.telegram.token to the private key store and writes a tombstone on clear', async () => {
+  await settings.updateSettingsWith(current => ({
+    ...current,
+    secrets: { ...current.secrets, telegram: { token: 'example-telegram-token' } },
+    telegram: { ...current.telegram, chatId: '12345' },
+  }));
+  const disk = await readFile(join(directory, 'settings.json'), 'utf8');
+  expect(disk).not.toContain('example-telegram-token');
+  expect(JSON.parse(disk).secrets?.telegram?.token).toBeUndefined();
+  expect(JSON.parse(disk).telegram?.chatId).toBe('12345');
+
+  const keys = JSON.parse(await readFile(join(directory, 'private/api-keys.json'), 'utf8')).keys;
+  expect(keys.telegram).toBe('example-telegram-token');
+  if (process.platform !== 'win32') {
+    expect((await stat(join(directory, 'private'))).mode & 0o777).toBe(0o700);
+    expect((await stat(join(directory, 'private/api-keys.json'))).mode & 0o777).toBe(0o600);
+  }
+
+  settings.__resetSettingsCache();
+  expect((await settings.getSettings()).secrets.telegram.token).toBe('example-telegram-token');
+
+  await settings.updateSettingsWith(current => ({
+    ...current,
+    telegram: null,
+    secrets: { ...current.secrets, telegram: undefined },
+  }));
+  const clearedKeys = JSON.parse(await readFile(join(directory, 'private/api-keys.json'), 'utf8')).keys;
+  expect(clearedKeys.telegram).toBe('');
+
+  // Even if a legacy copy sits in settings.json, the empty tombstone wins on restart.
+  const currentDisk = JSON.parse(await readFile(join(directory, 'settings.json'), 'utf8'));
+  await writeFile(join(directory, 'settings.json'), JSON.stringify({
+    ...currentDisk,
+    secrets: { ...currentDisk.secrets, telegram: { token: 'example-legacy-token' } },
+  }));
+  settings.__resetSettingsCache();
+  expect((await settings.getSettings()).secrets.telegram.token).toBe('');
+});

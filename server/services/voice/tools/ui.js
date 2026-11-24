@@ -3,7 +3,7 @@
 // always-on (left out of TOOL_GROUPS) so "take me to X" works on any turn; the
 // rest gate on UI_INTENT_RE. ui_click runs a destructive-action confirm gate.
 
-import { resolveNavCommand } from '../../../lib/navManifest.js';
+import { resolveNavCommand } from '../../../lib/navSearchMetadata.js';
 import { requiresConfirmation, buildPending } from '../confirmGate.js';
 import { UI_KINDS, findUiElement } from './shared.js';
 

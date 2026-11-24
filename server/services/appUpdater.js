@@ -2,7 +2,7 @@ import { existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import * as gitService from './git.js';
+import * as gitService from './git/sync.js';
 import * as pm2Service from './pm2.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parseCommandArgs, validateCommand } from '../lib/commandSecurity.js';

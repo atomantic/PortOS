@@ -25,8 +25,10 @@ vi.mock('../github.js', () => ({
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
 vi.mock('../gitlab.js', () => ({ findMergeRequestForBranch: vi.fn() }));
-vi.mock('../git.js', () => ({
+vi.mock('../forgeAuth.js', () => ({
   resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })),
+}));
+vi.mock('../git/status.js', () => ({
   getDefaultBranch: vi.fn(async () => 'main'),
 }));
 

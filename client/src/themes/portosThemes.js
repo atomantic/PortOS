@@ -1,4 +1,25 @@
-export const DEFAULT_THEME_ID = 'kestrel-neon';
+import {
+  DEFAULT_AVATAR_COLOR,
+  DEFAULT_THEME_ID,
+  LEGACY_THEME_ALIASES,
+  THEME_EFFECTS,
+  THEME_IDS,
+  THEME_METADATA,
+  getPairedThemeId,
+  normalizeThemeId,
+} from './themeCatalog.js';
+
+export {
+  DEFAULT_AVATAR_COLOR,
+  DEFAULT_THEME_ID,
+  LEGACY_THEME_ALIASES,
+  THEME_EFFECTS,
+  THEME_IDS,
+  THEME_METADATA,
+  getPairedThemeId,
+  normalizeThemeId,
+};
+
 
 const baseStatusColors = {
   '--port-success': '34 197 94',
@@ -28,10 +49,6 @@ const DEFAULT_ACCENT2 = {
   '--port-accent-2-text': '216 180 254',
 };
 
-// Full-screen effects a theme composes by listing them in `effects`; each is
-// a shared block in index.css ("Theme effects layer") tuned by --port-fx-*
-// tokens. Catalogue and tokens: docs/themes/README.md, "Effects".
-export const THEME_EFFECTS = Object.freeze(['scanlines', 'vignette', 'sweep', 'grid-floor', 'glitch', 'aurora', 'grain']);
 
 const baseMotionTokens = {
   '--port-motion-fast': '120ms',
@@ -83,19 +100,10 @@ const kestrelShellTokens = {
   '--port-fx-overlay-blend': 'multiply',
 };
 
-export const THEMES = {
+const THEME_PALETTES = {
   'classic-midnight': {
-    id: 'classic-midnight',
-    label: 'Classic Midnight',
-    shortLabel: 'Classic',
     concept: 'The existing PortOS interface, kept as the stable baseline.',
-    family: 'classic',
-    mode: 'night',
-    accent: '#2563eb',
     doc: '/docs/themes/classic-midnight.md',
-    colorScheme: 'dark',
-    density: 'comfortable',
-    swatches: ['#0f0f0f', '#1e1e1e', '#2563eb', '#22c55e'],
     colors: {
       '--port-bg': '15 15 15',
       '--port-card': '30 30 30',
@@ -160,17 +168,8 @@ export const THEMES = {
   },
 
   'classic-noon': {
-    id: 'classic-noon',
-    label: 'Classic Noon',
-    shortLabel: 'Classic',
     concept: 'Classic Midnight reflected to a clean white workspace — same blue accent, daylight legibility.',
-    family: 'classic',
-    mode: 'day',
-    accent: '#2563eb',
     doc: '/docs/themes/classic-midnight.md',
-    colorScheme: 'light',
-    density: 'comfortable',
-    swatches: ['#f0f0f0', '#ffffff', '#2563eb', '#166534'],
     colors: {
       '--port-bg': '240 240 240',
       '--port-card': '255 255 255',
@@ -248,21 +247,11 @@ export const THEMES = {
   },
 
   'lumen-glass': {
-    id: 'lumen-glass',
-    label: 'Lumen Glass',
-    shortLabel: 'Glass',
     concept: 'A translucent local-first command deck with layered glass panes and soft luminous depth.',
-    family: 'glass',
-    mode: 'night',
-    accent: '#67e8f9',
     doc: '/docs/themes/lumen-glass.md',
-    colorScheme: 'dark',
-    density: 'spacious',
     // The night pane finally gets the ambient depth its day partner always had
     // (which drifts on its own body::before/::after): two slow blooms behind
     // the glass, plus edge falloff so the stack reads as lit from the middle.
-    effects: ['aurora', 'vignette'],
-    swatches: ['#071016', '#1c2e37', '#67e8f9', '#fb7185'],
     colors: {
       '--port-bg': '7 16 22',
       '--port-card': '28 46 55',
@@ -353,20 +342,10 @@ export const THEMES = {
   },
 
   'lumen-glass-day': {
-    id: 'lumen-glass-day',
-    label: 'Lumen Glass Day',
-    shortLabel: 'Glass',
     concept: 'Lumen Glass at noon — cream-and-cyan glass panels floating on a sunlit drifting mesh.',
-    family: 'glass',
-    mode: 'day',
-    accent: '#155e75',
     doc: '/docs/themes/lumen-glass.md',
-    colorScheme: 'light',
-    density: 'spacious',
     // The drifting mesh stays on this theme's own body pseudo-elements; grain
     // is what turns its white panes from flat fill into frosted glass.
-    effects: ['grain'],
-    swatches: ['#eae4db', '#ffffff', '#155e75', '#fb7185'],
     colors: {
       '--port-bg': '234 228 219',
       '--port-card': '255 255 255',
@@ -445,21 +424,11 @@ export const THEMES = {
   },
 
   'black-ice-terminal': {
-    id: 'black-ice-terminal',
-    label: 'Black ICE Terminal',
-    shortLabel: 'Terminal',
     concept: 'A dense cyberpunk terminal interface for agents, logs, orchestration, and system control.',
-    family: 'terminal',
-    mode: 'night',
-    accent: '#00f5a0',
     doc: '/docs/themes/black-ice-terminal.md',
-    colorScheme: 'dark',
-    density: 'compact',
     // A cyberpunk CRT was already scanlined but otherwise inert: the phosphor
     // sweep, the tube's edge falloff, and the title glitch are the rest of the
     // same monitor.
-    effects: ['scanlines', 'vignette', 'sweep', 'glitch'],
-    swatches: ['#020403', '#151c19', '#00f5a0', '#ff2bd6'],
     colors: {
       '--port-bg': '2 4 3',
       '--port-card': '21 28 25',
@@ -557,22 +526,12 @@ export const THEMES = {
   },
 
   'black-ice-terminal-day': {
-    id: 'black-ice-terminal-day',
-    label: 'Phosphor Paper',
-    shortLabel: 'Terminal',
     concept: 'Black ICE Terminal printed on cream paper — green ink, pixel grid, line-printer report aesthetic.',
-    family: 'terminal',
-    mode: 'day',
-    accent: '#086c43',
     doc: '/docs/themes/black-ice-terminal.md',
-    colorScheme: 'light',
-    density: 'compact',
     // Paper tooth moved off --port-body-texture (where a 400-char inline SVG
     // sat behind the app backdrop) and onto the shared grain effect, which
     // blends over the whole page the way real stock does. Vignette is the
     // warm edge fall of a page under a desk lamp.
-    effects: ['scanlines', 'vignette', 'grain'],
-    swatches: ['#ece6d5', '#fbf6e8', '#086c43', '#b91d6a'],
     colors: {
       '--port-bg': '236 230 213',
       '--port-card': '251 246 232',
@@ -662,19 +621,9 @@ export const THEMES = {
   },
 
   'blueprint-ops': {
-    id: 'blueprint-ops',
-    label: 'Blueprint Ops',
-    shortLabel: 'Blueprint',
     concept: 'A systems-map aesthetic with drafting-grid structure, annotated panels, and calm operational contrast.',
-    family: 'blueprint',
-    mode: 'night',
-    accent: '#60a5fa',
     doc: '/docs/themes/blueprint-ops.md',
-    colorScheme: 'dark',
-    density: 'compact',
     // A drafting table is lit from above: the sheet falls off toward its edges.
-    effects: ['vignette'],
-    swatches: ['#0b1020', '#1b2231', '#60a5fa', '#f59e0b'],
     colors: {
       '--port-bg': '11 16 32',
       '--port-card': '27 34 49',
@@ -760,20 +709,10 @@ export const THEMES = {
   },
 
   'blueprint-ops-day': {
-    id: 'blueprint-ops-day',
-    label: 'Drafting Paper',
-    shortLabel: 'Blueprint',
     concept: 'Blueprint Ops on white drafting paper — pale cyan grid, navy accents, amber annotations.',
-    family: 'blueprint',
-    mode: 'day',
-    accent: '#1d4ed8',
     doc: '/docs/themes/blueprint-ops.md',
-    colorScheme: 'light',
-    density: 'compact',
     // Vellum tooth over the printed grid — the day sheet's counterpart to the
     // night table's edge falloff.
-    effects: ['grain'],
-    swatches: ['#eaeef2', '#ffffff', '#1d4ed8', '#d97706'],
     colors: {
       '--port-bg': '234 238 242',
       '--port-card': '255 255 255',
@@ -855,18 +794,8 @@ export const THEMES = {
     },
   },
   'kestrel-neon': {
-    id: 'kestrel-neon',
-    label: 'Kestrel Neon',
-    shortLabel: 'Kestrel',
     concept: 'A CRT boot terminal at midnight — cyan wireframes and magenta panel labels over a scanlined void with a perspective grid floor.',
-    family: 'kestrel',
-    mode: 'night',
-    accent: '#00f0ff',
     doc: '/docs/themes/kestrel-neon.md',
-    colorScheme: 'dark',
-    density: 'compact',
-    effects: ['scanlines', 'vignette', 'sweep', 'grid-floor', 'glitch'],
-    swatches: ['#05060a', '#161a32', '#00f0ff', '#ff2bd6'],
     colors: {
       '--port-bg': '5 6 10',
       '--port-card': '22 26 50',
@@ -931,18 +860,8 @@ export const THEMES = {
   },
 
   'kestrel-neon-day': {
-    id: 'kestrel-neon-day',
-    label: 'Kestrel Dawn',
-    shortLabel: 'Kestrel',
     concept: 'Kestrel Neon at first light — holographic white panels, teal and magenta ink, the CRT grid faded to a watermark.',
-    family: 'kestrel',
-    mode: 'day',
-    accent: '#0e7c8c',
     doc: '/docs/themes/kestrel-neon.md',
-    colorScheme: 'light',
-    density: 'compact',
-    effects: ['scanlines', 'grid-floor'],
-    swatches: ['#eaecf6', '#ffffff', '#0e7c8c', '#b5178f'],
     colors: {
       '--port-bg': '234 236 246',
       '--port-card': '255 255 255',
@@ -1003,41 +922,14 @@ export const THEMES = {
   },
 };
 
-export const THEME_IDS = Object.keys(THEMES);
-export const THEME_LIST = THEME_IDS.map(id => THEMES[id]);
+export const THEMES = Object.fromEntries(
+  THEME_IDS.map((id) => [id, { ...THEME_METADATA[id], ...THEME_PALETTES[id] }]),
+);
 
-// Fallback color for user-pickable swatches (agent avatars, calendar sources).
-// A native <input type="color"> only accepts a literal `#rrggbb` and cannot read
-// a CSS custom property, so this mirrors the default theme's accent instead of
-// `rgb(var(--port-accent))`. Single definition — every swatch site imports it.
-export const DEFAULT_AVATAR_COLOR = THEMES[DEFAULT_THEME_ID].accent;
-
-export const LEGACY_THEME_ALIASES = {
-  midnight: 'classic-midnight',
-  phosphor: 'black-ice-terminal',
-  ember: 'blueprint-ops',
-  arctic: 'lumen-glass',
-  synthwave: 'black-ice-terminal',
-  'pastel-dawn': 'lumen-glass-day',
-  'pastel-paper': 'classic-noon',
-  'pastel-void': 'classic-midnight',
-  'pastel-submarine': 'lumen-glass',
-};
-
-export function normalizeThemeId(id) {
-  if (!id || typeof id !== 'string') return DEFAULT_THEME_ID;
-  if (THEMES[id]) return id;
-  return LEGACY_THEME_ALIASES[id] ?? DEFAULT_THEME_ID;
-}
+export const THEME_LIST = THEME_IDS.map((id) => THEMES[id]);
 
 export function getTheme(id) {
   return THEMES[normalizeThemeId(id)];
-}
-
-export function getPairedThemeId(id) {
-  const theme = getTheme(id);
-  const opposite = theme.mode === 'day' ? 'night' : 'day';
-  return THEME_LIST.find(t => t.family === theme.family && t.mode === opposite)?.id ?? theme.id;
 }
 
 export function groupThemesByFamily() {

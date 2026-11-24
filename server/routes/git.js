@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { existsSync, statSync, realpathSync } from 'fs';
 import { resolve } from 'path';
-import * as git from '../services/git.js';
+import * as gitStatus from '../services/git/status.js';
+import * as gitSync from '../services/git/sync.js';
+import * as gitCleanup from '../services/git/cleanup.js';
 import * as gitSubmodules from '../services/gitSubmodules.js';
 import * as appsService from '../services/apps.js';
 import { getAgents } from '../services/cos/cosAgentLifecycle.js';
@@ -98,7 +100,7 @@ router.get('/:appId', asyncHandler(async (req, res) => {
     throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  const info = await git.getGitInfo(app.repoPath);
+  const info = await gitStatus.getGitInfo(app.repoPath);
   res.json(info);
 }));
 
@@ -106,7 +108,7 @@ router.get('/:appId', asyncHandler(async (req, res) => {
 router.post('/status', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const status = await git.getStatus(path);
+  const status = await gitStatus.getStatus(path);
   res.json(status);
 }));
 
@@ -114,7 +116,7 @@ router.post('/status', asyncHandler(async (req, res) => {
 router.post('/diff', asyncHandler(async (req, res) => {
   const { path, staged } = validateRequest(gitDiffBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const diff = await git.getDiff(path, staged);
+  const diff = await gitStatus.getDiff(path, staged);
   res.json({ diff });
 }));
 
@@ -122,7 +124,7 @@ router.post('/diff', asyncHandler(async (req, res) => {
 router.post('/commits', asyncHandler(async (req, res) => {
   const { path, limit } = validateRequest(gitCommitsBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const commits = await git.getCommits(path, limit);
+  const commits = await gitStatus.getCommits(path, limit);
   res.json({ commits });
 }));
 
@@ -130,7 +132,7 @@ router.post('/commits', asyncHandler(async (req, res) => {
 router.post('/stage', asyncHandler(async (req, res) => {
   const { path, files } = validateRequest(gitStageBodySchema, req.body);
   assertAllowedWorkspace(path);
-  await git.stageFiles(path, files);
+  await gitStatus.stageFiles(path, files);
   res.json({ success: true });
 }));
 
@@ -138,7 +140,7 @@ router.post('/stage', asyncHandler(async (req, res) => {
 router.post('/unstage', asyncHandler(async (req, res) => {
   const { path, files } = validateRequest(gitStageBodySchema, req.body);
   assertAllowedWorkspace(path);
-  await git.unstageFiles(path, files);
+  await gitStatus.unstageFiles(path, files);
   res.json({ success: true });
 }));
 
@@ -146,7 +148,7 @@ router.post('/unstage', asyncHandler(async (req, res) => {
 router.post('/commit', asyncHandler(async (req, res) => {
   const { path, message } = validateRequest(gitCommitBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.commit(path, message);
+  const result = await gitStatus.commit(path, message);
   res.json(result);
 }));
 
@@ -154,7 +156,7 @@ router.post('/commit', asyncHandler(async (req, res) => {
 router.post('/update-branches', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.updateBranches(path);
+  const result = await gitSync.updateBranches(path);
   res.json(result);
 }));
 
@@ -162,8 +164,8 @@ router.post('/update-branches', asyncHandler(async (req, res) => {
 router.post('/branch-comparison', asyncHandler(async (req, res) => {
   const { path, base, head } = validateRequest(gitBranchComparisonBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const baseBranch = base || await git.getDefaultBranch(path, { allowRemote: false }).catch(() => null) || 'main';
-  const result = await git.getBranchComparison(path, baseBranch, head || 'dev');
+  const baseBranch = base || await gitStatus.getDefaultBranch(path, { allowRemote: false }).catch(() => null) || 'main';
+  const result = await gitStatus.getBranchComparison(path, baseBranch, head || 'dev');
   res.json(result);
 }));
 
@@ -171,7 +173,7 @@ router.post('/branch-comparison', asyncHandler(async (req, res) => {
 router.post('/push', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitOptionalBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.push(path, branch);
+  const result = await gitSync.push(path, branch);
   res.json(result);
 }));
 
@@ -179,21 +181,21 @@ router.post('/push', asyncHandler(async (req, res) => {
 router.post('/push-all', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.pushAll(path);
+  const result = await gitSync.pushAll(path);
   res.json(result);
 }));
 
 router.post('/rebase-push', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  res.json(await git.rebaseAndPushDefaultBranch(path));
+  res.json(await gitSync.rebaseAndPushDefaultBranch(path));
 }));
 
 // POST /api/git/info - Get full git info for a path
 router.post('/info', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const info = await git.getGitInfo(path);
+  const info = await gitStatus.getGitInfo(path);
   res.json(info);
 }));
 
@@ -201,7 +203,7 @@ router.post('/info', asyncHandler(async (req, res) => {
 router.post('/branches', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const branches = await git.getBranches(path);
+  const branches = await gitStatus.getBranches(path);
   res.json({ branches });
 }));
 
@@ -209,7 +211,7 @@ router.post('/branches', asyncHandler(async (req, res) => {
 router.post('/checkout', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.checkout(path, branch);
+  const result = await gitSync.checkout(path, branch);
   res.json(result);
 }));
 
@@ -217,7 +219,7 @@ router.post('/checkout', asyncHandler(async (req, res) => {
 router.post('/sync', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitOptionalBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.syncBranch(path, branch);
+  const result = await gitSync.syncBranch(path, branch);
   res.json(result);
 }));
 
@@ -225,7 +227,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
 router.post('/remote-branches', asyncHandler(async (req, res) => {
   const { path, force } = validateRequest(gitRemoteBranchesBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.getRemoteBranches(path, { force });
+  const result = await gitSync.getRemoteBranches(path, { force });
   res.json(result);
 }));
 
@@ -233,7 +235,7 @@ router.post('/remote-branches', asyncHandler(async (req, res) => {
 router.post('/merge', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.mergeBranch(path, branch);
+  const result = await gitSync.mergeBranch(path, branch);
   res.json(result);
 }));
 
@@ -241,7 +243,7 @@ router.post('/merge', asyncHandler(async (req, res) => {
 router.post('/checkout-remote', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.checkoutRemoteBranch(path, branch);
+  const result = await gitSync.checkoutRemoteBranch(path, branch);
   res.json(result);
 }));
 
@@ -252,7 +254,7 @@ router.post('/checkout-remote', asyncHandler(async (req, res) => {
 router.post('/reset-to-default', asyncHandler(async (req, res) => {
   const { path } = validateRequest(gitPathBodySchema, req.body);
   assertAllowedWorkspace(path);
-  const result = await git.resetToDefaultBranch(path);
+  const result = await gitCleanup.resetToDefaultBranch(path);
   res.json(result);
 }));
 
@@ -264,7 +266,7 @@ router.post('/cleanup-merged', asyncHandler(async (req, res) => {
   const { path, branches } = validateRequest(gitCleanupMergedBodySchema, req.body);
   assertAllowedWorkspace(path);
   const { excludeBranches, activeAgentIds } = await getAgentProtections();
-  const result = await git.deleteMergedBranches(path, { excludeBranches, activeAgentIds,
+  const result = await gitCleanup.deleteMergedBranches(path, { excludeBranches, activeAgentIds,
     ...(branches && { onlyBranches: new Set(branches) }) });
   res.json(result);
 }));
@@ -274,7 +276,7 @@ router.post('/delete-branch', asyncHandler(async (req, res) => {
   const { path, branch, local, remote, expectedHead } = validateRequest(gitDeleteBranchBodySchema, req.body);
   assertAllowedWorkspace(path);
   const { excludeBranches } = await getAgentProtections();
-  const result = await git.deleteBranch(path, branch, { local, remote, excludeBranches, ...(expectedHead && { expectedHead }) });
+  const result = await gitCleanup.deleteBranch(path, branch, { local, remote, excludeBranches, ...(expectedHead && { expectedHead }) });
   res.json(result);
 }));
 
