@@ -31,7 +31,7 @@ vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => va
 vi.mock('../../lib/pythonSetup.js', () => ({ installLockedRuntime: setupMocks.installLocked, resolvePatchedUv: setupMocks.resolveUv }));
 vi.mock('../../lib/spawnCwd.js', () => ({ withSpawnCwdEnv: (env, cwd) => ({ ...env, PWD: cwd }) }));
 vi.mock('../../lib/paths.js', () => ({ PATHS: { root: '/example' } }));
-const { synthesizeAuk, getAukStatus, startAukSetup, unloadAuk } = await import('./aukRuntime.js');
+const { AUK_WEIGHT_SOURCES, synthesizeAuk, getAukStatus, startAukSetup, unloadAuk } = await import('./aukRuntime.js');
 let restorePlatform;
 let restoreArch;
 beforeEach(() => {
@@ -175,6 +175,28 @@ describe('AuK explicit setup', () => {
     await settled();
     expect(await getAukStatus()).toMatchObject({ state: 'failed', stage: 'Installing MLX dependencies', error: expect.stringContaining('AuK setup failed') });
     expect(commands().some(command => command.includes('snapshot_download'))).toBe(false);
+  });
+  it('passes an immutable 40-char hex revision to snapshot_download and records that same revision without querying model_info', async () => {
+    expect(AUK_WEIGHT_SOURCES.length).toBeGreaterThan(0);
+    for (const source of AUK_WEIGHT_SOURCES) {
+      expect(source.revision).toMatch(/^[0-9a-f]{40}$/);
+    }
+    startAukSetup();
+    await settled();
+    const downloads = setupMocks.exec.mock.calls.filter(([, args]) => args[0] === '-c' && args[1]?.includes('snapshot_download'));
+    expect(downloads).toHaveLength(AUK_WEIGHT_SOURCES.length);
+    for (const source of AUK_WEIGHT_SOURCES) {
+      const call = downloads.find(([, args]) => args[2] === source.repo);
+      expect(call).toBeDefined();
+      const [, args] = call;
+      expect(args[1]).toContain('snapshot_download(repo_id=repo, revision=rev, local_dir=str(dest))');
+      expect(args[1]).toContain('"sourceRevision": rev');
+      expect(args[1]).not.toContain('HfApi');
+      expect(args[1]).not.toContain('model_info');
+      expect(args[3]).toMatch(new RegExp(`ckpts/${source.directory}$`));
+      expect(args[4]).toMatch(/^[0-9a-f]{40}$/);
+      expect(args[4]).toBe(source.revision);
+    }
   });
   it('refuses to run any command when no patched private uv can be had', async () => {
     setupMocks.resolveUv.mockResolvedValue({ ok: false, reason: 'Could not bootstrap uv 0.13.7: the hash-verified package install step failed.' });
