@@ -1,7 +1,7 @@
 /**
  * HTML Pages bench: run installed local models against the fixed creative HTML brief and keep each model's pages as a durable run for side-by-side comparison.
  *
- * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a provider route (`route`: any configured provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
+ * A run targets either an installed local model (`backend` + `modelId`, talked to directly) or a tool-free provider route (`route`: provider, model and effort, run through the shared prompt runner with no fallback, so the gallery names what really answered). An MTPLX pack that is downloaded but not serving is a target too: MTPLX is switched to it for the run and switched back after.
  *
  * Each page is also written as a file under `data/html-pages/<runId>/` (`pageFiles.js`) so it can be downloaded or opened by path; the record stays authoritative, and a page whose file is missing gets it written from the record when it is first asked for.
  *
@@ -15,6 +15,7 @@ import { PATHS } from '../../lib/paths.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { ASSESSABLE_RUNTIMES, LOCAL_RUNTIMES } from '../../lib/localProviderRuntime.js';
 import { isEmbeddingModel } from '../../lib/localModelHeuristics.js';
+import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import {
   HTML_BRIEF_MAX_CHARS, HTML_PAGE_DEFAULT_BRIEFS, HTML_PAGES_MAX, htmlPagePlanPrompt, htmlPagePrompt, htmlPagePromptParts, extractHtmlDocument, extractHtmlPagePlan, scoreHtmlPage, scoreHtmlPages,
 } from '../../lib/htmlPageBench.js';
@@ -118,13 +119,25 @@ export const readRun = async (id) => {
   return isCutOff(run) ? markInterrupted(id) : run;
 };
 
-/** A provider route resolved to what the run record names; 409 when the provider is gone or switched off. */
-async function resolveRoute({ providerId, model, effort }) {
+/** Check the current configuration each time a route is admitted or dispatched. */
+async function requireRouteProvider({ providerId, providerName = providerId }) {
   const { getProviderById } = await import('../provider/providers.js');
   const provider = await getProviderById(providerId).catch(() => null);
   if (!provider || provider.enabled === false) {
-    throw new ServerError(`Provider ${providerId} is not available`, { status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
+    throw new ServerError(`Provider ${providerName} is unavailable. Re-enable it or start a new run with another provider.`, {
+      status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE',
+    });
   }
+  if (!isToolFreeOneShotProvider(provider)) {
+    throw new ServerError(`Provider ${provider.name || providerName} cannot run HTML Pages without tools. Start a new run with an API provider, a tool-free CLI, or an installed model.`, {
+      status: 409, code: 'HTML_PAGES_PROVIDER_NOT_TOOL_FREE',
+    });
+  }
+  return provider;
+}
+
+async function resolveRoute({ providerId, model, effort }) {
+  const provider = await requireRouteProvider({ providerId });
   const resolvedModel = model || provider.defaultModel || null;
   return { providerId, providerName: provider.name || providerId, model: resolvedModel, effort: effort || null };
 }
@@ -179,6 +192,8 @@ export async function resumeRun(id) {
   liveRuns.set(id, { controller: new AbortController() });
   let run;
   try {
+    const saved = await getRun(id);
+    if (saved && !saved.deleted && isRetryable(saved) && saved.route) await requireRouteProvider(saved.route);
     run = await mutateRun(id, (current) => {
       if (!isRetryable(current)) return null;
       const firstMissing = current.pages.findIndex((page) => !page.html || page.passed !== page.total);
@@ -343,11 +358,12 @@ async function processRun(id) {
  * One page through a provider route: the configured provider, model and effort exactly as picked, no fallback (the gallery must name what answered) and tool-free (the reply is the page, not files an agent wrote). Resolves to the same `{ text, error, timings }` shape `generate` does.
  */
 async function generateViaProvider(route, prompt, signal) {
-  const [{ getProviderById }, { runPromptThroughProvider }, { stopRun }] = await Promise.all([
-    import('../provider/providers.js'), import('../promptRunner.js'), import('../runner.js'),
+  const [{ runPromptThroughProvider }, { stopRun }] = await Promise.all([
+    import('../promptRunner.js'), import('../runner.js'),
   ]);
-  const provider = await getProviderById(route.providerId).catch(() => null);
-  if (!provider) return { text: '', error: `Provider ${route.providerName || route.providerId} is not available`, timings: null };
+  // A provider can change after queueing or between the plan and page requests.
+  const provider = await requireRouteProvider(route);
+  signal.throwIfAborted();
   let runId = null;
   const stop = () => { if (runId) stopRun(runId).catch(() => { /* best-effort cancel */ }); };
   signal.addEventListener('abort', stop, { once: true });
