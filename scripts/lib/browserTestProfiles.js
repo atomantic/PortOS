@@ -1,9 +1,11 @@
 /** Browser profiles select existing assertions; they never change render settings. */
 export const BROWSER_FIDELITY_TESTS = {
   'server/services/musicVideo/documentRender.browser.test.js': [
-    '[fidelity] [local-performance] authors a local Three.js world and renders the same deterministic scene through module preview and export',
     '[fidelity] matches bounded grades across real composed/document ramps and song-time excerpts',
     '[fidelity] matches bounded grades across real composed/document generated-shots and song-time excerpts',
+  ],
+  'server/services/musicVideo/documentRenderGeneration.browser.test.js': [
+    '[fidelity] [local-performance] authors a local Three.js world and renders the same deterministic scene through module preview and export',
   ],
   'server/routes/musicVideoRichAuthoring.browser.test.js': [
     '[fidelity] authors and accepts a Three.js world through the real UI and renders its reviewed proof',

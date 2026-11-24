@@ -884,6 +884,20 @@ it('requests DB verification for the real deck, model pin and backup source cont
   }
 });
 
+it('keeps document generation and provider inputs out of the render-only browser closure', () => {
+  const { browserDependencies } = realTree();
+  const render = browserDependencies['server/services/musicVideo/documentRender.browser.test.js'];
+  const generation = browserDependencies['server/services/musicVideo/documentRenderGeneration.browser.test.js'];
+  const generationInputs = [
+    'server/services/musicVideo/documentGeneration.js',
+    'server/lib/aiToolkit/internal/providerCatalogService.js',
+    'server/lib/systemCapabilities.js',
+  ];
+  expect(render).toContain('server/services/musicVideo/documentRender.js');
+  expect(generation).toEqual(expect.arrayContaining(generationInputs));
+  for (const input of generationInputs) expect(render).not.toContain(input);
+});
+
 describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
   const planFor = (source) => buildCiTestPlan([source], realTree());
 

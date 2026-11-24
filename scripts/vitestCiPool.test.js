@@ -129,6 +129,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
       ['poster', 'services/codeAnimation/poster.realBrowser.test.js'],
       ['html', 'services/htmlComposition/index.test.js'],
       ['music', 'services/musicVideo/documentRender.browser.test.js'],
+      ['music-generation', 'services/musicVideo/documentRenderGeneration.browser.test.js'],
       ['suno', 'services/musicVideo/publish/sunoHook.browser.test.js'],
       ['cutover', 'services/databaseMaintenanceCutover.test.js'],
       ['ownership-recheck', 'routes/cosAgentRoutes.ownershipResponse.test.js'],
@@ -158,7 +159,7 @@ it('runs parallel units before exclusive, nonduplicated captures and cutover pro
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const events = readFileSync(join(fixture, 'events'), 'utf8').trim().split('\n');
     expect(events.slice(0, 2).sort()).toEqual(['unit-a', 'unit-b']);
-    expect(events.slice(2).sort()).toEqual(['animatic', 'assembly', 'cutover', 'film-look', 'greybox', 'html', 'music', 'ownership-recheck', 'poster', 'shared-git-recovery', 'suno', 'workspace-caches']);
+    expect(events.slice(2).sort()).toEqual(['animatic', 'assembly', 'cutover', 'film-look', 'greybox', 'html', 'music', 'music-generation', 'ownership-recheck', 'poster', 'shared-git-recovery', 'suno', 'workspace-caches']);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
