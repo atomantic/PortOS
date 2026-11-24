@@ -605,6 +605,17 @@ describe('getCurrentWeekProgress', () => {
     expect(progress.recentCompletions.at(-1).description).toBe(`${'z'.repeat(57)}...`);
   });
 
+  it('counts agents already archived out of live state, matching the week\'s digest', async () => {
+    onDates([agent('archived', { day: 16 }), agent('both', { day: 17 })]);
+    mock.agents = [agent('both', { day: 17 }), agent('live', { day: 18 })];
+
+    const progress = await digestService.getCurrentWeekProgress();
+    const digest = await digestService.generateWeeklyDigest();
+
+    expect(progress.current.totalTasks).toBe(3);
+    expect(progress.current.totalTasks).toBe(digest.summary.totalTasks);
+  });
+
   it('reports an idle week without projecting phantom tasks', async () => {
     const progress = await digestService.getCurrentWeekProgress();
 
