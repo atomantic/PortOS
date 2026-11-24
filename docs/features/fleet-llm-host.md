@@ -10,12 +10,13 @@ For one RTX 3090, the default stack is:
 ```text
 PortOS clients ── Tailscale ──> queue :18022 ──> private vLLM :18020 ──> Qwen3.8-27B + DFlash2
       │
+      ├─ Pi provider (recommended): coding agents and tool use
       ├─ OpenCode TUI provider: coding agents and tool use
       └─ API provider: text generation, analysis, and thinking workflows
 ```
 
-Open **Settings → AI Providers → Model host setup** on each client to create either
-provider. The walkthrough can prefill the endpoint from an existing PortOS peer
+Open **AI Providers → Model host setup** on each client to create any of these
+providers. The walkthrough can prefill the endpoint from an existing PortOS peer
 and writes it into both the provider record and OpenCode's actual `baseURL`.
 
 ## Why this stack on a 3090
@@ -53,11 +54,11 @@ Other existing PortOS paths remain useful, but solve different problems:
 
 ## Host setup
 
-Open **AI Providers → Model host setup → Host**. The banner is visible above the provider list and detects GPU/platform capabilities. On Windows/Linux with an RTX 3090 (24 GB), the recommended action prepares missing weights, preserves the prepared image by digest, selects DFlash 2 and prefix caching, and starts a persistent container. The recorded warm agent-prompt result was **105.3 tok/s**; this is a measured reference, not a speed guarantee for every prompt.
+Open **AI Providers → Model host setup → GPU host**. The banner is visible above the provider list and detects GPU/platform capabilities. On Windows/Linux with an RTX 3090 (24 GB), the recommended action prepares missing weights, preserves the prepared image by digest, selects DFlash 2 and prefix caching, and starts a persistent container. The recorded warm agent-prompt result was **105.3 tok/s**; this is a measured reference, not a speed guarantee for every prompt.
 
 Setup binds the underlying runtime to loopback `:18020` and exposes a bearer-authenticated queue on `:18022`. It creates a **Direct API** provider — not an OpenCode TUI one — and moves existing local vLLM providers (including OpenCode's baseURL) through the queue. Competing local LM Studio/Ollama/llama/SGLang/SlotStream providers are disabled; their configurations remain available. Unload other GPU models before starting. PortOS no longer enables the default local backend at boot while dedicated hosting is enabled.
 
-Once the host is configured (`hasApiKey` and an endpoint are both present), the host panel itself offers **Set up OpenCode TUI on this machine** — the same "Connect client" walkthrough below, but pre-filled with this machine's own loopback endpoint and key, so running coding agents on the host machine doesn't require hand-copying its own credentials. The provider list on this page also surfaces this as an "add a provider" prompt when the host is serving and no matching provider exists yet.
+Once the host is configured (`hasApiKey` and an endpoint are both present), the host panel itself offers **Set up Pi on this machine** (recommended) or **Set up OpenCode TUI on this machine** — the same "Connect client" walkthrough below, but pre-filled with this machine's own loopback endpoint and key, so running coding agents on the host machine doesn't require hand-copying its own credentials. The provider list on this page also surfaces this as an "add a provider" prompt when the host is serving and no matching provider exists yet.
 
 The status panel checks Docker, prepared weights/key, the loaded model, Tailscale and queue listener. Copy the endpoint and explicitly reveal/copy the key only when connecting a client. The key never appears in the status payload. Driver installation, Docker engine repair, Windows reboot and enabling Docker Desktop startup may still require host interaction. Setup enables the model distro in Docker Desktop, wakes it before retrying a failed WSL integration, and registers a Windows login task to restore PortOS and the prepared container. The login task waits for Docker, never downloads weights or generates tokens, and does nothing when the dedicated-host flag is disabled. Once Docker starts, the container's `unless-stopped` policy restores the model; PortOS restores the queue from its machine-local opt-in flag. Cold model initialization can take 5–7 minutes. Boot makes no generation requests.
 
@@ -103,20 +104,22 @@ On each client PortOS:
 
 1. Add the GPU host under **Instances** if it is not already a peer.
 2. Open **AI Providers → Model host setup → Connect client**.
-3. Select the peer (or enter its MagicDNS/IP endpoint), paste the host's
-   `VLLM_API_KEY`, and keep the served model id in sync.
-4. Choose **OpenCode TUI** for CoS coding agents. Choose **Direct API** for
+3. Select the peer (or enter its MagicDNS/IP endpoint). Selecting a known
+   PortOS peer fetches the host's `VLLM_API_KEY` automatically through the peer
+   endpoint; if that fails, use **Fetch API key from host** or paste the key
+   manually. Keep the served model id in sync.
+4. Choose **Pi** (recommended) or **OpenCode TUI** for CoS coding agents. Choose **Direct API** for
    PortOS text-generation calls that do not need a file/tool harness.
 5. Optionally point an existing provider at this host instead of creating a
    new one: pick it from the **Provider** dropdown (candidates are existing
-   OpenCode TUI and Direct API providers). Its harness type is locked, but its
+   Pi, OpenCode TUI and Direct API providers). Its harness type is locked, but its
    endpoint, key, and model are updated in place — its other env vars and
    previously-served models are preserved rather than overwritten.
 6. Create (or update) the provider, refresh models, run the card test, then
    test one small tool-using workspace before making it the default.
 
-OpenCode is the optimal coding harness for this vLLM server because it speaks
-the OpenAI-compatible protocol directly and preserves structured tool calls.
+Pi is the recommended coding harness for this vLLM server, and OpenCode TUI is the alternative; both speak
+the OpenAI-compatible protocol directly and preserve structured tool calls.
 Claude Code would require an Anthropic-compatible translation layer for this
 specific runtime. A direct API provider has no coding harness: it is deliberately
 the lighter path for ordinary synthesis.
