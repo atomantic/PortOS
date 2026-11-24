@@ -167,9 +167,13 @@ export default function PipelineSeries() {
 
   const toggleSidebar = () => setSidebarCollapsed((prev) => !prev);
 
-  // `onlyIfId` scopes async rollbacks to the series that issued the request.
-  const patchSeries = (patch, onlyIfId) => setSeries((prev) => (
-    onlyIfId && prev?.id !== onlyIfId ? prev : { ...prev, ...patch }
+  const patchSeries = (patch) => setSeries((prev) => ({ ...prev, ...patch }));
+  // Undo a failed optimistic patch only while the same series still shows the
+  // optimistic values; a later selection or a series switch must survive.
+  const rollbackSeries = (id, optimistic, prior) => setSeries((prev) => (
+    prev?.id === id && Object.keys(optimistic).every((k) => (prev[k] ?? null) === optimistic[k])
+      ? { ...prev, ...prior }
+      : prev
   ));
 
   // Host-side ArcCanvas wiring (lastSavedRef dirty-check + server-confirmed
@@ -376,6 +380,7 @@ export default function PipelineSeries() {
               universesError={universesResource.error}
               universesRetry={universesResource.retry}
               patchSeries={patchSeries}
+              rollbackSeries={rollbackSeries}
               onSeriesUpdate={updateSeriesFromServer}
               onFlushPending={flushPending}
               onCollapse={toggleSidebar}
@@ -388,7 +393,7 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, universes, universesError, universesRetry, patchSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
+function BibleSidebar({ series, universes, universesError, universesRetry, patchSeries, rollbackSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
   const [generatingLogo, setGeneratingLogo] = useState(false);
   const handleGenerateLogo = async () => {
     // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
@@ -471,7 +476,7 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
               const updated = await updatePipelineSeries(series.id, { primaryManuscriptType: value }, { silent: true })
                 .catch((err) => { toast.error(err.message || 'Failed to set primary format'); return null; });
               if (updated) onSeriesUpdate?.(updated);
-              else patchSeries({ primaryManuscriptType: prior }, series.id);
+              else rollbackSeries(series.id, { primaryManuscriptType: value }, { primaryManuscriptType: prior });
             }}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           >
@@ -628,7 +633,7 @@ function BibleSidebar({ series, universes, universesError, universesRetry, patch
             const updated = await updatePipelineSeries(series.id, { imageMode, imageModelId }, { silent: true })
               .catch((err) => { toast.error(err.message || 'Failed to save render pin'); return null; });
             if (updated) onSeriesUpdate?.(updated);
-            else patchSeries(prior, series.id);
+            else rollbackSeries(series.id, { imageMode, imageModelId }, prior);
           }}
           autoLabel="Auto (install / surface default)"
         />

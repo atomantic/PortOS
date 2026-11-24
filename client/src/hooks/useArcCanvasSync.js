@@ -92,9 +92,10 @@ export function useArcCanvasSync({
   // state for every bible field, so it becomes the baseline outright.
   const applyServerRecord = useCallback((next, { fromFlush = false } = {}) => {
     // A response for a series the user already navigated away from must not
-    // replace the loaded series or its dirty baseline.
+    // replace the loaded series or its dirty baseline. While no series is
+    // loaded (mid-switch) there is nothing to update either.
     const loadedId = latestSeriesRef.current?.id;
-    if (loadedId && next?.id && loadedId !== next.id) return;
+    if (!loadedId || (next?.id && loadedId !== next.id)) return;
     const saved = lastSavedRef.current;
     const pendingIn = (local) => (
       next && saved?.id === next.id && local?.id === next.id ? pendingFields(local, saved, flushFields) : []
@@ -102,7 +103,7 @@ export function useArcCanvasSync({
     // The local merge reads `prev` so an edit queued in the same tick counts;
     // React may run this updater lazily, so the baseline below can't depend on it.
     setSeries((prev) => {
-      if (prev?.id && next?.id && prev.id !== next.id) return prev;
+      if (!prev?.id || (next?.id && prev.id !== next.id)) return prev;
       const pending = pendingIn(prev);
       if (!pending.length) return next;
       const merged = { ...next };
