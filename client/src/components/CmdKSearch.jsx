@@ -20,7 +20,7 @@ import { safeReadJsonStorage } from '../lib/safeStorage.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 import { ingredientPath } from '../lib/ingredientPath.js';
 import { onActivateKeyDown } from '../lib/a11yKeyboard.js';
-import { NAV_COMMANDS } from '../../../server/lib/navManifest.js';
+import { NAV_COMMANDS_WITH_SEARCH } from '../../../server/lib/navSearchMetadata.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse, Video };
 
@@ -84,7 +84,7 @@ function Highlight({ text, query }) {
   );
 }
 
-const BUNDLED_NAV = NAV_COMMANDS.map(precompute);
+const BUNDLED_NAV = NAV_COMMANDS_WITH_SEARCH.map(precompute);
 
 // Curated default shortlist — shown when the palette opens with no query so
 // Enter always does something useful.

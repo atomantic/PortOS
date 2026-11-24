@@ -405,4 +405,20 @@ describe('button compositor layer isolation and animation stabilization', () => 
     expect(match[0]).not.toContain('opacity');
   });
 });
+
+describe('default kestrel-neon CSS fallback in index.css', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf8');
+
+  it('declares every kestrel-neon color and token identically so fresh cold boot has zero flash', () => {
+    const match = css.match(/html\[data-port-theme="kestrel-neon"\]\s*\{([^}]+)\}/);
+    expect(match).toBeTruthy();
+    const cssVars = Object.fromEntries(
+      [...match[1].matchAll(/(--port-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]),
+    );
+    const kestrel = THEMES[DEFAULT_THEME_ID];
+    for (const [prop, value] of Object.entries({ ...kestrel.colors, ...kestrel.tokens })) {
+      expect(cssVars[prop], prop).toBe(value);
+    }
+  });
+});
 // @vitest-environment node
