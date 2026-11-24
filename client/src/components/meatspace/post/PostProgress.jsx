@@ -9,6 +9,7 @@ import useChartColors from '../../../hooks/useChartColors.js';
 import { formatDurationMin } from '../../../utils/formatters';
 import { DRILL_LABELS, DRILL_TO_DOMAIN, domainLabel } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
+import ListLoadError from '../../ui/ListLoadError';
 import PostHistory from './PostHistory';
 import TabPills from '../../ui/TabPills';
 
@@ -83,6 +84,7 @@ export default function PostProgress({ subtab, onBack }) {
   const [range, setRange] = useState(90);
   const [domain, setDomain] = useState('all');
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   // Guard against out-of-order responses: switching All (a full-history scan)
   // → 7d can let the slower All response land last and overwrite the 7d data
   // while the 7d range stays selected. Only the newest request may set state.
@@ -97,6 +99,7 @@ export default function PostProgress({ subtab, onBack }) {
       .catch((err) => { console.warn('⚠️ Failed to load POST progress: ' + err.message); return null; });
     if (reqId !== reqRef.current) return; // a newer request superseded this one
     setProgress(p);
+    setLoadFailed(p == null);
     setLoaded(true);
   }, [range, subtab]);
 
@@ -191,7 +194,11 @@ export default function PostProgress({ subtab, onBack }) {
 
       <ProgressTabs subtab={undefined} onChange={goToProgress} />
 
-      {loaded && !hasAny && (
+      {loadFailed && (
+        <ListLoadError what="POST progress" onRetry={loadData} />
+      )}
+
+      {loaded && !loadFailed && !hasAny && (
         <div className="bg-port-card border border-port-border rounded-lg text-center text-gray-500 py-12 text-sm">
           No training activity yet. Complete a POST session or a practice drill to start tracking your progress.
         </div>
