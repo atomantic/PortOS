@@ -234,7 +234,8 @@ export default function Review() {
     updateParams({ view });
   };
 
-  const pendingCount = counts?.total ?? 0;
+  const loadedPendingCount = useMemo(() => pendingItems.filter(item => item.status === 'pending').length, [pendingItems]);
+  const pendingCount = counts?.total ?? loadedPendingCount;
 
   return (
     <div className="flex flex-col h-full min-h-0">

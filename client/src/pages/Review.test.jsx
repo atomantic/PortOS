@@ -1015,6 +1015,13 @@ describe('Review Hub triage summary (#6926)', () => {
 describe('Review Hub all-clear Today tab (#13005)', () => {
   const historyDisclosure = () => screen.getByText(/Daily briefing ·/).closest('details');
 
+  it('counts loaded pending rows in the triage summary when global counts are unavailable', async () => {
+    getReviewCounts.mockRejectedValue(new Error('synthetic counts failure'));
+    render(<Review />);
+
+    expect(await screen.findByText(/2 stored items still pending/)).toBeInTheDocument();
+  });
+
   it('states the all-clear and shows the pending stored items ahead of a stale briefing', async () => {
     getReviewItems.mockResolvedValueOnce([SHORT_ITEM]);
     getReviewCounts.mockResolvedValue({ total: 1, todo: 1 });
