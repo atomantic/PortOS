@@ -316,6 +316,48 @@ describe('saved schedule hydration', () => {
     expect(inferSavedQualitySchedule({ 'claim-work': { enabled: true, interval: '0 9 * * *' } })).toEqual({ hasExistingSchedule: false });
   });
 
+  it('ignores non-cron enabled toggles, disabled entries, and legacy pre-consolidation overrides', () => {
+    expect(inferSavedQualitySchedule({
+      security: { enabled: true, interval: null },
+      accessibility: { enabled: true },
+      'api-contract': { enabled: true, interval: undefined },
+      'better-dependency-freedom': { enabled: false, interval: null },
+      simplify: { enabled: true, interval: '0 8 * * *' },
+      'better-complexity': { enabled: true, interval: null },
+    })).toEqual({ hasExistingSchedule: false });
+
+    expect(inferSavedQualitySchedule({
+      security: { enabled: true, interval: '0 9 * * 1', taskMetadata: { fileIssues: false } },
+      privacy: { enabled: true, interval: null, taskMetadata: { fileIssues: true } },
+    })).toEqual({
+      hasExistingSchedule: true,
+      taskTypes: ['security'],
+      fileIssuesByType: { security: false },
+      options: { windowStartHour: 9, windowEndHour: 9, claimBetween: false },
+    });
+  });
+
+  it('hydrates all applicable domains when only non-cron toggles and legacy overrides exist', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({
+      security: { enabled: true, interval: null },
+      accessibility: { enabled: true },
+      'api-contract': { enabled: true, interval: null },
+      'better-dependency-freedom': { enabled: true },
+      simplify: { enabled: true },
+      'better-complexity': { enabled: true, interval: '0 8 * * *' },
+    });
+    const fullStackApp = appWith([
+      ...NODE_SERVICE,
+      'client/src/App.jsx',
+      'src/index.ts',
+      'Dockerfile',
+    ]);
+    const built = await buildQualitySchedulePlan(fullStackApp, {}, { hydrate: true });
+    expect(built.hasExistingSchedule).toBe(false);
+    expect(built.checks).toHaveLength(16);
+    expect(built.selectedTaskTypes).toHaveLength(16);
+  });
+
   it('derives selection, delivery modes, window and claim drain from the overrides', () => {
     expect(inferSavedQualitySchedule(SAVED)).toEqual({
       hasExistingSchedule: true,
