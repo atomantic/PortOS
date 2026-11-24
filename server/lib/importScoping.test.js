@@ -130,8 +130,12 @@ const SELECTION_CUTS = [
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
     'never re-exports boot observers into notification producers'],
-  ['services/memoryConfig.js', 'services/cos/cos.js',
-    'updates memory approval counts through the declaring agent lifecycle module'],
+  ['services/memoryConfig.js', /^services\/cos\//,
+    'updates memory approval counts through lib/lateBoundServices.js without importing CoS'],
+  ['services/sharing/version.js', 'services/updateChecker.js',
+    'reads package.json directly so sharing leaves stay off updateChecker/github/CoS'],
+  ['services/codeAnimation/export.js', 'services/codeAnimation/soundtrack.js',
+    'resolves finished soundtracks through soundtrackTrack.js without pulling pipeline/musicGen.js'],
   ['services/worktreeManager.js', 'services/cos/cosClaimOwnership.js',
     'shares the ownership fence and trusted reader without reconciliation dependencies'],
   ['services/promptRunner.js', 'services/compositeProviders.js',
@@ -241,8 +245,10 @@ const SELECTION_CUTS = [
     'runs the re-time handler songRevision.js and the route hand in'],
 ];
 
-// Runtimes that import the queue back load through bootHookRegistry.js (#17499).
+// Runtimes, helpers, and terminal hooks registered in bootHooks.js (#17499, #18217).
+// Only pure event/mode/recorder leaves from those directories may be imported by mediaJobQueue.
 const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
+const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$|loraTraining\/(?!events\.js$))/;
 const productionModulesIn = (dir) => readdirSync(abs(dir))
   .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
   .map(file => `${dir}/${file}`);
@@ -267,11 +273,12 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     }
   });
 
-  it('keeps every media queue module off the runtimes that import the queue', () => {
+  it('keeps every media queue module off domain runtimes, helpers, and terminal hooks (#17499, #18217)', () => {
     const entries = productionModulesIn('services/mediaJobQueue');
     expect(entries).toContain('services/mediaJobQueue/execution.js');
+    expect(entries).toContain('services/mediaJobQueue/hookRegistry.js');
     for (const entry of entries) {
-      expect(importTargets(entry), entry).not.toContainEqual(expect.stringMatching(QUEUE_IMPORTING_RUNTIME));
+      expect(importTargets(entry), entry).not.toContainEqual(expect.stringMatching(MEDIA_QUEUE_BOOT_REGISTERED));
     }
   });
 
@@ -307,12 +314,17 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
-  // Positive control for the media scan: the boot owner still names every runtime.
+  // Positive control for the media scan: the boot owner still names every runtime and helper.
   it('still sees the runtime loaders bootHooks.js registers', () => {
-    expect(importTargets('services/bootHooks.js').filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
-    expect(importTargets('services/bootHooks.js')).toEqual(expect.arrayContaining([
+    const bootTargets = importTargets('services/bootHooks.js');
+    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(bootTargets).toEqual(expect.arrayContaining([
       'services/musicVideo/render.js',
       'services/musicVideo/excerptRender.js',
+      'services/creativeDirector/videoExecution.js',
+      'services/audioGen/local.js',
+      'services/imageVerifier.js',
+      'services/pipeline/comicPagesFilenameHook.js',
     ]));
   });
 

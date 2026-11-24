@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, } from 'vitest';
 
-const getCurrentVersionMock = vi.fn();
-vi.mock('../updateChecker.js', () => ({
-  getCurrentVersion: getCurrentVersionMock,
+const readFileMock = vi.fn();
+vi.mock('fs/promises', () => ({
+  readFile: readFileMock,
 }));
 
 const version = await import('./version.js');
@@ -32,19 +32,18 @@ describe('sharing/version', () => {
   });
 
   it('getProducedByVersion returns the package version when available', async () => {
-    getCurrentVersionMock.mockResolvedValueOnce('1.99.0');
+    readFileMock.mockResolvedValueOnce(JSON.stringify({ version: '1.99.0' }));
     // The 60s internal cache means later tests in this file may see this
     // value too — we only assert the shape, not exact equality.
     const v = await version.getProducedByVersion();
-    expect(typeof v).toBe('string');
-    expect(v.length).toBeGreaterThan(0);
+    expect(v).toBe('1.99.0');
   });
 
   it("getProducedByVersion falls back to 'unknown' on read failure", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(Date.now() + 65_000);
-      getCurrentVersionMock.mockRejectedValueOnce(new Error('boom'));
+      readFileMock.mockRejectedValueOnce(new Error('boom'));
       const v = await version.getProducedByVersion();
       expect(v).toBe('unknown');
     } finally {

@@ -20,6 +20,7 @@ import {
 import { ensureSseEntry, broadcastTerminalSse, replaceSseEntry, recomputeQueuePositions } from './sse.js';
 import { decideOwnershipRelease, OWNERSHIP_RELEASE } from './recoverySettlement.js';
 import { runJob } from './execution.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // A reservation row whose own reconcile attempt failed again is retried when a
 // later job to the same peer is blocked behind it, but no faster than this.
@@ -226,7 +227,7 @@ function startLaneJob(job, { lane }, enqueueJob) {
     const settled = await drainMediaJobQueue();
     const remoteRecoveryUnsettled = isRemoteMediaJob(job) && (job.params?.remoteMedia?.reconcile === true || job.params?.remotePeerReservation === true);
     if (settled.ok && job.params?.reviewedReferenceSnapshot && ((job.providerInvoked !== true && !remoteRecoveryUnsettled) || lifecycleEvidence?.snapshotProcessSettled === true)) {
-      const { markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+      const { markSnapshotState, withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
       await withReviewedSnapshotLock(() => markSnapshotState(job.params.reviewedReferenceSnapshot, 'settled')).catch(error => console.error(`❌ Reviewed image settlement retained for ${job.id}: ${error.message}`));
     }
     recoveringJobs.delete(job.id);
@@ -256,7 +257,7 @@ export async function settleQueuedJob(job, { status, error }) {
     trackTerminalOperation((async () => {
       await releaseStagedUploads(job.params);
       if (isTopazUpscale(job)) {
-        const { cleanupTopazStaging } = await import('../videoGen/topazStaging.js');
+        const { cleanupTopazStaging } = await loadMediaRuntimeModule('topazStaging');
         await cleanupTopazStaging(job.params.preparedId);
       }
       broadcastTerminalSse(job.id, status === 'canceled'
@@ -269,7 +270,7 @@ export async function settleQueuedJob(job, { status, error }) {
   await trackTerminalOperation(persistTerminalTransition(job));
   if (job.params?.reviewedReferenceSnapshot && !job.durabilityPending
     && !(isRemoteMediaJob(job) && (job.params?.remoteMedia?.reconcile === true || job.params?.remotePeerReservation === true))) {
-    const { markSnapshotState, withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+    const { markSnapshotState, withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
     await withReviewedSnapshotLock(() => markSnapshotState(job.params.reviewedReferenceSnapshot, 'settled')).catch(error => console.error(`❌ Reviewed image settlement retained for ${job.id}: ${error.message}`));
   }
   return true;

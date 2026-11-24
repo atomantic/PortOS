@@ -9,6 +9,7 @@ import { registerLateBoundService } from '../lib/lateBoundServices.js';
 export const SERVICE_LOADERS = Object.freeze({
   agentManagement: () => import('./agent/agentManagement.js'),
   agentWorktreeCleanup: () => import('./agent/agentWorktreeCleanup.js'),
+  cosAgentLifecycle: () => import('./cos/cosAgentLifecycle.js'),
   cosToolRegistry: () => import('./cos/cosToolRegistry.js'),
   creativeFirstPassGen: () => import('./creativeDirector/firstPassGen.js'),
   creativeToolRegistry: () => import('./creative/toolRegistry.js'),

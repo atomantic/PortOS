@@ -46,7 +46,11 @@ vi.mock('../services/blenderModels/store.js', async (importOriginal) => ({
 const { default: routes } = await import('./blenderModels.js');
 const { mediaJobEvents } = await import('../services/mediaJobQueue/index.js');
 const { createMediaJobHookLoader } = await import('../services/mediaJobQueue/hookRegistry.js');
+const { registerMediaJobTerminalHooks } = await import('../services/bootHookRegistry.js');
 const hook = await import('../services/blenderModels/referenceImageHook.js');
+registerMediaJobTerminalHooks([
+  [job => job.params?.blenderModelReference, () => hook.initBlenderModelReferenceHook()],
+]);
 
 const app = express();
 app.use(express.json());

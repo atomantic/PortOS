@@ -35,6 +35,7 @@ import {
 import { ensureSseEntry, broadcastTerminalSse, recomputeQueuePositions, resetSseForTests } from './sse.js';
 import { assertMusicVideoJobPolicy, getGenModuleForJob, installVideoExecutionRecorder, JOB_KINDS } from './execution.js';
 import { prepareQueuedVideos, quiesceMediaJobQueue, runJobNow as runScheduledJobNow, settleQueuedJob, startWorker } from './scheduler.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
 // import the queue can still recognize a refusal; re-exported where callers
@@ -266,7 +267,7 @@ export async function enqueueJob(job) {
     ...(Array.isArray(params.referenceImagePaths) ? params.referenceImagePaths : []),
     ...(Array.isArray(params.remoteMedia?.inputAssets) ? params.remoteMedia.inputAssets.map(asset => asset?.path) : [])];
   if (!params.reviewedReferenceDigest && !inputs.some(path => typeof path === 'string' && path.includes('snapshot-'))) return enqueueJobLocked(job);
-  const { withReviewedSnapshotLock } = await import('../imageGen/reviewedReference.js');
+  const { withReviewedSnapshotLock } = await loadMediaRuntimeModule('reviewedReference');
   return withReviewedSnapshotLock(() => enqueueJobLocked(job));
 }
 
@@ -275,7 +276,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   if (kind === 'training') refuseRetiredTraining();
   await assertMusicVideoJobPolicy(kind, params);
   if (params?.musicVideo?.sceneId) {
-    const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+    const { assertMusicVideoSceneReview } = await loadMediaRuntimeModule('musicVideoProductionReview');
     await assertMusicVideoSceneReview(params.musicVideo, kind);
   }
   if (!JOB_KINDS.includes(kind)) {
@@ -298,7 +299,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
     if (params.initImagePath || !params.referenceImagePaths?.length) {
       throw new ServerError('Reviewed quick edit requires a local reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
-    const { stageReviewedReference } = await import('../imageGen/reviewedReference.js');
+    const { stageReviewedReference } = await loadMediaRuntimeModule('reviewedReference');
     const snapshot = await stageReviewedReference(id, params.referenceImagePaths[0], params.reviewedReferenceDigest);
     const snapshotPath = join(PATHS.imageRefs, snapshot.filename);
     // The edited image is replaced by its snapshot; further references follow it unchanged.

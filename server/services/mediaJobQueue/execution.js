@@ -53,23 +53,23 @@ const chunkScaledWatchdog = ({ chunks }) => WATCHDOG_VIDEO_MS * Math.max(1, Numb
 
 // The single declaration of how each kind runs: its lazily-loaded module (by
 // `params.mode`, falling back to `default`), the event bus its progress rides,
-// its idle-watchdog window, entry point and progress verb. Module loads stay
-// thunks so no static import edge is added (server/AGENTS.md, "Import scoping");
-// runtimes that import the queue back load through bootHookRegistry.js.
+// its idle-watchdog window, entry point and progress verb. Every runtime loads
+// through bootHookRegistry.js (#17499, #18217) so mediaJobQueue stays a leaf
+// hub with zero literal import edges into domain generators or orchestrators.
 const MEDIA_JOB_RUNTIME = Object.freeze({
   video: {
     events: videoGenEvents,
     verb: 'Rendering',
     watchdogMs: chunkScaledWatchdog,
     modules: {
-      [IMAGE_GEN_MODE.GROK]: () => import('../videoGen/grok.js'),
-      [VIDEO_GEN_MODE.FAL]: () => import('../videoGen/fal.js'),
-      [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
-      [VIDEO_GEN_MODE.RUNWAY]: () => import('../videoGen/runway.js'),
-      [VIDEO_GEN_MODE.GEMINI]: () => import('../videoGen/geminiWeb.js'),
-      [VIDEO_GEN_MODE.HIGGSFIELD]: () => import('../videoGen/higgsfield.js'),
-      [VIDEO_GEN_MODE.GOOGLE]: () => import('../videoGen/google.js'),
-      default: () => import('../videoGen/local.js'),
+      [IMAGE_GEN_MODE.GROK]: () => loadMediaRuntimeModule('videoGrok'),
+      [VIDEO_GEN_MODE.FAL]: () => loadMediaRuntimeModule('videoFal'),
+      [VIDEO_GEN_MODE.REACTOR]: () => loadMediaRuntimeModule('videoReactor'),
+      [VIDEO_GEN_MODE.RUNWAY]: () => loadMediaRuntimeModule('videoRunway'),
+      [VIDEO_GEN_MODE.GEMINI]: () => loadMediaRuntimeModule('videoGemini'),
+      [VIDEO_GEN_MODE.HIGGSFIELD]: () => loadMediaRuntimeModule('videoHiggsfield'),
+      [VIDEO_GEN_MODE.GOOGLE]: () => loadMediaRuntimeModule('videoGoogle'),
+      default: () => loadMediaRuntimeModule('videoLocal'),
     },
     invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),
   },
@@ -103,7 +103,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Generating',
     watchdogMs: flatWatchdog(WATCHDOG_VIDEO_MS),
-    modules: { default: () => import('../musicVideo/sharingCopy.js') },
+    modules: { default: () => loadMediaRuntimeModule('sharingCopy') },
     invoke: (mod, request) => mod.runSharingCopy(request),
   },
   // Window and verb are the values this kind inherited from the old default
@@ -112,7 +112,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: videoGenEvents,
     verb: 'Generating',
     watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
-    modules: { default: () => import('../htmlComposition/index.js') },
+    modules: { default: () => loadMediaRuntimeModule('htmlComposition') },
     invoke: (mod, request) => mod.renderComposition(request),
   },
   image: {
@@ -120,14 +120,14 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     verb: 'Generating',
     watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
     modules: {
-      [IMAGE_GEN_MODE.CODEX]: () => import('../imageGen/codex.js'),
-      [IMAGE_GEN_MODE.GROK]: () => import('../imageGen/grok.js'),
-      [IMAGE_GEN_MODE.AGY]: () => import('../imageGen/agy.js'),
-      [IMAGE_GEN_MODE.FAL]: () => import('../imageGen/fal.js'),
-      [IMAGE_GEN_MODE.RUNWAY]: () => import('../imageGen/runway.js'),
-      [IMAGE_GEN_MODE.HIGGSFIELD]: () => import('../imageGen/higgsfield.js'),
-      [IMAGE_GEN_MODE.GOOGLE]: () => import('../imageGen/google.js'),
-      default: () => import('../imageGen/local.js'),
+      [IMAGE_GEN_MODE.CODEX]: () => loadMediaRuntimeModule('imageCodex'),
+      [IMAGE_GEN_MODE.GROK]: () => loadMediaRuntimeModule('imageGrok'),
+      [IMAGE_GEN_MODE.AGY]: () => loadMediaRuntimeModule('imageAgy'),
+      [IMAGE_GEN_MODE.FAL]: () => loadMediaRuntimeModule('imageFal'),
+      [IMAGE_GEN_MODE.RUNWAY]: () => loadMediaRuntimeModule('imageRunway'),
+      [IMAGE_GEN_MODE.HIGGSFIELD]: () => loadMediaRuntimeModule('imageHiggsfield'),
+      [IMAGE_GEN_MODE.GOOGLE]: () => loadMediaRuntimeModule('imageGoogle'),
+      default: () => loadMediaRuntimeModule('imageLocal'),
     },
     invoke: (mod, request) => mod.generateImage(request),
   },
@@ -142,7 +142,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: audioGenEvents,
     verb: 'Generating',
     watchdogMs: flatWatchdog(WATCHDOG_AUDIO_MS),
-    modules: { default: () => import('../audioGen/local.js') },
+    modules: { default: () => loadMediaRuntimeModule('audioLocal') },
     invoke: (mod, request) => mod.generateAudio(request),
   },
   // Window and verb inherited from the old default arms (see html-composition).
@@ -150,7 +150,7 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
     events: audioGenEvents,
     verb: 'Generating',
     watchdogMs: flatWatchdog(WATCHDOG_IMAGE_MS),
-    modules: { default: () => import('../superColliderRender.js') },
+    modules: { default: () => loadMediaRuntimeModule('superCollider') },
     invoke: (mod, request) => mod.renderSuperCollider(request),
   },
 });
@@ -289,12 +289,12 @@ export async function assertMusicVideoJobPolicy(kind, params) {
   // Release cover art is not footage in the video, so the media mode (what the
   // video itself may contain) does not govern it.
   if (params?.musicVideo?.projectId && !params.musicVideo.coverArt && ['image', 'video'].includes(kind)) {
-    const { getProject } = await import('../musicVideo/projects.js');
+    const { getProject } = await loadMediaRuntimeModule('musicVideoProjects');
     const project = await getProject(params.musicVideo.projectId);
     if (!project) throw new Error('Music Video project not found');
     assertMusicVideoMedia(project, kind, 'generation');
     if (project.castAndSets?.source === 'catalog') {
-      const { assertCatalogRenderParams } = await import('../musicVideo/clipCastReferences.js');
+      const { assertCatalogRenderParams } = await loadMediaRuntimeModule('musicVideoClipCastReferences');
       await assertCatalogRenderParams(params, project);
     }
   }
@@ -358,7 +358,7 @@ async function assertReviewedReferenceDispatch(job, safeParams) {
     throw new ServerError('Reviewed reference ownership is missing', { status: 409, code: 'REVIEWED_REFERENCE_CHANGED' });
   }
   if (!safeParams.reviewedReferenceSnapshot) return;
-  const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock, isReviewedReferenceList } = await import('../imageGen/reviewedReference.js');
+  const { readOwnedSnapshot, markSnapshotState, withReviewedSnapshotLock, isReviewedReferenceList } = await loadMediaRuntimeModule('reviewedReference');
   const snapshot = safeParams.reviewedReferenceSnapshot;
   const { path, record } = await readOwnedSnapshot(snapshot);
   const remoteAssets = safeParams.remoteMedia?.inputAssets;
@@ -590,11 +590,11 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane, enqueu
       if (!recoveringRemoteCancellation) await assertMusicVideoJobPolicy(job.kind, job.params);
       const mod = await getGenModuleForJob(job);
       if (job.params?.videoProduction) {
-        const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+        const { assertVideoAttemptDispatch } = await loadMediaRuntimeModule('creativeDirectorVideoExecution');
         await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
       }
       if (job.params?.shotInstruction?.repair && job.params?.musicVideo) {
-        const { assertPerformanceRepairDispatch } = await import('../musicVideo/revisionService.js');
+        const { assertPerformanceRepairDispatch } = await loadMediaRuntimeModule('musicVideoRevisionService');
         await assertPerformanceRepairDispatch(job.params.musicVideo);
       }
       if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
@@ -610,7 +610,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane, enqueu
         };
       }
       if (job.params?.musicVideo?.sceneId && !(job.cancelRequested && isRemoteMediaJob(job))) {
-        const { assertMusicVideoSceneReview } = await import('../musicVideo/productionReviewService.js');
+        const { assertMusicVideoSceneReview } = await loadMediaRuntimeModule('musicVideoProductionReview');
         await assertMusicVideoSceneReview(job.params.musicVideo, job.kind);
       }
       // The user may edit a referenced file while this job waits in the queue.
@@ -618,7 +618,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane, enqueu
       // recovery/finish replays must not start another render.
       if (job.kind === 'image' && safeParams.fableLoom && !isLocalFinishReplay(job)
         && !isRemoteReconcile(job)) {
-        const { assertFableLoomDispatchInputs } = await import('../fableLoom/requestInputs.js');
+        const { assertFableLoomDispatchInputs } = await loadMediaRuntimeModule('fableLoomRequestInputs');
         await assertFableLoomDispatchInputs(safeParams);
       }
       await assertReviewedReferenceDispatch(job, safeParams);

@@ -24,35 +24,11 @@ const defaults = {
   queueGeneration: async (body) => (await import('../musicGeneration.js')).queueMusicGeneration(body),
 };
 
+export { withGeneratedSoundtrack } from './soundtrackTrack.js';
+
 // One request per animation at a time; the queue's own per-track duplicate
 // check covers a render that is already queued.
 const starting = new Set();
-
-const trackAudioUrl = (track) => `/data/music/${encodeURIComponent(track.audioFilename)}`;
-
-/** The job with its generated soundtrack (once rendered) as the audio. */
-export async function withGeneratedSoundtrack(job, deps = {}) {
-  const trackId = job?.soundtrack?.trackId;
-  if (!trackId) return job;
-  const { getTrack } = { ...defaults, ...deps };
-  const track = await getTrack(trackId).catch(() => null);
-  if (!track?.audioFilename) return job;
-  return {
-    ...job,
-    audioUrl: trackAudioUrl(track),
-    input: {
-      ...job.input,
-      audio: {
-        source: 'track',
-        trackId: track.id,
-        label: track.title || 'Soundtrack',
-        durationSeconds: track.durationSec ?? null,
-        notes: job.input?.audio?.trackId === track.id ? job.input.audio.notes || '' : '',
-      },
-      soundtrack: 'none',
-    },
-  };
-}
 
 async function requireCompletedJob(id) {
   const job = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
