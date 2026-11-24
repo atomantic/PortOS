@@ -239,6 +239,18 @@ describe('MediaCard', () => {
     expect(files).not.toContainElement(remix);
   });
 
+  it('sizes the file-action grid for the pins the menu can offer', () => {
+    const item = { ...imageItem, key: `image:${'a'.repeat(257)}`, previewUrl: null };
+    const { rerender } = render(<MediaCard item={item} showCollectionMenu={false} />);
+
+    expect(screen.queryByRole('button', { name: 'Pin to mood board' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'File actions' })).toHaveClass('grid-cols-1');
+
+    rerender(<MediaCard item={{ ...item, previewUrl: imageItem.previewUrl }} showCollectionMenu={false} />);
+    expect(screen.getByRole('button', { name: 'Pin to mood board' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'File actions' })).toHaveClass('grid-cols-2');
+  });
+
   it('offers the image-to-Three.js handoff only when its handler is provided', () => {
     const onSendTo3d = vi.fn();
     const { rerender } = render(
