@@ -1,11 +1,11 @@
 /**
- * Client error reporter — POSTs window.onerror + unhandledrejection events to
- * `/api/client-errors` for aggregation in the Review Hub.
+ * Client error reporter — POSTs browser errors to `/api/client-errors` for
+ * aggregation in the Review Hub.
  *
- * `reportClientError({ type, error?, message?, ... })` — POSTs window.onerror + unhandledrejection
- * events to `/api/client-errors` with throttle + dedup, dropping browser-extension errors (see
- * `extensionErrors.js`) before either gate. Wired from `main.jsx`; never call directly from React
- * components.
+ * `reportClientError({ type, error?, message?, ... })` handles window errors,
+ * unhandled rejections and errors caught by React's root. It drops browser-extension
+ * errors (see `extensionErrors.js`) before throttle and dedup. Wired from `main.jsx`;
+ * never call directly from React components.
  *
  * In-memory dedup (60s window per message+stack hash) plus a 1/sec throttle
  * to keep render storms from flooding the server; both mirror the server-side

@@ -62,9 +62,13 @@ Errors include rich context for debugging:
 
 ## Browser Error Capture
 
-`main.jsx` wires `window.onerror` + `unhandledrejection` to `reportClientError`, which
-POSTs to `/api/client-errors`; the aggregator surfaces each unique group in the Review Hub
-as a `type: 'alert'` item (`metadata.category: 'client-error'`).
+`main.jsx` wires window `error` and `unhandledrejection` events and React's root
+`onCaughtError` callback to `reportClientError`. Render crashes caught by the page,
+router, or app boundary reach `/api/client-errors` while the boundary displays its
+fallback. The caught-error callback skips reports for stale chunks and boundaries
+that use `fallback={null}` or handle degradation with `onError`. The aggregator
+surfaces each unique group in the Review Hub as a `type: 'alert'` item
+(`metadata.category: 'client-error'`).
 
 ### Extension errors are filtered out
 
