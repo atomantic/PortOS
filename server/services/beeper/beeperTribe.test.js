@@ -49,8 +49,26 @@ vi.mock('../../lib/db.js', () => ({
     const s = sql.replace(/\s+/g, ' ').trim();
 
     if (/^SELECT p\.\*, c\.network, c\.account_id, tp\.deleted/.test(s)) {
+      if (/p\.source_user_id = ANY\(\$2::text\[\]\)/.test(s)) {
+        const ids = new Set(params[1] || []);
+        const rows = [...db.participants.values()]
+          .filter((r) => r.conversation_id === params[0] && ids.has(r.source_user_id))
+          .map(participantRow);
+        return { rows };
+      }
       const row = db.participants.get(pKey(params[0], params[1]));
       return { rows: row ? [participantRow(row)] : [] };
+    }
+    if (/^SELECT ti\.kind, ti\.network, ti\.handle, ti\.person_id FROM unnest/.test(s)) {
+      const [kinds = [], networks = [], handles = []] = params;
+      const rows = [];
+      for (let i = 0; i < kinds.length; i++) {
+        const personId = db.identities.get(iKey(kinds[i], networks[i], handles[i]));
+        if (personId && !db.people.get(personId)?.deleted) {
+          rows.push({ kind: kinds[i], network: networks[i], handle: handles[i], person_id: personId });
+        }
+      }
+      return { rows };
     }
     if (/^SELECT ti\.person_id FROM tribe_identities/.test(s)) {
       const personId = db.identities.get(iKey(params[0], params[1], params[2]));
@@ -93,28 +111,36 @@ vi.mock('../../lib/db.js', () => ({
       };
     }
     if (/^INSERT INTO beeper_participants/.test(s)) {
-      const [conversationId, sourceUserId, displayName, handle, observedVia] = params;
-      const key = pKey(conversationId, sourceUserId);
-      const existing = db.participants.get(key);
-      if (existing) {
-        // Honor the REAL ON CONFLICT clause: a durable handle survives an
-        // empty re-observation only while the COALESCE guard is in the SQL.
-        const guarded = /COALESCE\(NULLIF\(EXCLUDED\.handle, ''\), beeper_participants\.handle\)/.test(s);
-        db.participants.set(key, {
-          ...existing,
-          display_name: displayName,
-          handle: guarded ? (handle || existing.handle) : handle,
-          observed_via: observedVia,
-        });
+      const guarded = /COALESCE\(NULLIF\(EXCLUDED\.handle, ''\), beeper_participants\.handle\)/.test(s);
+      const applyOne = (conversationId, sourceUserId, displayName, handle, observedVia) => {
+        const key = pKey(conversationId, sourceUserId);
+        const existing = db.participants.get(key);
+        if (existing) {
+          db.participants.set(key, {
+            ...existing,
+            display_name: displayName || existing.display_name,
+            handle: guarded ? (handle || existing.handle) : handle,
+            observed_via: observedVia,
+          });
+        } else {
+          db.participants.set(key, {
+            conversation_id: conversationId,
+            source_user_id: sourceUserId,
+            display_name: displayName,
+            handle,
+            observed_via: observedVia,
+            tribe_person_id: null,
+          });
+        }
+      };
+      if (/FROM unnest/.test(s)) {
+        const [conversationId, ids = [], names = [], handles = [], vias = []] = params;
+        for (let i = 0; i < ids.length; i++) {
+          applyOne(conversationId, ids[i], names[i], handles[i], vias[i]);
+        }
       } else {
-        db.participants.set(key, {
-          conversation_id: conversationId,
-          source_user_id: sourceUserId,
-          display_name: displayName,
-          handle,
-          observed_via: observedVia,
-          tribe_person_id: null,
-        });
+        const [conversationId, sourceUserId, displayName, handle, observedVia] = params;
+        applyOne(conversationId, sourceUserId, displayName, handle, observedVia);
       }
       return { rows: [] };
     }
@@ -131,6 +157,22 @@ vi.mock('../../lib/db.js', () => ({
         rowCount++;
       }
       return { rows: [], rowCount };
+    }
+    if (/^UPDATE beeper_participants p SET tribe_person_id = u\.tribe_person_id/.test(s)) {
+      const [conversationId, ids = [], personIds = []] = params;
+      const rows = [];
+      for (let i = 0; i < ids.length; i++) {
+        const row = db.participants.get(pKey(conversationId, ids[i]));
+        if (!row) continue;
+        if (row.tribe_person_id && !db.people.get(row.tribe_person_id)?.deleted) continue;
+        row.tribe_person_id = personIds[i];
+        rows.push({
+          source_user_id: row.source_user_id,
+          tribe_person_id: row.tribe_person_id,
+          updated_at: '2026-01-01T00:00:00.000Z',
+        });
+      }
+      return { rows };
     }
     if (/^UPDATE beeper_participants SET tribe_person_id = NULL/.test(s)) {
       const row = db.participants.get(pKey(params[0], params[1]));
@@ -932,5 +974,125 @@ describe('touchpoint roster reuse', () => {
     };
     expect(await run(false)).toEqual({ created: 1, matched: 500, reads: 21, attempts: 20 });
     expect(await run(true)).toEqual({ created: 1, matched: 500, reads: 1, attempts: 20 });
+  });
+});
+
+describe('query-count reduction and batched upsertConversationParticipants (#18162)', () => {
+  it('upsertParticipant loads the participant row once and combines handle + beeper-user tribe_identities into one query', async () => {
+    seedConversation(CONVERSATION, 'discord', ACCOUNT_ID);
+    db.identities.set(iKey('handle', 'discord', 'example_handle'), CLAIMING_PERSON);
+    db.identities.set(iKey('beeper-user', ACCOUNT_ID, 'user-1'), CACHED_PERSON);
+
+    const participant = await beeperTribe.upsertParticipant({
+      conversationId: CONVERSATION,
+      sourceUserId: 'user-1',
+      displayName: 'Example Person',
+      handle: '@example_handle',
+      observedVia: 'message-sender',
+    });
+
+    expect(participant.tribePersonId).toBe(CLAIMING_PERSON);
+    const participantSelects = seenSql.filter((s) => /SELECT p\.\*, c\.network/.test(s));
+    const identitySelects = seenSql.filter((s) => /tribe_identities/.test(s));
+    expect(participantSelects).toHaveLength(1);
+    expect(identitySelects).toHaveLength(1);
+    expect(identitySelects[0].replace(/\s+/g, ' ')).toContain('FROM unnest');
+  });
+
+  it('upsertConversationParticipants batches 20 participants into 4 queries, preserves precedence/COALESCE/soft-delete, and lets logSenderTouchpoints skip re-querying', async () => {
+    seedConversation(CONVERSATION, 'whatsapp', ACCOUNT_ID);
+    const SOFT_DELETED = '44444444-4444-4444-8444-444444444444';
+    db.people.set(SOFT_DELETED, { deleted: true });
+
+    // Pre-existing participant with handle and soft-deleted cached person.
+    seedParticipant({
+      conversationId: CONVERSATION,
+      sourceUserId: 'user-soft-deleted',
+      handle: '+1 (555) 010-0011',
+      tribePersonId: SOFT_DELETED,
+      network: 'whatsapp',
+    });
+    // Pre-existing participant with cached person whose handle claim was moved elsewhere.
+    seedParticipant({
+      conversationId: CONVERSATION,
+      sourceUserId: 'user-stale-cache',
+      handle: '@example_moved',
+      tribePersonId: CACHED_PERSON,
+      network: 'whatsapp',
+    });
+    db.identities.set(iKey('handle', 'whatsapp', 'example_moved'), CLAIMING_PERSON);
+    db.identities.set(iKey('beeper-user', ACCOUNT_ID, 'user-both'), CACHED_PERSON);
+    db.identities.set(iKey('handle', 'whatsapp', 'example_both'), CLAIMING_PERSON);
+    db.identities.set(iKey('beeper-user', ACCOUNT_ID, 'user-beeper-only'), LEGACY_PHONE_PERSON);
+
+    listPeople.mockResolvedValue([
+      { id: CLAIMING_PERSON, name: 'Phone Match', phones: ['+15550100011'] },
+    ]);
+    const personIndex = await beeperTribe.loadRosterIndex();
+
+    const batch = [
+      // Duplicate sourceUserId: roster gives handle, message-sender gives observedVia without wiping handle
+      { sourceUserId: 'user-soft-deleted', displayName: 'Soft Deleted User', handle: '', observedVia: 'message-sender' },
+      { sourceUserId: 'user-stale-cache', displayName: 'Stale Cache User', handle: '', observedVia: 'message-sender' },
+      { sourceUserId: 'user-both', displayName: 'Roster Name', handle: '@example_both', observedVia: 'participant-list' },
+      { sourceUserId: 'user-both', displayName: 'Sender Name', handle: '', observedVia: 'message-sender' },
+      { sourceUserId: 'user-beeper-only', displayName: 'Beeper Only', handle: '', observedVia: 'message-sender' },
+      ...Array.from({ length: 16 }, (_, i) => ({
+        sourceUserId: `user-unlinked-${i}`,
+        displayName: `Unlinked ${i}`,
+        handle: '',
+        observedVia: i < 10 ? 'participant-list' : 'message-sender',
+      })),
+    ];
+
+    seenSql.length = 0;
+    const { participants, resolvedPersonIds } = await beeperTribe.upsertConversationParticipants(
+      CONVERSATION,
+      batch,
+      { personIndex },
+    );
+
+    expect(participants).toHaveLength(20);
+    // 1 UNNEST insert + 1 participant SELECT + 1 batched tribe_identities + 1 batched UPDATE
+    expect(seenSql).toHaveLength(4);
+    expect(seenSql[0]).toContain('INSERT INTO beeper_participants');
+    expect(seenSql[0]).toContain('FROM unnest');
+    expect(seenSql[1]).toContain('p.source_user_id = ANY($2::text[])');
+    expect(seenSql[2]).toContain('JOIN tribe_identities');
+    expect(seenSql[3]).toContain('UPDATE beeper_participants p');
+
+    const byId = new Map(participants.map((p) => [p.sourceUserId, p]));
+    // COALESCE kept existing handle on empty sender observation + soft-deleted cache replaced via phone fallback
+    expect(byId.get('user-soft-deleted').handle).toBe('+1 (555) 010-0011');
+    expect(byId.get('user-soft-deleted').tribePersonId).toBe(CLAIMING_PERSON);
+    // Deduplication kept roster handle and took message-sender observedVia + handle claim outranked beeper-user claim
+    expect(byId.get('user-both').handle).toBe('@example_both');
+    expect(byId.get('user-both').displayName).toBe('Sender Name');
+    expect(byId.get('user-both').observedVia).toBe('message-sender');
+    expect(byId.get('user-both').tribePersonId).toBe(CLAIMING_PERSON);
+    // beeper-user claim resolved
+    expect(byId.get('user-beeper-only').tribePersonId).toBe(LEGACY_PHONE_PERSON);
+    // Stale cache column stays preserved on DB row while resolvedPersonIds gives authoritative tribe_identities owner
+    expect(byId.get('user-stale-cache').tribePersonId).toBe(CACHED_PERSON);
+    expect(resolvedPersonIds.get('user-stale-cache')).toBe(CLAIMING_PERSON);
+    expect(resolvedPersonIds.get('user-unlinked-0')).toBeNull();
+
+    // logSenderTouchpoints uses resolvedPersonIds without firing any DB queries for participants/identities or reloading roster
+    seenSql.length = 0;
+    listPeople.mockClear();
+    tribeService.autoCreateTouchpoint.mockReset();
+    tribeService.autoCreateTouchpoint.mockResolvedValue({ id: 'tp-1' });
+
+    const tpResult = await beeperTribe.logSenderTouchpoints([
+      { conversationId: CONVERSATION, senderId: 'user-stale-cache', sentAt: '2026-10-03T12:00:00.000Z', network: 'whatsapp' },
+      { conversationId: CONVERSATION, senderId: 'user-unlinked-10', sentAt: '2026-10-03T12:05:00.000Z', network: 'whatsapp' },
+      { conversationId: CONVERSATION, senderId: 'user-beeper-only', sentAt: '2026-10-03T12:10:00.000Z', network: 'whatsapp' },
+    ], { resolvedPersonIds });
+
+    expect(tpResult).toEqual({ matched: 2, created: 2 });
+    expect(seenSql).toEqual([]);
+    expect(listPeople).not.toHaveBeenCalled();
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(CLAIMING_PERSON, expect.any(Object));
+    expect(tribeService.autoCreateTouchpoint).toHaveBeenCalledWith(LEGACY_PHONE_PERSON, expect.any(Object));
   });
 });

@@ -49,7 +49,7 @@ import {
   isSafeAttachmentRelativePath,
 } from '../../lib/beeperAttachmentPaths.js';
 import { getSettings } from '../settings.js';
-import { fetchAssetStream, headAsset } from './beeperClient.js';
+import { fetchAssetStream, headAsset, resolveBeeperConfig } from './beeperClient.js';
 
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 const DEFAULT_BUDGET_GB = 5;
@@ -233,7 +233,7 @@ const tooLarge = (bytes) => new ServerError(
  * declines to report `Content-Length` would otherwise get an unbounded write
  * past a ceiling the pre-flight could not see.
  */
-async function streamAssetToStore(mxcId, { maxBytes, extension, commit }) {
+async function streamAssetToStore(mxcId, { maxBytes, extension, baseUrl, token, commit }) {
   // Abort on SILENCE, not on elapsed time — see STREAM_IDLE_TIMEOUT_MS. The
   // controller is handed to the client so the abort tears down the live socket,
   // not just this side's reader. `abort()` cannot throw, which matters because
@@ -248,7 +248,7 @@ async function streamAssetToStore(mxcId, { maxBytes, extension, commit }) {
   };
   armIdle();
 
-  const response = await fetchAssetStream(mxcId, { signal: controller.signal })
+  const response = await fetchAssetStream(mxcId, { baseUrl, token, signal: controller.signal })
     .catch((err) => { clearIdle(); throw err; });
   // A 200 with no body at all: `Readable.fromWeb(null)` would throw a bare
   // TypeError from inside the store, which tells the surface nothing.
@@ -346,7 +346,7 @@ async function markUnavailable(row, message) {
  * runs without it, which is what keeps an aged-out attachment from being
  * re-requested on every paint.
  */
-export async function ensureAttachmentBytes(messageId, idx, { force = false } = {}) {
+export async function ensureAttachmentBytes(messageId, idx, { force = false, clientOptions = null } = {}) {
   const row = await loadRow(messageId, idx);
   if (!row) throw notFound();
 
@@ -380,8 +380,13 @@ export async function ensureAttachmentBytes(messageId, idx, { force = false } = 
     });
   }
 
+  const resolvedConfig = (clientOptions?.baseUrl !== undefined && clientOptions?.token !== undefined)
+    ? clientOptions
+    : await resolveBeeperConfig();
+  const { baseUrl, token } = resolvedConfig;
+
   const maxBytes = force ? Number.POSITIVE_INFINITY : BEEPER_ATTACHMENT_MAX_BYTES;
-  const head = await headAsset(row.mxc_id).catch(async (err) => {
+  const head = await headAsset(row.mxc_id, { baseUrl, token }).catch(async (err) => {
     if (err?.code === 'ASSET_UNAVAILABLE') await markUnavailable(row, err.message);
     throw err;
   });
@@ -403,7 +408,7 @@ export async function ensureAttachmentBytes(messageId, idx, { force = false } = 
   }
 
   const extension = attachmentExtension({ mimeType: row.mime_type, fileName: row.file_name });
-  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension, commit: stored => query(
+  const stored = await streamAssetToStore(row.mxc_id, { maxBytes, extension, baseUrl, token, commit: stored => query(
     `UPDATE beeper_attachments
         SET local_path = $3, byte_length = $4,
             fetched_at = NOW(), last_viewed_at = NOW(),
@@ -488,12 +493,14 @@ export async function backfillAttachments({ limit = 500 } = {}) {
   let failed = 0;
   let bytes = 0;
   let stoppedForBudget = false;
+  let clientOptions = null;
   for (const row of pending?.rows || []) {
     if (used >= budgetBytes) {
       stoppedForBudget = true;
       break;
     }
-    const result = await ensureAttachmentBytes(row.message_id, row.idx)
+    clientOptions ??= await resolveBeeperConfig();
+    const result = await ensureAttachmentBytes(row.message_id, row.idx, { clientOptions })
       .then((value) => ({ value }))
       .catch((err) => ({ err }));
     if (result.err) {
@@ -586,6 +593,7 @@ export async function evictToBudget() {
   let reclaimedBytes = 0;
   let keptUnavailable = 0;
   let failedUnlinks = 0;
+  let clientOptions = null;
   for (let attempt = 0; attempt < MAX_EVICTIONS_PER_SWEEP && used > budgetBytes; attempt += 1) {
     const candidates = await query(
       // `mxc_id IS NOT NULL` is part of the eviction RULE, not an optimisation:
@@ -603,7 +611,12 @@ export async function evictToBudget() {
     const row = candidates?.rows?.[0];
     if (!row) break;
 
-    const probe = await headAsset(row.mxc_id).then(() => null).catch((err) => err);
+    if (!clientOptions) {
+      const resolved = await resolveBeeperConfig().catch((err) => err);
+      if (resolved instanceof Error) break;
+      clientOptions = { baseUrl: resolved?.baseUrl, token: resolved?.token ?? null };
+    }
+    const probe = await headAsset(row.mxc_id, clientOptions).then(() => null).catch((err) => err);
     if (probe?.code === 'ASSET_UNAVAILABLE') {
       await markUnavailable(row, probe.message);
       keptUnavailable += 1;

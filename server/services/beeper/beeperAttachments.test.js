@@ -46,14 +46,19 @@ vi.mock('./beeperClient.js', () => {
       this.retryable = retryable;
     }
   }
-  return { BeeperApiError: MockBeeperApiError, headAsset: vi.fn(), fetchAssetStream: vi.fn() };
+  return {
+    BeeperApiError: MockBeeperApiError,
+    headAsset: vi.fn(),
+    fetchAssetStream: vi.fn(),
+    resolveBeeperConfig: vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:23373', token: 'test-token' })),
+  };
 });
 vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => tempRoot }));
 
 import { query } from '../../lib/db.js';
 import { getSettings } from '../settings.js';
-import { BeeperApiError, headAsset, fetchAssetStream } from './beeperClient.js';
+import { BeeperApiError, headAsset, fetchAssetStream, resolveBeeperConfig } from './beeperClient.js';
 import {
   attachmentsRoot,
   backfillAttachments,
@@ -845,5 +850,101 @@ describe('attachment snapshot publication', () => {
     expect(await sweep).toMatchObject({ orphansRemoved: 0 });
     expect(table.row().local_path).not.toBeNull();
     expect(existsSync(first.filePath)).toBe(true);
+  });
+});
+
+describe('vaulted Beeper token caching across attachment operations (#18162)', () => {
+  it('ensureAttachmentBytes resolves Beeper config once per call and passes { baseUrl, token } to both headAsset and fetchAssetStream', async () => {
+    respondTo([['FROM beeper_attachments WHERE message_id', { rows: [attachmentRow()] }]]);
+    vi.mocked(resolveBeeperConfig).mockResolvedValue({ baseUrl: 'http://127.0.0.1:24444', token: 'cached-token' });
+    vi.mocked(headAsset).mockResolvedValue({ bytes: 4 });
+    vi.mocked(fetchAssetStream).mockResolvedValue(streamResponse([new Uint8Array([1, 2, 3, 4])]));
+
+    await ensureAttachmentBytes('msg-example-1', 0);
+
+    expect(vi.mocked(resolveBeeperConfig)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(headAsset)).toHaveBeenCalledWith('mxc://example.invalid/abc', {
+      baseUrl: 'http://127.0.0.1:24444', token: 'cached-token',
+    });
+    expect(vi.mocked(fetchAssetStream)).toHaveBeenCalledWith(
+      'mxc://example.invalid/abc',
+      expect.objectContaining({ baseUrl: 'http://127.0.0.1:24444', token: 'cached-token' }),
+    );
+  });
+
+  it('ensureAttachmentBytes reuses caller-supplied clientOptions without resolving again', async () => {
+    respondTo([['FROM beeper_attachments WHERE message_id', { rows: [attachmentRow()] }]]);
+    vi.mocked(headAsset).mockResolvedValue({ bytes: 4 });
+    vi.mocked(fetchAssetStream).mockResolvedValue(streamResponse([new Uint8Array([1, 2, 3, 4])]));
+
+    await ensureAttachmentBytes('msg-example-1', 0, {
+      clientOptions: { baseUrl: 'http://127.0.0.1:25555', token: 'caller-token' },
+    });
+
+    expect(vi.mocked(resolveBeeperConfig)).not.toHaveBeenCalled();
+    expect(vi.mocked(headAsset)).toHaveBeenCalledWith('mxc://example.invalid/abc', {
+      baseUrl: 'http://127.0.0.1:25555', token: 'caller-token',
+    });
+    expect(vi.mocked(fetchAssetStream)).toHaveBeenCalledWith(
+      'mxc://example.invalid/abc',
+      expect.objectContaining({ baseUrl: 'http://127.0.0.1:25555', token: 'caller-token' }),
+    );
+  });
+
+  it('backfillAttachments resolves Beeper config once across multiple attachments', async () => {
+    const pending = [
+      { message_id: 'msg-example-1', idx: 0 },
+      { message_id: 'msg-example-2', idx: 0 },
+      { message_id: 'msg-example-3', idx: 0 },
+    ];
+    respondTo([
+      ['ORDER BY created_at ASC', { rows: pending }],
+      ['unique_files', { rows: [{ bytes: '0', files: 0 }] }],
+      ['FROM beeper_attachments WHERE message_id', { rows: [attachmentRow()] }],
+    ]);
+    vi.mocked(resolveBeeperConfig).mockResolvedValue({ baseUrl: 'http://127.0.0.1:23373', token: 'backfill-token' });
+    vi.mocked(headAsset).mockResolvedValue({ bytes: 4 });
+    vi.mocked(fetchAssetStream).mockImplementation(async () => streamResponse([new Uint8Array([1, 2, 3, 4])]));
+
+    const result = await backfillAttachments({ limit: 10 });
+
+    expect(result.fetched).toBe(3);
+    expect(vi.mocked(resolveBeeperConfig)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(headAsset).mock.calls.every(([, opts]) => opts?.token === 'backfill-token')).toBe(true);
+    expect(vi.mocked(fetchAssetStream).mock.calls.every(([, opts]) => opts?.token === 'backfill-token')).toBe(true);
+  });
+
+  it('evictToBudget resolves Beeper config once across multiple candidate probes', async () => {
+    const relA = `aa/${'a'.repeat(64)}.png`;
+    const relB = `bb/${'b'.repeat(64)}.png`;
+    for (const rel of [relA, relB]) {
+      mkdirSync(join(attachmentsRoot(), rel.split('/')[0]), { recursive: true });
+      writeFileSync(join(attachmentsRoot(), rel), Buffer.alloc(16));
+    }
+    const queue = [
+      { message_id: 'msg-1', idx: 0, mxc_id: 'mxc://example.invalid/1', local_path: relA, byte_length: 16 },
+      { message_id: 'msg-2', idx: 0, mxc_id: 'mxc://example.invalid/2', local_path: relB, byte_length: 16 },
+    ];
+    let used = 10 * 1024 * 1024 * 1024;
+    vi.mocked(query).mockImplementation(async (sql) => {
+      const flat = String(sql).replace(/\s+/g, ' ');
+      if (flat.includes('unique_files')) return { rows: [{ bytes: String(used), files: 2 }] };
+      if (flat.includes('ORDER BY last_viewed_at ASC NULLS FIRST')) {
+        const next = queue.shift();
+        return { rows: next ? [next] : [] };
+      }
+      if (flat.includes('SET local_path = NULL')) { used -= 16; return { rows: [] }; }
+      if (flat.includes('WHERE local_path = $1 LIMIT 1')) return { rows: [] };
+      return { rows: [] };
+    });
+    vi.mocked(resolveBeeperConfig).mockResolvedValue({ baseUrl: 'http://127.0.0.1:23373', token: 'evict-token' });
+    vi.mocked(headAsset).mockResolvedValue({ bytes: 16 });
+
+    const result = await evictToBudget();
+
+    expect(result.evicted).toBe(2);
+    expect(vi.mocked(resolveBeeperConfig)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(headAsset)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(headAsset).mock.calls.every(([, opts]) => opts?.token === 'evict-token')).toBe(true);
   });
 });
