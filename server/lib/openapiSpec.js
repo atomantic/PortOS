@@ -77,14 +77,24 @@ const generatedOperation = (operation) => {
 
 // The contract's schemas are JSON Schema; this document declares 3.0.3, so they
 // convert on the way in. Generated operations model no schemas and need none.
-const modeledOperation = (operation, contract) => toOpenApi30Operation({
-  ...generatedOperation(operation),
-  ...contract,
-  operationId: apiOperationId(operation.method, operation.path),
-  tags: [operation.domain],
-  security: operation.access === 'always-public' ? [] : authenticatedSecurity,
-  'x-portos-contract-status': 'modeled',
-});
+const modeledOperation = (operation, contract) => {
+  const generated = generatedOperation(operation);
+  const contractParams = contract.parameters ?? [];
+  const declaredNames = new Set(contractParams.map((param) => `${param.in}:${param.name}`));
+  const missingPathParams = (generated.parameters ?? []).filter(
+    (param) => param.in === 'path' && !declaredNames.has(`path:${param.name}`),
+  );
+  const parameters = [...missingPathParams, ...contractParams];
+  return toOpenApi30Operation({
+    ...generated,
+    ...contract,
+    ...(parameters.length ? { parameters } : {}),
+    operationId: apiOperationId(operation.method, operation.path),
+    tags: [operation.domain],
+    security: operation.access === 'always-public' ? [] : authenticatedSecurity,
+    'x-portos-contract-status': 'modeled',
+  });
+};
 
 /** Build the OpenAPI document for public APIs currently exposed in Settings. */
 export const buildOpenApiSpec = (settings, { baseUrl, version = '0.0.0' } = {}) => {
