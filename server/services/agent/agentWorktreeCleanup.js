@@ -31,6 +31,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { execGit } from '../../lib/execGit.js';
 import { doneSentinelCandidateNames } from '../../lib/agent/agentSentinel.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../../lib/taskRetryHold.js';
+import { DELIVERY_RECOVERY_BLOCKED_CATEGORIES } from '../../lib/taskBlockCategories.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
@@ -1210,7 +1211,7 @@ export async function releaseRetryHold({ agentId, task, success, agentMetadata, 
   });
   if (!persisted) return {};
 
-  if (persisted.status === 'blocked' && ['task-approval', 'task-recovery-exhausted', 'runtime-verification'].includes(persisted.metadata?.blockedCategory)) {
+  if (persisted.status === 'blocked' && DELIVERY_RECOVERY_BLOCKED_CATEGORIES.has(persisted.metadata?.blockedCategory)) {
     if (persisted.metadata.deliveryDecisionAgentId !== agentId) return {};
     const metadata = agentMetadata === undefined ? (await getAgentRecord(agentId))?.metadata : agentMetadata;
     const patch = persisted.metadata.blockedCategory === 'runtime-verification'
@@ -1739,8 +1740,11 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   const branch = agent?.metadata?.worktreeBranch || agent?.metadata?.claimBranch
     || cleanupWarnings.map(warning => warning.match(/(?:Auto-merge failed|PR creation failed) for branch (\S+?)(?=:|\s|$)/)?.[1]).find(Boolean);
   if (branch) {
+    const worktreePath = agent?.metadata?.isWorktree
+      ? (agent.metadata.workspacePath || join(PATHS.worktrees, agentId))
+      : (agent?.metadata?.worktreePath || null);
     const recorded = await recordCleanupOutcome(agentId, { status: 'pending', reason: 'cleanup-warning-pending', branch,
-      path: agent?.metadata?.worktreePath || null, warnings: cleanupWarnings, sourceWorkspace, taskId: task?.id || null });
+      path: worktreePath, warnings: cleanupWarnings, sourceWorkspace, taskId: task?.id || null });
     if (!recorded) throw new Error('cleanup-warning-receipt-unavailable');
   }
   const pending = await recordRepoStateVerification(agentId, { status: 'pending', reasons: ['cleanup-warning-pending'] });

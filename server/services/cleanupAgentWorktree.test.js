@@ -1806,6 +1806,19 @@ describe('releaseRetryHold', () => {
     }) }, 'user', { expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
   });
 
+  it.each(['internal-dependency', 'internal-dependency-unverified'])('records a resume pointer for %s when deliveryDecisionAgentId matches', async blockedCategory => {
+    getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' } });
+    git.getWorktreeBranches.mockResolvedValue(new Set([DEAD_BRANCH]));
+    existsSyncMock.mockReturnValue(true);
+    const patch = await releaseRetryHold({ agentId: 'agent-x', task: task(), success: false, agentMetadata });
+    expect(patch).toEqual({
+      existingBranch: DEAD_BRANCH, resumedFromAgentId: 'agent-x', resumeWorktreePath: DEAD_TREE,
+    });
+    expect(updateTask).toHaveBeenCalledWith('task-1', { metadata: patch }, 'user', {
+      expectedStatus: 'blocked', expectedMetadata: { blockedCategory, blockedAt: 'now', deliveryDecisionAgentId: 'agent-x' },
+    });
+  });
+
   it('retains an already-merged checkout for runtime verification and never makes it pending', async () => {
     getTaskById.mockResolvedValue({ id: 'task-1', status: 'blocked', metadata: {
       blockedCategory: 'runtime-verification', blockedAt: 'now', deliveryDecisionAgentId: 'agent-x',
@@ -2363,6 +2376,19 @@ describe('cleanup warning recovery', () => {
       status: 'pending', reason: 'cleanup-warning-pending', taskId: 'original',
     }));
     expect(recordRepoStateVerification).toHaveBeenCalledWith('agent-1', { status: 'pending', reasons: ['cleanup-warning-pending'] });
+  });
+
+  it('passes the registered worktree workspacePath to recordCleanupOutcome', async () => {
+    const { recordCleanupOutcome } = await import('./cos/cosAgentLifecycle.js');
+    vi.clearAllMocks();
+    getAgentRecord.mockResolvedValueOnce({
+      metadata: { isWorktree: true, worktreeBranch: 'claim/example', workspacePath: '/mock/worktrees/agent-1' },
+    });
+    await spawnMergeRecoveryTask(['PR creation failed for branch claim/example: unavailable forge'], 'agent-1',
+      { id: 'original' }, 'Example', '/mock/workspace');
+    expect(recordCleanupOutcome).toHaveBeenCalledWith('agent-1', expect.objectContaining({
+      status: 'pending', reason: 'cleanup-warning-pending', branch: 'claim/example', path: '/mock/worktrees/agent-1', taskId: 'original',
+    }));
   });
 });
 
