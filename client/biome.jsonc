@@ -63,7 +63,7 @@
         "useAltText": "error",
         "useAriaPropsForRole": "error",
         "useValidAriaProps": "error",
-        "noLabelWithoutControl": "error",
+        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftNumberInput"] } },
         "useKeyWithClickEvents": "error",
         "noNoninteractiveElementToInteractiveRole": "error",
         "useFocusableInteractive": "error",

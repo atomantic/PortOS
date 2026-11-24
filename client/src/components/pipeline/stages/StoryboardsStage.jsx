@@ -46,6 +46,7 @@ import { matchCharactersInText } from '../../../lib/scenePrompt';
 import MediaJobThumb from '../MediaJobThumb';
 import ImagePromptCandidates, { PromptCountInput } from '../ImagePromptCandidates';
 import { genConfigToImageOptions, genConfigToRefineOptions, IMAGE_PROMPT_COUNT_DEFAULT } from './VisualGenSettings';
+import DraftNumberInput from '../../ui/DraftNumberInput';
 
 const STORYBOARD_CHANGE_EVENTS = ['storyboard:changed'];
 
@@ -863,12 +864,11 @@ function ShotList({
                   </div>
                 </div>
                 <div className="flex flex-col gap-1 w-24">
-                  <input
-                    type="number"
+                  <DraftNumberInput
                     min={1}
                     max={30}
                     value={shot.durationSeconds ?? 4}
-                    onChange={(e) => onUpdateShot(j, { durationSeconds: Number(e.target.value) || 4 })}
+                    onCommit={(durationSeconds) => onUpdateShot(j, { durationSeconds })}
                     onBlur={onBlurShot}
                     title="Duration in seconds"
                     aria-label={`Shot ${j + 1} duration in seconds`}

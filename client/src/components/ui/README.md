@@ -23,6 +23,7 @@ accessibility). Feature-specific components live under their own feature directo
 | `ConnectionStatusDot` | Live-transport status dot — coloured by connection state, with a caption and the state word. |
 | `CopyableId` | Click-to-copy record-id badge — short prefix shown, full id copied. |
 | `diffRuns` | Renders `{ text, changed }` runs from `diffWords` as highlighted nodes (shared by the diff views). |
+| `DraftNumberInput` | Number input that keeps the typed text until blur while committing the clamped value, so a minimum never rewrites a half-typed number. |
 | `FilePickerButton` | Opens the OS file picker, styled as a button or as a whole drop target. |
 | `FormField` | Accessible config-field wrapper — generates an id and wires `<label htmlFor>` to the input; `compact` preserves dense editor-label styling. |
 | `HunkDiff` | Hunked side-by-side diff for long texts, with unchanged runs collapsed. |

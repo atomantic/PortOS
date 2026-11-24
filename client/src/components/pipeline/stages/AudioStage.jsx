@@ -38,6 +38,7 @@ import {
   PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
 } from '../../../services/apiPipeline.js';
+import DraftNumberInput from '../../ui/DraftNumberInput';
 
 // The whole-episode audio strategy (#863). 'per-clip' keeps each stitched
 // clip's own soundtrack (today's default); 'silent' strips it; 'generated'
@@ -1098,21 +1099,13 @@ export default function AudioStage({ issue, onStageUpdate }) {
                         <label htmlFor="musicgen-duration" className="block text-xs text-gray-400 mb-1">
                           Length (s)
                         </label>
-                        <input
+                        <DraftNumberInput
                           id="musicgen-duration"
-                          type="number"
                           min={activeEngine.minDurationSec ?? 1}
                           max={activeEngine.maxDurationSec ?? 30}
                           step="1"
                           value={genDuration}
-                          onChange={(e) => {
-                            // Clamp to the engine's accepted range so a blank/typed
-                            // out-of-range value can't 400 on Generate. NaN → default.
-                            const min = activeEngine.minDurationSec ?? 1;
-                            const max = activeEngine.maxDurationSec ?? 30;
-                            const n = Number(e.target.value);
-                            setGenDuration(Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : (activeEngine.defaultDurationSec ?? 12));
-                          }}
+                          onCommit={setGenDuration}
                           className="w-24 px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-sm"
                         />
                       </div>
