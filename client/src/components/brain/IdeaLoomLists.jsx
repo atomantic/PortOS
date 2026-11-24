@@ -13,6 +13,7 @@ import {
   syncIdeaLoomToObsidian,
 } from '../../services/apiBrain.js';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import useUrlParams from '../../hooks/useUrlParams';
@@ -105,7 +106,7 @@ export default function IdeaLoomLists() {
   // `overrides` lets a one-click action (completing a list) persist through the
   // same validated path instead of a second endpoint, so it can never drop the
   // edits already sitting in the draft.
-  const save = async (overrides = {}) => {
+  const [save, saving] = useAsyncAction(async (overrides = {}) => {
     const next = { ...draft, ...overrides };
     const problem = missingField(next);
     if (problem) {
@@ -125,7 +126,7 @@ export default function IdeaLoomLists() {
     setDraft({ ...saved, ideas: [...(saved.ideas || [])] });
     select(saved.id);
     toast.success(next.id ? 'List saved' : 'List created');
-  };
+  });
 
   const remove = async (id) => {
     const result = await deleteIdeaLoomList(id, { silent: true }).catch((error) => {
@@ -235,7 +236,7 @@ export default function IdeaLoomLists() {
           <div className="mt-5"><h3 className="mb-2 text-sm font-medium text-white">Ordered ideas</h3><div className="space-y-2">{(draft.ideas || []).map((idea, index) => <div className="flex items-center gap-1" key={`${index}-${idea}`}><span className="w-6 text-right text-xs text-gray-500">{index + 1}.</span><input value={idea} onChange={(event) => { const ideas = [...draft.ideas]; ideas[index] = event.target.value; updateDraft('ideas', ideas); }} aria-label={`Idea ${index + 1}`} className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 text-sm text-white" /><button type="button" onClick={() => moveIdea(index, -1)} disabled={index === 0} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} up`}><ArrowUp size={16} /></button><button type="button" onClick={() => moveIdea(index, 1)} disabled={index === draft.ideas.length - 1} className="min-h-[44px] min-w-[44px] text-gray-400 disabled:opacity-30" aria-label={`Move idea ${index + 1} down`}><ArrowDown size={16} /></button><button type="button" onClick={() => updateDraft('ideas', draft.ideas.filter((_, itemIndex) => itemIndex !== index))} className="min-h-[44px] min-w-[44px] text-gray-400 hover:text-port-error" aria-label={`Remove idea ${index + 1}`}><X size={16} /></button></div>)}</div>
             <div className="mt-2 flex gap-2"><input value={ideaText} onChange={(event) => setIdeaText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addIdea(); } }} aria-label="New idea" placeholder="Add an idea" className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 text-sm text-white" /><button type="button" onClick={addIdea} aria-label="Add idea" className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 min-h-[44px] rounded px-3 text-port-accent hover:bg-port-accent/10"><Plus size={16} /></button></div>
           </div>
-          <div className="mt-5 flex flex-wrap gap-2"><button type="button" onClick={() => save()} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Save size={16} />Save list</button>{draft.id && <button type="button" onClick={() => save({ status: draft.status === 'completed' ? 'draft' : 'completed' })} aria-label={draft.status === 'completed' ? 'Mark list draft' : 'Mark list completed'} className="flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-gray-300 hover:bg-port-border/50"><CheckCircle2 size={16} />Mark {draft.status === 'completed' ? 'draft' : 'completed'}</button>}</div>
+          <div className="mt-5 flex flex-wrap gap-2"><button type="button" disabled={saving} onClick={() => save()} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30 disabled:opacity-50"><Save size={16} />Save list</button>{draft.id && <button type="button" disabled={saving} onClick={() => save({ status: draft.status === 'completed' ? 'draft' : 'completed' })} aria-label={draft.status === 'completed' ? 'Mark list draft' : 'Mark list completed'} className="flex min-h-[44px] items-center gap-2 rounded px-3 text-sm text-gray-300 hover:bg-port-border/50"><CheckCircle2 size={16} />Mark {draft.status === 'completed' ? 'draft' : 'completed'}</button>}</div>
         </>}
       </div>
     </section>

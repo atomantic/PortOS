@@ -352,10 +352,13 @@ export default function InboxTab({ accounts }) {
     }));
   };
 
+  const draftingReplyRef = useRef(new Set());
   const handleQuickReply = async (msg, e) => {
     e.stopPropagation();
+    if (draftingReplyRef.current.has(msg.id)) return;
     const account = accountList.find(a => a.id === msg.accountId) || accountList[0];
     if (!account) return toast.error('No account available');
+    draftingReplyRef.current.add(msg.id);
     toast('Generating AI reply...', { icon: '✨' });
     const draft = await generateMessageDraft({
       accountId: account.id,
@@ -363,7 +366,7 @@ export default function InboxTab({ accounts }) {
       threadId: msg.threadId,
       context: `Replying to: "${msg.subject}" from ${msg.from?.name || msg.from?.email}`,
       instructions: ''
-    }).catch(() => null);
+    }).catch(() => null).finally(() => draftingReplyRef.current.delete(msg.id));
     if (draft) {
       toast.success('Draft created — opening Drafts');
       navigate('/messages/drafts');

@@ -212,6 +212,19 @@ describe('Tribe care filter', () => {
     expect(await screen.findByText('Last 2026-01-01')).toBeTruthy();
   });
 
+  it('logs one touch when Touch is clicked again before the first request answers', async () => {
+    let answer;
+    createTribeTouchpoint.mockClear();
+    createTribeTouchpoint.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    renderAt('/tribe');
+    await screen.findByText('Example Person');
+    const touch = screen.getAllByRole('button', { name: 'Touch' })[0];
+    fireEvent.click(touch);
+    fireEvent.click(touch);
+    await act(async () => answer({ id: 'touch-1' }));
+    expect(createTribeTouchpoint).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the page mounted while a tribe:changed reload is in flight', async () => {
     getTribePeople.mockResolvedValue({ people: PEOPLE });
     renderAt('/tribe');

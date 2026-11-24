@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, Save, X } from 'lucide-react';
 import toast from '../../ui/Toast';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import FormField from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
@@ -92,7 +93,7 @@ export function toPayload(form, appId) {
   return payload;
 }
 
-function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, providers, activeProviderId, dataInputCatalog }) {
+function TaskForm({ form, setForm, onSave, saving = false, onCancel, saveLabel, timezone, providers, activeProviderId, dataInputCatalog }) {
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
 
   return (
@@ -156,7 +157,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel, timezone, provid
         <button onClick={onCancel} className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors">
           <X size={14} /> Cancel
         </button>
-        <button onClick={onSave} className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors">
+        <button onClick={onSave} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50">
           <Save size={14} /> {saveLabel}
         </button>
       </div>
@@ -235,7 +236,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
   // silent here), so catches just return null — guarding on the result avoids a
   // second toast and the success-on-error footgun. Deliberate 200 `skipped`
   // outcomes are NOT toasted by the helper, so those branches toast explicitly.
-  const handleCreate = async () => {
+  const [handleCreate, creating] = useAsyncAction(async () => {
     if (!validate(createForm)) return;
     const created = await createCosJob(toPayload(createForm, appId)).catch(() => null);
     if (!created) return;
@@ -243,7 +244,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
     setCreateForm(emptyForm());
     setShowCreate(false);
     fetchTasks();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId).catch(() => null);
@@ -295,6 +296,7 @@ export default function CustomTasksSection({ appId, appName, providerCatalog, ac
           form={createForm}
           setForm={setCreateForm}
           onSave={handleCreate}
+          saving={creating}
           onCancel={() => setShowCreate(false)}
           saveLabel="Create"
           timezone={timezone}

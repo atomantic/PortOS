@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timer, Play, StopCircle, X, FilePlus } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {
   listWritersRoomExercises,
   createWritersRoomExercise,
@@ -57,7 +58,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
   const wordsAdded = useMemo(() => countWords(text), [text]);
   const expired = active && remaining <= 0;
 
-  const start = async () => {
+  const [start, starting] = useAsyncAction(async () => {
     // Word count lives on the active draft metadata, not the work root, so
     // walk drafts → activeDraftVersionId before falling back to a top-level
     // wordCount (which only the listWorks summary exposes).
@@ -76,7 +77,7 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
     setActive(session);
     setText('');
     setNow(Date.now());
-  };
+  });
 
   const finishSession = async ({ keep } = { keep: true }) => {
     if (!active) return;
@@ -181,7 +182,8 @@ export default function ExercisePanel({ activeWork, onClose, editorDirty = false
 
           <button
             onClick={start}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-accent text-white text-sm font-medium rounded hover:bg-port-accent/80"
+            disabled={starting}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-port-accent text-white text-sm font-medium rounded hover:bg-port-accent/80 disabled:opacity-50"
           >
             <Play size={14} /> Start
           </button>

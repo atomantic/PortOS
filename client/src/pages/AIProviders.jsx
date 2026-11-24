@@ -2,6 +2,7 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import { getApps } from '../services/apiApps.js';
 import {
   getSampleProviders,
@@ -627,7 +628,7 @@ export default function AIProviders() {
     }
   };
 
-  const handleExecuteRun = async () => {
+  const [handleExecuteRun, startingRun] = useAsyncAction(async () => {
     if (!runPrompt.trim() || !activeProviderId) return;
 
     setRunOutput('');
@@ -646,7 +647,7 @@ export default function AIProviders() {
     }
 
     setActiveRun(result.runId);
-  };
+  });
 
   const handleStopRun = async () => {
     if (activeRun) {
@@ -697,7 +698,7 @@ export default function AIProviders() {
     return updated;
   };
 
-  const handleAddAllSamples = async () => {
+  const [handleAddAllSamples, addingAllSamples] = useAsyncAction(async () => {
     if (addableSamples.length === 0) return;
 
     const succeededIds = [];
@@ -723,7 +724,7 @@ export default function AIProviders() {
     } else {
       toast.warning(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}, ${failedIds.length} failed`);
     }
-  };
+  });
 
   const handleRuntimeInstallComplete = () => {
     toast.success(`${installingRuntime?.label || 'Runtime'} installed and ready to test`);
@@ -987,6 +988,7 @@ export default function AIProviders() {
           addingSample={addingSample}
           onAddSample={handleAddSample}
           onAddAllSamples={handleAddAllSamples}
+          addingAllSamples={addingAllSamples}
           showRunPanel={showRunPanel}
           apps={apps}
           appsState={appsState}
@@ -1000,6 +1002,7 @@ export default function AIProviders() {
           runOutput={runOutput}
           runProviderIsTui={runProviderIsTui}
           onExecuteRun={handleExecuteRun}
+          startingRun={startingRun}
           onStopRun={handleStopRun}
           compositionCatalog={compositionCatalog}
           onCompose={setComposeInitial}

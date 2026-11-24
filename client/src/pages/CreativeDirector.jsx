@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { useAsyncAction } from '../hooks/useAsyncAction';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import OverflowMenu from '../components/ui/OverflowMenu';
 import {
@@ -140,7 +141,7 @@ export default function CreativeDirector() {
     return next;
   }, { replace: true });
 
-  const handleCreate = async (e) => {
+  const [handleCreate, creating] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.modelId) {
       toast.error('Name and model are required');
@@ -176,7 +177,7 @@ export default function CreativeDirector() {
     } catch (err) {
       toast.error(err.message || 'Failed to create project');
     }
-  };
+  });
 
   const openDirective = () => {
     setDirectiveName('');
@@ -478,7 +479,7 @@ export default function CreativeDirector() {
             />
           </label>
           <div className="flex gap-2">
-            <button type="submit" className="bg-port-accent hover:bg-port-accent/80 text-white px-3 py-1.5 rounded text-sm">
+            <button type="submit" disabled={creating} className="bg-port-accent hover:bg-port-accent/80 text-white px-3 py-1.5 rounded text-sm disabled:opacity-50">
               Create
             </button>
             <button type="button" onClick={() => { setShowForm(false); clearRemix(); }} className="bg-port-card border border-port-border px-3 py-1.5 rounded text-sm">

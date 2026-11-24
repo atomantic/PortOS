@@ -4,6 +4,7 @@ import { getEyeExams, addEyeExam, updateEyeExam, removeEyeExam } from '../../../
 import BrailleSpinner from '../../BrailleSpinner';
 import LoadFailureNotice from '../LoadFailureNotice';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import { localDateKey } from '../../../utils/formatters';
 import BodyCompChart from '../BodyCompChart';
@@ -56,13 +57,14 @@ export default function BodyTab() {
     fetchEyes();
   }, [fetchEyes]);
 
-  const handleAddEye = async () => {
+  const [handleAddEye, addingEye] = useAsyncAction(async () => {
     if (!eyeForm.date) return;
-    const exam = await addEyeExam(buildEyePayload(eyeForm));
+    const exam = await addEyeExam(buildEyePayload(eyeForm)).catch(() => null);
+    if (!exam) return;
     setEyeData(prev => ({ ...prev, exams: sortEyeExams([...(prev?.exams || []), exam]) }));
     setEyeForm(EMPTY_EYE_FORM);
     setShowEyeForm(false);
-  };
+  });
 
   const startEditEye = (exam) => {
     setEditingEyeId(exam.id);
@@ -79,7 +81,8 @@ export default function BodyTab() {
 
   const handleUpdateEye = async () => {
     if (editingEyeId == null) return;
-    const updated = await updateEyeExam(editingEyeId, buildEyePayload(eyeForm));
+    const updated = await updateEyeExam(editingEyeId, buildEyePayload(eyeForm)).catch(() => null);
+    if (!updated) return;
     setEyeData(prev => ({
       ...prev,
       exams: sortEyeExams(prev.exams.map(e => e.id === editingEyeId ? updated : e))
@@ -89,7 +92,8 @@ export default function BodyTab() {
   };
 
   const handleDeleteEye = async (id) => {
-    await removeEyeExam(id);
+    const removed = await removeEyeExam(id).then(() => true, () => false);
+    if (!removed) return;
     setEyeData(prev => ({ ...prev, exams: prev.exams.filter(e => e.id !== id) }));
   };
 
@@ -180,7 +184,7 @@ export default function BodyTab() {
             <div className="flex gap-2">
               <button
                 onClick={editingEyeId != null ? handleUpdateEye : handleAddEye}
-                disabled={!eyeForm.date}
+                disabled={addingEye || !eyeForm.date}
                 className="flex items-center gap-1 px-3 py-1 bg-port-accent/20 text-port-accent rounded text-sm hover:bg-port-accent/30 disabled:opacity-40"
               >
                 <Check size={14} /> {editingEyeId != null ? 'Save' : 'Add'}

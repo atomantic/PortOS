@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import {Plus, Trash2, ChevronDown, ChevronRight,
   Activity, Pill, Heart, CheckCircle, Calendar, FlameKindling} from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
@@ -90,7 +91,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
     }
   }, [fetchData]);
 
-  const handleAddCustom = useCallback(async () => {
+  const [handleAddCustom, addingCustom] = useAsyncAction(async () => {
     if (!customForm.name.trim()) {
       toast.error('Name is required');
       return;
@@ -102,7 +103,7 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
       setShowAdd(false);
       await fetchData();
     }
-  }, [customForm, fetchData]);
+  });
 
   const handleLog = useCallback(async (id) => {
     const amount = parseFloat(logAmounts[id]);
@@ -220,7 +221,8 @@ export default function EpigeneticTracker({ markerCategories = [] }) {
           <div className="flex gap-2">
             <button
               onClick={handleAddCustom}
-              className="px-3 py-1.5 bg-port-accent/20 text-port-accent border border-port-accent/30 rounded text-sm hover:bg-port-accent/30"
+              disabled={addingCustom}
+              className="px-3 py-1.5 bg-port-accent/20 text-port-accent border border-port-accent/30 rounded text-sm hover:bg-port-accent/30 disabled:opacity-50"
             >
               Add
             </button>

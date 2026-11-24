@@ -6,6 +6,7 @@ import {
 } from '@dnd-kit/core';
 import { createFreeDroppableKeyboardCoordinates, keyboardAwareCollisionDetection } from '../../lib/dndKeyboardCoordinates';
 import toast from '../ui/Toast';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import { formatCount } from '../../utils/formatters';
@@ -64,7 +65,7 @@ export default function LibraryPane({
 
   const toggleFolder = (id) => setOpenFolders((s) => ({ ...s, [id]: !s[id] }));
 
-  const submitFolder = async (e) => {
+  const [submitFolder, savingFolder] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!folderName.trim()) return;
     const folder = await createWritersRoomFolder({ name: folderName.trim() }, { silent: true }).catch((err) => {
@@ -76,9 +77,9 @@ export default function LibraryPane({
     setCreatingFolder(false);
     setOpenFolders((s) => ({ ...s, [folder.id]: true }));
     onRefresh?.({ folder });
-  };
+  });
 
-  const submitWork = async (e) => {
+  const [submitWork, savingWork] = useAsyncAction(async (e) => {
     e.preventDefault();
     if (!workTitle.trim()) return;
     const folderId = creatingWork === 'unfiled' ? null : creatingWork;
@@ -92,7 +93,7 @@ export default function LibraryPane({
     onCreatingWorkChange(null);
     onRefresh?.({ work });
     onSelectWork?.(work.id);
-  };
+  });
 
   const handleDeleteFolder = (id) => confirmDelete(async () => {
     const result = await deleteWritersRoomFolder(id, { silent: true }).catch((err) => {
@@ -258,7 +259,7 @@ export default function LibraryPane({
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-w-0 min-h-[44px]"
           />
           <div className="flex items-center gap-1">
-            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px]">Add</button>
+            <button type="submit" disabled={savingFolder} className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px] disabled:opacity-50">Add</button>
             <button type="button" onClick={() => { setCreatingFolder(false); setFolderName(''); }}
               className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
           </div>
@@ -284,7 +285,7 @@ export default function LibraryPane({
             {Object.entries(KIND_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           </select>
           <div className="flex items-center gap-1">
-            <button type="submit" className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px]">Create</button>
+            <button type="submit" disabled={savingWork} className="text-xs px-2 py-1 bg-port-accent text-white rounded flex-1 min-h-[44px] disabled:opacity-50">Create</button>
             <button type="button" onClick={() => onCreatingWorkChange(null)} className="text-xs px-2 py-1 text-gray-400 min-w-[44px] min-h-[44px]">Cancel</button>
           </div>
         </form>

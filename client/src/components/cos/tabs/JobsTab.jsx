@@ -2,6 +2,7 @@ import { sortByLabel } from '../../../lib/sortByLabel.js';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { getApps } from '../../../services/apiApps.js';
 import { getCosJobs, createCosJob, toggleCosJob, triggerCosJob, deleteCosJob } from '../../../services/apiAgents.js';
 import { getProviders } from '../../../services/apiProviders.js';
@@ -111,7 +112,7 @@ export default function JobsTab() {
     [rawProviders, jobs]
   );
 
-  const handleCreate = async () => {
+  const [handleCreate, creating] = useAsyncAction(async () => {
     if (!newJob.name.trim()) {
       toast.error('Name is required');
       return;
@@ -144,7 +145,7 @@ export default function JobsTab() {
     setNewJob(INITIAL_JOB);
     setShowCreate(false);
     fetchJobs();
-  };
+  });
 
   const handleToggle = async (jobId) => {
     const result = await toggleCosJob(jobId, { silent: true }).catch(err => {
@@ -366,7 +367,8 @@ export default function JobsTab() {
               </button>
               <button
                 onClick={handleCreate}
-                className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors"
+                disabled={creating}
+                className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
               >
                 <Plus size={14} />
                 Create Job
