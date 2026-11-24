@@ -26,6 +26,11 @@ router.post('/ingest', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+/** GET /api/brain/youtube/ingest/active — ingests still running, newest first. */
+router.get('/ingest/active', (_req, res) => {
+  res.json({ jobs: ingest.listActiveYoutubeIngests() });
+});
+
 /** GET /api/brain/youtube/ingest/:jobId/events — SSE progress stream. */
 router.get('/ingest/:jobId/events', asyncHandler(async (req, res) => {
   // Throw before SSE headers are written so the standard error envelope applies.

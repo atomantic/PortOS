@@ -247,7 +247,9 @@ the feature is on) checks, in order:
 2. **Something to update to** — a newer release tag (`release`), or origin's default branch
    ahead of this checkout / `installState.outOfSync` (`main`). Nothing to do is a no-op.
 3. **Checkout readiness** (`updateRepoReadiness.js`) — see below.
-4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no CoS agent or
+4. **System idle** (`lib/systemIdle.js`) — no render running **or queued**, no detached job
+   tracked in `renderActivity.js` (downloads, song analysis, voice training, exports,
+   Homebrew jobs), no CoS agent or
    queued task, no Persistent Mind turn or queued message, no app operation, no update
    already in flight. An unreadable Persistent Mind state counts as busy, matching the
    update path's own `PERSISTENT_MIND_STATE_UNTRUSTED` refusal.

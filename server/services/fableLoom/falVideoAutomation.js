@@ -18,6 +18,7 @@ import {
   MAX_GALLERY_VIDEO_UPLOAD_BYTES,
   saveUploadedGalleryVideoBuffer,
 } from '../videoUpload.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { attachNodeVideo, getLoom } from './records.js';
 
 export const FAL_H3_MAX_FREE_URL = 'https://fal.ai/tools/minimax-h3-max';
@@ -32,6 +33,8 @@ const ACTIVE_STATUSES = new Set(['queued', 'running']);
 const FAL_ASPECT_RATIOS = new Set(['16:9', '9:16', '1:1']);
 
 const jobs = new Map();
+// Queued and running jobs only; `jobs` keeps settled ones for a day.
+const liveJobs = trackedRenderMap('fal-browser-video', { noun: 'fal.ai scene video', link: (_id, job) => `/fableloom/${encodeURIComponent(job.loomId)}` });
 const latestJobByScene = new Map();
 const pendingJobByScene = new Map();
 let runTail = Promise.resolve();
@@ -527,6 +530,7 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
       filename: null,
     };
     jobs.set(job.id, job);
+    liveJobs.set(job.id, job);
     latestJobByScene.set(key, job.id);
     emitJob(job);
 
@@ -565,7 +569,7 @@ export async function startFalVideoAutomation(loomId, episodeId, nodeId, {
       } catch (finishError) {
         console.error(`❌ fal.ai video automation queue recovery could not finish the job record: ${finishError?.message || finishError}`);
       }
-    });
+    }).finally(() => liveJobs.delete(job.id));
     // Snapshot the queued state before the serialized runner can advance it;
     // both same-scene callers receive the same initial API contract.
     return publicJob(job);
@@ -648,6 +652,7 @@ export function cancelFalVideoAutomation(loomId, episodeId, nodeId, jobId) {
  */
 export function _resetFalVideoAutomations() {
   jobs.clear();
+  for (const id of [...liveJobs.keys()]) liveJobs.delete(id);
   latestJobByScene.clear();
   pendingJobByScene.clear();
   runTail = Promise.resolve();

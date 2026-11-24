@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ServerError } from '../../lib/errorHandler.js';
+import { listActiveRenders } from '../renderActivity.js';
 import { getProject } from './projects.js';
 import { startLyricAlign } from './lyricAlignJob.js';
 
 vi.mock('./projects.js', () => ({ getProject: vi.fn() }));
 vi.mock('./lyricAlign.js', () => ({ alignProjectLyrics: vi.fn() }));
+
+it('counts as live work until it settles, so an update waits for it', async () => {
+  getProject.mockResolvedValue({ id: 'proj-live', lyricCues: [{ id: 'cue-1', text: 'Example' }] });
+  let finish;
+  await startLyricAlign('proj-live', { align: () => new Promise((resolve) => { finish = resolve; }) });
+  expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'lyric-align', to: '/music-video/proj-live' })]);
+  finish({ id: 'proj-live' });
+  await vi.waitFor(() => expect(listActiveRenders()).toEqual([]));
+});
 
 describe('lyric alignment job refusals', () => {
   afterEach(() => { vi.clearAllMocks(); });

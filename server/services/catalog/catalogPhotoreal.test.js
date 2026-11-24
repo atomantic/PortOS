@@ -21,6 +21,7 @@ vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 
 const { cleanupTempDataRoots } = await import('../../lib/mockPathsDataRoot.js');
 const { catalogEvents } = await import('./catalogEvents.js');
+const { listActiveRenders } = await import('../renderActivity.js');
 afterAll(cleanupTempDataRoots);
 const { getPhotorealStatus, openPhotorealBlend, startPhotorealRender, __setPhotorealDepsForTests } = await import('./catalogPhotoreal.js');
 const { PATHS } = await import('../../lib/fileUtils.js');
@@ -301,6 +302,7 @@ describe('openPhotorealBlend', () => {
     const second = openPhotorealBlend(record.id);
     await vi.waitFor(() => expect(worker).toHaveBeenCalledOnce());
     await expect(getPhotorealStatus(record.id)).resolves.toMatchObject({ sceneBuilding: true, blendUrl: null });
+    expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'photoreal-scene' })]);
     expect(sceneFrames).toEqual([{ ingredientId: record.id }]);
     await expect(startPhotorealRender(record.id, { shotIds: ['wide'], engine: 'cycles' })).rejects.toMatchObject({ code: 'PHOTOREAL_BUSY' });
     release();
@@ -323,8 +325,10 @@ describe('openPhotorealBlend', () => {
     await expect(openPhotorealBlend(record.id)).rejects.toMatchObject({ code: 'PHOTOREAL_BUSY' });
     expect(worker).toHaveBeenCalledOnce();
     expect(launch).not.toHaveBeenCalled();
+    expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'photoreal', to: `/catalog/place/${record.id}` })]);
     release({ status: 'terminated', reason: 'time' });
     await finished(record.id);
+    await vi.waitFor(() => expect(listActiveRenders()).toEqual([]));
   });
 
   it('does not replace a scene that appears while the build is running', async () => {

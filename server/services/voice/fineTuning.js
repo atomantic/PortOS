@@ -23,6 +23,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { PATHS } from '../../lib/paths.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { closeJobAfterDelay } from '../../lib/sseUtils.js';
 import {
@@ -32,6 +33,7 @@ import {
   SUPPORTED_QWEN3_MODELS,
   getQwen3RuntimeStatus,
 } from './qwen3TtsRuntime.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import {
   getVoiceProfileRequired,
   profileArtifactDirectory,
@@ -42,7 +44,8 @@ import { fineTuningEvents } from './fineTuningEvents.js';
 // In-memory active training job map. Entries are evicted once terminal (see
 // `finalizeJob`); the durable record is the `job.json` sidecar written beside
 // the run's checkpoints, so a restart mid-training does not orphan them.
-const activeJobs = new Map();
+// Tracked, so an update or restart that would end hours of training waits or warns.
+const activeJobs = trackedRenderMap('voice-fine-tune', { noun: 'voice fine-tune', link: (_id, job) => `/voices/${encodeURIComponent(job.profileId)}` });
 
 // Sidecar record written into `<profileDir>/fine-tune/<jobId>/`. It lives with
 // the checkpoints it indexes so the record and its artifacts are deleted
@@ -54,11 +57,6 @@ const JOB_RECORD_FILE = 'job.json';
 // directory. Enforced here as well as in the route schema because this path is
 // built from a caller-supplied id.
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// A user cancel is recorded by `cancelFineTuningJob` and, when the abort reaches
-// the child before the caller returns, by the child's terminal handler. One
-// shape so whichever writes first leaves the same record.
-const CANCELLED_OUTCOME = Object.freeze({ status: 'cancelled', error: 'Cancelled by user' });
 
 // The official recipe fine-tunes the Base variants only.
 const TRAINABLE_MODELS = new Set(SUPPORTED_QWEN3_MODELS.map((model) => model.id).filter((id) => id.endsWith('-Base')));
@@ -94,10 +92,9 @@ const isJobRecord = (record) => Boolean(
   && Array.isArray(record.checkpoints)
 );
 
-// Drops the runtime-only handles (abort controller, child process, write chain,
+// Drops the runtime-only handles (child process, write chain,
 // finalize latch) that cannot — and must not — be serialized.
 const serializableJob = ({
-  controller: _controller,
   child: _child,
   persistChain: _persistChain,
   finalized: _finalized,
@@ -349,7 +346,6 @@ export async function startFineTuningJob({
   await atomicWrite(datasetManifest, dataset);
 
   assertNoRunningJob(profile.id);
-  const abortController = new AbortController();
   const jobState = {
     id: jobId,
     profileId: profile.id,
@@ -368,9 +364,8 @@ export async function startFineTuningJob({
     startedAt: new Date().toISOString(),
     completedAt: null,
     error: null,
-    controller: abortController,
     child: null,
-    // Flipped by `finalizeJob` once the child has closed or errored.
+    // Flipped by `finalizeJob` once the child has closed or never started.
     finalized: false,
   };
 
@@ -388,8 +383,22 @@ export async function startFineTuningJob({
     '--model-id', baseModel,
   ];
 
-  const child = spawn(runtime.pythonPath, args, safeChildProcessOptions({ signal: abortController.signal }));
-  // Keep a handle on the child so a future shutdown hook can reach in-flight training.
+  // Canceled while its record was being written: no trainer was started.
+  if (jobState.status !== 'running') {
+    finalizeJob(jobState);
+    return { jobId, profileId: profile.id, status: jobState.status, totalSteps: null, trainingAdapter: jobState.trainingAdapter, startedAt: jobState.startedAt, job: publicJob(jobState) };
+  }
+
+  // No spawn `signal`: aborting one emits 'error' at once, before the trainer has
+  // exited, and the run must stay busy until the GPU is released.
+  let child;
+  try {
+    child = spawn(runtime.pythonPath, args, safeChildProcessOptions());
+  } catch (err) {
+    Object.assign(jobState, { status: 'failed', error: err.message, completedAt: new Date().toISOString() });
+    finalizeJob(jobState);
+    throw err;
+  }
   jobState.child = child;
 
   // Drain stderr so a long run cannot block on a full pipe; keep the tail for
@@ -453,11 +462,9 @@ export async function startFineTuningJob({
     }
   });
 
-  // Only the FIRST terminal event may write the outcome. An aborted spawn fires
-  // BOTH — `error` with an AbortError, then `close(null, 'SIGTERM')` — and
-  // `cancelFineTuningJob` records 'cancelled' synchronously before either
-  // arrives, so an unguarded `error` handler lands a user cancel on disk (and in
-  // the next status poll) as 'failed'.
+  // Only the first terminal verdict is kept: `cancelFineTuningJob` records
+  // 'cancelled' before the killed child closes with a signal, which would
+  // otherwise land a user cancel on disk as 'failed'.
   const settle = (outcome) => {
     if (jobState.status === 'running') {
       Object.assign(jobState, outcome, { completedAt: new Date().toISOString() });
@@ -467,7 +474,6 @@ export async function startFineTuningJob({
 
   child.on('close', (code, signal) => {
     if (code === 0) return settle({ status: 'completed', progress: 100 });
-    if (abortController.signal.aborted) return settle(CANCELLED_OUTCOME);
     // A killed child reports a null code — an OOM reap during a long training
     // run is the likely cause, so name the signal rather than "code null".
     settle({
@@ -479,7 +485,9 @@ export async function startFineTuningJob({
   });
 
   child.on('error', (err) => {
-    settle(abortController.signal.aborted ? CANCELLED_OUTCOME : { status: 'failed', error: err.message });
+    // A started trainer reports a failed signal here and still owes its 'close'.
+    if (child.pid) return console.error(`❌ Fine-tune ${jobId} process error: ${err.message}`);
+    settle({ status: 'failed', error: err.message });
   });
 
   return {
@@ -541,8 +549,8 @@ export function cancelFineTuningJob(jobId, profileId) {
     throw new ServerError('Fine-tuning job not found', { status: 404, code: 'JOB_NOT_FOUND' });
   }
   if (job.status === 'running') {
-    job.controller.abort();
-    Object.assign(job, CANCELLED_OUTCOME, { completedAt: new Date().toISOString() });
+    Object.assign(job, { status: 'cancelled', error: 'Cancelled by user', completedAt: new Date().toISOString() });
+    if (job.child) killWithEscalation(job.child, { label: 'voice fine-tune', stillRunning: () => !job.finalized });
     publishJob(job);
   }
   return { ok: true, jobId, status: job.status, job: publicJob(job) };

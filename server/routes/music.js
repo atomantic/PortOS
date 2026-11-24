@@ -120,6 +120,19 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
   // Claim synchronously before platform/CUDA probes can yield, so concurrent
   // requests cannot both pass the guard while readiness is being checked.
   runtimeInstallInFlight.set(engine.id, null);
+  // Registered before the first await: a client that closes the installer during
+  // a probe would otherwise start a multi-GB install nobody can stop.
+  let child = null;
+  let finished = false;
+  let clientGone = false;
+  let installLog = null;
+  onClientDisconnect(req, res, () => {
+    clientGone = true;
+    if (finished || !child) return;
+    installLog.cancel();
+    stopSetupScript(child);
+    safeEnd();
+  });
   if (!isEnginePlatformSupported(engine.id)) {
     runtimeInstallInFlight.delete(engine.id);
     send({ type: 'error', message: `${engine.name} requires ${enginePlatformLabel(engine.id)} and cannot be installed on this host.` });
@@ -150,7 +163,12 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
 
   // Force a fresh probe: a cached `true` from before the venv broke would
   // short-circuit the very install meant to repair it.
-  if (await isEngineHealthy(engine.id, { refresh: true })) {
+  const alreadyHealthy = await isEngineHealthy(engine.id, { refresh: true });
+  if (clientGone) {
+    runtimeInstallInFlight.delete(engine.id);
+    return safeEnd();
+  }
+  if (alreadyHealthy) {
     runtimeInstallInFlight.delete(engine.id);
     send({ type: 'log', message: `${engine.name} already installed at ${engine.resolvePython() || engine.venvDefault}` });
     send({ type: 'complete', message: 'Already installed - nothing to do.' });
@@ -166,12 +184,11 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
   send({ type: 'log', message: `Starting ${engine.name} install.` });
   // Server-console visibility for the multi-GB install (start / heartbeat /
   // outcome) — the SSE stream otherwise surfaces progress only in the browser.
-  const installLog = createInstallLogger({ installer: engine.name, target: engine.venvDefault });
+  installLog = createInstallLogger({ installer: engine.name, target: engine.venvDefault });
   const emit = (ev) => { installLog.onEvent(ev); send(ev); };
   installLog.start();
-  const child = spawnSetupScript({ [engine.installEnv]: '1' });
+  child = spawnSetupScript({ [engine.installEnv]: '1' });
   runtimeInstallInFlight.set(engine.id, child);
-  let finished = false;
 
   // `splitRe: /[\r\n]+/` so a bash/pip/tqdm progress bar that redraws with a
   // bare `\r` surfaces each redraw as its own log line; the carry buffer
@@ -215,13 +232,6 @@ router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
       emit({ type: 'error', message: `Install completion check failed: ${err.message}` });
       safeEnd();
     }
-  });
-
-  onClientDisconnect(req, res, () => {
-    if (finished) return;
-    installLog.cancel();
-    stopSetupScript(child);
-    safeEnd();
   });
 }));
 
