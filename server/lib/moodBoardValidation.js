@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { paginationQuerySchema } from './queryValidation.js';
 import { GENERATION_METADATA_LIMITS } from './pngMetadata.js';
 import { isValidKey, parseKey } from './mediaItemKey.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
@@ -14,6 +15,8 @@ import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 // A mood board collects visual + textual references that feed the Create suite.
 // Boards are db-primary, local-only records; items live inline in the board's
 // JSONB.
+
+export const moodBoardListQuerySchema = paginationQuerySchema.extend({ view: z.string().optional() });
 
 export const MOOD_BOARD_ITEM_TYPES = Object.freeze(['image', 'text', 'video']);
 

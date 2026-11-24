@@ -5,6 +5,8 @@ import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
 import { listMoodBoards, createMoodBoard, addMoodBoardItem, removeMoodBoardItem } from '../../services/apiMoodBoard.js';
 
+const loadBoardSummaries = (options) => listMoodBoards({ ...options, view: 'summary' });
+
 // Self-contained "Pin to mood board" popover button, the mood-board sibling of
 // AddToCollectionMenu (issue #1455, follow-up to #911). It reuses the shared
 // CollectionPickerShell with the mood-board API injected as the data source, so
@@ -165,7 +167,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
         searchPlaceholder="Search boards…"
         renderItem={renderItem}
         onCreated={handleCreated}
-        loadItems={listMoodBoards}
+        loadItems={loadBoardSummaries}
         createItem={createMoodBoard}
         getSortLabel={boardName}
       />
