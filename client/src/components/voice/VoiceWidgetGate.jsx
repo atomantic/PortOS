@@ -37,19 +37,22 @@ export const useVoiceEnabled = () => useContext(VoiceEnabledContext);
 
 // `updated` names the fields a `voice:config:changed` event already set, which
 // the bootstrap read must not overwrite: an event can overtake that read.
-// Personality only ever arrives with the read.
 const hydrate = (previous, cfg, updated) => {
   const engine = cfg?.tts?.engine;
+  const ttsKey = engine
+    ? [engine, engine.replace(/-tts$/, '')].find((key) => cfg?.tts?.[key] && typeof cfg.tts[key] === 'object')
+    : undefined;
   return {
     enabled: updated.has('enabled') ? previous.enabled : !!cfg?.enabled,
     hotkey: updated.has('hotkey') ? previous.hotkey : cfg?.hotkey || 'Space',
     sttEngine: !updated.has('sttEngine') && cfg?.stt?.engine ? cfg.stt.engine : previous.sttEngine,
     sttLanguage: !updated.has('sttLanguage') && cfg?.stt?.language ? cfg.stt.language : previous.sttLanguage,
     fastPath: updated.has('fastPath') ? previous.fastPath : cfg?.llm?.fastPath || null,
-    personality: cfg?.llm?.personality || null,
+    personality: updated.has('personality') ? previous.personality : cfg?.llm?.usePersonality === false ? null : cfg?.llm?.personality || null,
+    vad: updated.has('vad') ? previous.vad : cfg?.vad || null,
     tts: updated.has('tts')
       ? previous.tts
-      : { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate },
+      : { engine, voice: ttsKey ? cfg.tts[ttsKey]?.voice : undefined, rate: cfg?.tts?.rate },
   };
 };
 
@@ -62,6 +65,8 @@ const changedFields = (cfg) => {
   if (cfg?.sttEngine) patch.sttEngine = cfg.sttEngine;
   if (cfg?.sttLanguage) patch.sttLanguage = cfg.sttLanguage;
   if ('fastPath' in (cfg || {})) patch.fastPath = cfg.fastPath || null;
+  if ('personality' in (cfg || {})) patch.personality = cfg.personality || null;
+  if (cfg?.vad) patch.vad = cfg.vad;
   if (cfg?.ttsEngine) patch.tts = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
   return patch;
 };

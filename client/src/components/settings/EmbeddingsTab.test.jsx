@@ -12,6 +12,10 @@ vi.mock('../../services/apiLocalLlm', () => ({
     .mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { models: [] } })
     .mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { models: [{ id: 'example/custom-embedding' }] } }),
 }));
+vi.mock('../../services/apiCatalog', () => ({
+  getCatalogStats: vi.fn().mockResolvedValue({ total: 120, withEmbeddings: 70 }),
+  backfillCatalogEmbeddings: vi.fn(),
+}));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
@@ -19,6 +23,7 @@ vi.mock('../ui/Toast', () => ({
 import EmbeddingsTab from './EmbeddingsTab.jsx';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
+import { backfillCatalogEmbeddings } from '../../services/apiCatalog';
 
 describe('EmbeddingsTab', () => {
   it('reads installed embedding choices from the public models field for both backends', async () => {
@@ -86,5 +91,41 @@ describe('EmbeddingsTab', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load installed models — LM Studio is not running');
     expect(document.querySelector('option[value="example/custom-embedding"]')).toBeTruthy();
+  });
+
+  describe('catalog backfill', () => {
+    const renderTab = () => {
+      getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+      return render(<MemoryRouter><EmbeddingsTab /></MemoryRouter>);
+    };
+
+    it('shows coverage and drains batches until a short batch', async () => {
+      backfillCatalogEmbeddings
+        .mockResolvedValueOnce({ processed: 50, embedded: 50, failed: 0 })
+        .mockResolvedValueOnce({ processed: 20, embedded: 20, failed: 0 });
+      renderTab();
+      expect(await screen.findByTestId('embedding-coverage')).toHaveTextContent('70 of 120');
+
+      fireEvent.click(await screen.findByRole('button', { name: /Embed missing/ }));
+      await waitFor(() => expect(backfillCatalogEmbeddings).toHaveBeenCalledTimes(2));
+      expect(backfillCatalogEmbeddings).toHaveBeenCalledWith({ limit: 50, includeStale: false }, { silent: true });
+    });
+
+    it('requests stale rows and stops when a batch embeds nothing', async () => {
+      backfillCatalogEmbeddings.mockReset();
+      backfillCatalogEmbeddings.mockResolvedValueOnce({ processed: 50, embedded: 0, failed: 50 });
+      renderTab();
+      fireEvent.click(await screen.findByRole('button', { name: /Re-embed stale/ }));
+      await waitFor(() => expect(backfillCatalogEmbeddings).toHaveBeenCalledTimes(1));
+      expect(backfillCatalogEmbeddings).toHaveBeenCalledWith({ limit: 50, includeStale: true }, { silent: true });
+    });
+
+    it('disables backfill while the form has unsaved edits', async () => {
+      renderTab();
+      const button = await screen.findByRole('button', { name: /Embed missing/ });
+      expect(button).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'other-model' } });
+      expect(button).toBeDisabled();
+    });
   });
 });

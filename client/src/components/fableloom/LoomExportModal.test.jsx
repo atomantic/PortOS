@@ -5,7 +5,7 @@ import * as api from '../../services/apiFableLoom.js';
 import socket from '../../services/socket';
 import { downloadBlob } from '../../lib/downloadBlob.js';
 
-vi.mock('../../services/apiFableLoom.js', () => ({ preflightLoomExport: vi.fn(), startLoomExport: vi.fn(), getLoomExport: vi.fn(), downloadLoomExport: vi.fn() }));
+vi.mock('../../services/apiFableLoom.js', () => ({ preflightLoomExport: vi.fn(), startLoomExport: vi.fn(), getLoomExport: vi.fn(), getLatestLoomExport: vi.fn(), cancelLoomExport: vi.fn(), downloadLoomExport: vi.fn() }));
 vi.mock('../../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
 vi.mock('../../lib/downloadBlob.js', () => ({ downloadBlob: vi.fn() }));
 const loom = { id: 'loom', episodes: [{ id: 'one', title: 'One' }, { id: 'two', title: 'Two' }] };
@@ -17,6 +17,7 @@ beforeEach(() => {
   api.preflightLoomExport.mockResolvedValue({ canBuild: true, findings: [] });
   api.startLoomExport.mockResolvedValue({ jobId: 'selected' });
   api.getLoomExport.mockResolvedValue(snapshot('selected', 'packing'));
+  api.getLatestLoomExport.mockResolvedValue({ job: null });
 });
 
 describe('story export interaction', () => {
@@ -106,4 +107,40 @@ describe('story export interaction', () => {
     await act(async () => {});
   });
 
+
+  it('reattaches to the latest server job on open and skips hydration while closed', async () => {
+    api.getLatestLoomExport.mockResolvedValue({ job: snapshot('selected', 'packing') });
+    const { rerender } = render(<LoomExportModal loom={loom} open={false} onClose={vi.fn()} />);
+    await act(async () => {});
+    expect(api.getLatestLoomExport).not.toHaveBeenCalled();
+    rerender(<LoomExportModal loom={loom} open onClose={vi.fn()} />);
+    await screen.findByText(/selected: packing/);
+    expect(api.getLatestLoomExport).toHaveBeenCalledWith('loom', { silent: true });
+    expect(api.getLoomExport).toHaveBeenCalledWith('loom', 'selected', { silent: true });
+    expect(screen.getByText('Cancel export')).toBeEnabled();
+  });
+
+  it('shows a reattached completed job with its download button', async () => {
+    api.getLatestLoomExport.mockResolvedValue({ job: snapshot('selected', 'completed', 4) });
+    api.getLoomExport.mockResolvedValue(snapshot('selected', 'completed', 4));
+    render(<LoomExportModal loom={loom} onClose={vi.fn()} />);
+    expect(await screen.findByText('Download selected ZIP')).toBeEnabled();
+    expect(screen.queryByText('Cancel export')).toBeNull();
+  });
+
+  it('cancels a running job once and applies the settled snapshot', async () => {
+    let resolveCancel;
+    api.cancelLoomExport.mockReturnValueOnce(new Promise(resolve => { resolveCancel = resolve; }));
+    render(<LoomExportModal loom={loom} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Build ZIP')).toBeEnabled());
+    fireEvent.click(screen.getByText('Build ZIP'));
+    fireEvent.click(await screen.findByText('Cancel export'));
+    expect(screen.getByText('Cancel export')).toBeDisabled();
+    fireEvent.click(screen.getByText('Cancel export'));
+    expect(api.cancelLoomExport).toHaveBeenCalledTimes(1);
+    expect(api.cancelLoomExport).toHaveBeenCalledWith('loom', 'selected', { silent: true });
+    await act(async () => resolveCancel({ ...snapshot('selected', 'failed', 5), error: { code: 'EXPORT_CANCELLED', message: 'Export cancelled' } }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Export cancelled');
+    expect(screen.queryByText('Cancel export')).toBeNull();
+  });
 });

@@ -32,10 +32,10 @@ vi.mock('./genome.js', () => ({ getSnpIndex: async () => null }));
 
 import { PATHS } from '../lib/fileUtils.js';
 import { importToPortOS } from './mortalLoomStore.js';
-import { getDailyAlcohol, logDrink, removeDrink } from './meatspaceAlcohol.js';
-import { getDailyNicotine } from './meatspaceNicotine.js';
-import { getBodyHistory } from './meatspaceHealth.js';
-import { getConfig } from './meatspace.js';
+import { getDailyAlcohol, logDrink, removeDrink } from './meatspace/meatspaceAlcohol.js';
+import { getDailyNicotine } from './meatspace/meatspaceNicotine.js';
+import { getBodyHistory } from './meatspace/meatspaceHealth.js';
+import { getConfig } from './meatspace/meatspace.js';
 
 const localPath = (name) => join(PATHS.meatspace, name);
 async function seed(path, value) {

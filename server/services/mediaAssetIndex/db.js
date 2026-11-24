@@ -56,6 +56,7 @@ const UPSERT_CONFLICT = `ON CONFLICT (media_key) DO UPDATE SET
        kind = EXCLUDED.kind,
        ref = EXCLUDED.ref,
        data = EXCLUDED.data,
+       provenance_refs = EXCLUDED.provenance_refs,
        created_at = EXCLUDED.created_at,
        indexed_at = NOW()`;
 
@@ -63,10 +64,10 @@ const UPSERT_CONFLICT = `ON CONFLICT (media_key) DO UPDATE SET
 export async function upsertAsset(row) {
   if (!row) return;
   await query(
-    `INSERT INTO media_assets (media_key, kind, ref, data, created_at, indexed_at)
-     VALUES ($1, $2, $3, $4::jsonb, $5, NOW())
+    `INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at, indexed_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6, NOW())
      ${UPSERT_CONFLICT}`,
-    [row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.createdAt],
+    [row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.provenanceRefs ?? [], row.createdAt],
   );
 }
 
@@ -87,13 +88,13 @@ async function upsertAssets(rows, runQuery = query) {
     const values = [];
     const params = [];
     chunk.forEach((row, j) => {
-      const b = j * 5;
+      const b = j * 6;
       // NOW() for indexed_at is a literal, not a param.
-      values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}::jsonb, $${b + 5}, NOW())`);
-      params.push(row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.createdAt);
+      values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}::jsonb, $${b + 5}::text[], $${b + 6}, NOW())`);
+      params.push(row.mediaKey, row.kind, row.ref, toPgJson(row.data), row.provenanceRefs ?? [], row.createdAt);
     });
     await runQuery(
-      `INSERT INTO media_assets (media_key, kind, ref, data, created_at, indexed_at)
+      `INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at, indexed_at)
        VALUES ${values.join(', ')}
        ${UPSERT_CONFLICT}`,
       params,

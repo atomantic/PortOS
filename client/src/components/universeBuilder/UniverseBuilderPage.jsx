@@ -24,13 +24,13 @@ import {
   waitForUniverseWrites,
   WORLD_CATEGORY_KEY_MAX,
 } from '../../services/apiUniverseBuilder.js';
-import useUniverseBucketActions from '../../hooks/useUniverseBucketActions';
+import useUniverseBucketActions from './useUniverseBucketActions';
 import useUniverseDraft from './useUniverseDraft';
 import useUniverseExpand from './useUniverseExpand';
-import useUniverseGallery from '../../hooks/useUniverseGallery';
-import { useUniverseNav } from '../../hooks/useUniverseNav';
-import useUniverseRender from '../../hooks/useUniverseRender';
-import useUniverseTabs from '../../hooks/useUniverseTabs';
+import useUniverseGallery from './useUniverseGallery';
+import { useUniverseNav } from './useUniverseNav';
+import useUniverseRender from './useUniverseRender';
+import useUniverseTabs from './useUniverseTabs';
 import EntityCombobox from '../EntityCombobox';
 import FilePickerButton from '../ui/FilePickerButton';
 import MediaPreview from '../media/MediaPreview';

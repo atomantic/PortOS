@@ -29,6 +29,10 @@ it('loads only visitor metadata and the remote renderer, without private PortOS 
   expect(url.searchParams.get('world')).toBe('example-world');
   expect(request).toHaveBeenCalledExactlyOnceWith('/api/eidoverse/travel/guest', expect.objectContaining({ headers: { 'X-Eidoverse-Guest': ticket } }));
   expect(screen.queryByText('Owner layout')).not.toBeInTheDocument();
+  // header must stay a top-level banner landmark, a sibling of <main> (#18286)
+  expect(screen.getByRole('banner')).toBeInTheDocument();
+  expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+  expect(screen.getByRole('main')).not.toContainElement(screen.getByRole('banner'));
   // Vernacular labeling (#7459, corrected by #7634): a guest visit shows two
   // distinct classes — the shared PortOS design every install renders the
   // same way, and the host's own private vernacular build — never a blanket

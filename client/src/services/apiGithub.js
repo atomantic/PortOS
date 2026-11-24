@@ -41,6 +41,10 @@ export const getGitHubNotifications = ({ accountId, view } = {}, options = {}) =
   const qs = params.toString();
   return request(`/github/notifications${qs ? `?${qs}` : ''}`, options);
 };
+export const setGitHubNotificationMute = ({ accountId, repoFullName, reason, muted }, options = {}) =>
+  request('/github/notifications/mutes', {
+    method: 'PUT', body: JSON.stringify({ accountId, repoFullName, reason, muted }), ...options,
+  });
 export const syncGitHubNotifications = (accountId = null, options = {}) =>
   request('/github/notifications/sync', { method: 'POST', body: JSON.stringify(accountId ? { accountId } : {}), ...options });
 export const clearFinishedGitHubNotifications = (accountId = null, options = {}) =>
@@ -54,6 +58,10 @@ export const applyGitHubNotificationAction = (accountId, threadId, action, optio
 export const resolveGitHubNotificationWithAgent = (accountId, threadId, run = null, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/agent`, {
     method: 'POST', body: JSON.stringify(run || {}), ...options,
+  });
+export const claimGitHubNotificationIssue = (accountId, threadId, pin, options = {}) =>
+  request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/claim-issue`, {
+    method: 'POST', body: JSON.stringify(pin || {}), ...options,
   });
 export const getGitHubDeploymentReview = (accountId, threadId, options = {}) =>
   request(`/github/notifications/${encodeURIComponent(accountId)}/${encodeURIComponent(threadId)}/deployment`, options);

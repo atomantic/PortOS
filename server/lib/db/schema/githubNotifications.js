@@ -28,6 +28,11 @@ export const githubNotificationsDdl = [
     PRIMARY KEY (account_id, thread_id)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC)`,
+  // Open-lane reads (inbox, actions, triage, assist) filter state = 'open'; the
+  // partial index keeps them off the archived done/muted history.
+  `CREATE INDEX IF NOT EXISTS idx_github_notifications_open_updated ON github_notifications (account_id, gh_updated_at DESC) WHERE state = 'open'`,
+  // Per-repo thread counts and the Automations overview's DISTINCT repo scan.
+  `CREATE INDEX IF NOT EXISTS idx_github_notifications_account_repo ON github_notifications (account_id, repo_full_name)`,
   // Triage (#12871): computed from metadata only. `triaged_for` is the
   // gh_updated_at a decision was made for, so new activity re-triages.
   `ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT`,
@@ -80,6 +85,13 @@ export const githubNotificationsDdl = [
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (account_id, repo_full_name, reason, actor)
   )`,
+  // Local display preference, not a thread subscription or automation rule.
+  `CREATE TABLE IF NOT EXISTS github_notification_mutes (
+    account_id TEXT NOT NULL,
+    repo_full_name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (account_id, repo_full_name, reason)
+  )`,
   // Subscription audit (#12873): each change the operator applied from an
   // audit card, with what Undo needs to reverse it.
   `CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
@@ -91,6 +103,7 @@ export const githubNotificationsDdl = [
     applied_at TIMESTAMPTZ DEFAULT NOW(),
     undone_at TIMESTAMPTZ
   )`,
+  `CREATE INDEX IF NOT EXISTS idx_github_notification_audit_changes_account ON github_notification_audit_changes (account_id, applied_at DESC, id DESC)`,
   // Monthly audit report (#12874): when each account's report last went out.
   `CREATE TABLE IF NOT EXISTS github_notification_audit_reports (
     account_id TEXT PRIMARY KEY,

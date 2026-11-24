@@ -6,6 +6,7 @@ import { useSocketResource } from '../hooks/useSocketResource';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalListByKeys } from '../lib/compareHelpers';
 import { CATEGORY_CONFIG, GOAL_TYPE_CONFIG } from './goals/GoalDetailPanel';
+import { GOALS_LIST_PATH, goalDetailPath } from './goals/goalConstants';
 
 const RESOURCE_EVENTS = ['goals:changed'];
 
@@ -95,7 +96,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
           </div>
         </div>
         <Link
-          to="/goals"
+          to={GOALS_LIST_PATH}
           className="flex items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 transition-colors min-h-[40px] px-2"
         >
           <span className="@max-xs:sr-only">View All</span>
@@ -109,7 +110,7 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
           const CatIcon = cat.icon;
 
           return (
-            <Link key={goal.id} to="/goals" className="block group">
+            <Link key={goal.id} to={goalDetailPath(goal.id)} className="block group">
               <div className="flex items-center justify-between mb-1">
                 <div className="flex items-center gap-2 min-w-0">
                   <CatIcon size={14} className={`shrink-0 ${cat.color}`} aria-hidden="true" />

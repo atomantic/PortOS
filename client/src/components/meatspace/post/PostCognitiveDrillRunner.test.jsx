@@ -25,7 +25,7 @@ import { hasSeenDrillTutorial, markDrillTutorialSeen, buildNBackExample } from '
 
 // Result-assembly tests for PostCognitiveDrillRunner's `finish()` builders.
 // The server rescores each drill deterministically from `drillData`/`questions`
-// (server/services/meatspacePostCognitive.js), so the `index`/`answered`/
+// (server/services/meatspace/meatspacePostCognitive.js), so the `index`/`answered`/
 // `responseMs` shape these functions produce is load-bearing — a regression
 // here (n-back off-by-one, digit-span reversed-answer comparison, stroop
 // ink-vs-word grading) would pass silently in the interactive UI.

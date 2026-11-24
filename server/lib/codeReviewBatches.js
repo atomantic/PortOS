@@ -20,7 +20,7 @@ const digest = text => createHash('sha256').update(text).digest('hex');
 export function isReviewContextCapacityFailure(result) {
   // Successful JSON verdicts may legitimately discuss context-capacity bugs.
   // Classify structured errors or plain vendor refusals, never their quoted text.
-  const plain = value => typeof value === 'string' && !/^[\s]*[\[{`]/.test(value) ? value : null;
+  const plain = value => typeof value === 'string' && !/^[\s]*[[{`]/.test(value) ? value : null;
   const streamErrors = [];
   if (result?.streamFormat === 'stream-json' && typeof result.text === 'string') {
     for (const line of result.text.split('\n')) {

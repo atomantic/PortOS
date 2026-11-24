@@ -46,7 +46,7 @@ glab issue update "\${NUM}" --label in-progress 2>/dev/null
 ${CONTRIBUTOR_RELEASE_GLAB}`;
   return `## Phase 2 — Claim (worktree + markers)
 
-Use your own claim worktree, never the source checkout or slashdo /do:next.${github ? ' If the default is not main, resolve it with \`gh repo view --json defaultBranchRef -q .defaultBranchRef.name\` and substitute it below.' : ''}
+Use your own claim worktree, never the source checkout or slashdo /do:next.${github ? ' If the default is not main, resolve it with `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` and substitute it below.' : ''}
 \`\`\`bash
 NUM="\${NUM:?Prepare an eligible issue first}"
 ${resolve}WORKTREE="{worktreesRoot}/claim-{appSlug}-issue-\${NUM}"

@@ -282,7 +282,7 @@ export function primaryTrackForKind(kind, tracks = ANIMATION_TRACKS) {
 
 /** True when `id` names a track in `tracks` (the shipped registry by default). */
 export function isAnimationTrack(id, tracks = ANIMATION_TRACKS) {
-  return typeof id === 'string' && Object.prototype.hasOwnProperty.call(tracks, id);
+  return typeof id === 'string' && Object.hasOwn(tracks, id);
 }
 
 /**

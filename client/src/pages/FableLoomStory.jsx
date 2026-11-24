@@ -62,6 +62,8 @@ import {
   updateLoomEpisode,
   updateLoomNode,
   startLoomFalVideo,
+  listLoomFalVideos,
+  cancelLoomFalVideo,
   weaveLoomEpisode,
 } from '../services/apiFableLoom.js';
 import { generateImage } from '../services/apiSystem.js';
@@ -117,6 +119,9 @@ export default function FableLoomStory({ view = 'graph' }) {
   const [setupOpen, setSetupOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  // Once opened the export modal stays mounted (hidden) so closing it keeps the job id and socket subscription.
+  const [exportMountedFor, setExportMountedFor] = useState(null);
+  if (exportOpen && loom && exportMountedFor !== loom.id) setExportMountedFor(loom.id);
   const playOpen = searchParams.get('play') === '1';
   useScrollLock(playOpen);
   const seriesPlanOpen = episodeId === 'plan';
@@ -458,6 +463,44 @@ export default function FableLoomStory({ view = 'graph' }) {
     toast.success(queued.status === 'queued' ? 'fal.ai scene video queued' : 'fal.ai scene video already running');
     return queued;
   }, [episodeId, falStylePreset, generationDisabledReason, loom, mediaReadiness.reason, mediaWorkflowBlocked, scopeMediaJob, styleContextLoading, styleContextUnavailable]);
+
+  const cancelFalSceneVideo = useCallback(async (targetNode, job) => {
+    const targetLoomId = loom.id;
+    const canceled = await cancelLoomFalVideo(targetLoomId, episodeId, targetNode.id, job.jobId, { silent: true })
+      .catch((error) => {
+        toast.error(`Could not cancel fal.ai video: ${error.message || 'Request failed'}`);
+        return null;
+      });
+    if (!canceled) return null;
+    scopeMediaJob(targetLoomId)(targetNode.id, 'video', { ...canceled, jobId: canceled.id });
+    toast.success('fal.ai scene video canceled');
+    return canceled;
+  }, [episodeId, loom, scopeMediaJob]);
+
+  // Reload recovery: the server keeps fal.ai browser jobs in memory, so ask it
+  // which ones are still active for this episode and reattach their watchers.
+  const hydratedLoomId = loom?.id;
+  const hydrateEpisodeId = !seriesPlanOpen && hydratedLoomId ? episodeId : null;
+  useEffect(() => {
+    if (!hydratedLoomId || !hydrateEpisodeId) return undefined;
+    let canceled = false;
+    listLoomFalVideos(hydratedLoomId, hydrateEpisodeId, { silent: true })
+      .then((active) => {
+        if (canceled || !Array.isArray(active)) return;
+        setMediaJobs((prev) => {
+          let next = prev;
+          for (const job of active) {
+            if (prev[job.nodeId]?.video?.jobId) continue;
+            next = { ...next, [job.nodeId]: { ...next[job.nodeId], video: { ...job, jobId: job.id } } };
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        // Reattach is best-effort; starting a render still reports its own state.
+      });
+    return () => { canceled = true; };
+  }, [hydratedLoomId, hydrateEpisodeId]);
 
   const basePath = `/fableloom/${loomId}`;
   const episodePath = useCallback(
@@ -802,6 +845,7 @@ export default function FableLoomStory({ view = 'graph' }) {
                   onGenerateImage={queueSceneImage}
                   onGenerateVideo={queueSceneVideo}
                   onAutomateFalVideo={automateFalSceneVideo}
+                  onCancelFalVideo={cancelFalSceneVideo}
                   generationDisabled={styleContextLoading || styleContextUnavailable || mediaWorkflowBlocked}
                   generationDisabledReason={mediaGenerationDisabledReason}
                   onMakeStart={node.id !== episode.startNodeId ? async () => {
@@ -857,7 +901,7 @@ export default function FableLoomStory({ view = 'graph' }) {
         /></Suspense>
       )}
 
-      {exportOpen && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
+      {exportMountedFor === loom?.id && loom && <Suspense fallback={null}><LoomExportModal key={loom.id} loom={loom} open={exportOpen} onClose={() => setExportOpen(false)} /></Suspense>}
 
       {settingsOpen && <Suspense fallback={null}><LoomSettingsDrawer
         open={settingsOpen}

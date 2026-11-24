@@ -86,6 +86,27 @@ beforeEach(() => {
   });
 });
 
+describe('idle review forwards ignoreTaskId (#3179)', () => {
+  it('reaches the input hook of the scheduled type, and omission is observable', async () => {
+    const seen = [];
+    pipeline.securityPreflight.mockResolvedValue({ skipped: false });
+    vi.doMock('../taskTypeHooks.js', () => ({
+      getTaskInputHook: async () => async (args) => { seen.push(args); return { skip: { reason: 'test' } }; }
+    }));
+    try {
+      getNextTaskType.mockResolvedValue({ taskType: 'issue-watcher', reason: 'cron-due' });
+      await generateIdleReviewTask(STATE, { ignoreTaskId: 'sys-finishing' });
+      await generateIdleReviewTask(STATE);
+    } finally {
+      vi.doUnmock('../taskTypeHooks.js');
+      getNextTaskType.mockResolvedValue(null);
+    }
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ taskType: 'issue-watcher', ignoreTaskId: 'sys-finishing' });
+    expect(seen[1].ignoreTaskId).toBeNull();
+  });
+});
+
 describe('idle review stealing a queued on-demand request', () => {
   it('leaves another owner or cancelled receipt alone', async () => {
     scheduleMocks.requests = [request()];

@@ -74,6 +74,8 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
       const kept = (latest.reports || []).filter((r) => r.decision === 'keep').length;
       toast.success(`Polish complete — ${latest.cyclesRun} cycle${latest.cyclesRun === 1 ? '' : 's'}, ${kept} kept (score ${fmtScore(latest.finalScore)})`);
       onBodyChanged?.();
+    } else if (latest.type === 'conflict') {
+      toast.error(latest.message || 'Polish stopped — draft was edited concurrently');
     } else if (latest.type === 'error') {
       toast.error(`Polish failed: ${latest.error || 'unknown error'}`);
     } else if (latest.type === 'canceled') {
@@ -180,7 +182,7 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
       )}
 
       {/* Live progress */}
-      {(running || baseline) && (
+      {(running || baseline || latest?.type === 'conflict') && (
         <div className="border border-port-border rounded p-3 space-y-2 bg-port-bg/40">
           <div className="flex items-center justify-between text-[11px]">
             <span className="uppercase tracking-wide text-gray-500">Progress</span>
@@ -217,6 +219,11 @@ export default function PolishPanel({ work, dirty, blocked = false, onBusyChange
           </ul>
           {latest?.type === 'plateau' && (
             <div className="text-[11px] text-gray-500 italic">Converged (plateau) after cycle {latest.cycle}.</div>
+          )}
+          {latest?.type === 'conflict' && (
+            <div className="text-[11px] text-port-warning" role="alert">
+              {latest.message || 'Polish stopped because the draft changed while it was running. Your edits were kept.'}
+            </div>
           )}
         </div>
       )}

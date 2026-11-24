@@ -702,7 +702,7 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
         loomId: { type: 'string' },
         episodeId: { type: 'string' },
         nodeId: { type: 'string' },
-        status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed'] },
+        status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed', 'canceled'] },
         statusMsg: { type: 'string' },
         progress: { type: 'number', minimum: 0, maximum: 1 },
         createdAt: { type: 'string' },
@@ -835,6 +835,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'image-to-3d:changed': {
     direction: 'server-to-client',
     summary: 'Invalidate one model after a persisted lifecycle change, including progress and deletion.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+  },
+  'blender-model:changed': {
+    direction: 'server-to-client',
+    summary: 'Invalidate one Blender model after a record change, a source write or a build job change (start, finish, cancel); identity only.',
     payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
   },
   'threejs-model:changed': {

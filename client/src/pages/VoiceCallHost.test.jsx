@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
@@ -15,6 +16,9 @@ vi.mock('../services/socket', () => {
   };
 });
 
+vi.mock('../services/apiVoice', () => ({ getVoiceConfig: vi.fn() }));
+
+import { getVoiceConfig } from '../services/apiVoice';
 import socket from '../services/socket';
 import VoiceCallHost from './VoiceCallHost';
 
@@ -82,6 +86,7 @@ const startSession = async (label = 'Attach call host') => {
 };
 
 beforeEach(() => {
+  getVoiceConfig.mockReset();
   vi.clearAllMocks();
   workletNodes.length = 0;
   socket.connected = true;
@@ -89,6 +94,11 @@ beforeEach(() => {
 });
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+const SwitchToCapture = () => {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate('/?mode=capture')}>Navigate to capture</button>;
+};
 
 describe('VoiceCallHost', () => {
   it('says nothing reaches PortOS until the host is attached', () => {
@@ -120,6 +130,21 @@ describe('VoiceCallHost', () => {
 
     expect((await screen.findByRole('alert')).textContent).toMatch(/Another tab owns the call host/);
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it('uses the configured BlackHole labels for matching and copy', async () => {
+    getVoiceConfig.mockResolvedValue({ facetime: { blackHole16chLabel: 'Custom In', blackHole2chLabel: 'Custom Out' } });
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue([
+      { label: 'Custom In', kind: 'audioinput', deviceId: 'in-c' },
+      { label: 'Custom Out', kind: 'audiooutput', deviceId: 'out-c' },
+    ]);
+    navigator.mediaDevices.getUserMedia.mockRejectedValue(new Error('stop here'));
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    expect((await screen.findAllByText(/Custom In/)).length).toBeGreaterThan(0);
+
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled());
+    expect(navigator.mediaDevices.getUserMedia.mock.calls[0][0].audio.deviceId).toEqual({ exact: 'in-c' });
   });
 
   it('reports the specific missing device rather than a generic failure', async () => {
@@ -220,11 +245,12 @@ describe('VoiceCallHost', () => {
     let resolveStream;
     navigator.mediaDevices.getUserMedia.mockReturnValue(new Promise(resolve => { resolveStream = resolve; }));
     audioContext();
-    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    render(<><VoiceCallHost /><SwitchToCapture /></>, { wrapper: MemoryRouter });
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
     expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Capture system audio' }));
+    // The tabs lock while startup is pending (#17950); URL navigation still cancels it.
+    act(() => { fireEvent.click(screen.getByText('Navigate to capture')); });
     const track = { stop: vi.fn() };
     await act(async () => { resolveStream({ getTracks: () => [track] }); });
 
@@ -267,13 +293,14 @@ describe('VoiceCallHost', () => {
     navigator.mediaDevices.getUserMedia.mockReturnValueOnce(new Promise(resolve => { resolveOldStream = resolve; }))
       .mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
     audioContext();
-    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    render(<><VoiceCallHost /><SwitchToCapture /></>, { wrapper: MemoryRouter });
     await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
-    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: 'Capture system audio' })); });
-    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
-    expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
+    act(() => { fireEvent.click(screen.getByText('Navigate to capture')); });
+    expect(screen.getByText('Start capture').closest('button').disabled).toBe(true);
     const oldTrack = { stop: vi.fn() };
     await act(async () => { resolveOldStream({ getTracks: () => [oldTrack] }); });
+    await act(async () => { fireEvent.click(screen.getByText('Start capture')); });
+    expect(socket.emit).toHaveBeenCalledWith('voice:capture:start');
 
     const probe = vi.fn(() => null);
     await navigator.locks.request('portos-call-host', { ifAvailable: true }, probe);
@@ -510,8 +537,9 @@ describe('VoiceCallHost', () => {
       expect(track.stop).not.toHaveBeenCalled();
     });
 
-    it('never renders a tab that opened no device as attached to another tab\'s host', () => {
+    it('never renders a tab that opened no device as attached to another tab\'s host', async () => {
       render(<VoiceCallHost />, { wrapper: MemoryRouter });
+      await act(async () => {});
 
       act(() => socket.__fire('voice:call:state', { hostAttached: true, state: 'listening' }));
 
@@ -680,5 +708,43 @@ describe('VoiceCallHost — meeting capture mode', () => {
     unmount();
     expect(socket.emit).toHaveBeenCalledWith('voice:capture:stop');
     expect(socket.emit).not.toHaveBeenCalledWith('voice:call:detach');
+  });
+});
+
+describe('VoiceCallHost — render storm and double-click (#17950)', () => {
+  it('publishes at most one level update for a burst of worklet frames within 100 ms', async () => {
+    let commits = 0;
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    navigator.mediaDevices.getUserMedia.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    audioContext();
+    render(
+      <Profiler id="host" onRender={() => { commits += 1; }}><VoiceCallHost /></Profiler>,
+      { wrapper: MemoryRouter },
+    );
+    await act(async () => { fireEvent.click(screen.getByText('Attach call host')); });
+    const onmessage = workletNodes[0].port.onmessage;
+    const loud = [new Float32Array(128).fill(0.5)];
+    vi.spyOn(performance, 'now').mockReturnValue(5000);
+    const before = commits;
+    act(() => { for (let i = 0; i < 60; i += 1) onmessage({ data: loud }); });
+    expect(commits - before).toBeLessThanOrEqual(1);
+  });
+
+  it('disables Attach and the mode tabs while startup is pending, so a second click cannot self-lock', async () => {
+    exclusiveLock();
+    navigator.mediaDevices.enumerateDevices.mockResolvedValue(devices);
+    let resolveMedia;
+    navigator.mediaDevices.getUserMedia.mockReturnValue(new Promise((resolve) => { resolveMedia = resolve; }));
+    audioContext();
+    render(<VoiceCallHost />, { wrapper: MemoryRouter });
+    const button = screen.getByText('Attach call host').closest('button');
+    await act(async () => { fireEvent.click(button); });
+    expect(button.disabled).toBe(true);
+    expect(screen.getByRole('tab', { name: /Capture system audio/ }).disabled).toBe(true);
+    await act(async () => { fireEvent.click(button); });
+    expect(navigator.locks.request).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => { resolveMedia({ getTracks: () => [{ stop: vi.fn() }] }); });
   });
 });

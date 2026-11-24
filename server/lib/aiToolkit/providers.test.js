@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
@@ -1122,13 +1122,17 @@ describe('Provider Service', () => {
       const antigravity = await providerService.getProviderById('antigravity-cli');
       expect(antigravity.models.length).toBeGreaterThan(1);
       expect(antigravity.models[0]).toBe('antigravity-configured-default');
+      expect(antigravity.models).toContain('gemini-4-neon-medium');
+      expect(antigravity.models).toContain('gemini-4-hydrogen-xhigh');
+      expect(antigravity.models).toContain('gemini-pro-orchestrator-neon');
       expect(antigravity.models).toContain('gemini-4-argon-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-high');
       expect(antigravity.models).toContain('claude-sonnet-5-5-high');
-      // The *Model keys are untouched: an install that never picks a model keeps
-      // agy's own configured default (no --model flag), exactly as before.
-      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
-      expect(antigravity.lightModel).toBe('antigravity-configured-default');
+      expect(antigravity.defaultModel).toBe('gemini-4-neon-medium');
+      expect(antigravity.lightModel).toBe('gemini-3.8-flash-medium');
+      expect(antigravity.mediumModel).toBe('gemini-4-neon-medium');
+      expect(antigravity.heavyModel).toBe('gemini-4-neon-high');
+      expect(antigravity.ultraModel).toBe('gemini-4-neon-xhigh');
     });
 
     it('upgrades the Gemini 3.6 seeded Antigravity list to the current model catalog', async () => {
@@ -1163,11 +1167,14 @@ describe('Provider Service', () => {
       });
 
       const antigravity = await providerService.getProviderById('antigravity-cli');
+      expect(antigravity.models).toContain('gemini-4-neon-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-high');
       expect(antigravity.models).toContain('gemini-3.8-flash-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-low');
       expect(antigravity.models).not.toContain('gemini-3.6-flash-high');
-      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+      expect(antigravity.defaultModel).toBe('gemini-4-neon-medium');
+      expect(antigravity.lightModel).toBe('gemini-3.8-flash-medium');
+      expect(antigravity.ultraModel).toBe('gemini-4-neon-xhigh');
     });
 
     it('upgrades the Gemini 3.7 seeded Antigravity list to the current model catalog', async () => {
@@ -1205,11 +1212,14 @@ describe('Provider Service', () => {
       });
 
       const antigravity = await providerService.getProviderById('antigravity-cli');
+      expect(antigravity.models).toContain('gemini-4-neon-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-high');
       expect(antigravity.models).toContain('gemini-3.8-flash-medium');
       expect(antigravity.models).toContain('gemini-3.8-flash-low');
       expect(antigravity.models).not.toContain('gemini-3.7-flash-high');
-      expect(antigravity.defaultModel).toBe('antigravity-configured-default');
+      expect(antigravity.defaultModel).toBe('gemini-4-neon-medium');
+      expect(antigravity.lightModel).toBe('gemini-3.8-flash-medium');
+      expect(antigravity.ultraModel).toBe('gemini-4-neon-xhigh');
     });
 
     it.each(['cli', 'tui'])('refreshes the previous shipped Antigravity %s catalog while preserving pins', async (type) => {
@@ -1226,14 +1236,14 @@ describe('Provider Service', () => {
         },
       });
       const provider = await providerService.getProviderById(id);
-      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
+      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low', 'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
       expect(provider.defaultModel).toBe('claude-opus-4-6-thinking');
       expect(provider.lightModel).toBe('gemini-3.8-flash-low');
       // Reading again keeps the migrated list stable.
       expect((await providerService.getProviderById(id)).models).toEqual(provider.models);
     });
 
-    it.each(['cli', 'tui'])('upgrades the Gemini 3.8 / Claude 5.5 seeded Antigravity %s catalog to include Gemini 4 Argon', async (type) => {
+    it.each(['cli', 'tui'])('upgrades the Gemini 3.8 / Claude 5.5 seeded Antigravity %s catalog to include Gemini 4 Neon', async (type) => {
       const id = `antigravity-${type}`;
       await writeProvidersFile({
         activeProvider: id,
@@ -1247,10 +1257,37 @@ describe('Provider Service', () => {
         },
       });
       const provider = await providerService.getProviderById(id);
-      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
+      expect(provider.models).toEqual(['antigravity-configured-default', 'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low', 'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium']);
       expect(provider.defaultModel).toBe('claude-opus-5-5-medium');
       expect(provider.lightModel).toBe('gemini-3.8-flash-low');
       expect((await providerService.getProviderById(id)).models).toEqual(provider.models);
+    });
+
+    it.each(['cli', 'tui'])('upgrades the Gemini 4 Argon seeded Antigravity %s catalog and sentinel pins without overwriting customized pins', async (type) => {
+      const id = `antigravity-${type}`;
+      await writeProvidersFile({
+        activeProvider: id,
+        providers: {
+          [id]: {
+            id, name: 'Antigravity', type, command: 'agy', contextWindow: 1048576,
+            models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low', 'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low', 'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high', 'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high', 'gpt-oss-120b-medium'],
+            defaultModel: 'gemini-4-argon-high',
+            lightModel: 'antigravity-configured-default',
+            mediumModel: 'antigravity-configured-default',
+            heavyModel: 'antigravity-configured-default',
+          },
+        },
+      });
+      const provider = await providerService.getProviderById(id);
+      expect(provider.models).toContain('gemini-4-neon-medium');
+      expect(provider.models).toContain('gemini-4-hydrogen-xhigh');
+      expect(provider.models).toContain('gemini-pro-orchestrator-neon');
+      expect(provider.models).toContain('gemini-pro-orchestrator-g1-pro');
+      expect(provider.defaultModel).toBe('gemini-4-argon-high');
+      expect(provider.lightModel).toBe('gemini-3.8-flash-medium');
+      expect(provider.mediumModel).toBe('gemini-4-neon-medium');
+      expect(provider.heavyModel).toBe('gemini-4-neon-high');
+      expect(provider.ultraModel).toBe('gemini-4-neon-xhigh');
     });
 
     // A failed `agy models` probe must be distinguishable from a real fetch.
@@ -2506,6 +2543,20 @@ rl.on('line', (line) => {
       }
       const { activeProvider } = await providerService.getAllProviders();
       expect(['__proto__', 'constructor', 'toString', 'hasOwnProperty']).not.toContain(activeProvider);
+    });
+  });
+
+  describe.skipIf(process.platform === 'win32')('providers.json file permissions (#18129)', () => {
+    it('writes new files and tightens existing world-readable providers.json to 0o600', async () => {
+      const providersPath = join(TEST_DATA_DIR, 'providers.json');
+      await providerService.createProvider({ id: 'p1', name: 'P1', type: 'api', apiKey: 'secret' });
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o600);
+
+      await chmod(providersPath, 0o644);
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o644);
+
+      await providerService.updateProvider('p1', { name: 'P1 Updated' });
+      expect((await stat(providersPath)).mode & 0o777).toBe(0o600);
     });
   });
 });

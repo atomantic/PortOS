@@ -9,7 +9,7 @@ const stop = vi.fn();
 const reset = vi.fn();
 let hookState = { phase: 'idle', beat: null, result: null, error: null };
 
-vi.mock('../../hooks/useSingToScore.js', () => ({
+vi.mock('./useSingToScore.js', () => ({
   __esModule: true,
   default: () => ({ ...hookState, start, stop, reset }),
   SING_IDLE: 'idle',

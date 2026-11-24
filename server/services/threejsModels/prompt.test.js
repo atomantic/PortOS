@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildThreejsGenerationPrompt } from './prompt.js';
+import { buildThreejsGenerationPrompt, buildReferenceImagesBlock } from './prompt.js';
 
 const build = (overrides = {}) => buildThreejsGenerationPrompt({
   sourcePath: '/tmp/reference.png',
@@ -202,5 +202,24 @@ describe('buildThreejsGenerationPrompt animation clips', () => {
 
   it('says a cue is an identifier, never audio PortOS would load', () => {
     expect(build()).toContain('never a filename, a URL, or audio data');
+  });
+});
+
+describe('reference images', () => {
+  it('leaves the prompt byte-identical when there are none', () => {
+    expect(build({ references: [] })).toBe(build());
+    expect(buildReferenceImagesBlock(undefined)).toBe('');
+  });
+
+  it('lists every reference with its role in order and says the primary wins', () => {
+    const prompt = build({ references: [
+      { path: '/img/back.png', role: 'back', label: '' },
+      { path: '/img/hinge.png', role: 'close-up', label: 'lid hinge' },
+    ] });
+    expect(prompt.indexOf('Reference 1 (back): /img/back.png')).toBeGreaterThan(-1);
+    expect(prompt.indexOf('Reference 2 (close-up — lid hinge): /img/hinge.png'))
+      .toBeGreaterThan(prompt.indexOf('Reference 1'));
+    expect(prompt).toContain('The primary image wins on identity and color');
+    expect(prompt).toContain('record the disagreement in "limitations"');
   });
 });

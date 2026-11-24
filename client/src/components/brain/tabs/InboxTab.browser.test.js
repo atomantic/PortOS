@@ -224,7 +224,7 @@ describe.skipIf(!chrome)('Brain inbox capture geometry', () => {
 
         const filedView = page.locator('div.p-3.bg-port-card').filter({ hasText: 'Filed view row' });
         await filedView.getByRole('button', { name: 'View', exact: true }).click();
-        await page.waitForFunction(() => document.querySelector('output[aria-label="Current path"]')?.textContent === '/brain/memory');
+        await page.waitForFunction(() => document.querySelector('output[aria-label="Current path"]')?.textContent === '/brain/memory/memories/memory-1');
         expect(await page.evaluate(() => window.inboxActions.length)).toBe(1);
 
         const filedFix = page.locator('div.p-3.bg-port-card').filter({ hasText: 'Filed fix row' });

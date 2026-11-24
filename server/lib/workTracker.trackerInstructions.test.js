@@ -208,7 +208,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
     for (const tracker of ['github', 'gitlab']) {
       const block = formatTrackerInstructions(tracker, ux);
       expect(block).toContain('legacy marker only');
-      expect(block).not.toMatch(/--title "\[[^\"]+\]/);
+      expect(block).not.toMatch(/--title "\[[^"]+\]/);
     }
     const jira = formatTrackerInstructions('jira', ux);
     expect(jira).toContain('short, human-readable summary');
@@ -331,7 +331,7 @@ describe('formatTrackerInstructions — plan-feature preset', () => {
     for (const tracker of ['github', 'gitlab']) {
       const block = formatTrackerInstructions(tracker, planFeature);
       expect(block).toContain('legacy marker only');
-      expect(block).not.toMatch(/--title "\[[^\"]+\]/);
+      expect(block).not.toMatch(/--title "\[[^"]+\]/);
     }
     const jira = formatTrackerInstructions('jira', planFeature);
     expect(jira).toContain('short, human-readable summary');

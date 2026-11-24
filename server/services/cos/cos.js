@@ -67,6 +67,7 @@ import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';
 import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosTaskMetadata.js';
 import { handBackBlockedPrRemediation } from '../blockedPrRemediation.js';
 import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from '../healthCriticalNotifier.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 const RESUME_DEQUEUE_DELAY_MS = 500;
 // CD recovery normally resolves in <100ms; hold start() at most this long so
@@ -139,8 +140,8 @@ import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '
 import { cleanupZombieAgents } from './cosAgentLifecycle.js';
 import { requireCosOrphanRecoveryHandlers } from '../bootHookRegistry.js';
 import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
-// `../persistent/persistentMindAdapter.js` is imported lazily where the daemon registers the
-// adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
+// `../persistent/persistentMindAdapter.js` is late-bound where the daemon registers the
+// adapter, NOT imported here. It pulls in the whole CoS tool registry — and through it the
 // voice tool surface, ask service and image-gen backends — a graph the daemon only
 // executes once it is actually running, but that a static edge instantiated in
 // every suite importing cos.js for an unrelated helper.
@@ -296,7 +297,7 @@ export async function updateConfig(updates) {
   }
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
   const improvePatch = Object.fromEntries(
-    improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),
+    improveKeys.filter((key) => Object.hasOwn(updates, key)).map((key) => [key, updates[key]]),
   );
   await logCosScheduleUpdate({
     target: 'cos-config',
@@ -524,7 +525,7 @@ async function bootDaemon(state) {
   emitLog('info', 'Running initial task evaluation...');
   await evaluateTasks({ initialStartup: true });
   await runHealthCheck();
-  const { createPersistentMindTurnAdapter } = await import('../persistent/persistentMindAdapter.js');
+  const { createPersistentMindTurnAdapter } = await loadLateBoundService('persistentMindAdapter');
   await registerPersistentMindTurnAdapter(createPersistentMindTurnAdapter());
   await initializePersistentMindSupervisor();
 

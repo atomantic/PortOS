@@ -26,9 +26,9 @@ it('loads on demand, confirms block and purge, and saves handle/conversation exc
   fireEvent.click(screen.getByRole('button', { name: 'Manage imported data' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Block and purge' }));
   expect(api.blockSignalConversation).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Confirm purge' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Block and purge' }).at(-1));
   await waitFor(() => expect(api.blockSignalConversation).toHaveBeenCalledWith('opaque:%_:id'));
-  await waitFor(() => expect(screen.queryByRole('button', { name: 'Confirm purge' })).toBeNull());
+  await waitFor(() => expect(screen.queryByText(/Block this conversation and purge/)).toBeNull());
   fireEvent.change(screen.getByLabelText('Blocked handles (one per line)'), { target: { value: '+15551234567' } });
   fireEvent.change(screen.getByLabelText('Blocked conversation IDs (one per line)'), { target: { value: 'group' } });
   fireEvent.click(screen.getByRole('button', { name: 'Save exclusions' }));

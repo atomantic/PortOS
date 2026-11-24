@@ -108,7 +108,7 @@ export default function BlenderShotsTab({ blender, project, audioUrl, onOpenPrev
           <BlenderShotList projectId={blender.projectId} state={state} selectedId={shotId} onSelect={selectFromList} noteDrafts={blender.noteDrafts} />
         </div>
         <div ref={detailRef} className="min-w-0 scroll-mt-[calc(var(--mv-header-h,9rem)+0.5rem)]">
-          <BlenderShotDetail blender={blender} shot={shot} audioUrl={audioUrl} blocker={blocker} onTime={setPlayhead} onOpenPreview={onOpenPreview} onOpenTab={onOpenTab} />
+          <BlenderShotDetail blender={blender} shot={shot} audioUrl={audioUrl} blocker={blocker} playheadSec={playhead} onTime={setPlayhead} onOpenPreview={onOpenPreview} onOpenTab={onOpenTab} />
         </div>
       </div>
     </div>

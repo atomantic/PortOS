@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { LayoutGrid, Check } from 'lucide-react';
-import { isValidKey } from '../../../../server/lib/mediaItemKey.js';
+import { resolveMoodBoardPin } from './mediaDetail.js';
 import toast from '../ui/Toast';
 import CollectionPickerShell from './CollectionPickerShell';
 import { listMoodBoards, createMoodBoard, addMoodBoardItem, removeMoodBoardItem } from '../../services/apiMoodBoard.js';
@@ -45,15 +45,7 @@ export default function PinToMoodBoardMenu({ item, size = 'sm' }) {
   const [busyId, setBusyId] = useState(null);
   const triggerRef = useRef(null);
 
-  // A real media-key only when it matches the server vocabulary; a synthetic
-  // key (canon-sheet:) falls through to an imageUrl-only pin.
-  const mediaKey = isValidKey(item.key) ? item.key : null;
-  // Only http(s) / absolute app paths are valid imageUrls (mirror the board
-  // item schema, which rejects a protocol-relative `//host` path even though it
-  // starts with `/`); a missing/blob/protocol-relative preview is dropped.
-  const thumbUrl = typeof item.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl)
-    ? item.previewUrl
-    : null;
+  const { mediaKey = null, thumbUrl = null } = resolveMoodBoardPin(item) ?? {};
   // The board item payload: a real media-key for source linkage + dedup when we
   // have one, plus the thumbnail as imageUrl so the board renders directly (and
   // so a video pin shows a frame its key can't resolve). Built once so the

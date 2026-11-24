@@ -4,6 +4,10 @@
 
 import { PORTOS_APP_ID } from './apiCore';
 
+export const EIDOVERSE_SOLO_PATH = '/eidoverse/solo';
+
+const isEidoverseApp = (app) => Boolean(app.pm2ProcessNames?.includes?.('eidoverse-worlds'));
+
 /**
  * Compute possible launch URLs for an app based on current page context.
  * Returns `{ https, http, dev }` — any may be null. Callers pick whichever
@@ -15,6 +19,8 @@ import { PORTOS_APP_ID } from './apiCore';
  */
 export function getLaunchUrls(app) {
   if (!app) return { https: null, http: null, dev: null };
+  // The sequencer port is loopback-only; its UI is the gated same-origin page.
+  if (isEidoverseApp(app)) return { https: null, http: `${window.location.origin}${EIDOVERSE_SOLO_PATH}`, dev: null };
   if (app.uiUrl) return { https: null, http: app.uiUrl, dev: null };
   const hostname = window.location.hostname;
   // Non-TLS launch URLs always use http:// regardless of how PortOS itself is served —

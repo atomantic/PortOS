@@ -21,7 +21,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 
-vi.mock('./git.js', () => ({
+const gitMocks = vi.hoisted(() => ({
   getBranches: vi.fn(),
   deleteMergedRemoteBranches: vi.fn(async (_repo, names) => ({ deleted: names, skipped: [] })),
   getDefaultBranch: vi.fn(async () => 'main'),
@@ -33,6 +33,17 @@ vi.mock('./git.js', () => ({
   readBranchPublished: vi.fn(async () => false),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
+vi.mock('./git/status.js', () => ({ getBranches: gitMocks.getBranches, getDefaultBranch: gitMocks.getDefaultBranch }));
+vi.mock('./git/branchEvidence.js', () => ({
+  hasBranchMergeEvidence: gitMocks.hasBranchMergeEvidence,
+  readBranchLineage: gitMocks.readBranchLineage,
+  readBranchPublished: gitMocks.readBranchPublished,
+}));
+vi.mock('./git/cleanup.js', () => ({
+  deleteMergedRemoteBranches: gitMocks.deleteMergedRemoteBranches,
+  deleteBranch: gitMocks.deleteBranch,
+}));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: gitMocks.resolveForgeForRepo }));
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
@@ -141,7 +152,7 @@ import {
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
   reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped, retireMergedCheckouts
 } from './branchReconcile.js';
-import * as git from './git.js';
+const git = gitMocks;
 import * as wt from './worktreeManager.js';
 import { recordHeldCheckoutRetirement, recordWorkspaceCheckoutRetirement } from './branchReconcileOutcome.js';
 import { hasCompletedCheckoutEvidence, readMergedClaimEvidence } from './completedCheckoutEvidence.js';
@@ -2155,7 +2166,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
 // refused to delete a dirty tree, and every pass instead spent a coordinator run
 // that came back "no real work product, a human should discard it".
 describe('reconcile — detached-HEAD worktrees (#10825)', () => {
-  const MAIN = { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
+  const MAIN = { path: '/repo', head: 'aaa111', branch: 'refs/heads/main' };
   const detachedTree = (path, extra = {}) => ({ path, head: 'bbb222', detached: true, ...extra });
   // Only the ancestry probe cares about argv; status reads clean unless a test says otherwise.
   const stubGit = ({ merged = true, dirty = false } = {}) => execGit.mockImplementation(async (args) => {
@@ -2267,7 +2278,7 @@ describe('reconcile — detached-HEAD worktrees (#10825)', () => {
 
   it('never gathers the main checkout or a detached tree at unmerged commits', async () => {
     wt.listWorktrees.mockResolvedValue([
-      { head: RETIRE_HEAD, path: '/repo', head: 'aaa111', detached: true },
+      { path: '/repo', head: 'aaa111', detached: true },
       detachedTree('/repo/data/cos/worktrees/unmerged-work'),
     ]);
     stubGit({ merged: false });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
 import { materializeGitRepo } from '../lib/gitTestRepo.js';
-import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity, completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
+import { captureCompletedCheckouts, hasCompletedCheckoutEvidence, readCompletedCheckoutIdentity, completedCheckoutReceiptValid, isGitCommitSha, shortBranch, findValidCheckoutCaptures } from './completedCheckoutEvidence.js';
 
 describe('completed claim checkout evidence', () => {
   let scratch, repoPath, path, head, agent;
@@ -118,5 +118,44 @@ describe('completed claim checkout evidence', () => {
     }
   });
 
+  it('validates strict 40-or-64-char Git commit SHAs and rejects 41-63 char hex strings', () => {
+    expect(isGitCommitSha('a'.repeat(40))).toBe(true);
+    expect(isGitCommitSha('0123456789abcdef'.repeat(4))).toBe(true);
+    expect(isGitCommitSha('a'.repeat(39))).toBe(false);
+    for (const length of [41, 48, 56, 63]) {
+      expect(isGitCommitSha('a'.repeat(length)), `length ${length}`).toBe(false);
+    }
+    expect(isGitCommitSha('a'.repeat(65))).toBe(false);
+    expect(isGitCommitSha('A'.repeat(40))).toBe(false);
+    expect(isGitCommitSha(`${'a'.repeat(39)}g`)).toBe(false);
+    expect(isGitCommitSha(null)).toBe(false);
+    expect(isGitCommitSha(undefined)).toBe(false);
+    expect(isGitCommitSha(12345)).toBe(false);
+  });
 
+  it('normalizes refs/heads/ branch names and filters valid completed-checkout captures', () => {
+    expect(shortBranch('refs/heads/claim/issue-1')).toBe('claim/issue-1');
+    expect(shortBranch('claim/issue-1')).toBe('claim/issue-1');
+    expect(shortBranch('refs/tags/v1.0.0')).toBe('refs/tags/v1.0.0');
+    expect(shortBranch(undefined)).toBeUndefined();
+
+    const validReceipt = {
+      version: 1, agentId: agent.id, startedAt: agent.startedAt,
+      capturedAt: agent.startedAt, repoPath, branch, path, head,
+    };
+    const otherBranchReceipt = { ...validReceipt, branch: 'claim/issue-2', path: `${path}-2` };
+    const driftedShaReceipt = { ...validReceipt, branch: 'claim/issue-3', head: 'a'.repeat(48) };
+    const missingPathReceipt = { ...validReceipt, branch: 'claim/issue-4', path: '' };
+    const wrongRepoReceipt = { ...validReceipt, branch: 'claim/issue-5', repoPath: `${repoPath}-other` };
+    const record = completed([validReceipt, otherBranchReceipt, driftedShaReceipt, missingPathReceipt, wrongRepoReceipt]);
+
+    expect(findValidCheckoutCaptures(record, { branch, repoPath })).toEqual([validReceipt]);
+    expect(findValidCheckoutCaptures(record, { branch, repoPath, path })).toEqual([validReceipt]);
+    expect(findValidCheckoutCaptures(record, { branch, repoPath, path: `${path}-other` })).toEqual([]);
+    expect(findValidCheckoutCaptures(record, { excludeBranch: branch, repoPath })).toEqual([otherBranchReceipt]);
+    expect(findValidCheckoutCaptures(record, { branch: 'claim/issue-3', repoPath })).toEqual([]);
+    expect(findValidCheckoutCaptures(record, { branch: 'claim/issue-4', repoPath })).toEqual([]);
+    expect(findValidCheckoutCaptures(record, { branch: 'claim/issue-5', repoPath })).toEqual([]);
+    expect(findValidCheckoutCaptures(record, { branch, repoPath: null })).toEqual([]);
+  });
 });

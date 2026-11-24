@@ -30,10 +30,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No failed-read write-back: an unreadable or non-object metadata file returns null before the repair write."
   },
   {
-    "key": "contactsSync.js :: cachePath ( )",
-    "reason": "Cache-only: each sync replaces the whole contact cache from the source; the tolerant read only serves the UI."
-  },
-  {
     "key": "contactsSync.js :: statePath ( )",
     "reason": "Rebuildable status: a lost last-run record only resets the displayed run status; the next sync rewrites it."
   },
@@ -58,12 +54,12 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Authoritative rebuild: theme extraction replaces the cache from source evidence without retaining prior fields."
   },
   {
-    "key": "meatspaceDailyLog.js :: DAILY_LOG_FILE",
+    "key": "meatspace/meatspaceDailyLog.js :: DAILY_LOG_FILE",
     "reason": "No non-strict write-back: UI reads stay tolerant, but mutateDailyLog is the only writer and always reads with strict: true before atomicWrite.",
     "issue": "#8032"
   },
   {
-    "key": "meatspacePostDrillCache.js :: CACHE_FILE",
+    "key": "meatspace/meatspacePostDrillCache.js :: CACHE_FILE",
     "reason": "Cache-only: a lost drill cache costs one refill."
   },
   {
@@ -73,6 +69,10 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "messageSync.js :: filePath",
     "reason": "Rebuildable cache: the per-account message cache and sync cursor are re-fetched from the provider; an unreadable cache reads as empty."
+  },
+  {
+    "key": "musicVideo/shotSegments.js :: join ( dir , LOOKS_FILE )",
+    "reason": "Rebuildable cache: looks.json only lists film looks rendered into the shot-segment cache; an unreadable list reads as empty and the next render re-adds the current look, so a failed read loses no authored data."
   },
   {
     "key": "ollamaSafetensorsImport.js :: markerPath ( tempRoot )",

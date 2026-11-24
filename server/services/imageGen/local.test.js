@@ -30,6 +30,8 @@ vi.mock('../localMemory.js', () => ({
     return { blockers: [], unloaded: [] };
   },
 }));
+const mockInspectModelCache = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/hfCache.js', async (original) => ({ ...await original(), inspectModelCache: (...args) => mockInspectModelCache(...args) }));
 vi.mock('../hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 
@@ -255,6 +257,53 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(() => buildArgs({ ...baseInput, ...inputs, referenceImagePaths: ['/tmp/reference.png'],
       model: { id: 'flux2-klein-9b', runner: 'flux2', repo: 'example/flux2' } }))
       .toThrow(expect.objectContaining({ code: 'IMAGE_GEN_FLUX2_INPUTS_INCOMPATIBLE' }));
+  });
+
+  it('threads immutable revisions for every FLUX.2 repo flag', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const sha = (c) => c.repeat(40);
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none',
+        repo: 'black-forest-labs/FLUX.2-klein-9B', revision: sha('a'),
+        kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv', kvRevision: sha('b'),
+        tokenizerRepo: 't/t', tokenizerRevision: sha('c'),
+        basePipelineRepo: 'b/b', basePipelineRevision: sha('d'),
+      },
+    });
+    const val = (f) => args[args.indexOf(f) + 1];
+    expect(val('--revision')).toBe(sha('a'));
+    expect(val('--kv-revision')).toBe(sha('b'));
+    expect(val('--tokenizer-revision')).toBe(sha('c'));
+    expect(val('--base-pipeline-revision')).toBe(sha('d'));
+  });
+
+  it('omits revision flags for an unpinned fork', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: { id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none', repo: 'my-fork/FLUX.2-klein-9B' },
+    });
+    expect(args.some((a) => a.endsWith('-revision') || a === '--revision')).toBe(false);
+  });
+
+  it('pins the bf16 base on the LoRA reroute and drops the quantized entry revisions', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      loraPaths: ['/data/loras/x.safetensors'],
+      loraScales: [1.0],
+      model: {
+        id: 'flux2-klein-4b', runner: 'flux2', quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic', revision: '1'.repeat(40),
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B', tokenizerRevision: '2'.repeat(40),
+      },
+    });
+    expect(args[args.indexOf('--repo') + 1]).toBe('black-forest-labs/FLUX.2-klein-4B');
+    expect(args[args.indexOf('--revision') + 1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(args[args.indexOf('--revision') + 1]).not.toBe('1'.repeat(40));
+    expect(args).not.toContain('--tokenizer-revision');
   });
 
   it('leaves a LoRA render on a bf16 model untouched (already unquantized)', () => {
@@ -625,6 +674,32 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
     initImagePath: null,
     initImageStrength: null,
   };
+
+  it('threads pinned revisions to the diffusers runner, omitting them for unpinned custom repos', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const sha = 'a'.repeat(40);
+    const encSha = 'b'.repeat(40);
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'hidream-i1-full',
+        runner: 'hidream',
+        repo: 'HiDream-ai/HiDream-I1-Full',
+        revision: sha,
+        textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+        textEncoderRevision: encSha,
+        textEncoderClass: 'LlamaForCausalLM',
+      },
+    });
+    expect(args[args.indexOf('--revision') + 1]).toBe(sha);
+    expect(args[args.indexOf('--text-encoder-revision') + 1]).toBe(encSha);
+    const { args: custom } = buildArgs({
+      ...baseInput,
+      model: { id: 'custom', runner: 'z-image', repo: 'someone/fork' },
+    });
+    expect(custom).not.toContain('--revision');
+    expect(custom).not.toContain('--text-encoder-revision');
+  });
 
   it('routes z-image models to the FLUX.2 venv + z_image_turbo.py', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
@@ -1631,7 +1706,10 @@ describe('local render launch unwind (#11862)', () => {
 
 
 describe('FLUX.3 dispatch', () => {
-  const base = { model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
+  const snapshot = '/hf-cache/snapshots/79c0034de040c460e9685bf0127f40af042a2abe';
+  beforeEach(() => { mockInspectModelCache.mockReset().mockResolvedValue({ cached: true, sizeBytes: 1, snapshotPath: snapshot }); });
+  const base = { flux3ModelPath: snapshot,
+    model: { id: 'flux3-klein-q4', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q4' },
     prompt: 'An illustrated puffin on a rocky cliff in soft morning light', width: 1024, height: 1024,
     steps: 16, seed: 42, outputPath: '/tmp/example.png', quantize: '8', guidance: 3.5, pythonPath: '/legacy/python3' };
 
@@ -1654,21 +1732,36 @@ describe('FLUX.3 dispatch', () => {
       const completed = new Promise(resolve => imageGenEvents.once('completed', resolve));
       child.emit('close', 0);
       await completed;
-      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      expect(mockSpawn.mock.calls[0][2].env).toMatchObject({ HF_TOKEN: 'fixture-stored-token', HF_HUB_OFFLINE: '1', PYTHONPATH: undefined, PYTHONNOUSERSITE: '1' });
+      expect(mockInspectModelCache).toHaveBeenCalledWith('mflux-community/flux-3-image-klein-mflux-q4', { revision: '79c0034de040c460e9685bf0127f40af042a2abe' });
+      expect(mockSpawn.mock.calls[0][1]).toContain(snapshot);
       const sidecar = JSON.parse(readFileSync(join(PATHS.images, `${job.jobId}.metadata.json`), 'utf8'));
       expect(sidecar).toMatchObject({ modelId: 'flux3-klein-q4', quantization: 'q4', quantize: '4', guidance: 0,
-        sentPrompt: base.prompt, modelRepo: base.model.repo,
+        sentPrompt: base.prompt, modelRepo: base.model.repo, modelRevision: '79c0034de040c460e9685bf0127f40af042a2abe',
         provenance: { sources: [expect.objectContaining({ license: 'flux-kommunity-license' })] } });
     } finally {
       spy.mockRestore();
       if (previousToken === undefined) delete process.env.HF_TOKEN; else process.env.HF_TOKEN = previousToken;
     }
   });
+  it('refuses an uncached pinned snapshot before spawning so mflux never pulls from the Hub', async () => {
+    mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
+    mockSpawn.mockReset();
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    const spy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true, cpuCount: 8, totalMemoryGb: 64,
+    });
+    try {
+      await expect(generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42 }))
+        .rejects.toMatchObject({ code: 'FLUX3_WEIGHTS_NOT_CACHED' });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
   it('uses the isolated FLUX.3 CLI and checkpoint quantization for text and all ten reference images', () => {
     const text = buildArgs(base);
     expect(text.bin).toMatch(/venv-flux3\/bin\/python3$/);
     expect(text.bin).not.toBe(base.pythonPath);
-    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', base.model.repo,
+    expect(text.args).toEqual(['-I', '-m', 'mflux.models.flux3.cli.flux3_generate', '--model', snapshot,
       '--base-model', 'flux3-image-klein', '--prompt', base.prompt, '--width', '1024', '--height', '1024',
       '--steps', '16', '--seed', '42', '--output', base.outputPath, '--metadata', '--low-ram']);
     const refs = Array.from({ length: 10 }, (_, i) => `/tmp/ref-${i}.png`);

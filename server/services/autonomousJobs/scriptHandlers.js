@@ -18,12 +18,13 @@ import { getActiveAgentIds } from '../agent/agentState.js'
 import { sweepStaleDoneSentinels, checkoutDirsOf } from '../agent/agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
+import { loadLateBoundService } from '../../lib/lateBoundServices.js'
 
 // Loaded lazily to keep the built-in handler registry free of an import cycle:
 // the projection reads CoS state, while this registry is loaded by the CoS job
 // store itself. The job remains deterministic and makes no provider call.
 async function eidoverseProjection(options = {}) {
-  const { projectEidoverseWorld } = await import('../eidoverseWorld.js')
+  const { projectEidoverseWorld } = await loadLateBoundService('eidoverseWorld')
   return projectEidoverseWorld({ ...options, compact: true })
 }
 

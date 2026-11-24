@@ -1,14 +1,15 @@
 import { jevEvents } from './jevEvents.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
-import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
+import { meatspaceEvents, invalidateMeatspace } from './meatspace/meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
-import { authEvents } from './auth.js';
+import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
+import { verifyPeerToken } from './authGate.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
@@ -52,12 +53,18 @@ vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
 // The Beeper realtime bus is a real EventEmitter here — the relay boundary test
 // below drives it directly to prove where its frames land (and where they don't).
-vi.mock('./beeperSocketEvents.js', async () => {
+vi.mock('./beeper/beeperSocketEvents.js', async () => {
   const { EventEmitter } = await import('events');
   return { beeperSocketEvents: new EventEmitter() };
 });
 vi.mock('./instanceEvents.js', async () => ({ instanceEvents: new (await import('node:events')).EventEmitter() }));
 import { instanceEvents } from './instanceEvents.js';
+vi.mock('./auth.js', async (importActual) => ({
+  ...(await importActual()),
+  isAuthEnabled: vi.fn(async () => false),
+  verifyRequestSession: vi.fn(async () => false),
+}));
+vi.mock('./authGate.js', async (importActual) => ({ ...(await importActual()), verifyPeerToken: vi.fn(async () => null) }));
 vi.mock('./tailcatPeer.js', () => ({ attachTailcatForwardsToPeers: vi.fn(async (peers) => peers) }));
 import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn((...args) => queueListeners.review.push(args)) } }));
@@ -105,7 +112,7 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged } from './apps.js';
 import { resolvePm2HomeForProcess } from './appProcessStatus.js';
 import { logAction } from './history.js';
-import { beeperSocketEvents } from './beeperSocketEvents.js';
+import { beeperSocketEvents } from './beeper/beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -129,7 +136,11 @@ function makeSocket(id = 'sock-1') {
     on(event, fn) { handlers[event] = fn; },
     emit(event, ...args) { emitted.push([event, ...args]); },
     removeAllListeners: vi.fn(),
-    setMaxListeners: vi.fn()
+    setMaxListeners: vi.fn(),
+    join(room) { this.rooms.push(room); },
+    rooms: [],
+    data: {},
+    handshake: { headers: {} }
   };
 }
 
@@ -137,9 +148,12 @@ function makeSocket(id = 'sock-1') {
 function makeIo() {
   let connectionHandler = null;
   const emitted = [];
+  const excepted = [];
   return {
     connectionHandler: () => connectionHandler,
     emit(event, ...args) { emitted.push([event, ...args]); },
+    except(room) { return { emit: (event, ...args) => { emitted.push([event, ...args]); excepted.push([event, room]); } }; },
+    excepted,
     emitted,
     on(event, fn) {
       if (event === 'connection') connectionHandler = fn;
@@ -188,6 +202,30 @@ describe('socket.js — initSocket', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('isolates peer sockets from operator cos events and global operator broadcasts', () => {
+    const operator = makeSocket('operator');
+    const peer = makeSocket('peer');
+    peer.data.portosAuthMethod = 'peer';
+    createdSockets.push(operator, peer);
+    io.connect(operator);
+    io.connect(peer);
+    operator.handlers['cos:subscribe']();
+    peer.handlers['cos:subscribe']();
+    expect(peer.rooms).toContain('peer-sockets');
+    expect(operator.rooms).not.toContain('peer-sockets');
+    io.emitted.length = 0;
+    const emitCos = (name, payload) =>
+      queueListeners.cos.filter(([event]) => event === name).forEach(([, handler]) => handler(payload));
+    emitCos('memory:created', { id: 'example-memory' });
+    emitCos('agent:output', { agentId: 'example-agent', line: 'x' });
+    expect(operator.emitted.map(([n]) => n)).toEqual(expect.arrayContaining(['cos:memory:created', 'cos:agent:output']));
+    expect(peer.emitted.map(([n]) => n).filter((n) => n.startsWith('cos:') && !n.endsWith(':subscribed')))
+      .toEqual(['cos:agent:output']);
+    queueListeners.brain.filter(([event]) => event === 'classified').forEach(([, handler]) => handler({ entryId: 'example' }));
+    expect(io.emitted).toContainEqual(['brain:classified', { entryId: 'example' }]);
+    expect(io.excepted).toContainEqual(['brain:classified', 'peer-sockets']);
   });
 
   it('invalidates active memories after approval/rejection only for CoS subscribers', () => {
@@ -1605,5 +1643,64 @@ describe('socket.js — initSocket', () => {
       expect(opts.initialCommand).toBe('claude');
       expect(opts.waitForPromptReady).toBe(true);
     });
+  });
+});
+
+describe('socket.js — inbound peer socket revocation (#17905)', () => {
+  const peerSocket = (id, peerId, instanceId) => {
+    const socket = makeSocket(id);
+    socket.data = { portosAuthMethod: 'peer', portosPeerId: peerId, portosPeerInstanceId: instanceId };
+    socket.disconnect = vi.fn();
+    const middlewares = [];
+    socket.use = (fn) => middlewares.push(fn);
+    socket.runEvent = async (event) => {
+      const next = vi.fn();
+      await middlewares[0]([event, {}], next);
+      return next;
+    };
+    return socket;
+  };
+  let io;
+  let sockets;
+
+  beforeEach(() => {
+    sockets = [];
+    io = { ...makeIo(), fetchSockets: async () => sockets };
+    initSocket(io);
+    vi.mocked(isAuthEnabled).mockResolvedValue(true);
+    vi.mocked(verifyRequestSession).mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    authEvents.removeAllListeners('sessions:revoked-all');
+    vi.mocked(isAuthEnabled).mockResolvedValue(false);
+    vi.mocked(verifyPeerToken).mockResolvedValue(null);
+  });
+
+  it('disconnects only the revoked peer\'s inbound sockets', async () => {
+    const revoked = peerSocket('a', 'peer-a', 'inst-a');
+    const other = peerSocket('b', 'peer-b', 'inst-b');
+    sockets = [revoked, other];
+    instanceEvents.emit('peer:auth-revoked', { peerId: 'peer-a', instanceId: 'inst-a' });
+    await vi.waitFor(() => expect(revoked.disconnect).toHaveBeenCalledWith(true));
+    expect(other.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('drops a peer socket whose token no longer verifies instead of subscribing it', async () => {
+    const stale = peerSocket('stale', 'peer-a', 'inst-a');
+    io.connect(stale);
+    vi.mocked(verifyPeerToken).mockResolvedValue(null);
+    const next = await stale.runEvent('peer:sync:subscribe');
+    expect(next).not.toHaveBeenCalled();
+    expect(stale.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it('keeps serving a peer socket whose token still verifies', async () => {
+    const live = peerSocket('live', 'peer-a', 'inst-a');
+    io.connect(live);
+    vi.mocked(verifyPeerToken).mockResolvedValue({ id: 'peer-a' });
+    const next = await live.runEvent('peer:sync:subscribe');
+    expect(next).toHaveBeenCalled();
+    expect(live.disconnect).not.toHaveBeenCalled();
   });
 });

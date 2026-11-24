@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 const { request } = await import('../lib/testHelper.js');
 
+// Shrink the upload cap so an oversized clone body fits express.json's default limit.
+vi.mock('../lib/uploadLimits.js', async (importActual) => ({ ...(await importActual()), MAX_BASE64_UPLOAD_BYTES: 8 }));
 vi.mock('../services/voice/studio.js', () => ({ createStudioVoice: vi.fn(), assignStudioVoice: vi.fn() }));
 
 // Mock all voice service modules before importing the router so the route
@@ -72,6 +74,14 @@ vi.mock('../services/voice/facetimeBridge.js', () => ({
   hangup: vi.fn(),
 }));
 
+vi.mock('../services/voice/callSession.js', () => ({
+  startCall: vi.fn(),
+  endCall: vi.fn(),
+  isCallActive: vi.fn(),
+  getCallState: vi.fn(),
+}));
+
+const callSession = await import('../services/voice/callSession.js');
 const config = await import('../services/voice/config.js');
 const health = await import('../services/voice/health.js');
 const bootstrap = await import('../services/voice/bootstrap.js');
@@ -170,6 +180,21 @@ describe('Voice Routes', () => {
         instructions: 'warm low alto', seed: 42,
       }));
       expect(res.body.profile.kind).toBe('designed');
+    });
+
+    it('rejects an oversized clone upload with 413 FILE_TOO_LARGE and a readable message', async () => {
+      const res = await request(buildApp()).post('/api/voice/profiles/clone').send({
+        universeId: 'uni-1',
+        characterId: 'char-1',
+        filename: 'reference.wav',
+        audioBase64: Buffer.alloc(64).toString('base64'),
+        transcript: 'sample transcript',
+        performerConsentConfirmed: true,
+      });
+      expect(res.status).toBe(413);
+      expect(res.body.code).toBe('FILE_TOO_LARGE');
+      expect(res.body.error).toMatch(/exceeds maximum size limit of 8 bytes/);
+      expect(voiceProfiles.createClonedVoiceCandidate).not.toHaveBeenCalled();
     });
 
     it('creates a consented clone candidate profile with verified performer consent', async () => {
@@ -343,9 +368,37 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
     });
 
-    it('accepts Qwen3-TTS engine and voice configuration', async () => {
+    it('accepts a legacy trigger key by stripping it instead of returning 400', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
       bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const res = await request(buildApp()).put('/api/voice/config').send({ trigger: 'hotword', enabled: true });
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith({ enabled: true });
+    });
+
+    it('broadcasts personality on voice:config:changed, null when disabled', async () => {
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const emit = vi.fn();
+      const personality = { name: 'Example', speechStyle: 'calm' };
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: true, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality }));
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, llm: { usePersonality: false, personality } });
+      await request(buildApp({ io: { emit } })).put('/api/voice/config').send({ enabled: true });
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({ personality: null }));
+    });
+
+    it('accepts Qwen3-TTS engine and voice configuration and resolves ttsVoice on voice:config:changed', async () => {
+      const qwenCfg = {
+        ...DEFAULT_CFG,
+        tts: {
+          engine: 'qwen3-tts',
+          qwen3: { modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', voice: 'warm-narrator' },
+        },
+      };
+      config.updateVoiceConfig.mockResolvedValue(qwenCfg);
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const emit = vi.fn();
       const patch = {
         tts: {
           engine: 'qwen3-tts',
@@ -353,10 +406,14 @@ describe('Voice Routes', () => {
         },
       };
 
-      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      const res = await request(buildApp({ io: { emit } })).put('/api/voice/config').send(patch);
 
       expect(res.status).toBe(200);
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+      expect(emit).toHaveBeenLastCalledWith('voice:config:changed', expect.objectContaining({
+        ttsEngine: 'qwen3-tts',
+        ttsVoice: 'warm-narrator',
+      }));
     });
 
     it('accepts a facetime.autoAnswer patch', async () => {
@@ -645,12 +702,75 @@ describe('Voice Routes', () => {
       expect(facetimeBridge.probe).not.toHaveBeenCalled();
     });
 
-    it.each(['probe', 'call', 'hangup'])('POST /api/voice/facetime/%s dispatches to the matching bridge command', async (command) => {
-      facetimeBridge[command].mockResolvedValue({ ok: true, command });
-      const res = await request(buildApp()).post(`/api/voice/facetime/${command}`).send({});
+    it('POST /api/voice/facetime/probe dispatches to the bridge', async () => {
+      facetimeBridge.probe.mockResolvedValue({ ok: true, command: 'probe' });
+      const res = await request(buildApp()).post('/api/voice/facetime/probe').send({});
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ ok: true, command });
-      expect(facetimeBridge[command]).toHaveBeenCalledTimes(1);
+      expect(res.body).toEqual({ ok: true, command: 'probe' });
+    });
+
+    it('POST /api/voice/facetime/call starts a session-backed call', async () => {
+      callSession.startCall.mockResolvedValue({ ok: true, state: { state: 'dialing' } });
+      const res = await request(buildApp()).post('/api/voice/facetime/call').send({});
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, command: 'call', state: { state: 'dialing' } });
+      expect(callSession.startCall).toHaveBeenCalledWith({ origin: 'user' });
+      expect(facetimeBridge.call).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        reason: 'no-call-host',
+        result: { ok: false, reason: 'no-call-host' },
+        code: 'NO_CALL_HOST',
+        error: 'No FaceTime call host tab is attached',
+      },
+      {
+        reason: 'call-in-progress',
+        result: { ok: false, reason: 'call-in-progress' },
+        code: 'CALL_IN_PROGRESS',
+        error: 'A FaceTime call is already in progress',
+      },
+      {
+        reason: 'dial-failed',
+        result: { ok: false, reason: 'dial-failed', message: 'FaceTime helper timed out' },
+        code: 'DIAL_FAILED',
+        error: 'FaceTime helper timed out',
+      },
+      {
+        reason: 'dial-failed (fallback)',
+        result: { ok: false, reason: 'dial-failed' },
+        code: 'DIAL_FAILED',
+        error: 'FaceTime dial failed',
+      },
+    ])('POST /api/voice/facetime/call returns standard 409 ServerError envelope on refusal $reason', async ({ result, code, error }) => {
+      callSession.startCall.mockResolvedValue(result);
+      const res = await request(buildApp()).post('/api/voice/facetime/call').send({});
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({
+        error,
+        code,
+        timestamp: expect.any(Number),
+        context: { command: 'call', reason: result.reason },
+      });
+    });
+
+    it('POST /api/voice/facetime/hangup ends an active session call', async () => {
+      callSession.isCallActive.mockReturnValue(true);
+      callSession.endCall.mockResolvedValue({});
+      callSession.getCallState.mockReturnValue({ state: 'idle' });
+      const res = await request(buildApp()).post('/api/voice/facetime/hangup').send({});
+      expect(res.status).toBe(200);
+      expect(callSession.endCall).toHaveBeenCalledWith('user-hangup');
+      expect(facetimeBridge.hangup).not.toHaveBeenCalled();
+    });
+
+    it('POST /api/voice/facetime/hangup falls back to the bridge when idle', async () => {
+      callSession.isCallActive.mockReturnValue(false);
+      facetimeBridge.hangup.mockResolvedValue({ ok: true, command: 'hangup' });
+      const res = await request(buildApp()).post('/api/voice/facetime/hangup').send({});
+      expect(res.body).toEqual({ ok: true, command: 'hangup' });
+      expect(callSession.endCall).not.toHaveBeenCalled();
     });
 
     it('POST /api/voice/facetime/probe propagates a bridge failure as an error response', async () => {
@@ -662,7 +782,7 @@ describe('Voice Routes', () => {
     it('rejects an unexpected body field with 400 without touching the bridge', async () => {
       const res = await request(buildApp()).post('/api/voice/facetime/call').send({ extra: 'nope' });
       expect(res.status).toBe(400);
-      expect(facetimeBridge.call).not.toHaveBeenCalled();
+      expect(callSession.startCall).not.toHaveBeenCalled();
     });
   });
 });

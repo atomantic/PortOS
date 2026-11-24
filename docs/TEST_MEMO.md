@@ -116,12 +116,14 @@ A directory a test reads as a whole is an input as a whole.
   directory or by its proven containing tree. An unbounded rooting option
   refuses the browser test. A Node test that passes a directory along keeps
   the older reading.
-- **A served root narrows to what the fixture served** (#17616). Keyed
+- **A served root narrows to what the fixture served** (#17616, #17894). Keyed
   whole, `client/` is ~4,600 files, so any client edit re-ran every
   real-Chromium suite. When the runner records (`--experimental.recordDependencies`)
-  it also sets `PORTOS_TEST_MEMO_SERVED_DIR`, and `startBrowserFixture` adds
-  a recorder plugin (`scripts/lib/browserServedFiles.js`) that notes every
-  file its Vite server loads, transforms or answers a request from. The
+  it also sets `PORTOS_TEST_MEMO_SERVED_DIR`, and `startBrowserFixture` plus the
+  instrumented Vite/static helpers (`buildRecordedViteFixture`,
+  `startRecordedViteServer`, `createRecordedStaticServer` in
+  `scripts/lib/browserServedFiles.js`) add a recorder that notes every file
+  Vite loads, transforms, copies from `publicDir` or serves statically. The
   suite's memo record stores those files (`served: { roots, files }`,
   repo-relative, installed packages and paths outside the repository
   dropped). For a root the record names, the recorded key and
@@ -135,8 +137,8 @@ A directory a test reads as a whole is an input as a whole.
   adds styles only elements that use it, and those live in served files.
   The whole tree stays keyed, failing closed, when there is no record or
   the record names another root, a served path leaves the repository, or
-  the test file serves or bundles through a call of its own
-  (`UNRECORDED_SERVER_CALL`: `createServer(`, `express.static(`, …), which
+  the test file serves or bundles through an uninstrumented call of its own
+  (`UNRECORDED_SERVER_CALL`: `createServer(`, `build(`, `express.static(`, `.listen(`, …), which
   the recorder never sees. The floor key is unchanged.
 
 The key still fails closed for the repository root; for a tree the test
@@ -427,6 +429,10 @@ The runner determines shard ownership from the complete memo-independent
 candidate inventory, including explicit files. Unit jobs use Vitest's
 hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
 `vitest run --shard`), and browser jobs use the browser suite registry order.
+The two-shard server unit matrix pins heavy suites and all non-capture serial
+suites to balance the two jobs. Its regression checks the pinned duration spread
+with shard 1's Smoke-boot step and the distribution of always-run guards and
+non-capture serial suites.
 The runner then evaluates related reach and subtracts memo hits within each
 shard's own candidates. Each file has one owner even when sibling shards
 restore different memo records. Vitest receives the final selection directly.
@@ -521,6 +527,12 @@ newest trusted lineage. The DB job runs the `db` scope
 its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
 `server/scripts/setup-db-test.mjs` are base inputs (a schema change
 invalidates every key) and `PGDATABASE` is a keyed env var.
+The DB job restores the memo and counts remaining tests before provisioning
+`portos_test` or installing verification tools. It skips those steps and the
+DB runner when the count is zero and the impact plan does not request a live
+restore. The real `pg_dump` restore runs outside the memo on full plans,
+changes matching database risk rules, or changes in the restore suite's import
+closure. An inconclusive closure also selects the restore on server-source changes.
 
 ## Disable
 

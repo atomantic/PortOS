@@ -1,13 +1,19 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-usage-worker-' });
-vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const readJSONFileSpy = vi.hoisted(() => vi.fn());
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  const proxy = makeProxy(actual);
+  readJSONFileSpy.mockImplementation((...args) => actual.readJSONFile(...args));
+  return new Proxy(proxy, { get: (target, key, receiver) => (key === 'readJSONFile' ? readJSONFileSpy : Reflect.get(target, key, receiver)) });
+});
 afterAll(cleanup);
-const { __resetUsageClaims, readMeasuredUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
+const { __resetUsageClaims, __resetUsageIndexCache, listAgyConversations, readMeasuredUsage, snapshotUsageClaims } = await import('./usageReconciler.js');
 const { scanHistoricalUsage } = await import('./usageBackfillWorker.js');
 
 let root;
@@ -211,6 +217,20 @@ describe('historical usage worker', () => {
     expect(snapshotUsageClaims()).toEqual(expect.objectContaining({ codexHighWater: [] }));
   });
 
+  it('never reads metadata for runs the parent already reconciled on a reported-only pass', async () => {
+    const metadata = { providerId: 'claude-api-example', model: 'example-model',
+      startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:10:00Z',
+      success: true, selfContainedUsage: true, usageSessionDeferred: true,
+      reportedUsage: { tokensIn: 7, tokensOut: 3 } };
+    await writeRun('done', metadata);
+    await writeRun('pending', metadata);
+    readJSONFileSpy.mockClear();
+    const result = await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true, reconciledRunIds: ['done'] });
+    const readPaths = readJSONFileSpy.mock.calls.map(([path]) => path);
+    expect(readPaths).toEqual([join(root, 'pending', 'metadata.json')]);
+    expect(result.corrections.map((c) => c.runId)).toEqual(['pending']);
+  });
+
   it('skips an unreconciled self-contained run instead of swapping an estimate for a session it cannot own', async () => {
     await writeRun('run-self-contained-pending', {
       providerId: 'claude-api-example',
@@ -376,5 +396,39 @@ describe('historical sibling-family attribution', () => {
 
     const result = await scanHistoricalUsage({ runsDir: root, home });
     expect(result.corrections).toEqual([]);
+  });
+});
+
+describe('append-only index memoization', () => {
+  it('re-parses agy history only when its mtime or size changes', async () => {
+    __resetUsageIndexCache();
+    const agyRoot = join(home, '.gemini', 'antigravity-cli');
+    await mkdir(agyRoot, { recursive: true });
+    const historyPath = join(agyRoot, 'history.jsonl');
+    const entry = id => JSON.stringify({ conversationId: id, workspace: '/work/a', timestamp: 1 });
+    await writeFile(historyPath, entry('conv-aaaa'));
+    const when = new Date('2026-07-01T00:00:00Z');
+    await utimes(historyPath, when, when);
+    expect((await listAgyConversations(agyRoot)).map(c => c.conversationId)).toEqual(['conv-aaaa']);
+
+    // Same size and mtime: the cached parse is served, proving no re-read.
+    await writeFile(historyPath, entry('conv-bbbb'));
+    await utimes(historyPath, when, when);
+    expect((await listAgyConversations(agyRoot)).map(c => c.conversationId)).toEqual(['conv-aaaa']);
+
+    // A changed size invalidates it.
+    await writeFile(historyPath, `${entry('conv-bbbb')}\n${entry('conv-cccc')}`);
+    await utimes(historyPath, when, when);
+    expect((await listAgyConversations(agyRoot)).map(c => c.conversationId)).toEqual(['conv-bbbb', 'conv-cccc']);
+  });
+
+  it('does not let a caller mutate the cached agy index', async () => {
+    __resetUsageIndexCache();
+    const agyRoot = join(home, '.gemini', 'antigravity-cli');
+    await mkdir(join(agyRoot, 'brain', 'conv-dddd'), { recursive: true });
+    await writeFile(join(agyRoot, 'history.jsonl'), JSON.stringify({ conversationId: 'conv-aaaa', workspace: '/work/a', timestamp: 1 }));
+    const first = await listAgyConversations(agyRoot);
+    first.push({ conversationId: 'junk' });
+    expect((await listAgyConversations(agyRoot)).map(c => c.conversationId)).toEqual(['conv-aaaa', 'conv-dddd']);
   });
 });

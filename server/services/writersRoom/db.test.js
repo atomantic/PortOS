@@ -206,14 +206,44 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect(JSON.stringify(hashes)).toContain('wr-work-1');
   });
 
-  it('pruneTombstonedWorks hard-removes old tombstones (rows + drafts) and returns their ids', async () => {
+  it('mergeWorksFromSync and the folder/exercise merges wait for the shared write queues (#17918)', async () => {
+    const { queueWorkWrite, queueFolderWrite, queueExerciseWrite } = await import('./_shared.js');
+    await db.writeWork(manifest('wr-work-1'));
+    const folder = { id: 'wr-folder-1', parentId: null, name: 'Peer', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z' };
+    const exercise = { id: 'wr-ex-1', workId: null, prompt: 'go', status: 'running', startedAt: '2026-01-03T00:00:00.000Z', finishedAt: null };
+    const peer = manifest('wr-work-1', { drafts: [draft('wr-draft-a'), draft('wr-draft-b')], updatedAt: '2026-03-01T00:00:00.000Z' });
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    // A local mutator: read outside a transaction, suspend, write the snapshot back.
+    const mutator = queueWorkWrite('wr-work-1', async () => {
+      const snapshot = await db.readWork('wr-work-1');
+      await held;
+      await db.writeWork({ ...snapshot, title: 'Local', updatedAt: '2026-02-01T00:00:00.000Z' });
+    });
+    const holders = [queueFolderWrite(() => held), queueExerciseWrite(() => held)];
+    const merges = [db.mergeWorksFromSync([peer]), db.mergeFoldersFromSync([folder]), db.mergeExercisesFromSync([exercise])];
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await db.readWork('wr-work-1')).drafts).toHaveLength(1);
+    expect(await db.readFolder('wr-folder-1')).toBeNull();
+    expect(await db.readExercise('wr-ex-1')).toBeNull();
+    release();
+    await Promise.all([mutator, ...holders]);
+    expect(await Promise.all(merges)).toEqual(Array(3).fill({ applied: true, count: 1 }));
+    const stored = await db.readWork('wr-work-1');
+    expect(stored.drafts.map((d) => d.id)).toEqual(['wr-draft-a', 'wr-draft-b']);
+    expect(stored.updatedAt).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('pruneTombstonedWork hard-removes an old tombstone (row + drafts) after re-checking it', async () => {
     await db.writeWork(manifest('wr-work-1'));
     await db.mergeWorksFromSync([manifest('wr-work-1', { deleted: true, deletedAt: '2026-01-05T00:00:00.000Z', updatedAt: '2026-01-05T00:00:00.000Z' })]);
     // Cutoff before the tombstone → nothing pruned.
-    expect(await db.pruneTombstonedWorks(Date.parse('2026-01-04T00:00:00.000Z'))).toEqual({ pruned: 0, ids: [] });
+    expect(await db.listPrunableWorkIds(Date.parse('2026-01-04T00:00:00.000Z'))).toEqual([]);
+    expect(await db.pruneTombstonedWork('wr-work-1', Date.parse('2026-01-04T00:00:00.000Z'))).toBe(false);
     expect((await query(`SELECT 1 FROM writers_room_works WHERE id = 'wr-work-1'`)).rows).toHaveLength(1);
     // Cutoff after the tombstone → row + draft rows gone, id returned.
-    expect(await db.pruneTombstonedWorks(Date.parse('2026-02-01T00:00:00.000Z'))).toEqual({ pruned: 1, ids: ['wr-work-1'] });
+    expect(await db.listPrunableWorkIds(Date.parse('2026-02-01T00:00:00.000Z'))).toEqual(['wr-work-1']);
+    expect(await db.pruneTombstonedWork('wr-work-1', Date.parse('2026-02-01T00:00:00.000Z'))).toBe(true);
     expect((await query(`SELECT 1 FROM writers_room_works WHERE id = 'wr-work-1'`)).rows).toHaveLength(0);
     expect((await query(`SELECT 1 FROM writers_room_draft_versions WHERE work_id = 'wr-work-1'`)).rows).toHaveLength(0);
   });
@@ -230,6 +260,17 @@ describe.skipIf(!runDb)('Writers Room DB adapter round-trip', () => {
     expect(tomb.deleted).toBe(true);
     expect(await db.listFolders({ includeDeleted: true })).toContainEqual(expect.objectContaining({ id: 'wr-folder-2', deleted: true }));
     expect(await db.listFolderIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-folder-1', 'wr-folder-2']));
+  });
+
+  it('deleteFolder/deleteWork repair a split-brain row (column FALSE, data.deleted true) (#17919)', async () => {
+    await db.writeFolder({ id: 'wr-folder-1', parentId: null, name: 'Zombie', sortOrder: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+    await db.writeWork(manifest('wr-work-1'));
+    await query(`UPDATE writers_room_folders SET data = data || '{"deleted": true}'::jsonb, deleted = FALSE WHERE id = 'wr-folder-1'`);
+    await query(`UPDATE writers_room_works SET data = data || '{"deleted": true}'::jsonb, deleted = FALSE WHERE id = 'wr-work-1'`);
+    await db.deleteFolder('wr-folder-1');
+    await db.deleteWork('wr-work-1');
+    expect((await query(`SELECT deleted FROM writers_room_folders WHERE id = 'wr-folder-1'`)).rows[0].deleted).toBe(true);
+    expect((await query(`SELECT deleted FROM writers_room_works WHERE id = 'wr-work-1'`)).rows[0].deleted).toBe(true);
   });
 
   it('mergeFoldersFromSync inserts + LWW-resolves, pruneTombstonedFolders hard-removes old tombstones (#1645)', async () => {

@@ -1,0 +1,449 @@
+/**
+ * MeatSpace Core Service
+ *
+ * Config CRUD, sex detection from genome, death clock computation,
+ * and LEV 2045 tracker. Reads genome/longevity data from Digital Twin.
+ */
+
+import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
+import { join } from 'path';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, readJSONFileStrict } from '../../lib/fileUtils.js';
+import { queueConfigWrite } from './meatspaceWriteQueues.js';
+import { isPlainObject } from '../../lib/objects.js';
+import { readLocalDailyLog } from './meatspaceDailyLog.js';
+import { getSnpIndex } from '../genome.js';
+import { mlGetProfileIfEnabled, mlPatchProfileIfEnabled } from '../mortalLoomStore.js';
+
+// MortalLoom `LifestyleData` uses a subset of PortOS lifestyle fields.
+// Only mirror these when writing back to avoid introducing PortOS-only keys.
+const MORTALLOOM_LIFESTYLE_KEYS = [
+  'smokingStatus', 'exerciseMinutesPerWeek', 'sleepHoursPerNight',
+  'dietQuality', 'stressLevel', 'bmi'
+];
+
+function pickMortalLoomLifestyle(lifestyle) {
+  if (!lifestyle || typeof lifestyle !== 'object') return null;
+  const out = {};
+  for (const k of MORTALLOOM_LIFESTYLE_KEYS) {
+    if (lifestyle[k] !== undefined) out[k] = lifestyle[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+const MEATSPACE_DIR = PATHS.meatspace;
+const CONFIG_FILE = join(MEATSPACE_DIR, 'config.json');
+
+// Digital Twin paths (read-only)
+const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
+const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');
+
+const SSA_BASELINE = 78.5;
+
+const DEFAULT_CONFIG = {
+  birthDate: null,
+  sex: null,
+  sexSource: null,
+  lifestyle: {
+    smokingStatus: 'never',
+    exerciseMinutesPerWeek: 150,
+    sleepHoursPerNight: 7.5,
+    dietQuality: 'good',
+    stressLevel: 'moderate',
+    bmi: null,
+    chronicConditions: []
+  },
+  updatedAt: null
+};
+
+const LEV_TARGET_YEAR = 2045;
+const LEV_START_YEAR = 2000;
+
+// === File I/O ===
+
+async function ensureMeatspaceDir() {
+  await ensureDir(MEATSPACE_DIR);
+}
+
+async function loadConfig() {
+  return readJSONFile(CONFIG_FILE, structuredClone(DEFAULT_CONFIG), { strict: true });
+}
+
+async function saveConfig(config) {
+  await ensureMeatspaceDir();
+  await atomicWrite(CONFIG_FILE, config);
+  meatspaceEvents.emit('death-clock:changed', {});
+  invalidateMeatspace(['overview', 'alcohol', 'calendar']);
+}
+
+// === Sex Detection ===
+
+export async function detectSexFromGenome() {
+  const index = await getSnpIndex();
+  if (!index) return null;
+
+  let yCount = 0;
+  for (const [, snp] of index) {
+    if (snp.chromosome === 'Y') yCount++;
+  }
+  return yCount > 1000 ? 'male' : 'female';
+}
+
+// === Lifestyle Adjustments (Pure) ===
+
+export function computeLifestyleAdjustment(lifestyle) {
+  if (!lifestyle) return 0;
+
+  let adj = 0;
+
+  // Smoking
+  const smoking = lifestyle.smokingStatus || 'never';
+  if (smoking === 'never') adj += 0;
+  else if (smoking === 'former') adj -= 2;
+  else if (smoking === 'current') adj -= 10;
+
+  // Alcohol (from daily average or questionnaire)
+  const drinks = lifestyle.alcoholDrinksPerDay;
+  if (drinks != null) {
+    if (drinks <= 2) adj += 0.5;
+    else if (drinks > 3) adj -= 5;
+  }
+
+  // Exercise
+  const exercise = lifestyle.exerciseMinutesPerWeek ?? 150;
+  if (exercise > 150) adj += 2;
+  else if (exercise >= 75) adj += 0.5;
+  else adj -= 2;
+
+  // Sleep
+  const sleep = lifestyle.sleepHoursPerNight ?? 7.5;
+  if (sleep >= 7 && sleep <= 9) adj += 1;
+  else if (sleep >= 6 && sleep < 7) adj += 0;
+  else adj -= 1.5;
+
+  // Diet
+  const diet = lifestyle.dietQuality || 'good';
+  if (diet === 'excellent') adj += 2;
+  else if (diet === 'good') adj += 0.5;
+  else if (diet === 'fair') adj += 0;
+  else adj -= 3;
+
+  // Stress
+  const stress = lifestyle.stressLevel || 'moderate';
+  if (stress === 'low') adj += 1;
+  else if (stress === 'moderate') adj += 0;
+  else adj -= 2;
+
+  // BMI
+  const bmi = lifestyle.bmi;
+  if (bmi != null) {
+    if (bmi >= 18.5 && bmi < 25) adj += 0.5;
+    else if (bmi >= 25 && bmi < 30) adj -= 0.5;
+    else if (bmi >= 30) adj -= 3;
+  }
+
+  return Math.round(adj * 100) / 100;
+}
+
+// === Death Clock ===
+
+export function computeDeathClock(birthDate, genomeAdjustedLE, lifestyleAdj) {
+  const baseline = genomeAdjustedLE ?? SSA_BASELINE;
+  const totalLE = baseline + lifestyleAdj;
+
+  const birth = new Date(birthDate);
+  const deathDate = new Date(birth);
+  deathDate.setFullYear(deathDate.getFullYear() + Math.floor(totalLE));
+  deathDate.setMonth(deathDate.getMonth() + Math.round((totalLE % 1) * 12));
+
+  const now = new Date();
+  const msRemaining = deathDate.getTime() - now.getTime();
+  const ageYears = (now - birth) / (365.25 * 24 * 60 * 60 * 1000);
+  const yearsRemaining = Math.max(0, totalLE - ageYears);
+  const healthyYearsRemaining = Math.round(yearsRemaining * 0.85 * 10) / 10;
+  const percentComplete = Math.min(100, Math.round((ageYears / totalLE) * 1000) / 10);
+
+  return {
+    birthDate,
+    deathDate: deathDate.toISOString(),
+    msRemaining: Math.max(0, msRemaining),
+    lifeExpectancy: {
+      baseline: SSA_BASELINE,
+      genomeAdjusted: genomeAdjustedLE ?? SSA_BASELINE,
+      lifestyleAdjustment: lifestyleAdj,
+      total: Math.round(totalLE * 10) / 10
+    },
+    ageYears: Math.round(ageYears * 100) / 100,
+    yearsRemaining: Math.round(yearsRemaining * 100) / 100,
+    healthyYearsRemaining,
+    percentComplete
+  };
+}
+
+// === LEV Tracker ===
+
+export function computeLEV(birthDate, adjustedLE) {
+  const birthYear = new Date(birthDate).getFullYear();
+  const now = new Date();
+  const currentYear = now.getFullYear() + now.getMonth() / 12;
+  const ageAtLEV = LEV_TARGET_YEAR - birthYear;
+  const yearsToLEV = LEV_TARGET_YEAR - currentYear;
+  const researchProgress = Math.round(((currentYear - LEV_START_YEAR) / (LEV_TARGET_YEAR - LEV_START_YEAR)) * 1000) / 10;
+  const onTrack = adjustedLE > ageAtLEV;
+
+  return {
+    targetYear: LEV_TARGET_YEAR,
+    ageAtLEV,
+    yearsToLEV: Math.round(yearsToLEV * 10) / 10,
+    researchProgress: Math.min(100, researchProgress),
+    onTrack,
+    adjustedLifeExpectancy: adjustedLE
+  };
+}
+
+// === Exported Service Functions ===
+
+export async function getConfig() {
+  let config = await loadConfig();
+
+  // Auto-detect sex from genome if not set
+  if (!config.sex) {
+    const detectedSex = await detectSexFromGenome();
+    if (detectedSex) {
+      config = await queueConfigWrite(async () => {
+        const freshConfig = await loadConfig();
+        if (freshConfig.sex) return freshConfig;
+        freshConfig.sex = detectedSex;
+        freshConfig.sexSource = 'genome';
+        freshConfig.updatedAt = new Date().toISOString();
+        await saveConfig(freshConfig);
+        console.log('🧬 Sex auto-detected from genome');
+        return freshConfig;
+      });
+    }
+  }
+
+  // MortalLoom iCloud: treat `store.profile` as authoritative when sync is enabled
+  // so edits made in the iOS/macOS app show up here without a manual import.
+  const mlProfile = await mlGetProfileIfEnabled();
+  if (mlProfile) {
+    if ('biologicalSex' in mlProfile) {
+      config.sex = mlProfile.biologicalSex ?? null;
+      config.sexSource = 'mortalloom';
+    }
+    if ('birthDate' in mlProfile) config.birthDate = mlProfile.birthDate ?? null;
+    if (mlProfile.lifestyle && typeof mlProfile.lifestyle === 'object') {
+      config.lifestyle = { ...config.lifestyle, ...mlProfile.lifestyle };
+    }
+  }
+
+  return config;
+}
+
+export async function updateConfig(updates) {
+  const config = await queueConfigWrite(async () => {
+    const config = await loadConfig();
+    if (updates.sex !== undefined) config.sex = updates.sex;
+    if (updates.sexSource !== undefined) config.sexSource = updates.sexSource;
+    if (updates.lifestyle) {
+      config.lifestyle = { ...config.lifestyle, ...updates.lifestyle };
+    }
+    config.updatedAt = new Date().toISOString();
+    await saveConfig(config);
+    return config;
+  });
+
+  const mlPatch = {};
+  if (updates.sex !== undefined) mlPatch.biologicalSex = updates.sex || null;
+  const mlLifestyle = pickMortalLoomLifestyle(updates.lifestyle);
+  if (mlLifestyle) mlPatch.lifestyle = mlLifestyle;
+  if (Object.keys(mlPatch).length) await mlPatchProfileIfEnabled(mlPatch);
+
+  return config;
+}
+
+export async function updateLifestyle(updates) {
+  const config = await queueConfigWrite(async () => {
+    const config = await loadConfig();
+    config.lifestyle = { ...config.lifestyle, ...updates };
+    config.updatedAt = new Date().toISOString();
+    await saveConfig(config);
+    return config;
+  });
+
+  const mlLifestyle = pickMortalLoomLifestyle(updates);
+  if (mlLifestyle) await mlPatchProfileIfEnabled({ lifestyle: mlLifestyle });
+
+  return config;
+}
+
+/**
+ * Strict read of the stored `config.json` with no defaults applied: `null` when
+ * absent, a throw when present-but-unreadable or not an object.
+ */
+export async function readStoredConfig() {
+  const stored = await readJSONFile(CONFIG_FILE, null, { allowArray: false, strict: true });
+  if (stored !== null && !isPlainObject(stored)) throw new Error(`MeatSpace config malformed: ${CONFIG_FILE}`);
+  return stored;
+}
+
+const presentString = value => typeof value === 'string' && value !== '';
+
+/**
+ * Explicit MortalLoom import of a native `HealthProfile` into `config.json`,
+ * fill-only: a field the stored config already holds is a local edit and wins.
+ * With no stored config the shipped lifestyle defaults are not edits, so the
+ * profile's lifestyle values replace them.
+ * @returns {Promise<{ filled: string[] }>}
+ */
+export async function fillConfigFromMortalLoomProfile(profile) {
+  return queueConfigWrite(async () => {
+    const stored = await readStoredConfig();
+    const config = stored ?? structuredClone(DEFAULT_CONFIG);
+    const storedLifestyle = isPlainObject(stored?.lifestyle) ? stored.lifestyle : {};
+    const filled = [];
+    if (config.sex == null && presentString(profile.biologicalSex)) {
+      config.sex = profile.biologicalSex;
+      config.sexSource = 'mortalloom';
+      filled.push('sex');
+    }
+    if (config.birthDate == null && presentString(profile.birthDate)) {
+      config.birthDate = profile.birthDate;
+      filled.push('birthDate');
+    }
+    if (isPlainObject(profile.lifestyle)) {
+      if (!isPlainObject(config.lifestyle)) config.lifestyle = {};
+      for (const [key, value] of Object.entries(profile.lifestyle)) {
+        if (value == null || storedLifestyle[key] !== undefined) continue;
+        config.lifestyle[key] = value;
+        filled.push(`lifestyle.${key}`);
+      }
+    }
+    if (filled.length === 0) return { filled };
+    config.updatedAt = new Date().toISOString();
+    await saveConfig(config);
+    return { filled };
+  });
+}
+
+// === Birth Date (canonical source: meatspace/config.json) ===
+
+async function migrateBirthDateFromGoals(config) {
+  if (config.birthDate) return config;
+  return queueConfigWrite(async () => {
+    const freshConfig = await loadConfig();
+    if (freshConfig.birthDate) return freshConfig;
+    // Read-only migration source: an unreadable legacy file skips migration without writing either file.
+    const goals = await readJSONFile(GOALS_FILE, null);
+    if (!goals?.birthDate) return freshConfig;
+    freshConfig.birthDate = goals.birthDate;
+    freshConfig.updatedAt = new Date().toISOString();
+    await saveConfig(freshConfig);
+    console.log(`📅 Migrated birthDate from goals.json to meatspace config`);
+    return freshConfig;
+  });
+}
+
+export async function getBirthDate() {
+  const config = await loadConfig();
+  const migrated = await migrateBirthDateFromGoals(config);
+  return { birthDate: migrated.birthDate };
+}
+
+// Like getBirthDate, but reports whether the config read was TRUSTWORTHY (see
+// readJSONFileStrict / AGENTS.md's "Sentinel + validate" rule). A corrupt/unreadable
+// config.json yields `{ birthDate: null, readable: false }` — distinct from a genuinely
+// unset date (`readable: true`) — so consumers (the character enrichment, #2757) can tell a
+// user "your birth date is unreadable, fix it" instead of "set your birth date". An ENOENT
+// (never-written) config is a trustworthy empty and stays `readable: true`.
+export async function getBirthDateStrict() {
+  const { ok, value: config } = await readJSONFileStrict(CONFIG_FILE, structuredClone(DEFAULT_CONFIG));
+  // `ok` only means the JSON parsed — a parseable-but-non-object root (`[]`, `"corrupt"`, a
+  // bare number) is still a corrupt config, not a trustworthy "unset". Treat it as unreadable
+  // so the CTA prompts "fix" rather than the friendly "set" (#2757, codex review).
+  if (!ok || !isPlainObject(config)) return { birthDate: null, readable: false };
+  const migrated = await migrateBirthDateFromGoals(config);
+  return { birthDate: migrated.birthDate, readable: true };
+}
+
+export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {
+  // Verify the compatibility mirror before committing the canonical config.
+  const goals = syncGoals ? await readJSONFile(GOALS_FILE, null, { strict: true }) : null;
+  await queueConfigWrite(async () => {
+    const config = await loadConfig();
+    config.birthDate = birthDate;
+    config.updatedAt = new Date().toISOString();
+    await saveConfig(config);
+  });
+
+  // Keep goals.json in sync for backward compatibility
+  if (goals) {
+    const { mutateGoals } = await import('../identity/store.js');
+    await mutateGoals(fresh => {
+      fresh.birthDate = birthDate;
+      fresh.updatedAt = new Date().toISOString();
+      return fresh;
+    });
+  }
+
+  await mlPatchProfileIfEnabled({ birthDate });
+
+  return { birthDate };
+}
+
+export async function getDeathClock() {
+  const [config, longevity] = await Promise.all([
+    loadConfig(),
+    // Read-only longevity input; this service never persists the projection.
+    readJSONFile(LONGEVITY_FILE, null)
+  ]);
+
+  const migrated = await migrateBirthDateFromGoals(config);
+  const birthDate = migrated.birthDate;
+  if (!birthDate) {
+    return { error: 'Birth date not set. Go to MeatSpace > Age to set it.' };
+  }
+
+  const genomeAdjusted = longevity?.lifeExpectancy?.adjusted ?? null;
+  const lifestyleAdj = computeLifestyleAdjustment(config.lifestyle);
+
+  return computeDeathClock(birthDate, genomeAdjusted, lifestyleAdj);
+}
+
+export async function getLEV() {
+  const [longevity, config] = await Promise.all([
+    // Read-only longevity input; this service never persists the projection.
+    readJSONFile(LONGEVITY_FILE, null),
+    loadConfig()
+  ]);
+
+  const migrated = await migrateBirthDateFromGoals(config);
+  const genomeAdjusted = longevity?.lifeExpectancy?.adjusted ?? SSA_BASELINE;
+  const lifestyleAdj = computeLifestyleAdjustment(migrated.lifestyle);
+  const totalLE = genomeAdjusted + lifestyleAdj;
+
+  return computeLEV(migrated.birthDate, totalLE);
+}
+
+export async function getOverview() {
+  const [config, deathClock, lev, dailyLog] = await Promise.all([
+    getConfig(),
+    getDeathClock(),
+    getLEV(),
+    readLocalDailyLog()
+  ]);
+
+  const entryCount = dailyLog.entries?.length || 0;
+  const lastEntry = dailyLog.entries?.[entryCount - 1] || null;
+
+  return {
+    config,
+    deathClock,
+    lev,
+    summary: {
+      totalEntries: entryCount,
+      lastEntryDate: lastEntry?.date || null,
+      hasGenomeData: deathClock.lifeExpectancy?.genomeAdjusted !== SSA_BASELINE,
+      hasLifestyleData: !!config.lifestyle?.smokingStatus
+    }
+  };
+}

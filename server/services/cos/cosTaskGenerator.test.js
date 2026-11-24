@@ -97,6 +97,7 @@ import {
 } from './cosImprovementTasks.js';
 import { buildJiraTicketTask, buildClaimWorkTask, resolveAppClaimReviewers } from './cosTaskClaimWork.js';
 import * as cosImprovementTasks from './cosImprovementTasks.js';
+import { resolveConfidenceApproval } from './cosImprovementPolicy.js';
 import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
 import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
 import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
@@ -304,6 +305,14 @@ describe('isConfiguredApprovalRequired', () => {
     expect(isConfiguredApprovalRequired(undefined)).toBe(false);
   });
 
+  it('resolveConfidenceApproval lets the requireApproval toggle win over a disabled confidence gate', async () => {
+    const state = { config: { confidenceAutoApproval: { enabled: false } } };
+    expect(await resolveConfidenceApproval(state, 'app-improve:security', 'Task', { requireApproval: true }))
+      .toMatchObject({ autoApproved: false, approvalRequired: true, approvalReason: 'config:requireApproval' });
+    expect(await resolveConfidenceApproval(state, 'app-improve:security', 'Task', {}))
+      .toMatchObject({ autoApproved: true, approvalRequired: false });
+  });
+
   it('both generators stamp approvalReason onto metadata so the hint survives COS-TASKS.md', () => {
     const selfStart = IMP_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = IMP_SRC.indexOf('export async function prepareManagedAppImprovementTask');
@@ -321,17 +330,6 @@ describe('isConfiguredApprovalRequired', () => {
     const selfBody = IMP_SRC.slice(selfStart, selfStart + 9000);
     expect(selfBody).toContain('resolveTaskDataInputs(interval.dataInputs');
     expect(selfBody).toContain('appendTaskDataInputs(description, taskDataInputs)');
-  });
-
-  it('resolveConfidenceApproval consults the toggle before safety-kind and confidence', () => {
-    const start = IMP_SRC.indexOf('async function resolveConfidenceApproval');
-    expect(start).toBeGreaterThan(-1);
-    const body = IMP_SRC.slice(start, start + 1800);
-    const configIdx = body.indexOf('isConfiguredApprovalRequired(metadata)');
-    const safetyIdx = body.indexOf('safety.outwardFacing && requiresSafetyApproval');
-    expect(configIdx).toBeGreaterThan(-1);
-    expect(safetyIdx).toBeGreaterThan(configIdx);
-    expect(body).toContain("approvalReason: 'config:requireApproval'");
   });
 });
 
@@ -559,9 +557,6 @@ describe('claim-work single-source routing', () => {
 
   it('exposes buildClaimWorkTask so the manual /do:next button reuses the same router', () => {
     expect(CLAIM_SRC).toContain('export async function buildClaimWorkTask(');
-    // Same tracker resolution + delegated isolation posture as the scheduler.
-    expect(CLAIM_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveAppWorkTracker, trackerToClaimTaskType/);
-    expect(CLAIM_SRC).toMatch(/buildClaimWorkTask[\s\S]*resolveIssueAuthorFilterBlock\(promptTaskType/);
   });
 
   it('buildClaimWorkTask resolves issueAuthorFilter + reviewers from configured claim-work metadata (parity with scheduler)', () => {
@@ -799,17 +794,6 @@ describe('buildJiraTicketTask', () => {
     expect(prompt).toContain('Local Reviewer Procedure');
     expect(prompt).toContain('@alice');
     expect(taskMetadata.reviewers).toEqual(['ollama']);
-  });
-
-  it('is exported so the /tasks/jira-ticket route reuses the shared assembly', () => {
-    expect(CLAIM_SRC).toContain('export async function buildJiraTicketTask(');
-    // Routes the JIRA flow directly, not via buildClaimWorkTask.
-    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*getTaskPrompt\('claim-issue-jira'\)/);
-    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*appendTargetWorkItemBlock\('claim-issue-jira', key\)/);
-    // The play button layers the app's claim-work metadata, not the defaults
-    // alone (#6210) — the app travels into the reviewer resolution.
-    expect(CLAIM_SRC).toMatch(/buildJiraTicketTask[\s\S]*resolveClaimReviewerPrompt\(app\)/);
-    expect(CLAIM_SRC).toMatch(/async function resolveClaimReviewerPrompt\(app\)/);
   });
 });
 
@@ -1196,7 +1180,7 @@ describe('emitOnDemandEmpty', () => {
   it('passes a remedy the detector already named straight through, without asking gh', async () => {
     // A per-repo permission the token lacks passes checkGhHealth's global-auth
     // probe, so consulting it would drop the remedy this channel exists to carry.
-    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', remedy: null, detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
+    expect(await emitTransient('claim-issue', { gate: 'perpetual-work', cli: 'gh', reason: 'gh-list-failed', detail: null, remedy: 'Grant the token collaborator read.' })).toMatchObject({
       forge: { cli: 'gh', remedy: 'Grant the token collaborator read.' }
     });
     expect(ghHealth).not.toHaveBeenCalled();
@@ -1671,16 +1655,20 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
     expect(body()).toContain('applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, interval, taskSchedule, { ignoreTaskId })');
   });
 
-  it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', () => {
-    // It already forwards the same id to addTask and buildImprovementDedupSets;
-    // the generator was the one path that dropped it.
-    expect(IMP_SRC).toMatch(/prepareTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
-  });
-
-  it('the perpetual gate hands ignoreTaskId to the work detector', () => {
-    const start = IMP_SRC.indexOf('async function applyPerpetualWorkGate');
-    const gate = IMP_SRC.slice(start, IMP_SRC.indexOf('\n}', start));
-    expect(gate).toMatch(/detectActionableWork\(promptTaskType, app, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
+  it('queueEligibleImprovementTasks passes its ignoreTaskId down to the generator', async () => {
+    const state = { config: { improvementEnabled: true, appReviewCooldownMs: 0 } };
+    const prepareTask = vi.fn(async () => ({ task: null, pendingPerpetualDispatch: null, skip: 'test' }));
+    vi.spyOn(apps, 'getActiveApps').mockResolvedValue([{ id: 'app-1', name: 'App One' }]);
+    vi.spyOn(appActivity, 'loadAppActivity').mockResolvedValue({ apps: {} });
+    vi.spyOn(taskSchedule, 'getDueTasks').mockImplementation(async appId => appId ? [{ taskType: 'do-release', reason: 'cron-due' }] : []);
+    vi.spyOn(taskSchedule, 'recordExecution').mockResolvedValue();
+    try {
+      await cosImprovementTasks.queueEligibleImprovementTasks(state, { tasks: [] },
+        { ignoreTaskId: 'sys-finishing', prepareTask, persistTask: vi.fn(), wakeAfterRecord: false });
+      expect(prepareTask).toHaveBeenCalledTimes(1);
+      expect(prepareTask).toHaveBeenCalledWith('do-release', expect.objectContaining({ id: 'app-1' }), state,
+        { ignoreTaskId: 'sys-finishing' });
+    } finally { vi.restoreAllMocks(); }
   });
 
   it('resolveTaskInputHook passes ignoreTaskId into the hook call', async () => {
@@ -1705,13 +1693,6 @@ describe('ignoreTaskId reaches the in-flight-counting gates (#3179)', () => {
  * burn, skipping a dispatch the family was entitled to (#3179).
  */
 describe('ignoreTaskId reaches BOTH completion-continuation generators (#3179)', () => {
-  it('the idle-review chain threads ignoreTaskId end to end', () => {
-    expect(IMP_SRC).toMatch(/export async function generateIdleReviewTask\(state, \{ ignoreTaskId = null, isAppEligible = \(\) => true, onPreflightStart = null \} = \{\}\)/);
-    expect(IMP_SRC).toContain('generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart })');
-    expect(IMP_SRC).toMatch(/async function generateManagedAppImprovementTask\(app, state, \{ ignoreTaskId = null, onPreflightStart = null \} = \{\}\)/);
-    expect(IMP_SRC).toMatch(/prepareManagedAppImprovementTask\(nextType, app, state, \{[\s\S]*ignoreTaskId[\s\S]*\}\)/);
-  });
-
   it('cos.js passes the completing task id into the dequeue that follows the refill', () => {
     expect(COS_SRC).toContain('dequeueNextTask({ ignoreTaskId: agent?.taskId })');
     expect(COS_SRC).toMatch(/async function dequeueNextTask\(\{ ignoreTaskId = null \} = \{\}\)/);

@@ -23,6 +23,8 @@ source you did not write or review, and never fetch code at render time.
 <workspace>/renders/        PortOS output: frames, shot videos, stills, cuts, logs
 ```
 
+3D models from the library: `POST .../blender/models` with `{ kind: "image-to-3d" | "threejs", id }` copies a snapshot into `src/models/<slug>.glb` (or `.js`). In a shot, `from portos_film import models; root, actions = models.load(ctx, "<slug>", height=1.8)` imports it under one empty, scales to a height in meters, stands it on z = 0 and returns the named actions. Loaded models make the shot stale when the file changes; no `deps` entry needed.
+
 Call the API with `node scripts/portos-api.js` (see the `portos-api` skill). Edit files in `src/` directly, or with
 `PUT /api/music-video/:id/blender/file`. No workspace yet: `POST /api/music-video/:id/blender/workspace` copies a
 working three-shot starter. Read it before writing your own.
@@ -128,6 +130,12 @@ Rules that keep a film renderable:
      Always review motion from contact sheets rendered through PortOS (stills alone cannot establish motion, and a
      separate local runner does not pass PortOS's exact shot timing). A current preview is tiled as it stands; a code
      shot with no current preview draws its own frames, and a code layer is painted onto the tiles. Neither needs Blender.
+   - Motion references (timing only): read `motionReferences` in the state. Each `{ id, filename, inSec, outSec, speed,
+     note, missing, strip }` has a `strip.path` image tiled on the contact sheet's grid (same columns, same time step
+     scaled by `speed`); open it beside the sheet and compare timing column by column (which foot moves first, how long
+     it is airborne). `POST .../blender/shots/<shotId>/motion-references/<refId>/strip` with `{ "sheet": <sheet.file> }`
+     lines one up with a specific sheet. Never use a reference as the look, and attach one only when the director asked
+     (`PUT .../shots/<shotId>/motion-references`); they never mark a render out of date.
 3. **Previews**: `{ "quality": "preview" }` renders every shot that has no current preview, so send it again after
    each edit: it takes the shots that went stale and any not rendered yet, and skips the rest (`skipped`).
    `"onlyStale": true` narrows it to renders that exist and went stale; `"force": true` re-renders current ones.

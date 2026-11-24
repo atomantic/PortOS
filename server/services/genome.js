@@ -422,6 +422,8 @@ export async function deleteGenome() {
   const { deriveChronotype } = await import('./identity/chronotype.js');
   const { deriveLongevity } = await import('./identity/longevity.js');
   const { mutateGoals } = await import('./identity/store.js');
+  const { clearCrossDomainNarrative } = await import('./insightsService.js');
+  const { stripGenomeFromSnapshots } = await import('./timeCapsule.js');
 
   // Raw data and every derived identity snapshot share one backup lease, so a
   // backup cannot capture a deleted genome alongside its cached genetic markers.
@@ -436,8 +438,12 @@ export async function deleteGenome() {
     await mutateGoals(goals => {
       goals.lifeExpectancy = null;
       goals.timeHorizons = null;
+      // Advance the document clock so the explicit clears win a peer's LWW merge.
+      goals.updatedAt = new Date().toISOString();
       return goals;
     }, { localOnly: true });
+    await clearCrossDomainNarrative();
+    await stripGenomeFromSnapshots();
     await unlinkGuarded(RAW_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await unlinkGuarded(META_FILE).catch(error => { if (error.code !== 'ENOENT') throw error; });
     snpIndex = null;

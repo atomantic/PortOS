@@ -36,7 +36,7 @@ function regexAllowed(tokens) {
   return false;
 }
 
-function unescape(ch) {
+function unescapeChar(ch) {
   return { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }[ch] ?? ch ?? '';
 }
 
@@ -56,7 +56,7 @@ function readEscape(src, at) {
   }
   if (ch === '\r' && src[at + 2] === '\n') return { text: '', length: 3 };
   if (ch === '\n' || ch === '\r') return { text: '', length: 2 };
-  return { text: unescape(ch), length: 2 };
+  return { text: unescapeChar(ch), length: 2 };
 }
 
 function readString(src, start) {
@@ -64,7 +64,7 @@ function readString(src, start) {
   let text = '';
   for (let i = start + 1; i < src.length; i += 1) {
     const ch = src[i];
-    if (ch === '\\') { const escape = readEscape(src, i); text += escape.text; i += escape.length - 1; continue; }
+    if (ch === '\\') { const escapeResult = readEscape(src, i); text += escapeResult.text; i += escapeResult.length - 1; continue; }
     if (ch === '\n') return null;
     if (ch === quote) return { text, end: i + 1 };
     text += ch;
@@ -197,7 +197,7 @@ export function tokenize(src, proseBackticks = new Set(), { jsx = true } = {}) {
         for (;;) {
           if (pos >= n) throw Object.assign(new Error('unterminated template literal'), { prose: start });
           const ch = src[pos];
-          if (ch === '\\') { const escape = readEscape(src, pos); quasi += escape.text; pos += escape.length; continue; }
+          if (ch === '\\') { const escapeResult = readEscape(src, pos); quasi += escapeResult.text; pos += escapeResult.length; continue; }
           if (ch === '`') { pos += 1; break; }
           if (ch === '$' && src[pos + 1] === '{') {
             quasis.push(quasi);
@@ -339,4 +339,38 @@ export function moduleImports(src, { jsx = true } = {}) {
   };
   scan(tokens);
   return { statics, deferred, mocked, computed };
+}
+
+// Vitest registry calls that can hand a suite the real module behind a mock, or replace its mock later.
+const MOCK_ESCAPES = new Set(['doMock', 'unmock', 'doUnmock', 'importActual', 'importMock']);
+export const MOCK_CALL_RE = /\b(?:mock|doMock|unmock|doUnmock|importActual|importMock)\b/;
+
+/**
+ * Every Vitest module-registry call in `src`, for a selector that wants to
+ * know which modules a suite can never load: `{ calls, opaque }`.
+ *
+ * A call is `{ method, spec, sealed }`. `sealed` marks `vi.mock('<literal>',
+ * () => …)`: the call is hoisted above every import and its parameterless
+ * arrow cannot receive `importOriginal`, so the real module stays unloaded.
+ * `opaque` is true when a call names its module by an expression, or an escape
+ * appears in any other shape (destructured, aliased), since it may name any module.
+ */
+export function moduleMockCalls(src, { jsx = true } = {}) {
+  const calls = [];
+  let opaque = false;
+  const scan = (stream) => stream.forEach((token, i) => {
+    if (token.t === 'tpl') { token.exprs.forEach(scan); return; }
+    if (token.t !== 'id' || (token.v !== 'mock' && !MOCK_ESCAPES.has(token.v))) return;
+    const punct = (offset, value) => stream[i + offset]?.t === 'p' && stream[i + offset].v === value;
+    const viMember = punct(-1, '.') && stream[i - 2]?.t === 'id' && stream[i - 2].v === 'vi';
+    const isCall = viMember && punct(1, '(');
+    if (token.v === 'mock' && !isCall) return;
+    const spec = isCall ? literalArgument(stream[i + 2]) : null;
+    if (spec === null || !(punct(3, ',') || punct(3, ')'))) { opaque = true; return; }
+    const arrow = stream[i + 4]?.t === 'id' && stream[i + 4].v === 'async' ? 5 : 4;
+    const sealed = token.v === 'mock' && punct(3, ',') && punct(arrow, '(') && punct(arrow + 1, ')') && punct(arrow + 2, '=>');
+    calls.push({ method: token.v, spec, sealed });
+  });
+  scan(tokenize(src, new Set(), { jsx }));
+  return { calls, opaque };
 }

@@ -39,7 +39,7 @@ import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { bufferChildExit } from '../videoGen/generateVideoHelpers.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
-import { assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
+import { assertFlux3Inputs, flux3Env, resolveFlux3Snapshot } from './flux3Runtime.js';
 import {
   assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
 } from './minimaxH3ImageRuntime.js';
@@ -115,10 +115,12 @@ async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width,
     const runtime = await diagnoseLocalRuntime({ modelId });
     if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code });
   };
+  let flux3ModelPath = null;
   if (usesFlux3(model)) {
     assertFlux3Inputs({ negativePrompt, width: Number(width), height: Number(height), initImagePath, referenceImagePaths, referenceImageStrengths,
       loraPaths: [...loraPaths, ...loraFilenames] });
     await assertRuntimeReady('FLUX3_NOT_READY');
+    flux3ModelPath = await resolveFlux3Snapshot(model);
   }
   let minimaxRuntime = null;
   if (usesMinimaxH3Image(model)) {
@@ -166,7 +168,7 @@ async function preflightLocalModel({ modelId, pythonPath, negativePrompt, width,
       );
     }
   }
-  return { model, minimaxRuntime };
+  return { model, minimaxRuntime, flux3ModelPath };
 }
 
 async function prepareLocalRenderMeta(inputs) {
@@ -193,6 +195,7 @@ async function prepareLocalRenderMeta(inputs) {
     meta.quantization = model.quantization;
     meta.guidance = 0;
     meta.modelRepo = model.repo;
+    meta.modelRevision = model.revision;
   }
   if (usesMinimaxH3Image(model)) {
     meta.quantize = null;
@@ -270,7 +273,7 @@ async function launchLocalChild(render, stepwiseDir) {
     jobId, model, modelId, meta, actualSteps, actualGuidance, actualSeed, width, height,
     pythonPath, renderPrompt, negativePrompt, quantize, outputPath, validLoras, loraScales,
     validInitImagePath, validInitImageStrength, validReferenceImagePaths, validReferenceImageStrengths,
-    minimaxRuntime, reviewedReferenceSnapshot,
+    minimaxRuntime, flux3ModelPath, reviewedReferenceSnapshot,
   } = render;
   const preparation = { cancelRequested: false };
   preparing = preparation;
@@ -297,7 +300,7 @@ async function launchLocalChild(render, stepwiseDir) {
       pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height),
       steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras,
       loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength,
-      referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime,
+      referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime, flux3ModelPath,
     });
     recordProviderInputs(render, providerInputs);
     heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
@@ -695,7 +698,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
   // the first child.
-  const { model, minimaxRuntime } = await preflightLocalModel({
+  const { model, minimaxRuntime, flux3ModelPath } = await preflightLocalModel({
     modelId, pythonPath, negativePrompt, width, height, steps, initImagePath,
     referenceImagePaths, referenceImageStrengths, loraPaths, loraFilenames,
   });
@@ -728,7 +731,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   const render = {
     ...metadata, job, jobId, model, modelId, pythonPath, negativePrompt, width, height, quantize, loraScales,
     outputPath, filename, outputDir, publicPath, skipSidecar, cleanC2PA, denoise, regenOf,
-    upscaleTo, reviewedReferenceSnapshot, minimaxRuntime,
+    upscaleTo, reviewedReferenceSnapshot, minimaxRuntime, flux3ModelPath,
   };
   const child = await launchLocalChild(render, stepwiseDir);
   wireLocalChild(render, child, stepwiseDir);

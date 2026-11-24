@@ -38,6 +38,26 @@ import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MIGRATIONS_DIR = join(__dirname, 'db-migrations');
 
+// Dedicated transaction-scoped advisory lock key for serializing pending DB
+// migrations across concurrent boot/CLI processes. Distinct from
+// SCHEMA_DDL_ADVISORY_LOCK_KEY (5977001), DB_RUN_ADVISORY_LOCK_KEY (5977002),
+// and SYNC_FEED_LOCK_KEY (8315001).
+export const DB_MIGRATIONS_LOCK_KEY = 5977003;
+
+async function loadMigrationExecutor(migrationsDir, file) {
+  const fullPath = join(migrationsDir, file);
+  if (file.endsWith('.sql')) {
+    const sql = await readFile(fullPath, 'utf-8');
+    return (client) => client.query(sql);
+  }
+  const mod = await import(pathToFileURL(fullPath).href);
+  const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
+  if (!migration || typeof migration.up !== 'function') {
+    throw new Error(`DB migration "${file}" does not export an up() function`);
+  }
+  return (client) => migration.up(client);
+}
+
 /**
  * Apply pending DB migrations.
  *
@@ -54,7 +74,9 @@ export async function runDbMigrations({
   const { query, withTransaction } = db ?? await import('../lib/db.js');
 
   // The tracking table is part of the base schema (ensureSchema + init-db.sql),
-  // so it always exists by the time this runs. Read the applied set once.
+  // so it always exists by the time this runs. Read the applied set once to
+  // skip already-applied files fast, then re-verify per migration under an
+  // advisory lock inside withTransaction.
   const { rows } = await query('SELECT id FROM schema_migrations');
   const applied = new Set(rows.map((r) => r.id));
 
@@ -64,29 +86,30 @@ export async function runDbMigrations({
   for (const file of files) {
     if (applied.has(file)) continue;
 
-    console.log(`🔄 Running DB migration: ${file}`);
-    // Each migration + its bookkeeping insert share ONE transaction so a
-    // failure rolls back both: the migration is NOT marked applied, and a
-    // subsequent boot retries it. Nothing half-applies.
-    if (file.endsWith('.sql')) {
-      const sql = await readFile(join(migrationsDir, file), 'utf-8');
-      await withTransaction(async (client) => {
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [file]);
-      });
+    const applyMigration = await loadMigrationExecutor(migrationsDir, file);
+    // Acquire a transaction-scoped advisory lock and re-check schema_migrations
+    // before running the migration body so overlapping boots/CLI runs cannot
+    // race on the same migration or hit duplicate-key 23505 on insert.
+    const didApply = await withTransaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock($1)', [DB_MIGRATIONS_LOCK_KEY]);
+      const { rows: existing } = await client.query(
+        'SELECT 1 FROM schema_migrations WHERE id = $1',
+        [file],
+      );
+      if (existing.length > 0) return false;
+
+      console.log(`🔄 Running DB migration: ${file}`);
+      await applyMigration(client);
+      await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [file]);
+      return true;
+    });
+
+    if (didApply) {
+      ran++;
+      console.log(`✅ DB migration applied: ${file}`);
     } else {
-      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
-      const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
-      if (!migration || typeof migration.up !== 'function') {
-        throw new Error(`DB migration "${file}" does not export an up() function`);
-      }
-      await withTransaction(async (client) => {
-        await migration.up(client);
-        await client.query('INSERT INTO schema_migrations (id) VALUES ($1)', [file]);
-      });
+      console.log(`⏭️ DB migration already applied by concurrent runner: ${file}`);
     }
-    ran++;
-    console.log(`✅ DB migration applied: ${file}`);
   }
 
   if (ran === 0) {

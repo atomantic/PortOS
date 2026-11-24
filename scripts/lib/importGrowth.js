@@ -67,6 +67,16 @@ export const REGRESSION_6156 = HISTORICAL_PROXY_TOTALS.after6009 - HISTORICAL_PR
  */
 export const EXISTING_SUITE_GROWTH_LIMIT = 2_500;
 
+/** Server entrypoint whose static import closure is growth-guarded per PR. */
+export const BOOT_ENTRY = 'server/index.js';
+
+/**
+ * Maximum net modules a single change may add to `server/index.js`'s static
+ * import closure relative to the base commit. Replaces the fixed absolute cap
+ * that broke unrelated PRs once repository headroom ran out (#18119).
+ */
+export const BOOT_CLOSURE_GROWTH_LIMIT = 15;
+
 /** Half of the smaller known heavy regression. The pin test keeps the limit under this. */
 export const HEAVY_REGRESSION_BAND = Math.floor(REGRESSION_6156 / 2);
 
@@ -117,14 +127,15 @@ function closureOf(entry, resolved) {
 }
 
 /**
- * Closure sizes for `testFiles`, using `readText` for every file.
- * Both the working tree and a git commit go through this function — base and
- * head never run different analyzers. `readText` returns null when the path
- * is absent. A throw from `readText` is a failed read, not an empty closure.
+ * Closure sizes for `testFiles` (plus `bootEntry` when present), using
+ * `readText` for every file. Both the working tree and a git commit go through
+ * this function — base and head never run different analyzers. `readText`
+ * returns null when the path is absent. A throw from `readText` is a failed
+ * read, not an empty closure.
  *
- * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, texts: Map<string, string|null>, testCount: number, total: number }}
+ * @returns {{ tests: Map<string, Set<string>>, deps: Map<string, string[]>, texts: Map<string, string|null>, bootClosure: Set<string>|null, testCount: number, total: number }}
  */
-export function measureClosures(testFiles, readText) {
+export function measureClosures(testFiles, readText, { bootEntry = BOOT_ENTRY } = {}) {
   const textCache = new Map();
   const read = (rel) => {
     if (textCache.has(rel)) return textCache.get(rel);
@@ -162,7 +173,8 @@ export function measureClosures(testFiles, readText) {
     tests.set(file, closure);
     total += closure.size;
   }
-  return { tests, deps, texts: textCache, testCount: tests.size, total };
+  const bootClosure = bootEntry && read(bootEntry) != null ? closureOf(bootEntry, resolved) : null;
+  return { tests, deps, texts: textCache, bootClosure, testCount: tests.size, total };
 }
 
 export function closureSizeFromDeps(entry, deps) {
@@ -178,9 +190,14 @@ function isServerTest(rel) {
  * Compare two measurements from `measureClosures`.
  * `existingSuiteGrowth` sums per-file closure growth. A suite that shrinks
  * does not pay down a suite that grew. New test files contribute only to
- * `newSuiteContribution`.
+ * `newSuiteContribution`. When either side measures `bootClosure`, its net
+ * delta (head minus base) is also checked against `bootLimit`.
  */
-export function compareImportGrowth(base, head, { limit = EXISTING_SUITE_GROWTH_LIMIT } = {}) {
+export function compareImportGrowth(
+  base,
+  head,
+  { limit = EXISTING_SUITE_GROWTH_LIMIT, bootLimit = BOOT_CLOSURE_GROWTH_LIMIT } = {},
+) {
   let existingSuiteGrowth = 0;
   let existingSuiteShrink = 0;
   let comparedSuites = 0;
@@ -236,8 +253,30 @@ export function compareImportGrowth(base, head, { limit = EXISTING_SUITE_GROWTH_
     .sort((a, b) => (b.newReach * b.closureSize) - (a.newReach * a.closureSize) || a.module.localeCompare(b.module))
     .slice(0, 8);
 
+  const baseBoot = base.bootClosure ?? null;
+  const headBoot = head.bootClosure ?? null;
+  let bootClosure = null;
+  if (baseBoot || headBoot) {
+    const baseSet = baseBoot ?? new Set();
+    const headSet = headBoot ?? new Set();
+    const added = [...headSet].filter((mod) => !baseSet.has(mod)).sort();
+    const delta = headSet.size - baseSet.size;
+    bootClosure = {
+      ok: delta <= bootLimit,
+      limit: bootLimit,
+      base: baseSet.size,
+      head: headSet.size,
+      delta,
+      added,
+    };
+  }
+
+  const suiteOk = existingSuiteGrowth <= limit;
+  const bootOk = bootClosure ? bootClosure.ok : true;
+
   return {
-    ok: existingSuiteGrowth <= limit,
+    ok: suiteOk && bootOk,
+    suiteOk,
     limit,
     proxyNote: PROXY_NOTE,
     baseTotal: base.total,
@@ -253,6 +292,7 @@ export function compareImportGrowth(base, head, { limit = EXISTING_SUITE_GROWTH_
     removedSuiteCount,
     largestSuiteDeltas: suiteDeltas.slice(0, 8),
     largestNewDependencies,
+    bootClosure,
   };
 }
 
@@ -267,6 +307,16 @@ export function formatImportGrowthReport(report) {
     `Removed-suite proxy ${report.removedSuiteContribution} across ${report.removedSuiteCount} deleted test file(s).`,
   ];
   if (report.baseSha) lines.splice(1, 0, `Compared with ${report.baseSource || 'base'} ${report.baseSha}.`);
+  if (report.bootClosure) {
+    const boot = report.bootClosure;
+    const sign = boot.delta > 0 ? '+' : '';
+    lines.push(`Boot closure (${BOOT_ENTRY}): ${boot.base} → ${boot.head} (${sign}${boot.delta}, limit +${boot.limit}).`);
+    if (boot.added.length > 0) {
+      const preview = boot.added.slice(0, 20).join(', ');
+      const extra = boot.added.length > 20 ? ` (+${boot.added.length - 20} more)` : '';
+      lines.push(`Added boot-reachable modules (${boot.added.length}): ${preview}${extra}`);
+    }
+  }
   if (report.largestSuiteDeltas.length > 0) {
     lines.push('Largest existing-suite increases:');
     for (const row of report.largestSuiteDeltas) {
@@ -280,12 +330,19 @@ export function formatImportGrowthReport(report) {
       lines.push(`  ${row.module}  closure ${row.closureSize}, newly reached by ${row.newReach} existing suite(s)`);
     }
   }
-  if (!report.ok) {
+  const suiteFailed = report.suiteOk === false || (report.suiteOk == null && !report.ok);
+  if (suiteFailed) {
     lines.push(
       'A widely reached module gained an eager dependency whose closure is too large to be ordinary leaf growth.',
       'Narrow it, or defer it with await import() on the path that actually uses it.',
       'New test files do not spend this allowance — do not delete a suite to get under the limit.',
       'Raising EXISTING_SUITE_GROWTH_LIMIT is the intentional-regression path: do it in the same change, name the module that cannot be deferred, and keep the limit below the #6156 band (the pin test enforces that). See server/AGENTS.md, Import scoping.',
+    );
+  }
+  if (report.bootClosure && !report.bootClosure.ok) {
+    lines.push(
+      `Boot closure (${BOOT_ENTRY}) grew by +${report.bootClosure.delta} module(s), exceeding BOOT_CLOSURE_GROWTH_LIMIT (${report.bootClosure.limit}).`,
+      'Defer rare-path or feature imports with await import(), or narrow imports to a leaf module so server boot stays lean.',
     );
   }
   if (report.timings) {
@@ -602,6 +659,7 @@ export function evaluateWorkingTreeImportGrowth({
   repoRoot,
   env = process.env,
   limit = EXISTING_SUITE_GROWTH_LIMIT,
+  bootLimit = BOOT_CLOSURE_GROWTH_LIMIT,
   now = () => performance.now(),
   headMeasurement = null,
   measureHead = measureWorkingTree,
@@ -626,7 +684,7 @@ export function evaluateWorkingTreeImportGrowth({
     );
   }
   const compareStart = now();
-  const report = compareImportGrowth(base, head, { limit });
+  const report = compareImportGrowth(base, head, { limit, bootLimit });
   const compareMs = Math.round(now() - compareStart);
   report.baseSha = baseRef.sha;
   report.baseSource = baseRef.source;

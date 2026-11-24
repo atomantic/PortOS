@@ -80,6 +80,21 @@ Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. T
 and only listed. A file sits at most five folders below `src/`, and symbolic links are not followed.
 A workspace with more than 5,000 supported source files is refused explicitly; it is never partially hashed or copied.
 
+### 3D models from the library
+
+**Add 3D model** on the Files tab picks an image-to-3D model (its animated, rigged or plain GLB, richest published asset first) or a Three.js model. The server copies a snapshot to `src/models/<slug>.glb` (or the generated factory module `src/models/<slug>.js`) beside `<slug>.json` (source kind and id, variant, source timestamp, SHA-256, size). Adding the same model twice gives a second slug; an explicit taken slug is `409 MUSIC_VIDEO_BLENDER_MODEL_EXISTS` unless `replace` is true. A model with no mesh yet is `409 MODEL_NOT_READY`. A Blender model (`kind: "blender-model"`, its published build) is added the same way by [Make showcase film](blender-models.md#showcase-film); a model without a published build is `409 BLENDER_MODEL_NOT_PUBLISHED`. `models.load` leaves out the importer's hidden bone-shape helper, so a rigged model is sized and grounded by its own meshes.
+
+The copy is self-contained: deleting or re-rendering the source never changes it. When the library holds a different asset the Files tab shows **Update copy**; nothing updates by itself. In a Blender shot:
+
+```python
+from portos_film import models
+root, actions = models.load(ctx, "robot-dog", height=1.8)  # one empty, scaled to meters, standing on z = 0
+```
+
+Blender's importer leaves an animated file's first clip playing on the scene's timeline. To hold or drive the pose yourself, pass `settle=` a function that clears each object's `animation_data.action`; it runs before the model is measured and grounded.
+
+The driver reports each loaded `models/<slug>.glb` with the shot's imports, so a shot goes out of date when that file changes without listing it in `deps`; renders from before this have no model hashes and stay current. A Three.js module is for `"space": "three"` code shots. Forking and promoting a film copy `src/models/` with the rest of `src/`.
+
 **Create starter workspace** copies a small complete film into `src/`: a stage, three figures and lights that follow
 the song's beats and loudness, in three shots. Use it as a template.
 
@@ -400,6 +415,9 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `GET /api/music-video/:id/blender/file` | Read one text file (`?path=shots/s010.py`) |
 | `PUT /api/music-video/:id/blender/file` | Write one text file `{ path, content }` |
 | `DELETE /api/music-video/:id/blender/file` | Delete one file (`?path=`) |
+| `GET /api/music-video/:id/blender/models` | The film's library copies, with `updateAvailable` and `sourceMissing` |
+| `POST /api/music-video/:id/blender/models` | Copy a library model in `{ kind: 'image-to-3d' \| 'threejs', id, variant?, slug?, replace? }` → `201 { model, snippet }` |
+| `POST /api/music-video/:id/blender/models/:slug/update` | Re-copy one model from its source |
 | `POST /api/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }` |
 | `GET /api/music-video/:id/blender/usage` | What the workspace takes on disk |
 | `POST /api/music-video/:id/blender/frames/clear` | Clear rendered frames → `{ freedBytes, usage }` |
@@ -408,6 +426,8 @@ changes; a sync, a render and a cut answer with the jobs they queued.
 | `POST /api/music-video/:id/blender/cancel` | Cancel every job of the project |
 | `POST /api/music-video/:id/blender/cut` | Assemble a cut `{ quality, animatic?, filmLook? }` → `202 { job }` |
 | `PUT /api/music-video/:id/blender/shots/:shotId/note` | Save a note `{ text?, status? }` |
+| `PUT /api/music-video/:id/blender/shots/:shotId/motion-references` | Replace the shot's motion references `{ references: [{ id?, filename, inSec, outSec, speed, note? }] }` (at most three) |
+| `POST /api/music-video/:id/blender/shots/:shotId/motion-references/:refId/strip` | Tile a reference on a contact sheet's grid `{ sheet? }` → `{ file, path, every, columns, tiles, available }` |
 | `POST /api/music-video/:id/blender/shots/:shotId/open` | Open the shot's saved `.blend` in Blender |
 | `GET /api/music-video/:id/blender/media` | Serve a file under `renders/` (`?path=s010/preview/shot.mp4`) |
 
@@ -420,6 +440,26 @@ default 3; `columns` 2–12, default 6; `range: [startSec, endSec]` inside the s
 rendering stamped preview-scale frames otherwise. A code shot draws those frames itself, with no Blender. A code
 layer is painted onto each tile, including a sheet taken from a current preview. Agents should review motion from
 contact sheets rendered through PortOS rather than relying on stills alone or a separate local runner.
+
+### Motion references
+
+A shot can hold up to three **motion references**: a Media History video, in and out seconds, a speed (0.25 to 4)
+and a note ("read the footfall order"). They are for judging timing only: they never enter a render, a cut or a
+shot's out-of-date check, so adding or changing one marks nothing stale. They are saved in the install-local film
+record beside the notes (`motionReferences`, state key of the same name), a removed shot loses its references at the
+next sync, and a record from an older version reads as having none. A video that has left Media History shows as
+`missing`; the shot still renders.
+
+The Shots step shows each reference's strip above the newest contact sheet. The strip is tiled on the sheet's grid:
+the same columns and cell width, and tile `k` shows reference time `in + (tile k's shot time) * speed`, so a 2x
+reference over a 4 s shot lines up column for column. Tiles past the out point stay black. Scrubbing the shot player
+marks the same tile on both. A strip is a regenerable JPEG at `renders/<shot>/references/<refId>.jpg`; the state
+carries its `strip.path` (and `strip.current`, false once the clip, window, speed or sheet changed) so an authoring
+agent can look at it, and the agent brief lists every reference.
+
+**Make a motion reference** opens Video Gen with the shot's newest still as the input image and the prompt left
+empty. You write and submit it; nothing is queued by itself and no words are added. Attach the finished clip with
+**Add reference** when you choose it.
 
 A job is `{ id, kind: "sync" | "render" | "cut", status: "queued" | "running" | "encoding" | "done" | "error" |
 "canceled", shotId?, quality?, frame?, index?, total?, secPerFrame?, queuedAt, startedAt, finishedAt?, error?,

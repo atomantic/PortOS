@@ -56,7 +56,7 @@ const sharedMedia = vi.hoisted(() => ({
   generateVideo: vi.fn(),
   renderMusicVideoSceneFrame: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })),
 }));
-vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
+vi.mock('../components/musicVideo/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
   busy: false, error: null, proof: { active: false }, save: vi.fn(), prepare: vi.fn(), approve: vi.fn(), renderProof: vi.fn(),
@@ -220,7 +220,12 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   // Blender film: read only for a project in that render style; a test that opens one supplies the state.
   getMusicVideoBlender: vi.fn(() => new Promise(() => {})),
   saveMusicVideoBlenderSettings: vi.fn(),
+  saveMusicVideoBlenderMotionReferences: vi.fn(),
+  makeMusicVideoBlenderMotionStrip: vi.fn(),
   createMusicVideoBlenderWorkspace: vi.fn(),
+  listMusicVideoBlenderModels: vi.fn(async () => ({ models: [] })),
+  addMusicVideoBlenderModel: vi.fn(),
+  updateMusicVideoBlenderModel: vi.fn(),
   listMusicVideoBlenderFiles: vi.fn(async () => ({ files: [] })),
   getMusicVideoBlenderFile: vi.fn(),
   saveMusicVideoBlenderFile: vi.fn(),
@@ -291,7 +296,7 @@ vi.mock('../hooks/useProviderModels', () => ({
   }),
 }));
 // MIDI loading/parsing is covered by useMidiNotes; this page checks the link.
-vi.mock('../hooks/useMidiNotes.js', () => ({
+vi.mock('../components/songs/useMidiNotes.js', () => ({
   default: () => ({ status: 'idle', data: null, error: null, reload: vi.fn() }),
 }));
 vi.mock('../services/apiImageVideo.js', () => ({

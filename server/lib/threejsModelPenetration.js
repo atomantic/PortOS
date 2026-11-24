@@ -2,14 +2,23 @@
  * Cross-part penetration gate for an already-validated Three.js scene spec.
  *
  * `evaluateThreejsPenetration(spec)` — cross-part penetration gate over an already-validated Three.js
- * spec, the one check that compares two parts to each other. Rebuilds each part's world placement (the
- * same `THREE.Euler` 'XYZ' composition the preview applies), derives an analytic solid per geometry
- * type, and samples one part's interior against another's to flag a part entirely buried inside an
+ * spec, the one check that compares two parts to each other, at rest and across the clip poses it
+ * declares. Rebuilds each part's world placement (the same `THREE.Euler` 'XYZ' composition the
+ * preview applies), derives an analytic solid per geometry type, and samples one part's interior against another's to flag a part entirely buried inside an
  * unrelated one (`error`) or unrelated parts occupying substantially the same space (`warning`). Parts
  * in the same subtree and declared `attachmentPartIds` are exempt — embedding is what those
  * relationships are *for* — and a shallow or transparent-container overlap is reported as an undecided
- * `note`, never as a defect. `buildThreejsPenetrationFeedback(penetration)` turns the errors and
- * warnings (never the undecided notes) into default refinement feedback.
+ * `note`, never as a defect.
+ *
+ * A spec with clips is also swept through the pose times the physical audit plans
+ * (`threejsModelClipSampling.js`): a pair is reported as `clip-part-collision` only
+ * when a pose makes it WORSE than rest — a hatch swinging through its frame, a leg
+ * folding through the hull — so overlap the rest pose already has is never blamed
+ * on the motion. Parts hidden or fully transparent at that time, pairs an
+ * articulation joint connects, and a transparent container are skipped, and poses
+ * the shared budget omits are reported as `clip-poses-unsampled`, never as clean.
+ * `buildThreejsPenetrationFeedback(penetration)` turns the errors and warnings
+ * (never the undecided notes) into default refinement feedback.
  *
  * Every other gate reads one part at a time. `threejsSculptSpecSchema` proves
  * each geometry is well formed (a hole inside its outline, a tube that does not
@@ -45,6 +54,12 @@
  */
 
 import { listSpecNames, resolveThreejsAttachments } from './threejsModel.js';
+import {
+  MAX_CLIP_AUDIT_POSES,
+  MAX_LISTED_OMITTED_TIMES,
+  getThreejsClipPoseState,
+  planThreejsClipPoseSamples,
+} from './threejsModelClipSampling.js';
 import {
   applyLinear,
   applyTransform,
@@ -345,60 +360,81 @@ const customVertexPoints = (geometry) => {
 };
 
 /**
+ * A part's pose-independent solid: its analytic shape, its interior samples in
+ * LOCAL space and the eight corners of its local box, or `null` when nothing of
+ * it is measurable. Built once per part and reused by every pose — only the
+ * transform moves between poses, never the shape — which is what keeps the clip
+ * walk from re-deriving the solids of a 160-part spec for each sampled time.
+ */
+function describeLocalSolid(part) {
+  const solid = describeSolid(part.geometry);
+  if (!solid) return null;
+  const sampled = solid.contains
+    ? sampleSolid(solid.bounds, solid.contains, SAMPLE_GRID)
+    : customVertexPoints(part.geometry);
+  // A shape too thin to catch a cell centre gets one finer pass before it
+  // is written off — a narrow torus or a shallow extrude is a real solid,
+  // not an unmeasurable one.
+  const refined = solid.contains && sampled.length === 0
+    ? sampleSolid(solid.bounds, solid.contains, RETRY_GRID)
+    : sampled;
+  if (refined.length === 0) return null;
+  const corners = [];
+  for (const x of [solid.bounds[0][0], solid.bounds[1][0]]) {
+    for (const y of [solid.bounds[0][1], solid.bounds[1][1]]) {
+      for (const z of [solid.bounds[0][2], solid.bounds[1][2]]) corners.push([x, y, z]);
+    }
+  }
+  return {
+    contains: solid.contains,
+    samples: strideDown(refined, MAX_PAIR_SAMPLES),
+    corners,
+  };
+}
+
+/**
  * Flatten the part tree into world-placed volumes. Parts with no geometry are
  * groups: they carry their transform down to their children and are never
  * compared themselves.
+ *
+ * `getState(part)` supplies the TRS a part holds in a clip pose (default: the
+ * authored one). With `skipUnseen`, a part that is hidden — itself or through an
+ * ancestor, as Three.js hides a whole subtree — or fully transparent at that
+ * time yields no volume: nothing of it can be seen passing through anything.
  */
-function collectVolumes(spec) {
+function collectVolumes(spec, { solids, getState = null, skipUnseen = false } = {}) {
   const volumes = [];
-  const walk = (part, parentTransform, ancestorIds) => {
-    const transform = composeTransform(parentTransform, part);
-    if (part.geometry) {
-      const solid = describeSolid(part.geometry);
-      const inverse = solid ? invertTransform(transform) : null;
-      if (solid && inverse) {
-        const sampled = solid.contains
-          ? sampleSolid(solid.bounds, solid.contains, SAMPLE_GRID)
-          : customVertexPoints(part.geometry);
-        // A shape too thin to catch a cell centre gets one finer pass before it
-        // is written off — a narrow torus or a shallow extrude is a real solid,
-        // not an unmeasurable one.
-        const refined = solid.contains && sampled.length === 0
-          ? sampleSolid(solid.bounds, solid.contains, RETRY_GRID)
-          : sampled;
-        if (refined.length > 0) {
-          const worldSamples = strideDown(refined, MAX_PAIR_SAMPLES)
-            .map((point) => applyTransform(transform, point));
-          const corners = [];
-          for (const x of [solid.bounds[0][0], solid.bounds[1][0]]) {
-            for (const y of [solid.bounds[0][1], solid.bounds[1][1]]) {
-              for (const z of [solid.bounds[0][2], solid.bounds[1][2]]) {
-                corners.push(applyTransform(transform, [x, y, z]));
-              }
-            }
-          }
-          volumes.push({
-            id: part.id,
-            name: part.name || part.id,
-            ancestorIds,
-            materialId: part.material || null,
-            samples: worldSamples,
-            // `null` for a `custom` mesh: it can be found buried inside another
-            // part, but nothing can be tested against ITS interior.
-            contains: solid.contains
-              ? (worldPoint) => solid.contains(applyTransform(inverse, worldPoint))
-              : null,
-            worldBounds: [0, 1, 2].map((axis) => [
-              Math.min(...corners.map((corner) => corner[axis])),
-              Math.max(...corners.map((corner) => corner[axis])),
-            ]),
-          });
-        }
+  const walk = (part, parentTransform, ancestorIds, parentVisible) => {
+    const state = getState ? getState(part) : part;
+    const transform = composeTransform(parentTransform, state);
+    const visible = parentVisible && state.visible !== false;
+    if (part.geometry && !(skipUnseen && (!visible || !(state.opacity > 0)))) {
+      if (!solids.has(part.id)) solids.set(part.id, describeLocalSolid(part));
+      const local = solids.get(part.id);
+      const inverse = local ? invertTransform(transform) : null;
+      if (local && inverse) {
+        const corners = local.corners.map((corner) => applyTransform(transform, corner));
+        volumes.push({
+          id: part.id,
+          name: part.name || part.id,
+          ancestorIds,
+          materialId: part.material || null,
+          samples: local.samples.map((point) => applyTransform(transform, point)),
+          // `null` for a `custom` mesh: it can be found buried inside another
+          // part, but nothing can be tested against ITS interior.
+          contains: local.contains
+            ? (worldPoint) => local.contains(applyTransform(inverse, worldPoint))
+            : null,
+          worldBounds: [0, 1, 2].map((axis) => [
+            Math.min(...corners.map((corner) => corner[axis])),
+            Math.max(...corners.map((corner) => corner[axis])),
+          ]),
+        });
       }
     }
-    for (const child of part.children || []) walk(child, transform, [...ancestorIds, part.id]);
+    for (const child of part.children || []) walk(child, transform, [...ancestorIds, part.id], visible);
   };
-  for (const part of spec?.parts || []) walk(part, IDENTITY_TRANSFORM, []);
+  for (const part of spec?.parts || []) walk(part, IDENTITY_TRANSFORM, [], true);
   return volumes;
 }
 
@@ -411,62 +447,235 @@ const boundsDisjoint = (a, b) => [0, 1, 2].some((axis) => (
  * `null` when the container has no interior test.
  *
  * Bails as soon as every remaining sample landing inside could no longer reach
- * `CONTACT_FRACTION` — the caller drops anything under that floor, and the
- * abandoned tally is by construction below it too, so the early exit cannot
- * change a verdict. It is what keeps the common case (parts that merely brush
+ * `floor` (default `CONTACT_FRACTION`) — the caller drops anything under that
+ * floor, and the abandoned tally is by construction below it too, so the early
+ * exit cannot change a verdict. It is what keeps the common case (parts that merely brush
  * each other's bounding boxes) from paying for a full sample sweep.
  */
-const containedFraction = (subject, container) => {
+const containedFraction = (subject, container, floor) => {
   if (!container.contains) return null;
   const total = subject.samples.length;
   let inside = 0;
   for (let index = 0; index < total; index += 1) {
     if (container.contains(subject.samples[index])) inside += 1;
-    else if ((inside + (total - index - 1)) / total < CONTACT_FRACTION) return inside / total;
+    else if ((inside + (total - index - 1)) / total < floor) return inside / total;
   }
   return inside / total;
 };
+
+/**
+ * The deeper-contained direction of a pair, or `null` when neither direction has
+ * an interior test. Whichever direction is measurable and deeper: a small part
+ * swallowed by a large one reports ~1 in its own direction and a sliver in the
+ * other. A fraction under `floor` is only a bound (see `containedFraction`).
+ */
+const measurePair = (a, b, floor) => {
+  const aInB = containedFraction(a, b, floor);
+  const bInA = containedFraction(b, a, floor);
+  if (aInB === null && bInA === null) return null;
+  const [subject, container, fraction] = (aInB ?? -1) >= (bInA ?? -1)
+    ? [a, b, aInB]
+    : [b, a, bInA];
+  return { subject, container, fraction };
+};
+
+const pairKey = (idA, idB) => (idA < idB ? `${idA}\u0000${idB}` : `${idB}\u0000${idA}`);
 
 const isTransparent = (material) => Boolean(material)
   && ((material.transparent === true && (material.opacity ?? 1) < 1) || (material.transmission ?? 0) > 0);
 
 const describePair = (a, b) => `"${a.name}" and "${b.name}"`;
 
+const CLIP_COLLISION_CODE = 'clip-part-collision';
+
+// A pair already touching at rest is only reported for a pose that pushes it
+// this much DEEPER — an overlap the rest pose already has is the design, and a
+// hinge that merely keeps it is not a collision.
+const COLLISION_WORSENING = 0.25;
+
+/**
+ * Part-id pairs an articulation joint explicitly connects (a joint's part and its
+ * parent joint's part). They meet at a pivot by construction, so a pose that
+ * keeps them touching carries no information about collision.
+ */
+const jointPairKeys = (articulation) => {
+  const joints = Array.isArray(articulation?.joints) ? articulation.joints : [];
+  const partByJointId = new Map(joints.map((joint) => [joint.id, joint.partId]));
+  const keys = new Set();
+  for (const joint of joints) {
+    const parentPartId = partByJointId.get(joint.parentJointId);
+    if (typeof joint.partId === 'string' && typeof parentPartId === 'string') {
+      keys.add(pairKey(joint.partId, parentPartId));
+    }
+  }
+  return keys;
+};
+
+/**
+ * Which parts a clip drives, so the walk can skip a pair whose relative pose
+ * cannot differ from rest. A driven ancestor SHARED by both parts moves them
+ * rigidly together — unless it rescales, which can shear one against the other.
+ */
+const describeClipDrive = (clip) => {
+  const driven = new Set();
+  const rescaled = new Set();
+  for (const sequence of Array.isArray(clip.sequences) ? clip.sequences : []) {
+    const channels = sequence.channels || {};
+    if (Object.keys(channels).length === 0) continue;
+    driven.add(sequence.partId);
+    if (channels.scale) rescaled.add(sequence.partId);
+  }
+  return (a, b) => {
+    const chainA = [...a.ancestorIds, a.id];
+    const chainB = [...b.ancestorIds, b.id];
+    if (chainA.some((id) => rescaled.has(id)) || chainB.some((id) => rescaled.has(id))) return true;
+    const movesAlone = (chain, other) => chain.some((id) => driven.has(id) && !other.includes(id));
+    return movesAlone(chainA, chainB) || movesAlone(chainB, chainA);
+  };
+};
+
+const percent = (fraction) => `${Math.round(fraction * 100)}%`;
+
+/**
+ * Sweep every clip through the pose times the physical audit plans and report a
+ * pair only when a pose makes it WORSE than rest: below contact at rest and at or
+ * above it in the pose, or at least `COLLISION_WORSENING` deeper. One finding per
+ * pair per clip, carrying the first failing time and the worst overlap seen.
+ * A pose the shared budget left out is reported as unsampled, never as clean.
+ */
+function walkClipPoses({ spec, clips, solids, materials, isExemptPair, restFractions }) {
+  const jointPairs = jointPairKeys(spec.articulation);
+  const collisionFindings = [];
+  const unsampledFindings = [];
+  const coverage = [];
+  let evaluatedPoseCount = 0;
+  let comparedPairCount = 0;
+
+  for (const { clip, timesToTest, omittedTimes } of planThreejsClipPoseSamples(clips)) {
+    const clipName = clip.name || clip.id;
+    const movesRelatively = describeClipDrive(clip);
+    const collisions = new Map();
+    for (const timeSeconds of timesToTest) {
+      evaluatedPoseCount += 1;
+      const volumes = collectVolumes(spec, {
+        solids,
+        getState: getThreejsClipPoseState(clip, timeSeconds),
+        skipUnseen: true,
+      });
+      for (let i = 0; i < volumes.length; i += 1) {
+        for (let j = i + 1; j < volumes.length; j += 1) {
+          const [a, b] = [volumes[i], volumes[j]];
+          const key = pairKey(a.id, b.id);
+          if (isExemptPair(a, b) || jointPairs.has(key) || !movesRelatively(a, b) || boundsDisjoint(a, b)) continue;
+          comparedPairCount += 1;
+          const rest = restFractions.get(key) ?? 0;
+          const floor = rest < CONTACT_FRACTION ? CONTACT_FRACTION : rest + COLLISION_WORSENING;
+          const measured = measurePair(a, b, floor);
+          if (!measured || !(measured.fraction >= floor)) continue;
+          // Same exemption as the rest pose: a part inside glass is the reference.
+          if (isTransparent(materials[measured.container.materialId])) continue;
+          const seen = collisions.get(key);
+          if (!seen) {
+            collisions.set(key, { ...measured, firstTimeSeconds: timeSeconds, worstTimeSeconds: timeSeconds, rest });
+          } else if (measured.fraction > seen.fraction) {
+            Object.assign(seen, measured, { worstTimeSeconds: timeSeconds });
+          }
+        }
+      }
+    }
+
+    const ranked = [...collisions.values()].sort((left, right) => (right.fraction - left.fraction)
+      || left.subject.id.localeCompare(right.subject.id)
+      || left.container.id.localeCompare(right.container.id));
+    for (const entry of ranked) {
+      const { subject, container, fraction, firstTimeSeconds, worstTimeSeconds, rest } = entry;
+      collisionFindings.push({
+        code: CLIP_COLLISION_CODE,
+        // A part swallowed whole, or half of it, is past any seam a motion could
+        // legitimately close; a shallow graze is for a human to look at.
+        severity: fraction >= HEAVY_OVERLAP_FRACTION ? 'warning' : 'note',
+        partIds: [subject.id, container.id],
+        clipId: clip.id,
+        clipName,
+        timeSeconds: firstTimeSeconds,
+        worstTimeSeconds,
+        worstFraction: Number(fraction.toFixed(3)),
+        restFraction: Number(Math.min(rest, 1).toFixed(3)),
+        message: `In clip "${clipName}", ${describePair(subject, container)} pass through each other from ${firstTimeSeconds}s: ${percent(fraction)} of "${subject.name}" lies inside "${container.name}" at ${worstTimeSeconds}s, against ${percent(Math.min(rest, 1))} at rest. Move the pivot, shorten the swing or add clearance so the motion never drives one part into the other.`,
+      });
+    }
+
+    const listed = omittedTimes.slice(0, MAX_LISTED_OMITTED_TIMES);
+    coverage.push({
+      clipId: clip.id,
+      clipName,
+      sampledTimes: timesToTest,
+      omittedCount: omittedTimes.length,
+      omittedTimes: listed,
+    });
+    if (omittedTimes.length > 0) {
+      unsampledFindings.push({
+        code: 'clip-poses-unsampled',
+        severity: 'note',
+        partIds: [],
+        clipId: clip.id,
+        omittedTimes: listed,
+        omittedCount: omittedTimes.length,
+        message: `In clip "${clipName}", collisions were checked at ${timesToTest.length} of ${timesToTest.length + omittedTimes.length} sampled pose(s); the ${MAX_CLIP_AUDIT_POSES}-pose budget across ${clips.length} clip(s) left ${listed.map((time) => `${time}s`).join(', ')}${omittedTimes.length > listed.length ? ` and ${omittedTimes.length - listed.length} more` : ''} unmeasured, so parts could pass through each other there unreported.`,
+      });
+    }
+  }
+
+  return {
+    findings: [...collisionFindings, ...unsampledFindings],
+    evaluatedPoseCount,
+    poseCoverage: {
+      status: coverage.some((entry) => entry.omittedCount > 0) ? 'partial' : 'complete',
+      budget: MAX_CLIP_AUDIT_POSES,
+      comparedPairCount,
+      clips: coverage,
+    },
+  };
+}
+
 /**
  * @param {object|null} spec a spec that has already passed a sculpt-spec schema
  * @returns {{findings: Array, errorCount: number, warningCount: number, noteCount: number,
- *   evaluatedPartCount: number, comparedPairCount: number, undecidedPairCount: number}}
+ *   evaluatedPartCount: number, comparedPairCount: number, undecidedPairCount: number,
+ *   evaluatedPoseCount?: number, poseCoverage?: object}} the last two exist only for a spec that declares clips
  */
 export function evaluateThreejsPenetration(spec) {
-  const volumes = collectVolumes(spec);
+  const solids = new Map();
+  const volumes = collectVolumes(spec, { solids });
   const materials = spec?.materials && typeof spec.materials === 'object' ? spec.materials : {};
   // A declared attachment says outright that this part rides another one, so a
   // pack sunk into the back it is strapped to is the spec working as declared.
   const attachments = new Set(resolveThreejsAttachments(spec?.articulation).map((attachment) => attachment.partId));
+  // Same subtree: interpenetration is what a parent/child relationship is
+  // FOR, so the pair carries no information.
+  const isExemptPair = (a, b) => a.ancestorIds.includes(b.id) || b.ancestorIds.includes(a.id)
+    || attachments.has(a.id) || attachments.has(b.id);
 
   const buried = [];
   const overlapping = [];
   const undecided = [];
+  // What each measurable pair overlapped by at rest, for the clip walk to judge
+  // a pose against. A value under `CONTACT_FRACTION` is a bound, which is all
+  // "below contact at rest" needs.
+  const restFractions = new Map();
   let comparedPairCount = 0;
 
   for (let i = 0; i < volumes.length; i += 1) {
     for (let j = i + 1; j < volumes.length; j += 1) {
       const [a, b] = [volumes[i], volumes[j]];
-      // Same subtree: interpenetration is what a parent/child relationship is
-      // FOR, so the pair carries no information.
-      if (a.ancestorIds.includes(b.id) || b.ancestorIds.includes(a.id)) continue;
-      if (attachments.has(a.id) || attachments.has(b.id)) continue;
+      if (isExemptPair(a, b)) continue;
       if (boundsDisjoint(a, b)) continue;
       comparedPairCount += 1;
 
-      const aInB = containedFraction(a, b);
-      const bInA = containedFraction(b, a);
-      if (aInB === null && bInA === null) continue;
-      // Whichever direction is measurable and deeper: a small part swallowed by
-      // a large one reports ~1 in its own direction and a sliver in the other.
-      const [subject, container, fraction] = (aInB ?? -1) >= (bInA ?? -1)
-        ? [a, b, aInB]
-        : [b, a, bInA];
+      const measured = measurePair(a, b, CONTACT_FRACTION);
+      if (!measured) continue;
+      const { subject, container, fraction } = measured;
+      restFractions.set(pairKey(a.id, b.id), fraction);
       if (fraction < CONTACT_FRACTION) continue;
 
       // A part inside glass is the reference being followed, not a mistake, so
@@ -541,6 +750,12 @@ export function evaluateThreejsPenetration(spec) {
     });
   }
 
+  const clips = Array.isArray(spec?.animation?.clips) ? spec.animation.clips : [];
+  const clipWalk = clips.length > 0
+    ? walkClipPoses({ spec, clips, solids, materials, isExemptPair, restFractions })
+    : null;
+  if (clipWalk) findings.push(...clipWalk.findings);
+
   const countBy = (severity) => findings.filter((finding) => finding.severity === severity).length;
   return {
     findings,
@@ -552,6 +767,11 @@ export function evaluateThreejsPenetration(spec) {
     evaluatedPartCount: volumes.length,
     comparedPairCount,
     undecidedPairCount: undecided.length,
+    // Only a spec that declares clips carries these, so a static model returns
+    // exactly what it did before the clip walk existed, and a record written
+    // before it reads back without them — which a reader treats as "clip poses
+    // never evaluated", never as "no part collides while moving".
+    ...(clipWalk ? { evaluatedPoseCount: clipWalk.evaluatedPoseCount, poseCoverage: clipWalk.poseCoverage } : {}),
   };
 }
 
@@ -567,10 +787,18 @@ export function buildThreejsPenetrationFeedback(penetration) {
   const actionable = (penetration?.findings || []).filter((finding) => (
     finding.severity === 'error' || finding.severity === 'warning'
   ));
-  if (actionable.length === 0) return '';
+  const inMotion = actionable.filter((finding) => finding.code === CLIP_COLLISION_CODE);
+  const atRest = actionable.filter((finding) => finding.code !== CLIP_COLLISION_CODE);
   return [
-    'The previous pass failed the cross-part penetration check — unrelated parts are modelled in the same space:',
-    ...actionable.map((finding, index) => `${index + 1}. ${finding.message}`),
-    'Give every part its own volume: place each one against the surface it belongs on rather than inside it, and parent anything that is genuinely meant to be embedded to the part it rides.',
+    ...(atRest.length > 0 ? [
+      'The previous pass failed the cross-part penetration check — unrelated parts are modelled in the same space:',
+      ...atRest.map((finding, index) => `${index + 1}. ${finding.message}`),
+      'Give every part its own volume: place each one against the surface it belongs on rather than inside it, and parent anything that is genuinely meant to be embedded to the part it rides.',
+    ] : []),
+    ...(inMotion.length > 0 ? [
+      'The previous pass failed the cross-part collision check — parts pass through each other while a clip plays:',
+      ...inMotion.map((finding, index) => `${index + 1}. ${finding.message}`),
+      'Fix the motion, not the resting pose: put each pivot on the edge the part really turns about, reduce the travel, or move the parts apart so no sequence drives one through another.',
+    ] : []),
   ].join('\n');
 }

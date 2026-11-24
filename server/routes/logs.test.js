@@ -16,7 +16,7 @@ vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn(),
 }));
 vi.mock('../services/appProcessStatus.js', () => ({
-  resolvePm2HomeForProcess: vi.fn(),
+  resolveRegisteredProcess: vi.fn(),
 }));
 
 vi.mock('../services/pm2.js', () => ({
@@ -39,6 +39,7 @@ const createApp = () => {
 describe('log routes PM2_HOME resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue({ pm2Home: null });
     pm2Service.getLogs.mockResolvedValue('line');
     pm2Service.spawnPm2.mockImplementation(() => {
       const child = makeLogProcess();
@@ -55,23 +56,35 @@ describe('log routes PM2_HOME resolution', () => {
     }
     expect(pm2Service.getLogs).not.toHaveBeenCalled();
     expect(pm2Service.spawnPm2).not.toHaveBeenCalled();
-    expect(appProcessStatus.resolvePm2HomeForProcess).not.toHaveBeenCalled();
+    expect(appProcessStatus.resolveRegisteredProcess).not.toHaveBeenCalled();
+  });
+
+  it.each(['all', 'unrelated-host-proc'])('rejects unregistered process %s with 400 UNKNOWN_PROCESS before static or streaming PM2 reads', async (name) => {
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue(null);
+    for (const follow of ['false', 'true']) {
+      const response = await request(createApp()).get(`/api/logs/${name}?follow=${follow}`);
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('UNKNOWN_PROCESS');
+    }
+    expect(appProcessStatus.resolveRegisteredProcess).toHaveBeenCalledWith(name);
+    expect(pm2Service.getLogs).not.toHaveBeenCalled();
+    expect(pm2Service.spawnPm2).not.toHaveBeenCalled();
   });
 
   it.each(['1-worker', '_worker'])('reads accepted anchored name %s', async (name) => {
-    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue(undefined);
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue({ pm2Home: null });
     const response = await request(createApp()).get(`/api/logs/${name}`);
     expect(response.status).toBe(200);
-    expect(pm2Service.getLogs).toHaveBeenCalledWith(name, 100, undefined);
+    expect(pm2Service.getLogs).toHaveBeenCalledWith(name, 100, null);
   });
 
   it('fetches static logs for a process from its resolved custom PM2 home', async () => {
-    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue({ pm2Home: '/tmp/example-pm2' });
 
     const response = await request(createApp()).get('/api/logs/example-api?lines=50');
 
     expect(response.status).toBe(200);
-    expect(appProcessStatus.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
+    expect(appProcessStatus.resolveRegisteredProcess).toHaveBeenCalledWith('example-api');
     expect(pm2Service.getLogs).toHaveBeenCalledWith('example-api', 50, '/tmp/example-pm2');
   });
 
@@ -90,12 +103,12 @@ describe('log routes PM2_HOME resolution', () => {
   });
 
   it('follows a process from its resolved custom PM2 home', async () => {
-    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue({ pm2Home: '/tmp/example-pm2' });
 
     const response = await request(createApp()).get('/api/logs/example-api?follow=true');
 
     expect(response.status).toBe(200);
-    expect(appProcessStatus.resolvePm2HomeForProcess).toHaveBeenCalledWith('example-api');
+    expect(appProcessStatus.resolveRegisteredProcess).toHaveBeenCalledWith('example-api');
     expect(pm2Service.buildEnv).toHaveBeenCalledWith('/tmp/example-pm2');
     expect(pm2Service.spawnPm2).toHaveBeenCalledWith(
       ['logs', 'example-api', '--raw', '--lines', '100'],
@@ -104,7 +117,7 @@ describe('log routes PM2_HOME resolution', () => {
   });
 
   it('follows a process from the default PM2 home when no custom home resolves', async () => {
-    appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue(null);
+    appProcessStatus.resolveRegisteredProcess.mockResolvedValue({ pm2Home: null });
 
     const response = await request(createApp()).get('/api/logs/example-api?follow=true&lines=25');
 

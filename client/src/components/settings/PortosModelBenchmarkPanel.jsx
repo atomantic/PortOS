@@ -30,7 +30,7 @@ function BenchmarkTooltip({ active, payload }) {
       <div className="font-semibold">{row.model}</div>
       <div className="text-port-text-muted">{row.provider} · {row.effort}</div>
       <div>{formatCount(row.y)}% score</div>
-      <div>{formatCount(row.tokensPerRun.value)} tokens per run</div>
+      <div>{formatCount(row.tokensPerRun.value)} {row.tokensPerRun.value === 1 ? 'token' : 'tokens'} per run</div>
       {row.apiEquivalentCost && <div>~{formatUsd(row.apiEquivalentCost.value * 1000)} API equivalent / 1,000 runs</div>}
       <div className="text-port-text-muted">{row.tokenBasis || 'token basis unavailable'}</div>
     </div>

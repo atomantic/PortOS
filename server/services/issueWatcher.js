@@ -27,7 +27,8 @@ import { MAX_PR_REMEDIATION_ATTEMPTS, PR_HANDBACK, PR_REVIEW_OUTCOME, resolveHan
 import { forkHeadFromGithubPr } from '../lib/forkHead.js';
 import { getAppById, updateApp } from './apps.js';
 import { execGh, ensureForgeReachable } from './github.js';
-import { mergePR, resolveForgeForRepo } from './git.js';
+import { mergePR } from './git/prs.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
@@ -1571,7 +1572,7 @@ async function reviewScreenedPullRequest({ app, ctx, raw, expectedPullRequests, 
   let ledger = approvals;
   const skipped = () => ({ reviewed: false, handedBack: false, landing: null, approvals: ledger });
   const eligibilityRequired = requireEligibilityFacts
-    || Object.prototype.hasOwnProperty.call(target, 'eligibilityFacts');
+    || Object.hasOwn(target, 'eligibilityFacts');
   const eligibilityStillCurrent = async () => {
     if (!await assessment.stillCurrent()) {
       drops.record(decision.number, 'the assessed contribution or CI changed before action');

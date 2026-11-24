@@ -208,9 +208,9 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     modules: ['services/writersRoom/local.js'],
   },
   {
-    // Tombstone GC drops the work rows first and removes their directories after.
+    // Tombstone GC drops one work's rows and then its directory under one lease.
     id: 'writers-room-tombstone-prune',
-    status: 'reference-only',
+    status: 'admitted',
     modules: ['services/writersRoom/sync.js'],
   },
   {
@@ -235,6 +235,28 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'image-to-3d-record-deletion',
     status: 'reference-only',
     modules: ['services/imageTo3d/models.js'],
+  },
+  {
+    // The Blender model driver writes builds/<buildId>/ in place while the row
+    // says the build is running, so only the commit that names the finished
+    // build takes the lease.
+    id: 'blender-model-builds',
+    status: 'admitted',
+    modules: ['services/blenderModels/build.js'],
+  },
+  {
+    // An approved reference is copied into src/refs/ and the row names that copy.
+    id: 'blender-model-references',
+    status: 'admitted',
+    modules: ['services/blenderModels/references.js'],
+  },
+  {
+    // Publishing names a finished build whose bytes are already durable.
+    // Pruning and deletion drop builds from the row before removing their
+    // folders; a source write or scaffold changes src/, which no row names.
+    id: 'blender-model-publish-prune-and-source',
+    status: 'reference-only',
+    modules: ['services/blenderModels/models.js', 'services/blenderModels/build.js'],
   },
   {
     // A rig or retarget pair is published into its own `rig/<id>` or
@@ -491,7 +513,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // and the local_path row commit share a lease/queue with eviction and orphan
     // cleanup. The byte mirror is an overridable backup exclusion.
     id: 'beeper-attachment-mirror', status: 'admitted',
-    modules: ['services/beeperAttachments.js'],
+    modules: ['services/beeper/beeperAttachments.js'],
   },
 ]);
 

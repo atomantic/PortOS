@@ -192,7 +192,7 @@ export async function withSnapshotRead(snapshotDir, snapshotId, operation) {
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
-export const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+export const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.-]/g, '_') || 'unknown';
 const LEGACY_SNAPSHOT_SOURCE = '@legacy';
 const SNAPSHOT_ID_PATTERN = /^[\w\-.:T]+$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -759,6 +759,12 @@ export async function legacyDbMetadataDomains(srcDir, paths) {
   if (paths.includes('universes/index.json')) {
     const index = await readJSONFileStrict(join(srcDir, 'universes', 'index.json'), null, { logError: false });
     if (!index.ok || index.value?.config?.runs !== undefined) domains.add('universes');
+  }
+  if (paths.includes('cos/state.json')) {
+    const state = await readJSONFileStrict(join(srcDir, 'cos', 'state.json'), null, { logError: false });
+    if (!state.ok || (state.value && typeof state.value === 'object' && !Array.isArray(state.value) && Object.hasOwn(state.value, 'agents'))) {
+      domains.add('cos-agents');
+    }
   }
   if (paths.length && !domains.has('cos-tasks') && (await snapshotLegacyCosTaskPaths(srcDir)).some(path => paths.includes(path))) {
     domains.add('cos-tasks');

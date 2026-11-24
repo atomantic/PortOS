@@ -16,7 +16,7 @@ set -euo pipefail
 
 INCLUDE_POSTGRES="${INCLUDE_POSTGRES-true}"
 ROOT="${APT_ROOT:-}"
-PRIMARY_BUDGET="${APT_PRIMARY_BUDGET_SECONDS:-180}"
+PRIMARY_BUDGET="${APT_PRIMARY_BUDGET_SECONDS:-45}"
 TOTAL_BUDGET="${APT_TOTAL_BUDGET_SECONDS:-390}"
 # The HTTP archive can trickle while the same index is reachable over HTTPS.
 OFFICIAL_ARCHIVE='https://archive.ubuntu.com/ubuntu/'
@@ -31,7 +31,33 @@ case "$INCLUDE_POSTGRES" in
   false) ;;
   *) echo "INCLUDE_POSTGRES must be true or false" >&2; exit 1 ;;
 esac
-APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Languages=none)
+APT_SOURCE_OPTS=()
+APT_SOURCEPARTS_DIR=''
+cleanup() {
+  if [[ -n "$APT_SOURCEPARTS_DIR" ]]; then
+    rm -rf "$APT_SOURCEPARTS_DIR"
+  fi
+}
+trap cleanup EXIT
+
+if [[ "$INCLUDE_POSTGRES" == false ]]; then
+  # Browser jobs only need ffmpeg from Ubuntu system repos; omit unrelated
+  # third-party runner repos (e.g. packages.microsoft.com) so apt-get update
+  # does not spend budget downloading their indexes. Symlink so mirror fallback
+  # edits to ubuntu.sources take effect immediately.
+  APT_SOURCEPARTS_DIR=$(mktemp -d)
+  chmod 755 "$APT_SOURCEPARTS_DIR"
+  shopt -s nullglob
+  for src in "${ROOT}/etc/apt/sources.list.d/"ubuntu*.sources "${ROOT}/etc/apt/sources.list.d/"ubuntu*.list; do
+    [[ -f "$src" ]] || continue
+    src_dir=$(cd "$(dirname "$src")" && pwd)
+    ln -s "${src_dir}/$(basename "$src")" "${APT_SOURCEPARTS_DIR}/$(basename "$src")"
+  done
+  shopt -u nullglob
+  APT_SOURCE_OPTS=(-o "Dir::Etc::sourceparts=${APT_SOURCEPARTS_DIR}")
+  APT_OPTS+=("${APT_SOURCE_OPTS[@]}")
+fi
 ARCHIVES="${ROOT}/var/cache/apt/archives"
 
 fail() {
@@ -99,7 +125,7 @@ if ! download_by "$PRIMARY_BUDGET"; then
     fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
 fi
 
-sudo apt-get -o APT::Keep-Downloaded-Packages=true install -y --no-download "${PACKAGES[@]}" || fail "Downloaded packages did not install."
+sudo apt-get ${APT_SOURCE_OPTS[@]+"${APT_SOURCE_OPTS[@]}"} -o APT::Keep-Downloaded-Packages=true install -y --no-download "${PACKAGES[@]}" || fail "Downloaded packages did not install."
 if [[ -n "${APT_PACKAGE_CACHE:-}" ]]; then
   mkdir -p "$APT_PACKAGE_CACHE"
   # Only completed .debs enter the Actions cache, never partial downloads/locks.

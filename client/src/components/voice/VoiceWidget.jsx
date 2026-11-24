@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useId } from 'react';
 import { useNavigate } from 'react-router';
 import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
 import {
@@ -14,7 +14,7 @@ import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voice
 import { warmNano } from '../../services/browserLlm';
 import { getPaletteManifest } from '../../services/apiPalette';
 import toast from '../ui/Toast';
-import { useVoiceUiSync, pushUiIndexAfterAction } from '../../hooks/useVoiceUiSync';
+import { useVoiceUiSync, pushUiIndexAfterAction } from './useVoiceUiSync';
 import { doClick, doFill, doSelect, doSetCheckbox } from '../../services/uiInteract';
 import {
   VISIBILITY_EVENT,
@@ -59,6 +59,9 @@ const warnIfQuiet = (peak) => {
 // `config`. `claimHeld` returns, once, what happened while this chunk was
 // still loading: `{ start, dictation }`.
 export default function VoiceWidget({ config, claimHeld }) {
+  // Read at capture start so a settings change applies to the next turn without rebinding the mic.
+  const vadRef = useRef(config.vad);
+  vadRef.current = config.vad;
   const navigate = useNavigate();
   const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
   const [stage, setStage] = useState('idle');
@@ -85,6 +88,9 @@ export default function VoiceWidget({ config, claimHeld }) {
   // module-level stream/recorder, so without this serialization the in-flight
   // stop can tear down tracks from the freshly-started capture.
   const cancelInFlightRef = useRef(null);
+  // Bumped by engage, disengage and unmount so an onEngage suspended on
+  // cancelInFlightRef can tell it was superseded and must not reopen the mic.
+  const engageSeqRef = useRef(0);
   const [handsFree, setHandsFree] = useState(() => {
     const stored = safeReadStorage(HANDS_FREE_KEY);
     return stored === null ? true : stored === '1';
@@ -101,6 +107,12 @@ export default function VoiceWidget({ config, claimHeld }) {
   // doesn't play on every open tab/machine at once.
   const [isVoiceOutputTab, setIsVoiceOutputTab] = useState(false);
   const scrollRef = useRef(null);
+  const inputRef = useRef(null);
+  const fabRef = useRef(null);
+  // Which control should receive focus once the next expand/minimize render
+  // commits; the control that held focus unmounts or hides on that transition.
+  const pendingFocusRef = useRef(null);
+  const conversationId = useId();
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
   // Fast-resolution cascade config (trigger → on-device Nano → server). Mirrored
@@ -174,7 +186,9 @@ export default function VoiceWidget({ config, claimHeld }) {
       temperature: fastPath?.browser?.temperature ?? 0.7,
       topK: fastPath?.browser?.topK ?? 3,
     }).catch(() => {});
-  }, [enabled, fastPath?.enabled, fastPath?.browserLlm]);
+    // personalityRef is read inside, so the fields that shape the router prompt
+    // are listed explicitly to re-warm Nano when they change.
+  }, [enabled, fastPath?.enabled, fastPath?.browserLlm, personality?.name, personality?.speechStyle, fastPath?.browser?.temperature, fastPath?.browser?.topK]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -443,6 +457,7 @@ export default function VoiceWidget({ config, claimHeld }) {
       if (isContinuous()) return;
       setStage('handsfree');
       await startContinuous({
+        vad: vadRef.current,
         onSpeechStart: () => {
           if (!disposedRef.current) setStage('capturing');
         },
@@ -542,6 +557,7 @@ export default function VoiceWidget({ config, claimHeld }) {
     disposedRef.current = false;
     return () => {
       disposedRef.current = true;
+      engageSeqRef.current += 1;
       pendingEngageRef.current = false;
       disposeCaptureOwner();
       const teardown = handleCancelRef.current?.({ updateUi: false });
@@ -573,7 +589,8 @@ export default function VoiceWidget({ config, claimHeld }) {
     // Typed turns run through the same cascade (a typed "go to tasks" navigates
     // instantly). Falls through to the server pipeline when unhandled.
     const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
-    if (!handled) sendText(text);
+    if (disposedRef.current || handled) return;
+    sendText(text);
   }, [draft, runFastPath]);
 
   const toggleCapture = useCallback(() => {
@@ -669,7 +686,9 @@ export default function VoiceWidget({ config, claimHeld }) {
   useEffect(() => {
     let live = true;
     const onEngage = async () => {
+      const seq = ++engageSeqRef.current;
       if (cancelInFlightRef.current) await cancelInFlightRef.current;
+      if (!live || seq !== engageSeqRef.current) return;
       if (!enabled) {
         pendingEngageRef.current = true;
         return;
@@ -677,6 +696,7 @@ export default function VoiceWidget({ config, claimHeld }) {
       handleStartRef.current?.();
     };
     const onDisengage = () => {
+      engageSeqRef.current += 1;
       pendingEngageRef.current = false;
       const p = handleCancelRef.current?.();
       if (p && typeof p.then === 'function') {
@@ -719,9 +739,20 @@ export default function VoiceWidget({ config, claimHeld }) {
   const hideWidget = useCallback(async () => {
     await handleCancel();
     writeVoiceHidden(true);
+    // Hand focus to the sidebar toggle (which stays mounted and now offers
+    // re-engage) before this widget unmounts, else it drops to document.body.
+    const target = document.querySelector('[data-voice-toggle]') || document.getElementById('main-content');
+    target?.focus();
     setHidden(true);
     toast('Voice widget hidden. Re-enable from the sidebar mic or Settings → Voice.');
   }, [handleCancel]);
+
+  useLayoutEffect(() => {
+    const next = pendingFocusRef.current;
+    if (!next) return;
+    pendingFocusRef.current = null;
+    (next === 'input' ? inputRef : fabRef).current?.focus();
+  }, [expanded]);
 
   if (!enabled || hidden) return null;
 
@@ -736,11 +767,12 @@ export default function VoiceWidget({ config, claimHeld }) {
     // TEXT_EXCLUDE_SELECTORS to keep the widget's own conversation transcript
     // out of the ui_read visible-text snapshot — otherwise the voice agent
     // would "read the page" and recite its own dialog back to the user.
-    <div data-voice-widget className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+    <aside data-voice-widget aria-label="Voice assistant" className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
       {!expanded && (
         <div className="md:hidden flex items-center gap-2">
-          {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}
+          {capturing && <span role="status" className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}
           <button
+            type="button"
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
@@ -749,7 +781,9 @@ export default function VoiceWidget({ config, claimHeld }) {
             <EyeOff size={14} />
           </button>
           <button
-            onClick={() => { setExpanded(true); toggleCapture(); }}
+            type="button"
+            ref={fabRef}
+            onClick={() => { pendingFocusRef.current = 'input'; setExpanded(true); toggleCapture(); }}
             className={`p-3 rounded-full border transition-colors ${fabSurface} ${
               capturing
                 ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
@@ -764,10 +798,11 @@ export default function VoiceWidget({ config, claimHeld }) {
       )}
       <div className={`${expanded ? 'flex' : 'hidden'} md:flex flex-col items-end gap-2 w-96 max-w-[calc(100vw-2rem)]`}>
         {!collapsed && history.length > 0 && (
-          <div className={`bg-port-card/95 backdrop-blur border rounded-xl w-full flex flex-col ${fabSurface}`}>
+          <div id={conversationId} className={`bg-port-card/95 backdrop-blur border rounded-xl w-full flex flex-col ${fabSurface}`}>
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-port-border/50">
               <span className="text-xs text-gray-400">Conversation</span>
               <button
+                type="button"
                 onClick={handleClear}
                 title="Clear conversation"
                 aria-label="Clear conversation"
@@ -777,16 +812,19 @@ export default function VoiceWidget({ config, claimHeld }) {
               </button>
             </div>
             <div ref={scrollRef} className="text-xs p-3 space-y-2 overflow-y-auto max-h-80">
-              {history.map((turn, i) => (
-                <div key={i} className={turn.role === 'user' ? 'text-gray-400' : 'text-white'}>
-                  <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">
-                    {turn.role === 'user' ? 'you' : 'assistant'}
-                  </span>
-                  {turn.text}
-                </div>
-              ))}
+              {/* Only finalized turns are announced; the interim line below churns per word. */}
+              <div role="log" aria-live="polite" aria-label="Conversation" className="space-y-2">
+                {history.map((turn, i) => (
+                  <div key={i} className={turn.role === 'user' ? 'text-gray-400' : 'text-white'}>
+                    <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">
+                      {turn.role === 'user' ? 'you' : 'assistant'}
+                    </span>
+                    {turn.text}
+                  </div>
+                ))}
+              </div>
               {interimTranscript && (
-                <div className="text-gray-500 italic">
+                <div aria-hidden="true" className="text-gray-500 italic">
                   <span className="text-[10px] uppercase tracking-wide opacity-60 mr-2">you</span>
                   {interimTranscript}
                 </div>
@@ -799,6 +837,7 @@ export default function VoiceWidget({ config, claimHeld }) {
           className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full focus-within:border-port-accent ${fabSurface}`}
         >
           <input
+            ref={inputRef}
             type="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -817,13 +856,13 @@ export default function VoiceWidget({ config, claimHeld }) {
           </button>
         </form>
         {dictationActive && (
-          <div className="flex items-center gap-2 bg-port-accent/15 border border-port-accent/40 rounded-full px-3 py-1 text-xs text-port-accent shadow-lg">
+          <div role="status" className="flex items-center gap-2 bg-port-accent/15 border border-port-accent/40 rounded-full px-3 py-1 text-xs text-port-accent shadow-lg">
             <NotebookPen size={12} className="animate-pulse" />
             Dictating to Daily Log — say &quot;stop dictation&quot; to end
           </div>
         )}
         <div className={`flex items-center gap-2 bg-port-card/95 backdrop-blur border rounded-full pl-3 pr-1 py-1 ${fabSurface}`}>
-          <span className={`text-xs ${tone}`}>{label}</span>
+          <span role="status" className={`text-xs ${tone}`}>{label}</span>
           {!useWebSpeech && handsFree && isContinuous() && (
             <span
               className="inline-flex items-center text-port-accent"
@@ -834,7 +873,9 @@ export default function VoiceWidget({ config, claimHeld }) {
           )}
           {!useWebSpeech && (
             <button
+              type="button"
               onClick={toggleHandsFree}
+              aria-pressed={handsFree}
               title={handsFree
                 ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
                 : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
@@ -847,10 +888,12 @@ export default function VoiceWidget({ config, claimHeld }) {
             </button>
           )}
           <button
+            type="button"
             onClick={async () => {
               if (visionEnabled) { disableVisionCapture(); setVisionEnabled(false); return; }
               // getDisplayMedia must run inside this click (user gesture).
               const ok = await enableVisionCapture();
+              if (disposedRef.current) { if (ok) disableVisionCapture(); return; }
               setVisionEnabled(ok);
               if (!ok) toast('Voice: screen sharing was declined or is unavailable.', { icon: '🖥️' });
             }}
@@ -867,8 +910,8 @@ export default function VoiceWidget({ config, claimHeld }) {
             {visionEnabled ? 'vision' : 'no vision'}
           </button>
           <button
+            type="button"
             onClick={() => { if (!isVoiceOutputTab) claimVoiceOutput(); }}
-            disabled={isVoiceOutputTab}
             aria-pressed={isVoiceOutputTab}
             title={isVoiceOutputTab
               ? 'This tab plays the assistant\'s proactive speech (reminders, briefings). Only one tab speaks at a time.'
@@ -882,7 +925,10 @@ export default function VoiceWidget({ config, claimHeld }) {
           </button>
           {history.length > 0 && (
             <button
+              type="button"
               onClick={() => setCollapsed((c) => !c)}
+              aria-expanded={!collapsed}
+              aria-controls={conversationId}
               title={collapsed ? 'Show conversation' : 'Hide conversation'}
               aria-label={collapsed ? 'Show conversation' : 'Hide conversation'}
               className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
@@ -892,6 +938,7 @@ export default function VoiceWidget({ config, claimHeld }) {
           )}
           {stage === 'speaking' && (
             <button
+              type="button"
               onClick={interrupt}
               title="Interrupt"
               aria-label="Interrupt"
@@ -901,7 +948,9 @@ export default function VoiceWidget({ config, claimHeld }) {
             </button>
           )}
           <button
+            type="button"
             onClick={toggleCapture}
+            aria-pressed={capturing}
             className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-3 rounded-full transition-colors ${
               capturing
                 ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
@@ -924,7 +973,8 @@ export default function VoiceWidget({ config, claimHeld }) {
             <Icon size={16} />
           </button>
           <button
-            onClick={() => setExpanded(false)}
+            type="button"
+            onClick={() => { pendingFocusRef.current = 'fab'; setExpanded(false); }}
             title="Minimize voice controls"
             aria-label="Minimize voice controls"
             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 md:hidden p-2 rounded-full text-gray-400 hover:text-white hover:bg-port-border/70"
@@ -932,6 +982,7 @@ export default function VoiceWidget({ config, claimHeld }) {
             <X size={14} />
           </button>
           <button
+            type="button"
             onClick={hideWidget}
             title="Hide voice widget (restore from the sidebar or Settings → Voice)"
             aria-label="Hide voice widget"
@@ -941,6 +992,6 @@ export default function VoiceWidget({ config, claimHeld }) {
           </button>
         </div>
       </div>
-    </div>
+    </aside>
   );
 }

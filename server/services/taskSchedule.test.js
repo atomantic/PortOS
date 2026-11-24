@@ -288,7 +288,7 @@ describe('taskSchedule', () => {
     // explicit, human-readable blurb.
     it('has an explicit description for every SELF_IMPROVEMENT_TASK_TYPES entry', () => {
       const missing = SELF_IMPROVEMENT_TASK_TYPES.filter(
-        (t) => !Object.prototype.hasOwnProperty.call(TASK_TYPE_DESCRIPTIONS, t)
+        (t) => !Object.hasOwn(TASK_TYPE_DESCRIPTIONS, t)
       )
       expect(missing).toEqual([])
     })

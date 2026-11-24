@@ -3,6 +3,7 @@
  */
 
 import { z } from 'zod';
+import { VIDEO_GEN_MODES } from './generationModes.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { grokVideoDurationSchema } from './sharedSchemas.js';
 import {
@@ -160,7 +161,7 @@ export const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google']).optional(),
+  backend: z.enum(VIDEO_GEN_MODES).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.

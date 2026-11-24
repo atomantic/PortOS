@@ -15,7 +15,7 @@ import {
   dailyRangeQuerySchema,
   substanceEventQuerySchema,
 } from '../lib/meatspaceValidation.js';
-import * as alcoholService from '../services/meatspaceAlcohol.js';
+import * as alcoholService from '../services/meatspace/meatspaceAlcohol.js';
 import { parseIndexParam } from '../lib/queryValidation.js';
 
 const router = Router();

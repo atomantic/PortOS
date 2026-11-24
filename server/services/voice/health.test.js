@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   authHeaders: vi.fn(() => ({})),
   fetchWithTimeout: vi.fn(async () => ({ ok: true, status: 200 })),
   checkSetup: vi.fn(async () => ({})),
+  isInstanceFeatureEnabled: vi.fn(async () => false),
   inspectVoiceAsset: vi.fn(() => ({ state: 'verified', reason: '' })),
 }));
 
@@ -25,7 +26,12 @@ vi.mock('./config.js', () => ({
 vi.mock('./bootstrap.js', () => ({ which: mocks.which }));
 vi.mock('./llm.js', () => ({ resolveLlmEndpoint: mocks.resolveLlmEndpoint, authHeaders: mocks.authHeaders }));
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: mocks.fetchWithTimeout }));
-vi.mock('./facetimeBridge.js', () => ({ checkSetup: mocks.checkSetup }));
+vi.mock('./facetimeBridge.js', () => ({
+  checkSetup: mocks.checkSetup,
+  blockingSetupFailure: (report) => Object.entries(report)
+    .find(([key, value]) => key !== 'accessibility' && value.ok !== 'ok')?.[0] || null,
+}));
+vi.mock('../instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mocks.isInstanceFeatureEnabled }));
 vi.mock('../../lib/voiceModelAssets.js', () => ({
   inspectVoiceAsset: mocks.inspectVoiceAsset,
   isVoiceAssetUsable: (state) => state === 'verified' || state === 'unverified',
@@ -63,5 +69,36 @@ describe('voice health Piper probe', () => {
 
     expect(mocks.existsSync).toHaveBeenCalledWith(join('/voice', 'piper', 'piper.exe'));
     expect(result.piper).toEqual({ ok: true, state: 'ready' });
+  });
+});
+
+describe('voice health FaceTime probe', () => {
+  const cfg = () => ({
+    stt: { engine: 'web-speech', endpoint: '' },
+    llm: { provider: 'lmstudio' },
+    tts: { engine: 'piper', piper: { voicePath: '/voice/en.onnx' } },
+  });
+  beforeEach(() => {
+    invalidateHealthCache();
+    vi.clearAllMocks();
+    mocks.isInstanceFeatureEnabled.mockResolvedValue(false);
+    mocks.checkSetup.mockResolvedValue({ helper: { ok: 'ok' }, accessibility: { ok: false } });
+  });
+
+  it('omits facetime from services when the feature is disabled', async () => {
+    const result = await checkAll(cfg());
+    expect(result).not.toHaveProperty('facetime');
+    expect(mocks.checkSetup).not.toHaveBeenCalled();
+  });
+
+  it('summarizes a passing setup into the standard probe shape', async () => {
+    mocks.isInstanceFeatureEnabled.mockResolvedValue(true);
+    expect((await checkAll(cfg())).facetime).toEqual({ ok: true, state: 'ready' });
+  });
+
+  it('reports the blocking failure as a not-ok probe', async () => {
+    mocks.isInstanceFeatureEnabled.mockResolvedValue(true);
+    mocks.checkSetup.mockResolvedValue({ helper: { ok: 'ok' }, identity: { ok: 'missing' } });
+    expect((await checkAll(cfg())).facetime).toEqual({ ok: false, state: 'identity' });
   });
 });

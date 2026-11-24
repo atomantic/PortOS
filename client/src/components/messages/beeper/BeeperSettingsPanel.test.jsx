@@ -664,7 +664,7 @@ describe('BeeperSettingsPanel — attachment mirror', () => {
     // The modal states BOTH numbers, and the unknown-size tail separately
     // rather than folding it into the total as zero.
     expect(await screen.findByText('Mirror all attachments?')).toBeInTheDocument();
-    expect(screen.getAllByText(/12 attachment\(s\)/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/12 attachments/).length).toBeGreaterThan(0);
     expect(screen.getByText(/4 MB/)).toBeInTheDocument();
     expect(screen.getByText(/3 whose size Beeper did not report/)).toBeInTheDocument();
     expect(api.backfillBeeperAttachments).not.toHaveBeenCalled();

@@ -73,10 +73,12 @@ vi.mock('./modelStoreStorage.js', () => ({
 }));
 vi.mock('./ollamaManager.js', () => ({
   getStatus: vi.fn(async () => ({ available: true, models: [{ id: 'example:latest', name: 'Example', size: 100 }] })),
-  listStoredModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', size: 100 }]),
   getLoadedModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', sizeVram: 80 }]),
   getLastLoadedModelsError: vi.fn(() => null),
   getModelsDir: vi.fn(() => '/example/ollama'),
+}));
+vi.mock('./ollamaDiskImport.js', () => ({
+  listStoredModels: vi.fn(async () => [{ id: 'example:latest', name: 'Example', size: 100 }]),
 }));
 vi.mock('./lmStudioManager.js', () => ({
   checkLMStudioAvailable: vi.fn(async () => true),
@@ -131,6 +133,7 @@ const dataManager = await import('./dataManager.js');
 const mediaModelStorage = await import('./mediaModelStorage.js');
 const modelStoreStorage = await import('./modelStoreStorage.js');
 const ollamaManager = await import('./ollamaManager.js');
+const ollamaDisk = await import('./ollamaDiskImport.js');
 const lmStudioManager = await import('./lmStudioManager.js');
 const { getAgents } = await import('./cos/cosAgentLifecycle.js');
 const { getAllTasks } = await import('./cos/cosTaskStore.js');
@@ -156,7 +159,7 @@ describe('system resource reporting', () => {
       available: true,
       models: [{ id: 'example:latest', name: 'Example', size: 100 }],
     });
-    ollamaManager.listStoredModels.mockResolvedValue([{ id: 'example:latest', name: 'Example', size: 100 }]);
+    ollamaDisk.listStoredModels.mockResolvedValue([{ id: 'example:latest', name: 'Example', size: 100 }]);
     ollamaManager.getLoadedModels.mockResolvedValue([{ id: 'example:latest', name: 'Example', sizeVram: 80 }]);
     ollamaManager.getLastLoadedModelsError.mockReturnValue(null);
     lmStudioManager.checkLMStudioAvailable.mockResolvedValue(true);

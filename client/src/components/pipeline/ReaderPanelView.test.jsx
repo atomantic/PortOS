@@ -3,9 +3,9 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { PANEL_PERSONAS, PANEL_QUESTIONS } from '../../../../server/lib/editorial/panelDisagreement.js';
 
-vi.mock('../../hooks/useReaderPanel', () => ({ useReaderPanel: vi.fn() }));
+vi.mock('./useReaderPanel', () => ({ useReaderPanel: vi.fn() }));
 
-import { useReaderPanel } from '../../hooks/useReaderPanel';
+import { useReaderPanel } from './useReaderPanel';
 import ReaderPanelView from './ReaderPanelView';
 
 describe('ReaderPanelView', () => {

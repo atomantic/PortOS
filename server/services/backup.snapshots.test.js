@@ -51,6 +51,13 @@ describe('DEFAULT_EXCLUDES anchoring', () => {
     expect(paths).not.toContain('/image-to-3d/');
     expect(paths.some((x) => x.includes('model.glb'))).toBe(false);
   });
+
+  it('excludes /contacts-cache.json non-overridably', () => {
+    const entry = DEFAULT_EXCLUDES.find((e) => e.path === '/contacts-cache.json');
+    expect(entry).toBeDefined();
+    expect(entry.overridable).toBe(false);
+    expect(computeEffectiveExcludes({ disabledDefaultExcludes: ['/contacts-cache.json'] })).toContain('/contacts-cache.json');
+  });
 });
 
 describe('deployed LoRA backup recovery', () => {
@@ -1577,7 +1584,7 @@ describe('getState and saveState', () => {
 });
 
 it('cannot re-enable Tailcat authority/capability files in backup filters', () => {
-  const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr'];
+  const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr', '/tailcat-forwards.json', '/tailcat-forwards.json.*.tmp'];
   const excluded = computeEffectiveExcludes({ disabledDefaultExcludes: paths });
   for (const path of paths) expect(excluded).toContain(path);
 });

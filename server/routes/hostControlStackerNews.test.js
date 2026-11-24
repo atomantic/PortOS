@@ -170,12 +170,14 @@ describe('Stacker News review and publication behind the default-deny gate (#161
     action = seedAction('approved');
     action.approved_at = new Date(Date.now() - 25 * 60 * 60 * 1_000);
     const stale = await post(app, actionPath('execute'));
-    expect(stale.status).toBe(500);
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('CONFLICT');
     expect(stale.body.error).toContain('Approval is stale');
     action = seedAction('approved');
     budget.hour_count = 3;
     const exhausted = await post(app, actionPath('execute'));
-    expect(exhausted.status).toBe(500);
+    expect(exhausted.status).toBe(429);
+    expect(exhausted.body.code).toBe('RATE_LIMITED');
     expect(exhausted.body.error).toContain('Hourly Stacker News action budget reached');
     expect(action.state).toBe('approved');
     expect(events).toEqual([]);

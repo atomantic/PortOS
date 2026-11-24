@@ -60,8 +60,10 @@ const REAL_TREE_SOURCES = [
   'server/services/backup/snapshots.js', 'server/services/backup/restore.js', 'server/services/backup/dbRestore.js',
   'client/src/components/catalog/GreyboxViewer.jsx', 'client/src/components/catalog/GreyboxCapture.jsx',
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
-  'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
-  'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx',
+  'client/src/components/musicVideo/FrameStepper.jsx', 'client/src/components/musicVideo/PreviewVideo.jsx',
+  'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'server/lib/eidoversePort.js', 'server/services/eidoverse.js', 'server/services/catalog/catalogSync.js', 'server/services/musicVideo/documentRender.js',
   'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
 let realTreeInputs;
@@ -116,10 +118,10 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const shared = [
     '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
     'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-    'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
+    'scripts/lib/vitestWatch.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
     'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
     'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
-    'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+    'server/lib/mockPathsDataRoot.js',
   ];
   const server = [
     'server/package.json', 'server/package-lock.json',
@@ -129,7 +131,7 @@ it('selects checkout-cache contracts only in their installed-dependency runners'
   const client = [
     'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
     'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-    'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
+    'client/vitest.config.js', 'client/src/test/timeouts.js',
     'scripts/dev-start.js', 'scripts/publish-client-build.js',
     'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
     'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',
@@ -882,6 +884,47 @@ it('requests DB verification for the real deck, model pin and backup source cont
   }
 });
 
+it('keeps document generation and provider inputs out of the render-only browser closure', () => {
+  const { browserDependencies } = realTree();
+  const render = browserDependencies['server/services/musicVideo/documentRender.browser.test.js'];
+  const generation = browserDependencies['server/services/musicVideo/documentRenderGeneration.browser.test.js'];
+  const generationInputs = [
+    'server/services/musicVideo/documentGeneration.js',
+    'server/lib/aiToolkit/internal/providerCatalogService.js',
+    'server/lib/systemCapabilities.js',
+  ];
+  expect(render).toContain('server/services/musicVideo/documentRender.js');
+  expect(generation).toEqual(expect.arrayContaining(generationInputs));
+  for (const input of generationInputs) expect(render).not.toContain(input);
+});
+
+describe('late-bound hubs keep unrelated suites out of browser and DB plans (#17896)', () => {
+  const planFor = (source) => buildCiTestPlan([source], realTree());
+
+  it.each(['server/lib/eidoversePort.js', 'server/services/eidoverse.js'])('plans no DB job and no browser suite for %s', (source) => {
+    expect(planFor(source)).toMatchObject({ full: false, db: false, browserFiles: [] });
+  });
+
+  it('plans the DB job but no media or vault browser suite for the catalog sync service', () => {
+    const plan = planFor('server/services/catalog/catalogSync.js');
+    expect(plan).toMatchObject({ full: false, db: true });
+    expect(plan.browserFiles.filter((suite) => !/catalog/i.test(suite))).toEqual([]);
+  });
+
+  it('still selects real direct and transitive dependents', () => {
+    const inputs = realTree();
+    const render = 'server/services/musicVideo/documentRender.js';
+    expect(planFor(render).browserFiles).toEqual(expect.arrayContaining([
+      'server/services/musicVideo/documentRender.browser.test.js', 'server/services/musicVideo/documentVignette.browser.test.js',
+    ]));
+    // Reached only through a lazy import, several modules below the suite.
+    expect(inputs.browserDependencies['server/services/musicVideo/documentVignette.browser.test.js']).toContain('server/services/htmlComposition/index.js');
+    expect(inputs.dbDependencies).toEqual(expect.arrayContaining([
+      'server/services/catalog/catalogSync.js', 'server/services/syncCursors.js', 'server/services/instanceFeatures.js',
+    ]));
+  });
+});
+
 it('follows DB-only deferred dependencies through the pre-install CLI and preserves conservative and unrelated plans', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-db-deps-'));
   const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
@@ -892,6 +935,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
   };
   const leaf = 'server/services/example/leaf.js';
   const contract = 'server/routes/decks.db.test.js';
+  const liveRestore = 'server/services/backupDatabaseDump.restore.live.test.js';
   const plan = (changedFiles) => JSON.parse(execFileSync(process.execPath, [planner], {
     cwd: root,
     encoding: 'utf8', stdio: PLANNER_STDIO,
@@ -907,16 +951,25 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
       "export const load = () => import('./example/leaf.js');",
     ].join('\n'));
     write(contract, "import '../services/bridge.js';\n");
+    write(liveRestore, '// No shared dependencies.\n');
     write('server/services/unrelated.js', 'export const value = 2;\n');
     git('add', '--all');
 
     // The contract neither names leaf.js nor shares its feature; only the
     // dependency walk can request the otherwise excluded database suite.
     const related = plan([leaf]);
-    expect(related).toMatchObject({ full: false, db: true, server_mode: 'related' });
+    expect(related).toMatchObject({ full: false, db: true, db_live_restore: false, server_mode: 'related' });
     expect(related.server_files).not.toContain(contract);
     expect(plan(['server/services/unrelated.js'])).toMatchObject({ full: false, db: false });
     expect(plan(['docs/README.md'])).toMatchObject({ full: false, db: false });
+
+    const restoreOnly = 'server/services/restoreInput.js';
+    write(restoreOnly, 'export const value = 3;\n');
+    write(liveRestore, "import './restoreInput.js';\n");
+    expect(plan([restoreOnly])).toMatchObject({ full: false, db: true, db_live_restore: true });
+    write(liveRestore, "import './missing.js';\n");
+    expect(plan([restoreOnly])).toMatchObject({ full: false, db: true, db_live_restore: true });
+    write(liveRestore, '// No shared dependencies.\n');
 
     // Basename and feature selectors must trigger DB coverage too.
     write('server/services/bridge.js', 'export const value = 2;\n');
@@ -1262,7 +1315,7 @@ describe('CI test impact planner', () => {
     }
   });
 
-  it('selects the touched feature across server and client without pulling unrelated tests', () => {
+  it('scopes feature-directory matching to its own workspace without pulling unrelated or cross-workspace tests (#17895)', () => {
     const plan = buildCiTestPlan([
       '.changelog/NEXT.md',
       'server/services/sprites/animationTracks.js',
@@ -1279,7 +1332,7 @@ describe('CI test impact planner', () => {
       full: false,
       reason: 'targeted features: sprites',
       server: { mode: 'related' },
-      client: { mode: 'files' },
+      client: { mode: 'skip', files: [], sources: [] },
       db: false,
       lint: { mode: 'files' },
       build: false,
@@ -1293,11 +1346,139 @@ describe('CI test impact planner', () => {
       'server/services/sprites/atlasLayout.test.js',
       'server/services/taskPromptDefaults.test.js',
     ]);
-    expect(plan.client.files).toEqual([
-      'client/src/components/sprites/WalkWorkflow.test.jsx',
-      'client/src/services/apiSprites.test.js',
-    ]);
     expect(plan.server.files).not.toContain('server/services/auth.test.js');
+    expect(plan.client.files).toEqual([]);
+  });
+
+  describe('workspace-scoped featureDirectory matching (#17895)', () => {
+    it('keeps a client-only feature edit out of server, DB and unrelated browser suites while preserving pathContractTests', () => {
+      const source = 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx';
+      const paritySuite = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
+      const unrelatedServer = 'server/services/musicVideo/projects.test.js';
+      const unrelatedDb = 'server/services/musicVideo/projects.db.test.js';
+      const unrelatedBrowser = 'server/services/musicVideo/documentRender.browser.test.js';
+      const clientFeatureTest = 'client/src/components/musicVideo/DocumentTemplateCanvas.test.jsx';
+      const trackedFiles = [...TRACKED, source, clientFeatureTest, paritySuite, unrelatedServer, unrelatedDb, unrelatedBrowser];
+
+      const plan = buildCiTestPlan([source], {
+        trackedFiles,
+        pathContractTests: { [source]: [clientFeatureTest, paritySuite] },
+      });
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: false,
+        build: true,
+        smoke: false,
+        browserFiles: [paritySuite],
+        client: { mode: 'related', sources: [source] },
+        server: { mode: 'files', sources: [] },
+      });
+      expect(plan.client.files).toContain(clientFeatureTest);
+      expect(plan.server.files).toEqual([paritySuite, 'server/services/taskPromptDefaults.test.js']);
+      expect(plan.server.files).not.toContain(unrelatedServer);
+      expect(plan.server.files).not.toContain(unrelatedBrowser);
+    });
+
+    it('keeps a server-only feature edit from selecting client feature or singular-name tests', () => {
+      const appRoute = 'server/routes/apps/crud.js';
+      const appServerTest = 'server/routes/apps/crud.test.js';
+      const trackedFiles = [...TRACKED, appRoute, appServerTest];
+
+      const plan = buildCiTestPlan([appRoute], { trackedFiles });
+      expect(plan).toMatchObject({
+        full: false,
+        build: false,
+        smoke: true,
+        client: { mode: 'skip', files: [], sources: [] },
+        server: { mode: 'related', sources: [appRoute] },
+      });
+      expect(plan.server.files).toContain(appServerTest);
+      expect(plan.client.files).not.toContain('client/src/App.test.jsx');
+      expect(githubPlanOutput(plan).client_mode).toBe('skip');
+    });
+
+    it('retains cross-workspace selection through clientDependencies, clientTestDependencies and pathContractTests', () => {
+      const sharedLib = 'server/lib/sprites/sharedGeometry.js';
+      const serverFeatureTest = 'server/routes/sprites.test.js';
+      const clientFeatureTest = 'client/src/components/sprites/WalkWorkflow.test.jsx';
+      const clientApiTest = 'client/src/services/apiSprites.test.js';
+      const clientConsumerTest = 'client/src/components/catalog/CatalogCard.test.jsx';
+      const trackedFiles = [...TRACKED, sharedLib];
+
+      // Imported by client production code (clientDependencies): sharedLib is a client source too.
+      const sharedPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [sharedLib],
+      });
+      expect(sharedPlan).toMatchObject({
+        full: false,
+        build: true,
+        server: { mode: 'related', sources: [sharedLib] },
+        client: { mode: 'related', sources: [sharedLib] },
+      });
+      expect(sharedPlan.server.files).toContain(serverFeatureTest);
+      expect(sharedPlan.client.files).toEqual(expect.arrayContaining([clientFeatureTest, clientApiTest]));
+
+      // Imported only by a client test fixture (clientTestDependencies): runs only that consumer, not client feature tests.
+      const testDepPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [],
+        clientTestDependencies: { [clientConsumerTest]: [sharedLib] },
+      });
+      expect(testDepPlan).toMatchObject({
+        full: false,
+        build: false,
+        client: { mode: 'files', files: [clientConsumerTest], sources: [] },
+      });
+
+      // Explicit basename contract (pathContractTests): selects only the named client test.
+      const contractPlan = buildCiTestPlan([sharedLib], {
+        trackedFiles,
+        clientDependencies: [],
+        pathContractTests: { [sharedLib]: [clientApiTest] },
+      });
+      expect(contractPlan).toMatchObject({
+        full: false,
+        build: false,
+        client: { mode: 'files', files: [clientApiTest], sources: [] },
+      });
+    });
+
+    it('plans DocumentTemplateCanvas.jsx on the real tree with only documentTemplateParity and always-run server guards', () => {
+      const source = 'client/src/components/musicVideo/DocumentTemplateCanvas.jsx';
+      const paritySuite = 'server/services/musicVideo/documentTemplateParity.browser.test.js';
+      const inputs = realTree();
+      const plan = buildCiTestPlan([source], inputs);
+      const expectedServerFiles = [
+        paritySuite,
+        ...splitByRunner(getAlwaysRunTests(inputs.trackedFiles)).server,
+      ].sort();
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: false,
+        build: true,
+        smoke: false,
+        browserFiles: [paritySuite],
+        client: { mode: 'related', sources: [source] },
+        server: { mode: 'files', files: expectedServerFiles, sources: [] },
+      });
+    });
+
+    it('plans server/services/catalog/catalogSync.js on the real tree with client_mode skip', () => {
+      const source = 'server/services/catalog/catalogSync.js';
+      const plan = buildCiTestPlan([source], realTree());
+
+      expect(plan).toMatchObject({
+        full: false,
+        db: true,
+        build: false,
+        smoke: true,
+        client: { mode: 'skip', files: [], sources: [] },
+      });
+      expect(githubPlanOutput(plan).client_mode).toBe('skip');
+    });
   });
 
   it('uses Vitest related mode for flat modules whose impact is defined by imports', () => {
@@ -1669,6 +1850,97 @@ describe('CI test impact planner', () => {
     });
   });
 
+  describe('server-owned data.reference JSON seeds (#18220)', () => {
+    it('scopes data.reference/providers.json to server provider contracts + smoke without client/browser/build/windows', () => {
+      const providerTests = [
+        'scripts/generate-provider-samples.test.js',
+        'server/cos-runner/allowedCommands.test.js',
+        'server/lib/aiToolkit/defaults/providersSeedParity.test.js',
+        'server/services/provider/providers.shape.test.js',
+        'server/services/provider/providerPresets.test.js',
+        'server/services/provider/providerReadiness.test.js',
+      ];
+      const seed = 'data.reference/providers.json';
+      const trackedFiles = [...TRACKED, seed, ...providerTests];
+
+      const plan = buildCiTestPlan([seed], { trackedFiles });
+
+      expect(plan.full).toBe(false);
+      expect(plan.reason).toBe('server seed contracts');
+      expect(plan.server.mode).toBe('files');
+      expect(plan.server.files).toEqual(expect.arrayContaining([
+        ...providerTests,
+        'server/services/taskPromptDefaults.test.js',
+      ]));
+      expect(plan.client).toMatchObject({ mode: 'skip', files: [], sources: [] });
+      expect(plan.browserFiles).toEqual([]);
+      expect(plan.build).toBe(false);
+      expect(plan.smoke).toBe(true);
+      expect(plan.db).toBe(false);
+      expect(plan.windows).toBe(false);
+    });
+
+    it('scopes data.reference/prompts/*.json seeds to server prompt contract tests + pathContractTests + smoke', () => {
+      const promptTests = [
+        'scripts/migrations/shippedPromptHashes.test.js',
+        'scripts/regen-shipped-prompt-hashes.test.js',
+        'server/lib/promptSystemStages.test.js',
+      ];
+      const pathHit = 'server/routes/prompts.test.js';
+      const seeds = [
+        'data.reference/prompts/stage-config.json',
+        'data.reference/prompts/shipped-hashes.json',
+      ];
+      const trackedFiles = [...TRACKED, ...seeds, ...promptTests, pathHit];
+
+      for (const seed of seeds) {
+        const plan = buildCiTestPlan([seed], {
+          trackedFiles,
+          pathContractTests: { [seed]: [pathHit] },
+        });
+        expect(plan.full, seed).toBe(false);
+        expect(plan.server.mode, seed).toBe('files');
+        expect(plan.server.files, seed).toEqual(expect.arrayContaining([
+          'server/services/taskPromptDefaults.test.js',
+          'scripts/migrations/shippedPromptHashes.test.js',
+          pathHit,
+        ]));
+        expect(plan.client.mode, seed).toBe('skip');
+        expect(plan.build, seed).toBe(false);
+        expect(plan.browserFiles, seed).toEqual([]);
+        expect(plan.windows, seed).toBe(false);
+        expect(plan.smoke, seed).toBe(true);
+      }
+    });
+
+    it('scopes other data.reference/**/*.json seeds via pathContractTests + smoke and still fails closed for unknown non-JSON files', () => {
+      const seed = 'data.reference/settings.json';
+      const hit = 'scripts/lib/mergeJsonStarter.test.js';
+      const scoped = buildCiTestPlan([seed], {
+        trackedFiles: [...TRACKED, seed, hit],
+        pathContractTests: { [seed]: [hit] },
+      });
+      expect(scoped.full).toBe(false);
+      expect(scoped.server.files).toContain(hit);
+      expect(scoped.smoke).toBe(true);
+      expect(scoped.client.mode).toBe('skip');
+      expect(scoped.build).toBe(false);
+      expect(scoped.windows).toBe(false);
+
+      const unknownBinary = buildCiTestPlan(['data.reference/unknown.bin'], { trackedFiles: TRACKED });
+      expect(unknownBinary.full).toBe(true);
+      expect(unknownBinary.reason).toMatch(/unclassified changed file: data\.reference\/unknown\.bin/);
+
+      const unknownCode = buildCiTestPlan(['data.reference/unexpected.js'], { trackedFiles: [...TRACKED, 'data.reference/unexpected.js'] });
+      expect(unknownCode.full).toBe(true);
+      expect(unknownCode.reason).toMatch(/unmapped executable surface: data\.reference\/unexpected\.js/);
+
+      const outsideSeed = buildCiTestPlan(['unmapped/config.json'], { trackedFiles: [...TRACKED, 'unmapped/config.json'] });
+      expect(outsideSeed.full).toBe(true);
+      expect(outsideSeed.reason).toMatch(/unmapped executable surface: unmapped\/config\.json/);
+    });
+  });
+
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
       'server/test/guards/modules.guard.test.js',
@@ -1731,7 +2003,7 @@ describe('CI test impact planner', () => {
     expect(full.shards).toEqual({
       server: shardIndexes('full', FULL_SUITE_SHARDS.server),
       client: [1, 2, 3, 4],
-      browser: [1, 2],
+      browser: [1, 2, 3, 4],
       windows: shardIndexes('full', FULL_SUITE_SHARDS.windows),
     });
     const scoped = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: TRACKED });
@@ -2420,7 +2692,30 @@ describe('cross-workspace browser suites (#10312)', () => {
     }
   });
 
-  it('selects every music-video browser suite when a client component they mount changes', () => {
+  it('keeps unrelated catalog edits out of composition and music-video browser suites (#18337)', () => {
+    const suites = [
+      'server/services/htmlComposition/index.test.js',
+      'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/services/musicVideo/documentTemplateParity.browser.test.js',
+      'server/services/musicVideo/documentFilmLook.browser.test.js',
+      'server/services/musicVideo/lyricPlaythrough.browser.test.js',
+    ];
+    const catalogFiles = [
+      'server/lib/localLlmCatalog.js', 'server/lib/aiToolkit/internal/providerCatalogService.js',
+      'server/lib/localModelHeuristics.js', 'server/lib/systemCapabilities.js',
+    ];
+    const inputs = realTree();
+    const trackedFiles = inputs.trackedFiles.filter((path) =>
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
+    const plan = buildCiTestPlan(catalogFiles, { ...inputs, trackedFiles });
+    expect(plan.full).toBe(false);
+    for (const suite of [...suites, 'server/services/codeAnimation/export.realBrowser.test.js']) {
+      expect(inputs.browserDependencies[suite]?.length, suite).toBeLessThan(400);
+    }
+    for (const suite of suites) expect(plan.browserFiles).not.toContain(suite);
+  });
+
+  it('selects only the music-video browser suites that mount ProductionReviewPanel when it changes', () => {
     const source = 'client/src/components/musicVideo/ProductionReviewPanel.jsx';
     const inputs = realTree();
     // Keep the real source/import walk, with a bounded test corpus. Unrelated
@@ -2430,18 +2725,18 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
-    // Server-only media suites do not mount the changed client component. The title-card suite is
-    // not among them: it lives in server/lib/musicVideo/ (#16561), so the musicVideo feature selects it.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js',
-      'server/services/federatedMedia/sourceAudio.browser.test.js',
-      'server/services/greyboxRender.browser.test.js',
-      'server/services/fableLoom/static-player/player.browser.test.js',
-      'server/services/codeAnimation/export.realBrowser.test.js',
-      'server/services/htmlComposition/index.test.js'];
+    // Only the three route suites mount ProductionReviewPanel.jsx (via pathContractTests);
+    // server-only musicVideo render/publish/title-card suites do not mount it (#17895).
+    const mountedSuites = [
+      'server/routes/musicVideoProductionReview.browser.test.js',
+      'server/routes/musicVideoRichAuthoring.browser.test.js',
+      'server/routes/musicVideoSongRevision.browser.test.js',
+    ];
     expect(plan.full).toBe(false);
-    expect(plan.browserFiles).toEqual(expect.arrayContaining(BROWSER_SUITES.filter((suite) => suite.includes('/musicVideo') && !runtimeOnly.includes(suite))));
+    expect(plan.browserFiles).toEqual(mountedSuites);
     expect(plan.browserFiles).not.toContain('server/routes/catalogGreyboxViewer.browser.test.js');
-    for (const suite of runtimeOnly) expect(plan.browserFiles).not.toContain(suite);
+    expect(plan.browserFiles).not.toContain('server/lib/musicVideo/musicVideoTitleCard.browser.test.js');
+    expect(plan.browserFiles).not.toContain('server/services/musicVideo/documentRender.browser.test.js');
     expect(plan.suiteReasons.browser).toMatch(/browser suite/);
   });
 
@@ -2659,12 +2954,29 @@ describe('path-gated single-purpose jobs', () => {
     expect(gates(realPlan(['docs/README.md'])))
       .toEqual({ linuxContainment: false, supercolliderLive: false });
     // Shared helper reached through the containment suite's import closure.
-    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ linuxContainment: true });
+    expect(gates(realPlan(['server/lib/spawnCwd.js']))).toMatchObject({ linuxContainment: true });
     expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
       .toEqual({ linuxContainment: true, supercolliderLive: false });
     expect(gates(realPlan(['server/package-lock.json']))).toMatchObject({ linuxContainment: true, supercolliderLive: true });
     expect(gates(realPlan(['.github/workflows/ci.yml'])))
       .toEqual({ linuxContainment: true, supercolliderLive: true });
+  });
+
+  it('keeps fileUtils/jsonIo/auth/browser barrels out of containment closures (#18218)', () => {
+    const { trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs } = realTree();
+    for (const excluded of ['server/lib/jsonIo.js', 'server/lib/secureAuthStore.js', 'server/lib/fileUtils.js']) {
+      expect(linuxContainmentInputs).not.toContain(excluded);
+      expect(dockerContainmentLiveInputs).not.toContain(excluded);
+    }
+    for (const excluded of ['server/services/authGate.js', 'server/services/browserService.js', 'server/services/pm2.js']) {
+      expect(linuxContainmentInputs).not.toContain(excluded);
+    }
+    expect(buildCiTestPlan(['server/lib/jsonIo.js'], {
+      trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs,
+    })).toMatchObject({ linuxContainment: false, dockerContainmentLive: false });
+    expect(buildCiTestPlan(['server/lib/secureAuthStore.js'], {
+      trackedFiles, linuxContainmentInputs, dockerContainmentLiveInputs,
+    })).toMatchObject({ linuxContainment: false });
   });
 
   it('selects the SuperCollider live job for the spawn plumbing its containment cases depend on, not for unrelated files (#12612)', () => {
@@ -2798,7 +3110,7 @@ describe('path-gated single-purpose jobs', () => {
       if (typeof output[key] === 'boolean') expect(comparison, `plan.${key} compared as a string`).toBeUndefined();
     }
     // Every other impact output stays a declared, separately emitted value.
-    const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^      (\w+): \$\{\{/gm)].map(([, name]) => name);
+    const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^ {6}(\w+): \$\{\{/gm)].map(([, name]) => name);
     expect(impactOutputs).toEqual(['plan', 'server_shards', 'client_shards', 'browser_shards', 'windows_shards', 'db_image']);
     for (const [, name] of ci.matchAll(/needs\.impact\.outputs\.(\w+)/g)) expect(impactOutputs, name).toContain(name);
   });
@@ -3039,9 +3351,16 @@ describe('native jobs on a push to main', () => {
   });
 });
 
-// Database maintenance sources select the DB job by path.
-it.each(['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
-  'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js', 'docker-compose.yml'])
-('selects the DB job for %s', source => {
-  expect(buildCiTestPlan([source], { trackedFiles: [source], clientDependencies: [] }).db).toBe(true);
+it('selects live restore for DB risks and its real closure, separately from general DB dependencies', () => {
+  const inputs = realTree();
+  const planFor = (source) => githubPlanOutput(buildCiTestPlan([source], inputs));
+  for (const source of ['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
+    'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js',
+    'server/scripts/init-db.sql', 'server/services/backupDatabaseReset.js']) {
+    expect(planFor(source), source).toMatchObject({ full: false, db: true, db_live_restore: true });
+  }
+  expect(planFor('docker-compose.yml')).toMatchObject({ full: true, db: true, db_live_restore: true });
+  expect(planFor('server/services/catalog/catalogSync.js')).toMatchObject({ full: false, db: true, db_live_restore: false });
+  expect(planFor('docs/README.md')).toMatchObject({ db: false, db_live_restore: false });
+  expect(githubPlanOutput(buildCiTestPlan([], { forceFull: true }))).toMatchObject({ full: true, db: true, db_live_restore: true });
 });

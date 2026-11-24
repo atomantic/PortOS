@@ -74,13 +74,36 @@ async function failGeneration(id, operationId, error) {
   });
 }
 
+// Resolve every reference to a gallery file or refuse the run naming the missing one.
+function resolveReferenceImages(referenceImages) {
+  return (Array.isArray(referenceImages) ? referenceImages : []).map((ref) => {
+    const path = resolveGalleryImage(ref.filename);
+    if (!path) {
+      throw new ServerError(`Reference image ${ref.filename} is no longer in the gallery`, { status: 409, code: 'GALLERY_IMAGE_NOT_FOUND' });
+    }
+    return { ...ref, path };
+  });
+}
+
+// A provider that declares an image cap (`maxImages`) refuses an oversized set up
+// front; nothing is ever dropped to fit.
+function assertImageLimit(provider, count) {
+  const limit = Number(provider.maxImages);
+  if (Number.isFinite(limit) && limit > 0 && count > limit) {
+    throw new ServerError(`This run sends ${count} images but ${provider.name || provider.id} accepts at most ${limit}`, {
+      status: 400,
+      code: 'IMAGE_LIMIT_EXCEEDED',
+    });
+  }
+}
+
 async function executeGeneration({
   id,
   operationId,
   provider,
   requestedModel,
   requestedEffort,
-  sourcePath,
+  imagePaths,
   prompt,
   family,
 }) {
@@ -97,7 +120,7 @@ async function executeGeneration({
       // HTTP create/refine requires operator authority, including API requests
       // that fall back to a tool-capable provider.
       cwd: PATHS.data,
-      screenshots: provider.type === 'api' ? [sourcePath] : [],
+      screenshots: provider.type === 'api' ? imagePaths : [],
       responseSchema: threejsSculptSpecSchema,
       timeout: Math.max(provider.timeout || 0, 10 * 60 * 1000),
     });
@@ -114,9 +137,10 @@ async function executeGeneration({
     // renders correctly from the generated camera, so it is recorded rather than
     // rejected — the user sees it and an unsteered refinement asks for depth.
     const flatness = evaluateThreejsFlatness(spec);
-    // And likewise for a spec whose parts are modelled inside each other: it
-    // still renders, and from the hero angle it still looks right, so the
-    // finding is recorded and fed back rather than thrown away.
+    // And likewise for a spec whose parts are modelled inside each other, or
+    // driven through each other by a clip: it still renders, and from the hero
+    // angle it still looks right, so the finding is recorded and fed back
+    // rather than thrown away.
     const penetration = evaluateThreejsPenetration(spec);
     // And likewise for deterministic physical-conformance audits: floating parts,
     // swallowed geometry, coplanar z-fighting surfaces, unprovenanced clip transitions,
@@ -213,6 +237,7 @@ export async function createModel(input) {
     throw new ServerError('Gallery image not found', { status: 400, code: 'GALLERY_IMAGE_NOT_FOUND' });
   }
   await resolveProvider(input.providerId);
+  resolveReferenceImages(input.referenceImages);
   const created = await store.createModel(input);
   return startGeneration(created.id, {
     providerId: input.providerId,
@@ -220,6 +245,7 @@ export async function createModel(input) {
     effort: input.effort,
     prompt: input.prompt,
     family: input.family,
+    referenceImages: input.referenceImages,
   });
 }
 
@@ -229,6 +255,7 @@ export async function startGeneration(id, {
   effort,
   prompt,
   family,
+  referenceImages,
   feedback = '',
 } = {}) {
   const current = await store.getModel(id);
@@ -243,6 +270,14 @@ export async function startGeneration(id, {
   if (!sourcePath) {
     throw new ServerError('The source gallery image is no longer available', { status: 409, code: 'GALLERY_IMAGE_NOT_FOUND' });
   }
+
+  // Absent keeps the stored list; an explicit (possibly empty) array replaces it.
+  const effectiveReferences = referenceImages === undefined
+    ? (Array.isArray(current.referenceImages) ? current.referenceImages : [])
+    : referenceImages;
+  const references = resolveReferenceImages(effectiveReferences);
+  const imagePaths = [sourcePath, ...references.map((ref) => ref.path)];
+  assertImageLimit(provider, imagePaths.length);
 
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
@@ -280,6 +315,7 @@ export async function startGeneration(id, {
     : (family || GENERAL_FAMILY_ID);
   const generationPrompt = buildThreejsGenerationPrompt({
     sourcePath,
+    references,
     name: current.name,
     prompt: effectivePrompt,
     currentSpec: current.spec,
@@ -297,6 +333,7 @@ export async function startGeneration(id, {
       model: model || provider.defaultModel || null,
       effort: effectiveEffort,
       family: effectiveFamily,
+      referenceImages: effectiveReferences,
       status: 'generating',
       error: null,
       generationOperationId: operationId,
@@ -309,6 +346,7 @@ export async function startGeneration(id, {
           model: model || provider.defaultModel || null,
           effort: effectiveEffort,
           family: effectiveFamily,
+          images: [current.sourceImage.filename, ...effectiveReferences.map((ref) => ref.filename)],
           feedback: effectiveFeedback || null,
           startedAt,
           completedAt: null,
@@ -327,7 +365,7 @@ export async function startGeneration(id, {
       provider,
       requestedModel: model,
       requestedEffort: effectiveEffort,
-      sourcePath,
+      imagePaths,
       prompt: generationPrompt,
       family: effectiveFamily,
     });

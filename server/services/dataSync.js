@@ -6,7 +6,7 @@
  * No data is ever lost — unique records from both sides are kept (union semantics).
  */
 
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 import { stat, readdir } from 'fs/promises';
 import { join } from 'path';
 import { isDeepStrictEqual } from 'util';
@@ -21,8 +21,8 @@ import {
   DAILY_LOG_TOMBSTONES_KEY,
   dailyLogEventLiveStamp,
   queueDailyLogWrite,
-} from './meatspaceDailyLog.js';
-import { queueConfigWrite, queueHealthWrite } from './meatspaceWriteQueues.js';
+} from './meatspace/meatspaceDailyLog.js';
+import { queueConfigWrite, queueHealthWrite } from './meatspace/meatspaceWriteQueues.js';
 import {
   PORTOS_SCHEMA_VERSIONS,
   RECORD_KIND_SCHEMA_CATEGORIES,
@@ -582,7 +582,7 @@ async function applyGoalsRemote(remoteData) {
 
     const winning = {};
     if (remoteWins) {
-      for (const field of GOALS_METADATA_FIELDS) winning[field] = remoteData[field] ?? local[field];
+      for (const field of GOALS_METADATA_FIELDS) winning[field] = Object.hasOwn(remoteData, field) && remoteData[field] !== undefined ? remoteData[field] : local[field];
       // Carry the winning clock itself — restamping on receipt would out-date the peer's
       // next edit, and leaving ours would let the same snapshot win again.
       if (parseTsMs(remoteData.updatedAt) !== null) winning.updatedAt = remoteData.updatedAt;
@@ -1535,7 +1535,7 @@ const SCOPED_COVERAGE_KEY = {
 async function resolveExcludeSet(category, forPeerId) {
   const coverageKey = SCOPED_COVERAGE_KEY[category];
   if (!coverageKey || typeof forPeerId !== 'string' || forPeerId.length === 0) return new Set();
-  const { getOutboundCoverageForPeer } = await import('./sharing/peerSync.js');
+  const { getOutboundCoverageForPeer } = await import('./sharing/peerOutboundCoverage.js');
   const coverage = await getOutboundCoverageForPeer(forPeerId).catch(() => null);
   return coverage?.[coverageKey] instanceof Set ? coverage[coverageKey] : new Set();
 }

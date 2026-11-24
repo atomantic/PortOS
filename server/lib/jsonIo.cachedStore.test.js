@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { readFile, writeFile } from 'fs/promises';
+import { chmod, readFile, stat, writeFile } from 'fs/promises';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -238,6 +238,21 @@ describe('createCachedStore', () => {
       await expect(store.load()).rejects.toThrow(/Unreadable JSON file/);
       await writeFile(file, JSON.stringify({ accounts: { a: 1 } }));
       expect((await store.mutate((data) => { data.accounts.b = 2; })).accounts).toEqual({ a: 1, b: 2 });
+    });
+  });
+
+  describe.skipIf(process.platform === 'win32')('file mode option (#18129)', () => {
+    it('applies mode 0o600 on create and tightens existing 0o644 files on write', async () => {
+      const file = join(dir, 'secret.json');
+      const store = createCachedStore(file, { accounts: {} }, { mode: 0o600 });
+      await store.mutate((data) => { data.accounts.a = 1; });
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+      await chmod(file, 0o644);
+      expect((await stat(file)).mode & 0o777).toBe(0o644);
+
+      await store.save({ accounts: { a: 2 } });
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
     });
   });
 });

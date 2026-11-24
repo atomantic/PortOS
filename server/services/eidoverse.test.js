@@ -1,9 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { commandExists } from '../lib/commandExists.js';
+import { eidoverseStartCommand } from '../lib/eidoverseStartCommand.js';
 
 const mock = vi.hoisted(() => ({
   existing: new Set(),
@@ -65,7 +67,9 @@ import {
   DEFAULT_EIDOVERSE_WORLDS_REPO,
   EIDOVERSE_VIDEO_REPO,
   getBunExecutable,
-  getBunInstallInvocation,
+  BUN_RELEASE_TARGETS,
+  BUN_VERSION,
+  getBunReleaseTarget,
   getEidoversePaths,
   getEidoverseStatus,
   installEidoverse,
@@ -94,7 +98,11 @@ describe('Eidoverse managed-app installer', () => {
         : join(selectedPaths.worlds, '.git'));
     });
     mock.spawn.mockImplementation(async (command, _args, options = {}) => {
-      if (command === 'powershell' || command === 'bash') {
+      if (command === 'tar' || command === 'unzip') {
+        const directory = command === 'tar' ? _args[_args.indexOf('-C') + 1] : _args[_args.indexOf('-d') + 1];
+        const folder = join(directory, getBunReleaseTarget().archive.replace(/\.zip$/, ''));
+        await mkdir(folder, { recursive: true });
+        await writeFile(join(folder, process.platform === 'win32' ? 'bun.exe' : 'bun'), 'fake-bun');
         mock.installedBunAvailable = true;
       } else {
         mock.existing.add(join(options.cwd, 'node_modules'));
@@ -156,7 +164,7 @@ describe('Eidoverse managed-app installer', () => {
       type: 'bun',
       repoPath: selectedPaths.worlds,
       companionRepoPaths: [selectedPaths.video],
-      startCommands: ['bun --env-file=.env.portos server/server.ts'],
+      startCommands: [eidoverseStartCommand('bun')],
     }));
     expect(status).toMatchObject({
       installed: true,
@@ -208,23 +216,13 @@ describe('Eidoverse managed-app installer', () => {
       .toBe('git@github.com:example-owner/eidoverse-worlds.git');
   });
 
-  it('selects the official unattended Bun installer for each supported platform', () => {
-    expect(getBunInstallInvocation('win32')).toEqual({
-      command: 'powershell',
-      args: [
-        '-NoProfile',
-        '-NonInteractive',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        "Invoke-RestMethod 'https://bun.com/install.ps1' | Invoke-Expression",
-      ],
-    });
-    expect(getBunInstallInvocation('darwin')).toEqual({
-      command: 'bash',
-      args: ['-c', 'curl -fsSL https://bun.com/install | bash'],
-    });
-    expect(getBunInstallInvocation('linux')).toEqual(getBunInstallInvocation('darwin'));
+  it('pins a SHA-256 digest for every supported platform and keeps remote install scripts out of the module', async () => {
+    expect(Object.keys(BUN_RELEASE_TARGETS).sort())
+      .toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64']);
+    for (const target of Object.values(BUN_RELEASE_TARGETS)) expect(target.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(getBunReleaseTarget('freebsd', 'x64')).toBeNull();
+    const source = await (await import('node:fs/promises')).readFile(new URL('./eidoverse.js', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/Invoke-Expression|bun\.com\/install|curl -fsSL/);
   });
 
   it('rejects non-GitHub Worlds repositories before cloning', async () => {
@@ -233,55 +231,86 @@ describe('Eidoverse managed-app installer', () => {
     expect(mock.cloneRepo).not.toHaveBeenCalled();
   });
 
-  it('installs Bun automatically before cloning when it is unavailable', async () => {
-    mock.bunAvailable = false;
+  describe('pinned Bun download', () => {
+    let root;
+    let previousInstall;
+    const target = getBunReleaseTarget();
+    const archiveBytes = Buffer.from('fake-archive');
 
-    await expect(installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO }))
-      .resolves.toMatchObject({ installed: true, bunAvailable: true });
+    beforeEach(async () => {
+      root = await mkdtemp(join(tmpdir(), 'eidoverse-bun-'));
+      previousInstall = process.env.BUN_INSTALL;
+      process.env.BUN_INSTALL = root;
+      mock.bunAvailable = false;
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(archiveBytes)));
+    });
 
-    const installer = getBunInstallInvocation();
-    const bunExecutable = getBunExecutable();
-    expect(mock.spawn).toHaveBeenCalledWith(
-      installer.command,
-      installer.args,
-      expect.objectContaining({ timeoutLabel: 'Bun installation' }),
-    );
-    expect(mock.spawn).toHaveBeenCalledWith(
-      bunExecutable,
-      ['install', '--frozen-lockfile'],
-      expect.objectContaining({ cwd: selectedPaths.worlds }),
-    );
-    expect(mock.createApp).toHaveBeenCalledWith(expect.objectContaining({
-      startCommands: [expect.stringContaining(bunExecutable)],
-    }));
+    afterEach(async () => {
+      vi.unstubAllGlobals();
+      if (previousInstall === undefined) delete process.env.BUN_INSTALL;
+      else process.env.BUN_INSTALL = previousInstall;
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('verifies the pinned digest, extracts the binary, and installs before cloning', async () => {
+      const digest = createHash('sha256').update(archiveBytes).digest('hex');
+      const patched = { ...BUN_RELEASE_TARGETS[`${process.platform}-${process.arch}`] };
+      const original = patched.sha256;
+      // The table is frozen at the top level only; entries are patched for the fixture archive.
+      Object.defineProperty(BUN_RELEASE_TARGETS[`${process.platform}-${process.arch}`], 'sha256', { value: digest, configurable: true });
+      try {
+        await expect(installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO }))
+          .resolves.toMatchObject({ installed: true, bunAvailable: true });
+      } finally {
+        Object.defineProperty(BUN_RELEASE_TARGETS[`${process.platform}-${process.arch}`], 'sha256', { value: original, configurable: true });
+      }
+
+      expect(fetch).toHaveBeenCalledWith(
+        `https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${target.archive}`,
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+      const bunExecutable = getBunExecutable();
+      expect((await stat(bunExecutable)).isFile()).toBe(true);
+      if (process.platform !== 'win32') expect((await stat(bunExecutable)).mode & 0o777).toBe(0o755);
+      expect(mock.spawn).toHaveBeenCalledWith(
+        bunExecutable,
+        ['install', '--frozen-lockfile'],
+        expect.objectContaining({ cwd: selectedPaths.worlds }),
+      );
+    });
+
+    it('refuses a digest mismatch without extracting or executing anything', async () => {
+      await expect(installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO }))
+        .rejects.toMatchObject({ code: 'EIDOVERSE_BUN_DIGEST_MISMATCH' });
+      expect(mock.spawn).not.toHaveBeenCalled();
+      await expect(stat(getBunExecutable())).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(mock.cloneRepo).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the download fails', async () => {
+      fetch.mockResolvedValue(new Response('nope', { status: 404 }));
+      await expect(installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO }))
+        .rejects.toMatchObject({ code: 'EIDOVERSE_BUN_DOWNLOAD_FAILED' });
+      expect(mock.spawn).not.toHaveBeenCalled();
+    });
   });
 
-  it('reuses the default Bun installation even when it is not on PATH', async () => {
+  it('reuses the default Bun installation without any download even when it is not on PATH', async () => {
     mock.bunAvailable = false;
     mock.installedBunAvailable = true;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
 
     await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
+    vi.unstubAllGlobals();
 
-    const installer = getBunInstallInvocation();
-    expect(mock.spawn).not.toHaveBeenCalledWith(
-      installer.command,
-      installer.args,
-      expect.anything(),
-    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mock.spawn).not.toHaveBeenCalledWith('tar', expect.anything(), expect.anything());
     expect(mock.spawn).toHaveBeenCalledWith(
       getBunExecutable(),
       ['install', '--frozen-lockfile'],
       expect.objectContaining({ cwd: selectedPaths.worlds }),
     );
-  });
-
-  it('stops before cloning when the Bun installer does not produce a runnable binary', async () => {
-    mock.bunAvailable = false;
-    mock.spawn.mockResolvedValue({ stdout: '', stderr: '' });
-
-    await expect(installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO }))
-      .rejects.toMatchObject({ status: 500, code: 'EIDOVERSE_BUN_INSTALL_FAILED' });
-    expect(mock.cloneRepo).not.toHaveBeenCalled();
   });
 
   it('keeps an unreadable app registry distinct from a confirmed missing registration', async () => {

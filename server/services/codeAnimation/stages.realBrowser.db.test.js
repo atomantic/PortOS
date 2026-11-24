@@ -107,7 +107,6 @@ describe.skipIf(!dbReady || !chrome || !ffmpeg || !ffprobe)('Production stages w
         launch: attempt => {
           const profile = join(root, `chrome-test-profile-${attempt}`);
           const child = spawn(chrome, _testChromeCaptureArgs(profile), { stdio: ['ignore', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
-          channel('portos.composition-browser.lifecycle').publish({ event: 'child', profile: root, child });
           startup = { source: 'test-chrome', executable: chrome, profile };
           return child;
         },

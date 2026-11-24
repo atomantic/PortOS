@@ -18,6 +18,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { UUID_RE } from '../lib/fileCore.js';
@@ -108,15 +109,21 @@ function rowToMeta(row) {
 // dimensions" on EVERY insert, aborting the whole bridge resync. Store NULL with
 // one clear warning instead; the record stays un-searchable until it's
 // re-embedded with a matching-dimension model. Returns `{ value, model }` for
-// the embedding + embedding_model columns so both stay consistent.
-function embeddingColumns(embedding) {
+// the embedding + embedding_model columns so both stay consistent; `model` is
+// the ACTIVE embedding model that produced the vector (#18296), not the default.
+async function embeddingColumns(embedding) {
   if (!embedding) return { value: null, model: null };
   const expected = DEFAULT_MEMORY_CONFIG.embeddingDimension;
   if (embedding.length !== expected) {
-    console.warn(`⚠️ Skipping memory embedding: got ${embedding.length} dims, column expects ${expected} — check the Brain embedding model`);
+    console.warn(`⚠️ Skipping memory embedding: got ${embedding.length} dims, column expects ${expected} — check the shared embeddings setting (/models/embeddings)`);
     return { value: null, model: null };
   }
-  return { value: arrayToPgvector(embedding), model: DEFAULT_MEMORY_CONFIG.embeddingModel };
+  // Lazy: the embedder (provider/settings/CoS config) loads only when a vector
+  // is written. `embedding_model` is VARCHAR(100); the legacy CoS model field
+  // is unbounded.
+  const { getActiveEmbeddingModel } = await import('./memoryEmbeddings.js');
+  const model = await getActiveEmbeddingModel();
+  return { value: arrayToPgvector(embedding), model: model ? model.slice(0, 100) : null };
 }
 
 /**
@@ -128,7 +135,7 @@ async function insertMemory(client, data, embedding, reviewOrigin = null) {
   const now = new Date().toISOString();
 
   const originInstanceId = await getInstanceId();
-  const embeddingCol = embeddingColumns(embedding);
+  const embeddingCol = await embeddingColumns(embedding);
 
   const result = await client.query(
     `INSERT INTO memories (
@@ -163,16 +170,29 @@ async function insertMemory(client, data, embedding, reviewOrigin = null) {
   mem.embedding = embeddingCol.value ? embedding : null;
   // Store related memories as links
   if (data.relatedMemories?.length > 0) {
-    for (const relId of data.relatedMemories) {
-      await client.query(
-        'INSERT INTO memory_links (source_id, target_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [id, relId]
-      );
-    }
-    mem.relatedMemories = data.relatedMemories;
+    mem.relatedMemories = await insertSymmetricRelatedLinks(client, id, data.relatedMemories);
   }
 
   return mem;
+}
+
+/**
+ * Insert 'related' links as symmetric (id, relId) + (relId, id) pairs, matching
+ * linkMemories and the getGraphData `source_id < target_id` dedupe. Returns the
+ * unique non-self target ids.
+ */
+async function insertSymmetricRelatedLinks(client, id, relatedIds) {
+  const targets = [...new Set(relatedIds)].filter(relId => relId !== id);
+  if (targets.length) {
+    await client.query(
+      `INSERT INTO memory_links (source_id, target_id)
+       SELECT $1, t FROM unnest($2::uuid[]) AS t
+       UNION ALL SELECT t, $1 FROM unnest($2::uuid[]) AS t
+       ON CONFLICT DO NOTHING`,
+      [id, targets]
+    );
+  }
+  return targets;
 }
 
 export async function createMemory(data, embedding = null) {
@@ -273,7 +293,7 @@ export async function upsertBrainMemory(key, data, embedding = null, legacyId = 
       memory = await insertMemory(client, data, embedding);
       await client.query('UPDATE brain_memory_links SET memory_id = $2 WHERE bridge_key = $1', [key, memory.id]);
     } else if (embedding) {
-      const columns = embeddingColumns(embedding);
+      const columns = await embeddingColumns(embedding);
       await client.query('UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3',
         [columns.value, columns.model, id]);
       memory.embedding = columns.value ? embedding : null;
@@ -507,12 +527,9 @@ async function updateMemoryWithClient(client, id, updates) {
   )).rows[0] : row;
   if (updates.relatedMemories) {
     // Legacy edits replace only the symmetric relation; preserve typed provenance.
-    await client.query("DELETE FROM memory_links WHERE source_id = $1 AND link_type = 'related'", [id]);
-    if (updates.relatedMemories.length) {
-      const slots = updates.relatedMemories.map((_, i) => `($1, $${i + 2})`).join(', ');
-      await client.query(`INSERT INTO memory_links (source_id, target_id) VALUES ${slots} ON CONFLICT DO NOTHING`,
-        [id, ...updates.relatedMemories]);
-    }
+    // Symmetric pairs are stored as two rows, so clear both directions.
+    await client.query("DELETE FROM memory_links WHERE (source_id = $1 OR target_id = $1) AND link_type = 'related'", [id]);
+    await insertSymmetricRelatedLinks(client, id, updates.relatedMemories);
     // Ask the trigger for a local clock; explicit clocks belong to peer replay.
     updated = (await client.query('UPDATE memories SET updated_at = NULL WHERE id = $1 RETURNING *', [id])).rows[0];
   }
@@ -534,7 +551,7 @@ export async function updateMemory(id, updates) {
  * Update a memory's embedding
  */
 export async function updateMemoryEmbedding(id, embedding) {
-  const embeddingCol = embeddingColumns(embedding);
+  const embeddingCol = await embeddingColumns(embedding);
   const result = await query(
     `UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3 RETURNING *`,
     [embeddingCol.value, embeddingCol.model, id]
@@ -1179,7 +1196,9 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false, { rea
 export async function applyDecay(decayRate = 0.01) {
   // Set-based decay: archive old low-importance memories and decay the rest in bulk
   const archived = await withTransaction(async (client) => {
-    // Archive memories that have decayed below threshold and are older than 30 days
+    // Archive memories that have decayed below threshold and are older than 30 days. Mind-owned
+    // memories are exempt (ETHOS §7: pruning is self-directed); they still decay below 0.15 in the
+    // second UPDATE so selectMindMemoryForReview can surface them for the Mind's own verdict.
     const archiveResult = await client.query(`
       UPDATE memories SET status = 'archived',
         importance = GREATEST(0.1,
@@ -1188,12 +1207,13 @@ export async function applyDecay(decayRate = 0.01) {
         )
       WHERE status = 'active'
         AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
+        AND source_agent_id IS DISTINCT FROM $3
         AND created_at < NOW() - INTERVAL '30 days'
         AND GREATEST(0.1,
           importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
           + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
         ) < 0.15
-    `, [decayRate, protectedMindMemoryTags]);
+    `, [decayRate, protectedMindMemoryTags, PERSISTENT_MIND_ID]);
 
     // Decay importance for remaining active memories where change exceeds threshold
     const decayResult = await client.query(`

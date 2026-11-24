@@ -102,6 +102,14 @@ export const startLoomFalVideo = (id, episodeId, nodeId, body, options = {}) =>
 export const getLoomFalVideo = (id, episodeId, nodeId, jobId, options = {}) =>
   request(nodePath(id, episodeId, nodeId, `/fal-video/${encodeURIComponent(jobId)}`), options);
 
+export const listLoomFalVideos = (id, episodeId, options = {}) =>
+  request(episodePath(id, episodeId, '/fal-video'), options);
+
+export const cancelLoomFalVideo = (id, episodeId, nodeId, jobId, options = {}) =>
+  request(nodePath(id, episodeId, nodeId, `/fal-video/${encodeURIComponent(jobId)}/cancel`), {
+    method: 'POST', ...options,
+  });
+
 // One path out of a scene per call. `addLoomTransition` resolves to
 // `{ loom, transition }` — the row carries its server-minted id, so the editor
 // never has to reconcile ids back into locally-added rows. The node PATCH's
@@ -204,4 +212,6 @@ export const startLoomExport = (id, body = {}, options = {}) => request(loomPath
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 export const getLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}`), options);
+export const getLatestLoomExport = (id, options = {}) => request(loomPath(id, '/export/latest'), options);
+export const cancelLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}`), { method: 'DELETE', ...options });
 export const downloadLoomExport = (id, jobId, options = {}) => request(loomPath(id, `/export/${encodeURIComponent(jobId)}/download`), { ...options, responseType: 'blob' });

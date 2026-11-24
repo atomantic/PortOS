@@ -1,25 +1,18 @@
 import { Router } from 'express';
-import { spotifyOauthCallbackQuerySchema } from '../lib/queryValidation.js';
+import { oauthCallbackQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler } from '../lib/errorHandler.js';
+import { INVALID_OAUTH_STATE_MESSAGE } from '../lib/oauthState.js';
 import { validateRequest } from '../lib/validateRequest.js';
+import { requestOriginFrom as requestOrigin } from '../lib/beeperOAuthOrigin.js';
 import * as spotifyAuth from '../services/spotifyAuth.js';
 import * as spotifySync from '../services/spotifySync.js';
 import * as spotifyPlaylists from '../services/spotifyPlaylists.js';
 
 const router = Router();
 
-// OAuth must use the same public origin the browser used to reach this request.
-// Certificate metadata is not guaranteed to be present on every HTTPS install,
-// while the request host is authoritative for the current callback round-trip.
-function requestOrigin(req) {
-  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http')
-    .toString().split(',')[0].trim();
-  const host = (req.headers['x-forwarded-host'] || req.headers.host || '')
-    .toString().split(',')[0].trim();
-  return ['http', 'https'].includes(proto) && host ? `${proto}://${host}` : null;
-}
+// OAuth uses the origin the request arrived on (Host + socket scheme), never X-Forwarded-*.
 
 function requestRedirectOptions(req) {
   return { origin: requestOrigin(req) };
@@ -56,8 +49,9 @@ router.post('/auth/credentials', asyncHandler(async (req, res) => {
 }));
 
 // Build the Spotify authorize URL (the SPA opens it to start the OAuth flow).
-router.get('/auth/url', asyncHandler(async (req, res) => {
+router.post('/auth/url', asyncHandler(async (req, res) => {
   const result = await spotifyAuth.getAuthUrl(requestRedirectOptions(req));
+  res.set('Cache-Control', 'no-store');
   res.json(result);
 }));
 
@@ -65,24 +59,20 @@ router.get('/auth/url', asyncHandler(async (req, res) => {
 // so render every outcome as a redirect to the Brain Spotify tab (which toasts
 // the oauthError param) instead of the JSON envelope the middleware would send.
 router.get('/oauth/callback', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const settingsUrl = (error) => (error
     ? `/brain/spotify?oauthError=${encodeURIComponent(error)}`
     : '/brain/spotify?oauthConnected=1');
-  const { code, error: authError } = validateRequest(spotifyOauthCallbackQuerySchema, req.query);
-  if (authError) return res.redirect(settingsUrl(String(authError)));
-  if (!code) return res.redirect(settingsUrl('Missing authorization code'));
-  const callback = await spotifyAuth.handleCallback(String(code), requestRedirectOptions(req)).then((result) => ({ result }))
+  const parsed = oauthCallbackQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.redirect(settingsUrl(INVALID_OAUTH_STATE_MESSAGE));
+  const { error } = await spotifyAuth.handleCallback(parsed.data)
     .catch((err) => {
       // This catch replaces asyncHandler's logging (the redirect swallows the
       // throw), so keep the failure visible in server logs.
       console.error(`❌ Spotify OAuth callback failed: ${err.message}`);
       return { error: err.message || 'Spotify OAuth callback failed' };
     });
-  if (callback.error) return res.redirect(settingsUrl(callback.error));
-  console.log(callback.result?.duplicate
-    ? '🎧 Spotify OAuth callback replay ignored; tokens already stored'
-    : '🎧 Spotify OAuth callback processed, tokens stored');
-  res.redirect(settingsUrl());
+  res.redirect(settingsUrl(error));
 }));
 
 // Disconnect — clear stored tokens (leaves the client id/secret in place).

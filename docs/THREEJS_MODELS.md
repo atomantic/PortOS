@@ -14,6 +14,21 @@ procedural Three.js scene with:
 - gallery-image lineage, run attribution, detail inventory, and honest
   single-view limitations.
 
+## Reference views
+
+A model has one primary gallery image plus up to five `referenceImages`
+(`{filename, role, label}`; roles `front`, `side`, `back`, `top`,
+`turnaround-sheet`, `close-up`, the last with a short "what this shows"
+label). They apply to create and refine. The prompt lists each with its role and
+states that the primary image wins on identity and color; disagreements go in
+the spec's limitations. API providers receive the primary then the references
+in order as attachments; CLI/TUI providers get the paths in the prompt. A
+provider declaring `maxImages` below the count is refused before the run, and a
+deleted gallery image gives a 409 naming it. On refine, an absent
+`referenceImages` keeps the stored list and `[]` clears it. Each run records
+the `images` it was sent. A record without the field reads as none; no
+migration. With no references the prompt and attachments are unchanged.
+
 ## Why this is native instead of an `img2threejs` dependency
 
 [hoainho/img2threejs](https://github.com/hoainho/img2threejs) is an Apache-2.0
@@ -131,6 +146,41 @@ a stylized clip is the author's to keep. `buildThreejsAnimationFeedback()` turns
 the findings into refinement feedback, so a refinement the user did not steer
 asks for clips that open from the assembled pose and close their loops alongside
 the coverage, cross-section, penetration, and material asks.
+
+### Collisions while a clip plays
+
+The cross-part penetration gate (`evaluateThreejsPenetration()`,
+`server/lib/threejsModelPenetration.js`) compares unrelated parts at rest. For a
+model that declares clips it also sweeps each clip through the same pose times
+the physical audit measures — `planThreejsClipPoseSamples()` in
+`server/lib/threejsModelClipSampling.js` owns that plan and its 48-pose
+round-robin budget, so the two gates cannot sample different moments of one
+clip. A hatch that swings through its frame or a leg that folds through the hull
+passes every rest-pose check; this is the check that sees it.
+
+- A pair is reported only when a pose makes it **worse than rest**: below the
+  contact fraction at rest and at or above it in the pose, or at least 0.25
+  deeper than at rest. An overlap the rest pose already has is the design, not a
+  collision.
+- Same-subtree pairs, declared attachments, pairs an articulation joint connects
+  (a joint's part and its parent joint's part) and transparent containers are
+  exempt. A part that is hidden (itself or through an ancestor) or fully
+  transparent at that time is skipped.
+- **`clip-part-collision`** is a `warning` at heavy overlap (half of the smaller
+  part or more, which includes a part swallowed whole) and a `note` otherwise.
+  One finding per pair per clip carries both part ids, the clip, the first
+  failing time (`timeSeconds`) and the worst overlap (`worstFraction`).
+- Poses the budget leaves out are listed as a `clip-poses-unsampled` note and in
+  `poseCoverage`; they are never read as clean. A result stored before the sweep
+  existed carries no `poseCoverage`, and the detail page says so for a model
+  with clips. A model with no clips returns exactly the resting-pose result.
+- Warnings join the automatic refinement feedback (with a motion-focused
+  remedy); notes do not.
+
+The finding's **Show in preview** button selects the clip, parks the playhead on
+the failing time and highlights both parts. All three live in the URL
+(`?clip=<id>&time=<seconds>&highlight=<partA>,<partB>`), so the view survives a
+reload and can be shared; opening another clip drops the `time`.
 
 ### The exported player
 

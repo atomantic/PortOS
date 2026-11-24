@@ -28,7 +28,7 @@ import TouchDragHint from '../../graph3d/TouchDragHint';
 import EntityCombobox from '../../EntityCombobox';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
-import useGraphNodeDetail from '../../../hooks/useGraphNodeDetail';
+import useGraphNodeDetail from './useGraphNodeDetail';
 import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric, formatPercent } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
@@ -497,7 +497,7 @@ export default function BrainGraph() {
           {BRAIN_TYPES.map(type => {
             const dest = DESTINATIONS[type];
             return (
-              <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none text-sm py-1.5 sm:py-0 min-h-[32px] sm:min-h-0">
+              <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none text-sm py-1.5 sm:py-0 min-h-[44px] pointer-fine:sm:min-h-0">
                 <input
                   type="checkbox"
                   checked={typeFilters[type]}
@@ -614,7 +614,7 @@ export default function BrainGraph() {
           <button
             onClick={() => setSelectedNode(null)}
             title="Clear selection (Esc)"
-            className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs bg-port-bg/90 border border-port-border text-gray-300 hover:text-white rounded-lg transition-colors"
+            className="absolute top-3 right-3 z-10 flex items-center gap-1.5 px-3 py-1.5 min-h-[44px] pointer-fine:sm:min-h-[32px] text-xs bg-port-bg/90 border border-port-border text-gray-300 hover:text-white rounded-lg transition-colors"
           >
             <X size={14} />
             Clear selection
@@ -664,7 +664,7 @@ export default function BrainGraph() {
           <button
             onClick={() => setLegendOpen(o => !o)}
             aria-expanded={legendOpen}
-            className="roomy-viewport:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+            className="roomy-viewport:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] pointer-fine:sm:min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
           >
             <Info size={12} />
             Legend
@@ -724,9 +724,9 @@ export default function BrainGraph() {
               onClick={() => setSelectedNode(null)}
               title="Clear selection (Esc)"
               aria-label="Clear selection"
-              className="shrink-0 text-gray-500 hover:text-white transition-colors p-1"
+              className="shrink-0 text-gray-500 hover:text-white transition-colors min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded"
             >
-              &times;
+              <X size={16} aria-hidden="true" />
             </button>
           </div>
 

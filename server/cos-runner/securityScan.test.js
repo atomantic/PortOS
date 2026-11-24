@@ -257,8 +257,8 @@ describe.skipIf(process.platform === 'win32')('runner-owned scanner lifecycle', 
     await writeFile(join(output, 'coverage.json'), '{}');
     if (launchGrant.maxCostUsd === 'unlimited') {
       child.stderr.write('Synthetic progress on stderr.\n');
-      child.stdout.write('{\n  \"cost\": {\n    \"estimatedUsd\":');
-      child.stdout.write(' 0.25, \"estimatedUsdRange\": {\"min\":0.25,\"max\":0.5} }\n}\n');
+      child.stdout.write('{\n  "cost": {\n    "estimatedUsd":');
+      child.stdout.write(' 0.25, "estimatedUsdRange": {"min":0.25,"max":0.5} }\n}\n');
     } else child.stdout.write(`short-context budget baseline: $0.25 of $${launchGrant.maxCostUsd}.00 limit\n`);
     child.emit('close', 0, null);
     const result = await run;

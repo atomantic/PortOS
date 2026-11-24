@@ -4,7 +4,8 @@
  * Reads `settings.embeddings = { provider, model }` and routes embedText() to
  * the configured backend (Ollama or LM Studio). When `provider === 'none'` or
  * unset, returns `{ skipped: true }` — callers persist the row without an
- * embedding and a future re-embed admin action backfills.
+ * embedding and the catalog backfill (`POST /api/catalog/embeddings/backfill`,
+ * driven from Settings → Embeddings) fills it in later.
  *
  * Vector dim is pinned to 768 (matches the `vector(768)` column on memories +
  * catalog_ingredients). Output dim is validated; a mismatch surfaces clearly
@@ -147,6 +148,21 @@ export async function embedIngredient(ingredient) {
     return {};
   }
   return { embedding: out.embedding, embeddingModel: out.model };
+}
+
+/**
+ * Query vector for catalog hybrid search (`hybridSearchIngredients`). It MUST
+ * come from the same provider/model `embedIngredient`/`embedBatch` wrote the
+ * rows with, or pgvector compares vectors from two different spaces (#18296),
+ * so catalog searchers call this rather than the memory embedder. Returns the
+ * vector, or `null` when embeddings are disabled or the embed failed — the
+ * search then degrades to FTS-only.
+ */
+export async function embedSearchQuery(text) {
+  const out = await embedText(text).catch((err) => ({ success: false, error: err?.message || String(err) }));
+  if (out?.success) return out.embedding;
+  if (!out?.skipped) console.warn(`🧬 embedSearchQuery failed: ${out?.error || 'unknown'} — catalog search falls back to text only`);
+  return null;
 }
 
 /**

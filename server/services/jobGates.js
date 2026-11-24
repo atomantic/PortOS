@@ -102,7 +102,7 @@ export async function checkJobGate(jobId) {
  * @returns {boolean}
  */
 export function hasGate(jobId) {
-  return Object.prototype.hasOwnProperty.call(GATES, jobId);
+  return  Object.hasOwn(GATES, jobId);
 }
 
 /**

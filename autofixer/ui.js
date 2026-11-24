@@ -12,6 +12,9 @@ import { isPm2ProcessName } from '../lib/pm2ProcessName.js';
 import { PORTS } from '../server/lib/ports.js';
 import { PM2_BIN, execPm2, listProcessesStrict, DATA_DIR, INDEX_FILE, loadApps } from './shared.js';
 
+// Staged-fix metadata the dashboard may see; repoPath is deliberately absent.
+const PUBLIC_FIX_FIELDS = ['sessionId', 'processName', 'appName', 'startTime', 'endTime', 'duration', 'staged', 'promoted', 'disposition', 'changedFiles', 'diffBytes'];
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -65,8 +68,9 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
 
   // API: Get registered apps and their processes
   app.get('/api/apps', async (req, res) => {
+    // The dashboard only needs names and processes; repoPath/envFile/commands stay server-side.
     const apps = await loadApps();
-    res.json(apps);
+    res.json(apps.map(({ id, name, pm2ProcessNames }) => ({ id, name, pm2ProcessNames: pm2ProcessNames || [] })));
   });
 
   // API: Get autofixer history
@@ -78,7 +82,10 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
   // Staged patches are data on reads; applying/discarding requires host authority.
   app.get('/api/fixes/:session', async (req, res) => {
     const result = await stagedFixes.read(req.params.session);
-    res.status(result.status || 200).json(result);
+    if (result.error) return res.status(result.status || 200).json(result);
+    // repoPath stays on disk for stagedFixes#perform; never send host paths to the browser.
+    const record = Object.fromEntries(PUBLIC_FIX_FIELDS.filter(key => key in result.record).map(key => [key, result.record[key]]));
+    res.json({ record, patch: result.patch });
   });
   for (const action of ['apply', 'discard']) {
     app.post(`/api/fixes/:session/${action}`, auth.requireHostControl, async (req, res) => {
@@ -148,10 +155,13 @@ export async function startAutofixerUi(stagedFixes, port = process.env.PORT || P
   });
 
   // Server-Sent Events endpoint for streaming logs
-  app.get('/logs', async (req, res) => {
+  app.get('/logs', auth.requireHostControl, async (req, res) => {
     const processName = req.query.process || 'portos-autofixer';
     if (!isPm2ProcessName(processName)) {
       return res.status(400).json({ error: 'Invalid process name', code: 'INVALID_PROCESS_NAME' });
+    }
+    if (processName !== 'portos-autofixer' && !(await isRegisteredProcess(processName))) {
+      return res.status(400).json({ error: 'Unknown process', code: 'UNKNOWN_PROCESS' });
     }
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');

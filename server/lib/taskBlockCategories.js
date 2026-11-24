@@ -5,6 +5,7 @@
  * auto-retry (may it re-queue?) so they can't drift into three literal sets (the retry's first draft shipped a `'user-paused'` matching nothing, the real category being `agent-paused`, and missed `challenge-escalation`).
  * `PAUSED_BLOCKED_CATEGORIES` (paused until something outside the task changes; keeps the resume pointer), `USER_DECISION_BLOCKED_CATEGORIES` (user intent / open decision; the reaper's exemption),
  * `NON_AUTO_RETRY_BLOCK_CATEGORIES` (their union; a completed investigation must never revive these), `TIMED_COOLDOWN_BLOCKED_CATEGORIES` (a timer clears these: the cooldown sweeper revives them, so block reporters stay quiet),
+ * `PREREQUISITE_BLOCKED_CATEGORIES` / `DELIVERY_RECOVERY_BLOCKED_CATEGORIES` (delivery prerequisite and retry-hold blocks that keep preserved resume pointers),
  * `PROVIDER_CONFIG_BLOCKED_CATEGORY` and `MAX_SPAWNS_BLOCKED_CATEGORY` (shared literals the spawn gates stamp). Pure and dependency-free (beyond two categories shared with `taskPauseHold.js` and `taskParser.js`).
  */
 
@@ -78,4 +79,18 @@ export function hasSpawnBudgetResetPrerequisite(metadata = {}) {
 export const NON_AUTO_RETRY_BLOCK_CATEGORIES = new Set([
   ...USER_DECISION_BLOCKED_CATEGORIES,
   ...PAUSED_BLOCKED_CATEGORIES
+]);
+
+/** Delivery prerequisite blocks that pause execution on server verification or an owned dependency rather than generic retry. */
+export const PREREQUISITE_BLOCKED_CATEGORIES = new Set([
+  'runtime-verification',
+  'internal-dependency',
+  'internal-dependency-unverified',
+]);
+
+/** Delivery-held blocked categories whose decision owner keeps a preserved resume pointer via `releaseRetryHold`. */
+export const DELIVERY_RECOVERY_BLOCKED_CATEGORIES = new Set([
+  'task-approval',
+  'task-recovery-exhausted',
+  ...PREREQUISITE_BLOCKED_CATEGORIES,
 ]);

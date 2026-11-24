@@ -151,7 +151,7 @@ async function resyncFederationAfterRestore(feedPositions) {
       [feedPositions.map((p) => p.sequencename), feedPositions.map((p) => p.last_value)],
     );
   }
-  const { rewindPostgresSyncCursors } = await import('./syncOrchestrator.js');
+  const { rewindPostgresSyncCursors } = await import('./syncCursors.js');
   const peers = await rewindPostgresSyncCursors();
   console.log(`🔄 DB restore: floored ${feedPositions.length} sync feed sequences, rewound memory/Catalog cursors for ${peers} peers`);
   return peers;

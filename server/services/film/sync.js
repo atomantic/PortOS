@@ -104,6 +104,7 @@ async function prepareBlenderSync(owner, { replaceScenes = false }) {
       return { syncedAt, manifestHash,
         settings: { ...blender.settings, options: blenderValidOptionValues(described.options, blender.settings.options) },
         notes: Object.fromEntries(Object.entries(blender.notes).filter(([shotId]) => shotIds.has(shotId))),
+        motionReferences: Object.fromEntries(Object.entries(blender.motionReferences).filter(([shotId]) => shotIds.has(shotId))),
       };
     };
     if (entry.abort.signal.aborted) throw blenderRefusal('The sync was canceled', 'MUSIC_VIDEO_BLENDER_SYNC_CANCELED', 409);

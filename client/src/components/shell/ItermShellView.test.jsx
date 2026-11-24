@@ -95,8 +95,12 @@ describe('ItermShellView', () => {
 
   it('groups sessions window › tab › pane and selects through the URL callback', () => {
     renderAt('/shell/iterm/iterm-A', <ItermShellView />);
-    const tabs = screen.getAllByTestId('iterm-session-tab');
+    const group = screen.getByRole('group', { name: 'iTerm2 sessions' });
+    const tabs = within(group).getAllByTestId('iterm-session-tab');
     expect(tabs).toHaveLength(3);
+    expect(tabs[0].tagName).toBe('BUTTON');
+    expect(tabs[0].getAttribute('aria-current')).toBe('true');
+    expect(tabs[1].hasAttribute('aria-current')).toBe(false);
     expect(tabs[0].getAttribute('title')).toContain('Window 1 › Tab 1 › Pane 1/2');
     expect(tabs[2].getAttribute('title')).toContain('Window 2 › Tab 1');
     expect(screen.getByText('W2')).toBeTruthy();

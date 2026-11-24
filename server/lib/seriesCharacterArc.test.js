@@ -196,7 +196,7 @@ describe('optional five-stage evolution lens (#6440)', () => {
     const arc = sanitizeCharacterArc({
       characterId: 'chr-1', characterName: 'Mara', want: 'revenge', need: 'to forgive',
     });
-    expect(Object.prototype.hasOwnProperty.call(arc, 'evolution')).toBe(false);
+    expect(Object.hasOwn(arc, 'evolution')).toBe(false);
     expect(JSON.stringify(sanitizeCharacterArc(arc))).toBe(JSON.stringify(arc));
   });
 

@@ -19,6 +19,20 @@ vi.mock('./eidoverseWorld.js', () => ({
   readEidoverseHostDescriptor: (...args) => readEidoverseHostDescriptor(...args),
 }));
 
+const auth = vi.hoisted(() => ({ enabled: false, readable: true }));
+vi.mock('./auth.js', async () => {
+  const { extractTokens } = await import('../../lib/portosAuthCore.js');
+  return {
+    isAuthEnabled: async () => auth.enabled,
+    verifyRequestSession: async (req) => {
+      if (!auth.readable) throw new Error('session store unreadable');
+      return extractTokens(req).find((token) => token === 'operator-session') ?? null;
+    },
+    verifyPassword: async (password) => password === 'instance-password',
+  };
+});
+vi.mock('./eidoverseTravel.js', () => ({ hasValidEidoverseGuestCookie: async () => false }));
+
 const bridges = [];
 const upstreamServers = [];
 const webSocketServers = [];
@@ -50,12 +64,110 @@ const rawGet = (port, path, hostHeader) => new Promise((settle, reject) => {
   probe.end();
 });
 
+/** 101 when the upgrade is admitted, else the HTTP refusal status. */
+const upgradeStatus = (port, path, headers = {}) => new Promise((settle, reject) => {
+  const client = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+  webSocketClients.push(client);
+  client.once('open', () => settle(101));
+  client.once('unexpected-response', (_req, response) => {
+    response.resume();
+    response.socket.once('close', () => settle(response.statusCode));
+  });
+  client.once('error', reject);
+});
+
+const rawRequest = (port, path, headers) => new Promise((settle, reject) => {
+  const probe = httpRequest({ host: '127.0.0.1', port, path, headers }, (response) => {
+    let body = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => { body += chunk; });
+    response.on('end', () => settle({ status: response.statusCode, body }));
+  });
+  probe.once('error', reject);
+  probe.end();
+});
+
+const listenRecordingUpstream = async () => {
+  const reached = [];
+  const upstream = createServer((req, res) => {
+    reached.push(req.url);
+    res.end('sequencer');
+  });
+  const webSocketServer = new WebSocketServer({ server: upstream });
+  webSocketServers.push(webSocketServer);
+  webSocketServer.on('connection', (_socket, req) => reached.push(req.url));
+  return { reached, upstreamPort: await listen(upstream) };
+};
+const FOREIGN_BROWSERS = [
+  ['a cross-origin page', { origin: 'https://attacker.example' }],
+  ['a sandboxed page', { origin: 'null' }],
+  ['a DNS-rebound page', { host: 'rebound.attacker.example', origin: 'http://rebound.attacker.example' }],
+];
+const REFUSED_CREDENTIALS = [
+  ['no credentials', {}],
+  ['a stale session', { cookie: 'portos_auth=stale' }],
+  ['the instance password as Basic', { authorization: `Basic ${Buffer.from(':instance-password').toString('base64')}` }],
+  ['a peer credential', { 'x-portos-peer-auth': 'peer', 'x-portos-instance-id': 'peer-instance' }],
+  ['a guest cookie with no visit behind it', { cookie: 'portos_eidoverse_guest=unknown-ticket' }],
+];
+const OPERATOR_CREDENTIALS = [
+  ['a session cookie', { cookie: 'portos_auth_5555=operator-session' }],
+  ['a Bearer session', { authorization: 'Bearer operator-session' }],
+];
+
+const startBridge = async (targetPort) => {
+  const bridge = createEidoverseHost({ targetPort, listenHost: '127.0.0.1', listenPort: 0, certDir: null });
+  bridges.push(bridge);
+  return (await bridge.start()).port;
+};
+
 afterEach(async () => {
+  auth.enabled = false;
+  auth.readable = true;
   vi.unstubAllEnvs();
   webSocketClients.splice(0).forEach((client) => client.terminate());
   await Promise.all(bridges.splice(0).map((bridge) => bridge.close()));
   await Promise.all(webSocketServers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
   await Promise.all(upstreamServers.splice(0).map(closeServer));
+});
+
+describe('Eidoverse host bridge admission', () => {
+  const PATHS = ['/', '/ws', '/upload', '/auth', '/seat-profile', '/snap', '/geom', '/host', '/embed-config', '/anything-else'];
+  const UPGRADES = ['/ws', '/', '/anything-else'];
+
+  it.each(REFUSED_CREDENTIALS)('refuses HTTP and WebSocket given %s when a password is set', async (_label, headers) => {
+    auth.enabled = true;
+    const { reached, upstreamPort } = await listenRecordingUpstream();
+    const port = await startBridge(upstreamPort);
+
+    for (const path of PATHS) expect((await rawRequest(port, path, headers)).status, path).toBe(401);
+    for (const path of UPGRADES) expect(await upgradeStatus(port, path, headers), path).toBe(401);
+    expect(reached).toEqual([]);
+  });
+
+  it.each(FOREIGN_BROWSERS.flatMap(([label, headers]) => [true, false].map((enabled) => [label, enabled, headers])))(
+    'refuses %s with password enabled=%s, even carrying a live session', async (_label, enabled, foreign) => {
+      auth.enabled = enabled;
+      const { reached, upstreamPort } = await listenRecordingUpstream();
+      const port = await startBridge(upstreamPort);
+      const headers = { ...foreign, cookie: 'portos_auth=operator-session' };
+
+      for (const path of PATHS) expect((await rawRequest(port, path, headers)).status, path).toBe(403);
+      for (const path of UPGRADES) expect(await upgradeStatus(port, path, headers), path).toBe(403);
+      expect(reached).toEqual([]);
+    },
+  );
+
+  it.each(OPERATOR_CREDENTIALS)('admits an operator with %s when a password is set', async (_label, credentials) => {
+    auth.enabled = true;
+    const { reached, upstreamPort } = await listenRecordingUpstream();
+    const port = await startBridge(upstreamPort);
+    const headers = { ...credentials, origin: `http://127.0.0.1:${port}` };
+
+    expect((await rawRequest(port, '/main.js', headers)).status).toBe(200);
+    expect(await upgradeStatus(port, '/ws', headers)).toBe(101);
+    await vi.waitFor(() => expect(reached).toEqual(['/main.js', '/ws']));
+  });
 });
 
 describe('Eidoverse host bridge', () => {

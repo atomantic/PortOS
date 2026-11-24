@@ -16,6 +16,7 @@ const mock = vi.hoisted(() => ({
   dashboardRunning: vi.fn(),
   dashboardHandle: { on: vi.fn() },
   restart: vi.fn(),
+  restartEidoverse: vi.fn(),
   runningNames: vi.fn(),
   syncFork: vi.fn(),
 }));
@@ -24,7 +25,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, PATHS: mock.paths };
 });
-vi.mock('./git.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
+vi.mock('./git/sync.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
 vi.mock('./pm2.js', () => ({ restartApp: mock.restart, getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -37,6 +38,8 @@ vi.mock('../lib/detachedSpawn.js', () => ({
 }));
 vi.mock('./managedAppRepositories.js', () => ({ syncManagedAppFork: mock.syncFork }));
 vi.mock('./cos/cosTaskStore.js', () => ({ addTask: mock.addTask }));
+
+vi.mock('./eidoverseLaunch.js', () => ({ restartEidoverseProcess: mock.restartEidoverse }));
 
 import { updateApp } from './appUpdater.js';
 
@@ -94,6 +97,9 @@ describe('managed app updates', () => {
     expect(mock.spawn).not.toHaveBeenCalledWith('npm', expect.anything(), expect.anything());
     expect(emit).toHaveBeenCalledWith('git-pull:companion-1', 'done', 'Already up to date');
     expect(emit).toHaveBeenCalledWith('app-update', 'done', 'App update routine complete');
+    // The sequencer restarts through its loopback launch path, never a bare PM2 restart.
+    expect(mock.restartEidoverse).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ repoPath: repo }));
+    expect(mock.restart).not.toHaveBeenCalled();
   });
 
   it('queues a CoS agent and stops the update when the pull hits a conflict', async () => {

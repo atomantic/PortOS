@@ -62,6 +62,7 @@ const VISION_RE = new RegExp([
   'kosmos', 'nanollava',
   'nemotron-?3\\.5?-bolt', 'nemotron-?3\\.5-?super',
   'ornith-?1\\.5', 'lfm3-?omni',
+  'mimo-?v2\\.6', 'glm-?ocr',
 ].join('|'), 'i');
 
 // CLI providers whose CLI accepts an image file (codex `-i`, claude via a file in the working dir). CLI providers expose no capability-tagged model list,
@@ -112,7 +113,7 @@ const TOOL_USE_RE = new RegExp([
   'gpt-oss',
   'nemotron',
   'olmo-?3',
-  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2', 'inkling',
+  'lfm[23]', 'ornith', 'flint', 'muse-glimmer', 'nex-n2', 'inkling', 'mimo-?v2', 'laguna',
   'smollm2',
   'dflash',
   'deepseek-v3', 'deepseek-r1', 'deepseek-v4',

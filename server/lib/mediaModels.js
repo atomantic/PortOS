@@ -89,7 +89,7 @@ import {
   readVideoDefault,
   resolveVideoBucketKey,
 } from './mediaModelBuckets.js';
-import { RUNNER_FAMILIES } from './runners.js';
+import { RUNNER_FAMILIES, flux2RepoRevision, diffusersRepoRevision } from './runners.js';
 import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
@@ -637,6 +637,16 @@ export const upgradeLtx25AudioControls = (list) => {
   });
 };
 
+// Immutable commits of the community FLUX.3 Klein MLX conversions. They are
+// third-party repos, so the render loads the verified local snapshot of exactly
+// this commit instead of letting mflux follow a mutable `main`.
+const flux3Repo = (bits) => `mflux-community/flux-3-image-klein-mflux-q${bits}`;
+const FLUX3_KLEIN_REVISIONS = Object.freeze({
+  [flux3Repo(4)]: '79c0034de040c460e9685bf0127f40af042a2abe',
+  [flux3Repo(6)]: 'ace05578b60f0185b0c1212d23fb13616d88d6c7',
+  [flux3Repo(8)]: '7e46237dea3999a9792959f5e000aeb1b9f9e7df',
+});
+
 const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
@@ -1118,7 +1128,7 @@ const DEFAULT_REGISTRY = {
     // availability does not certify acceptance of BFL's upstream terms.
     ...[4, 6, 8].map(bits => ({
       id: `flux3-klein-q${bits}`, name: `FLUX.3 Klein Q${bits} (MLX, 32+ GB RAM)`,
-      runner: 'flux3', repo: `mflux-community/flux-3-image-klein-mflux-q${bits}`,
+      runner: 'flux3', repo: flux3Repo(bits), revision: FLUX3_KLEIN_REVISIONS[flux3Repo(bits)],
       steps: 16, guidance: 0, cfgDisabled: true, quantization: `q${bits}`,
       supportsImg2Img: false, supportsLoras: false, supportsNegativePrompt: false,
       license: 'flux-kommunity-license',
@@ -1138,7 +1148,9 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+      revision: flux2RepoRevision('Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic'),
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      tokenizerRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-4B'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1149,11 +1161,13 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'sdnq',
       repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
+      revision: flux2RepoRevision('Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32'),
       // KV repo's tokenizer is the same Qwen3 tokenizer as the base 9B repo,
       // but the multi-reference editing path in scripts/ml/flux2_macos.py probes
       // HF auth against this value — pinning to the KV repo means accepting
       // its license once enables both single-ref + multi-ref renders.
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+      tokenizerRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B-kv'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1164,7 +1178,9 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'int8',
       repo: 'aydin99/FLUX.2-klein-4B-int8',
+      revision: flux2RepoRevision('aydin99/FLUX.2-klein-4B-int8'),
       basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      basePipelineRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-4B'),
       steps: 8,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1180,12 +1196,14 @@ const DEFAULT_REGISTRY = {
       runner: 'flux2',
       quantization: 'none',
       repo: 'black-forest-labs/FLUX.2-klein-9B',
+      revision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B'),
       // Multi-reference editing loads this `-kv` sibling repo instead of the
       // base 9B (its transformer is tuned for the K/V reference-editing task).
       // The plain text/i2i bf16 path stays on `repo`. Same FLUX.2-klein
       // license — accept once at huggingface.co. Threaded to the runner as
       // `--kv-repo`; see scripts/ml/flux2_macos.py.
       kvRepo: 'black-forest-labs/FLUX.2-klein-9B-kv',
+      kvRevision: flux2RepoRevision('black-forest-labs/FLUX.2-klein-9B-kv'),
       steps: 20,
       guidance: 3.5,
       cfgDisabled: true,
@@ -1201,8 +1219,10 @@ const DEFAULT_REGISTRY = {
       name: 'HiDream-I1 Full (17B, ~34 GB @ bf16, 50 steps)',
       runner: 'hidream',
       repo: 'HiDream-ai/HiDream-I1-Full',
+      revision: diffusersRepoRevision('HiDream-ai/HiDream-I1-Full'),
       pipelineClass: 'HiDreamImagePipeline',
       textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderRevision: diffusersRepoRevision('meta-llama/Meta-Llama-3.1-8B-Instruct'),
       textEncoderClass: 'LlamaForCausalLM',
       tokenizerClass: 'PreTrainedTokenizerFast',
       steps: 50,
@@ -1215,8 +1235,10 @@ const DEFAULT_REGISTRY = {
       name: 'HiDream-I1 Fast (17B distilled, ~34 GB, 16 steps)',
       runner: 'hidream',
       repo: 'HiDream-ai/HiDream-I1-Fast',
+      revision: diffusersRepoRevision('HiDream-ai/HiDream-I1-Fast'),
       pipelineClass: 'HiDreamImagePipeline',
       textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderRevision: diffusersRepoRevision('meta-llama/Meta-Llama-3.1-8B-Instruct'),
       textEncoderClass: 'LlamaForCausalLM',
       tokenizerClass: 'PreTrainedTokenizerFast',
       steps: 16,
@@ -1235,6 +1257,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image (20B MMDiT, ~40 GB @ bf16, best text rendering)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image'),
       pipelineClass: 'QwenImagePipeline',
       steps: 30,
       guidance: 4.0,
@@ -1244,6 +1267,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image-Edit (20B, image-to-image + text-rewrite)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image-Edit',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image-Edit'),
       pipelineClass: 'QwenImageEditPipeline',
       steps: 30,
       guidance: 4.0,
@@ -1259,6 +1283,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image 2.1 (7B DiT, generation + editing, research license)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image-2.1',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image-2.1'),
       pipelineClass: 'QwenImage21Pipeline',
       steps: 40,
       guidance: 1.0,
@@ -1272,6 +1297,7 @@ const DEFAULT_REGISTRY = {
       name: 'Z-Image-Turbo (bf16, ~13 GB)',
       runner: 'z-image',
       repo: 'Tongyi-MAI/Z-Image-Turbo',
+      revision: diffusersRepoRevision('Tongyi-MAI/Z-Image-Turbo'),
       steps: 8,
       guidance: 1.0,
       cfgDisabled: true,
@@ -1285,6 +1311,7 @@ const DEFAULT_REGISTRY = {
       name: 'ERNIE-Image (~16 GB @ bf16, 50 steps)',
       runner: 'ernie',
       repo: 'baidu/ERNIE-Image',
+      revision: diffusersRepoRevision('baidu/ERNIE-Image'),
       pipelineClass: 'ErnieImagePipeline',
       usePromptEnhancer: true,
       steps: 50,
@@ -1295,6 +1322,7 @@ const DEFAULT_REGISTRY = {
       name: 'ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)',
       runner: 'ernie',
       repo: 'baidu/ERNIE-Image-Turbo',
+      revision: diffusersRepoRevision('baidu/ERNIE-Image-Turbo'),
       pipelineClass: 'ErnieImagePipeline',
       usePromptEnhancer: true,
       steps: 8,
@@ -1492,6 +1520,66 @@ const backfillKvRepo = (list) => {
     const spec = KV_REPO_BY_ID[entry.id];
     if (!spec || entry.repo !== spec.shippedRepo) return entry; // unknown id or forked repo
     return { ...entry, kvRepo: spec.kvRepo };
+  });
+};
+
+// Commit-pin backfill for persisted FLUX.2 entries: each `<x>Repo` gets its
+// `<x>Revision` only while that repo is still a shipped one with a known pin,
+// so a user fork is never clobbered and an explicit revision (including '') wins.
+const FLUX2_REVISION_FIELDS = [
+  ['repo', 'revision'],
+  ['tokenizerRepo', 'tokenizerRevision'],
+  ['basePipelineRepo', 'basePipelineRevision'],
+  ['kvRepo', 'kvRevision'],
+];
+
+const backfillFlux2Revisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || entry.runner !== RUNNER_FAMILIES.FLUX2) return entry;
+    let next = entry;
+    for (const [repoKey, revKey] of FLUX2_REVISION_FIELDS) {
+      if (revKey in entry) continue;
+      const pin = typeof entry[repoKey] === 'string' ? flux2RepoRevision(entry[repoKey]) : null;
+      if (pin) next = { ...next, [revKey]: pin };
+    }
+    return next;
+  });
+};
+
+// Fork-safe commit-pin backfill for persisted FLUX.3 entries: the pin lands only
+// while the repo is still a shipped one, and an explicit revision (including '') wins.
+const backfillFlux3Revisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || entry.runner !== 'flux3' || 'revision' in entry) return entry;
+    const pin = FLUX3_KLEIN_REVISIONS[entry.repo];
+    return pin ? { ...entry, revision: pin } : entry;
+  });
+};
+
+// Same fork-safe commit-pin backfill for persisted diffusers-runner entries
+// (HiDream/Qwen/Z-Image/ERNIE): a revision lands only while the repo is still a
+// shipped one with a known pin; an explicit revision (including '') wins.
+const DIFFUSERS_RUNNERS = new Set([
+  RUNNER_FAMILIES.HIDREAM, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.Z_IMAGE, RUNNER_FAMILIES.ERNIE,
+]);
+const DIFFUSERS_REVISION_FIELDS = [
+  ['repo', 'revision'],
+  ['textEncoderRepo', 'textEncoderRevision'],
+];
+
+const backfillDiffusersRevisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || !DIFFUSERS_RUNNERS.has(entry.runner)) return entry;
+    let next = entry;
+    for (const [repoKey, revKey] of DIFFUSERS_REVISION_FIELDS) {
+      if (revKey in entry) continue;
+      const pin = typeof entry[repoKey] === 'string' ? diffusersRepoRevision(entry[repoKey]) : null;
+      if (pin) next = { ...next, [revKey]: pin };
+    }
+    return next;
   });
 };
 
@@ -1747,9 +1835,9 @@ const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
+  const upgradedImage = backfillFlux3Revisions(backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  )));
+  ))))));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the

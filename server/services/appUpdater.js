@@ -2,10 +2,11 @@ import { existsSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { readFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import * as gitService from './git.js';
+import * as gitService from './git/sync.js';
 import * as pm2Service from './pm2.js';
 import { bufferedSpawnOrThrow } from '../lib/bufferedSpawn.js';
 import { parseCommandArgs, validateCommand } from '../lib/commandSecurity.js';
+import { EIDOVERSE_PROCESS_NAME } from '../lib/eidoversePort.js';
 import { isDetachedRunning, spawnDetached } from '../lib/detachedSpawn.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -203,6 +204,12 @@ export async function updateApp(app, emit, options = {}) {
   }
 }
 
+async function restartUpdatedProcess(app, name) {
+  if (name !== EIDOVERSE_PROCESS_NAME) return pm2Service.restartApp(name, app.pm2Home);
+  const { restartEidoverseProcess } = await import('./eidoverseLaunch.js');
+  return restartEidoverseProcess(app);
+}
+
 async function _doUpdate(app, emit, {
   syncFork = false,
   acknowledgeFork = false,
@@ -346,7 +353,7 @@ async function _doUpdate(app, emit, {
     await startDashboardHandoff(app);
     const restartResults = await Promise.all(
       processNames.map(name =>
-        pm2Service.restartApp(name, app.pm2Home).then(() => null, e => e)
+        restartUpdatedProcess(app, name).then(() => null, e => e)
       )
     );
     const failures = processNames.filter((_, i) => restartResults[i]);

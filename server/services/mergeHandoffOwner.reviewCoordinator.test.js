@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { storedForm } from '../lib/cos/cosTaskRows.js';
 import { forkLocalBranch } from '../lib/forkHead.js';
-import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'feature/fix', workspaceRepo: 'example/repo', originHost: 'github.com', row: null, head: null, upstream: null, remote: null, pushRemote: null, detached: false }));
 vi.mock('./cos/cosState.js', () => ({
@@ -39,7 +38,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
   if (typeof stdout !== 'string') throw new Error('unreadable git fixture');
   return { stdout, exitCode: 0 };
 } }));
-vi.mock('./git.js', () => ({ parsePullRequestUrl, isRepo: async () => true, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
+vi.mock('./git/status.js', () => ({ isRepo: async () => true, getRepoBranches: async () => ({ baseBranch: 'main' }) }));
 vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktreeDirt: vi.fn(),
   listWorktrees: async () => [], findAdoptableWorktreeForBranch: async () => null, releaseIdleSiblingNextHolder: async () => null,
   createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead),

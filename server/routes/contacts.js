@@ -14,7 +14,7 @@ router.get('/setup-check', asyncHandler(async (req, res) => {
   res.json(report);
 }));
 
-// Status — cache counts + last sync (no AddressBook open unless setup block).
+// Status — cache counts + last sync; never opens AddressBook (setup-check does).
 router.get('/status', asyncHandler(async (req, res) => {
   const status = await contactsSync.getStatus();
   res.json(status);
@@ -23,6 +23,12 @@ router.get('/status', asyncHandler(async (req, res) => {
 // Run a full Contacts → cache sync now.
 router.post('/sync', asyncHandler(async (req, res) => {
   const result = await contactsSync.runSync();
+  res.json(result);
+}));
+
+// Clear cached Contacts PII and reset sync state idempotently.
+router.delete('/cache', asyncHandler(async (req, res) => {
+  const result = await contactsSync.clearContactCache();
   res.json(result);
 }));
 

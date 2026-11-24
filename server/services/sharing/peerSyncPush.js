@@ -19,6 +19,7 @@ import {
   buildPortosMeta,
   formatVersionGap,
 } from '../../lib/schemaVersions.js';
+import { peerLogLabel } from '../instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { listIssuesForSeries } from '../pipeline/issues.js';
 import {
@@ -102,7 +103,6 @@ const pushRetryWalkSaw = new Map();
 let pushRetryScheduler = null;
 
 const flattenLogText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
-const peerLabel = (peer) => peer.name || peer.instanceId;
 
 function isRetryablePushReason(reason) {
   if (reason === 'network') return true;
@@ -183,7 +183,7 @@ function reportPushFailure(sub, peer, reason, detail) {
   if (isRetryablePushReason(reason)) markPushRetryDue(sub.peerId);
   if (loggedPushFailures.get(sub.peerId) === reason) return;
   loggedPushFailures.set(sub.peerId, reason);
-  const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${flattenLogText(peerLabel(peer))}`;
+  const target = `${sub.recordKind}/${sub.recordId} (sub ${sub.id}) to ${peerLogLabel()}`;
   const suffix = `${detail ? `: ${flattenLogText(detail)}` : ''} — record not delivered; repeat ${reason} failures for this peer are logged once until a push lands`;
   // An unreachable peer is routine (asleep, off the tailnet). Retryable
   // failures schedule the bounded walk; a peer the probe has marked offline
@@ -196,7 +196,7 @@ function reportPushRecovered(sub, peer) {
   const prior = loggedPushFailures.get(sub.peerId);
   if (!prior) return;
   loggedPushFailures.delete(sub.peerId);
-  console.log(`✅ peerSync: pushes to ${flattenLogText(peerLabel(peer))} landing again after ${prior}`);
+  console.log(`✅ peerSync: pushes to ${peerLogLabel()} landing again after ${prior}`);
 }
 
 export function __resetPushFailureLogForTests() {
@@ -261,7 +261,7 @@ async function recordSchemaVersionRefusal(res, body, sub, peer) {
   const action = localBehind ? 'Update this PortOS to resume sync.' : 'Update the peer’s PortOS to resume sync.';
   const gap = localBehind ? { behind } : { ahead };
   const diagnostic = ahead.length || behind.length ? ` ${formatVersionGap(gap)}` : '';
-  console.log(`⏸️ peerSync: ${peerLabel(peer)} rejected push — ${action}${diagnostic}`);
+  console.log(`⏸️ peerSync: ${peerLogLabel()} rejected push — ${action}${diagnostic}`);
   return { pushed: false, reason: localBehind ? 'local-schema-behind' : 'peer-schema-behind', blockedBySchema: true };
 }
 
@@ -434,7 +434,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     const legacyPayload = { ...payload };
     for (const { key } of stripped) delete legacyPayload[key];
     console.log(
-      `ℹ️ peerSync: ${peerLabel(peer)} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
+      `ℹ️ peerSync: ${peerLogLabel()} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
     );
     ({ res, body } = await postPayload(legacyPayload));
   } else if (unknownKind) {
@@ -447,7 +447,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     await persistSchemaVersionBlock(sub.id, { reason: 'peer-pre-feature' });
     // Same class as a schema-version refusal: the peer is behind, the block is persisted, and re-tries pause.
     console.log(
-      `⏸️ peerSync: ${peerLabel(peer)} rejected push — its PortOS doesn't recognize the ` +
+      `⏸️ peerSync: ${peerLogLabel()} rejected push — its PortOS doesn't recognize the ` +
       `'${sub.recordKind}' record kind yet. Re-tries pause until they upgrade.`,
     );
     return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
@@ -456,7 +456,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   if (schemaRefusal) return schemaRefusal;
   if (isLegacyCollectionManifestRefusal(res, body, payload)) {
     await persistSchemaVersionBlock(sub.id, { reason: 'peer-collection-manifest-limit' });
-    console.log(`⏸️ peerSync: ${peerLabel(peer)} needs a PortOS update to sync media collections with more than 2,000 assets.`);
+    console.log(`⏸️ peerSync: ${peerLogLabel()} needs a PortOS update to sync media collections with more than 2,000 assets.`);
     return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
   }
   if (!res) {
@@ -524,7 +524,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   await persistPushDeliveryEvidence(sub.id, deliveryEvidence);
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch((err) => {
-      console.warn(`⚠️ peerSync: tombstone cursor ack for ${sub.peerId} after push of ${sub.recordKind}/${sub.recordId} failed (retried on the next push): ${err?.message || err}`);
+      console.warn(`⚠️ peerSync: tombstone cursor ack for ${peerLogLabel()} after push of ${sub.recordKind}/${sub.recordId} failed (retried on the next push): ${err?.message || err}`);
     });
   }
   await stampPushedBaseHashes(sub, payload);

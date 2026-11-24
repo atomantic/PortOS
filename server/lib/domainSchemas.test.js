@@ -1409,7 +1409,7 @@ describe('domain validation schemas', () => {
     it('keeps an explicit 0 (slashdo: loop until clean) — never collapsed with absent', () => {
       const out = normalizeReviewerMaxRounds({ ollama: 0 });
       expect(out).toEqual({ ollama: 0 });
-      expect(Object.prototype.hasOwnProperty.call(out, 'codex')).toBe(false);
+      expect(Object.hasOwn(out, 'codex')).toBe(false);
     });
 
     it('drops unknown tokens, non-integers, negatives, and over-cap values', () => {

@@ -70,9 +70,11 @@ async function makeSandbox({
   writeFileSync(join(repo, '.gitignore'), 'data/*\nnode_modules/\n');
 
   // Records every pm2 invocation the script makes, in order. When stallDelete is
-  // set the `delete` call logs and then BLOCKS until the test deletes the release
-  // file, so a signal can be delivered while the delete is still running — the
-  // window a latch armed after the delete would miss.
+  // set the first `delete` call logs and then BLOCKS until the test deletes the
+  // release file, so a signal can be delivered while the delete is still running —
+  // the window a latch armed after the delete would miss. Only the first: the
+  // updater runs several, and a signal that lands after the release but before the
+  // next one spawns would leave that one blocked with nobody to release it.
   if (!withoutDeps) {
     writeFileSync(join(repo, 'node_modules', 'pm2', 'package.json'), JSON.stringify({ name: 'pm2', version: '0.0.0' }));
     writeFileSync(
@@ -80,7 +82,7 @@ async function makeSandbox({
       `const fs = require('fs');
 const args = process.argv.slice(2).join(' ');
 fs.appendFileSync(${JSON.stringify(calls)}, args + '\\n');
-if (${stallDelete} && args.startsWith('delete')) {
+if (${stallDelete} && args.startsWith('delete ecosystem.config.cjs')) {
   const release = ${JSON.stringify(releaseFile)};
   fs.writeFileSync(release, 'stalled');
   const sleep = new Int32Array(new SharedArrayBuffer(4));

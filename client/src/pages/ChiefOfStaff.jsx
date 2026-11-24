@@ -82,7 +82,7 @@ export default function ChiefOfStaff() {
   const cos = useCosPageData({ activeTab, selectedTask });
   const {
     status, loading, agentState, insights, tasks, agents, agentsLoaded, agentsError, liveOutputs,
-    providers, providersLoaded, activeProviderId, apps, health, healthLoaded, healthError,
+    providers, providersLoaded, activeProviderId, apps, appsStatus, readApps, health, healthLoaded, healthError,
     completedRevision, taskHistoryRevision, configAvatarStyle, avatarStyle, fetchData, fetchQueue,
     setAvatarStyle, handleForceEvaluate, handleHealthCheck, handleTaskUnblocked, handleTaskDeleted, handleUserTaskAdded,
   } = cos;
@@ -245,7 +245,7 @@ export default function ChiefOfStaff() {
           )}
           {activeTab === 'schedule' && (
             <Suspense fallback={<TabLoadFallback label="schedule" />}>
-              <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} providersLoaded={providersLoaded} daemonRunning={status?.running} />
+              <ScheduleTab apps={apps} appsStatus={appsStatus} onReadApps={readApps} providers={providers} activeProviderId={activeProviderId} providersLoaded={providersLoaded} daemonRunning={status?.running} />
             </Suspense>
           )}
           {activeTab === 'workflow' && (

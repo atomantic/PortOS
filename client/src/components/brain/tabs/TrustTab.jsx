@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
-import { getBrainInbox, getBrainSettings, updateBrainSettings } from '../../../services/apiBrain.js';
+import { getBrainInbox, getBrainSettings } from '../../../services/apiBrain.js';
 import {
   RefreshCw,
   Shield,
@@ -9,8 +10,6 @@ import {
   Settings
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
-import toast from '../../ui/Toast';
-import { FormField } from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 
 import {
@@ -20,7 +19,7 @@ import {
 import ConfidenceBadge from '../ConfidenceBadge';
 import { timeAgo } from '../../../utils/formatters';
 
-export default function TrustTab({ onRefresh }) {
+export default function TrustTab() {
   const [entries, setEntries] = useState([]);
   const [counts, setCounts] = useState({});
   const [settings, setSettings] = useState(null);
@@ -29,11 +28,7 @@ export default function TrustTab({ onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [expandedId, setExpandedId] = useState(null);
-  const [editingSettings, setEditingSettings] = useState(false);
-  const [settingsForm, setSettingsForm] = useState({});
   const beginLoad = useLatestRequest();
-  // Seed the edit form once; an inbox-filter reload must not discard in-progress edits.
-  const formSeededRef = useRef(false);
 
   const fetchData = useCallback(async () => {
     const isCurrent = beginLoad();
@@ -56,10 +51,6 @@ export default function TrustTab({ onRefresh }) {
     setSettingsError(settingsResult.error || null);
     if (settingsResult.data) {
       setSettings(settingsResult.data);
-      if (!formSeededRef.current) {
-        formSeededRef.current = true;
-        setSettingsForm(settingsResult.data);
-      }
     }
     setLoading(false);
   }, [statusFilter, beginLoad]);
@@ -67,31 +58,6 @@ export default function TrustTab({ onRefresh }) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  const handleSaveSettings = async () => {
-    const threshold = parseFloat(settingsForm.confidenceThreshold);
-    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
-      toast.error('Confidence threshold must be a number between 0 and 1');
-      return;
-    }
-
-    const result = await updateBrainSettings({
-      confidenceThreshold: threshold,
-      dailyDigestTime: settingsForm.dailyDigestTime,
-      weeklyReviewTime: settingsForm.weeklyReviewTime,
-      weeklyReviewDay: settingsForm.weeklyReviewDay
-    }, { silent: true }).catch(err => {
-      toast.error(err.message || 'Failed to save settings');
-      return null;
-    });
-
-    if (result) {
-      toast.success('Settings saved');
-      setEditingSettings(false);
-      setSettings(result);
-      onRefresh?.();
-    }
-  };
 
   if (loading) {
     return (
@@ -124,110 +90,38 @@ export default function TrustTab({ onRefresh }) {
         )}
       </div>
 
-      {/* Settings Section */}
+      {/* Settings Section — read-only; ConfigTab owns editing */}
       <div className="p-4 bg-port-card border border-port-border rounded-lg">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-medium text-white flex items-center gap-2">
             <Settings size={16} />
             Settings
           </h3>
-          {!editingSettings && !settingsError && (
-            <button
-              onClick={() => setEditingSettings(true)}
-              className="text-sm text-port-accent hover:underline"
+          {!settingsError && (
+            <Link
+              to="/brain/config"
+              className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
             >
-              Edit
-            </button>
+              Edit in Config
+            </Link>
           )}
         </div>
 
         {settingsError ? (
           <ListLoadError what="Brain settings" error={settingsError} onRetry={fetchData} />
-        ) : editingSettings ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <FormField label="Confidence Threshold">
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={settingsForm.confidenceThreshold || 0.6}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, confidenceThreshold: e.target.value })}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Items below this threshold go to "needs review" (0-1)
-                </p>
-              </FormField>
-
-              <FormField label="Daily Digest Time">
-                <input
-                  type="time"
-                  value={settingsForm.dailyDigestTime || '09:00'}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, dailyDigestTime: e.target.value })}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-
-              <FormField label="Weekly Review Day">
-                <select
-                  value={settingsForm.weeklyReviewDay || 'sunday'}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, weeklyReviewDay: e.target.value })}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                >
-                  <option value="sunday">Sunday</option>
-                  <option value="monday">Monday</option>
-                  <option value="tuesday">Tuesday</option>
-                  <option value="wednesday">Wednesday</option>
-                  <option value="thursday">Thursday</option>
-                  <option value="friday">Friday</option>
-                  <option value="saturday">Saturday</option>
-                </select>
-              </FormField>
-
-              <FormField label="Weekly Review Time">
-                <input
-                  type="time"
-                  value={settingsForm.weeklyReviewTime || '16:00'}
-                  onChange={(e) => setSettingsForm({ ...settingsForm, weeklyReviewTime: e.target.value })}
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-                />
-              </FormField>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleSaveSettings}
-                className="px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
-              >
-                Save
-              </button>
-              <button
-                onClick={() => { setEditingSettings(false); setSettingsForm(settings || {}); }}
-                className="px-3 py-1.5 text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
               <span className="text-gray-500">Confidence Threshold:</span>
-              <span className="text-white ml-2">{Math.round((settings?.confidenceThreshold || 0.6) * 100)}%</span>
+              <span className="text-white ml-2">{Math.round((settings?.confidenceThreshold ?? 0.6) * 100)}%</span>
             </div>
             <div>
-              <span className="text-gray-500">Daily Digest:</span>
-              <span className="text-white ml-2">{settings?.dailyDigestTime || '09:00'}</span>
-            </div>
-            <div>
-              <span className="text-gray-500">Weekly Review:</span>
-              <span className="text-white ml-2">{settings?.weeklyReviewDay || 'Sunday'} {settings?.weeklyReviewTime || '16:00'}</span>
+              <span className="text-gray-500">Scheduled Reviews:</span>
+              <span className="text-white ml-2">{settings?.scheduledReviewsEnabled === true ? `On (digest ${settings?.dailyDigestTime || "09:00"}, review ${settings?.weeklyReviewDay || "sunday"} ${settings?.weeklyReviewTime || "16:00"})` : "Off"}</span>
             </div>
             <div>
               <span className="text-gray-500">Provider:</span>
-              <span className="text-white ml-2">{settings?.defaultProvider || 'lmstudio'}</span>
+              <span className="text-white ml-2">{settings?.defaultProvider || "Not configured"}</span>
             </div>
           </div>
         )}

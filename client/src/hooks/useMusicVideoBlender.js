@@ -46,8 +46,8 @@ const without = (map, key) => {
 export default function useMusicVideoBlender(projectId, { enabled = true, api = musicVideoApi, socketChannel = 'music-video:blender' } = {}) {
   const {
   assembleMusicVideoBlenderCut, cancelMusicVideoBlenderJob, cancelMusicVideoBlenderJobs, clearMusicVideoBlenderFrames, createMusicVideoBlenderWorkspace,
-  deleteMusicVideoBlenderFile, getMusicVideoBlender, openMusicVideoBlenderShot, renderMusicVideoBlender,
-  saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings, saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
+  deleteMusicVideoBlenderFile, getMusicVideoBlender, makeMusicVideoBlenderMotionStrip, openMusicVideoBlenderShot, renderMusicVideoBlender,
+  saveMusicVideoBlenderFile, saveMusicVideoBlenderMotionReferences, saveMusicVideoBlenderSettings, saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
 } = api;
   const [state, setState] = useState(null);
   const [status, setStatus] = useState(enabled && projectId ? 'loading' : 'idle');
@@ -316,6 +316,10 @@ export default function useMusicVideoBlender(projectId, { enabled = true, api = 
   const cancelJob = (jobId) => run(`cancel:${jobId}`, () => cancelMusicVideoBlenderJob(projectId, jobId, { silent: true }), 'Could not cancel the job', { reread: true });
   const cancelAll = () => run('cancel:all', () => cancelMusicVideoBlenderJobs(projectId, { silent: true }), 'Could not cancel the jobs', { reread: true });
   const assembleCut = (body) => run(`cut:${body.quality}`, () => assembleMusicVideoBlenderCut(projectId, body, { silent: true }), 'Could not start the cut');
+  // Motion references answer with the new film state; a strip answers with its own file, which the page shows once the state re-reads.
+  const saveMotionReferences = (shotId, references) => run(`refs:${shotId}`, () => saveMusicVideoBlenderMotionReferences(projectId, shotId, references, { silent: true }), 'Could not save the motion references');
+  const makeMotionStrip = (shotId, refId, sheet) => run(`strip:${shotId}:${refId}`, () => makeMusicVideoBlenderMotionStrip(projectId, shotId, refId, sheet ? { sheet } : {}, { silent: true }),
+    'Could not make the reference strip', { reread: true });
   const openShot = (shotId) => run(`open:${shotId}`, () => openMusicVideoBlenderShot(projectId, shotId, { silent: true }), 'Could not open Blender');
 
   // One answer for every "can a sync or a render start?" control, so they cannot disagree.
@@ -334,6 +338,6 @@ export default function useMusicVideoBlender(projectId, { enabled = true, api = 
     optionFields, editOption,
     noteDrafts: drafts.notes, editNote, discardNote, saveNote,
     fileDrafts: drafts.files, editFile, discardFile, saveFile, deleteFile,
-    createWorkspace, sync, render, cancelJob, cancelAll, assembleCut, openShot, clearFrames,
+    createWorkspace, sync, render, cancelJob, cancelAll, assembleCut, openShot, clearFrames, saveMotionReferences, makeMotionStrip,
   };
 }

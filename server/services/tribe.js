@@ -21,7 +21,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
-import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { buildCalendarSubcalendarClause, buildPersonMatchIndex, matchPeople, normalizeFilterIds, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { toUserDayKey } from '../lib/activeDays.js';
 import { getUserTimezone } from './userTimezone.js';
 
@@ -460,19 +460,39 @@ const escapeLike = (value) => String(value).replace(/[\\%_]/g, (ch) => `\\${ch}`
  * Erase the touchpoints a synced source wrote, plus their `record_audit`
  * snapshots (which would otherwise keep the subject/title for the 30-day Tribe
  * sweep), in one transaction (#12984). Selectors:
- *   - `accountId`: message touchpoints (`msg:<id>:%`) and every calendar
+ *   - `accountId` (alone): message touchpoints (`msg:<id>:%`) and every calendar
  *     touchpoint of that account, including hand-logged ones — the account and
  *     its event details are going away together.
+ *   - `accountId` + `subcalendarIds` / `calendarEventIds`: scoped calendar
+ *     touchpoints (`source = 'calendar'`) for disabled subcalendars, matching
+ *     `metadata.subcalendarId` or legacy rows lacking it via `calendar_event_id`
+ *     (#18229).
  *   - `dedupePrefix`: any other source's dedupe-key family (e.g. `imsg:<chat>:`).
  *   - `signalConversationId` / `beeperConversationId`: exact source-scoped
  *     conversation metadata; opaque ids
  *     never become wildcard or prefix expressions.
  * Returns counts only. An empty selector deletes nothing.
  */
-export async function deleteAutoTouchpoints({ accountId, dedupePrefix, signalConversationId, beeperConversationId, client } = {}) {
+export async function deleteAutoTouchpoints({ accountId, subcalendarIds, calendarEventIds, dedupePrefix, signalConversationId, beeperConversationId, client } = {}) {
+  const hasAccount = accountId != null && String(accountId).length > 0;
+  const hasCalendarFilter = subcalendarIds !== undefined || calendarEventIds !== undefined;
+  const subcalendars = normalizeFilterIds(subcalendarIds);
+  const calendarEvents = normalizeFilterIds(calendarEventIds);
   const clauses = [];
   const params = [];
-  if (accountId != null && String(accountId).length > 0) {
+  if (hasCalendarFilter) {
+    if (hasAccount && (subcalendars.length > 0 || calendarEvents.length > 0)) {
+      params.push(String(accountId));
+      const accountParam = params.length;
+      const calendarClause = buildCalendarSubcalendarClause({
+        subcalendars,
+        calendarEvents,
+        eventIdColumn: 'calendar_event_id',
+        params,
+      });
+      clauses.push(`(source = 'calendar' AND calendar_account_id = $${accountParam} AND ${calendarClause})`);
+    }
+  } else if (hasAccount) {
     params.push(`msg:${escapeLike(accountId)}:%`, String(accountId));
     clauses.push(`(source = 'message' AND dedupe_key LIKE $${params.length - 1})`);
     clauses.push(`(source = 'calendar' AND calendar_account_id = $${params.length})`);
@@ -575,7 +595,7 @@ export async function createTouchpoint(personId, data = {}) {
 //
 // Exported (in addition to being used internally by autoLogTouchpoints below)
 // so a caller that has ALREADY resolved a personId through a different axis —
-// server/services/beeperTribe.js resolves via tribe_identities / the
+// server/services/beeper/beeperTribe.js resolves via tribe_identities / the
 // beeper_participants cache, not the email/phone/name matcher in
 // tribeMatch.js — can reuse this exact dedupe-keyed insert + last_contact_on
 // advance instead of re-implementing it (#34).

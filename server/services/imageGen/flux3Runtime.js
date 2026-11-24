@@ -9,6 +9,9 @@ import { resolvePatchedUv } from '../../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { inspectModelCache } from '../../lib/hfCache.js';
+
+const isNonBlank = (v) => typeof v === 'string' && v.trim().length > 0;
 
 const exec = promisify(execFile);
 export const flux3Venv = () => join(PATHS.data, 'python', 'venv-flux3');
@@ -34,8 +37,10 @@ from mflux.models.flux3.cli.flux3_edit_generate import main
 
 // This venv deliberately cannot inherit the older shared mflux's user-site,
 // PYTHONPATH or virtualenv. No weights are loaded by the readiness probe.
+// HF_HUB_OFFLINE is forced after `extra` so a stored token env can never let
+// mflux reach the Hub: renders load only the pinned, locally verified snapshot.
 export function flux3Env(extra = {}) {
-  return { ...process.env, ...extra, PYTHONPATH: undefined, PYTHONHOME: undefined, VIRTUAL_ENV: undefined, PYTHONNOUSERSITE: '1' };
+  return { ...process.env, ...extra, HF_HUB_OFFLINE: '1', PYTHONPATH: undefined, PYTHONHOME: undefined, VIRTUAL_ENV: undefined, PYTHONNOUSERSITE: '1' };
 }
 
 function hostProblem() {
@@ -113,15 +118,32 @@ export function assertFlux3Inputs({ negativePrompt, width, height, initImagePath
 
 export function flux3RenderArgs(inputs) {
   assertFlux3Inputs(inputs);
-  const { model, prompt, width, height, steps, seed, outputPath, referenceImagePaths = [], stepwiseDir } = inputs;
+  const { model, prompt, width, height, steps, seed, outputPath, referenceImagePaths = [], stepwiseDir, flux3ModelPath } = inputs;
   if (!model?.repo) throw new ServerError('FLUX.3 model is missing its Hugging Face repo.', { status: 500, code: 'FLUX3_MISCONFIGURED' });
+  if (!flux3ModelPath) throw new ServerError('FLUX.3 needs the verified local snapshot path of its pinned revision.', { status: 500, code: 'FLUX3_MISCONFIGURED' });
   const module = referenceImagePaths.length ? 'flux3_edit_generate' : 'flux3_generate';
+  // `--model` is the pinned local snapshot directory, never the mutable repo id.
   // Quantization is embedded in the community checkpoint. A request's global
   // quantize/guidance controls cannot change those weights or distilled CFG.
-  const args = ['-I', '-m', `mflux.models.flux3.cli.${module}`, '--model', model.repo,
+  const args = ['-I', '-m', `mflux.models.flux3.cli.${module}`, '--model', flux3ModelPath,
     '--base-model', 'flux3-image-klein', '--prompt', prompt, '--width', String(width), '--height', String(height),
     '--steps', String(steps), '--seed', String(seed), '--output', outputPath, '--metadata', '--low-ram'];
   if (referenceImagePaths.length) args.push('--image-paths', ...referenceImagePaths);
   if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
   return { bin: flux3Python(), args, providerInputs: { initImagePath: null, referenceImagePaths } };
+}
+
+// Resolves the cached snapshot of the model's pinned commit, refusing (instead of
+// letting mflux pull a mutable `main` from a third-party repo) when it is absent.
+export async function resolveFlux3Snapshot(model) {
+  if (!isNonBlank(model?.revision)) {
+    throw new ServerError(`FLUX.3 model "${model?.id}" has no pinned revision. Set a 40-hex commit "revision" on its registry entry.`,
+      { status: 400, code: 'FLUX3_REVISION_UNPINNED' });
+  }
+  const { cached, snapshotPath } = await inspectModelCache(model.repo, { revision: model.revision });
+  if (!cached || !snapshotPath) {
+    throw new ServerError(`FLUX.3 weights for revision ${model.revision.slice(0, 12)} are not downloaded. Use Download beside the model in Image Gen, then retry.`,
+      { status: 400, code: 'FLUX3_WEIGHTS_NOT_CACHED' });
+  }
+  return snapshotPath;
 }

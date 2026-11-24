@@ -11,7 +11,8 @@ const text = (value, max) => (typeof value === 'string' ? value.slice(0, max) : 
 const count = (value) => (Number.isInteger(value) && value >= 0 ? value : null);
 // A lead-in shot's song frame is negative. Index and total stay counts.
 const frameNumber = (value) => (Number.isSafeInteger(value) ? value : null);
-const sourcePath = (path) => typeof path === 'string' && path.endsWith('.py')
+// A Python module, or a model the film loaded from src/models/ (portos_film.models).
+const sourcePath = (path) => typeof path === 'string' && (path.endsWith('.py') || /^models\/[^/]+\.glb$/.test(path))
   && !path.startsWith('/') && !path.includes('\\') && !path.includes(':')
   && !path.split('/').some((part) => !part || part === '.' || part === '..');
 const duration = (value) => (Number.isFinite(value) && value >= 0 ? value : null);

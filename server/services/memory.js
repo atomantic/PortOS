@@ -13,6 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
 import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistent/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
 import { cosEvents } from './cos/cosEvents.js';
@@ -45,10 +46,20 @@ export { DEFAULT_MEMORY_CONFIG };
 // Re-export the cache invalidator so existing import sites keep working.
 export { invalidateCaches };
 
+// Lazy: the embedder (provider/settings/CoS config) loads only when a vector
+// is written, so stamping `embeddingModel` doesn't drag it into every importer.
+async function activeEmbeddingModelFor(embedding) {
+  if (!embedding) return null;
+  const { getActiveEmbeddingModel } = await import('./memoryEmbeddings.js');
+  return getActiveEmbeddingModel();
+}
+
 /**
  * Create a new memory
  */
 export async function createMemory(data, embedding = null) {
+  // The model that produced `embedding`, resolved before the lock (#18296).
+  const embeddingModel = await activeEmbeddingModelFor(embedding);
   return withMemoryLock(async () => {
     const index = await loadIndex();
     const embeddings = await loadEmbeddings();
@@ -71,7 +82,7 @@ export async function createMemory(data, embedding = null) {
       sourceAgentId: data.sourceAgentId || null,
       sourceAppId: data.sourceAppId || null,
       embedding: embedding || null,
-      embeddingModel: embedding ? DEFAULT_MEMORY_CONFIG.embeddingModel : null,
+      embeddingModel,
       confidence: data.confidence ?? 0.8,
       importance: data.importance ?? 0.5,
       accessCount: 0,
@@ -93,7 +104,7 @@ export async function createMemory(data, embedding = null) {
     // Store embedding separately
     if (embedding) {
       embeddings.vectors[id] = embedding;
-      embeddings.model = DEFAULT_MEMORY_CONFIG.embeddingModel;
+      embeddings.model = embeddingModel;
       embeddings.dimension = embedding.length;
       await saveEmbeddings(embeddings);
     }
@@ -279,20 +290,21 @@ export async function updateMemory(id, updates) {
  * Update a memory's embedding
  */
 export async function updateMemoryEmbedding(id, embedding) {
+  const embeddingModel = await activeEmbeddingModelFor(embedding);
   return withMemoryLock(async () => {
     const memory = await loadMemory(id);
     if (!memory) return null;
 
     // Update memory with new embedding
     memory.embedding = embedding;
-    memory.embeddingModel = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    memory.embeddingModel = embeddingModel;
     memory.updatedAt = new Date().toISOString();
     await saveMemory(memory);
 
     // Update embeddings file
     const embeddings = await loadEmbeddings();
     embeddings.vectors[id] = embedding;
-    embeddings.model = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    embeddings.model = embeddingModel;
     embeddings.dimension = embedding.length;
     await saveEmbeddings(embeddings);
 
@@ -874,7 +886,8 @@ export async function applyDecay(decayRate = 0.01) {
     const newImportance = Math.max(0.1, memory.importance * (1 - decayRate * Math.sqrt(ageInDays)) + accessBoost);
 
     // Archive if importance falls below threshold and old enough
-    if (newImportance < 0.15 && ageInDays > 30) {
+    // Mind-owned memories are archived only by the Mind's own review, never by background decay.
+    if (newImportance < 0.15 && ageInDays > 30 && memory.sourceAgentId !== PERSISTENT_MIND_ID) {
       await updateMemory(meta.id, { status: 'archived', archivedReason: 'decay' });
       updated++;
     } else if (Math.abs(newImportance - memory.importance) > 0.01) {

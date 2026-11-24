@@ -19,15 +19,15 @@ import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
 
 // --- Notification / status hooks: no-op, except useNotifications which feeds the
 //     dropdown with a nonzero unread count. ---
-vi.mock('../hooks/useErrorNotifications', () => ({ useErrorNotifications: () => {} }));
-vi.mock('../hooks/useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
-vi.mock('../hooks/useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
-vi.mock('../hooks/useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
+vi.mock('./useErrorNotifications', () => ({ useErrorNotifications: () => {} }));
+vi.mock('./useSharingNotifications', () => ({ useSharingNotifications: () => {} }));
+vi.mock('./useAgentFeedbackToast', () => ({ useAgentFeedbackToast: () => {} }));
+vi.mock('./useAIStatusNotifications', () => ({ useAIStatusNotifications: () => {} }));
 vi.mock('./UpdateBanners', () => ({ default: () => null }));
 vi.mock('./SetupBanner', () => ({ default: () => null }));
 vi.mock('./MaintenanceBanner.jsx', () => ({ default: () => null }));
 vi.mock('./PasswordRiskWarning.jsx', () => ({ default: () => null }));
-vi.mock('../hooks/useNotifications', () => ({
+vi.mock('./useNotifications', () => ({
   useNotifications: () => ({
     notifications: [],
     unreadCount: 6,
@@ -818,6 +818,12 @@ describe('Layout — keyboard navigation shell', () => {
     fireEvent.click(opener);
     expect(sidebar).not.toHaveAttribute('inert');
     expect(sidebar).not.toHaveAttribute('aria-hidden');
+    expect(screen.getByRole('dialog', { name: 'Navigation menu' })).toBe(sidebar);
+    expect(sidebar).toHaveAttribute('aria-modal', 'true');
+    const mainWrapper = opener.closest('header').parentElement;
+    expect(mainWrapper).toHaveAttribute('inert');
+    expect(mainWrapper).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getAllByRole('button', { name: 'Close sidebar' })).toHaveLength(1);
     expect(sidebar.contains(document.activeElement)).toBe(true);
     const first = document.activeElement;
     fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
@@ -830,12 +836,16 @@ describe('Layout — keyboard navigation shell', () => {
     expect(opener).toHaveFocus();
     expect(opener).toHaveAttribute('aria-expanded', 'false');
     expect(sidebar).toHaveAttribute('inert');
+    expect(sidebar).not.toHaveAttribute('role');
+    expect(sidebar).not.toHaveAttribute('aria-modal');
+    expect(mainWrapper).not.toHaveAttribute('inert');
+    expect(mainWrapper).not.toHaveAttribute('aria-hidden');
 
     fireEvent.click(opener);
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Close sidebar' }));
     expect(opener).toHaveFocus();
     fireEvent.click(opener);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Close sidebar' }).find(el => !sidebar.contains(el)));
+    fireEvent.click(screen.getByTestId('mobile-nav-scrim'));
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
   });
@@ -848,13 +858,14 @@ describe('Layout — keyboard navigation shell', () => {
     fireEvent.click(opener);
     const themeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
     fireEvent.click(themeButton);
-    const option = screen.getByRole('menuitemradio', { name: /Test/ });
+    const option = await screen.findByRole('menuitemradio', { name: /Test/ });
     expect(option).toHaveFocus();
     fireEvent.keyDown(option, { key: 'Escape' });
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-    expect(themeButton).toHaveFocus();
+    const activeThemeButton = within(sidebar).getByRole('button', { name: 'Switch theme. Current theme: Test' });
+    expect(activeThemeButton).toHaveFocus();
     expect(opener).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.keyDown(themeButton, { key: 'Escape' });
+    fireEvent.keyDown(activeThemeButton, { key: 'Escape' });
     expect(opener).toHaveFocus();
     expect(sidebar).toHaveAttribute('inert');
   });

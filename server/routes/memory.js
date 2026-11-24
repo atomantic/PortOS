@@ -113,6 +113,13 @@ router.get('/embeddings/status', asyncHandler(async (req, res) => {
   res.json(status);
 }));
 
+// GET /api/memory/embeddings/config - The resolved embedding backend (no probe):
+// whether it comes from settings.embeddings or the legacy CoS config, so every
+// embedding surface shows the one configuration actually in effect.
+router.get('/embeddings/config', asyncHandler(async (req, res) => {
+  res.json(await embeddings.resolveEmbeddingSource());
+}));
+
 // POST /api/memory/search - Semantic search
 router.post('/search', asyncHandler(async (req, res) => {
   const { query, types, categories, tags, appId, minRelevance, limit, offset } = validateRequest(memorySearchSchema, req.body);
@@ -121,7 +128,10 @@ router.post('/search', asyncHandler(async (req, res) => {
   const queryEmbedding = await embeddings.generateQueryEmbedding(query, { types, categories });
 
   if (!queryEmbedding) {
-    throw new ServerError('Failed to generate query embedding. Is LM Studio running?', { status: 503 });
+    const source = await embeddings.resolveEmbeddingSource();
+    throw new ServerError(source.disabled
+      ? `Embeddings are disabled — choose a provider on ${embeddings.embeddingsSettingsPage()} to enable semantic search`
+      : `Failed to generate query embedding — is the ${source.provider} embedding backend running?`, { status: 503 });
   }
 
   const result = await memory.searchMemories(queryEmbedding, {

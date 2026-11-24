@@ -11,6 +11,7 @@ import { join } from 'path';
 const REAL_DIR = tmpdir();
 import lifecycleRoutes from './lifecycle.js';
 import { authGate, hostControlRouteGate } from '../../services/authGate.js';
+import { eidoverseStartCommand } from '../../lib/eidoverseStartCommand.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { DEV_PROXY_CLIENT_ADDRESS_HEADER } from '../../../lib/portosAuthCore.js';
 
@@ -24,6 +25,7 @@ vi.mock('../../services/auth.js', async (importOriginal) => ({
 // Mock the services this router touches. appBuilder is intentionally NOT mocked
 // so the build-command validation branch (INVALID_BUILD_COMMAND) runs for real.
 vi.mock('../../services/apps.js', () => ({
+  getAllApps: vi.fn(),
   getAppById: vi.fn(),
   updateApp: vi.fn(),
   notifyAppsChanged: vi.fn(),
@@ -32,6 +34,7 @@ vi.mock('../../services/apps.js', () => ({
 
 vi.mock('../../services/pm2.js', () => ({
   getAppStatus: vi.fn(),
+  getAppStatusStrict: vi.fn(),
   startFromEcosystem: vi.fn(),
   startWithCommand: vi.fn(),
   deleteApp: vi.fn(),
@@ -252,7 +255,7 @@ describe('Apps Lifecycle Routes', () => {
         repoPath: '/path/to/repo',
         uiPort: 8940,
         apiPort: 8940,
-        pm2ProcessNames: ['eidoverse-worlds'],
+        pm2ProcessNames: ['example-worlds'],
         startCommands: ['bun --env-file=.env.portos server/server.ts']
       };
       appsService.getAppById.mockResolvedValue(mockApp);
@@ -263,9 +266,31 @@ describe('Apps Lifecycle Routes', () => {
 
       expect(response.status).toBe(200);
       expect(pm2Service.startWithCommand).toHaveBeenCalledWith(
-        'eidoverse-worlds', '/path/to/repo', 'bun --env-file=.env.portos server/server.ts',
-        expect.objectContaining({ port: 8940, maxMemoryRestart: '2G' })
+        'example-worlds', '/path/to/repo', 'bun --env-file=.env.portos server/server.ts',
+        expect.objectContaining({ port: 8940 })
       );
+    });
+
+    it('starts and restarts the Eidoverse sequencer only through its loopback command', async () => {
+      const mockApp = {
+        id: 'app-001', name: 'Worlds', repoPath: '/path/to/repo', uiPort: 8940,
+        pm2ProcessNames: ['eidoverse-worlds'],
+        startCommands: ['bun --env-file=.env.portos server/server.ts'],
+      };
+      const loopback = ['eidoverse-worlds', '/path/to/repo', eidoverseStartCommand('bun'),
+        expect.objectContaining({ port: 8940, maxMemoryRestart: '2G' })];
+      appsService.getAppById.mockResolvedValue(mockApp);
+      pm2Service.getAppStatusStrict.mockResolvedValue({ status: 'online', args: ['server/server.ts'] });
+      pm2Service.deleteApp.mockResolvedValue({ success: true });
+      pm2Service.startWithCommand.mockResolvedValue({ success: true });
+      history.logAction.mockResolvedValue();
+
+      expect((await request(app).post('/api/apps/app-001/start')).status).toBe(200);
+      expect((await request(app).post('/api/apps/app-001/restart')).status).toBe(200);
+
+      expect(pm2Service.startWithCommand.mock.calls).toEqual([loopback, loopback]);
+      expect(pm2Service.restartApp).not.toHaveBeenCalled();
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { startCommands: [eidoverseStartCommand('bun')] });
     });
 
     // Multi-process apps have no port-to-process mapping here, so handing every

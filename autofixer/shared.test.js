@@ -73,7 +73,7 @@ describeShared('autofixer/shared — execPm2', () => {
   // MODULE_NOT_FOUND dump.
   it('rejects with a one-line message when PM2_BIN is missing, without spawning', async () => {
     existsSyncMock.mockReturnValueOnce(false);
-    await expect(shared.execPm2(['jlist'])).rejects.toThrow(`PM2 binary not found at ${shared.PM2_BIN} — run "npm install" in the repo root`);
+    await expect(shared.execPm2(['jlist'])).rejects.toThrow('PM2 binary not found — run "npm install" in the repo root');
   });
 });
 

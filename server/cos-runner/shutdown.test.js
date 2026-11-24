@@ -1,17 +1,16 @@
-import { runnerRequestGuard, runnerRequestRefusal } from './requestGuard.js';
-import { maintenance } from '../lib/maintenanceAdmission.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
-import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
-import { join, basename } from 'node:path';
-import { runInNewContext } from 'node:vm';
+import { join } from 'node:path';
+import { io as connect } from 'socket.io-client';
 import { z } from 'zod';
+import { createDatabaseMaintenanceJournal } from '../lib/databaseMaintenanceJournal.js';
 
-// The runner body runs in a VM, but its extracted completion helper and
-// publication/rollback boundary must stay real. Share the VM's virtual files
-// with those modules; all other filesystem reads/writes keep their real behavior.
+// Keep persistRunnerCompletion and withBackupAssetPublication real while
+// redirecting /example/agents reads/writes to an in-memory map so shutdown
+// drain tests can pause/fail writes deterministically under fake timers.
 const storage = vi.hoisted(() => ({ current: null }));
 const virtualPath = vi.hoisted(() => path => {
   if (typeof path !== 'string') return false;
@@ -20,33 +19,38 @@ const virtualPath = vi.hoisted(() => path => {
 });
 vi.mock('fs/promises', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual, readFile: (path, ...args) => virtualPath(path)
-    ? storage.current.readFile(path, ...args) : actual.readFile(path, ...args) };
+  return {
+    ...actual,
+    readFile: (path, ...args) => (virtualPath(path)
+      ? storage.current.readFile(path, ...args)
+      : actual.readFile(path, ...args)),
+  };
 });
 vi.mock('../lib/fileUtils.js', async importOriginal => {
   const actual = await importOriginal();
-  return { ...actual,
-    ensureDir: (path, ...args) => virtualPath(path) ? Promise.resolve() : actual.ensureDir(path, ...args),
-    atomicWrite: (path, data, ...args) => virtualPath(path)
-      ? storage.current.atomicWrite(path, data) : actual.atomicWrite(path, data, ...args),
-    unlinkGuarded: (path, ...args) => virtualPath(path)
-      ? storage.current.unlink(path) : actual.unlinkGuarded(path, ...args),
+  return {
+    ...actual,
+    ensureDir: (path, ...args) => (virtualPath(path) ? Promise.resolve() : actual.ensureDir(path, ...args)),
+    atomicWrite: (path, data, ...args) => (virtualPath(path)
+      ? storage.current.atomicWrite(path, data)
+      : actual.atomicWrite(path, data, ...args)),
+    unlinkGuarded: (path, ...args) => (virtualPath(path)
+      ? storage.current.unlink(path)
+      : actual.unlinkGuarded(path, ...args)),
   };
 });
-import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { persistRunnerCompletion } from './completion.js';
+vi.mock('../lib/bufferedSpawn.js', async importOriginal => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    killProcessTree: vi.fn((child, signal) => child.kill(signal)),
+  };
+});
 
-vi.mock('../lib/bufferedSpawn.js', () => ({
-  killProcessTree: vi.fn((child, signal) => child.kill(signal)),
-}));
-import { killProcessTree } from '../lib/bufferedSpawn.js';
-import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.js';
-import { createSecurityScanManager } from './securityScan.js';
-import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
-import { createTuiExitHandler } from './tuiExit.js';
-import { armForceKill } from './forceKill.js';
-import * as requestSchemas from './requestSchemas.js';
-import { createHttpDrain } from '../lib/httpDrain.js';
+import { createCosRunner, runnerErrorHandler } from './index.js';
+import { registerRunnerShutdownSignals } from './shutdown.js';
+
+const FAKE_TIMERS_OPTS = { toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] };
 
 const deferred = () => {
   let resolve;
@@ -54,22 +58,47 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-// Execute the real route/signal wiring with isolated transports, children and
-// storage. No listening port, real child, live PATHS or runner data is touched.
-const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8')
-  .replace(/\r\n/g, '\n').replace(/^import (?:.+ from )?['"][^'"]+['"];\n/gm, '');
+// Dispatch a real HTTP JSON POST through the runner's Express app (including
+// runnerRequestGuard, express.json, route handlers, and runnerErrorHandler)
+// using node:http so fake setTimeout never interferes with client delivery.
+function postJson(app, path, payload) {
+  return new Promise((resolve, reject) => {
+    const tmpServer = createServer(app);
+    tmpServer.once('error', reject);
+    tmpServer.listen(0, '127.0.0.1', () => {
+      const { port } = tmpServer.address();
+      const raw = JSON.stringify(payload);
+      const req = httpRequest({
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method: 'POST',
+        headers: {
+          host: `127.0.0.1:${port}`,
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(raw),
+        },
+      }, (res) => {
+        let text = '';
+        res.on('data', chunk => { text += chunk; });
+        res.on('end', () => {
+          tmpServer.close(() => {
+            let body = text;
+            try { body = JSON.parse(text); } catch { /* leave as text */ }
+            resolve({ status: res.statusCode, body });
+          });
+        });
+      });
+      req.on('error', err => tmpServer.close(() => reject(err)));
+      req.end(raw);
+    });
+  });
+}
 
-function runner(assertDatabaseAdmission = vi.fn()) {
-  const routes = new Map();
-  const app = { use: vi.fn(), get: vi.fn(), post: (path, handler) => routes.set(path, handler) };
-  const express = Object.assign(() => app, { json: vi.fn() });
-  const server = Object.assign(new EventEmitter(), {
-    listen: vi.fn(), close: vi.fn(cb => cb?.()), closeAllConnections: vi.fn(),
-  });
-  const io = Object.assign(new EventEmitter(), {
-    engine: { use: vi.fn() }, use: vi.fn(), close: vi.fn(cb => cb?.()),
-  });
-  const process = Object.assign(new EventEmitter(), { env: {}, exit: vi.fn() });
+const activeRunners = [];
+
+function createTestRunner(assertDatabaseAdmission = vi.fn()) {
+  const proc = Object.assign(new EventEmitter(), { env: {}, exit: vi.fn(), uptime: () => 1 });
   const state = { agents: {}, stats: { spawned: 0, completed: 0, failed: 0 } };
   const files = new Map();
   const writeFile = vi.fn(async (path, content) => { files.set(path, content); });
@@ -77,7 +106,10 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     if (!files.has(path)) throw Object.assign(new Error('Fixture file absent'), { code: 'ENOENT' });
     return files.get(path);
   };
-  const atomicWrite = (path, data) => writeFile(path, typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2));
+  const atomicWrite = (path, data) => writeFile(
+    path,
+    typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2),
+  );
   storage.current = { readFile, atomicWrite, unlink: async path => { files.delete(path); } };
   const withState = vi.fn(async fn => fn(state));
   const drainState = vi.fn(async () => {});
@@ -105,53 +137,100 @@ function runner(assertDatabaseAdmission = vi.fn()) {
     cleanup: async () => {},
     watch: vi.fn(() => () => {}),
   }));
-  runInNewContext(source, {
-    runnerRequestGuard, runnerRequestRefusal,
-    assertDatabaseAdmission, maintenance, withBackupAssetPublication, persistRunnerCompletion,
-    express, http: { createServer: () => server }, SocketServer: function () { return io; },
-    process, console, Buffer, Date, setTimeout, clearTimeout, join, basename,
-    PATHS: { root: '/example', cosAgents: '/example/agents' }, PORTS: { COS: 0 },
-    setupProcessErrorHandlers: vi.fn(), existsSync: () => true, ensureDir: async () => {},
-    readFile, writeFile, atomicWrite,
-    withState, drainState,
-    ...requestSchemas,
-    createRunnerShutdown, registerRunnerShutdownSignals, createTuiExitHandler, createHttpDrain,
-    createSecurityScanManager, securityScanRequestSchema,
-    armForceKillShared: armForceKill, killProcessTree, spawn, pty,
+
+  const instance = createCosRunner({
+    process: proc,
+    rootDir: '/example',
+    agentsDir: '/example/agents',
+    port: 0,
+    host: '127.0.0.1',
+    orphanCleanupDelayMs: -1,
+    assertDatabaseAdmission,
+    existsSync: () => true,
+    ensureDir: async () => {},
+    adoptNpmGlobalBinDir: vi.fn(async () => {}),
+    readFile,
+    writeFile,
+    withState,
+    drainState,
+    spawn,
+    pty,
     createAgentSentinelAccess,
-    buildCliChildEnv: () => ({}), prepareCliSpawn: (command, args) => ({ command, args }),
+    buildCliChildEnv: () => ({}),
+    prepareCliSpawn: (command, args) => ({ command, args }),
     prepareWindowsAgentLaunch: (_agentId, command, args) => ({ command, args }),
     watchWindowsAgentProcess: child => child,
-    prepareCliPrompt: (command, args) => ({ args, useStdin: false, cleanup: vi.fn() }),
-    commandExists, findCommandOnPath: command => command,
-    isAllowedCommand: () => true, ALLOWED_COMMANDS: ['example-cli'],
-    guardChildStdin: vi.fn(), deliverChildStdin: vi.fn(),
-    createStreamingAnsiStripper: () => text => text, isKnownCliStderrNoise: () => false,
+    prepareCliPrompt: (_command, args) => ({ args, useStdin: false, cleanup: vi.fn() }),
+    commandExists,
+    findCommandOnPath: command => command,
+    isAllowedCommand: () => true,
+    allowedCommands: new Set(['example-cli']),
+    guardChildStdin: vi.fn(),
+    deliverChildStdin: vi.fn(),
+    createStreamingAnsiStripper: () => text => text,
+    isKnownCliStderrNoise: () => false,
   });
-  const request = (path, extra = {}) => {
-    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json: vi.fn() };
-    const done = routes.get(path)({ body: {
-      agentId: 'agent-1', taskId: 'task-1', prompt: 'example', cliCommand: 'example-cli',
-      command: 'example-cli', ...extra,
-    } }, res);
-    return { res, done };
+
+  registerRunnerShutdownSignals(proc, instance.lifecycle);
+  const serverCloseSpy = vi.spyOn(instance.server, 'close');
+  const ioCloseSpy = vi.spyOn(instance.io, 'close');
+  activeRunners.push(instance);
+
+  const post = (path, extra = {}) => postJson(instance.app, path, {
+    agentId: 'agent-1',
+    taskId: 'task-1',
+    prompt: 'example',
+    cliCommand: 'example-cli',
+    command: 'example-cli',
+    ...extra,
+  });
+
+  return {
+    ...instance,
+    process: proc,
+    serverCloseSpy,
+    ioCloseSpy,
+    post,
+    state,
+    files,
+    children,
+    spawn,
+    pty,
+    commandExists,
+    writeFile,
+    withState,
+    drainState,
   };
-  const errorHandler = () => app.use.mock.calls.map(c => c[0]).findLast(fn => fn.length === 4);
-  return { errorHandler, request, process, server, io, state, files, children, spawn, pty, commandExists, writeFile, withState, drainState };
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  vi.useFakeTimers(FAKE_TIMERS_OPTS);
   vi.clearAllMocks();
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const instance of activeRunners.splice(0)) {
+    for (const agent of instance.activeAgents.values()) {
+      if (agent.killTimer) clearTimeout(agent.killTimer);
+    }
+    // Restore close spy if a test replaced it with a no-op before closing.
+    if (vi.isMockFunction(instance.io.close)) instance.io.close.mockRestore();
+    if (instance.server.listening) {
+      await new Promise(resolve => instance.io.close(resolve));
+      instance.server.closeAllConnections?.();
+    }
+  }
+  vi.restoreAllMocks();
+});
 
 describe('runner shutdown through its real spawn and signal handlers', () => {
   it.each(['SIGINT', 'SIGTERM'])('%s drains CLI output, completion and state exactly once', async signal => {
-    const run = runner();
-    await run.request('/spawn').done;
+    const run = createTestRunner();
+    const spawned = await run.post('/spawn');
+    expect(spawned.status).toBe(200);
     const child = run.children[0];
     child.stdout.emit('data', Buffer.from('final output'));
     const write = deferred();
@@ -161,39 +240,45 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
     });
     run.process.emit(signal);
     run.process.emit(signal === 'SIGINT' ? 'SIGTERM' : 'SIGINT');
-    expect(run.server.close).toHaveBeenCalledTimes(1);
+    expect(run.serverCloseSpy).toHaveBeenCalledTimes(1);
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     child.emit('close', 0);
     child.emit('close', 0);
     await vi.advanceTimersByTimeAsync(6000);
     expect(run.process.exit).not.toHaveBeenCalled();
-    expect(run.io.close).not.toHaveBeenCalled();
+    expect(run.ioCloseSpy).not.toHaveBeenCalled();
     write.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(run.files.get(join('/example/agents', 'agent-1', 'output.txt'))).toBe('final output');
     expect(JSON.parse(run.files.get(join('/example/agents', 'agent-1', 'metadata.json')))).toMatchObject({ success: true, exitCode: 0 });
     expect(run.state).toEqual({ agents: {}, stats: { spawned: 1, completed: 1, failed: 0 } });
     expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(0);
-    expect(run.io.close).toHaveBeenCalledTimes(1);
+    expect(run.ioCloseSpy).toHaveBeenCalledTimes(1);
   });
 
   it('rejects both new spawn routes and a TUI whose preparation resumes after shutdown', async () => {
-    const run = runner();
+    const run = createTestRunner();
     const probe = deferred();
-    run.commandExists.mockReturnValueOnce(probe.promise);
-    const preparing = run.request('/spawn-tui');
+    const probeStarted = deferred();
+    run.commandExists.mockImplementationOnce(() => {
+      probeStarted.resolve();
+      return probe.promise;
+    });
+    const preparing = run.post('/spawn-tui');
+    await probeStarted.promise;
     run.process.emit('SIGINT');
     for (const route of ['/spawn', '/spawn-tui']) {
-      const refused = run.request(route);
-      await refused.done;
-      expect(refused.res.statusCode).toBe(503);
+      const refused = await run.post(route);
+      expect(refused.status).toBe(503);
+      expect(refused.body).toMatchObject({ code: 'SHUTTING_DOWN' });
     }
     await vi.advanceTimersByTimeAsync(1000);
     expect(run.process.exit).not.toHaveBeenCalled();
     probe.resolve(true);
-    await preparing.done;
+    const preparedRes = await preparing;
     await vi.advanceTimersByTimeAsync(0);
-    expect(preparing.res.statusCode).toBe(503);
+    expect(preparedRes.status).toBe(503);
+    expect(preparedRes.body).toMatchObject({ code: 'SHUTTING_DOWN' });
     expect(run.spawn).not.toHaveBeenCalled();
     expect(run.pty.spawn).not.toHaveBeenCalled();
     expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(0);
@@ -203,18 +288,26 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
     const root = mkdtempSync(join(tmpdir(), 'runner-maintenance-'));
     const journal = createDatabaseMaintenanceJournal(root);
     try {
-      const run = runner(journal.assertAdmission);
+      const run = createTestRunner(journal.assertAdmission);
       const probe = deferred();
-      run.commandExists.mockReturnValueOnce(probe.promise);
-      const preparing = run.request('/spawn-tui');
+      const probeStarted = deferred();
+      run.commandExists.mockImplementationOnce(() => {
+        probeStarted.resolve();
+        return probe.promise;
+      });
+      const preparing = run.post('/spawn-tui');
+      await probeStarted.promise;
       const source = { mode: 'native', host: 'localhost', port: 5432, database: 'example_test', user: 'example' };
       journal.begin({ source, target: { ...source, mode: 'docker', port: 5561 } });
       for (const path of ['/spawn', '/spawn-tui']) {
-        await expect(run.request(path).done).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
+        const res = await run.post(path);
+        expect(res.status).toBe(503);
+        expect(res.body).toMatchObject({ code: 'DATABASE_MAINTENANCE' });
       }
-      const rejected = expect(preparing.done).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' });
       probe.resolve(true);
-      await rejected;
+      const preparedRes = await preparing;
+      expect(preparedRes.status).toBe(503);
+      expect(preparedRes.body).toMatchObject({ code: 'DATABASE_MAINTENANCE' });
       expect(run.spawn).not.toHaveBeenCalled();
       expect(run.pty.spawn).not.toHaveBeenCalled();
       expect(run.state.stats.spawned).toBe(0);
@@ -224,8 +317,9 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   });
 
   it('escalates a resistant TUI and waits for its terminal evidence and final state write', async () => {
-    const run = runner();
-    await run.request('/spawn-tui').done;
+    const run = createTestRunner();
+    const spawned = await run.post('/spawn-tui');
+    expect(spawned.status).toBe(200);
     const child = run.children[0];
     child.emit('data', 'terminal tail');
     const write = deferred();
@@ -245,22 +339,23 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   });
 
   it.each(['child', 'write', 'socket'])('bounds stalled %s completion and preserves unfinished evidence', async stalled => {
-    const run = runner();
-    await run.request('/spawn').done;
+    const run = createTestRunner();
+    const spawned = await run.post('/spawn');
+    expect(spawned.status).toBe(200);
     const pendingWrite = deferred();
     if (stalled === 'write') run.writeFile.mockImplementationOnce(async (path, output) => {
       await pendingWrite.promise;
       run.files.set(path, output);
     });
-    if (stalled === 'socket') run.io.close.mockImplementation(() => {});
-    run.process.exit.mockImplementation(() => { expect(run.io.close).toHaveBeenCalled(); });
+    if (stalled === 'socket') run.ioCloseSpy.mockImplementation(() => {});
+    run.process.exit.mockImplementation(() => { expect(run.ioCloseSpy).toHaveBeenCalled(); });
     run.process.emit('SIGTERM');
     if (stalled !== 'child') run.children[0].emit('close', 0);
     await vi.advanceTimersByTimeAsync(24_999);
     expect(run.process.exit).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(1);
-    expect(run.io.close).toHaveBeenCalledTimes(1);
+    expect(run.ioCloseSpy).toHaveBeenCalledTimes(1);
     if (stalled !== 'socket') {
       expect(run.state.agents['agent-1']).toBeDefined();
       expect(run.state.stats.completed).toBe(0);
@@ -273,8 +368,9 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   });
 
   it('reports a persistence failure without deleting the durable agent record', async () => {
-    const run = runner();
-    await run.request('/spawn').done;
+    const run = createTestRunner();
+    const spawned = await run.post('/spawn');
+    expect(spawned.status).toBe(200);
     run.writeFile.mockRejectedValueOnce(new Error('disk unavailable'));
     run.process.emit('SIGTERM');
     run.children[0].emit('close', 0);
@@ -285,11 +381,25 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   });
 
   it('does not stop children when only the main-server socket disconnects', async () => {
-    const run = runner();
-    await run.request('/spawn-tui').done;
-    const socket = Object.assign(new EventEmitter(), { use: vi.fn(), id: 'example-client' });
-    run.io.emit('connection', socket);
-    socket.emit('disconnect');
+    vi.useRealTimers();
+    const run = createTestRunner();
+    const { port } = await run.start(0, '127.0.0.1');
+    const spawned = await run.post('/spawn-tui');
+    expect(spawned.status).toBe(200);
+
+    const serverDisconnected = deferred();
+    run.io.once('connection', (socket) => {
+      socket.once('disconnect', () => serverDisconnected.resolve());
+    });
+    const client = connect(`http://127.0.0.1:${port}`, { transports: ['websocket'], reconnection: false });
+    await new Promise((resolve, reject) => {
+      client.once('connect', resolve);
+      client.once('connect_error', reject);
+    });
+    client.disconnect();
+    await serverDisconnected.promise;
+
+    vi.useFakeTimers(FAKE_TIMERS_OPTS);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(run.children[0].kill).not.toHaveBeenCalled();
     expect(run.process.exit).not.toHaveBeenCalled();
@@ -297,30 +407,34 @@ describe('runner shutdown through its real spawn and signal handlers', () => {
   });
 
   it('answers rejected spawns with JSON error bodies and keeps a clean shutdown exit', async () => {
-    const maintenance = Object.assign(new Error('Database maintenance in progress'), { status: 503, code: 'DATABASE_MAINTENANCE' });
-    const run = runner(vi.fn(() => { throw maintenance; }));
-    const handler = run.errorHandler();
-    const reply = () => ({ headersSent: false, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } });
+    const maintenanceErr = Object.assign(new Error('Database maintenance in progress'), {
+      status: 503,
+      code: 'DATABASE_MAINTENANCE',
+    });
+    const assertAdmission = vi.fn(() => { throw maintenanceErr; });
+    const run = createTestRunner(assertAdmission);
+
     for (const path of ['/spawn', '/spawn-tui']) {
-      const err = await run.request(path).done.catch(e => e);
-      const res = reply();
-      handler(err, {}, res, vi.fn());
-      expect(res.statusCode).toBe(503);
+      const res = await run.post(path);
+      expect(res.status).toBe(503);
       expect(res.body).toEqual({ error: 'Database maintenance in progress', code: 'DATABASE_MAINTENANCE' });
     }
+
     const zodErr = z.object({ agentId: z.string() }).safeParse({}).error;
-    const res = reply();
-    handler(zodErr, {}, res, vi.fn());
-    expect(res.statusCode).toBe(400);
-    expect(res.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.stringContaining('agentId') });
-    const generic = reply();
-    handler(new Error('boom'), {}, generic, vi.fn());
-    expect(generic.statusCode).toBe(500);
-    expect(generic.body).toEqual({ error: 'boom', code: 'RUNNER_ERROR' });
-    const sent = { ...reply(), headersSent: true };
+    assertAdmission.mockImplementationOnce(() => { throw zodErr; });
+    const validationRes = await run.post('/spawn');
+    expect(validationRes.status).toBe(400);
+    expect(validationRes.body).toMatchObject({ code: 'VALIDATION_ERROR', error: expect.stringContaining('agentId') });
+
+    assertAdmission.mockImplementationOnce(() => { throw new Error('boom'); });
+    const genericRes = await run.post('/spawn');
+    expect(genericRes.status).toBe(500);
+    expect(genericRes.body).toEqual({ error: 'boom', code: 'RUNNER_ERROR' });
+
     const next = vi.fn();
-    handler(maintenance, {}, sent, next);
-    expect(next).toHaveBeenCalledWith(maintenance);
+    runnerErrorHandler(maintenanceErr, {}, { headersSent: true }, next);
+    expect(next).toHaveBeenCalledWith(maintenanceErr);
+
     run.process.emit('SIGTERM');
     await vi.advanceTimersByTimeAsync(0);
     expect(run.process.exit).toHaveBeenCalledExactlyOnceWith(0);

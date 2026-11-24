@@ -14,7 +14,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, statSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { expandHome, dataPath, atomicWrite, unlinkGuarded, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { identityFromHandle, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 
@@ -73,7 +74,6 @@ export function normalizeContactRecord(raw) {
     nickname: String(raw.nickname || '').trim() || null,
     phones,
     emails,
-    sourcePath: raw.sourcePath || null,
   };
 }
 
@@ -329,7 +329,6 @@ export function readAddressBookDb(dbPath) {
         name: r.name,
         phones,
         emails,
-        sourcePath: dbPath,
       });
     }
     return { ok: true, path: dbPath, contacts };
@@ -370,8 +369,32 @@ async function writeContactCache(contacts, meta = {}) {
     sourceCount: meta.sourceCount || 0,
     contactCount: contacts.length,
   };
-  await atomicWrite(cachePath(), JSON.stringify(payload));
+  await writeSecureJson(cachePath(), JSON.stringify(payload));
   return payload;
+}
+
+async function removeIfExists(filePath) {
+  try {
+    await unlinkGuarded(filePath);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+/**
+ * Remove cached contacts and reset sync state idempotently.
+ */
+export async function clearContactCache() {
+  const [cacheRemoved, stateRemoved] = await Promise.all([
+    removeIfExists(cachePath()),
+    removeIfExists(statePath()),
+  ]);
+  if (cacheRemoved || stateRemoved) {
+    console.log('🧹 Cleared macOS Contacts cache and sync state');
+  }
+  return { ok: true, cleared: true, cacheRemoved, stateRemoved };
 }
 
 export async function readSyncState() {
@@ -504,12 +527,10 @@ async function doRunSync() {
   return result;
 }
 
+// Reads only machine-local cache and state files. Never calls checkSetup(): that
+// opens every AddressBook database and can spawn `ps` probes (#18279).
 export async function getStatus() {
-  const [cache, state, setup] = await Promise.all([
-    readContactCache(),
-    readSyncState(),
-    checkSetup().catch(() => ({ ok: false })),
-  ]);
+  const [cache, state] = await Promise.all([readContactCache(), readSyncState()]);
   return {
     cache: {
       contactCount: cache.contacts.length,
@@ -517,13 +538,6 @@ export async function getStatus() {
       sourceCount: cache.sourceCount,
     },
     state,
-    setup: {
-      ok: setup.ok,
-      sourceCount: setup.sourceCount,
-      root: setup.root,
-      fullDiskAccessRequired: setup.fullDiskAccessRequired,
-      error: setup.error,
-    },
   };
 }
 

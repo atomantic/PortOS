@@ -103,7 +103,7 @@ const PROBE_KILL_GRACE_MS = 5000;
 // deadline, and a SIGTERM -> SIGKILL ladder that waits for `close` so the
 // outcome says whether cleanup was actually observed. stderr is discarded, so
 // no raw browser output (paths, PIDs) can reach a caller.
-function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile }) {
+function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile, env }) {
   return new Promise((resolve) => {
     const processGroup = !IS_WIN32;
     let child;
@@ -132,7 +132,7 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile }) {
         profile: outcome.cleanupVerified ? 'removed' : 'retained' }, ...outcome });
     };
 
-    try { child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'], detached: processGroup }); }
+    try { child = spawn(file, args, { stdio: ['ignore', 'pipe', 'ignore'], detached: processGroup, ...(env ? { env } : {}) }); }
     catch (error) {
       observed.childError = ['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'other';
       finish({ spawnErrorCode: error.code ?? 'UNKNOWN', cleanupVerified: true });
@@ -170,6 +170,21 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile }) {
   });
 }
 
+// Chromium on macOS creates $TMPDIR/com.google.Chrome.*/SingletonSocket
+// outside --user-data-dir, so removing the profile leaves com.google.Chrome.*
+// in host temp forever. Outside Vitest (where PORTOS_TEST_TEMP_ROOT is unset),
+// a 4-char prefix keeps <tmpdir>/ph2-XXXXXX/com.google.Chrome.XXXXXX/SingletonSocket
+// under macOS's 104-byte sockaddr_un limit; inside Vitest we inherit the run
+// temp root rather than nesting another directory.
+const OWNED_TEMP_KEYS = ['TMPDIR', 'TMP', 'TEMP', 'MAC_CHROMIUM_TMPDIR'];
+
+function applyOwnedTemp(env, probeTemp) {
+  if (!probeTemp) return undefined;
+  const owned = { ...env };
+  for (const key of OWNED_TEMP_KEYS) owned[key] = probeTemp;
+  return owned;
+}
+
 /**
  * Probes whether a Chrome binary can decode H.264 and says why when it cannot.
  * Resolves `{ ok: true, chromePath }` or `{ ok: false, cause, ... }` with cause:
@@ -186,12 +201,23 @@ function runOwnedProbe(file, args, { timeoutMs, graceMs, removeProfile }) {
 export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS, graceMs = PROBE_KILL_GRACE_MS } = {}) {
   if (!chromePath) return { ok: false, cause: 'missing-executable' };
   const profile = mkdtempSync(join(tmpdir(), 'portos-h264-probe-'));
+  let probeTemp = null;
   let removed = false;
   const removeProfile = () => {
     if (removed) return true;
-    try { rmSync(profile, { recursive: true, force: true }); removed = true; return true; }
-    catch { return false; }
+    try {
+      rmSync(profile, { recursive: true, force: true });
+      if (probeTemp) rmSync(probeTemp, { recursive: true, force: true });
+      removed = true;
+      return true;
+    } catch { return false; }
   };
+  try {
+    probeTemp = process.env.PORTOS_TEST_TEMP_ROOT ? null : mkdtempSync(join(tmpdir(), 'ph2-'));
+  } catch (error) {
+    removeProfile();
+    throw error;
+  }
   const run = await runOwnedProbe(chromePath, [
     '--headless=new', '--disable-gpu', '--no-sandbox',
     '--no-first-run', '--no-default-browser-check',
@@ -199,7 +225,7 @@ export async function probeChromeH264(chromePath, { timeoutMs = PROBE_TIMEOUT_MS
     '--disable-sync', '--disable-breakpad',
     '--password-store=basic', '--use-mock-keychain',
     `--user-data-dir=${profile}`, '--virtual-time-budget=2000', '--dump-dom', H264_PROBE_PAGE,
-  ], { timeoutMs, graceMs, removeProfile });
+  ], { timeoutMs, graceMs, removeProfile, env: applyOwnedTemp(process.env, probeTemp) });
   const evidence = { cleanupVerified: run.cleanupVerified, diagnostics: run.diagnostics };
   if (run.spawnErrorCode) {
     return { ok: false, cause: ['ENOENT', 'ENOTDIR'].includes(run.spawnErrorCode) ? 'missing-executable' : 'no-answer', ...evidence };

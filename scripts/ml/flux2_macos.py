@@ -83,7 +83,7 @@ def _resolve_pipeline_cls(use_kv: bool):
     return Flux2KleinPipeline
 
 
-def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls):
+def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls, revision=None):
     """Native bf16 load — no SDNQ, no Int8. Pipeline + tokenizer come from
     the gated base repo (e.g. black-forest-labs/FLUX.2-klein-9B). Practical
     only with ~64+ GB unified memory for the 9B variant."""
@@ -92,6 +92,7 @@ def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls):
     with heartbeat("loading-pipeline"):
         pipe = pipeline_cls.from_pretrained(
             repo,
+            revision=revision,
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
         )
@@ -101,7 +102,7 @@ def load_pipeline_bf16(repo: str, device: str, dtype, pipeline_cls):
     return pipe
 
 
-def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipeline_cls):
+def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipeline_cls, revision=None, tokenizer_revision=None):
     # `sdnq` registers a custom config type at import-time. The pipeline
     # `from_pretrained` call below pulls a config that references it, so the
     # import has to happen first. Keep it inside the function so the runner
@@ -117,12 +118,13 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipel
     print(f"STAGE:download-tokenizer:{tokenizer_repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: tokenizer ← {tokenizer_repo}", file=sys.stderr)
     with heartbeat("loading-tokenizer"):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False, revision=tokenizer_revision)
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: pipeline ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("loading-pipeline"):
         pipe = pipeline_cls.from_pretrained(
             repo,
+            revision=revision,
             tokenizer=tokenizer,
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
@@ -133,7 +135,7 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype, pipel
     return pipe
 
 
-def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_cls):
+def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_cls, revision=None, base_revision=None):
     from accelerate import init_empty_weights
     from huggingface_hub import snapshot_download
     from optimum.quanto import requantize
@@ -146,7 +148,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_c
     print(f"STAGE:download-int8-snapshot:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 int8: snapshot ({pipeline_cls.__name__}) ← {repo}", file=sys.stderr)
     with heartbeat("downloading-snapshot"):
-        model_path = snapshot_download(repo)
+        model_path = snapshot_download(repo, revision=revision)
 
     print("STAGE:load-transformer", file=sys.stderr, flush=True)
     print("🔧 int8: transformer …", file=sys.stderr)
@@ -177,6 +179,7 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype, pipeline_c
     with heartbeat("loading-vae-scheduler"):
         pipe = pipeline_cls.from_pretrained(
             base_repo,
+            revision=base_revision,
             transformer=None,
             text_encoder=None,
             tokenizer=None,
@@ -216,8 +219,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS FLUX.2-klein runner")
     p.add_argument("--quantization", required=True, choices=["sdnq", "int8", "none"])
     p.add_argument("--repo", required=True, help="HF repo for the quantized weights")
+    p.add_argument("--revision", default=None, help="immutable HF commit SHA for --repo (omitted only for user forks)")
     p.add_argument("--tokenizer-repo", default=None, help="HF repo for tokenizer (sdnq variants)")
+    p.add_argument("--tokenizer-revision", default=None, help="immutable HF commit SHA for --tokenizer-repo")
     p.add_argument("--base-pipeline-repo", default=None, help="HF repo for VAE/scheduler (int8 variant)")
+    p.add_argument("--base-pipeline-revision", default=None, help="immutable HF commit SHA for --base-pipeline-repo")
     # Reference-editing repo for the bf16 (`quantization=none`) path. The base
     # FLUX.2-klein-9B transformer wasn't tuned for the K/V reference-editing
     # task, so when reference images are present we load the `-kv` sibling repo
@@ -231,6 +237,7 @@ def parse_args() -> argparse.Namespace:
     # `--reference-strengths` is honored per-reference via a runtime patch on
     # Flux2KVLayerCache.store + the extract-mode causal-attention helper — see
     # `_install_per_ref_strength_patch` below. Up to 4 references (route-side cap).
+    p.add_argument("--kv-revision", default=None, help="immutable HF commit SHA for --kv-repo")
     p.add_argument("--reference-images", nargs="*", default=[], help="absolute paths to reference images (multi-reference KV editing)")
     p.add_argument("--reference-strengths", nargs="*", default=[], help="0..1 strength per reference image, parallel to --reference-images (1.0 = full influence, 0.0 = ignore)")
     return p.parse_args()
@@ -367,21 +374,29 @@ def load_flux2_pipeline(args, device: str, dtype, use_kv: bool):
             print("❌ --tokenizer-repo is required for sdnq variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.tokenizer_repo)
-        pipe = load_pipeline_sdnq(args.repo, args.tokenizer_repo, device, dtype, pipeline_cls)
+        pipe = load_pipeline_sdnq(
+            args.repo, args.tokenizer_repo, device, dtype, pipeline_cls,
+            revision=args.revision, tokenizer_revision=args.tokenizer_revision,
+        )
     elif args.quantization == "int8":
         if not args.base_pipeline_repo:
             print("❌ --base-pipeline-repo is required for int8 variants", file=sys.stderr)
             sys.exit(64)
         probe_hf_auth(args.base_pipeline_repo)
-        pipe = load_pipeline_int8(args.repo, args.base_pipeline_repo, device, dtype, pipeline_cls)
+        pipe = load_pipeline_int8(
+            args.repo, args.base_pipeline_repo, device, dtype, pipeline_cls,
+            revision=args.revision, base_revision=args.base_pipeline_revision,
+        )
     elif args.quantization == "none":
         # Native bf16 — `repo` is the gated base repo itself. For multi-reference
         # editing, load the `-kv` sibling repo instead (its transformer is tuned
         # for the K/V reference-editing task); the plain text/i2i path stays on
         # the base repo. Both share the same FLUX.2-klein license.
-        bf16_repo = args.kv_repo if (use_kv and args.kv_repo) else args.repo
+        use_kv_repo = use_kv and args.kv_repo
+        bf16_repo = args.kv_repo if use_kv_repo else args.repo
+        bf16_revision = args.kv_revision if use_kv_repo else args.revision
         probe_hf_auth(bf16_repo)
-        pipe = load_pipeline_bf16(bf16_repo, device, dtype, pipeline_cls)
+        pipe = load_pipeline_bf16(bf16_repo, device, dtype, pipeline_cls, revision=bf16_revision)
     else:
         print(f"❌ unknown quantization: {args.quantization}", file=sys.stderr)
         sys.exit(64)

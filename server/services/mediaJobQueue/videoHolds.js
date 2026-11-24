@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 import { normalizeVideoFailure } from '../../lib/videoFailure.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 const cohortKey = ({ modelId, runtime }) => JSON.stringify([modelId, runtime]);
 const isLocalVideo = (job) => job.kind === 'video'
@@ -65,7 +66,7 @@ export function createVideoHolds() {
       let defaultError;
       if (local.some(omitted)) {
         try {
-          const { resolveVideoModelSelection } = await import('../videoGen/modelSelection.js');
+          const { resolveVideoModelSelection } = await loadMediaRuntimeModule('videoModelSelection');
           ({ model: defaultModel } = await resolveVideoModelSelection());
         } catch (error) {
           defaultError = error;

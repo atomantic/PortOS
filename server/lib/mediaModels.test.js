@@ -1205,6 +1205,80 @@ describe('mediaModels registry', () => {
     expect('kvRepo' in bf16).toBe(false);
   });
 
+  // FLUX.2 immutable commit pins (#18292): shipped entries carry 40-hex SHAs, persisted
+  // entries get them backfilled only while the repo is still the shipped one.
+  const SHA = /^[0-9a-f]{40}$/;
+  const writeImageRegistry = (image) => writeFileSync(registryFile, JSON.stringify({
+    video: { mlx: [], cuda: [], defaultMlx: 'x', defaultCuda: 'x' },
+    image,
+    textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+    selectedTextEncoder: 't',
+  }));
+
+  it('fresh install: every shipped FLUX.2 repo is pinned to a 40-hex commit', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const flux2 = getImageModels().filter((m) => m.runner === 'flux2');
+    expect(flux2).toHaveLength(4);
+    for (const m of flux2) {
+      expect(m.revision).toMatch(SHA);
+      if (m.tokenizerRepo) expect(m.tokenizerRevision).toMatch(SHA);
+      if (m.basePipelineRepo) expect(m.basePipelineRevision).toMatch(SHA);
+      if (m.kvRepo) expect(m.kvRevision).toMatch(SHA);
+    }
+  });
+
+  it('backfills revisions onto persisted unpinned shipped FLUX.2 entries', async () => {
+    writeImageRegistry([
+      { id: 'flux2-klein-4b-int8', runner: 'flux2', quantization: 'int8', repo: 'aydin99/FLUX.2-klein-4B-int8', basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B', steps: 8, guidance: 3.5 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const m = getImageModels().find((x) => x.id === 'flux2-klein-4b-int8');
+    expect(m.revision).toMatch(SHA);
+    expect(m.basePipelineRevision).toMatch(SHA);
+  });
+
+  it('does not pin forks or overwrite explicit revisions', async () => {
+    writeImageRegistry([
+      { id: 'flux2-klein-4b', runner: 'flux2', quantization: 'sdnq', repo: 'my-fork/FLUX.2-klein-4B-sdnq', tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B', tokenizerRevision: 'main', steps: 8, guidance: 3.5 },
+      { id: 'flux2-klein-9b-bf16', runner: 'flux2', quantization: 'none', repo: 'black-forest-labs/FLUX.2-klein-9B', revision: '', steps: 20, guidance: 3.5 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const fork = getImageModels().find((x) => x.id === 'flux2-klein-4b');
+    expect('revision' in fork).toBe(false);
+    expect(fork.tokenizerRevision).toBe('main');
+    const bf16 = getImageModels().find((x) => x.id === 'flux2-klein-9b-bf16');
+    expect(bf16.revision).toBe('');
+  });
+
+  it('fresh install: every shipped diffusers-runner repo (and HiDream text encoder) is pinned to a 40-hex commit', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const diffusers = getImageModels().filter((m) => ['hidream', 'qwen', 'z-image', 'ernie'].includes(m.runner));
+    expect(diffusers.map((m) => m.id).sort()).toEqual([
+      'ernie-image', 'ernie-image-turbo', 'hidream-i1-fast', 'hidream-i1-full',
+      'qwen-image', 'qwen-image-2.1', 'qwen-image-edit', 'z-image-turbo-bf16',
+    ]);
+    for (const m of diffusers) {
+      expect(m.revision).toMatch(SHA);
+      if (m.textEncoderRepo) expect(m.textEncoderRevision).toMatch(SHA);
+    }
+  });
+
+  it('backfills diffusers revisions onto persisted shipped entries but leaves forks and explicit revisions alone', async () => {
+    writeImageRegistry([
+      { id: 'hidream-i1-full', runner: 'hidream', repo: 'HiDream-ai/HiDream-I1-Full', textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct', steps: 50, guidance: 5 },
+      { id: 'qwen-image', runner: 'qwen', repo: 'my-fork/Qwen-Image', steps: 30, guidance: 4 },
+      { id: 'ernie-image', runner: 'ernie', repo: 'baidu/ERNIE-Image', revision: 'main', steps: 50, guidance: 4 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const byId = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
+    expect(byId['hidream-i1-full'].revision).toMatch(SHA);
+    expect(byId['hidream-i1-full'].textEncoderRevision).toMatch(SHA);
+    expect('revision' in byId['qwen-image']).toBe(false);
+    expect(byId['ernie-image'].revision).toBe('main');
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.
@@ -1847,5 +1921,27 @@ describe('live snapshot restore ownership', () => {
     await second;
     expect(order).toEqual(['first:start', 'first:end', 'second']);
     expect(registry.setMediaModelEnabled(registry.getImageModels()[0].id, false)).toMatchObject({ enabled: false });
+  });
+});
+
+describe('FLUX.3 Klein revision pins', () => {
+  const shipped = 'mflux-community/flux-3-image-klein-mflux-q4';
+  it('ships a 40-hex commit pin on every FLUX.3 Klein entry', async () => {
+    const { getImageModels } = await import('./mediaModels.js');
+    const klein = getImageModels().filter(m => m.runner === 'flux3');
+    expect(klein.map(m => m.id).sort()).toEqual(['flux3-klein-q4', 'flux3-klein-q6', 'flux3-klein-q8']);
+    for (const m of klein) expect(m.revision).toMatch(/^[0-9a-f]{40}$/);
+  });
+  it('backfills persisted shipped entries but never a fork or an explicit revision', async () => {
+    writeFileSync(registryFile, JSON.stringify({ video: {}, image: [
+      { id: 'flux3-klein-q4', runner: 'flux3', repo: shipped },
+      { id: 'flux3-klein-q6', runner: 'flux3', repo: 'my-fork/klein' },
+      { id: 'flux3-klein-q8', runner: 'flux3', repo: 'mflux-community/flux-3-image-klein-mflux-q8', revision: '' },
+    ] }));
+    const { getImageModels } = await import('./mediaModels.js');
+    const byId = Object.fromEntries(getImageModels().map(m => [m.id, m]));
+    expect(byId['flux3-klein-q4'].revision).toMatch(/^[0-9a-f]{40}$/);
+    expect('revision' in byId['flux3-klein-q6']).toBe(false);
+    expect(byId['flux3-klein-q8'].revision).toBe('');
   });
 });

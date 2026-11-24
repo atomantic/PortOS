@@ -12,9 +12,9 @@
  */
 
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { getGenomeSummary } from './genome.js';
-import { getBloodTests } from './meatspaceHealth.js';
+import { getBloodTests } from './meatspace/meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
 import { getActiveProvider, getProviderById } from './provider/providers.js';
@@ -396,6 +396,16 @@ export async function getCrossDomainNarrative() {
     return { available: false, reason: 'not_generated' };
   }
   return { ...cached, available: true };
+}
+
+/**
+ * INS-04: Remove the cached cross-domain narrative (e.g. when genome data is deleted).
+ * Idempotent: ignores ENOENT and rethrows unexpected filesystem errors.
+ */
+export async function clearCrossDomainNarrative() {
+  await unlinkGuarded(NARRATIVE_FILE).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
 }
 
 /**

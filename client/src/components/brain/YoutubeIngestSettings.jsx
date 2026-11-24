@@ -37,15 +37,23 @@ export default function YoutubeIngestSettings() {
   const [saving, setSaving] = useState(false);
   const vaultsResource = useListResource(fetchVaults);
   const [settings, setSettings] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   // Two-click arm rather than a confirm dialog, per the client UI conventions.
   const [armedDelete, setArmedDelete] = useState(null);
 
-  useEffect(() => {
-    getYoutubeIngestSettings({ silent: true }).catch(() => null).then((loaded) => {
-      setSettings(loaded);
-      setLoading(false);
-    });
+  const loadSettings = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    return getYoutubeIngestSettings({ silent: true })
+      .then((loaded) => {
+        if (loaded) setSettings(loaded);
+        else setLoadError(new Error('Empty response'));
+      })
+      .catch((err) => setLoadError(err || new Error('Request failed')))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { loadSettings(); }, [loadSettings]);
 
   // Loads 50 records at a time; `usePagedCollection` dedupes by `id`, so each
   // record is given one from its `videoId` (the ingest index's own key). A
@@ -106,7 +114,13 @@ export default function YoutubeIngestSettings() {
       </section>
     );
   }
-  if (!settings) return null;
+  if (!settings) {
+    return (
+      <section className="p-4 bg-port-card border border-port-border rounded-lg">
+        <ListLoadError what="YouTube ingest settings" error={loadError} onRetry={loadSettings} />
+      </section>
+    );
+  }
 
   return (
     <section className="p-4 bg-port-card border border-port-border rounded-lg space-y-4">

@@ -18,7 +18,7 @@ export default function GoalProgressLog({
           </span>
           {goal.progressLog?.length > 0 && (
             <span className="text-xs text-gray-600 ml-1">
-              {goal.progressLog.reduce((sum, e) => sum + (e.durationMinutes || 0), 0)}min total
+              {formatDurationMin(goal.progressLog.reduce((sum, e) => sum + (e.durationMinutes || 0), 0))} total
             </span>
           )}
         </div>

@@ -161,6 +161,9 @@ export const GALLERY_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', 
 
 export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 
+/** A Media History video by filename (`mp4`, `webm`, `mov`, `m4v`) under `PATHS.videos`, or null. */
+export const resolveGalleryVideo = makePathResolver(() => PATHS.videos, { extensions: ['mp4', 'webm', 'mov', 'm4v'] });
+
 /**
  /** Resolve a reference-image filename under `PATHS.imageRefs` (a sibling dir, kept out of gallery enumeration). */
 export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);

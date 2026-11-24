@@ -26,7 +26,6 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 import { getProject, updateProject, updatePlanStep, recordRun, updateRun } from './local.js';
 import { enqueuePlanTask } from './agentBridge.js';
-import { dispatchCreativeTool } from '../creative/toolRegistry.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 // Import the modules that DECLARE these, not the `seriesAutopilot.js` barrel that
 // forwards them (#5920): a barrel re-entry from outside the package pulls the whole
@@ -37,6 +36,7 @@ import { getSeries } from '../pipeline/series.js';
 import { MAX_REPLAN_ROUNDS, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { blockedStageReason, closeDeliverableStreak, exhaustedDeliverableStreak } from './deliverableGate.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 // The registry tool that runs Series Autopilot as a plan step. A long-running
 // step whose dispatch returns a run handle (a `runId`, not a media `jobId`)
@@ -254,7 +254,7 @@ async function finishRun(projectId, runId, status, failureReason) {
 function summarizeResult(result) {
   if (!result || typeof result !== 'object') return {};
   const out = {};
-  for (const k of ['id', 'jobId', 'seriesId', 'issueId', 'universeId', 'name', 'status']) {
+  for (const k of ['id', 'jobId', 'seriesId', 'issueId', 'universeId', 'workId', 'name', 'status']) {
     if (result[k] != null) out[k] = result[k];
   }
   return out;
@@ -424,11 +424,14 @@ async function runPlanStep(project, step) {
   // Outside the request lifecycle — catch so a throw becomes a settle, never an
   // unhandled rejection.
   const targetAbility = project.directive?.constraints?.targetAbility;
-  const dispatch = await dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
-    projectId,
-    ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
-    ...(targetAbility ? { targetAbility } : {}),
-  })
+  const budgetCap = project.directive?.constraints?.budgetCap;
+  const dispatch = await loadLateBoundService('creativeToolRegistry')
+    .then(({ dispatchCreativeTool }) => dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
+      projectId,
+      ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
+      ...(targetAbility ? { targetAbility } : {}),
+      ...(budgetCap != null ? { budgetCap } : {}),
+    }))
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
   return settlePlanStepDispatch(projectId, resolvedStep, run?.runId, dispatch);
 }
@@ -439,12 +442,16 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
   // autonomy and Resume — the CD never silently retries around a governance stop.
   if (!dispatch || (dispatch.ok !== true && !dispatch.threw)) {
     const reason = dispatch?.reason || 'rejected';
+    const isProjectBudget = reason === 'project-budget' && dispatch?.budgetCap != null;
+    const stepResult = isProjectBudget
+      ? { reason, budgetCap: dispatch.budgetCap, used: dispatch.used ?? 0 }
+      : { reason };
+    const pauseMessage = isProjectBudget
+      ? `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason} (${dispatch.used ?? 0}/${dispatch.budgetCap} autonomous actions today — raise the directive budget cap or wait until UTC midnight, then resume)`
+      : `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason}`;
     await finishRun(projectId, runId, 'failed', reason);
-    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'blocked', result: { reason } });
-    return pausePlanWithResidual(
-      projectId,
-      `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason}`,
-    );
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'blocked', result: stepResult });
+    return pausePlanWithResidual(projectId, pauseMessage);
   }
   // Real tool error → mark failed, then bounded re-plan or pause.
   if (dispatch.threw) {

@@ -35,7 +35,7 @@ const refImport = vi.hoisted(() => ({
   target: undefined,
   state: { active: false, percent: 0, stage: null },
 }));
-vi.mock('../../hooks/useReferenceAudioImport.js', () => ({
+vi.mock('./useReferenceAudioImport.js', () => ({
   default: (opts = {}) => {
     refImport.onComplete = opts.onComplete;
     refImport.target = opts.target;

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { registerLateBoundService } from '../lib/lateBoundServices.js';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+
+registerLateBoundService('eidoverse', () => import('../services/eidoverse.js'));
+registerLateBoundService('eidoverseRuntime', () => import('../services/eidoverseRuntime.js'));
 
 const settingsDataRoot = await vi.hoisted(async () => {
   const { mkdtempSync } = await import('node:fs');
@@ -115,21 +119,21 @@ vi.mock('../services/credentialInventory.js', () => ({
 // The Beeper feature toggle now reconciles the sweep + realtime transport
 // against the gate it just moved (fork issue #1). Mocked here because the real
 // module reaches the whole Beeper service graph; what a reconcile actually does
-// is covered by services/beeperArming.test.js.
-vi.mock('../services/beeperArming.js', () => ({
+// is covered by services/beeper/beeperArming.test.js.
+vi.mock('../services/beeper/beeperArming.js', () => ({
   reconcileBeeperIngestion: vi.fn(async () => ({ armed: false, changed: false })),
 }));
 // The interval-change half of fork issue #79: a Beeper save that changes only
 // `intervalMinutes` restarts the scheduler directly rather than going through
 // `reconcileBeeperIngestion` (that stays reserved for an `enabled` flip). Mocked
 // for the same reason `beeperArming.js` is above — what a restart actually does
-// is covered by services/beeperScheduler.test.js.
+// is covered by services/beeper/beeperScheduler.test.js.
 // `isBeeperSchedulerRegistered` defaults to `false` (mimicking a scheduler
 // that was never registered) so the existing interval-change tests below,
 // which never set this, keep exercising that path; the fork issue #94 test
 // under "beeper sync-toggle arming" overrides it to `true` for the
 // already-registered case.
-vi.mock('../services/beeperScheduler.js', () => ({
+vi.mock('../services/beeper/beeperScheduler.js', () => ({
   restartBeeperScheduler: vi.fn(async () => {}),
   isBeeperSchedulerRegistered: vi.fn(() => false),
 }));
@@ -146,9 +150,9 @@ import { buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata } from '../s
 import { buildReviewWithArgs } from '../lib/reviewerConfig.js';
 import { hostControlRouteGate } from '../services/authGate.js';
 import codeReviewRoutes from './codeReview.js';
-import { reconcileBeeperIngestion } from '../services/beeperArming.js';
+import { reconcileBeeperIngestion } from '../services/beeper/beeperArming.js';
 import { reconcileItermBridge } from '../services/itermBridge.js';
-import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
+import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeper/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
 import { updateAiAssignment } from '../services/aiAssignments.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
@@ -1208,7 +1212,7 @@ describe('Settings routes — beeper sync-toggle arming', () => {
 // `startBeeperScheduler()` deliberately no-ops once `beeper-sync` is already
 // registered. `restartBeeperScheduler()` (cancel, then register fresh) is the
 // fix; this describe block pins WHEN the route calls it, not what it does —
-// that lives in services/beeperScheduler.test.js.
+// that lives in services/beeper/beeperScheduler.test.js.
 describe('Settings routes — beeper interval change', () => {
   beforeEach(() => {
     store = {};

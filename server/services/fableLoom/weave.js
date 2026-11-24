@@ -246,7 +246,7 @@ const storyContext = (loom, episode, { includeSeriesPlan = true } = {}) => [
 ].filter(Boolean).join('\n');
 
 const seriesPlanDigest = (loom) => JSON.stringify({
-  ...(Object.prototype.hasOwnProperty.call(loom.seriesPlan || {}, 'seriesDesign')
+  ...(Object.hasOwn(loom.seriesPlan || {}, 'seriesDesign')
     ? { seriesDesign: loom.seriesPlan.seriesDesign }
     : {}),
   storyArc: loom.seriesPlan?.storyArc || '',

@@ -2,7 +2,9 @@ import { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'rea
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Billboard, OrbitControls, Text } from '@react-three/drei';
 import * as THREE from 'three';
+import { useNavigate } from 'react-router';
 import { Search, Plus, Wand2, Type } from 'lucide-react';
+import { GOALS_TREE_PATH, goalTreeDetailPath } from './goalConstants';
 import { layoutGoalNodes } from './goalTreeLayout';
 import {
   DIMMED_LABEL_OPACITY,
@@ -261,8 +263,11 @@ function GoalScene({ graph, selectedId, adjacentIds, onSelect, onHover, showLabe
   );
 }
 
-export default function GoalsTreeView({ data, onRefresh }) {
-  const [selectedNode, setSelectedNode] = useState(null);
+export default function GoalsTreeView({ data, onRefresh, selectedGoalId }) {
+  // Selection lives in the URL (/goals/tree/:goalId) so it survives reload, Back and tab switches.
+  const navigate = useNavigate();
+  const selectedNode = selectedGoalId ? { id: selectedGoalId } : null;
+  const clearSelection = useCallback(() => navigate(GOALS_TREE_PATH), [navigate]);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilters, setCategoryFilters] = useState(() =>
@@ -311,8 +316,8 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const selectedGoal = selectedNode ? data?.flat?.find(g => g.id === selectedNode.id) : null;
 
   const handleSelect = useCallback((node) => {
-    setSelectedNode(prev => prev?.id === node.id ? null : node);
-  }, []);
+    navigate(node.id === selectedGoalId ? GOALS_TREE_PATH : goalTreeDetailPath(node.id));
+  }, [navigate, selectedGoalId]);
 
   const handleHover = useCallback((node) => {
     setHoveredNode(node);
@@ -322,13 +327,18 @@ export default function GoalsTreeView({ data, onRefresh }) {
     const start = dragStartRef.current;
     if (!start) return;
     if (Math.abs(e.clientX - start.x) < 5 && Math.abs(e.clientY - start.y) < 5) {
-      setSelectedNode(null);
+      clearSelection();
     }
-  }, []);
+  }, [clearSelection]);
 
   const toggleCategory = (cat) => {
     setCategoryFilters(prev => ({ ...prev, [cat]: !prev[cat] }));
-    setSelectedNode(null);
+    clearSelection();
+  };
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setCategoryFilters(Object.fromEntries(Object.keys(CATEGORY_CONFIG).map(k => [k, true])));
   };
 
   const handleCreateGoal = async () => {
@@ -341,7 +351,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const handleOrganize = () => requestOrganize({ providerId: selectedProviderId, model: selectedModel });
 
   return (
-    <div className="h-full flex relative">
+    <div className="@container/goals h-full flex relative">
       <div className="flex-1 min-w-0 min-h-0 relative flex flex-col">
         {/* Filter bar */}
         <div className="relative z-10 shrink-0 m-2 sm:m-3">
@@ -531,7 +541,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
                 </span>
               )}
               {CATEGORY_CONFIG[hoveredNode.category]?.label} &middot; {HORIZON_OPTIONS.find(h => h.value === hoveredNode.horizon)?.label}
-              {hoveredNode.urgency != null && ` &middot; ${Math.round(hoveredNode.urgency * 100)}% urgency`}
+              {hoveredNode.urgency != null && ` · ${Math.round(hoveredNode.urgency * 100)}% urgency`}
             </div>
           </div>
         )}
@@ -554,20 +564,33 @@ export default function GoalsTreeView({ data, onRefresh }) {
             />
           </Canvas>
         ) : (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            No goals to display. Add a goal to get started.
-          </div>
+          (data?.flat?.length ?? 0) > 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 h-full text-gray-500">
+              <span>No goals match the current search or category filters.</span>
+              <button
+                type="button"
+                onClick={resetFilters}
+                className="px-3 py-1.5 min-h-[40px] rounded-lg bg-port-accent/20 text-port-accent hover:bg-port-accent/30 text-sm"
+              >
+                Reset filters
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full text-gray-500">
+              No goals to display. Add a goal to get started.
+            </div>
+          )
         )}
       </div>
 
-      {/* Detail panel — full overlay on mobile, side panel on desktop */}
+      {/* Detail panel — overlay until the workspace can fit both panes */}
       {selectedGoal && (
-        <div className="absolute inset-0 sm:relative sm:inset-auto z-20 sm:z-auto">
+        <div className="absolute inset-0 z-20 @min-[900px]/goals:relative @min-[900px]/goals:inset-auto @min-[900px]/goals:z-auto @min-[900px]/goals:w-80 shrink-0">
           <GoalDetailPanel
             key={selectedGoal.id}
             goal={selectedGoal}
             allGoals={data?.flat}
-            onClose={() => setSelectedNode(null)}
+            onClose={clearSelection}
             onRefresh={onRefresh}
           />
         </div>

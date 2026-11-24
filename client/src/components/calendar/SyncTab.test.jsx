@@ -152,6 +152,21 @@ describe('Calendar sync lifecycle', () => {
 describe('Calendar token clearing', () => {
   const present = { providers: [{ provider: 'outlook', hasToken: true }] };
 
+  it('requires inline confirmation naming the provider and Messages before clearing, and allows cancel', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue(present);
+    render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
+    const button = await screen.findByRole('button', { name: 'Clear' });
+
+    fireEvent.click(button);
+    expect(screen.getByText(/Clear outlook token\? This token is shared with Messages\./)).toBeTruthy();
+    expect(api.clearCalendarToken).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText(/shared with Messages/)).toBeNull();
+    expect(api.clearCalendarToken).not.toHaveBeenCalled();
+    expect(screen.getByText('Token present')).toBeTruthy();
+  });
+
   it('blocks duplicate clears and refreshes only after a bodyless success', async () => {
     let resolve;
     api.getCalendarTokenStatus.mockResolvedValue(present);
@@ -160,6 +175,7 @@ describe('Calendar token clearing', () => {
     const button = await screen.findByRole('button', { name: 'Clear' });
     api.getCalendarTokenStatus.mockResolvedValue({ providers: [{ provider: 'outlook', hasToken: false }] });
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(api.clearCalendarToken).toHaveBeenCalledExactlyOnceWith('outlook');
@@ -178,6 +194,7 @@ describe('Calendar token clearing', () => {
     render(<SyncTab accounts={[account]} onRefresh={vi.fn()} />);
     const button = await screen.findByRole('button', { name: 'Clear' });
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     await waitFor(() => expect(button).toBeEnabled());
     expect(screen.getByText('Token present')).toBeTruthy();
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(1);
@@ -185,8 +202,54 @@ describe('Calendar token clearing', () => {
     expect(toast.error).not.toHaveBeenCalled();
 
     fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }));
     await waitFor(() => expect(toast.success).toHaveBeenCalledExactlyOnceWith('outlook token cleared'));
     expect(api.clearCalendarToken).toHaveBeenCalledTimes(2);
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Token status load failure', () => {
+  it('calls getCalendarTokenStatus silently, renders ListLoadError with Retry, and recovers on retry', async () => {
+    api.getCalendarTokenStatus
+      .mockRejectedValueOnce(new Error('Token service unavailable'))
+      .mockResolvedValueOnce({ providers: [{ provider: 'outlook', hasToken: true }] });
+    render(<MemoryRouter><SyncTab accounts={[account]} onRefresh={vi.fn()} /></MemoryRouter>);
+
+    expect(await screen.findByText(/Could not load token status — Token service unavailable/)).toBeTruthy();
+    expect(api.getCalendarTokenStatus).toHaveBeenCalledWith({ silent: true });
+    expect(toast.error).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await screen.findByText('Token present');
+    expect(screen.queryByText(/Could not load token status/)).toBeNull();
+  });
+});
+
+describe('SyncTab narrow-viewport layout', () => {
+  it('applies flex-wrap and min-w-0 on account, sync-progress, and token status rows', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue({
+      providers: [{ provider: 'google-calendar-with-long-name', hasToken: true }],
+    });
+    const longAccount = {
+      ...account,
+      type: 'google-calendar',
+      name: 'Very Long Calendar Account Name That Would Overflow At 320px',
+    };
+    render(<MemoryRouter><SyncTab accounts={[longAccount]} onRefresh={vi.fn()} /></MemoryRouter>);
+
+    const accountHeading = await screen.findByText(longAccount.name);
+    const labelBlock = accountHeading.parentElement;
+    expect(labelBlock.className).toContain('min-w-0');
+    expect(labelBlock.parentElement.className).toContain('flex-wrap');
+
+    emit('started');
+    emit('progress', { message: 'Syncing long calendar progress status message across narrow cards' });
+    const progressEl = screen.getByText('Syncing long calendar progress status message across narrow cards');
+    expect(progressEl.parentElement.className).toContain('min-w-0');
+
+    const providerHeading = await screen.findByText('google-calendar-with-long-name');
+    expect(providerHeading.parentElement.className).toContain('min-w-0');
+    expect(providerHeading.parentElement.parentElement.className).toContain('flex-wrap');
   });
 });

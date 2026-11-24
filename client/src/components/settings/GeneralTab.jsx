@@ -9,6 +9,7 @@ import ThemePickerPanel from '../ThemePickerPanel';
 import useSettingsForm from '../../hooks/useSettingsForm';
 import useUnsavedChangesGuard from '../../hooks/useUnsavedChangesGuard';
 import { getSettings, updateSettings } from '../../services/apiSystem.js';
+import { failureMessage } from '../messages/failureMessage';
 
 // Coordinate inputs are free text so a partially-typed "-" or "37." isn't
 // clobbered mid-edit; parse + range-check only on save. Both blank = clear.
@@ -55,9 +56,9 @@ export function GeneralTab() {
         const nextLon = settings?.location?.lon != null ? String(settings.location.lon) : '';
         load({ timezone: nextTimezone, lat: nextLat, lon: nextLon });
       })
-      .catch(() => {
+      .catch((err) => {
         if (!current) return;
-        toast.error('Failed to load settings');
+        toast.error(failureMessage('Could not load general settings', err, 'Reload the page to retry.'));
       })
       .finally(() => {
         if (current) setLoading(false);

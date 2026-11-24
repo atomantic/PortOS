@@ -90,6 +90,11 @@ export const githubNotificationPullRequestActionSchema = z.object({
   ...githubAgentPinFields,
 }).strict();
 
+// A GitHub App's login, as the forge reports it for a Bot actor.
+const GITHUB_BOT_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,98}[A-Za-z0-9])?\[bot\]$/;
+const githubTrustedBotsSchema = z.array(z.string().trim().regex(GITHUB_BOT_LOGIN_RE, 'Use a bot login such as example-app[bot]'))
+  .max(50).transform((logins) => [...new Set(logins.map((login) => login.toLowerCase()))]);
+
 export const githubAccountCreateSchema = z.object({
   label: z.string().trim().max(80).optional(),
   host: z.string().trim().toLowerCase()
@@ -107,6 +112,10 @@ export const githubAccountCreateSchema = z.object({
   allowAgents: z.boolean().optional(),
   // Enterprise hosts only: every human on the instance counts as trusted (#13203).
   trustInstanceUsers: z.boolean().optional(),
+  // With trustInstanceUsers on, bots are trusted too unless this is false;
+  // trustedBots then names the only bots that count (always honored).
+  trustInstanceBots: z.boolean().optional(),
+  trustedBots: githubTrustedBotsSchema.optional(),
   agentRules: githubAgentRulesSchema.optional(),
   agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
   enabled: z.boolean().optional(),
@@ -118,6 +127,13 @@ export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().str
 export const githubNotificationsQuerySchema = z.object({
   accountId: z.string().trim().min(1).max(100).optional(),
   view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
+}).strict();
+
+export const githubNotificationMuteSchema = z.object({
+  accountId: z.string().trim().min(1).max(100),
+  repoFullName: z.string().trim().regex(/^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/),
+  reason: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/).refine((reason) => reason !== 'security_alert', 'Security alerts cannot be muted'),
+  muted: z.boolean(),
 }).strict();
 
 export const githubNotificationsSyncSchema = z.object({

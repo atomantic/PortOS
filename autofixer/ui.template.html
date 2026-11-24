@@ -11,7 +11,27 @@
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #0a0a0f;
       color: #e0e0e0;
-      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    :is(a, button, input, [tabindex]):focus-visible {
+      outline: 2px solid #93c5fd;
+      outline-offset: 2px;
     }
 
     /* Header — stacks vertically on mobile */
@@ -22,6 +42,7 @@
       display: flex;
       flex-direction: column;
       gap: 0.5rem;
+      flex-shrink: 0;
     }
 
     h1 {
@@ -34,24 +55,34 @@
 
     h1 span { font-size: 1.25rem; }
 
-    .nav-links {
+    .nav-links,
+    .nav-tabs {
       display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       gap: 0.25rem;
     }
 
-    .nav-links a {
-      color: #888;
+    .nav-links a,
+    .nav-links button {
+      color: #9ca3af;
+      background: transparent;
+      border: none;
+      font: inherit;
       text-decoration: none;
       font-size: 0.8125rem;
       padding: 0.5rem 0.75rem;
       border-radius: 0.5rem;
-      transition: all 0.2s;
+      cursor: pointer;
+      transition: color 0.2s, background-color 0.2s;
       min-height: 44px;
       display: flex;
       align-items: center;
     }
 
-    .nav-links a:hover, .nav-links a.active {
+    .nav-links a:hover,
+    .nav-links button:hover,
+    .nav-links .active {
       color: #fff;
       background: rgba(255,255,255,0.1);
     }
@@ -60,7 +91,8 @@
     .container {
       display: flex;
       flex-direction: column;
-      height: calc(100vh - 100px);
+      flex: 1;
+      min-height: 0;
     }
 
     /* Sidebar — horizontal scrolling strip on mobile */
@@ -77,22 +109,32 @@
       font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.1em;
-      color: #666;
+      color: #9ca3af;
       margin-bottom: 0.5rem;
     }
 
     .process-list {
+      list-style: none;
       display: flex;
       flex-direction: row;
       gap: 0.5rem;
     }
 
+    .process-list > li {
+      flex-shrink: 0;
+    }
+
     .process-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      font: inherit;
+      color: inherit;
       padding: 0.625rem 0.75rem;
       background: #1a1a2a;
       border-radius: 0.5rem;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: border-color 0.2s, background-color 0.2s;
       border: 1px solid transparent;
       min-height: 44px;
       min-width: 140px;
@@ -109,14 +151,16 @@
     }
 
     .process-name {
+      display: block;
       font-weight: 500;
       font-size: 0.8125rem;
       white-space: nowrap;
     }
 
     .process-app {
+      display: block;
       font-size: 0.6875rem;
-      color: #666;
+      color: #9ca3af;
       margin-top: 0.125rem;
       white-space: nowrap;
     }
@@ -149,6 +193,7 @@
       flex-wrap: wrap;
       align-items: center;
       gap: 0.5rem;
+      flex-shrink: 0;
     }
 
     .toolbar-left {
@@ -181,27 +226,27 @@
       border-radius: 0.375rem;
       cursor: pointer;
       font-size: 0.8125rem;
-      transition: all 0.2s;
+      transition: background-color 0.2s, color 0.2s;
       min-height: 40px;
       min-width: 40px;
     }
 
-    .toolbar button:hover {
+    .toolbar button:not(:disabled):hover {
       background: #3a3a5a;
     }
 
     .toolbar button.pause-active {
-      background: #ef4444;
+      background: #dc2626;
       color: white;
     }
 
     .toolbar button.restart-btn {
       background: #22c55e33;
-      color: #22c55e;
+      color: #4ade80;
       border: 1px solid #22c55e44;
     }
 
-    .toolbar button.restart-btn:hover {
+    .toolbar button.restart-btn:not(:disabled):hover {
       background: #22c55e55;
     }
 
@@ -213,11 +258,11 @@
 
     .toolbar button.stop-btn {
       background: #ef444433;
-      color: #ef4444;
+      color: #fca5a5;
       border: 1px solid #ef444444;
     }
 
-    .toolbar button.stop-btn:hover {
+    .toolbar button.stop-btn:not(:disabled):hover {
       background: #ef444455;
     }
 
@@ -230,35 +275,42 @@
       font-size: 0.875rem;
       z-index: 1000;
       opacity: 0;
+      pointer-events: none;
       transform: translateY(10px);
-      transition: all 0.3s;
+      transition: opacity 0.3s, transform 0.3s;
     }
 
     .toast.visible {
       opacity: 1;
+      pointer-events: auto;
       transform: translateY(0);
     }
 
     .toast.success {
-      background: #22c55e22;
-      color: #22c55e;
-      border: 1px solid #22c55e44;
+      background: #132a1c;
+      color: #4ade80;
+      border: 1px solid #22c55e66;
     }
 
     .toast.error {
-      background: #ef444422;
-      color: #ef4444;
-      border: 1px solid #ef444444;
+      background: #2d1518;
+      color: #fca5a5;
+      border: 1px solid #ef444466;
     }
 
     #logs {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding: 0.75rem;
       font-family: 'SF Mono', 'Fira Code', monospace;
       font-size: 0.75rem;
       line-height: 1.5;
       background: #0a0a0f;
+    }
+
+    #logs[hidden] {
+      display: none;
     }
 
     .log-line {
@@ -275,9 +327,10 @@
       background: #12121a;
       border-top: 1px solid #2a2a4a;
       font-size: 0.75rem;
-      color: #666;
+      color: #9ca3af;
       display: flex;
       justify-content: space-between;
+      flex-shrink: 0;
     }
 
     .status-indicator {
@@ -299,6 +352,7 @@
       display: none;
       overflow-y: auto;
       flex: 1;
+      min-height: 0;
       padding: 0.75rem;
     }
 
@@ -311,8 +365,7 @@
       background: #1a1a2a;
       border-radius: 0.5rem;
       margin-bottom: 0.5rem;
-      cursor: pointer;
-      transition: all 0.2s;
+      transition: background-color 0.2s;
       min-height: 44px;
     }
 
@@ -322,7 +375,7 @@
 
     .history-item .time {
       font-size: 0.75rem;
-      color: #666;
+      color: #9ca3af;
     }
 
     .history-item .process {
@@ -336,8 +389,26 @@
       margin-top: 0.25rem;
     }
 
-    .history-item .result.success { color: #22c55e; }
-    .history-item .result.failed { color: #ef4444; }
+    .history-item .result.success { color: #4ade80; }
+    .history-item .result.failed { color: #f87171; }
+
+    .history-item button {
+      margin-top: 0.5rem;
+      margin-right: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      min-height: 44px;
+      background: #2a2a4a;
+      color: #e0e0e0;
+      border: 1px solid #3a3a5a;
+      border-radius: 0.375rem;
+      font: inherit;
+      font-size: 0.8125rem;
+      cursor: pointer;
+    }
+
+    .history-item button:hover {
+      background: #3a3a5a;
+    }
 
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-track { background: #0a0a0f; }
@@ -356,16 +427,17 @@
       h1 { font-size: 1.25rem; }
       h1 span { font-size: 1.5rem; }
 
-      .nav-links { gap: 0.5rem; }
+      .nav-links,
+      .nav-tabs { gap: 0.5rem; }
 
-      .nav-links a {
+      .nav-links a,
+      .nav-links button {
         font-size: 0.875rem;
         padding: 0.5rem 1rem;
       }
 
       .container {
         flex-direction: row;
-        height: calc(100vh - 60px);
       }
 
       .sidebar {
@@ -430,6 +502,7 @@
       z-index: 100;
     }
 
+    .login-overlay[hidden] { display: none; }
     .login-overlay.visible { display: flex; }
 
     .login-card {
@@ -448,7 +521,7 @@
 
     .login-card p {
       font-size: 0.8125rem;
-      color: #888;
+      color: #9ca3af;
       margin-bottom: 1rem;
       line-height: 1.5;
     }
@@ -456,7 +529,7 @@
     .login-card label {
       display: block;
       font-size: 0.75rem;
-      color: #888;
+      color: #9ca3af;
       margin-bottom: 0.375rem;
     }
 
@@ -471,9 +544,8 @@
       font-size: 1rem;
     }
 
-    .login-card input:focus {
-      outline: none;
-      border-color: #6366f1;
+    .login-card input:focus-visible {
+      border-color: #818cf8;
     }
 
     .login-card button {
@@ -481,7 +553,7 @@
       margin-top: 0.75rem;
       padding: 0.625rem 1rem;
       min-height: 44px;
-      background: #6366f1;
+      background: #4f46e5;
       border: none;
       border-radius: 0.5rem;
       color: #fff;
@@ -499,78 +571,92 @@
     }
 
     #logoutLink { display: none; }
+    #logoutLink[hidden] { display: none; }
     #logoutLink.visible { display: flex; }
 
     /* Desktop (1024px+) */
     @media (min-width: 1024px) {
       .sidebar { width: 300px; }
 
-      .nav-links { gap: 1rem; }
+      .nav-links,
+      .nav-tabs { gap: 1rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition: none !important;
+        animation: none !important;
+        scroll-behavior: auto !important;
+      }
     }
   </style>
 </head>
 <body>
   <header>
-    <h1><span>🔧</span> PortOS Autofixer</h1>
-    <div class="nav-links">
-      <a href="#" id="portosDashboardLink" target="_blank">PortOS Dashboard</a>
-      <a href="#" class="active" id="logsTab">Logs</a>
-      <a href="#" id="historyTab">History</a>
-      <a href="#" id="logoutLink">Log out</a>
-    </div>
+    <h1><span aria-hidden="true">🔧</span> PortOS Autofixer</h1>
+    <nav class="nav-links" aria-label="Autofixer navigation">
+      <a href="#" id="portosDashboardLink" target="_blank" rel="noopener noreferrer">PortOS Dashboard</a>
+      <div class="nav-tabs" role="tablist" aria-label="Autofixer views">
+        <button type="button" class="active" id="logsTab" role="tab" aria-selected="true" aria-controls="logs" tabindex="0">Logs</button>
+        <button type="button" id="historyTab" role="tab" aria-selected="false" aria-controls="historyPanel" tabindex="-1">History</button>
+      </div>
+      <button type="button" id="logoutLink" hidden>Log out</button>
+    </nav>
   </header>
 
   <div class="container">
-    <div class="sidebar">
+    <aside class="sidebar" aria-label="Processes">
       <h2>Processes</h2>
-      <div class="process-list" id="processList">
+      <ul class="process-list" id="processList">
         <!-- Populated by JS -->
-      </div>
-    </div>
+      </ul>
+    </aside>
 
-    <div class="main-content">
+    <main class="main-content">
       <div class="toolbar">
         <div class="toolbar-left">
           <span class="toolbar-title" id="currentProcess">Select a process</span>
         </div>
         <div class="toolbar-buttons">
-          <button id="restartBtn" class="restart-btn" disabled>Restart</button>
-          <button id="stopBtn" class="stop-btn" disabled>Stop</button>
-          <button id="clearBtn">Clear</button>
-          <button id="pauseBtn">Pause</button>
+          <button type="button" id="restartBtn" class="restart-btn" disabled>Restart</button>
+          <button type="button" id="stopBtn" class="stop-btn" disabled>Stop</button>
+          <button type="button" id="clearBtn">Clear</button>
+          <button type="button" id="pauseBtn" aria-pressed="false">Pause</button>
         </div>
       </div>
 
-      <div id="logs"></div>
+      <div id="logs" role="tabpanel" aria-labelledby="logsTab"></div>
 
-      <div id="historyPanel" class="history-panel">
+      <div id="historyPanel" class="history-panel" role="tabpanel" aria-labelledby="historyTab" hidden>
         <!-- History items -->
       </div>
 
       <div class="status-bar">
-        <div class="status-indicator">
-          <div class="status-dot" id="statusDot"></div>
+        <div class="status-indicator" role="status" aria-live="polite">
+          <div class="status-dot" id="statusDot" aria-hidden="true"></div>
           <span id="statusText">Disconnected</span>
         </div>
         <span id="lineCount">0 lines</span>
       </div>
-    </div>
+    </main>
   </div>
 
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-  <div class="login-overlay" id="loginOverlay">
+  <div class="login-overlay" id="loginOverlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle" hidden>
     <form class="login-card" id="loginForm">
-      <h2>🔒 PortOS Autofixer</h2>
+      <h2 id="loginTitle"><span aria-hidden="true">🔒</span> PortOS Autofixer</h2>
       <p>This install is password protected. Enter your PortOS password — or sign in to the PortOS dashboard on this host and reload.</p>
       <label for="loginPassword">Password</label>
-      <input type="password" id="loginPassword" name="password" autocomplete="current-password" autofocus>
+      <input type="password" id="loginPassword" name="password" autocomplete="current-password">
       <button type="submit" id="loginSubmit">Unlock</button>
-      <div class="login-error" id="loginError"></div>
+      <div class="login-error" id="loginError" role="alert"></div>
     </form>
   </div>
 
   <script>
+    const headerEl = document.querySelector('header');
+    const containerEl = document.querySelector('.container');
     const loginOverlay = document.getElementById('loginOverlay');
     const loginForm = document.getElementById('loginForm');
     const loginPassword = document.getElementById('loginPassword');
@@ -598,6 +684,8 @@
     let totalLines = 0;
     let autoScroll = true;
     let selectedProcess = null;
+    let lastFocusedBeforeLogin = null;
+    let toastTimer = null;
     let processStatuses = new Map();
     const processStatusClasses = new Map([
       ['online', 'status-online'],
@@ -612,21 +700,68 @@
     // browsers that haven't signed in there.
     let authRequired = false;
 
+    function getLoginFocusables() {
+      return [...loginOverlay.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )].filter((el) => !el.hidden && !el.closest?.('[hidden]'));
+    }
+
     function showLogin(message) {
+      if (loginOverlay.hidden && document.activeElement && document.activeElement !== document.body
+        && typeof document.activeElement.focus === 'function' && !loginOverlay.contains(document.activeElement)) {
+        lastFocusedBeforeLogin = document.activeElement;
+      }
       authRequired = true;
       loginError.textContent = message || '';
+      loginOverlay.hidden = false;
       loginOverlay.classList.add('visible');
+      if (headerEl) headerEl.inert = true;
+      if (containerEl) containerEl.inert = true;
+      logoutLink.hidden = true;
       logoutLink.classList.remove('visible');
       if (eventSource) { eventSource.close(); eventSource = null; }
       loginPassword.focus();
     }
 
     function hideLogin() {
+      const wasVisible = !loginOverlay.hidden || loginOverlay.classList.contains('visible');
+      loginOverlay.hidden = true;
       loginOverlay.classList.remove('visible');
+      if (headerEl) headerEl.inert = false;
+      if (containerEl) containerEl.inert = false;
       loginPassword.value = '';
       loginError.textContent = '';
+      logoutLink.hidden = !authRequired;
       logoutLink.classList.toggle('visible', authRequired);
+      if (wasVisible) {
+        const canRestore = lastFocusedBeforeLogin
+          && (typeof document.contains !== 'function' || document.contains(lastFocusedBeforeLogin))
+          && !loginOverlay.contains(lastFocusedBeforeLogin);
+        const target = canRestore ? lastFocusedBeforeLogin : logsTab;
+        lastFocusedBeforeLogin = null;
+        target?.focus();
+      }
     }
+
+    document.addEventListener('keydown', (e) => {
+      if (loginOverlay.hidden || e.key !== 'Tab') return;
+      const focusables = getLoginFocusables();
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first || !loginOverlay.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last || !loginOverlay.contains(document.activeElement)) {
+        e.preventDefault();
+        first.focus();
+      }
+    });
 
     // Every API call routes through here so a 401 (session expired, password
     // rotated on :5555) re-arms the overlay instead of silently failing.
@@ -666,14 +801,14 @@
       if (!res || !res.ok) {
         const data = res ? await res.json().catch(() => ({})) : {};
         loginError.textContent = data.error || 'Login failed';
+        loginPassword.focus();
         return;
       }
       hideLogin();
       await start();
     });
 
-    logoutLink.addEventListener('click', async (e) => {
-      e.preventDefault();
+    logoutLink.addEventListener('click', async () => {
       await fetch('/api/auth/logout', { method: 'POST' }).catch(() => null);
       showLogin('Signed out.');
     });
@@ -714,26 +849,46 @@
 
     function updateProcessList() {
       const processes = window.processesList || [];
+      const activeEl = document.activeElement;
+      const focusedButton = activeEl && processList.contains(activeEl)
+        ? (activeEl.closest?.('button.process-item') || activeEl)
+        : null;
+      const focusedName = focusedButton?.dataset?.name ?? null;
+      let restoreFocusTarget = null;
+
       processList.replaceChildren();
 
       processes.forEach(p => {
         const name = String(p.name ?? '');
-        const item = document.createElement('div');
+        const li = document.createElement('li');
+        const item = document.createElement('button');
+        item.type = 'button';
         item.classList.add('process-item');
-        if (selectedProcess === name) item.classList.add('selected');
+        if (selectedProcess === name) {
+          item.classList.add('selected');
+          item.setAttribute('aria-current', 'true');
+        }
         item.dataset.name = name;
 
-        const nameEl = document.createElement('div');
+        const nameEl = document.createElement('span');
         nameEl.className = 'process-name';
 
         const statusEl = document.createElement('span');
         // `processStatuses === null` means the last PM2 read failed (503) —
         // render every process unknown rather than throwing on a missing Map.
-        const statusClass = processStatusClasses.get(processStatuses?.get(name)) || 'status-unknown';
+        const rawStatus = processStatuses?.get(name);
+        const statusClass = processStatusClasses.get(rawStatus) || 'status-unknown';
+        const statusLabel = processStatusClasses.has(rawStatus) ? rawStatus : 'unknown';
         statusEl.classList.add('process-status', statusClass);
-        nameEl.append(statusEl, document.createTextNode(name));
+        statusEl.setAttribute('aria-hidden', 'true');
 
-        const appEl = document.createElement('div');
+        const statusTextEl = document.createElement('span');
+        statusTextEl.className = 'sr-only';
+        statusTextEl.textContent = ` (${statusLabel})`;
+
+        nameEl.append(statusEl, document.createTextNode(name), statusTextEl);
+
+        const appEl = document.createElement('span');
         appEl.className = 'process-app';
         appEl.textContent = String(p.app ?? '');
 
@@ -741,8 +896,17 @@
         item.addEventListener('click', () => {
           selectProcess(item.dataset.name);
         });
-        processList.appendChild(item);
+        li.appendChild(item);
+        processList.appendChild(li);
+
+        if (focusedName !== null && name === focusedName) {
+          restoreFocusTarget = item;
+        }
       });
+
+      if (restoreFocusTarget) {
+        restoreFocusTarget.focus({ preventScroll: true });
+      }
     }
 
     function selectProcess(name) {
@@ -758,10 +922,13 @@
     }
 
     function showToast(message, type) {
+      if (toastTimer) clearTimeout(toastTimer);
+      toastEl.setAttribute('role', type === 'error' ? 'alert' : 'status');
+      toastEl.setAttribute('aria-live', type === 'error' ? 'assertive' : 'polite');
       toastEl.textContent = message;
       toastEl.className = 'toast ' + type;
       requestAnimationFrame(() => toastEl.classList.add('visible'));
-      setTimeout(() => toastEl.classList.remove('visible'), 3000);
+      toastTimer = setTimeout(() => toastEl.classList.remove('visible'), 3000);
     }
 
     async function restartProcess() {
@@ -805,7 +972,7 @@
         eventSource.close();
       }
 
-      eventSource = new EventSource('/logs?process=' + selectedProcess);
+      eventSource = new EventSource('/logs?process=' + encodeURIComponent(selectedProcess));
 
       eventSource.onopen = () => {
         statusText.textContent = 'Connected';
@@ -857,7 +1024,7 @@
       if (!Array.isArray(history) || history.length === 0) {
         const empty = document.createElement('div');
         empty.style.padding = '1rem';
-        empty.style.color = '#666';
+        empty.style.color = '#9ca3af';
         empty.textContent = 'No fix history yet';
         historyPanel.appendChild(empty);
         return;
@@ -886,14 +1053,22 @@
         item.append(timeEl, processEl, resultEl);
         if (h.staged) {
           const view = document.createElement('button');
+          view.type = 'button';
           view.textContent = 'Review patch';
           view.addEventListener('click', async () => {
             view.disabled = true;
             const res = await apiFetch('/api/fixes/' + encodeURIComponent(h.sessionId)).catch(() => null);
             view.disabled = false;
-            if (!res) return;
+            if (!res) {
+              if (loginOverlay.hidden) view.focus();
+              return;
+            }
             const fix = await res.json();
-            if (!res.ok) { showToast(fix.error || 'Unable to load patch', 'error'); return; }
+            if (!res.ok) {
+              showToast(fix.error || 'Unable to load patch', 'error');
+              view.focus();
+              return;
+            }
             view.remove();
             const diff = document.createElement('pre');
             diff.textContent = fix.patch;
@@ -902,21 +1077,33 @@
             const controls = [];
             for (const action of ['apply', 'discard']) {
               const button = document.createElement('button');
+              button.type = 'button';
               button.textContent = action === 'apply' ? 'Apply and restart' : 'Discard';
               controls.push(button);
               button.addEventListener('click', async () => {
                 controls.forEach(control => { control.disabled = true; });
                 const result = await apiFetch('/api/fixes/' + encodeURIComponent(h.sessionId) + '/' + action, { method: 'POST' }).catch(() => null);
                 controls.forEach(control => { control.disabled = false; });
-                if (!result) { showToast('Action failed — check connection', 'error'); return; }
+                if (!result) {
+                  showToast('Action failed — check connection', 'error');
+                  if (loginOverlay.hidden) button.focus();
+                  return;
+                }
                 const body = await result.json();
-                if (!result.ok) { showToast(body.error || 'Action failed', 'error'); return; }
+                if (!result.ok) {
+                  showToast(body.error || 'Action failed', 'error');
+                  button.focus();
+                  return;
+                }
                 resultEl.textContent = body.disposition === 'applied' ? 'Applied and restarted' : 'Discarded';
                 controls.forEach(control => control.remove());
+                resultEl.setAttribute('tabindex', '-1');
+                resultEl.focus();
                 if (body.disposition === 'applied') fetchStatus();
               });
               item.appendChild(button);
             }
+            controls[0]?.focus();
           });
           item.appendChild(view);
         }
@@ -933,6 +1120,7 @@
     pauseBtn.addEventListener('click', () => {
       isPaused = !isPaused;
       pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      pauseBtn.setAttribute('aria-pressed', String(isPaused));
       pauseBtn.classList.toggle('pause-active', isPaused);
     });
 
@@ -944,21 +1132,34 @@
       autoScroll = isAtBottom;
     });
 
-    logsTab.addEventListener('click', (e) => {
-      e.preventDefault();
-      logsTab.classList.add('active');
-      historyTab.classList.remove('active');
-      logsContainer.style.display = 'block';
-      historyPanel.classList.remove('active');
-    });
+    function activateTab(tab) {
+      const isLogs = tab === logsTab;
+      logsTab.classList.toggle('active', isLogs);
+      historyTab.classList.toggle('active', !isLogs);
+      logsTab.setAttribute('aria-selected', String(isLogs));
+      historyTab.setAttribute('aria-selected', String(!isLogs));
+      logsTab.setAttribute('tabindex', isLogs ? '0' : '-1');
+      historyTab.setAttribute('tabindex', isLogs ? '-1' : '0');
+      logsContainer.hidden = !isLogs;
+      logsContainer.style.display = isLogs ? 'block' : 'none';
+      historyPanel.hidden = isLogs;
+      historyPanel.classList.toggle('active', !isLogs);
+      if (!isLogs) fetchHistory();
+    }
 
-    historyTab.addEventListener('click', (e) => {
-      e.preventDefault();
-      historyTab.classList.add('active');
-      logsTab.classList.remove('active');
-      logsContainer.style.display = 'none';
-      historyPanel.classList.add('active');
-      fetchHistory();
+    const tabs = [logsTab, historyTab];
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activateTab(tab));
+      tab.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return;
+        e.preventDefault();
+        const nextIndex = e.key === 'Home' ? 0
+          : e.key === 'End' ? tabs.length - 1
+          : (index + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        const nextTab = tabs[nextIndex];
+        activateTab(nextTab);
+        nextTab.focus();
+      });
     });
 
     // Set dynamic PortOS Dashboard link
@@ -972,7 +1173,7 @@
     }
 
     start();
-    setInterval(() => { if (!loginOverlay.classList.contains('visible')) fetchStatus(); }, 10000);
+    setInterval(() => { if (loginOverlay.hidden && !loginOverlay.classList.contains('visible')) fetchStatus(); }, 10000);
   </script>
 </body>
 </html>

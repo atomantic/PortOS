@@ -1,6 +1,6 @@
 {
   "name": "portos",
-  "version": "2.127.0",
+  "version": "2.128.0",
   "private": true,
   "description": "Local dev machine App OS portal",
   "author": "Adam Eivy (@antic|@atomantic)",
@@ -51,6 +51,7 @@
     "reset:password": "node scripts/reset-password.js",
     "update": "node scripts/deferred-update.mjs",
     "test": "npm test --prefix server && npm test --prefix client",
+    "test:fast": "npm run test:fast --prefix server && npm test --prefix client",
     "pregate": "exec node scripts/pregate.js",
     "quality:complexity": "node server/scripts/complexity-report.js",
     "quality:snapshot": "node scripts/publish-quality-snapshot.js",

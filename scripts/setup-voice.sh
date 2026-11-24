@@ -112,14 +112,52 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
       ;;
   esac
 
+  # Download $1 (archive name under release URL $2), verify its pinned sha256 BEFORE any
+  # extraction, then extract into a fresh staging dir left in STAGED_EXTRACT. Nothing under
+  # PIPER_DIR is touched until the caller promotes the verified, fully extracted tree.
+  fetch_verified_archive() {
+    local archive="$1" url="$2"
+    download_staged "$url" "${VOICE_HOME}/${archive}"
+    if ! asset verify-archive "$archive" "$STAGED_TMP"; then
+      echo "❌ ${archive} failed SHA-256 verification — refusing to extract" >&2
+      exit 1
+    fi
+    STAGED_EXTRACT="$(mktemp -d "${VOICE_HOME}/.piper-stage.XXXXXX")"
+    STAGED_DIRS+=("$STAGED_EXTRACT")
+    tar xzf "$STAGED_TMP" -C "$STAGED_EXTRACT"
+  }
+
+  # Atomically replace $2 with the staged $1. The previous tree is renamed aside (and removed
+  # on exit) so a failed promotion restores it instead of leaving a half-installed directory.
+  promote_dir() {
+    local src="$1" dest="$2" old=""
+    if [[ -e "$dest" ]]; then
+      old="$(mktemp -u "${dest}.old.XXXXXX")"
+      mv "$dest" "$old"
+      STAGED_DIRS+=("$old")
+    fi
+    if ! mv "$src" "$dest"; then
+      if [[ -n "$old" ]]; then mv "$old" "$dest"; fi
+      exit 1
+    fi
+  }
+
   if [[ ! -x "${PIPER_DIR}/piper" ]]; then
     PIPER_VERSION="2023.11.14-2"
     TAR="piper_${OS}_${ARCH}.tar.gz"
     URL="https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${TAR}"
     echo "⬇️  Piper TTS → ${PIPER_DIR}/"
-    mkdir -p "${PIPER_DIR}"
-    curl --fail --location --progress-bar "$URL" | tar xz -C "${VOICE_HOME}"
-    chmod +x "${PIPER_DIR}/piper" 2>/dev/null || true
+    fetch_verified_archive "$TAR" "$URL"
+    if [[ ! -f "${STAGED_EXTRACT}/piper/piper" ]]; then
+      echo "❌ ${TAR} did not contain piper/piper" >&2
+      exit 1
+    fi
+    chmod +x "${STAGED_EXTRACT}/piper/piper"
+    # Keep already-installed companion libs when only the binary is being repaired.
+    if [[ -d "$PIPER_LIB" && ! -e "${STAGED_EXTRACT}/piper/lib" ]]; then
+      cp -R "$PIPER_LIB" "${STAGED_EXTRACT}/piper/lib"
+    fi
+    promote_dir "${STAGED_EXTRACT}/piper" "$PIPER_DIR"
   fi
 
   # Companion dylibs (espeak-ng, piper_phonemize, onnxruntime) from piper-phonemize
@@ -128,25 +166,30 @@ if [[ "$TTS_ENGINE" == "piper" ]]; then
     PTTAR="piper-phonemize_${OS}_${ARCH}.tar.gz"
     PTURL="https://github.com/rhasspy/piper-phonemize/releases/download/${PHONEMIZE_VERSION}/${PTTAR}"
     echo "⬇️  Piper libs → ${PIPER_LIB}/"
-    TMPDIR_PT="$(mktemp -d)"
-    STAGED_DIRS+=("$TMPDIR_PT")
-    curl --fail --location --progress-bar "$PTURL" | tar xz -C "$TMPDIR_PT"
-    mkdir -p "${PIPER_LIB}"
+    fetch_verified_archive "$PTTAR" "$PTURL"
+    LIB_STAGE="$(mktemp -d "${VOICE_HOME}/.piper-lib.XXXXXX")"
+    STAGED_DIRS+=("$LIB_STAGE")
     # Copy whichever extension is present; let one pattern miss without aborting.
-    cp "$TMPDIR_PT"/piper-phonemize/lib/*.dylib "${PIPER_LIB}/" 2>/dev/null || true
-    cp "$TMPDIR_PT"/piper-phonemize/lib/*.so "${PIPER_LIB}/" 2>/dev/null || true
+    cp "$STAGED_EXTRACT"/piper-phonemize/lib/*.dylib "$LIB_STAGE/" 2>/dev/null || true
+    cp "$STAGED_EXTRACT"/piper-phonemize/lib/*.so* "$LIB_STAGE/" 2>/dev/null || true
+    if [[ -z "$(ls -A "$LIB_STAGE")" ]]; then
+      echo "❌ ${PTTAR} contained no shared libraries" >&2
+      exit 1
+    fi
+    mkdir -p "${PIPER_DIR}"
+    promote_dir "$LIB_STAGE" "$PIPER_LIB"
   fi
 fi
 
 # Whisper model (GGUF) — only when whisper engine is active.
 ensure_whisper_model() {
   local path="${MODELS_DIR}/${MODEL_NAME}"
-  local url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}"
-  local state want have
+  local url state want have
   state="$(asset state whisper "$path")"
   if [[ "$state" == "verified" ]]; then
     return 0
   fi
+  url="$(asset url whisper "$MODEL_NAME")"
   if [[ "$state" == "unverified" ]]; then
     # Installed before completion receipts (or user-supplied). A partial transfer
     # looks identical to a complete file here, so compare against the remote
@@ -166,6 +209,10 @@ ensure_whisper_model() {
   fi
   echo "⬇️  Whisper model → ${path}"
   download_staged "$url" "$path"
+  if ! asset verify-model "$MODEL_NAME" "$STAGED_TMP"; then
+    echo "❌ ${MODEL_NAME} failed SHA-256 verification — refusing to promote" >&2
+    exit 1
+  fi
   mv -f "$STAGED_TMP" "$path"
   asset receipt whisper "$path"
 }
@@ -178,12 +225,16 @@ fi
 # automatically when present.
 if [[ "$STT_ENGINE" == "whisper" && "$INSTALL_COREML" == "1" ]] && is_macos; then
   ENCODER_BASE="${MODEL_NAME%.bin}"
+  ENCODER_ZIP="${ENCODER_BASE}-encoder.mlmodelc.zip"
   ENCODER_DIR="${MODELS_DIR}/${ENCODER_BASE}-encoder.mlmodelc"
   if [[ ! -d "${ENCODER_DIR}" ]]; then
+    ENCODER_URL="$(asset url whisper "$ENCODER_ZIP")"
     echo "⬇️  CoreML encoder → ${ENCODER_DIR}"
-    download_staged \
-      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${ENCODER_BASE}-encoder.mlmodelc.zip" \
-      "${ENCODER_DIR}.zip"
+    download_staged "$ENCODER_URL" "${ENCODER_DIR}.zip"
+    if ! asset verify-model "$ENCODER_ZIP" "$STAGED_TMP"; then
+      echo "❌ ${ENCODER_ZIP} failed SHA-256 verification — refusing to extract" >&2
+      exit 1
+    fi
     # Extract beside the final path, then rename: the `-d` gate above must only
     # ever see a complete directory, never a half-extracted one.
     COREML_STAGE="$(mktemp -d "${MODELS_DIR}/.coreml.XXXXXX")"
@@ -204,7 +255,7 @@ fi
 ONNX_PATH="${VOICES_DIR}/${VOICE_NAME}.onnx"
 JSON_PATH="${VOICES_DIR}/${VOICE_NAME}.onnx.json"
 ensure_piper_voice() {
-  local state locale lang_ rest speaker quality base onnx_tmp json_tmp
+  local state base onnx_tmp json_tmp
   state="$(asset state piper "$ONNX_PATH")"
   if [[ "$state" == "verified" ]]; then
     return 0
@@ -216,15 +267,14 @@ ensure_piper_voice() {
     asset receipt piper "$ONNX_PATH"
     return 0
   fi
-  locale="${VOICE_NAME%%-*}"       # en_US
-  lang_="${locale%%_*}"            # en
-  rest="${VOICE_NAME#*-}"          # ryan-high
-  speaker="${rest%-*}"             # ryan
-  quality="${rest##*-}"            # high
-  base="https://huggingface.co/rhasspy/piper-voices/resolve/main/${lang_}/${locale}/${speaker}/${quality}"
+  base="$(asset url piper "$VOICE_NAME")"
   echo "⬇️  Piper voice → ${ONNX_PATH}"
   download_staged "${base}/${VOICE_NAME}.onnx" "$ONNX_PATH"
   onnx_tmp="$STAGED_TMP"
+  if ! asset verify-model "${VOICE_NAME}.onnx" "$onnx_tmp"; then
+    echo "❌ ${VOICE_NAME}.onnx failed SHA-256 verification — refusing to promote" >&2
+    exit 1
+  fi
   download_staged "${base}/${VOICE_NAME}.onnx.json" "$JSON_PATH"
   json_tmp="$STAGED_TMP"
   if ! asset check-config "$json_tmp"; then

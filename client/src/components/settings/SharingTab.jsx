@@ -8,6 +8,7 @@ import useListResource from '../../hooks/useListResource';
 import { getAuthStatus } from '../../services/apiAuth.js';
 import { getMediaShareCandidates, getSettings, updateSettings } from '../../services/apiSystem.js';
 import { listMusicEngines } from '../../services/apiMusic.js';
+import { failureMessage } from '../messages/failureMessage';
 
 // Engine health probes may spawn local Python checks on a cold cache, so this
 // loads independently of the sharing controls.
@@ -124,7 +125,7 @@ export function SharingTab() {
         setProviderSettings(provider);
         loadProvider({ enabled, maxQueuedJobs, models, visualModels: visual });
       })
-      .catch(() => toast.error('Failed to load settings'))
+.catch((err) => toast.error(failureMessage('Could not load sharing settings', err, 'Reload the page to retry.')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -144,10 +145,11 @@ export function SharingTab() {
   const handleStrictPullToggle = async (next) => {
     setStrictPullSaving(true);
     // Same reachability precheck as the provider save below.
-    const fresh = await getSettings({ silent: true }).catch(() => null);
+    let readFailure = null;
+    const fresh = await getSettings({ silent: true }).catch((err) => { readFailure = err; return null; });
     if (fresh === null) {
       setStrictPullSaving(false);
-      toast.error('Could not read current settings — not saved');
+      toast.error(failureMessage('Could not read current settings — not saved', readFailure));
       return;
     }
     const merged = await updateSettings({ federation: { strictPullAuthorization: next } }).catch(() => null);
@@ -220,16 +222,18 @@ export function SharingTab() {
     // The read stays as a reachability precheck: without it an unreachable
     // server would surface only as a generic save failure, and the user would
     // not know their earlier edits were never loaded. A failed read aborts.
-    const fresh = await getSettings({ silent: true }).catch(() => null);
+    let readFailure = null;
+    const fresh = await getSettings({ silent: true }).catch((err) => { readFailure = err; return null; });
     if (fresh === null) {
       setProviderSaving(false);
-      toast.error('Could not read current settings — provider not saved');
+      toast.error(failureMessage('Could not read current settings — provider not saved', readFailure));
       return;
     }
-    const merged = await updateSettings({ federation: { mediaProvider } }, { silent: true }).catch(() => null);
+    let failure = null;
+    const merged = await updateSettings({ federation: { mediaProvider } }, { silent: true }).catch((err) => { failure = err; return null; });
     setProviderSaving(false);
     if (!merged) {
-      toast.error('Failed to save media provider settings');
+      toast.error(failureMessage('Could not save media provider settings', failure));
       return;
     }
     setProviderSettings(mediaProvider);
@@ -300,10 +304,11 @@ export function SharingTab() {
           <h3 className="text-lg font-semibold text-white">Federation pull authorization</h3>
         </div>
         <p className="text-sm text-gray-400 mb-4">
-          Peers that pull records from this instance are identified by the instance id they send.
-          By default a pull that your per-peer sharing settings would deny is still served, and logs a
-          warning once per peer per restart — so peers running an older PortOS keep syncing.
-          Turn this on to reject those pulls with a 403 instead. This default flips in a future release.
+          Paired peers are identified by their verified peer credential (unpaired peers fall back
+          to the instance id they send). Personal and sensitive categories (Brain, Memory, Digital
+          Twin, MeatSpace, and Character) are always refused with 403 when disallowed. Turning this
+          on also rejects disallowed pulls on legacy non-PII categories (such as Catalog and other
+          older sync feeds) with a 403 instead of serving them with a once-per-peer-per-restart warning.
         </p>
         <label htmlFor="federation-strict-pull" className="flex items-start gap-3 cursor-pointer">
           <input
@@ -330,8 +335,9 @@ export function SharingTab() {
           Let registered PortOS peers submit allowlisted audio, image, and video renders to this
           machine&apos;s durable media queue. Only models you allowlist below can be requested.
           Capability status never carries prompts or job details, and completed downloads include a
-          SHA-256 integrity hash. An image or video peer sends the prompt it wants rendered; an audio
-          peer can only send a fixed musical profile, never free text or lyrics.
+          SHA-256 integrity hash. An image or video peer sends its prompt; an audio peer sends a
+          fixed musical profile (never a free-form style prompt) plus song lyrics when targeting a
+          lyric-capable model.
         </p>
 
         {!authEnabled && (

@@ -76,3 +76,61 @@ describe('createModuleGraph', () => {
     expect(graph.closure([runner], graph.testDependencies)).toEqual(['scripts/migrations/001-first.js', runner]);
   });
 });
+
+describe('suiteClosure', () => {
+  const tree = {
+    'svc/subject.js': "import { hub } from './hub.js';\nexport const run = () => hub();\n",
+    'svc/hub.js': "import './deep.js';\nexport const hub = () => import('./lazy.js');\n",
+    'svc/deep.js': 'export {};\n',
+    'svc/lazy.js': 'export {};\n',
+    'svc/other.js': 'export {};\n',
+  };
+  const closureOf = (test, extra = {}) => graphOf({ ...tree, ...extra, 'svc/subject.test.js': test }).suiteClosure('svc/subject.test.js');
+  const SUBJECT = "import './subject.js';\n";
+  const PRUNED = ['svc/hub.js', 'svc/subject.js', 'svc/subject.test.js'];
+  const FULL = ['svc/deep.js', 'svc/hub.js', 'svc/lazy.js', 'svc/subject.js', 'svc/subject.test.js'];
+
+  it('stops at a module the suite replaces with a sealed factory and keeps that module', () => {
+    expect(closureOf(SUBJECT)).toEqual(FULL);
+    expect(closureOf(`vi.mock('./hub.js', () => ({ hub: vi.fn() }));\n${SUBJECT}`)).toEqual(PRUNED);
+    expect(closureOf(`vi.mock('./hub.js', async () => ({ hub: vi.fn() }));\n${SUBJECT}`)).toEqual(PRUNED);
+  });
+
+  it('keeps a pruned subtree another edge reaches', () => {
+    expect(closureOf(`vi.mock('./hub.js', () => ({}));\nawait import('./deep.js');\n${SUBJECT}`)).toEqual(['svc/deep.js', ...PRUNED]);
+  });
+
+  it.each([
+    ['an automock', "vi.mock('./hub.js');"],
+    ['a spy mock', "vi.mock('./hub.js', { spy: true });"],
+    ['a factory that receives importOriginal', "vi.mock('./hub.js', async (importOriginal) => ({ ...await importOriginal() }));"],
+    ['a factory passed by name', "vi.mock('./hub.js', factory);"],
+    ['a doMock, which is not hoisted', "vi.doMock('./hub.js', () => ({}));"],
+    ['an importActual', "vi.mock('./hub.js', () => ({}));\nawait vi.importActual('./hub.js');"],
+    ['a later unmock', "vi.mock('./hub.js', () => ({}));\nvi.doUnmock('./hub.js');"],
+    ['an importActual of a computed path', "vi.mock('./hub.js', () => ({}));\nawait vi.importActual(path);"],
+    ['a destructured importActual', "vi.mock('./hub.js', () => ({}));\nconst { importActual } = vi;"],
+    ['a computed mock target', "vi.mock('./hub.js', () => ({}));\nvi.mock(path, factory);"],
+    ['a query that names the real module', "vi.mock('./hub.js', () => ({}));\nawait import('./hub.js?real');"],
+  ])('walks the full subtree past %s', (_label, mocks) => {
+    expect(closureOf(`${mocks}\n${SUBJECT}`)).toEqual(FULL);
+  });
+
+  it('walks the full subtree when a fixture in the closure loads the module behind the mock', () => {
+    const extra = { 'svc/fixture.js': "export const actual = () => vi.importActual('./hub.js');\n" };
+    expect(closureOf(`vi.mock('./hub.js', () => ({}));\nimport './fixture.js';\n${SUBJECT}`, extra)).toEqual(['svc/deep.js', 'svc/fixture.js', ...FULL.slice(1)]);
+  });
+
+  it('follows a module only importActual names', () => {
+    expect(closureOf("await vi.importActual('./other.js');\n")).toEqual(['svc/other.js', 'svc/subject.test.js']);
+  });
+
+  it('ignores a mock whose target does not resolve and fails closed on an unresolved edge', () => {
+    expect(closureOf(`vi.mock('./gone.js', () => ({}));\n${SUBJECT}`)).toEqual(FULL);
+    expect(closureOf(`vi.mock('./hub.js', () => ({}));\nimport './gone.js';\n${SUBJECT}`)).toBeNull();
+    // Uncertainty behind the mock is uncertainty the suite cannot reach.
+    const computed = { 'svc/deep.js': 'export const load = (name) => import(name);\n' };
+    expect(closureOf(SUBJECT, computed)).toBeNull();
+    expect(closureOf(`vi.mock('./hub.js', () => ({}));\n${SUBJECT}`, computed)).toEqual(PRUNED);
+  });
+});

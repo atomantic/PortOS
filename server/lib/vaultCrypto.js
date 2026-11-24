@@ -148,11 +148,12 @@ async function provisionVaultKey(envPath) {
   const cleaned = content.replace(/^PRIVACY_VAULT_KEY=.*(\r?\n|$)/gm, '');
   const separator = cleaned && !cleaned.endsWith('\n') ? '\n' : '';
   await atomicWrite(envPath, `${cleaned}${separator}PRIVACY_VAULT_KEY=${key}\n`);
-  // A brand-new .env holding a key that decrypts every vault record must not
-  // be world-readable (atomicWrite gives new files the umask default, commonly
-  // 0644). An EXISTING .env keeps whatever mode the user chose — atomicWrite
-  // already preserves it, and silently re-chmodding a user's file is worse.
-  if (existing === null) await chmod(envPath, 0o600);
+  // Enforce owner-only permissions whenever writing PRIVACY_VAULT_KEY (including
+  // existing .env files created earlier with umask default 0644) so the vault
+  // master key is never left world-readable.
+  await chmod(envPath, 0o600).catch((err) => {
+    if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on .env (${err?.code || 'error'})`);
+  });
   process.env.PRIVACY_VAULT_KEY = key;
   console.log('🔐 Generated PRIVACY_VAULT_KEY and wrote it to .env (vault encryption engaged)');
   return { generated: true };

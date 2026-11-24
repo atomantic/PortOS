@@ -31,9 +31,10 @@ import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
 import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
-import { isRepo } from '../../services/git.js';
+import { isRepo } from '../../services/git/status.js';
 import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
+import { EIDOVERSE_PROCESS_NAME } from '../../lib/eidoversePort.js';
 import { appSchema, appUpdateSchema } from '../../lib/appValidation.js';
 
 const router = Router();
@@ -86,8 +87,10 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const apps = await Promise.all((await enrichAppsWithPm2Status(rawApps)).map(withGitRepoFlag));
   if (view === 'probe') {
-    res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type }) => ({
-      id, name, icon, overallStatus, uiPort, apiPort, type,
+    res.json(apps.map(({ id, name, icon, overallStatus, uiPort, apiPort, type, pm2ProcessNames }) => ({
+      // A null uiPort keeps peers from linking to a port only this machine can reach.
+      id, name, icon, overallStatus, apiPort, type,
+      uiPort: pm2ProcessNames?.includes(EIDOVERSE_PROCESS_NAME) ? null : uiPort,
     })));
     return;
   }

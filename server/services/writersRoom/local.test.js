@@ -6,6 +6,7 @@ import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
 let beforeWorkWrite = async () => {};
+let beforeBodylessWrite = async () => {};
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
@@ -18,17 +19,27 @@ vi.mock('./store.js', async (importOriginal) => {
     ...actual,
     writersRoomStore: () => {
       const real = actual.writersRoomStore();
-      return { ...real, writeWork: async (manifest) => { await beforeWorkWrite(manifest); return real.writeWork(manifest); } };
+      return {
+        ...real,
+        writeWork: async (manifest) => { await beforeWorkWrite(manifest); return real.writeWork(manifest); },
+        writeFolder: async (folder) => { await beforeBodylessWrite(); return real.writeFolder(folder); },
+        deleteFolder: async (id) => { await beforeBodylessWrite(); return real.deleteFolder(id); },
+        writeExercise: async (exercise) => { await beforeBodylessWrite(); return real.writeExercise(exercise); },
+      };
     },
   };
 });
 
 const local = await import('./local.js');
+const sync = await import('./sync.js');
+const { wrWorkDir } = await import('./_shared.js');
+const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
+const { __resetBaseHashCacheForTests, conflictJournalStore } = await import('../../lib/conflictJournal.js');
 const {
   countWords, contentHash, buildSegmentIndex,
   listFolders, createFolder, deleteFolder,
   listWorks, countWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
-  saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
+  saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody, ERR_DRAFT_CONFLICT,
   listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
   renderWorkVoiceGuide,
@@ -37,7 +48,9 @@ const {
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-test-'));
+  __resetBaseHashCacheForTests();
   beforeWorkWrite = async () => {};
+  beforeBodylessWrite = async () => {};
 });
 
 afterEach(() => {
@@ -345,6 +358,54 @@ describe('draft body and versioning', () => {
     expect(await getDraftBody(work.id, v1Id)).toBe('V1 text.');
     expect(await getDraftBody(work.id, v2Id)).toBe('V2 text.');
     expect(await getDraftBody(work.id, v3Id)).toBe('V3 text.');
+  });
+
+  it('saveDraftBody accepts matching expectedContentHash and rejects stale hashes with 409 DRAFT_CONFLICT', async () => {
+    const work = await createWork({ title: 'CAS Draft' });
+    const draftId = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Initial prose.');
+
+    // Matching hash succeeds.
+    const { manifest } = await saveDraftBody(work.id, 'Updated prose.', {
+      draftId,
+      expectedContentHash: contentHash('Initial prose.'),
+    });
+    expect(manifest.drafts[0].contentHash).toBe(contentHash('Updated prose.'));
+    expect(await getDraftBody(work.id, draftId)).toBe('Updated prose.');
+
+    // Stale hash is rejected with 409 DRAFT_CONFLICT and leaves disk + manifest intact.
+    await expect(saveDraftBody(work.id, 'Clobber attempt.', {
+      draftId,
+      expectedContentHash: contentHash('Initial prose.'),
+    })).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    // Explicit null/empty hash fails closed rather than bypassing the check.
+    await expect(saveDraftBody(work.id, 'Clobber attempt.', {
+      draftId,
+      expectedContentHash: null,
+    })).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    expect(await getDraftBody(work.id, draftId)).toBe('Updated prose.');
+    expect((await getWork(work.id)).drafts[0].contentHash).toBe(contentHash('Updated prose.'));
+  });
+
+  it('saveDraftBody with draftId writes only to that version even after active draft switches', async () => {
+    const work = await createWork({ title: 'Pinned Draft' });
+    const d1 = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Draft 1 prose.');
+    const snapped = await snapshotDraft(work.id, { label: 'Draft 2' });
+    const d2 = snapped.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Draft 2 prose.');
+
+    await saveDraftBody(work.id, 'Draft 1 revised.', {
+      draftId: d1,
+      expectedContentHash: contentHash('Draft 1 prose.'),
+    });
+
+    const latest = await getWork(work.id);
+    expect(latest.activeDraftVersionId).toBe(d2);
+    expect(await getDraftBody(work.id, d1)).toBe('Draft 1 revised.');
+    expect(await getDraftBody(work.id, d2)).toBe('Draft 2 prose.');
   });
 });
 
@@ -775,4 +836,155 @@ describe('per-work mutation serialization', () => {
     await expect(getWork(work.id)).rejects.toThrow(/not found/i);
   });
 
+  it('verifies expectedContentHash inside queueWorkWrite against an in-flight overlapping save', async () => {
+    const work = await createWork({ title: 'Concurrent CAS' });
+    const d1 = work.activeDraftVersionId;
+    await saveDraftBody(work.id, 'Baseline prose.');
+
+    await expect(overlap(
+      work.id,
+      () => saveDraftBody(work.id, 'Author manual edit.'),
+      () => [saveDraftBody(work.id, 'Stale async write.', {
+        draftId: d1,
+        expectedContentHash: contentHash('Baseline prose.'),
+      })],
+    )).rejects.toMatchObject({ status: 409, code: ERR_DRAFT_CONFLICT });
+
+    expect(await getDraftBody(work.id, d1)).toBe('Author manual edit.');
+    expect((await getWork(work.id)).drafts[0].contentHash).toBe(contentHash('Author manual edit.'));
+  });
+
+});
+
+// A peer push lands while a local mutator is paused between its read and its
+// write. Without the shared queues the resumed mutator writes its stale snapshot
+// over the merge.
+describe('local mutations against peer sync', () => {
+  const future = (ms = 60_000) => new Date(Date.now() + ms).toISOString();
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+  /** Start `local`, hold its store write, deliver `merge`, then let both finish. */
+  async function pushDuring(localWrite, merge) {
+    let entered;
+    const reached = new Promise((resolve) => { entered = resolve; });
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const pause = async () => {
+      beforeWorkWrite = async () => {};
+      beforeBodylessWrite = async () => {};
+      entered();
+      await held;
+    };
+    beforeWorkWrite = pause;
+    beforeBodylessWrite = pause;
+    const pending = localWrite();
+    await reached;
+    const merged = merge();
+    await settle();
+    release();
+    return Promise.all([pending, merged]);
+  }
+
+  const withPeerDraft = (work, extra = {}) => ({
+    ...work,
+    drafts: [...work.drafts, {
+      id: 'wr-draft-22222222-2222-2222-2222-222222222222', label: 'Draft 2',
+      contentFile: 'drafts/wr-draft-22222222-2222-2222-2222-222222222222.md',
+      contentHash: contentHash('peer prose'), wordCount: 2, segmentIndex: [],
+      createdAt: new Date().toISOString(), createdFromVersionId: work.activeDraftVersionId,
+    }],
+    updatedAt: future(),
+    ...extra,
+  });
+
+  it('keeps a newer peer draft version and journals the local save it replaced', async () => {
+    const work = await createWork({ title: 'Shared work' });
+    await sync.mergeWorksFromSync([{ ...work, title: 'Synced work', updatedAt: future(1) }]);
+    const baseline = await getWork(work.id);
+    const peer = withPeerDraft(baseline);
+    const [, merged] = await pushDuring(
+      () => saveDraftBody(work.id, 'Local prose'),
+      () => sync.mergeWorksFromSync([peer], { source: { via: 'peer-sync', peerId: 'peer-a' } }),
+    );
+    expect(merged).toEqual({ applied: true, count: 1 });
+    const stored = await getWork(work.id);
+    expect(stored.drafts.map((d) => d.label)).toEqual(['Draft 1', 'Draft 2']);
+    expect(stored.updatedAt).toBe(peer.updatedAt);
+    // The local prose survives on disk, and the manifest it replaced is journaled.
+    expect(await getDraftBody(work.id, work.activeDraftVersionId)).toBe('Local prose');
+    const journal = await conflictJournalStore().loadAll();
+    expect(JSON.stringify(journal)).toContain(contentHash('Local prose'));
+  });
+
+  it('keeps the usage bump and the peer draft without moving updatedAt backward', async () => {
+    const work = await createWork({ title: 'Usage' });
+    const peer = withPeerDraft(work);
+    await pushDuring(() => recordLiveModeUsage(work.id), () => sync.mergeWorksFromSync([peer]));
+    const stored = await getWork(work.id);
+    expect(stored.drafts).toHaveLength(2);
+    expect(stored.updatedAt).toBe(peer.updatedAt);
+    expect(resolveLiveMode(stored).usage.count).toBe(1);
+  });
+
+  it('does not resurrect a work tombstoned by a peer', async () => {
+    const work = await createWork({ title: 'Deleted by a peer' });
+    const at = future();
+    await pushDuring(
+      () => saveDraftBody(work.id, 'Late local prose'),
+      () => sync.mergeWorksFromSync([{ ...work, deleted: true, deletedAt: at, updatedAt: at }]),
+    );
+    await expect(getWork(work.id)).rejects.toThrow(/not found/i);
+    expect((await sync.getWorkForSync(work.id)).deleted).toBe(true);
+  });
+
+  it('does not prune a tombstone a queued merge revives', async () => {
+    const work = await createWork({ title: 'Revived' });
+    const old = '2020-01-01T00:00:00.000Z';
+    beforeWorkWrite = async () => {};
+    await sync.mergeWorksFromSync([{ ...work, deleted: true, deletedAt: old, updatedAt: future() }]);
+    const results = await Promise.all([
+      sync.mergeWorksFromSync([{ ...work, updatedAt: future(120_000) }]),
+      sync.pruneTombstonedWorks(Date.parse('2021-01-01T00:00:00.000Z')),
+    ]);
+    expect(results[1]).toEqual({ pruned: 0 });
+    expect((await getWork(work.id)).title).toBe('Revived');
+    expect(existsSync(wrWorkDir(work.id))).toBe(true);
+  });
+
+  it('defers pruning while a backup snapshot is open', async () => {
+    const work = await createWork({ title: 'Held' });
+    const old = '2020-01-01T00:00:00.000Z';
+    const cutoff = Date.parse('2021-01-01T00:00:00.000Z');
+    await sync.mergeWorksFromSync([{ ...work, deleted: true, deletedAt: old, updatedAt: future() }]);
+    const release = await acquireBackupSnapshotCut();
+    try {
+      expect(await sync.pruneTombstonedWorks(cutoff)).toEqual({ pruned: 0 });
+      expect(existsSync(wrWorkDir(work.id))).toBe(true);
+    } finally {
+      release();
+    }
+    expect(await sync.pruneTombstonedWorks(cutoff)).toEqual({ pruned: 1 });
+    expect(existsSync(wrWorkDir(work.id))).toBe(false);
+  });
+
+  it.each([
+    ['finishExercise', (id) => finishExercise(id, { endingWords: 5 })],
+    ['discardExercise', (id) => discardExercise(id)],
+    ['restoreExercise', (id) => local.restoreExercise(id, { prompt: 'restored' })],
+  ])('%s does not overwrite a newer peer exercise', async (_name, mutate) => {
+    const exercise = await createExercise({ prompt: 'go' });
+    const peer = { ...exercise, prompt: 'peer prompt', updatedAt: future() };
+    await pushDuring(() => mutate(exercise.id), () => sync.mergeExercisesFromSync([peer]));
+    expect((await sync.getExerciseForSync(exercise.id)).prompt).toBe('peer prompt');
+  });
+
+  it.each([
+    ['restoreFolder', (id) => local.restoreFolder(id, { name: 'restored' })],
+    ['deleteFolder', (id) => deleteFolder(id)],
+  ])('%s does not overwrite a newer peer folder', async (_name, mutate) => {
+    const folder = await createFolder({ name: 'Local' });
+    const peer = { ...folder, name: 'Peer name', updatedAt: future() };
+    await pushDuring(() => mutate(folder.id), () => sync.mergeFoldersFromSync([peer]));
+    expect(await sync.getFolderForSync(folder.id)).toMatchObject({ name: 'Peer name', deleted: false });
+  });
 });

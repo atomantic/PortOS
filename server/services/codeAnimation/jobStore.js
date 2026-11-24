@@ -11,7 +11,7 @@ import { readFile, stat } from 'fs/promises';
 import { join } from 'path';
 import { query } from '../../lib/db.js';
 import { PATHS } from '../../lib/paths.js';
-import { atomicWrite } from '../../lib/fileUtils.js';
+import { atomicWrite } from '../../lib/fileCore.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { toPgJson } from '../../lib/pgJson.js';
 

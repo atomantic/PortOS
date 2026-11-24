@@ -225,7 +225,7 @@ describe('music-video composition documents', () => {
 
   // Reconstruct older shipped bytes from the frozen outgoing fixture, never from today's engine.
   const withoutHandheld = (engine) => engine
-    .replace(/  \/\/ A person holding the camera: PortOS writes[\s\S]*?\n  }\n(?=  \/\/ The rig's camera state)/, '')
+    .replace(/ {2}\/\/ A person holding the camera: PortOS writes[\s\S]*?\n {2}}\n(?= {2}\/\/ The rig's camera state)/, '')
     .replace('handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt)', 'cameraView(scene, seg(t, scene.startSec, scene.endSec))');
 
   it('explicitly upgrades the shipped engine from before the handheld camera additions', async () => {
@@ -386,6 +386,19 @@ describe('music-video composition documents', () => {
       expect([upgraded.status, upgraded.body.changed, upgraded.body.customHelpers]).toEqual([200, true, []]);
       expect((await request(app).get(`${base()}/playback`)).body.native).toBe(true);
       expect((await exportFiles())['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideo/musicVideoImageEffects.js', import.meta.url)));
+    });
+
+    it('replaces the camera rig shipped before #17890', async () => {
+      const files = await stockFiles();
+      const shipped = files['cameraRig.js'];
+      const older = Buffer.from(shipped.toString().replace('Object.hasOwn(PATHS, id)', 'Object.prototype.hasOwnProperty.call(PATHS, id)'));
+      expect(older).not.toEqual(shipped);
+      const directory = await reupload({ ...files, 'cameraRig.js': older });
+      expect((await request(app).get(`${base()}/playback`)).body).toEqual({ native: false, reason: 'custom-helper', file: 'cameraRig.js', upgradable: true });
+      const upgraded = await request(app).post(`${base()}/engine/upgrade`).send({ directory });
+      expect([upgraded.status, upgraded.body.changed, upgraded.body.customHelpers]).toEqual([200, true, []]);
+      expect((await request(app).get(`${base()}/playback`)).body.native).toBe(true);
+      expect((await exportFiles())['cameraRig.js']).toEqual(shipped);
     });
 
     it('names a really customized helper in the update reply and the playback reply, and keeps its bytes', async () => {

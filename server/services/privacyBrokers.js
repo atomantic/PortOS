@@ -469,11 +469,15 @@ const CASE_COLUMNS = `id, subject_id, broker_id, state, found, evidence, disclos
 // `confirmed_removed`, and when the vault record it was derived from is
 // deleted.
 
-export const IDENTITY_EVIDENCE_KEYS = Object.freeze(['matched_name', 'matched_location', 'search_url', 'listing_urls']);
+export const IDENTITY_EVIDENCE_KEYS = Object.freeze(['matched_name', 'matched_location', 'search_url', 'listing_urls', 'verification_url']);
 const SEALED_EVIDENCE_KEY = 'sealed_identity';
 const EVIDENCE_ENVELOPE_VERSION = 1;
 // Every key that must be gone from a row whose identity evidence is erased.
 const ERASABLE_EVIDENCE_KEYS = Object.freeze([...IDENTITY_EVIDENCE_KEYS, SEALED_EVIDENCE_KEY]);
+
+// Legacy rows kept the confirmation link in plaintext at evidence.verification.url.
+// `#-` on a missing path is a no-op, so this is safe on every row.
+const STRIP_VERIFICATION_URL = `(evidence - $1::text[]) #- '{verification,url}'`;
 
 const hasIdentityValue = (v) => (Array.isArray(v) ? v.length > 0 : (v !== undefined && v !== null && v !== ''));
 
@@ -488,7 +492,13 @@ function splitEvidence(evidence) {
   const source = evidence && typeof evidence === 'object' && !Array.isArray(evidence) ? evidence : {};
   for (const [key, value] of Object.entries(source)) {
     if (key === SEALED_EVIDENCE_KEY) continue;
-    if (IDENTITY_EVIDENCE_KEYS.includes(key)) {
+    if (key === 'verification' && value && typeof value === 'object' && !Array.isArray(value)) {
+      // The broker confirmation link carries single-use tokens and often the
+      // user's email/name, so it is sealed; messageId/score stay plain.
+      const { url, ...rest } = value;
+      if (typeof url === 'string' && url) identity.verification_url = url;
+      plain.verification = rest;
+    } else if (IDENTITY_EVIDENCE_KEYS.includes(key)) {
       if (hasIdentityValue(value)) identity[key] = value;
     } else {
       plain[key] = value;
@@ -503,14 +513,18 @@ function splitEvidence(evidence) {
  * replaces the old match); when there are none, `existingEnvelope` is kept so
  * a lifecycle transition that only restates workflow metadata doesn't silently
  * drop the scan's search link. `clearIdentity` drops identity outright.
+ * `mergeExistingIdentity` (lifecycle transitions) layers the new identity keys
+ * over the opened existing envelope instead of replacing it, so adding
+ * `verification_url` keeps the matched name/search/listing links.
  */
-async function prepareEvidenceForStorage(evidence, { existingEnvelope = null, clearIdentity = false } = {}) {
-  const { plain, identity } = splitEvidence(evidence);
+async function prepareEvidenceForStorage(evidence, { existingEnvelope = null, clearIdentity = false, mergeExistingIdentity = false } = {}) {
+  const { plain, identity: fresh } = splitEvidence(evidence);
   if (clearIdentity) return plain;
-  if (Object.keys(identity).length === 0) {
+  if (Object.keys(fresh).length === 0) {
     return existingEnvelope ? { ...plain, [SEALED_EVIDENCE_KEY]: existingEnvelope } : plain;
   }
   await ensureVaultKey();
+  const identity = mergeExistingIdentity && existingEnvelope ? { ...openEvidenceEnvelope(existingEnvelope), ...fresh } : fresh;
   const envelope = {
     v: EVIDENCE_ENVELOPE_VERSION,
     ciphertext: encryptValue(JSON.stringify(identity)),
@@ -542,12 +556,12 @@ let evidenceSealFlight = null;
 async function sealLegacyCaseEvidence() {
   return withTransaction(async (client) => {
     const { rows } = await client.query(
-      `SELECT id, evidence FROM privacy_broker_cases WHERE evidence ?| $1::text[] FOR UPDATE`,
+      `SELECT id, evidence FROM privacy_broker_cases WHERE evidence ?| $1::text[] OR evidence->'verification' ? 'url' FOR UPDATE`,
       [IDENTITY_EVIDENCE_KEYS],
     );
     for (const row of rows) {
       const evidence = parseEvidence(row.evidence);
-      const stored = await prepareEvidenceForStorage(evidence, { existingEnvelope: evidence[SEALED_EVIDENCE_KEY] ?? null });
+      const stored = await prepareEvidenceForStorage(evidence, { existingEnvelope: evidence[SEALED_EVIDENCE_KEY] ?? null, mergeExistingIdentity: true });
       await client.query(`UPDATE privacy_broker_cases SET evidence = $1 WHERE id = $2`, [toPgJson(stored), row.id]);
     }
     if (rows.length) console.log(`🔐 Sealed identity evidence on ${rows.length} legacy broker case(s)`);
@@ -773,7 +787,7 @@ export async function transitionCase(caseId, toState, patch = {}) {
     if (patch.evidence !== undefined || clearIdentity) {
       const stored = parseEvidence(existing.rows[0].evidence);
       add('evidence', toPgJson(await prepareEvidenceForStorage(patch.evidence ?? stored, {
-        existingEnvelope: stored[SEALED_EVIDENCE_KEY] ?? null, clearIdentity,
+        existingEnvelope: stored[SEALED_EVIDENCE_KEY] ?? null, clearIdentity, mergeExistingIdentity: true,
       })));
     }
     params.push(caseId);
@@ -798,7 +812,7 @@ export async function transitionCase(caseId, toState, patch = {}) {
  */
 export async function clearCaseIdentityEvidence(caseId) {
   const { rows } = await query(
-    `UPDATE privacy_broker_cases SET evidence = evidence - $1::text[], updated_at = NOW()
+    `UPDATE privacy_broker_cases SET evidence = ${STRIP_VERIFICATION_URL}, updated_at = NOW()
      WHERE id = $2 RETURNING ${CASE_COLUMNS}`,
     [ERASABLE_EVIDENCE_KEYS, caseId],
   );
@@ -819,8 +833,8 @@ export async function clearCaseIdentityEvidence(caseId) {
 export async function clearSubjectIdentityEvidence(subjectId, { client = null } = {}) {
   const run = client ? (sql, params) => client.query(sql, params) : query;
   const { rowCount } = await run(
-    `UPDATE privacy_broker_cases SET evidence = evidence - $1::text[], updated_at = NOW()
-     WHERE subject_id = $2 AND evidence ?| $1::text[]`,
+    `UPDATE privacy_broker_cases SET evidence = ${STRIP_VERIFICATION_URL}, updated_at = NOW()
+     WHERE subject_id = $2 AND (evidence ?| $1::text[] OR evidence->'verification' ? 'url')`,
     [ERASABLE_EVIDENCE_KEYS, resolveSubjectId(subjectId)],
   );
   if (rowCount) console.log(`🗑️ Erased identity evidence on ${rowCount} broker case(s) (subject=${resolveSubjectId(subjectId)})`);

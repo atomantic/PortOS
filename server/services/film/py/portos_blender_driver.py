@@ -114,6 +114,10 @@ def workspace_imports(src):
             inside = False
         if path.endswith(".py") and inside:
             paths.add(os.path.relpath(path, root).replace(os.sep, "/"))
+    # Models a shot loaded with portos_film.models (binary files, not modules).
+    models = sys.modules.get("portos_film.models")
+    if models is not None:
+        paths.update(models.loaded())
     return sorted(paths)
 
 
@@ -280,6 +284,9 @@ def render_shot(job, film, song, shot):
     # same exact grid as frame / fps, or shot-relative stepped poses can lag.
     shot = {**shot, "start": first / fps, "end": end / fps}
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    models = sys.modules.get("portos_film.models")
+    if models is not None:
+        models.reset()
     scene = bpy.context.scene
     ctx = make_context(job, song, "preview" if quality == "sheet" else quality, shot)
     scene.render.engine = ctx.engine

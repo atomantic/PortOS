@@ -437,7 +437,7 @@ const nodes = CUES.map((cue) => {
   rest.className = 'rest';
   const words = [];
   if (cue.template === 'build') {
-    const tokens = cue.words && cue.words.length ? cue.words.map((w) => w.w) : cue.text.split(/\s+/).filter(Boolean);
+    const tokens = cue.words && cue.words.length ? cue.words.map((w) => w.w) : cue.text.split(/\\s+/).filter(Boolean);
     tokens.forEach((token, i) => {
       const span = document.createElement('span');
       span.className = 'word';

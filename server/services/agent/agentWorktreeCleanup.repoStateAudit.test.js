@@ -22,17 +22,30 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../git.js', () => ({
+vi.mock('../git/status.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
-  resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
-  parsePullRequestUrl: vi.fn().mockReturnValue(null),
-  deleteBranch: vi.fn(),
+}));
+vi.mock('../git/sync.js', () => ({
   push: vi.fn(),
+}));
+vi.mock('../git/prs.js', () => ({
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
   suggestPRTitle: vi.fn(),
   requestCopilotReview: vi.fn(),
+}));
+vi.mock('../git/cleanup.js', () => ({
+  deleteBranch: vi.fn(),
+}));
+vi.mock('../git/branchEvidence.js', () => ({
   hasBranchMergeEvidence: vi.fn().mockResolvedValue(true),
+}));
+vi.mock('../forgeAuth.js', () => ({
+  resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
+}));
+vi.mock('../../lib/gitForge.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  parsePullRequestUrl: vi.fn().mockReturnValue(null),
 }));
 vi.mock('../worktreeManager.js', () => ({
   removeWorktree: vi.fn().mockResolvedValue({ removed: true, warnings: [] }),

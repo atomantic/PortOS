@@ -15,6 +15,13 @@ const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
 const pendingGuardCheck = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => pendingGuardCheck(...args) }));
 vi.mock('../cos/cos.js', () => ({}));
+const resolveClaimForge = vi.hoisted(() => vi.fn());
+const checkInboxClaim = vi.hoisted(() => vi.fn());
+vi.mock('../appIssues.js', () => ({ prepareAppIssueClaim: (...args) => checkInboxClaim(...args) }));
+vi.mock('../../lib/workTracker.js', async (load) => ({
+  ...await load(),
+  resolveAppForgeTarget: (...args) => resolveClaimForge(...args),
+}));
 vi.mock('../cos/cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../../lib/execGit.js', () => ({
@@ -28,12 +35,14 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../apps.js', () => ({ getAppById: vi.fn().mockResolvedValue(null) }));
-vi.mock('../git.js', () => ({
-  ensureLatest: vi.fn(),
+vi.mock('../git/status.js', () => ({
   isRepo: vi.fn().mockResolvedValue(true),
   notGitRepoMessage: (name) => `${name} is not a git repository — run \`git init\``,
-  fetchOrigin: vi.fn().mockResolvedValue(undefined),
   getRepoBranches: vi.fn().mockResolvedValue({ baseBranch: 'main' }),
+}));
+vi.mock('../git/sync.js', () => ({
+  ensureLatest: vi.fn(),
+  fetchOrigin: vi.fn().mockResolvedValue(undefined),
   checkout: vi.fn().mockResolvedValue(undefined),
   createBranch: vi.fn().mockResolvedValue(undefined),
 }));
@@ -95,7 +104,8 @@ import { claimContinuationWorkspace } from '../../lib/claimContinuation.js';
 import { updateTask, addTask } from '../cos/cosTaskStore.js';
 import { getAgents } from '../cos/cosAgentLifecycle.js';
 import { emitLog } from '../cos/cosEvents.js';
-import { ensureLatest, isRepo, fetchOrigin, createBranch } from '../git.js';
+import { isRepo } from '../git/status.js';
+import { ensureLatest, fetchOrigin, createBranch } from '../git/sync.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from '../promptSections/appContext.js';
 import { getFeatureAgent } from '../featureAgents.js';
@@ -104,6 +114,7 @@ import { join } from 'path';
 import { execGit } from '../../lib/execGit.js';
 import { detectConflicts } from '../taskConflict.js';
 import { getAppWorkspace } from './agentAppWorkspace.js';
+import { getAppById } from '../apps.js';
 import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, listWorktrees, mergeBaseIntoFeatureWorktree, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from '../worktreeManager.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../../lib/spawnCwd.js';
@@ -194,6 +205,40 @@ describe('prepareAgentWorkspace', () => {
       expect(r).toMatchObject({ outcome: 'ready', workspacePath: claimCheckout.worktreePath, worktreeInfo: null, claimCheckout });
       expect(ensureLatest).not.toHaveBeenCalled();
       expect(createWorktree).not.toHaveBeenCalled();
+    });
+
+    it('blocks an inbox issue if the managed app changes repos after queuing', async () => {
+      const task = claimTask();
+      task.metadata.app = 'app-x';
+      task.metadata.githubIssueClaim = { host: 'github.com', repo: 'example/original', number: 42 };
+      getAppWorkspace.mockResolvedValueOnce(PATHS.root);
+      getAppById.mockResolvedValueOnce({ id: 'app-x', name: 'Example', repoPath: PATHS.root });
+      resolveClaimForge.mockResolvedValueOnce({ tracker: 'github', target: { forge: 'github', apiHost: 'github.com', fullName: 'example/replacement' } });
+      const result = await prepareAgentWorkspace({ agentId: 'agent-claim', task });
+      expect(result).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('no longer points') });
+      expect(provisionClaimCheckoutMock).not.toHaveBeenCalled();
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'github-inbox-issue-mismatch' }),
+      }), 'user');
+    });
+
+    it('stops a newly stale inbox claim before worktree creation and uses its bound login for the read', async () => {
+      const task = claimTask();
+      task.metadata.app = 'app-x';
+      task.metadata.githubIssueClaim = { host: 'github.com', repo: 'example/original', number: 42, author: 'operator' };
+      task.metadata.githubAccount = { login: 'operator' };
+      const app = { id: 'app-x', name: 'Example', repoPath: PATHS.root };
+      const inboxEnv = { GH_TOKEN: 'bound-test-token' };
+      getAppWorkspace.mockResolvedValueOnce(PATHS.root);
+      getAppById.mockResolvedValueOnce(app);
+      resolveClaimForge.mockResolvedValueOnce({ tracker: 'github', target: { forge: 'github', apiHost: 'github.com', fullName: 'example/original' } });
+      checkInboxClaim.mockRejectedValueOnce(Object.assign(new Error('Issue closed'), { code: 'ISSUE_IN_FLIGHT' }));
+      const result = await prepareAgentWorkspace({ agentId: 'agent-claim', task, inboxEnv });
+      expect(result).toMatchObject({ outcome: 'blocked', reason: expect.stringContaining('closed, claimed, or covered') });
+      expect(checkInboxClaim).toHaveBeenCalledWith(app, '42', 'github', {
+        expectedGithubIssue: { ...task.metadata.githubIssueClaim, login: 'operator' }, readOnly: true, inboxEnv,
+      });
+      expect(provisionClaimCheckoutMock).not.toHaveBeenCalled();
     });
 
     it('blocks the task when the checkout cannot be cut, rather than running in the source checkout', async () => {

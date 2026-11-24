@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exportedNames, moduleSummary, searchCatalog, summaryProblems, SUMMARY_MAX } from './lib-catalog.js';
+import { discoverSearchDirs, discoverServicesDirs, exportedNames, moduleSummary, searchCatalog, summaryProblems, SUMMARY_MAX } from './lib-catalog.js';
 
 const SCRIPT = fileURLToPath(new URL('./lib-catalog.js', import.meta.url));
 
@@ -78,6 +78,54 @@ it('prints `path — summary — exports` from the CLI and exits 1 on no match',
   const hit = spawnSync(process.execPath, [SCRIPT, 'abortTimeout', '--dir', 'server/lib'], { encoding: 'utf8' });
   expect(hit.status, hit.stderr).toBe(0);
   expect(hit.stdout).toMatch(/^server\/lib\/abortTimeout\.js — .+ — .*withAbortTimeout/m);
-  const bad = spawnSync(process.execPath, [SCRIPT, 'x', '--dir', 'server/services'], { encoding: 'utf8' });
+  const bad = spawnSync(process.execPath, [SCRIPT, 'x', '--dir', 'server/nope'], { encoding: 'utf8' });
   expect(bad.status).toBe(2);
+  const noFlag = spawnSync(process.execPath, [SCRIPT, 'x', '--dir', 'server/services'], { encoding: 'utf8' });
+  expect(noFlag.status).toBe(2);
+});
+
+describe('auto-discovery', () => {
+  const dirs = discoverSearchDirs();
+
+  it('walks nested server/lib dirs and scripts/lib but skips vendored and fixture dirs', () => {
+    expect(dirs).toEqual(expect.arrayContaining([
+      'server/lib', 'server/lib/editorial', 'server/lib/db/schema', 'server/lib/agentGuard',
+      'server/lib/skills', 'server/lib/aiToolkit', 'scripts/lib', 'client/src/hooks',
+    ]));
+    expect(dirs).not.toContain('server/lib/aiToolkit/internal');
+    expect(dirs.some((dir) => /(^|\/)(fixtures|__fixtures__|node_modules)(\/|$)/.test(dir))).toBe(false);
+    expect(dirs.some((dir) => dir.startsWith('server/services'))).toBe(false);
+  });
+
+  it('searchCatalog defaults dirs from the given root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'lib-catalog-'));
+    try {
+      mkdirSync(join(root, 'server/lib/nested'), { recursive: true });
+      writeFileSync(join(root, 'server/lib/nested/deep.js'), '// Deep.\nexport const deepThing = 1;\n');
+      expect(searchCatalog(['deepthing'], { root }).map((entry) => entry.path)).toEqual(['server/lib/nested/deep.js']);
+      expect(searchCatalog(['directInvocation']).map((entry) => entry.path)).toContain('scripts/lib/directInvocation.js');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('finds modules in nested dirs and scripts/lib from the CLI', () => {
+    const hit = spawnSync(process.execPath, [SCRIPT, 'directInvocation'], { encoding: 'utf8' });
+    expect(hit.status, hit.stderr).toBe(0);
+    expect(hit.stdout).toMatch(/^scripts\/lib\/directInvocation\.js — /m);
+    const nested = spawnSync(process.execPath, [SCRIPT, '', '--dir', 'server/lib/editorial'], { encoding: 'utf8' });
+    expect(nested.status, nested.stderr).toBe(0);
+    expect(nested.stdout).toMatch(/^server\/lib\/editorial\//m);
+  });
+
+  it('searches server/services only with --services', () => {
+    expect(discoverServicesDirs()).toContain('server/services');
+    const without = spawnSync(process.execPath, [SCRIPT, 'cos', '--dir', 'server/services'], { encoding: 'utf8' });
+    expect(without.status).toBe(2);
+    const withFlag = spawnSync(process.execPath, [SCRIPT, 'cos', '--services'], { encoding: 'utf8' });
+    expect(withFlag.status, withFlag.stderr).toBe(0);
+    expect(withFlag.stdout).toMatch(/^server\/services\//m);
+    const scoped = spawnSync(process.execPath, [SCRIPT, 'cos', '--services', '--dir', 'server/services'], { encoding: 'utf8' });
+    expect(scoped.status, scoped.stderr).toBe(0);
+  });
 });

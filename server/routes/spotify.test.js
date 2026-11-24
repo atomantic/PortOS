@@ -38,16 +38,23 @@ import spotifyRoutes from './spotify.js';
 
 function makeApp() {
   const app = express();
+  // superagent always stamps the Host header from the URL, so a test-only header stands in for it.
+  app.use((req, _res, next) => {
+    if (req.headers['x-test-host']) req.headers.host = req.headers['x-test-host'];
+    next();
+  });
   app.use(express.json());
   app.use('/api/spotify', spotifyRoutes);
+  app.get('/brain/spotify', (req, res) => res.json(req.query));
   app.use(errorMiddleware);
   return app;
 }
 
 describe('Spotify routes', () => {
-  it('rejects a repeated query key with 400 (oauth callback, #16428)', async () => {
-    const res = await request(makeApp()).get('/api/spotify/oauth/callback?code=a&code=b');
-    expect(res.status).toBe(400);
+  it('redirects with oauthError for a repeated callback query key', async () => {
+    const res = await request(makeApp()).get(`/api/spotify/oauth/callback?code=a&code=b&state=${'a'.repeat(32)}`);
+    expect(res.body).toEqual({ oauthError: expect.stringMatching(/OAuth state/) });
+    expect(mocks.handleCallback).not.toHaveBeenCalled();
   });
 
   beforeEach(() => {
@@ -60,23 +67,37 @@ describe('Spotify routes', () => {
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  it('derives the status redirect URI from the forwarded public origin', async () => {
+  it('derives the status redirect URI from the Host header', async () => {
     const response = await request(makeApp())
       .get('/api/spotify/status')
-      .set('X-Forwarded-Proto', 'https')
-      .set('X-Forwarded-Host', 'host-example.ts.net:5555');
+      .set('X-Test-Host', 'host-example.ts.net:5555');
 
     expect(response.status).toBe(200);
-    expect(mocks.getStatus).toHaveBeenCalledWith({ origin: 'https://host-example.ts.net:5555' });
+    expect(mocks.getStatus).toHaveBeenCalledWith({ origin: 'http://host-example.ts.net:5555' });
+  });
+
+  it('ignores spoofed X-Forwarded-* headers when deriving the redirect origin', async () => {
+    const response = await request(makeApp())
+      .get('/api/spotify/status')
+      .set('X-Test-Host', 'host-example.ts.net:5555')
+      .set('X-Forwarded-Proto', 'https')
+      .set('X-Forwarded-Host', 'evil.example.com');
+
+    expect(response.status).toBe(200);
+    expect(mocks.getStatus).toHaveBeenCalledWith({ origin: 'http://host-example.ts.net:5555' });
+  });
+
+  it('derives no origin from a Host header PortOS does not answer on', async () => {
+    await request(makeApp()).get('/api/spotify/status').set('X-Test-Host', 'evil.example.com');
+    expect(mocks.getStatus).toHaveBeenCalledWith({ origin: null });
   });
 
   it('uses the request origin for the OAuth authorize URL', async () => {
     await request(makeApp())
-      .get('/api/spotify/auth/url')
-      .set('X-Forwarded-Proto', 'https')
-      .set('X-Forwarded-Host', 'host-example.ts.net:5555');
+      .post('/api/spotify/auth/url')
+      .set('X-Test-Host', 'host-example.ts.net:5555');
 
-    expect(mocks.getAuthUrl).toHaveBeenCalledWith({ origin: 'https://host-example.ts.net:5555' });
+    expect(mocks.getAuthUrl).toHaveBeenCalledWith({ origin: 'http://host-example.ts.net:5555' });
   });
 
   it('serves the stored playlist snapshot and starts an explicit playlist sync', async () => {

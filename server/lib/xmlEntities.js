@@ -35,7 +35,7 @@ export function decodeXmlEntities(str, extraEntities) {
       // Leave out-of-range / non-Unicode code points untouched: `String.fromCodePoint` throws RangeError for cp < 0 or > 0x10FFFF, and one malformed entity must not fail the whole parse/import.
       return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
     }
-    if (extraEntities && Object.prototype.hasOwnProperty.call(extraEntities, code)) {
+    if (extraEntities && Object.hasOwn(extraEntities, code)) {
       return extraEntities[code];
     }
     return Object.hasOwn(NAMED_ENTITIES, code) ? NAMED_ENTITIES[code] : match;

@@ -95,7 +95,7 @@ export function wakePeerProbe(peer) {
   });
 
   probePeer(peer).catch((err) => {
-    console.log(`⚠️ Wake probe failed for ${peer.name || peer.id}: ${err.message}`);
+    console.log(`⚠️ Wake probe failed for ${peerLogLabel()}: ${err.message}`);
   });
 
   return true;
@@ -304,10 +304,14 @@ function announcedHost(str) {
 // and relay into an SSRF read. LAN and tailnet answers stay allowed; a lookup
 // failure is left to the fetch itself to report as unreachable.
 async function assertPeerHostNotLocal(peer) {
-  if (peer.transport === 'tailcat' || !peer.host || net.isIP(peer.host)) return;
+  if (peer.transport === 'tailcat') return;
+  if (peer.address && isBlockedIngestHost(peer.address)) {
+    throw new Error(`peer address ${peer.address} is a loopback, unspecified or link-local address`);
+  }
+  if (!peer.host || net.isIP(peer.host)) return;
   const answers = await dns.lookup(peer.host, { all: true }).catch(() => []);
   if (answers.some(({ address }) => isBlockedIngestHost(address))) {
-    throw new Error(`peer host ${peer.host} resolves to a loopback or link-local address`);
+    throw new Error(`peer host resolves to a loopback or link-local address`);
   }
 }
 
@@ -376,7 +380,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       directions: ['outbound']
     };
     data.peers.push(entry);
-    console.log(`🌐 Peer added: ${entry.name} (${entry.id})`);
+    console.log(`🌐 ${peerLogLabel()} added`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
@@ -400,13 +404,19 @@ export async function setTailcatPeerPort(id, port) {
     const peer = data.peers.find(p => p.id === id && p.transport === 'tailcat');
     if (!peer || peer.port === port) return peer || null;
     peer.port = port;
-    console.log(`🐈 Tailcat peer ${peer.name} repointed to 127.0.0.1:${port}`);
+    console.log(`🐈 Tailcat ${peerLogLabel()} repointed to loopback forward`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return peer;
   });
   // The relay pins the peer URL at connect time, so it has to redial the new port.
   if (updated) disconnectFromPeer(id);
   return updated;
+}
+
+// Tells socket.js to drop inbound Socket.IO sessions the peer authenticated at
+// connect time; a rotated secret or re-enabled peer reconnects with fresh auth.
+function emitPeerAuthRevoked(peer) {
+  instanceEvents.emit('peer:auth-revoked', { peerId: peer.id, instanceId: peer.instanceId });
 }
 
 export async function removePeer(id, { stopTransport = true } = {}) {
@@ -421,10 +431,11 @@ export async function removePeer(id, { stopTransport = true } = {}) {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;
     const [entry] = data.peers.splice(idx, 1);
-    console.log(`🌐 Peer removed: ${entry.name}`);
+    console.log(`🌐 ${peerLogLabel()} removed`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
+  if (removed) emitPeerAuthRevoked(removed);
   // Retire that instance's federated usage digest. Without this the row stays in
   // the fleet report forever: our own snapshot forwards every digest we hold, so
   // a surviving peer would hand it straight back on the next cycle. Dynamic
@@ -444,6 +455,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // probe cycle — otherwise an online relayed peer keeps the stale credential
   // until a natural reconnect. Tracked like hostChanged, consumed below.
   let authChanged = false;
+  let secretChanged = false;
   // Track false→true transitions for the per-record-subscribable categories
   // so we can backfill-subscribe existing local records after the data write
   // settles. Set inside withData (where we have the merged before/after
@@ -469,6 +481,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // new headers (#8356).
         peer.peerAuthAccepted = false;
         authChanged = true;
+        secretChanged = true;
       }
       // Entering the pair secret is the local inbound-admission action.
       if (peer.syncSecret && !peer.directions?.includes('inbound')) {
@@ -536,7 +549,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         if (!sameAuth(peer.auth, normalizedAuth)) {
           peer.auth = normalizedAuth; // null clears, object sets
           authChanged = true;
-          console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peer.name}`);
+          console.log(`🌐 Peer credential ${peer.auth ? 'set' : 'cleared'}: ${peerLogLabel()}`);
         }
         // When sameAuth was true (credential unchanged), authChanged is still
         // false. If the peer is stuck in authRequired+backoff the user is
@@ -558,7 +571,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
       if (canonicalStringify(previous ?? null) !== canonicalStringify(next)) {
         peer.mediaProvider = next;
         if (!next.enabled) delete peer.mediaProviderStatus;
-        console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peer.name}`);
+        console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peerLogLabel()}`);
       }
     }
     if (peer.transport !== 'tailcat' && updates.host !== undefined) {
@@ -570,7 +583,7 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
         // re-adopts the DNS name and the user can't revert to IP).
         peer.hostManual = true;
         hostChanged = true;
-        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peer.name}`);
+        console.log(`🌐 Peer host ${peer.host ? 'set' : 'cleared'}: ${peerLogLabel()}`);
       }
     }
     // Per-(peer, category) schema-version gaps, populated by syncOrchestrator
@@ -593,6 +606,9 @@ export async function updatePeer(id, updates, { probe = true } = {}) {
   // reconnect using the new URL on the next probe cycle. Invalid/no-op host
   // writes no longer disrupt an already-healthy connection.
   if (updates.enabled === false || hostChanged || authChanged) disconnectFromPeer(id);
+  // The relay above only closes our outbound socket; sockets the peer opened to
+  // this server stay admitted by their handshake-time token unless revoked (#17905).
+  if (result && (updates.enabled === false || secretChanged)) emitPeerAuthRevoked(result);
   // A credential edit is almost always the fix for a 401, but the peer may be
   // deep in exponential probe backoff (up to 1h) from those failures — so the
   // regular poll loop would skip it for hours. Retry immediately: probePeer
@@ -756,7 +772,10 @@ export async function acceptPeerSyncSecretFromPeer(instanceId, syncSecret) {
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return entry;
   });
-  if (changed && peer) disconnectFromPeer(peer.id);
+  if (changed && peer) {
+    disconnectFromPeer(peer.id);
+    emitPeerAuthRevoked(peer);
+  }
   return peer;
 }
 
@@ -916,7 +935,7 @@ export async function probePeer(peer) {
     at: probedAt,
   });
   if (status !== 'online') {
-    console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(probeFailure, peer, tunnelError)} ${formatProbeDiagnosticLog(lastProbe)}`);
+    console.log(`⚠️ Probe failed for ${peerLogLabel()}: ${classifyProbeError(probeFailure, peer, tunnelError)} ${formatProbeDiagnosticLog(lastProbe)}`);
   }
 
   const stored = await withData(async (data) => {
@@ -954,7 +973,7 @@ export async function probePeer(peer) {
     // Backoff tracking for failed probes
     if (status === 'online') {
       if (entry.consecutiveFailures > 0) {
-        console.log(`🌐 Peer ${entry.name} recovered after ${entry.consecutiveFailures} consecutive failures`);
+        console.log(`🌐 ${peerLogLabel()} recovered after ${entry.consecutiveFailures} consecutive failures`);
       }
       entry.consecutiveFailures = 0;
       entry.nextProbeAt = null;
@@ -963,7 +982,7 @@ export async function probePeer(peer) {
       const tier = Math.min(entry.consecutiveFailures - 1, BACKOFF_TIERS_MS.length - 1);
       const backoffMs = BACKOFF_TIERS_MS[tier];
       entry.nextProbeAt = new Date(Date.now() + backoffMs).toISOString();
-      console.log(`⏳ Peer ${entry.name} backoff tier ${tier} (${backoffMs / 1000}s), failures: ${entry.consecutiveFailures}`);
+      console.log(`⏳ ${peerLogLabel()} backoff tier ${tier} (${backoffMs / 1000}s), failures: ${entry.consecutiveFailures}`);
     }
 
     return entry;
@@ -1054,7 +1073,11 @@ export async function queryPeer(id, apiPath) {
 
 // --- Announce (Bidirectional Registration) ---
 
-export async function handleAnnounce({ address, port, instanceId, name, host }) {
+// `viaRemoteIngress`: the request is remote Tailcat traffic that arrived over
+// loopback, so `address` (127.0.0.1) is the ingress hop, never a dialable
+// caller. Such an announce may only refresh an existing tailcat peer by
+// instanceId; it can never create, address-match or probe a loopback peer.
+export async function handleAnnounce({ address, port, instanceId, name, host, viaRemoteIngress = false }) {
   // Set only when this announce marked the peer online (not the forged-address
   // branch, which records a sighting without trusting it).
   let markedOnlinePeer = null;
@@ -1069,9 +1092,15 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
     // already part of the match.
     let matchedByAddress = false;
     // Fallback: check by address + port
-    if (!existing) {
-      existing = data.peers.find(p => p.address === address && p.port === port);
+    // Tailcat peers sit on local forward coordinates (127.0.0.1:15555+), so an
+    // address+port match would let any caller on that hop hijack them.
+    if (!existing && !viaRemoteIngress) {
+      existing = data.peers.find(p => p.transport !== 'tailcat' && p.address === address && p.port === port);
       matchedByAddress = true;
+    }
+    if (viaRemoteIngress && existing?.transport !== 'tailcat') existing = undefined;
+    if (!existing && (viaRemoteIngress || isBlockedIngestHost(address))) {
+      throw new ServerError('Announce refused: caller address is not a dialable peer address', { status: 400 });
     }
 
     const instanceIdMatches = !existing || !existing.instanceId || existing.instanceId === instanceId;
@@ -1084,7 +1113,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
 
     const normalizedHost = announcedHost(host);
 
-    if (existing?.syncSecret) return { created: false, peer: existing };
+    if (existing?.syncSecret) return { created: false, peer: { instanceId: existing.instanceId } };
 
     // A forged announce: instanceId matches a stored peer, but the caller's
     // source address does not match the stored one. Record the sighting only
@@ -1099,7 +1128,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       console.warn(`⚠️ Peer announce instanceId matched but address mismatched — ignoring host/port/name update`);
       existing.lastSeen = new Date().toISOString();
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
-      return { created: false, peer: existing };
+      return { created: false, peer: { instanceId: existing.instanceId } };
     }
 
     if (existing) {
@@ -1122,12 +1151,12 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // existing.host check alone can't distinguish from "never set".
       if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
-        console.log(`🌐 Peer host learned via announce: ${existing.name}`);
+        console.log(`🌐 Peer host learned via announce: ${peerLogLabel()}`);
       }
       // Mark that this peer has announced to us (inbound connection)
       existing.directions = existing.directions || [];
       if (!existing.directions.includes('inbound')) existing.directions.push('inbound');
-      console.log(`🌐 Peer announced (existing): ${existing.name}`);
+      console.log(`🌐 Peer announced (existing): ${peerLogLabel()}`);
       afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
       return { created: false, peer: existing };
     }
@@ -1160,7 +1189,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       directions: ['inbound']
     };
     data.peers.push(peer);
-    console.log(`🌐 Peer announced (new): ${peer.name} (${peer.id})`);
+    console.log(`🌐 Peer announced (new): ${peerLogLabel()}`);
     afterCommit(() => instanceEvents.emit('peers:updated', data.peers));
     return { created: true, peer };
   });
@@ -1174,11 +1203,11 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
   // Immediately probe newly announced peers to populate health data
   if (result.created) {
     probePeer(result.peer).catch(err => {
-      console.log(`⚠️ Initial probe failed for announced peer ${result.peer.name}: ${err.message}`);
+      console.log(`⚠️ Initial probe failed for announced ${peerLogLabel()}: ${err.message}`);
     });
   } else if (peerToWake) {
     probePeer(peerToWake).catch(err => {
-      console.log(`⚠️ Wake probe failed for ${peerToWake.name || peerToWake.id}: ${err.message}`);
+      console.log(`⚠️ Wake probe failed for ${peerLogLabel()}: ${err.message}`);
     });
   }
 
@@ -1213,13 +1242,13 @@ async function announceSelf(peer) {
       signal
     }, peer);
     if (res.ok) {
-      console.log(`🌐 Announced self to ${url}`);
+      console.log(`🌐 Announced self to ${peerLogLabel()}`);
       await markDirection(peer.id, 'outbound');
     } else {
-      console.log(`🌐 Announce to ${url} failed: HTTP ${res.status}`);
+      console.log(`🌐 Announce to ${peerLogLabel()} failed: HTTP ${res.status}`);
     }
   }).catch((err) => {
-    console.log(`🌐 Announce to ${url} unreachable: ${err.message}`);
+    console.log(`🌐 Announce to ${peerLogLabel()} unreachable: ${err.message}`);
   });
 }
 
@@ -1391,7 +1420,7 @@ export async function applyReciprocalSync(instanceId, categories, { fullSync } =
   }
   if (changed) {
     const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
-    console.log(`🔁 Reciprocal sync applied for peer ${peer.name}: ${peer.fullSync ? 'full-mirror' : (enabledList || 'none')}`);
+    console.log(`🔁 Reciprocal sync applied for ${peerLogLabel()}: ${peer.fullSync ? 'full-mirror' : (enabledList || 'none')}`);
   }
   return { changed, peer };
 }
@@ -1427,7 +1456,7 @@ export async function requestReciprocalSync(peer, categories, { fullSync } = {})
     }, peer);
     if (res.ok) {
       const enabledList = sanitized ? Object.keys(sanitized).filter(k => sanitized[k]).join(',') : '';
-      console.log(`🔁 Requested reciprocal sync from ${peer.name}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
+      console.log(`🔁 Requested reciprocal sync from ${peerLogLabel()}: ${fullSync === false ? 'full-mirror-off' : (enabledList || 'none')}`);
       return { ok: true };
     }
     // 404 = peer predates this endpoint; not an error worth surfacing loudly.

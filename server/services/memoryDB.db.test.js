@@ -54,8 +54,12 @@ vi.mock('./memoryEmbeddings.js', async () => {
   return {
     generateQueryEmbedding: vi.fn(async () => embedding.slice()),
     estimateTokens: (text) => Math.ceil(String(text ?? '').length / 4),
+    // Differs from DEFAULT_MEMORY_CONFIG.embeddingModel: writes must stamp the
+    // model that produced the vector, not the default (#18296).
+    getActiveEmbeddingModel: vi.fn(async () => ACTIVE_EMBEDDING_MODEL),
   };
 });
+const ACTIVE_EMBEDDING_MODEL = 'nomic-embed-text';
 vi.mock('./instances.js', async (importOriginal) => mockNoPeers(await importOriginal()));
 vi.mock('./instanceIdentity.js', () =>
   mockTestIdentity({ getInstanceId: () => Promise.resolve(TEST_INSTANCE_ID) }));
@@ -155,7 +159,7 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     expect(created.importance).toBeCloseTo(0.7, 6);
     expect(created.status).toBe('active');
     expect(created.accessCount).toBe(0);
-    expect(created.embeddingModel).toBe(DEFAULT_MEMORY_CONFIG.embeddingModel);
+    expect(created.embeddingModel).toBe(ACTIVE_EMBEDDING_MODEL);
     // Federation provenance is stamped at insert time.
     expect(created.originInstanceId).toBe(TEST_INSTANCE_ID);
 
@@ -205,7 +209,7 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
 
     const embedded = await memoryDB.updateMemoryEmbedding(mem.id, VEC_A);
     expect(embedded.embedding).toHaveLength(DIM);
-    expect(embedded.embeddingModel).toBe(DEFAULT_MEMORY_CONFIG.embeddingModel);
+    expect(embedded.embeddingModel).toBe(ACTIVE_EMBEDDING_MODEL);
     expect((await memoryDB.getMemoryIdsMissingEmbedding()).has(mem.id)).toBe(false);
 
     // A wrong-dimension re-embed clears the column rather than throwing — the
@@ -270,6 +274,37 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
 
     await memoryDB.updateMemory(a.id, { relatedMemories: [] });
     expect((await memoryDB.getMemory(a.id)).relatedMemories).toEqual([]);
+  });
+
+  it('keeps createMemory/updateMemory related links symmetric for both id orderings', async () => {
+    const made = await Promise.all([1, 2, 3].map(n => memoryDB.createMemory({ type: 'fact', content: `Sym ${n}.` })));
+    const [lo, mid, hi] = made.sort((x, y) => (x.id < y.id ? -1 : 1));
+    const ids = new Set(made.map(m => m.id));
+    const pairEdges = async () => (await memoryDB.getGraphData()).edges
+      .filter(e => ids.has(e.source) && ids.has(e.target) && e.linkType === 'related')
+      .map(e => [e.source, e.target].sort().join('|')).sort();
+    const pair = (x, y) => [x.id, y.id].sort().join('|');
+
+    // Create from both the lower and higher id side; duplicates and self-links are dropped.
+    const fromHi = await memoryDB.createMemory({ type: 'fact', content: 'Sym created.', relatedMemories: [lo.id, lo.id] });
+    expect(fromHi.relatedMemories).toEqual([lo.id]);
+    expect((await memoryDB.getMemory(lo.id)).relatedMemories).toContain(fromHi.id);
+    ids.add(fromHi.id);
+    expect(await pairEdges()).toEqual([pair(fromHi, lo)]);
+
+    // Update from the highest id (reverse rows would be missed) and from the lowest.
+    await memoryDB.updateMemory(hi.id, { relatedMemories: [lo.id, mid.id, hi.id] });
+    await memoryDB.updateMemory(lo.id, { relatedMemories: [hi.id, mid.id] });
+    expect((await memoryDB.getMemory(mid.id)).relatedMemories.sort()).toEqual([lo.id, hi.id].sort());
+    expect(await pairEdges()).toEqual([pair(lo, mid), pair(lo, hi), pair(mid, hi)].sort());
+
+    // Clearing from either side removes the edge fully (no orphaned reverse rows).
+    await memoryDB.updateMemory(hi.id, { relatedMemories: [] });
+    expect((await memoryDB.getMemory(lo.id)).relatedMemories).toEqual([mid.id]);
+    expect(await pairEdges()).toEqual([pair(lo, mid)]);
+    await memoryDB.updateMemory(lo.id, { relatedMemories: [] });
+    expect(await pairEdges()).toEqual([]);
+    expect((await memoryDB.getMemory(mid.id)).relatedMemories).toEqual([]);
   });
 
   it('links two memories bidirectionally and refuses an unknown id', async () => {
@@ -851,6 +886,22 @@ describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
     expect(await statusOf(important.id)).toBe('active');
     expect(await statusOf(ordinary.id)).not.toBe('active');
     expect((await memoryDB.peekMemory(core.id)).tags).toEqual(['mind:core-identity']);
+  });
+
+  it('never auto-archives Persistent Mind memories, reviewed or not, yet decays them into review range (#18322)', async () => {
+    await resetMemories();
+    const mindId = 'cos-persistent-mind';
+    const reviewed = await memoryDB.createMemory({ type: 'observation', content: 'Reviewed fading note.', importance: 0.15, sourceAgentId: mindId });
+    const unreviewed = await memoryDB.createMemory({ type: 'observation', content: 'Unreviewed fading note.', importance: 0.15, sourceAgentId: mindId });
+    const foreign = await memoryDB.createMemory({ type: 'observation', content: 'Foreign fading note.', importance: 0.15, sourceAgentId: 'other-agent' });
+    for (const m of [reviewed, unreviewed, foreign]) await backdate(m.id, 400);
+    await memoryDB.reviewMindMemory({ memoryId: reviewed.id, expectedVersion: 1, verdict: 'keep' }, { mindId, turnId: 'synthetic-turn', providerId: 'example-provider', model: 'example-model' });
+    await memoryDB.applyDecay(0.01);
+    expect(await statusOf(reviewed.id)).toBe('active');
+    expect(await statusOf(unreviewed.id)).toBe('active');
+    expect(await importanceOf(unreviewed.id)).toBeLessThan(0.15);
+    expect(await statusOf(foreign.id)).toBe('archived');
+    expect((await memoryDB.selectMindMemoryForReview(mindId))?.id).toBe(unreviewed.id);
   });
 
   it('is a no-op at decayRate 0 for memories past the recency-bonus window', async () => {

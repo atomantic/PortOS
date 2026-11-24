@@ -1,5 +1,6 @@
 import fs from 'fs/promises';
 import { rmSync } from 'fs';
+import { join } from 'path';
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
@@ -1103,5 +1104,20 @@ describe('epic-link write compatibility (#5042)', () => {
     const fetchMock = stubFetchSequence([{ body: { key: 'PROJ-5' } }]);
     await createTicket(INSTANCE_ID, { projectKey: 'PROJ', summary: 'Slice', storyPoints: 0 });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).fields.customfield_10106).toBe(0);
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('jira.json file permissions (#18129)', () => {
+  it('writes new files and tightens existing world-readable jira.json to 0o600', async () => {
+    const jiraFile = join(tempRoot, 'jira.json');
+    await fs.rm(jiraFile, { force: true });
+    await saveInstances({ instances: {} });
+    expect((await fs.stat(jiraFile)).mode & 0o777).toBe(0o600);
+
+    await fs.chmod(jiraFile, 0o644);
+    expect((await fs.stat(jiraFile)).mode & 0o777).toBe(0o644);
+
+    await saveInstances({ instances: { example: { id: 'example', apiToken: 'tok' } } });
+    expect((await fs.stat(jiraFile)).mode & 0o777).toBe(0o600);
   });
 });

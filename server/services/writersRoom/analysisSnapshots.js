@@ -2,6 +2,7 @@ import { join } from 'path';
 import { readFile, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile, rmGuarded } from '../../lib/fileUtils.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { assertValidWorkId, nowIso } from './_shared.js';
 
 // Analysis id == kind. Each work keeps at most one snapshot per kind on disk
@@ -43,6 +44,10 @@ export async function loadAnalysis(workId, id) {
   // response object, so guard for a genuine object here.
   return parsed && typeof parsed === 'object' ? parsed : null;
 }
+
+// Serializes load→modify→save cycles per analysis FILE (`workId:analysisId`) so concurrent
+// read-modify-write callers (HTTP route, media-job hook) can't clobber each other's edits.
+export const withAnalysisLock = createRecordWriteQueue();
 
 export async function saveAnalysis(workId, snapshot) {
   await ensureDir(analysisDir(workId));

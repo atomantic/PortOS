@@ -173,7 +173,7 @@ describe('independent CI test failure recovery (#11552)', () => {
     expect(testStep).toContain(durable);
     expect(step).toContain(durable);
     const testMinutes = Number(testStep.match(/timeout-minutes:\s*(\d+)/)?.[1]);
-    const jobMinutes = Number(job.match(/^    timeout-minutes:\s*(\d+)/m)?.[1]);
+    const jobMinutes = Number(job.match(/^ {4}timeout-minutes:\s*(\d+)/m)?.[1]);
     expect(testMinutes).toBeGreaterThan(0);
     expect(testMinutes).toBeLessThan(jobMinutes - 1);
     expect(testStep).not.toContain('continue-on-error');

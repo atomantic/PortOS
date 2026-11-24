@@ -127,10 +127,11 @@ export const RESOLVE_EXTENSIONS = ['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
 export const RESOLVE_INDEXES = ['/index.js', '/index.jsx', '/index.ts', '/index.tsx'];
 
 /**
- * A test file call that serves or bundles files outside the browser
- * fixture's recorder. A suite that makes one keeps keying every handed
- * directory whole, served record or not: the record vouches only for what
- * the fixture's own Vite server served.
+ * An uninstrumented test-file call that serves or bundles files outside the
+ * browser fixture recorders (`startBrowserFixture`, `buildRecordedViteFixture`,
+ * `startRecordedViteServer`, `createRecordedStaticServer`). A suite that makes
+ * one keeps keying every handed directory whole, served record or not: the
+ * record vouches only for what an instrumented recorder saw.
  */
 export const UNRECORDED_SERVER_CALL = /\b(?:createServer|express\.static|serveStatic|sirv|build|preview)\s*\(|\.listen\s*\(/;
 

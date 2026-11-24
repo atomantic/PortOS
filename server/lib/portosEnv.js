@@ -11,6 +11,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { chmod } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PATHS, atomicWrite } from './fileUtils.js';
 import { escapeRegExp } from './textUtils.js';
@@ -119,13 +120,20 @@ export async function upsertPortosEnvLine(key, value, envPath) {
   const path = envPath ?? getDefaultEnvPath();
   return queuePortosEnvWrite(path, async () => {
     let contents = '';
+    let isNew = false;
     try {
       contents = readFileSync(path, 'utf8');
     } catch (err) {
       // Only a missing file is an empty start; another read failure (EACCES, EMFILE, EIO) would rewrite .env as this one line, dropping PGPASSWORD, PRIVACY_VAULT_KEY and the rest.
       if (err.code !== 'ENOENT') throw err;
+      isNew = true;
     }
     const next = upsertEnvLine(contents, key, value);
     await atomicWrite(path, next);
+    if (isNew) {
+      await chmod(path, 0o600).catch((err) => {
+        if (err?.code !== 'ENOENT') console.log(`⚠️ Could not set permissions on .env (${err?.code || 'error'})`);
+      });
+    }
   });
 }

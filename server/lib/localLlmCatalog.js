@@ -264,7 +264,7 @@ export const LOCAL_LLM_CATALOG = [
     category: 'lightweight',
     recommendedFor: ['lightweight', 'general', 'vision', 'multilingual'],
     params: '3B',
-    size: '2.6 GB',
+    size: '3.0 GB',
     family: 'ministral',
     description: "Mistral's compact edge instruct model — vision, tools, and a 256K context window in a 3B footprint.",
     capabilities: ['chat', 'tools', 'vision', 'multilingual'],
@@ -1083,6 +1083,22 @@ export const LOCAL_LLM_CATALOG = [
     lmstudioAliases: ['ornith-ai/Ornith-1.5-9B-GGUF']
   },
   {
+    key: 'mimo-v2.6-9b',
+    name: 'MiMo-V2.6-Distill 9B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning', 'vision'],
+    params: '9B',
+    size: '6.6 GB',
+    family: 'mimo',
+    description: "Xiaomi MiMo's MIT-licensed 9B coding and agent model distilled onto Qwen3.5-9B — vision, tools, thinking, and a 256K context window for 8–16GB laptops.",
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 262144,
+    ollama: 'mimo-v2.6:9b',
+    ollamaAliases: ['mimo-v2.6', 'mimo-v2.6:latest'],
+    lmstudio: 'bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF',
+    lmstudioAliases: ['ggml-org/MiMo-V2.6-Distill-Qwen-9B-GGUF']
+  },
+  {
     key: 'devstral-small-2-24b',
     benchmarkModel: 'devstral-small-2-24b',
     name: 'Devstral Small 2 24B',
@@ -1109,6 +1125,22 @@ export const LOCAL_LLM_CATALOG = [
     capabilities: ['chat', 'code', 'reasoning', 'tools'],
     ollama: 'north-mini-code-1.0',
     lmstudio: 'unsloth/North-Mini-Code-1.0-GGUF'
+  },
+  {
+    key: 'laguna-xs-2.1',
+    name: 'Laguna XS 2.1 33B-A3B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning'],
+    params: '33B / 3B active',
+    size: '20 GB',
+    family: 'laguna',
+    description: "Poolside's 33B coding MoE (3B active) with a 256K context — built for local agentic software engineering, multilingual code edits, and interleaved thinking between tool calls.",
+    capabilities: ['chat', 'code', 'reasoning', 'tools'],
+    context: 262144,
+    ollama: 'laguna-xs-2.1',
+    ollamaAliases: ['laguna-xs-2.1:latest', 'laguna-xs-2.1:q4_K_M'],
+    lmstudio: 'lmstudio-community/Laguna-XS-2.1-GGUF',
+    lmstudioAliases: ['bartowski/Laguna-XS-2.1-GGUF', 'ggml-org/Laguna-XS-2.1-GGUF', 'poolside/Laguna-XS-2.1-GGUF']
   },
   {
     key: 'ornith-1.5-35b-a3b',
@@ -1155,6 +1187,38 @@ export const LOCAL_LLM_CATALOG = [
     context: 262144,
     ollama: 'qwen3.6:35b',
     lmstudio: 'unsloth/Qwen3.6-35B-A3B-GGUF'
+  },
+  {
+    key: 'qwen3-coder-next',
+    name: 'Qwen3-Coder-Next 80B-A3B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning'],
+    params: '80B / 3B active',
+    size: '52 GB',
+    family: 'qwen',
+    description: "Alibaba's Apache-2.0 80B coding MoE (only 3B active) with a 256K context — fast long-horizon repository work and tool calling on 64GB+ workstations.",
+    capabilities: ['chat', 'code', 'tools'],
+    context: 262144,
+    ollama: 'qwen3-coder-next',
+    ollamaAliases: ['qwen3-coder-next:latest', 'qwen3-coder-next:q4_K_M'],
+    lmstudio: 'lmstudio-community/Qwen3-Coder-Next-GGUF',
+    lmstudioAliases: ['unsloth/Qwen3-Coder-Next-GGUF']
+  },
+  {
+    key: 'ornith-1.5-122b-a10b',
+    name: 'Ornith 1.5 122B-A10B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning', 'vision'],
+    params: '122B / 10B active',
+    size: '77 GB',
+    family: 'ornith',
+    description: 'High-capacity MIT-licensed self-improving MoE (10B active) for agentic coding, vision, and reasoning over a 256K context — needs ~96GB+ unified memory.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 262144,
+    ollama: 'ornith-1.5:122b',
+    ollamaAliases: ['ornith-1.5:122b-q4_K_M', 'ornith-1.5:122b-nvfp4'],
+    lmstudio: 'unsloth/Ornith-1.5-122B-GGUF',
+    lmstudioAliases: ['ornith-ai/Ornith-1.5-122B-GGUF']
   },
   // ── Fiction / writing tier ──
   {
@@ -1260,6 +1324,22 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF'
   },
   {
+    key: 'glm-ocr',
+    name: 'GLM-OCR 0.9B (vision)',
+    category: 'vision',
+    recommendedFor: ['vision', 'lightweight'],
+    params: '0.9B',
+    size: '2.7 GB',
+    family: 'glm',
+    description: "Z.ai's compact MIT-licensed multimodal OCR model with a 128K context — fast, accurate document, table, and formula extraction locally.",
+    capabilities: ['chat', 'vision'],
+    context: 131072,
+    ollama: 'glm-ocr',
+    ollamaAliases: ['glm-ocr:latest', 'glm-ocr:bf16', 'glm-ocr:q8_0'],
+    lmstudio: 'ggml-org/GLM-OCR-GGUF',
+    lmstudioAliases: ['mradermacher/GLM-OCR-GGUF']
+  },
+  {
     key: 'nemotron-3.5-bolt',
     name: 'Nemotron 3.5 Bolt 74B-A9B',
     category: 'vision',
@@ -1274,20 +1354,6 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'nemotron-3.5-bolt',
     lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-GGUF',
     lmstudioAliases: ['nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF']
-  },
-  {
-    key: 'llama3.2-vision-11b',
-    name: 'Llama 3.2 Vision 11B',
-    category: 'vision',
-    recommendedFor: ['vision', 'general'],
-    params: '11B',
-    size: '7.9 GB',
-    family: 'llama',
-    description: "Meta's instruction-tuned multimodal model with vision capabilities for image reasoning and captioning.",
-    capabilities: ['chat', 'tools', 'vision'],
-    context: 128000,
-    ollama: 'llama3.2-vision:11b',
-    lmstudio: 'lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF'
   },
   // ── Multilingual tier ──
   {
@@ -1329,7 +1395,8 @@ export const LOCAL_LLM_CATALOG = [
     capabilities: ['chat', 'multilingual', 'vision'],
     context: 131072,
     ollama: 'translategemma:12b',
-    lmstudio: 'lmstudio-community/TranslateGemma-12B-IT-GGUF'
+    lmstudio: 'mradermacher/translategemma-12b-it-GGUF',
+    lmstudioAliases: ['lmstudio-community/TranslateGemma-12B-IT-GGUF']
   },
   // ── Text embeddings ──
   // PortOS's memory/recall pipeline expects 768-dimension vectors
@@ -1347,6 +1414,7 @@ export const LOCAL_LLM_CATALOG = [
     description: "Google's Apache-2.0 Gemma-4-architecture embedding model — 768-dimension vectors across 100+ languages with stronger code retrieval in half the footprint of v1.",
     repository: 'google/embeddinggemma-2',
     capabilities: ['embeddings', 'multilingual'],
+    context: 262144,
     ollama: 'embeddinggemma-2:270m',
     ollamaAliases: ['embeddinggemma-2', 'embeddinggemma-2:740m'],
     lmstudio: 'ggml-org/embeddinggemma-2-GGUF',

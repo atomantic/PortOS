@@ -122,7 +122,7 @@ const entryHeadingKey = (entry) => (typeof entry?.name === 'string' && entry.nam
 const orderedEntryKeys = (kind, entry) => {
   const preferred = CANON_ENTRY_FIELD_ORDER[kind] || [];
   const headingKey = entryHeadingKey(entry);
-  const preferredKeys = preferred.filter((key) => Object.prototype.hasOwnProperty.call(entry, key));
+  const preferredKeys = preferred.filter((key) => Object.hasOwn(entry, key));
   const remainingKeys = Object.keys(entry)
     .filter((key) => key !== 'name' && key !== headingKey
       && !preferred.includes(key) && !ENTRY_METADATA_FIELDS.has(key))

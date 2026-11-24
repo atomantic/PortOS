@@ -142,11 +142,14 @@ async function resolveConfiguredAccount(dir) {
  */
 async function getGhCommitIdentity(host, token, timeoutMs, signal) {
   const { code, stdout } = await spawnCli(
-    'gh', ['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | @tsv'],
+    'gh', ['api', 'user', '--hostname', host, '--jq', '[.id, .login, .name, .email] | tojson'],
     timeoutMs, signal, ghHostEnv(host, token)
   );
   if (code !== 0) return null;
-  const [id, login, name, email] = (stdout || '').trim().split('\t');
+  let fields;
+  try { fields = JSON.parse((stdout || '').trim()); } catch { return null; }
+  if (!Array.isArray(fields)) return null;
+  const [id, login, name, email] = fields;
   if (!id || !login) return null;
   const commitEmail = host === 'github.com' ? `${id}+${login}@users.noreply.github.com` : email;
   if (!commitEmail) return null;
@@ -330,10 +333,8 @@ function parseOAuthScopes(output) {
 }
 
 /**
- * Whether the forge token an agent would receive can merge changes to
- * `.github/workflows/**`. GitHub refuses those merges for an OAuth token
- * without the `workflow` scope, surfacing only as a generic "base branch
- * policy" error at merge time.
+ * Report the classic OAuth workflow scope on the token an agent receives.
+ * This is advisory: only GitHub can decide whether a specific merge is allowed.
  *
  * @returns {Promise<{ status: 'granted'|'missing'|'unknown', remedy?: string }>}
  */
@@ -354,7 +355,7 @@ export async function getWorkflowScopeStatus(dir, { timeoutMs = DEFAULT_SPAWN_CL
   // Unknown is a transient or unreadable answer: do not pin it for the process.
   if (result.status !== 'unknown') scopeStatusCache.set(digest, result);
   if (result.status === 'missing') {
-    console.log(`⚠️ Forge token for ${forge.host} lacks the workflow scope; PRs touching .github/workflows cannot be merged by agents. Fix: ${WORKFLOW_SCOPE_REMEDY}`);
+    console.log(`⚠️ Forge token for ${forge.host} does not report the workflow scope; GitHub may reject changes to .github/workflows. For supported CLI OAuth, the owner can authorize it with: ${WORKFLOW_SCOPE_REMEDY}`);
   }
   return result;
 }

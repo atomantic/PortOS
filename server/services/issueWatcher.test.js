@@ -9,8 +9,10 @@ vi.mock('./github.js', () => ({
 
 const mergePrMock = vi.fn();
 const resolveForgeForRepoMock = vi.fn();
-vi.mock('./git.js', () => ({
+vi.mock('./git/prs.js', () => ({
   mergePR: (...args) => mergePrMock(...args),
+}));
+vi.mock('./forgeAuth.js', () => ({
   resolveForgeForRepo: (...args) => resolveForgeForRepoMock(...args),
 }));
 

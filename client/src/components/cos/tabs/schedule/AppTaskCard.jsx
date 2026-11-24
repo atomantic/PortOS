@@ -16,7 +16,7 @@ import BranchReconcileOutcome from './BranchReconcileOutcome';
 // appContext embeds the same card on a selected app's Automation tab: the
 // caller owns app-scoped saves/runs and supplies override controls as children.
 // Keep global coverage/history and global pin writes out of that context.
-export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep, appContext, children }) {
+export default function AppTaskCard({ taskType, config, apps, appsStatus, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep, appContext, children }) {
   // Owned here, not in the controls, so Run can gate on the same `saving` flag —
   // it reads the server-side config, so a run fired mid-write uses the old pins.
   const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate });
@@ -156,7 +156,9 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
           <>
             <RunTaskButton
               taskType={taskType}
-              apps={appContext ? undefined : apps}
+              apps={apps}
+              appsStatus={appsStatus}
+              appBound={!!appContext}
               onTrigger={onTrigger}
               installWide={!appContext && config.installWide}
               programmatic={config.programmatic}

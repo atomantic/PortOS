@@ -40,7 +40,7 @@ const h = vi.hoisted(() => {
 
 vi.mock('../lib/childProcess.js', async (importOriginal) => ({ ...(await importOriginal()), spawn: h.spawn }));
 vi.mock('../services/musicVideo/performanceShot.js', () => ({ assertCurrentPerformanceTakes: vi.fn(async () => {}) }));
-vi.mock('../services/videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), getHistoryItem: vi.fn(async () => ({ filename: 'accepted.mp4', fps: 24 })) }));
+vi.mock('../services/videoGen/history.js', async (importOriginal) => ({ ...(await importOriginal()), loadHistory: vi.fn(async () => []), getHistoryItem: vi.fn(async () => ({ filename: 'accepted.mp4', fps: 24 })) }));
 vi.mock('../lib/ffmpeg.js', async (original) => ({ ...(await original()), findFfmpeg: vi.fn(async () => 'ffmpeg'),
   runFfmpegProcess: vi.fn(async ({ args }) => { writeFileSync(args.at(-1), 'synthetic-boundary-frame'); return { ok: true }; }),
 }));

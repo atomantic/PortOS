@@ -54,6 +54,7 @@ import {
   RIG_STAGING_DIR_NAME,
 } from './autoSkin.js';
 import { resolveClipSource } from './clipLibrary.js';
+import { acquireRigLane, releaseRigLane, throwIfCancelled } from './inFlight.js';
 import { requireRiggingInterpreter } from './readiness.js';
 import {
   DEFAULT_RETARGET_MODE,
@@ -144,7 +145,7 @@ export function selectClip(clips, requested) {
  * rather than returning a partial mapping — a caller must not be able to proceed with
  * "most of" a skeleton.
  */
-async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint, clipName, spawnImpl, timeoutMs }) {
+async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint, clipName, spawnImpl, timeoutMs, signal }) {
   await atomicWrite(paths.probeJobFile, JSON.stringify({
     pass: 'probe',
     clip_glb: clipPath,
@@ -153,8 +154,9 @@ async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint,
   }, null, 2));
 
   const { code, tail } = await runRiggingWorker({
-    python: interpreter, script: WORKER_SCRIPT, jobFile: paths.probeJobFile, spawnImpl, timeoutMs,
+    python: interpreter, script: WORKER_SCRIPT, jobFile: paths.probeJobFile, spawnImpl, timeoutMs, signal,
   });
+  throwIfCancelled(signal);
   const probe = await readJSONFile(paths.probeReport, null, { logError: false });
   if (code !== 0 || !probe) {
     throw retargetError(
@@ -203,7 +205,7 @@ async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint,
  * @param {{modelId: string, recordDir: string, rigId: string, clipPath: string,
  *          clipName?: string|null, skeletonHint?: string, mode?: string, overrides?: object,
  *          readiness?: object, python?: string|null, spawnImpl?: Function,
- *          retargetId?: string, timeoutMs?: number, verify?: Function}} opts
+ *          retargetId?: string, timeoutMs?: number, signal?: AbortSignal, verify?: Function}} opts
  * @returns {Promise<object>}
  */
 export async function runRetarget({
@@ -220,6 +222,7 @@ export async function runRetarget({
   spawnImpl,
   retargetId = `retarget-${randomUUID()}`,
   timeoutMs,
+  signal,
   verify = readRiggedArtifact,
 }) {
   const interpreter = await requireRiggingInterpreter({ readiness, python });
@@ -240,7 +243,7 @@ export async function runRetarget({
   await ensureDir(paths.stageDir);
   try {
     const { mapping, clip } = await probeAndMap({
-      interpreter, paths, clipPath, rigGlb: source.glbPath, skeletonHint, clipName, spawnImpl, timeoutMs,
+      interpreter, paths, clipPath, rigGlb: source.glbPath, skeletonHint, clipName, spawnImpl, timeoutMs, signal,
     });
 
     await atomicWrite(paths.jobFile, JSON.stringify({
@@ -258,8 +261,9 @@ export async function runRetarget({
     }, null, 2));
 
     const { code, tail } = await runRiggingWorker({
-      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs,
+      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs, signal,
     });
+    throwIfCancelled(signal);
     const report = await readJSONFile(paths.workerReport, null, { logError: false });
 
     // A non-zero exit with a readable report is the EXPECTED gate failure: the worker
@@ -283,6 +287,10 @@ export async function runRetarget({
       paths,
       report: { ...report, kind: RETARGET_REPORT_KIND, source_rig_id: rigId, source_clip: basename(clipPath) },
     });
+    if (signal?.aborted) {
+      await rm(paths.publishDir, { recursive: true, force: true }).catch(() => {});
+      throwIfCancelled(signal);
+    }
     // Read the pair back through the same reader every consumer uses, before recording
     // the retarget as ready. A publish that does not verify is exactly the interrupted
     // state this contract exists to make detectable.
@@ -312,11 +320,6 @@ export async function runRetarget({
   }
 }
 
-// One retarget per record at a time. A double-click would otherwise put two Blender
-// processes on the same rig — a re-entrancy guard, not a multi-actor lock
-// (AGENTS.md single-user trust model).
-const retargetsInFlight = new Set();
-
 /**
  * Retarget a clip onto a stored image-to-3D record's published rig and persist the
  * result on it. The record's `retarget` field is the user-visible evidence: on success
@@ -342,18 +345,18 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
   if (!clipPath) {
     throw retargetError('That animation clip is not in the clip library.', 'RIGGING_CLIP_NOT_FOUND');
   }
-  if (retargetsInFlight.has(modelId)) {
-    throw new ServerError('This model is already being animated.', { status: 409, code: 'RIGGING_IN_FLIGHT' });
-  }
 
   const mode = options.mode || DEFAULT_RETARGET_MODE;
-  retargetsInFlight.add(modelId);
+  const signal = acquireRigLane(modelId, 'retarget');
   const startedAt = now();
-  await mutateModel(modelId, (current) => ({
-    ...current,
-    retarget: { ...(current.retarget || {}), status: 'retargeting', startedAt, error: null, reason: null },
-  }));
+  // False until the `retargeting` transition commits (see autoSkin.js).
+  let entered = false;
   try {
+    await mutateModel(modelId, (current) => ({
+      ...current,
+      retarget: { ...(current.retarget || {}), status: 'retargeting', startedAt, error: null, reason: null },
+    }));
+    entered = true;
     const result = await run({
       modelId,
       recordDir: join(PATHS.imageTo3d, modelId),
@@ -363,6 +366,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
       skeletonHint: model.rig.skeletonHint || 'mixamo',
       mode,
       overrides: options,
+      signal,
     });
     // The verified pair already sits in its own `retarget/<retargetId>/` directory
     // and is never replaced, so the row that first names it takes a backup lease
@@ -387,6 +391,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
       },
     })));
   } catch (error) {
+    if (!entered) throw error;
     await mutateModel(modelId, (current) => ({
       ...current,
       retarget: {
@@ -403,6 +408,6 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
     })).catch(() => {});
     throw error;
   } finally {
-    retargetsInFlight.delete(modelId);
+    releaseRigLane(modelId, 'retarget');
   }
 }

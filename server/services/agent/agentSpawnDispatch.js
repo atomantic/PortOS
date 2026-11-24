@@ -155,7 +155,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   // Phase order is load-bearing: the shutdown race check precedes any durable
   // registration, claim binding precedes the CAS persist, and `handedOff` flips
   // only once the process launch is committed.
-  return prepareAgentWorkspace({ agentId, task, onPrepared: async prep => {
+  return prepareAgentWorkspace({ agentId, task, inboxEnv: notificationAuth.env, onPrepared: async prep => {
     if (prep.outcome === 'deferred') {
       await context.cleanupOnError(prep.reason);
       return null;
@@ -388,7 +388,11 @@ async function registerAndBindPreparedAgent(d, prep, runtime) {
     }
     const issueNumber = claimCheckout.branchName.replace(/^claim\/issue-/, '');
     const { markAppIssueClaimed } = await import('../appIssues.js');
-    await markAppIssueClaimed(resolvedApp, issueNumber).catch(error => {
+    const inboxIssue = task.metadata?.githubIssueClaim;
+    const markers = inboxIssue
+      ? markAppIssueClaimed(resolvedApp, issueNumber, { inboxIssue, inboxEnv: d.notificationAuth.env })
+      : markAppIssueClaimed(resolvedApp, issueNumber);
+    await markers.catch(error => {
       emitLog('warn', `⚠️ Claim markers for issue ${issueNumber} were not set: ${error.message}`, { agentId, taskId: task.id });
     });
   }

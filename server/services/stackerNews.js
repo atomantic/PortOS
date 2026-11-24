@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { mapPgConstraintErrors } from '../lib/pgConstraintErrors.js';
 import { decryptValue, encryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
 import { executeStackerNewsBrowserRead, executeStackerNewsOperation } from '../integrations/stackerNews/index.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -222,6 +224,19 @@ async function saveCredential(client, accountId, apiKey) {
   );
 }
 
+const ACCOUNT_CONSTRAINT_MESSAGES = {
+  conflict: 'A Stacker News account with that username already exists',
+  missing: 'Stacker News account not found',
+};
+const TERRITORY_CONSTRAINT_MESSAGES = {
+  conflict: 'That territory already exists for this account',
+  missing: 'Stacker News account not found',
+};
+const ITEM_CONSTRAINT_MESSAGES = {
+  conflict: 'That Stacker News item already exists',
+  missing: 'Stacker News account or territory not found',
+};
+
 export async function createAccount({
   label, username, apiKey, enabled = true, monitoringEnabled = false,
   monitoringIntervalMinutes = 30, syncItemLimit = DEFAULT_SYNC_ITEM_LIMIT, analysisEnabled = false,
@@ -229,7 +244,7 @@ export async function createAccount({
   readTransport = DEFAULT_READ_TRANSPORT,
 }) {
   const id = randomUUID();
-  await withTransaction(async (client) => {
+  await mapPgConstraintErrors(() => withTransaction(async (client) => {
     await client.query(
       `INSERT INTO stacker_news_accounts
        (id,label,username,enabled,monitoring_enabled,monitoring_interval_minutes,sync_item_limit,analysis_enabled,text_model,vision_model,rules,policy_version,read_transport)
@@ -237,7 +252,7 @@ export async function createAccount({
       [id, label, username.toLowerCase(), enabled, monitoringEnabled, monitoringIntervalMinutes, normalizeSyncItemLimit(syncItemLimit), analysisEnabled, textModel, visionModel, normalizeStackerNewsRules(rules), POLICY_VERSION, normalizeReadTransport(readTransport)],
     );
     if (apiKey) await saveCredential(client, id, apiKey);
-  });
+  }), ACCOUNT_CONSTRAINT_MESSAGES);
   console.log(`📰 Added Stacker News account ${id}`);
   return getAccount(id);
 }
@@ -245,7 +260,7 @@ export async function createAccount({
 export async function updateAccount(id, updates) {
   // Merge omitted fields in SQL against the locked current row, not a snapshot
   // read before this transaction. Concurrent PATCHes must keep each other's edits.
-  const updated = await withTransaction(async (client) => {
+  const updated = await mapPgConstraintErrors(() => withTransaction(async (client) => {
     const result = await client.query(
       `UPDATE stacker_news_accounts SET label=COALESCE($2,label),username=COALESCE($3,username),
        enabled=COALESCE($4,enabled),monitoring_enabled=COALESCE($5,monitoring_enabled),
@@ -263,7 +278,7 @@ export async function updateAccount(id, updates) {
     if (!result.rows.length) return false;
     if (updates.apiKey !== undefined) await saveCredential(client, id, updates.apiKey);
     return true;
-  });
+  }), ACCOUNT_CONSTRAINT_MESSAGES);
   return updated ? getAccount(id) : null;
 }
 
@@ -283,18 +298,18 @@ export async function getTerritory(id) {
 }
 
 export async function createTerritory({ accountId, slug, label = '', isOwned = false, monitoringEnabled = null, inheritAccountRules = true, rules = {} }) {
-  const result = await query(
+  const result = await mapPgConstraintErrors(() => query(
     `INSERT INTO stacker_news_territories (id,account_id,slug,label,is_owned,monitoring_enabled,inherit_account_rules,rules)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
     [randomUUID(), accountId, slug, label, isOwned, monitoringEnabled, inheritAccountRules, normalizeStackerNewsRuleOverrides(rules)],
-  );
+  ), TERRITORY_CONSTRAINT_MESSAGES);
   return territoryView(result.rows[0]);
 }
 
 export async function updateTerritory(id, updates) {
   // Remote evidence belongs to the current slug. Preserve a sync's latest
   // evidence on ordinary edits; invalidate it atomically when renaming.
-  const result = await query(
+  const result = await mapPgConstraintErrors(() => query(
     `UPDATE stacker_news_territories SET slug=COALESCE($2,slug),label=COALESCE($3,label),is_owned=COALESCE($4,is_owned),
      monitoring_enabled=CASE WHEN $8 THEN $5 ELSE monitoring_enabled END,
      inherit_account_rules=COALESCE($6,inherit_account_rules),rules=COALESCE($7,rules),
@@ -305,7 +320,7 @@ export async function updateTerritory(id, updates) {
       updates.monitoringEnabled ?? null, updates.inheritAccountRules ?? null,
       updates.rules === undefined ? null : normalizeStackerNewsRuleOverrides(updates.rules),
       updates.monitoringEnabled !== undefined],
-  );
+  ), TERRITORY_CONSTRAINT_MESSAGES);
   return result.rows[0] ? territoryView(result.rows[0]) : null;
 }
 
@@ -360,7 +375,7 @@ export async function ingestItem({
   // not re-stamp `received_at` on every already-stored row and re-sort the whole
   // back catalogue to the top of the triage list. See `legacyItemContentHash`.
   const legacyHash = legacyItemContentHash(content);
-  const result = await query(
+  const result = await mapPgConstraintErrors(() => query(
     `INSERT INTO stacker_news_items
      (id,account_id,territory_id,remote_id,kind,author_name,title,body,source_url,image_urls,content_hash,remote_created_at,remote_updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
@@ -372,7 +387,7 @@ export async function ingestItem({
          THEN stacker_news_items.received_at ELSE NOW() END,
        updated_at=NOW() RETURNING *`,
     [randomUUID(), accountId, territoryId, String(remoteId), kind, authorName, content.title, content.body, sourceUrl, safeImageUrls, contentHash, remoteCreatedAt, remoteUpdatedAt, legacyHash],
-  );
+  ), ITEM_CONSTRAINT_MESSAGES);
   return itemView(result.rows[0]);
 }
 
@@ -572,10 +587,10 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
   const hasEffectiveMonitoring = territories.some((territory) => territory.monitoringEnabled ?? account.monitoring_enabled);
   if (!force && !hasEffectiveMonitoring) return { skipped: true, reason: 'monitoring_disabled', account: accountView({ ...account, api_key_configured: false }) };
   const { transport, read } = await openReadTransport(account);
-  if (!read) throw new Error('Stacker News API key is not configured');
+  if (!read) throw new ServerError('Stacker News API key is not configured', { status: 412 });
   const me = (await read('me', {}))?.me;
   if (!me?.name || me.name.toLowerCase() !== account.username.toLowerCase()) {
-    throw new Error(`${transport === 'api' ? 'API key' : 'Pinned browser'} identity @${me?.name || 'unknown'} does not match configured account`);
+    throw new ServerError(`${transport === 'api' ? 'API key' : 'Pinned browser'} identity @${me?.name || 'unknown'} does not match configured account`, { status: 409 });
   }
   let ingested = 0;
   let analyzed = 0;
@@ -641,14 +656,20 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
 }
 
 export async function syncAccount(accountId, options = {}) {
-  if (syncLocks.has(accountId)) return syncLocks.get(accountId);
+  const active = syncLocks.get(accountId);
+  if (active) {
+    if (!options.force || active.force) return active.promise;
+    // Reacquire after settlement so concurrent manual requests share one forced run.
+    await active.promise.catch(() => {});
+    return syncAccount(accountId, options);
+  }
   const run = syncAccountUnlocked(accountId, options)
     .catch(async (error) => {
       await query('UPDATE stacker_news_accounts SET last_error=$2,updated_at=NOW() WHERE id=$1', [accountId, error.message.slice(0, 2_000)]).catch(() => {});
       throw error;
     })
     .finally(() => syncLocks.delete(accountId));
-  syncLocks.set(accountId, run);
+  syncLocks.set(accountId, { promise: run, force: options.force });
   return run;
 }
 
@@ -663,7 +684,7 @@ async function actionContext({ accountId, itemId, territoryId }) {
     itemId ? query('SELECT * FROM stacker_news_items WHERE id=$1 AND account_id=$2', [itemId, accountId]) : Promise.resolve({ rows: [] }),
   ]);
   const item = itemResult.rows[0] || null;
-  if (item && territoryId && territoryId !== item.territory_id) throw new Error('Stacker News territory does not match the selected item');
+  if (item && territoryId && territoryId !== item.territory_id) throw new ServerError('Stacker News territory does not match the selected item', { status: 409 });
   const resolvedTerritoryId = territoryId || item?.territory_id || null;
   const territoryResult = resolvedTerritoryId
     ? await query('SELECT * FROM stacker_news_territories WHERE id=$1 AND account_id=$2', [resolvedTerritoryId, accountId])
@@ -671,15 +692,20 @@ async function actionContext({ accountId, itemId, territoryId }) {
   return { account, item, territory: territoryResult.rows[0] || null, resolvedTerritoryId };
 }
 
-export async function createAction({ accountId, itemId = null, territoryId = null, kind, destination = '', payload = {} }) {
+export async function createAction(input) {
+  const { action } = await createActionWithOutcome(input);
+  return action;
+}
+
+export async function createActionWithOutcome({ accountId, itemId = null, territoryId = null, kind, destination = '', payload = {} }) {
   if (!ACTION_KINDS.has(kind)) throw new Error('Unsupported Stacker News action kind');
   if (kind === 'open_browser' && destination === 'item' && !ITEM_HANDOFF_INTENTS.has(payload?.intent || 'inspect')) {
     throw new Error('Unsupported Stacker News item handoff intent');
   }
   const { account, item, territory, resolvedTerritoryId } = await actionContext({ accountId, itemId, territoryId });
-  if (!account) throw new Error('Stacker News account not found');
-  if (itemId && !item) throw new Error('Stacker News item not found for account');
-  if (resolvedTerritoryId && !territory) throw new Error('Stacker News territory not found for account');
+  if (!account) throw new ServerError('Stacker News account not found', { status: 404 });
+  if (itemId && !item) throw new ServerError('Stacker News item not found for account', { status: 404 });
+  if (resolvedTerritoryId && !territory) throw new ServerError('Stacker News territory not found for account', { status: 404 });
   const rules = resolveStackerNewsRules(account.rules, territory?.rules, territory?.inherit_account_rules ?? true);
   const rulesHash = hashStackerNewsRules(rules);
   const sourceContentHash = item?.content_hash || '';
@@ -690,11 +716,12 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
   };
   const idempotencyKey = stableHash({ accountId, itemId, territoryId: resolvedTerritoryId, kind, destination, payload, sourceContentHash, rulesHash, reviewedTarget });
   const id = randomUUID();
-  const row = await withTransaction(async (client) => {
+  const { row, created, changed } = await withTransaction(async (client) => {
+    // Hold the active row through stale-state checks so overlapping requests cannot both record its transition.
     const active = await client.query(
       `SELECT * FROM stacker_news_actions
        WHERE idempotency_key=$1 AND state IN ('pending_review','approved','executing')
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
       [idempotencyKey],
     );
     const existing = active.rows[0];
@@ -702,7 +729,9 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
       && (!existing.approved_at || Date.now() - new Date(existing.approved_at).getTime() > ACTION_MAX_AGE_MS);
     const executionInterrupted = existing?.state === 'executing'
       && (!existing.updated_at || Date.now() - new Date(existing.updated_at).getTime() > ACTION_EXECUTION_TIMEOUT_MS);
-    if (existing && !approvalExpired && !executionInterrupted) return existing;
+    if (existing && !approvalExpired && !executionInterrupted) {
+      return { row: existing, created: false, changed: false };
+    }
     if (executionInterrupted) {
       // Release the active-idempotency unique index; the outcome is unknown, so a fresh human review is required.
       await client.query(
@@ -727,7 +756,7 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
     );
     if (result.rows[0]) {
       await eventInsert(client, id, null, 'pending_review', 'Created for human review');
-      return result.rows[0];
+      return { row: result.rows[0], created: true, changed: true };
     }
     const conflicted = await client.query(
       `SELECT * FROM stacker_news_actions
@@ -735,9 +764,10 @@ export async function createAction({ accountId, itemId = null, territoryId = nul
        ORDER BY created_at DESC LIMIT 1`,
       [idempotencyKey],
     );
-    return conflicted.rows[0];
+    if (!conflicted.rows[0]) throw new Error('Concurrent Stacker News action is no longer active; retry to queue a new action');
+    return { row: conflicted.rows[0], created: false, changed: approvalExpired || executionInterrupted };
   });
-  return actionView(row);
+  return { action: actionView(row), created, changed };
 }
 
 export async function listActions(accountId) {
@@ -773,6 +803,9 @@ export async function updateActionState(id, state, reviewNote = '') {
       [id, state, reviewNote],
     );
     if (result.rows[0]) await eventInsert(client, id, 'pending_review', state, reviewNote || `Human ${state}`);
+    else if (!(await client.query('SELECT 1 FROM stacker_news_actions WHERE id=$1', [id])).rows[0]) {
+      throw new ServerError('Stacker News action not found', { status: 404 });
+    }
     return result.rows[0] || null;
   });
   return row ? actionView(row) : null;
@@ -789,9 +822,9 @@ async function assertActionBudget(accountId, budget) {
     [accountId],
   );
   const row = result.rows[0];
-  if (row.hour_count >= budget.maxPerHour) throw new Error('Hourly Stacker News action budget reached');
-  if (row.day_count >= budget.maxPerDay) throw new Error('Daily Stacker News action budget reached');
-  if (row.last_executed && Date.now() - new Date(row.last_executed).getTime() < budget.minMinutesBetween * 60_000) throw new Error('Minimum spacing between Stacker News actions has not elapsed');
+  if (row.hour_count >= budget.maxPerHour) throw new ServerError('Hourly Stacker News action budget reached', { status: 429 });
+  if (row.day_count >= budget.maxPerDay) throw new ServerError('Daily Stacker News action budget reached', { status: 429 });
+  if (row.last_executed && Date.now() - new Date(row.last_executed).getTime() < budget.minMinutesBetween * 60_000) throw new ServerError('Minimum spacing between Stacker News actions has not elapsed', { status: 429 });
 }
 
 async function runApprovedAction(action, account, item, territory, apiKey) {
@@ -820,43 +853,44 @@ async function runApprovedAction(action, account, item, territory, apiKey) {
 export async function executeApprovedAction(id) {
   const result = await query('SELECT * FROM stacker_news_actions WHERE id=$1', [id]);
   const action = result.rows[0];
-  if (!action || action.state !== 'approved') return null;
-  if (!action.approved_at || Date.now() - new Date(action.approved_at).getTime() > ACTION_MAX_AGE_MS) throw new Error('Approval is stale; create and review a fresh action');
+  if (!action) throw new ServerError('Stacker News action not found', { status: 404 });
+  if (action.state !== 'approved') return null;
+  if (!action.approved_at || Date.now() - new Date(action.approved_at).getTime() > ACTION_MAX_AGE_MS) throw new ServerError('Approval is stale; create and review a fresh action', { status: 409 });
   const { account, item, territory } = await actionContext({
     accountId: action.account_id,
     itemId: action.item_id,
     territoryId: action.territory_id,
   });
-  if (!account?.enabled) throw new Error('Selected Stacker News account is disabled');
+  if (!account?.enabled) throw new ServerError('Selected Stacker News account is disabled', { status: 409 });
   const currentTarget = {
     username: account.username,
     territorySlug: territory?.slug || '',
     remoteItemId: item?.remote_id || '',
   };
-  if (stableHash(currentTarget) !== stableHash(action.reviewed_target || {})) throw new Error('External account or destination changed after review');
+  if (stableHash(currentTarget) !== stableHash(action.reviewed_target || {})) throw new ServerError('External account or destination changed after review', { status: 409 });
   // An action reviewed BEFORE the image-aware digest landed stamped the legacy
   // hash, so compare the item's current content against both digests rather than
   // the two stored strings — otherwise every already-approved action fails
   // permanently on an upgrade, blaming a content change that never happened.
   // See `legacyItemContentHash`.
   if (item && !contentHashMatches(action.source_content_hash, { title: item.title, body: item.body, imageUrls: item.image_urls })) {
-    throw new Error('Source content changed after review');
+    throw new ServerError('Source content changed after review', { status: 409 });
   }
-  if (action.policy_version !== POLICY_VERSION) throw new Error('Policy version changed after review');
+  if (action.policy_version !== POLICY_VERSION) throw new ServerError('Policy version changed after review', { status: 409 });
   const rules = resolveStackerNewsRules(account.rules, territory?.rules, territory?.inherit_account_rules ?? true);
-  if (hashStackerNewsRules(rules) !== action.rules_hash) throw new Error('Community rules changed after review');
+  if (hashStackerNewsRules(rules) !== action.rules_hash) throw new ServerError('Community rules changed after review', { status: 409 });
   if (!['draft_post', 'draft_comment'].includes(action.kind)) await assertActionBudget(account.id, rules.actionBudget);
   if ((action.kind === 'territory_setting' || action.destination === 'territory_settings')
       && (!territory?.is_owned || territory.remote_settings?.ownershipVerified !== true)) {
-    throw new Error('Territory settings require verified ownership from the latest refresh');
+    throw new ServerError('Territory settings require verified ownership from the latest refresh', { status: 412 });
   }
   let apiKey = null;
   if (['publish_post', 'publish_comment'].includes(action.kind)) {
     apiKey = await getCredential(account.id);
-    if (!apiKey) throw new Error('Stacker News API key is not configured');
+    if (!apiKey) throw new ServerError('Stacker News API key is not configured', { status: 412 });
     const me = (await executeStackerNewsOperation('me', {}, apiKey))?.me;
-    if (me?.name?.toLowerCase() !== account.username.toLowerCase()) throw new Error('Stacker News API identity no longer matches the selected account');
-    if (territory?.is_owned && territory.remote_settings?.ownershipVerified !== true) throw new Error('Territory ownership has not been verified by the latest refresh');
+    if (me?.name?.toLowerCase() !== account.username.toLowerCase()) throw new ServerError('Stacker News API identity no longer matches the selected account', { status: 409 });
+    if (territory?.is_owned && territory.remote_settings?.ownershipVerified !== true) throw new ServerError('Territory ownership has not been verified by the latest refresh', { status: 412 });
   }
 
   const claimed = await withTransaction(async (client) => {

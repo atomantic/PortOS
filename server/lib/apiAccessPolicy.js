@@ -66,8 +66,9 @@ export const PEER_API_SURFACE = Object.freeze([
   // Make-primary release (services/mediaHolders.js): same capability check.
   { path: '/api/peer-media/copy', methods: Object.freeze(['POST']) },
   { path: '/api/peer-media/release', methods: Object.freeze(['POST']) },
-  // Planning-only administration. Each exact endpoint independently verifies
-  // the current paired identity and a host-local action grant. Never host control.
+  // Peer administration (planning-v1 and receiver-granted execution-v1). Each exact
+  // endpoint independently verifies the current paired identity and a host-local
+  // action grant; never general host control.
   ...['preflight', 'plans', 'receipt', 'execute', 'execution/preflight', 'execution/dispatch', 'execution/status'].map(endpoint => ({
     path: `/api/federation/admin/v1/${endpoint}`, methods: Object.freeze(['POST']),
   })),

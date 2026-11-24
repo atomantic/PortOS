@@ -110,6 +110,7 @@ def main():
     started_at = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', required=True)
+    parser.add_argument('--revision', default='')
     parser.add_argument('--text', required=True)
     parser.add_argument('--lyrics', default='')
     parser.add_argument('--duration', type=float, required=True)
@@ -133,7 +134,13 @@ def main():
     print('STAGE:load-model', file=sys.stderr, flush=True)
     with heartbeat('load-model'):
         components_manager = ComponentsManager()
-        pipe = ModularPipeline.from_pretrained(args.model, components_manager=components_manager)
+        from_pretrained_kwargs = {
+            'components_manager': components_manager,
+            'local_files_only': True,
+        }
+        if args.revision:
+            from_pretrained_kwargs['revision'] = args.revision
+        pipe = ModularPipeline.from_pretrained(args.model, **from_pretrained_kwargs)
         pipe.load_components(dtype=torch.bfloat16)
         execution_profile = place_minimax_pipeline(pipe, components_manager, torch)
     print('STAGE:generate', file=sys.stderr, flush=True)

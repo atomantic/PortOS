@@ -68,6 +68,21 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
     if (open) controller.current?.();
   }, [open]);
 
+  // Reattach once per loom to a job started before a reload or in another tab.
+  const hydratedFor = useRef(null);
+  useEffect(() => {
+    if (!open || jobId || hydratedFor.current === loom.id) return;
+    let active = true;
+    let settled = false;
+    hydratedFor.current = loom.id;
+    api.getLatestLoomExport(loom.id, { silent: true }).then(result => {
+      settled = true;
+      if (active && result?.job) setJobId(previous => previous ?? result.job.jobId);
+    }).catch(() => { settled = true; if (active) hydratedFor.current = null; });
+    // A superseded request retries on the next open instead of latching the loom as hydrated.
+    return () => { active = false; if (!settled) hydratedFor.current = null; };
+  }, [open, jobId, loom.id]);
+
   const change = patch => setOptions(previous => ({ ...previous, ...patch }));
   const start = async () => {
     if (busy || !preflight?.canBuild || preflight.identity !== identity) return;
@@ -75,6 +90,15 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
     setError('');
     await api.startLoomExport(loom.id, options, { silent: true }).then(result => {
       if (mounted.current) setJobId(result.jobId);
+    }).catch(err => { if (mounted.current) setError(err.message); });
+    if (mounted.current) setBusy(false);
+  };
+  const cancel = async () => {
+    if (busy || !jobId) return;
+    setBusy(true);
+    setError('');
+    await api.cancelLoomExport(loom.id, jobId, { silent: true }).then(next => {
+      if (mounted.current && next.jobId === jobId) setJob(previous => previous && previous.revision >= next.revision ? previous : next);
     }).catch(err => { if (mounted.current) setError(err.message); });
     if (mounted.current) setBusy(false);
   };
@@ -124,6 +148,7 @@ export default function LoomExportModal({ loom, open = true, onClose }) {
     </div>
     <div className="flex flex-wrap gap-3">
       <button disabled={busy || !!running || !preflight?.canBuild || preflight.identity !== identity} onClick={start} className="rounded bg-port-accent px-3 py-2 text-white disabled:opacity-50">Build ZIP</button>
+      {running && <button disabled={busy} onClick={cancel} className="rounded border border-port-border px-3 py-2">Cancel export</button>}
       {jobId && (error || jobError) && <button onClick={() => { controller.current?.(); }} className="rounded border border-port-border px-3 py-2">Refresh selected job</button>}
       {job?.jobId === jobId && job?.status === 'completed' && <button disabled={busy} onClick={download} className="rounded border border-port-border px-3 py-2">Download selected ZIP</button>}
     </div>

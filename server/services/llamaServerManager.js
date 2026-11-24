@@ -11,10 +11,10 @@ import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { adoptPathDirs, findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { expandHome, sleep } from '../lib/fileUtils.js';
-import { createDaemonWatcher, pm2ArgValue, LLAMA_APP } from '../lib/managedDaemon.js';
+import { createDaemonLogFiles, createDaemonWatcher, createPm2ExitTail, pm2ArgValue, waitForDaemonReady, LLAMA_APP } from '../lib/managedDaemon.js';
+import { createSingleFlight } from '../lib/singleFlight.js';
 import { execFile } from '../lib/childProcess.js';
-import { resolveSpecModelPath } from './specDecodeModels.js';
-import { parseSpecTypes, isDraftSpecType } from '../lib/specDecodePresets.js';
+import { parseSpecTypes, isDraftSpecType, resolveSpecModelPath } from '../lib/specDecodePresets.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { isPortInUse } from '../lib/platform.js';
 import {
@@ -446,6 +446,8 @@ const daemon = createDaemonWatcher({
   preserveConfigOnReadFailure: true,
 });
 const appendLog = daemon.appendLog;
+const llamaLogs = createDaemonLogFiles(LLAMA_APP);
+const exitTail = createPm2ExitTail({ appName: LLAMA_APP, execPm2: (...a) => execPm2(...a), appendLog });
 
 /**
  * Just the base URL llama-server is serving on — no endpoint probe, no PM2 log
@@ -794,7 +796,7 @@ async function failEarlyExit(proc) {
 /**
  * Starts llama-server with the specified model and options under PM2.
  */
-export async function startLlamaServer(options = {}) {
+async function startLlamaServerUnlocked(options = {}) {
   const binaryPath = resolveLlamaServerBinary();
   const endpoint = await assertLaunchable(binaryPath, normalizeLaunchOptions(options));
   const resolved = await resolveLaunch(options, binaryPath);
@@ -803,6 +805,9 @@ export async function startLlamaServer(options = {}) {
 
   lastExitError = null;
   daemon.resetLogs();
+  // Truncated per launch so `failEarlyExit` tails THIS launch's output, not a
+  // previous crash's (PM2 appends across process deletion).
+  await llamaLogs.reset();
   logLaunchResolution(resolved, args);
 
   // A fresh launch line supersedes any baseline: whatever PortOS tuned is gone
@@ -822,6 +827,8 @@ export async function startLlamaServer(options = {}) {
     '--name', LLAMA_APP,
     '--interpreter', 'none',
     '--no-autorestart',
+    '--output', llamaLogs.files().stdout,
+    '--error', llamaLogs.files().stderr,
     '--',
     ...args,
   ]);
@@ -900,13 +907,14 @@ async function restartManagedLlamaServer(config, baseline) {
   // The recovered PM2 config carries the effective idle flag from the old
   // process. Leave this field undefined so startLlamaServer reads the current
   // saved setting when an upgrade is also the next launch.
-  const started = await startLlamaServer({ ...config, sleepIdleMinutes: undefined }).catch((err) => {
+  const started = await startLlamaServerUnlocked({ ...config, sleepIdleMinutes: undefined }).catch((err) => {
     console.error(`❌ llama-server: could not restore the previous configuration after update: ${err.message}`);
     return null;
   });
   if (!started) return null;
-  if (!started.online && !(await waitForEndpoint(started.endpoint))) {
-    console.error('❌ llama-server: restored process never answered after update');
+  const ready = started.online ? { ready: true } : await waitForEndpoint(started.endpoint);
+  if (!ready.ready) {
+    console.error(`❌ llama-server: restored process never answered after update (${ready.reason})`);
     await stopLlamaServer().catch(() => {});
     return null;
   }
@@ -955,7 +963,7 @@ async function upgradePreflight(plan, binaryPath) {
  * external process is never stopped; changing the package only takes effect for
  * it when its owner starts it again.
  */
-export async function upgradeLlamaServer({ onProgress = () => {} } = {}) {
+async function upgradeLlamaServerUnlocked({ onProgress = () => {} } = {}) {
   const plan = installPlan();
   const binaryPath = resolveLlamaServerBinary();
   const refusal = await upgradePreflight(plan, binaryPath);
@@ -1043,17 +1051,23 @@ export async function upgradeLlamaServer({ onProgress = () => {} } = {}) {
 }
 
 /**
- * Block until the endpoint answers, or the readiness budget elapses.
- * `false` means it never answered — which is a wedged process, not a slow one.
+ * Block until the endpoint answers, or the readiness budget elapses. Fails
+ * fast, with PM2's exit tail, when the process dies while loading — a GGUF OOM
+ * after the startup window must not cost the full budget polling a dead port.
+ *
+ * @returns {Promise<{ready: boolean, reason: string|null}>}
  */
-async function waitForEndpoint(endpoint) {
-  const deadline = Date.now() + relaunchReadyTimeoutMs;
-  while (Date.now() < deadline) {
-    if (await probeEndpoint(endpoint)) return true;
-    await sleep(relaunchPollDelayMs);
-  }
-  return false;
-}
+const waitForEndpoint = (endpoint) => waitForDaemonReady({
+  endpoint,
+  label: 'llama-server',
+  probe: probeEndpoint,
+  getStatusStrict: () => getAppStatusStrict(LLAMA_APP),
+  clearStatusCache: clearJlistCache,
+  exitTail,
+  sleep,
+  timeoutMs: relaunchReadyTimeoutMs,
+  pollMs: relaunchPollDelayMs,
+});
 
 /**
  * Stop whatever is running and bring `next` up in its place, putting `previous`
@@ -1076,11 +1090,20 @@ async function relaunchWithConfig(next, previous) {
   // caller's own reason with a second error would hide why the relaunch failed.
   const restorePrevious = async () => {
     await waitForPortRelease(previous.port ?? PORTS.LLAMA_SERVER);
-    const restored = await startLlamaServer(previous).catch((err) => {
+    const restored = await startLlamaServerUnlocked(previous).catch((err) => {
       console.error(`❌ llama-server: could not restore the previous configuration: ${err.message}`);
       return null;
     });
-    return restored?.config || null;
+    if (!restored) return null;
+    // Same readiness bar as the primary launch: callers (assessments) probe the
+    // restored server next, and a still-loading one reads as a junk failure.
+    const ready = restored.online ? { ready: true } : await waitForEndpoint(restored.endpoint);
+    if (!ready.ready) {
+      console.error(`❌ llama-server: restored configuration never answered (${ready.reason})`);
+      await stopLlamaServer().catch(() => {});
+      return null;
+    }
+    return restored.config || null;
   };
 
   await stopLlamaServer();
@@ -1089,7 +1112,7 @@ async function relaunchWithConfig(next, previous) {
   // A tuning sweep EXPECTS launch lines that don't work — `--flash-attn` on a
   // build without it, a `--cache-type-k` this build lacks, a `-ub` past what the
   // GPU can hold. llama-server exits immediately and `startLlamaServer` throws.
-  const started = await startLlamaServer(next).catch(async (err) => {
+  const started = await startLlamaServerUnlocked(next).catch(async (err) => {
     console.error(`❌ llama-server: relaunch failed (${err.message}) — restoring the previous configuration`);
     return { failure: err.message, config: await restorePrevious() };
   });
@@ -1099,14 +1122,13 @@ async function relaunchWithConfig(next, previous) {
   // `startLlamaServer` only polls for four seconds, and a large GGUF routinely
   // takes longer than that to load — so `online: false` is "not ready YET",
   // not "wedged". Give it a real readiness budget before judging.
-  if (started.online || await waitForEndpoint(started.endpoint)) {
-    return { ok: true, rejected: null, config: started.config };
-  }
+  const ready = started.online ? { ready: true } : await waitForEndpoint(started.endpoint);
+  if (ready.ready) return { ok: true, rejected: null, config: started.config };
 
   // Still silent. Treat it exactly like a rejected launch line: put the previous
   // configuration back, so the install's llama provider is not left pointing at
   // a process that never serves.
-  console.error('❌ llama-server: relaunched process never answered — restoring the previous configuration');
+  console.error(`❌ llama-server: relaunched process never answered (${ready.reason}) — restoring the previous configuration`);
   await stopLlamaServer().catch(() => {});
   return { ok: false, rejected: null, config: await restorePrevious() };
 }
@@ -1148,7 +1170,7 @@ export async function readLlamaServerLaunch() {
  * @returns {Promise<{applied: boolean|null, reason: string|null, config: object|null}>}
  *   `applied: null` means the daemon already answers under that id.
  */
-export async function relaunchLlamaServerWithAlias(alias) {
+async function relaunchLlamaServerWithAliasUnlocked(alias) {
   const wanted = String(alias ?? '').trim();
   if (!wanted) return { applied: false, reason: 'No model id was given to serve under.', config: null };
 
@@ -1316,7 +1338,7 @@ export async function captureLlamaServerConfig() {
  * because PM2 could not be read to find out (`managed: null`, reported as its
  * own retryable refusal rather than as somebody else's process).
  */
-export async function restoreLlamaServerConfig(config) {
+async function restoreLlamaServerConfigUnlocked(config) {
   if (!config?.model) return { restored: false, reason: 'nothing was captured' };
   const status = await readLlamaServerStatusRetrying();
   // Split from the refusal below, not folded into it: a server PortOS cannot
@@ -1342,7 +1364,7 @@ export async function restoreLlamaServerConfig(config) {
   await waitForPortRelease(config.port ?? PORTS.LLAMA_SERVER);
 
   console.log('🦙 llama-server: restoring the launch configuration the sweep started from');
-  const started = await startLlamaServer(config).catch((err) => {
+  const started = await startLlamaServerUnlocked(config).catch((err) => {
     console.error(`❌ llama-server: could not restore the launch configuration: ${err.message}`);
     return null;
   });
@@ -1352,7 +1374,7 @@ export async function restoreLlamaServerConfig(config) {
   };
 }
 
-export async function relaunchLlamaServerWithTuning(tuning = {}, { reset = false } = {}) {
+async function relaunchLlamaServerWithTuningUnlocked(tuning = {}, { reset = false } = {}) {
   const empty = Object.values(tuning).every((v) => v === null || v === undefined);
   // An empty tuning with no `reset` is an UNTUNED measurement asking to be taken
   // at backend defaults. If PortOS put a tuning on this daemon, it has to come
@@ -1625,6 +1647,24 @@ export async function installLlamaServer({ onProgress = () => {} } = {}) {
 }
 
 /**
+ * Every operation that stops, deletes or starts the one `portos-llama-server`
+ * PM2 app runs through this exclusive slot. Unserialized, overlapping starts
+ * `pm2 delete` each other's process and interleave writes to `currentConfig` /
+ * `preTuningConfig` (same race #12723 closed for mtplx/slotstream). The key is
+ * unique per call so callers never join one another's result: each carries its
+ * own launch options. Internal composition (relaunch -> start) calls the
+ * `*Unlocked` bodies directly; re-entering the slot would deadlock.
+ */
+const launchFlight = createSingleFlight({ exclusive: true });
+const serialized = (fn) => (...args) => launchFlight.run(Symbol('llama-launch'), () => fn(...args));
+
+export const startLlamaServer = serialized((...a) => startLlamaServerUnlocked(...a));
+export const upgradeLlamaServer = serialized((...a) => upgradeLlamaServerUnlocked(...a));
+export const relaunchLlamaServerWithAlias = serialized((...a) => relaunchLlamaServerWithAliasUnlocked(...a));
+export const restoreLlamaServerConfig = serialized((...a) => restoreLlamaServerConfigUnlocked(...a));
+export const relaunchLlamaServerWithTuning = serialized((...a) => relaunchLlamaServerWithTuningUnlocked(...a));
+
+/**
  * Clears in-memory test state (used by test suites).
  */
 export function _resetLlamaServerStateForTests({
@@ -1636,6 +1676,7 @@ export function _resetLlamaServerStateForTests({
   sleepIdleMinutes = 0,
   sleepIdleKeepLoaded = null,
   platform = null,
+  logFiles,
 } = {}) {
   sleepIdleSupport.clear();
   // Pinned rather than read from disk — see `configuredSleepIdleMinutes`.
@@ -1644,6 +1685,7 @@ export function _resetLlamaServerStateForTests({
   // `null` = use the real host platform, which is what every suite that is not
   // specifically exercising the other package manager's path wants.
   platformOverride = platform;
+  llamaLogs.setForTests(logFiles);
   currentConfig = null;
   preTuningConfig = null;
   daemon.resetLogs();

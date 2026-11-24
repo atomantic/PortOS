@@ -10,7 +10,7 @@ vi.mock('../mortalLoomStore.js', () => ({
   mlReplace: async () => {},
 }));
 vi.mock('../genome.js', () => ({ getGenomeSummary: async () => null }));
-vi.mock('../meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
+vi.mock('../meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
 vi.mock('../aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: JSON.parse }));
 vi.mock('../userTimezone.js', () => ({
   getUserTimezone: async () => 'UTC',

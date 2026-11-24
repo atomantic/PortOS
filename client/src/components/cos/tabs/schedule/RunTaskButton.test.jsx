@@ -25,11 +25,21 @@ afterEach(() => {
 });
 
 describe('RunTaskButton', () => {
-  it('fires a plain global run when no active apps exist', async () => {
+  it.each([[[]], [[{ id: 'archived', archived: true }]]])('does not run an app task without an active target (%j)', async (apps) => {
     const user = userEvent.setup();
     const onTrigger = vi.fn();
-    render(<RunTaskButton taskType="review" apps={[]} onTrigger={onTrigger} />);
-    await user.click(screen.getByRole('button', { name: /Run Now/i }));
+    render(<RunTaskButton taskType="review" apps={apps} onTrigger={onTrigger} />);
+    const run = screen.getByRole('button', { name: 'No active apps' });
+    expect(run).toBeDisabled();
+    await user.click(run);
+    expect(onTrigger).not.toHaveBeenCalled();
+  });
+
+  it('keeps the app-bound Automation button actionable without an app list', async () => {
+    const user = userEvent.setup();
+    const onTrigger = vi.fn();
+    render(<RunTaskButton taskType="review" appsStatus="loading" onTrigger={onTrigger} appBound />);
+    await user.click(screen.getByRole('button', { name: 'Run Now' }));
     expect(onTrigger).toHaveBeenCalledWith('review');
   });
 
@@ -41,7 +51,7 @@ describe('RunTaskButton', () => {
     // unreachable from the UI entirely.
     const user = userEvent.setup();
     const onTrigger = vi.fn();
-    render(<RunTaskButton taskType="repo-sync" apps={APPS} onTrigger={onTrigger} installWide />);
+    render(<RunTaskButton taskType="repo-sync" apps={APPS} appsStatus="loading" onTrigger={onTrigger} installWide />);
     await user.click(screen.getByRole('button', { name: /Run on All Apps/i }));
     expect(onTrigger).toHaveBeenCalledWith('repo-sync');
     expect(onTrigger.mock.calls[0]).toHaveLength(1);
@@ -55,7 +65,7 @@ describe('RunTaskButton', () => {
     // either, so it must not claim to run on all of them.
     const user = userEvent.setup();
     const onTrigger = vi.fn();
-    render(<RunTaskButton taskType="universe-bible-images" apps={APPS} onTrigger={onTrigger} programmatic />);
+    render(<RunTaskButton taskType="universe-bible-images" apps={APPS} appsStatus="error" onTrigger={onTrigger} programmatic />);
     expect(screen.queryByRole('button', { name: /Run on All Apps/i })).toBeNull();
     await user.click(screen.getByRole('button', { name: /Run Now/i }));
     expect(onTrigger).toHaveBeenCalledWith('universe-bible-images');

@@ -262,14 +262,8 @@ export async function importFresh() {
   await mediaJobQueue?.__resetForTests();
   vi.resetModules();
   mediaJobQueue = await import('./index.js');
-  // The fresh graph has a fresh runtime registry; these resolve to the mocks above, as bootHooks.js's loaders do at boot.
-  (await import('../bootHookRegistry.js')).registerMediaRuntimeModules({
-    topazUpscale: () => import('../videoGen/topazJob.js'),
-    ltxUpscale: () => import('../videoGen/upscaleJob.js'),
-    stitch: () => import('../videoGen/stitchJob.js'),
-    vertical: () => import('../videoGen/verticalJob.js'),
-    training: () => import('../loraTraining/index.js'),
-  });
+  // The fresh graph has a fresh runtime registry; bootHooks.js's lazy loaders resolve to the mocks above, as at boot.
+  (await import('../bootHooks.js')).registerBootHooks();
   videoGenEvents = (await import('../videoGen/events.js')).videoGenEvents;
   imageGenEvents = (await import('../imageGenEvents.js')).imageGenEvents;
   audioGenEvents = (await import('../audioGen/events.js')).audioGenEvents;

@@ -11,18 +11,18 @@ import { constants } from 'node:fs';
 import { access, lstat, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import {
   CONTAINED_BLENDER_GPU_NOTICE, codeAnimationExecutionArmedSchema, codeAnimationExecutionToolsSchema, codeAnimationToolRoots,
   codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
 } from '../../lib/codeAnimationContainment.js';
-import { getSettings, updateSettings } from '../settings.js';
-import { cdpRequest } from '../browserService.js';
 import { currentContainmentMechanism, runContainedWorker, runTrustedLocalWorker } from './containedWorker.js';
 import { probeBlenderRender } from './blenderProbe.js';
 import { blenderSeries } from '../../lib/blenderVersion.js';
+
+const loadSettings = () => import('../settings.js');
 
 const SETTINGS_KEY = 'codeAnimationExecution';
 const ARMED_KEY = 'codeAnimationExecutionArmed';
@@ -83,6 +83,7 @@ async function inspectExecutable(path) {
 }
 
 async function configuredTools() {
+  const { getSettings } = await loadSettings();
   const parsed = codeAnimationExecutionToolsSchema.safeParse((await getSettings())?.[SETTINGS_KEY]);
   return parsed.success ? parsed.data : codeAnimationExecutionToolsSchema.parse({ blender: { executable: null } });
 }
@@ -95,6 +96,7 @@ async function inspectConfiguredBlender() {
 }
 
 async function armedConfiguration() {
+  const { getSettings } = await loadSettings();
   const parsed = codeAnimationExecutionArmedSchema.safeParse((await getSettings())?.[ARMED_KEY]);
   return parsed.success ? parsed.data : null;
 }
@@ -165,6 +167,7 @@ export async function setCodeAnimationExecutionTools(input) {
     if (inspected.problem) throw new ServerError(inspected.problem, { status: 400, code: 'CODE_ANIMATION_TOOL_INVALID' });
     executable = inspected.executable;
   }
+  const { updateSettings } = await loadSettings();
   await updateSettings({ [SETTINGS_KEY]: { blender: { ...tools.blender, executable } }, [ARMED_KEY]: null });
   configurationGeneration += 1;
   lastProbe = null;
@@ -297,7 +300,9 @@ async function runProbe(generation, expectedConfiguration) {
   const blender = await probeBlenderRender(inspected, workspaceRoot, {
     worker, engine: configuration.engine, executionMode: configuration.executionMode,
   });
-  const browser = await cdpRequest('/json/version', { timeout: 2000 }).then((response) => response.ok, () => false);
+  const browser = await import('../browserService.js')
+    .then(({ cdpRequest }) => cdpRequest('/json/version', { timeout: 2000 }))
+    .then((response) => response.ok, () => false);
   // A save during a probe revokes its authority, even if the operator later
   // switches back to the same path. Only the next explicit check can arm it.
   const current = await inspectConfiguredBlender();
@@ -326,7 +331,10 @@ async function armCheckedConfiguration(probe) {
   const armed = Object.fromEntries(CHECKED_FIELDS.map((field) => [field, evidence[field]]));
   const previous = await armedConfiguration();
   if (generation !== configurationGeneration || probe !== lastProbe) return;
-  if (!sameCheckedConfiguration(previous, armed)) await updateSettings({ [ARMED_KEY]: armed });
+  if (!sameCheckedConfiguration(previous, armed)) {
+    const { updateSettings } = await loadSettings();
+    await updateSettings({ [ARMED_KEY]: armed });
+  }
 }
 
 /**

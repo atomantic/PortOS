@@ -149,7 +149,24 @@ function scanLimits(overrides, ceilings) {
   return { ...ceilings, ...overrides };
 }
 
-async function* discover(directory, state, depth = 0) {
+// `sessions/YYYY/MM/DD` partitions are named for the day a rollout STARTED, so a
+// partition's newest possible write is the end of that period plus the day a
+// still-running session can spill into. Non-date names never prune.
+function datePartitionEnd(parts) {
+  const nums = parts.map(Number);
+  if (parts.length === 1 && /^\d{4}$/.test(parts[0])) return Date.UTC(nums[0] + 1, 0, 1);
+  if (parts.length === 2 && /^\d{4}$/.test(parts[0]) && /^\d{2}$/.test(parts[1])) return Date.UTC(nums[0], nums[1], 1);
+  if (parts.length === 3 && /^\d{4}$/.test(parts[0]) && /^\d{2}$/.test(parts[1]) && /^\d{2}$/.test(parts[2])) return Date.UTC(nums[0], nums[1] - 1, nums[2] + 1);
+  return null;
+}
+
+export function isStaleDatePartition(parts, floor) {
+  if (floor == null) return false;
+  const end = datePartitionEnd(parts);
+  return end != null && end + DAY_MS < floor;
+}
+
+async function* discover(directory, state, depth = 0, datePath = null) {
   state.check();
   const info = await lstat(directory).catch(error => {
     if (error.code === 'ENOENT' && depth === 0) return null;
@@ -165,7 +182,12 @@ async function* discover(directory, state, depth = 0) {
     state.check();
     if (++state.coverage.entriesVisited > state.limits.entries) throw problem('entry_limit');
     const path = join(directory, entry.name);
-    if (entry.isDirectory()) yield* discover(path, state, depth + 1);
+    if (entry.isDirectory()) {
+      // `datePath` is null outside `sessions/` (archived_sessions stays a flat scan).
+      const childDate = datePath ? [...datePath, entry.name] : null;
+      if (childDate && isStaleDatePartition(childDate, state.floor)) continue;
+      yield* discover(path, state, depth + 1, childDate);
+    }
     else if (entry.isFile() && /\.jsonl(?:\.zst)?$/.test(entry.name)) {
       yield path;
     } else if (entry.isSymbolicLink()) state.issue('unsupported_entry');
@@ -438,7 +460,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
   const coverage = { complete: false, filesDiscovered: 0, filesInspected: 0, filesCached: 0, filesPending: 0, entriesVisited: 0,
     decodedBytes: 0, recordsRead: 0, logicalSessions: 0, resolvedSessions: 0, unresolvedSessions: 0, duplicateCopies: 0, issues: {} };
   const state = {
-    limits, coverage, routine, started, retainedRecords: 0, revalidatedBytes: 0, unverifiedCoarseSources: false,
+    limits, coverage, routine, started, floor: modifiedSince, retainedRecords: 0, revalidatedBytes: 0, unverifiedCoarseSources: false,
     signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
     stopped: null,
     stopReason: () => signal?.aborted ? 'cancelled' : controller.signal.aborted || performance.now() - started >= limits.milliseconds ? 'time_limit' : null,
@@ -457,7 +479,7 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
     });
     if (root && (!root.isDirectory() || root.isSymbolicLink())) state.issue('unsupported_entry');
     else if (root) for (const directory of ['sessions', 'archived_sessions']) {
-      for await (const path of discover(join(codex, directory), state)) {
+      for await (const path of discover(join(codex, directory), state, 0, directory === 'sessions' ? [] : null)) {
         const info = await lstat(path).catch(() => null);
         if (info && floor != null && info.mtimeMs < floor) continue;
         if (coverage.filesDiscovered >= limits.files) throw problem('file_limit');

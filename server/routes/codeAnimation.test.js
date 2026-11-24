@@ -72,6 +72,9 @@ vi.mock('../services/promptRunner.js', () => ({
   assertProvider: vi.fn(),
   assertVisionRunUsedImages: vi.fn(),
 }));
+vi.mock('../services/runner.js', () => ({
+  stopRun: vi.fn(async () => true),
+}));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(async () => ({ jobId: 'media-export', position: 1, status: 'queued' })),
   listJobs: vi.fn(() => []),
@@ -101,6 +104,10 @@ import { getProviderById } from '../services/provider/providers.js';
 import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';
+import { stopRun } from '../services/runner.js';
+import { listActiveRenders } from '../services/renderActivity.js';
+import { maintenance } from '../lib/maintenanceAdmission.js';
+import { summarizeSystemActivity } from '../lib/systemIdle.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { captureCodeAnimationPoster, settleCodeAnimationPoster } from '../services/codeAnimation/poster.js';
 import routes from './codeAnimation.js';
@@ -691,12 +698,13 @@ describe('POST /api/code-animation/prompt', () => {
     expect((await request(app).post('/api/code-animation/prompt').send({ ...brief, styleGrammarId: 'Not Kebab' })).status).toBe(400);
 
     getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
-    runPromptThroughProvider.mockReturnValue(new Promise(() => {}));
+    runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'api-1' } });
     const started = await request(app).post('/api/code-animation/generate').send({ ...brief, styleGrammarId: 'blueprint-draft', providerId: 'api-1' });
     expect(started.status).toBe(202);
     expect(started.body.input.styleGrammarId).toBe('blueprint-draft');
     expect(codeAnimationRecords.get(started.body.id).input.styleGrammarId).toBe('blueprint-draft');
     expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('Film style grammar: Blueprint draft');
+    await vi.waitFor(() => expect(codeAnimationRecords.get(started.body.id).status).toBe('completed'));
   });
 
   it('rejects a missing brief, a stray upload, and an unknown universe', async () => {
@@ -895,6 +903,140 @@ describe('POST /api/code-animation/generate', () => {
 
   it('404s an unknown job', async () => {
     expect((await request(makeApp()).get('/api/code-animation/generate/nope')).status).toBe(404);
+  });
+
+  it('tracks active runs in renderActivity + maintenance admission and releases permits on completion and failure', async () => {
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    let finishRun;
+    runPromptThroughProvider.mockImplementationOnce(() => new Promise((resolve) => { finishRun = resolve; }));
+    const app = makeApp();
+    const started = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    const id = started.body.id;
+
+    expect(listActiveRenders()).toContainEqual(expect.objectContaining({
+      kind: 'code-animation-fast',
+      noun: 'Code Animation generation',
+      to: `/code-animation/${id}`,
+    }));
+    expect(summarizeSystemActivity({ renders: listActiveRenders() }).idle).toBe(false);
+    const update = maintenance.deferredUpdate.request();
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(false);
+    const blockedDelete = await request(app).delete(`/api/code-animation/jobs/${id}`);
+    expect(blockedDelete.status).toBe(409);
+    expect(blockedDelete.body.code).toBe('CODE_ANIMATION_RUNNING');
+
+    finishRun({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'api-1' } });
+    await pollUntilSettled(app, id);
+    expect(listActiveRenders().filter((render) => render.kind === 'code-animation-fast')).toEqual([]);
+    expect(summarizeSystemActivity({ renders: listActiveRenders() }).idle).toBe(true);
+    expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
+    const heldStart = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    expect(heldStart.status).toBe(503);
+    expect(heldStart.body.code).toBe('MAINTENANCE_HELD');
+    maintenance.deferredUpdate.finish(update.id, false);
+
+    // Failed run also releases its renderActivity slot.
+    let failRun;
+    runPromptThroughProvider.mockImplementationOnce(() => new Promise((_, reject) => { failRun = reject; }));
+    const startedFail = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    expect(listActiveRenders()).toContainEqual(expect.objectContaining({ kind: 'code-animation-fast', to: `/code-animation/${startedFail.body.id}` }));
+    failRun(new Error('provider crashed'));
+    const failedJob = await pollUntilSettled(app, startedFail.body.id);
+    expect(failedJob.status).toBe('failed');
+    expect(listActiveRenders().filter((render) => render.kind === 'code-animation-fast')).toEqual([]);
+  });
+
+  it('cancels before run creation, enforces beforeExecute abort, and stops any late-created runId', async () => {
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    let capturedHooks;
+    runPromptThroughProvider.mockImplementationOnce((options) => {
+      capturedHooks = options;
+      return new Promise(() => {});
+    });
+    const app = makeApp();
+    const started = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    const id = started.body.id;
+
+    const canceled = await request(app).post(`/api/code-animation/generate/${id}/cancel`);
+    expect(canceled.status).toBe(200);
+    expect(canceled.body).toMatchObject({ id, status: 'canceled', error: null });
+    expect(stopRun).not.toHaveBeenCalled();
+    expect(listActiveRenders().filter((render) => render.kind === 'code-animation-fast')).toEqual([]);
+    expect(emitCodeAnimationChanged.mock.results.map(({ value }) => value)).toEqual([
+      { id, status: 'running', html: undefined },
+      { id, status: 'canceled', html: undefined },
+    ]);
+
+    // If promptRunner crosses into execution or creates a runId late, both hooks enforce cancellation.
+    expect(() => capturedHooks.beforeExecute()).toThrow(/Generation canceled/);
+    capturedHooks.onRunCreated('late-run-1');
+    expect(stopRun).toHaveBeenCalledWith('late-run-1');
+    expect(saveCodeAnimationHtml).not.toHaveBeenCalled();
+
+    const deleted = await request(app).delete(`/api/code-animation/jobs/${id}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body).toEqual({ id, deleted: true });
+  });
+
+  it('cancels mid-run via stopRun, ignores already-settled runs, discards late completion, and supports idempotent cancel', async () => {
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    let resolveLate;
+    runPromptThroughProvider.mockImplementationOnce((options) => {
+      options.onRunCreated('run-settled');
+      options.onRunSettled('run-settled');
+      options.onRunCreated('run-active');
+      return new Promise((resolve) => { resolveLate = resolve; });
+    });
+    const app = makeApp();
+    const started = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    const id = started.body.id;
+
+    const canceled = await request(app).post(`/api/code-animation/generate/${id}/cancel`);
+    expect(canceled.status).toBe(200);
+    expect(canceled.body).toMatchObject({ id, status: 'canceled', error: null });
+    expect(stopRun).toHaveBeenCalledTimes(1);
+    expect(stopRun).toHaveBeenCalledWith('run-active');
+    expect(listActiveRenders().filter((render) => render.kind === 'code-animation-fast')).toEqual([]);
+
+    // Late provider resolution after cancel must never overwrite the canceled job or write HTML.
+    resolveLate({
+      runId: 'run-active',
+      text: '```html\n<!DOCTYPE html><html><body>late</body></html>\n```',
+      provider: { id: 'api-1' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(saveCodeAnimationHtml).not.toHaveBeenCalled();
+    expect(captureCodeAnimationPoster).not.toHaveBeenCalled();
+    expect(codeAnimationHtml.has(id)).toBe(false);
+    expect((await request(app).get(`/api/code-animation/generate/${id}`)).body.status).toBe('canceled');
+
+    // Idempotent repeat cancel returns 200; deleting the canceled job succeeds.
+    expect((await request(app).post(`/api/code-animation/generate/${id}/cancel`)).status).toBe(200);
+    expect((await request(app).delete(`/api/code-animation/jobs/${id}`)).status).toBe(200);
+  });
+
+  it('rejects cancel for invalid ids, missing jobs, finished jobs, and in-flight commits', async () => {
+    const app = makeApp();
+    expect((await request(app).post('/api/code-animation/generate/not-a-uuid/cancel')).status).toBe(400);
+    expect((await request(app).post('/api/code-animation/generate/00000000-0000-4000-8000-000000000099/cancel')).status).toBe(404);
+
+    const finishedId = '00000000-0000-4000-8000-000000000088';
+    codeAnimationRecords.set(finishedId, { id: finishedId, status: 'completed' });
+    const finishedCancel = await request(app).post(`/api/code-animation/generate/${finishedId}/cancel`);
+    expect(finishedCancel.status).toBe(409);
+    expect(finishedCancel.body.code).toBe('CODE_ANIMATION_NOT_RUNNING');
+
+    getProviderById.mockResolvedValue({ id: 'api-1', type: 'api', enabled: true });
+    runPromptThroughProvider.mockResolvedValue({ text: '```html\n<!DOCTYPE html><html></html>\n```', provider: { id: 'api-1' } });
+    let finishHtmlWrite;
+    saveCodeAnimationHtml.mockImplementationOnce(() => new Promise((resolve) => { finishHtmlWrite = resolve; }));
+    const started = await request(app).post('/api/code-animation/generate').send({ ...brief, providerId: 'api-1' });
+    await vi.waitFor(() => expect(finishHtmlWrite).toBeTypeOf('function'));
+    const committing = await request(app).post(`/api/code-animation/generate/${started.body.id}/cancel`);
+    expect(committing.status).toBe(409);
+    expect(committing.body.code).toBe('CODE_ANIMATION_COMMITTING');
+    finishHtmlWrite();
+    await pollUntilSettled(app, started.body.id);
   });
 });
 

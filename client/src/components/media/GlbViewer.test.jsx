@@ -58,6 +58,7 @@ vi.mock('@react-three/drei', () => ({
     );
   },
   Bounds: ({ children }) => children,
+  useBounds: () => null,
   useGLTF: Object.assign((url) => {
     if (gltf.error) gltf.rejections.set(url, gltf.error);
     const cached = gltf.rejections.get(url);
@@ -68,7 +69,7 @@ vi.mock('@react-three/drei', () => ({
 vi.mock('../../hooks/useClonedGltf', () => ({ GltfPrimitive: () => null }));
 
 import { useGLTF } from '@react-three/drei';
-import GlbViewer, { cloneGlbSceneWithOpaqueMaterials } from './GlbViewer';
+import GlbViewer, { cloneGlbSceneWithOpaqueMaterials, highlightGlbNodes, isolateGlbNode } from './GlbViewer';
 
 const openControls = () => fireEvent.click(screen.getByLabelText('Preview display settings'));
 
@@ -364,5 +365,67 @@ describe('GlbViewer HDRI failures', () => {
 
     expect(screen.getByTestId('glb-load-error')).toBeInTheDocument();
     expect(screen.queryByTestId('glb-canvas')).not.toBeInTheDocument();
+  });
+});
+
+describe('isolateGlbNode', () => {
+  // Two parts as the loader builds them: `name` loses its dot, the authored name is in userData, and a
+  // part with two materials is a Group of meshes that also carries its child part.
+  function twoParts() {
+    const scene = new Group();
+    const base = new Group();
+    base.name = 'base001';
+    base.userData.name = 'base.001';
+    const baseMeshes = [0, 1].map(() => new Mesh(new BoxGeometry(2, 2, 2), new MeshStandardMaterial()));
+    base.add(...baseMeshes);
+    const shade = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial());
+    shade.name = 'shade';
+    shade.userData.name = 'shade';
+    shade.position.set(0, 5, 0);
+    base.add(shade);
+    scene.add(base);
+    return { scene, baseMeshes, shade };
+  }
+  const shown = (mesh) => mesh.visible && mesh.layers.mask !== 0;
+
+  it('shows a child part without its parent, framed by its own bounds, and puts everything back', () => {
+    const { scene, baseMeshes, shade } = twoParts();
+    const { box, restore } = isolateGlbNode(scene, 'shade');
+    expect([shown(shade), ...baseMeshes.map(shown)]).toEqual([true, false, false]);
+    expect([box.min.y, box.max.y]).toEqual([4.5, 5.5]);
+    restore();
+    expect([shown(shade), ...baseMeshes.map(shown)]).toEqual([true, true, true]);
+  });
+
+  it('matches the authored name of a multi-material parent without its child part', () => {
+    const { scene, baseMeshes, shade } = twoParts();
+    const { box } = isolateGlbNode(scene, 'base.001');
+    expect([shown(shade), ...baseMeshes.map(shown)]).toEqual([false, true, true]);
+    expect(box.max.y).toBe(1);
+  });
+
+  it('isolates nothing for a name the model does not have', () => {
+    const { scene, baseMeshes, shade } = twoParts();
+    expect(isolateGlbNode(scene, 'nope').box).toBeNull();
+    expect([shown(shade), ...baseMeshes.map(shown)]).toEqual([true, true, true]);
+  });
+});
+
+describe('highlightGlbNodes', () => {
+  it('tints only the named nodes, each its own color, and puts the shared materials back', () => {
+    const scene = new Group();
+    const shared = new MeshStandardMaterial();
+    const [box, lid, knob] = ['box', 'lid', 'knob'].map((name) => {
+      const mesh = new Mesh(new BoxGeometry(1, 1, 1), shared);
+      mesh.userData.name = name;
+      scene.add(mesh);
+      return mesh;
+    });
+    const restore = highlightGlbNodes(scene, ['box', 'lid']);
+    expect(knob.material).toBe(shared);
+    expect(shared.emissive.getHex()).toBe(0);
+    expect(new Set([box, lid].map((mesh) => mesh.material.emissive.getHex())).size).toBe(2);
+    restore();
+    expect([box, lid, knob].every((mesh) => mesh.material === shared)).toBe(true);
   });
 });

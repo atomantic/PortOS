@@ -8,6 +8,8 @@ import { MemoryRouter, Routes, Route, useNavigate } from 'react-router';
 vi.mock('../hooks/useAssignableInstances', () => ({ default: () => ({ instances: [], isFederated: false }) }));
 const api = vi.hoisted(() => ({
   getCosStatus: vi.fn(),
+  getCosSchedule: vi.fn(),
+  triggerCosOnDemandTask: vi.fn(),
   getInstanceFeatures: vi.fn(),
   getCosTasks: vi.fn(),
   getCosTask: vi.fn(),
@@ -60,6 +62,8 @@ const localLlm = vi.hoisted(() => ({
 
 vi.mock('../services/apiAgents.js', () => ({
   getCosStatus: api.getCosStatus,
+  getCosSchedule: api.getCosSchedule,
+  triggerCosOnDemandTask: api.triggerCosOnDemandTask,
   getCosTasks: api.getCosTasks,
   getCosTask: api.getCosTask,
   getCosAgents: api.getCosAgents,
@@ -94,6 +98,11 @@ vi.mock('../services/apiSystem.js', async (importOriginal) => ({
   getInstanceFeatures: api.getInstanceFeatures,
 }));
 vi.mock('../services/apiLocalLlm', () => localLlm);
+// The Config tab's embeddings notice reads the shared settings.embeddings backend (#18296).
+vi.mock('../services/apiMemory', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getEmbeddingConfig: async () => ({ source: 'settings', provider: 'ollama', model: 'nomic-embed-text', endpoint: null, disabled: false }),
+}));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../services/socket', () => ({ default: socketStub }));
 // TaskAddForm drags in the reviewer/model picker plumbing (local-LLM status,
@@ -156,6 +165,7 @@ beforeEach(() => {
   api.getCosHealth.mockResolvedValue({ issues: [] });
   api.getProviders.mockResolvedValue({ providers: [] });
   api.getApps.mockResolvedValue([]);
+  api.getCosSchedule.mockResolvedValue({ tasks: {} });
   api.getCosLearningSummary.mockResolvedValue(null);
   api.getCosActionableInsights.mockResolvedValue({ insights: [] });
   api.forceHealthCheck.mockResolvedValue({ metrics: { timestamp: 1 }, issues: [] });
@@ -326,6 +336,54 @@ describe('ChiefOfStaff loading skeleton', () => {
 // a phone. It collapses to TabPills' ICON ROW — the same buttons, labels kept
 // for assistive tech — rather than the `<select>` #7283 briefly made universal.
 // The scroll chevrons that used to be hand-rolled here now live in TabPills.
+describe('ChiefOfStaff Schedule app targets', () => {
+  it('blocks an app task in both the card and drawer until a retry loads a selectable target', async () => {
+    let rejectApps;
+    let resolveRetry;
+    api.getApps
+      .mockReturnValueOnce(new Promise((_, reject) => { rejectApps = reject; }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveRetry = resolve; }));
+    api.getCosSchedule.mockResolvedValue({
+      improvementEnabled: true,
+      tasks: {
+        review: { type: 'on-demand', enabled: true, displayName: 'Example Review' },
+        'universe-bible-describe': { type: 'on-demand', enabled: true, displayName: 'Bible descriptions', programmatic: true },
+      },
+    });
+    api.triggerCosOnDemandTask.mockResolvedValue({ success: true });
+
+    await act(async () => { renderPageAt('schedule'); });
+    await waitForPageShell();
+    const loading = await screen.findByRole('button', { name: 'Loading apps…' });
+    expect(loading).toBeDisabled();
+    expect(loading).toHaveAttribute('aria-busy', 'true');
+    fireEvent.click(loading);
+    expect(api.triggerCosOnDemandTask).not.toHaveBeenCalled();
+
+    // The unrelated task still works while the app list is pending.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Run Now' })));
+    expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith('universe-bible-describe', null, { silent: true });
+
+    await act(async () => fireEvent.click(screen.getByText('Example Review')));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getByRole('button', { name: 'Loading apps…' })).toBeDisabled();
+    await act(async () => rejectApps(new Error('Example registry failure')));
+    expect(within(drawer).getByRole('button', { name: 'Apps unavailable' })).toBeDisabled();
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Apps unavailable' }));
+    expect(api.triggerCosOnDemandTask).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /Close/i }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Refresh' })));
+    expect(await screen.findByRole('button', { name: 'Loading apps…' })).toBeDisabled();
+    await act(async () => resolveRetry([{ id: 'real-app', name: 'Example Repo' }]));
+    fireEvent.click(await screen.findByRole('button', { name: 'Run on App' }));
+    const app = await screen.findByRole('button', { name: 'Example Repo' });
+    await act(async () => fireEvent.click(app));
+    expect(api.triggerCosOnDemandTask).toHaveBeenCalledTimes(2);
+    expect(api.triggerCosOnDemandTask).toHaveBeenLastCalledWith('review', 'real-app', { silent: true });
+  });
+});
+
 describe('ChiefOfStaff mobile tab navigation', () => {
   it('collapses to named icon links on the phone, not a select', async () => {
     await renderSettledAt('tasks');
@@ -352,7 +410,7 @@ describe('ChiefOfStaff mobile tab navigation', () => {
     expect(link).toHaveAttribute('aria-current', 'page');
     expect(link).toHaveAttribute('href', `/cos/${parent}/${viewId}`);
 
-    fireEvent.click(within(panel).getAllByRole('link')[0]);
+    await act(async () => fireEvent.click(within(panel).getAllByRole('link')[0]));
     expect(link).not.toHaveAttribute('aria-current');
     expect(within(tabBar).getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
   });

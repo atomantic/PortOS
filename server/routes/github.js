@@ -2,7 +2,7 @@ import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
-  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
+  githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationMuteSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
   githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema, githubNotificationPullRequestActionSchema } from '../lib/githubValidation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
@@ -12,6 +12,13 @@ import * as githubDeployment from '../services/githubNotificationDeployment.js';
 import { retriageOpenThreads } from '../services/githubNotificationTriage.js';
 
 const router = express.Router();
+
+// Threads triaged under the old trust settings are decided again on the next check.
+const botList = (account) => (Array.isArray(account.trustedBots) ? account.trustedBots : []).join(',');
+const accountTrustChanged = (before, after) => before.trust !== after.trust
+  || (before.trustInstanceUsers === true) !== (after.trustInstanceUsers === true)
+  || (before.trustInstanceBots !== false) !== (after.trustInstanceBots !== false)
+  || botList(before) !== botList(after);
 
 /**
  * GET /api/github/repos — cached repo list
@@ -119,8 +126,7 @@ router.put('/accounts/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(githubAccountUpdateSchema, req.body);
   const before = await githubAccounts.getAccount(req.params.id);
   const updated = await githubAccounts.updateAccount(req.params.id, body);
-  // Threads triaged under the old trust settings are decided again on the next check.
-  if (before.trust !== updated.trust || (before.trustInstanceUsers === true) !== (updated.trustInstanceUsers === true)) {
+  if (accountTrustChanged(before, updated)) {
     await retriageOpenThreads(updated.id);
   }
   res.json(updated);
@@ -143,6 +149,12 @@ router.get('/accounts/:id/status', asyncHandler(async (req, res) => {
 router.get('/notifications', asyncHandler(async (req, res) => {
   const { accountId, view } = validateRequest(githubNotificationsQuerySchema, req.query);
   res.json(await githubNotifications.listNotifications({ accountId, view }));
+}));
+
+// Local per-account repository/reason preferences. This never talks to GitHub.
+router.put('/notifications/mutes', asyncHandler(async (req, res) => {
+  const body = validateRequest(githubNotificationMuteSchema, req.body ?? {});
+  res.json(await githubNotifications.setNotificationMute(body));
 }));
 
 /**
@@ -199,6 +211,11 @@ router.post('/notifications/:accountId/:threadId/agent', asyncHandler(async (req
   const body = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
   const perRun = Object.keys(body).length ? body : undefined;
   res.json(await githubNotifications.resolveWithAgent(req.params.accountId, threadIdParam(req), perRun));
+}));
+
+router.post('/notifications/:accountId/:threadId/claim-issue', asyncHandler(async (req, res) => {
+  const pin = validateRequest(githubNotificationAgentRunSchema, req.body ?? {});
+  res.json(await githubNotifications.claimIssue(req.params.accountId, threadIdParam(req), pin));
 }));
 
 router.post('/notifications/:accountId/:threadId/pull-request', asyncHandler(async (req, res) => {

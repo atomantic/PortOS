@@ -12,6 +12,8 @@ vi.mock('../services/threejsModels/index.js', () => ({
   getModelSource: vi.fn(),
 }));
 
+vi.mock('../services/threejsModels/productSheet.js', () => ({ findProductSheetForImage: vi.fn() }));
+import { findProductSheetForImage } from '../services/threejsModels/productSheet.js';
 import * as models from '../services/threejsModels/index.js';
 import routes from './threejsModels.js';
 
@@ -25,6 +27,17 @@ const makeApp = () => {
 
 describe('Three.js model routes', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('returns the product sheet for an object image and null for an unrelated one', async () => {
+    findProductSheetForImage.mockResolvedValueOnce('sheet.png').mockResolvedValueOnce(null);
+    const hit = await request(makeApp()).get('/api/threejs-models/product-sheet?filename=obj.png');
+    expect(hit.status).toBe(200);
+    expect(hit.body).toEqual({ sheet: 'sheet.png' });
+    const miss = await request(makeApp()).get('/api/threejs-models/product-sheet?filename=other.png');
+    expect(miss.body).toEqual({ sheet: null });
+    const bad = await request(makeApp()).get('/api/threejs-models/product-sheet?filename=../x.png');
+    expect(bad.status).toBe(400);
+  });
 
   it('rejects paths masquerading as gallery filenames', async () => {
     const res = await request(makeApp())

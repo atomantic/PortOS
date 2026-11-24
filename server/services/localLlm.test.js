@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { EventEmitter } from 'events';
+import { createHash } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { pinPlatform } from '../lib/testHelper.js';
 
@@ -124,13 +125,15 @@ vi.mock('fs/promises', async (importOriginal) => {
 });
 
 const mocks = vi.hoisted(() => ({
+  safetensors: {
+    importModelFromHfSafetensors: vi.fn(async ({ modelId }) => ({ success: true, modelId }))
+  },
   settings: { getSettings: vi.fn(async () => ({})) },
   ollama: {
     getBaseUrl: vi.fn(() => 'http://localhost:11434'),
     getInstalledModels: vi.fn(async () => []),
     getModelCapabilities: vi.fn(async () => []),
     pullModel: vi.fn(async (id) => ({ success: true, modelId: id })),
-    importModelFromHfSafetensors: vi.fn(async ({ modelId }) => ({ success: true, modelId })),
     deleteModel: vi.fn(async (id) => ({ success: true, modelId: id })),
     getLoadedModels: vi.fn(async () => []),
     getLastLoadedModelsError: vi.fn(() => null),
@@ -140,7 +143,9 @@ const mocks = vi.hoisted(() => ({
     startServer: vi.fn(async () => ({ success: true, running: true })),
     stopServer: vi.fn(async () => ({ success: true, running: false })),
     startPersistentService: vi.fn(async () => ({ success: true, running: true, persistent: true })),
-    stopPersistentService: vi.fn(async () => ({ success: true, running: false, persistent: false })),
+    stopPersistentService: vi.fn(async () => ({ success: true, running: false, persistent: false }))
+  },
+  ollamaDisk: {
     // No local GGUF found by default → migrate falls back to re-pull.
     resolveLocalModel: vi.fn(async () => null),
     // Echo the requested mode as the real outcome (link mode "succeeds" in tests).
@@ -176,6 +181,8 @@ const mocks = vi.hoisted(() => ({
   }
 }));
 vi.mock('./ollamaManager.js', () => mocks.ollama);
+vi.mock('./ollamaSafetensorsImport.js', () => mocks.safetensors);
+vi.mock('./ollamaDiskImport.js', () => mocks.ollamaDisk);
 vi.mock('./lmStudioManager.js', () => mocks.lmstudio);
 // The classification predicate comes from the REAL toolkit module rather than
 // being re-implemented here: it decides which providers get refreshed at all, so
@@ -239,6 +246,9 @@ const fakeChild = ({ code = 0, lines = [] } = {}) => {
   });
   return child;
 };
+
+const OLLAMA_ZIP_URL = 'https://github.com/ollama/ollama/releases/download/v0.34.0/Ollama-darwin.zip';
+const sha256Of = (bytes) => createHash('sha256').update(Uint8Array.from(bytes)).digest('hex');
 
 const writeEnv = (content) => fs.writeFileSync(path.join(state.root, '.env'), content);
 
@@ -424,7 +434,7 @@ describe('localLlm', () => {
     it('routes a curated Safetensors model through Ollama create instead of registry pull', async () => {
       const onProgress = vi.fn();
       await svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', onProgress);
-      expect(mocks.ollama.importModelFromHfSafetensors).toHaveBeenCalledWith({
+      expect(mocks.safetensors.importModelFromHfSafetensors).toHaveBeenCalledWith({
         modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
         repo: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
         subdir: '4-bit',
@@ -434,7 +444,7 @@ describe('localLlm', () => {
     });
     it('refuses to cancel a Safetensors import, which cannot be stopped mid-create', async () => {
       let finish;
-      mocks.ollama.importModelFromHfSafetensors.mockImplementationOnce(({ modelId }) => new Promise((resolve) => { finish = () => resolve({ success: true, modelId }); }));
+      mocks.safetensors.importModelFromHfSafetensors.mockImplementationOnce(({ modelId }) => new Promise((resolve) => { finish = () => resolve({ success: true, modelId }); }));
       const install = svc.installModel('ollama', 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit');
       await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
       expect(svc.listActiveInstalls()).toEqual([expect.objectContaining({ modelId: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit', cancelable: false })]);
@@ -733,7 +743,7 @@ describe('localLlm', () => {
       expect(r.error).toBe('LM Studio is unavailable');
       expect(events.at(-1)).toEqual({ event: 'error', message: 'LM Studio is unavailable' });
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
     });
 
     it('returns success with no results when the source backend has no models', async () => {
@@ -743,7 +753,7 @@ describe('localLlm', () => {
       expect(r.success).toBe(true);
       expect(r.results).toEqual([]);
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled();
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
     });
 
     it('skips a model with no known target equivalent (→ LM Studio)', async () => {
@@ -769,7 +779,7 @@ describe('localLlm', () => {
       const r = await svc.migrateBackend('ollama'); // mode defaults to 'link'
       expect(r.results[0].status).toBe('imported');
       expect(r.results[0].linked).toBe(true);
-      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'link' });
+      expect(mocks.ollamaDisk.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'link' });
       expect(mocks.ollama.pullModel).not.toHaveBeenCalled(); // no network download
     });
 
@@ -785,7 +795,7 @@ describe('localLlm', () => {
       expect(r.mode).toBe('copy');
       expect(r.results[0].status).toBe('imported');
       expect(r.results[0].linked).toBe(false);
-      expect(mocks.ollama.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'copy' });
+      expect(mocks.ollamaDisk.importModelFromGguf).toHaveBeenCalledWith({ name: 'llama3.2', ggufPath: '/models/llama-3.2-3b.gguf', mode: 'copy' });
     });
 
     it('does not local-import an MLX model — falls back to re-pull', async () => {
@@ -798,7 +808,7 @@ describe('localLlm', () => {
       });
 
       const r = await svc.migrateBackend('ollama');
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
       expect(mocks.ollama.pullModel).toHaveBeenCalledWith('llama3.2', expect.any(Function), { signal: expect.any(AbortSignal) });
       expect(r.results[0].status).toBe('installed');
     });
@@ -812,7 +822,7 @@ describe('localLlm', () => {
       });
 
       const r = await svc.migrateBackend('ollama');
-      expect(mocks.ollama.importModelFromGguf).not.toHaveBeenCalled();
+      expect(mocks.ollamaDisk.importModelFromGguf).not.toHaveBeenCalled();
       expect(mocks.ollama.pullModel).toHaveBeenCalled();
       expect(r.results[0].status).toBe('installed');
     });
@@ -962,7 +972,7 @@ describe('localLlm', () => {
       pathExistsImpl.fn = async (p) => p === '/Applications/Ollama.app';
       vi.stubGlobal('fetch', vi.fn(async (url, init) => {
         if (String(url).includes('api.github.com')) {
-          return { ok: true, json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: 'https://example.com/Ollama-darwin.zip' }] }) };
+          return { ok: true, json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: OLLAMA_ZIP_URL, digest: `sha256:${sha256Of(Array.from({ length: 30 }, (_, i) => i + 1))}` }] }) };
         }
         started.resolve();
         return downloadFetch(init);
@@ -1029,7 +1039,7 @@ describe('localLlm', () => {
         // the sink, not an arbitrary number of real event-loop turns.
       });
       expect(bytes).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
-      expect(progress).toContain('Stopping running Ollama…');
+      expect(progress).toContain('Extracting…');
       expect(result).toEqual({ success: false, error: 'Extracted archive did not contain Ollama.app — release layout may have changed.' });
     });
   });
@@ -1060,7 +1070,7 @@ describe('localLlm', () => {
     // Runs the .app path end to end with every shell-out stubbed. `mv` mutates the
     // in-memory /Applications model the way the real one would, so the assertions
     // can read the resulting filesystem shape.
-    const runMacUpgrade = async ({ mv = 'ok', running = '0.33.3' } = {}) => {
+    const runMacUpgrade = async ({ mv = 'ok', running = '0.33.3', digest = `sha256:${sha256Of([0x50, 0x4b])}`, sumsText = null, codesign = 'ok' } = {}) => {
       const restorePlatform = pinPlatform('darwin');
       const extracted = { present: true };
       // `pathExists(APP)` is the dispatch check that routed upgradeBackend here, so
@@ -1073,14 +1083,18 @@ describe('localLlm', () => {
       pathExistsImpl.fn = async (p) => (p === APP ? true : /[\\/]Ollama\.app$/.test(p) && extracted.present);
       vi.stubGlobal('fetch', vi.fn(async (url) => {
         if (String(url).includes('api.github.com')) {
-          return {
-            ok: true,
-            json: async () => ({ tag_name: 'v0.34.0', assets: [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: 'https://example.com/Ollama-darwin.zip' }] })
-          };
+          const assets = [{ name: 'Ollama-darwin.zip', size: 1024, browser_download_url: OLLAMA_ZIP_URL, ...(digest ? { digest } : {}) }];
+          if (sumsText !== null) assets.push({ name: 'sha256sum.txt', browser_download_url: 'https://github.com/ollama/ollama/releases/download/v0.34.0/sha256sum.txt' });
+          return { ok: true, json: async () => ({ tag_name: 'v0.34.0', assets }) };
         }
+        if (String(url).endsWith('sha256sum.txt')) return { ok: true, text: async () => sumsText };
         return { ok: true, body: new ReadableStream({ start(c) { c.enqueue(new Uint8Array([0x50, 0x4b])); c.close(); } }) };
       }));
       cp.spawn = vi.fn((cmd, args) => {
+        if (cmd === 'codesign') {
+          if (codesign === 'fails' && args[0] === '--verify') return fakeChild({ code: 3, lines: ['a sealed resource is missing or invalid'] });
+          return fakeChild({ lines: [`TeamIdentifier=${codesign === 'wrongTeam' ? 'EVIL000000' : '3MU9H2V9Y9'}`] });
+        }
         if (cmd !== 'mv') return fakeChild();
         if (mv === 'fails') return fakeChild({ code: 1, lines: ['mv: Operation not permitted'] });
         // A real `mv` consumes the source; `mv === 'nonDirectory'` is the
@@ -1103,6 +1117,53 @@ describe('localLlm', () => {
         restorePlatform();
       }
     };
+
+    // The trust gate: nothing may touch /Applications, strip quarantine or launch
+    // unless the zip digest and the bundle's code signature both check out.
+    describe('download and signature verification', () => {
+      const spawned = () => cp.spawn.mock.calls.map(([cmd]) => cmd);
+      const expectUntouched = (r, pattern) => {
+        expect(r).toMatchObject({ success: false, error: expect.stringMatching(pattern) });
+        expect(appFs.entries.get(APP)).toBe('dir');
+        expect(aside()).toEqual([]);
+        expect(spawned()).not.toEqual(expect.arrayContaining(['xattr']));
+        expect(spawned()).not.toContain('open');
+        expect(spawned()).not.toContain('mv');
+      };
+
+      it('fails closed before downloading when the release publishes no digest', async () => {
+        appFs.entries.set(APP, 'dir');
+        const r = await runMacUpgrade({ digest: null });
+        expectUntouched(r, /no SHA-256 digest/);
+        expect(spawned()).not.toContain('unzip');
+      });
+
+      it('fails closed before unzip when the downloaded zip does not match the digest', async () => {
+        appFs.entries.set(APP, 'dir');
+        const r = await runMacUpgrade({ digest: `sha256:${'0'.repeat(64)}` });
+        expectUntouched(r, /failed SHA-256 verification/);
+        expect(spawned()).not.toContain('unzip');
+      });
+
+      it('accepts a matching digest from sha256sum.txt when the API digest is absent', async () => {
+        appFs.entries.set(APP, 'dir');
+        const r = await runMacUpgrade({ digest: null, sumsText: `${sha256Of([0x50, 0x4b])}  Ollama-darwin.zip\n`, running: '0.34.0' });
+        expect(r).toMatchObject({ success: true });
+      });
+
+      it('aborts without touching the install when codesign verification fails', async () => {
+        appFs.entries.set(APP, 'dir');
+        const r = await runMacUpgrade({ codesign: 'fails' });
+        expectUntouched(r, /signature verification/);
+        expect(spawned()).not.toContain('pkill');
+      });
+
+      it('aborts when the bundle is signed by a different TeamIdentifier', async () => {
+        appFs.entries.set(APP, 'dir');
+        const r = await runMacUpgrade({ codesign: 'wrongTeam' });
+        expectUntouched(r, /TeamIdentifier \(EVIL000000\)/);
+      });
+    });
 
     it('aborts with the install fully intact when the old bundle cannot be moved aside', async () => {
       appFs.entries.set(APP, 'dir');

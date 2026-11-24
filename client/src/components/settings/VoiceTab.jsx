@@ -1,52 +1,25 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router';
-import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
+import { Save, Mic, Play, Zap, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
-import {
-  getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, listVoiceEngines, testTts, fetchPiperVoice, getFaceTimeStatus, controlFaceTime,
-} from '../../services/apiVoice';
-import { getProviders, refreshProviderModels } from '../../services/apiProviders';
-import { playWav, webSpeechSupported } from '../../services/voiceClient';
-import { nanoAvailability } from '../../services/browserLlm';
+import { getVoiceStatus, getVoiceConfig, updateVoiceConfig, testTts } from '../../services/apiVoice';
+import { playWav } from '../../services/voiceClient';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
-import { formatVoiceLabel } from '../../lib/voiceLabel';
-import { withUnlistedOption } from '../../lib/withUnlistedOption';
-import ProviderModelSelector from '../ProviderModelSelector';
-import FormField from '../ui/FormField';
 import ListLoadError from '../ui/ListLoadError';
-import useListResource from '../../hooks/useListResource';
+import useMounted from '../../hooks/useMounted';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures';
+import VoiceFaceTimeSection from './voice/VoiceFaceTimeSection';
+import VoiceSpeechSection from './voice/VoiceSpeechSection';
+import VoiceLlmSection from './voice/VoiceLlmSection';
+import VoiceFastPathSection from './voice/VoiceFastPathSection';
 
 const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
   'web-speech': 'Web Speech API (STT)',
   piper: 'Piper (TTS)',
   llm: 'LLM provider',
-};
-
-const STT_ENGINES = [
-  { value: 'whisper', label: 'Whisper (local, accurate, works offline)' },
-  { value: 'web-speech', label: 'Web Speech API (browser-native, zero latency)' },
-];
-
-
-
-const WHISPER_MODELS = [
-  { value: 'tiny.en',   file: 'ggml-tiny.en.bin',   label: 'tiny.en — 75 MB, fastest' },
-  { value: 'base.en',   file: 'ggml-base.en.bin',   label: 'base.en — 142 MB, balanced (default)' },
-  { value: 'small.en',  file: 'ggml-small.en.bin',  label: 'small.en — 466 MB, more accurate' },
-  { value: 'medium.en', file: 'ggml-medium.en.bin', label: 'medium.en — 1.5 GB, very accurate' },
-  { value: 'large-v3',  file: 'ggml-large-v3.bin',  label: 'large-v3 — 3 GB, multilingual, best' },
-];
-
-// On-device (Gemini Nano) availability → [label, text tone, dot tone].
-const NANO_STATUS_UI = {
-  available: ['On-device model ready', 'text-port-success', 'bg-port-success'],
-  downloadable: ['Available — downloads on first use', 'text-port-warning', 'bg-port-warning'],
-  downloading: ['Downloading…', 'text-port-warning', 'bg-port-warning'],
-  unavailable: ['Not available on this device', 'text-gray-500', 'bg-gray-500'],
-  'no-api': ['Chrome built-in AI not detected', 'text-gray-500', 'bg-gray-500'],
+  facetime: 'FaceTime Audio',
 };
 
 const ServiceBadge = ({ label, probe }) => {
@@ -71,102 +44,55 @@ export function VoiceTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState(null);
+  const [configError, setConfigError] = useState(null);
+  const mountedRef = useMounted();
   const [status, setStatus] = useState(null);
-  const [ttsEngines, setTtsEngines] = useState([]);
-  const [ttsEngineError, setTtsEngineError] = useState(null);
   const [testing, setTesting] = useState(false);
-  const [previewingVoice, setPreviewingVoice] = useState(null);
-  const [downloadingVoice, setDownloadingVoice] = useState(null);
   const [widgetHidden, setWidgetHidden] = useState(readVoiceHidden);
-  // API-type providers only — voice needs low-latency streaming chat, which
-  // CLI/TUI providers can't deliver.
-  const [apiProviders, setApiProviders] = useState([]);
-  const [codeProviders, setCodeProviders] = useState([]);
-  const [providersError, setProvidersError] = useState(null);
-  const [refreshingModels, setRefreshingModels] = useState(false);
-  // On-device (Gemini Nano) availability for the fast-resolution tier-2 pill.
-  const [nanoStatus, setNanoStatus] = useState(null);
-  const [facetimeStatus, setFacetimeStatus] = useState(null);
-  const [facetimeAction, setFacetimeAction] = useState(null);
-  const [facetimeResult, setFacetimeResult] = useState(null);
+  // Persisted identity the server's /facetime/* routes actually use; form inputs may be ahead of it.
+  const [savedFacetime, setSavedFacetime] = useState(null);
+  const retryVoicesRef = useRef(null);
+  const traitsSyncRef = useRef(null);
 
   const toggleWidgetHidden = (next) => {
     writeVoiceHidden(next);
     setWidgetHidden(next);
   };
 
-  const currentEngine = cfg?.tts?.engine;
-
-  // The selected engine's voice catalog. A failed read renders an error row with
-  // Retry rather than an empty picker that offers only the saved voice.
-  const fetchVoices = useCallback(
-    () => listVoices(currentEngine, { silent: true }).then((v) => (Array.isArray(v?.voices) ? v.voices : [])),
-    [currentEngine],
-  );
-  const { items: voices, state: voicesState, error: voicesError, retry: retryVoices, setItems: setVoices } = useListResource(fetchVoices, { enabled: Boolean(currentEngine) });
-
-  useEffect(() => {
-    if (!currentEngine || ttsEngines.length === 0) return;
-    const registered = ttsEngines.find((item) => (
-      item.id === currentEngine || item.aliases?.includes(currentEngine)
-    ));
-    if (!registered || registered.id === currentEngine) return;
-    setCfg((current) => ({ ...current, tts: { ...current.tts, engine: registered.id } }));
-  }, [currentEngine, ttsEngines]);
+  const registerRetryVoices = useCallback((fn) => {
+    retryVoicesRef.current = fn;
+  }, []);
 
   const refreshStatus = useCallback(() => {
-    retryVoices();
+    retryVoicesRef.current?.();
     return getVoiceStatus()
       .then(setStatus)
       .catch(() => setStatus(null));
-  }, [retryVoices]);
-
-  // Load the provider registry. The conversational brain can only stream
-  // through `api`-type providers (filtered here); the code-agent picker draws
-  // from `cli`/`tui` providers (Claude Code, Codex, Antigravity) — those are the
-  // ones that can actually edit code. Silent: the ListLoadError row is the
-  // failure UI, so don't also pop a toast. A failure is kept distinct from an
-  // empty registry so the pickers offer Retry rather than reading as "none".
-  const loadProviders = useCallback(() => {
-    setProvidersError(null);
-    return getProviders({ silent: true })
-      .then((data) => {
-        const all = data?.providers || [];
-        setApiProviders(all.filter((p) => p.type === 'api'));
-        setCodeProviders(all.filter((p) => p.type === 'cli' || p.type === 'tui'));
-      })
-      .catch((err) => {
-        setApiProviders([]);
-        setCodeProviders([]);
-        setProvidersError(err instanceof Error ? err : new Error('Request failed'));
-      });
   }, []);
 
-  useEffect(() => {
-    loadProviders();
-  }, [loadProviders]);
+  // Config and status load independently: a failed status probe only degrades
+  // the status badges, and a failed config shows a retryable error row instead
+  // of an endless spinner. Silent: ListLoadError is the failure UI.
+  const loadConfig = useCallback(() => {
+    setLoading(true);
+    setConfigError(null);
+    getVoiceStatus({ silent: true })
+      .then((s) => { if (mountedRef.current) setStatus(s); })
+      .catch(() => { if (mountedRef.current) setStatus(null); });
+    return getVoiceConfig({ silent: true })
+      .then((config) => { if (mountedRef.current) { setCfg(config); setSavedFacetime(config?.facetime || {}); } })
+      .catch((err) => { if (mountedRef.current) setConfigError(err instanceof Error ? err : new Error('Request failed')); })
+      .finally(() => { if (mountedRef.current) setLoading(false); });
+  }, [mountedRef]);
 
   useEffect(() => {
-    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
-      .then(([config, s]) => { setCfg(config); setStatus(s); })
-      .catch(() => toast.error('Failed to load voice settings'))
-      .finally(() => setLoading(false));
-    listVoiceEngines({ silent: true })
-      .then((data) => {
-        const engines = Array.isArray(data?.engines) ? data.engines : [];
-        setTtsEngines(engines);
-        setTtsEngineError(engines.length > 0 ? null : 'No TTS engines were returned by this server.');
-      })
-      .catch(() => {
-        setTtsEngines([]);
-        setTtsEngineError('Could not load the TTS engine registry. The saved engine remains selected.');
-      });
-  }, []);
+    loadConfig();
+  }, [loadConfig]);
 
   // Functional setState form so sequential patch() calls in one event handler
   // compose correctly — each one sees the prior's result instead of cloning
   // the pre-event `cfg` and silently overwriting earlier changes.
-  const patch = (path, value) => {
+  const patch = useCallback((path, value) => {
     setCfg((prev) => {
       const next = JSON.parse(JSON.stringify(prev));
       let cur = next;
@@ -175,25 +101,20 @@ export function VoiceTab() {
       cur[keys[keys.length - 1]] = value;
       return next;
     });
-  };
-
-  // Probe on-device (Gemini Nano) availability for the fast-resolution pill.
-  // Re-checks when the browser-LLM tier is toggled on — the user may have just
-  // enabled the Chrome flag and come back to this tab.
-  const fastBrowserLlm = cfg?.llm?.fastPath?.browserLlm;
-  useEffect(() => {
-    let live = true;
-    nanoAvailability()
-      .then((s) => { if (live) setNanoStatus(s); })
-      .catch(() => { if (live) setNanoStatus('unavailable'); });
-    return () => { live = false; };
-  }, [fastBrowserLlm]);
+  }, []);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      const r = await updateVoiceConfig(cfg, { silent: true });
+      const pendingTraits = traitsSyncRef.current?.readPending();
+      const payload = pendingTraits === null || pendingTraits === undefined ? cfg : {
+        ...cfg,
+        llm: { ...cfg.llm, personality: { ...cfg.llm.personality, traits: pendingTraits } },
+      };
+      const r = await updateVoiceConfig(payload, { silent: true });
       setCfg(r.config);
+      setSavedFacetime(r.config?.facetime || {});
+      traitsSyncRef.current?.clear();
       const rec = r.reconciliation || {};
       if (rec.error) {
         toast.error(`Saved, but reconcile failed: ${rec.error}`, { duration: 12000 });
@@ -219,7 +140,7 @@ export function VoiceTab() {
   const handleTest = async () => {
     setTesting(true);
     try {
-      const buf = await testTts('Voice mode is online. I am ready to help.', undefined, currentEngine);
+      const buf = await testTts('Voice mode is online. I am ready to help.', undefined, cfg?.tts?.engine);
       playWav(buf);
     } catch (err) {
       toast.error(`TTS test failed: ${err.message}`);
@@ -229,860 +150,118 @@ export function VoiceTab() {
     await refreshStatus();
   };
 
-  const refreshFaceTime = () => getFaceTimeStatus({ silent: true })
-    .then(setFacetimeStatus)
-    .catch(() => setFacetimeStatus(null));
+  if (!loading && !cfg) return <ListLoadError what="voice settings" error={configError} onRetry={loadConfig} />;
 
-  const handleFaceTimeAction = async (action) => {
-    setFacetimeAction(action);
-    try {
-      setFacetimeResult(await controlFaceTime(action, { silent: true }));
-    } catch (err) {
-      setFacetimeResult({ ok: false, message: err.message });
-    } finally {
-      setFacetimeAction(null);
-      refreshFaceTime();
-    }
-  };
-
-  const handlePreviewVoice = async (voiceName) => {
-    if (!voiceName || previewingVoice) return;
-    setPreviewingVoice(voiceName);
-    try {
-      const buf = await testTts("Hi, I'm your voice. This is how I sound.", voiceName, currentEngine);
-      playWav(buf);
-    } catch (err) {
-      toast.error(`Preview failed: ${err.message}`);
-    } finally {
-      setPreviewingVoice(null);
-    }
-  };
-
-  const handleWhisperModel = (value) => {
-    const m = WHISPER_MODELS.find((x) => x.value === value);
-    if (!m) return;
-    patch('stt.model', m.value);
-    patch('stt.modelPath', `~/.portos/voice/models/${m.file}`);
-  };
-
-  // Re-query the selected provider's /models endpoint and refresh the dropdown
-  // (LM Studio / Ollama load models on demand, so the list goes stale).
-  const handleRefreshModels = async (providerId) => {
-    if (!providerId || refreshingModels) return;
-    setRefreshingModels(true);
-    try {
-      // Silent: the route errors when the refresh fails (502 with the probe's
-      // real message, or 400 when that CLI has no fetcher), so the catch below
-      // owns the error toast (avoids a double toast).
-      const updated = await refreshProviderModels(providerId, { silent: true });
-      setApiProviders((prev) => prev.map((p) => (p.id === providerId ? { ...p, models: updated.models || [] } : p)));
-      toast.success(`Refreshed models for ${updated.name || providerId} (${updated.models?.length || 0})`);
-    } catch (err) {
-      toast.error(`Failed to refresh models: ${err.message}`);
-    } finally {
-      setRefreshingModels(false);
-    }
-  };
-
-  if (loading || !cfg) return <BrailleSpinner text="Loading voice settings" />;
-
-  const facetime = cfg.facetime || {};
-  const faceTimeDirty = !facetime.targetHandle?.trim() || !facetime.targetName?.trim();
-
-  const configuredEngine = cfg.tts.engine || 'piper';
-  const sttEngine = cfg.stt.engine || 'whisper';
-  const engineMeta = ttsEngines.find((item) => (
-    item.id === configuredEngine || item.aliases?.includes(configuredEngine)
-  ));
-  const engine = engineMeta?.id || configuredEngine;
-  const engineConfigKey = typeof engineMeta?.configKey === 'string' ? engineMeta.configKey : null;
-  const fallbackConfigKey = [configuredEngine, configuredEngine.replace(/-tts$/, '')]
-    .find((key) => cfg.tts[key] && typeof cfg.tts[key] === 'object');
-  const activeVoice = cfg.tts[engineConfigKey || fallbackConfigKey]?.voice;
-  const selectedEngineMetadataMissing = Boolean(engineMeta && !engineConfigKey);
-  // A configured engine/voice the live registry no longer lists (retired
-  // engine, deleted voice) must still render as its own option — otherwise
-  // the select paints blank and a save would silently switch away from it.
-  const ttsEngineOptions = withUnlistedOption(ttsEngines, engine, (id) => ({ id, label: `${id} (current)` }));
-  // Voices are keyed by `name`, not `id`. `unlisted` flags the synthetic
-  // entry so the render below can show the same "(current)" text the old
-  // hand-rolled option used, instead of running a bare `{ name }` stand-in
-  // through formatVoiceLabel's engine-specific formatters.
-  const voiceOptions = withUnlistedOption(
-    voices,
-    activeVoice,
-    (name) => ({ name, unlisted: true }),
-    { key: 'name' },
-  );
-
-  // LLM provider/model pickers. The saved provider/model are always shown even
-  // when missing from the registry (e.g. provider deleted, or a model not in
-  // the cached list) so the select never silently drops the user's choice.
-  const llmProvider = cfg.llm.provider || 'lmstudio';
-  const llmModel = cfg.llm.model || 'auto';
-  const llmVisionModel = cfg.llm.visionModel || 'auto';
-  const selectedProvider = apiProviders.find((p) => p.id === llmProvider);
-  // Still used to gate the refresh buttons below, so kept alongside
-  // providerOptions rather than folded away.
-  const providerMissing = apiProviders.length > 0 && !selectedProvider;
-  // An empty registry means "not loaded yet" (or the fetch failed), not
-  // "confirmed not an API provider" — the synthetic option's own text makes
-  // that distinction, since `withUnlistedOption` can't know why a value is
-  // absent from an empty list.
-  const providerOptions = withUnlistedOption(
-    apiProviders,
-    llmProvider,
-    (id) => ({ id, name: apiProviders.length === 0 ? id : `${id} (not an API provider)` }),
-  );
-  const providerModels = selectedProvider?.models || [];
-  // `providerModels` is a flat id-string list; wrap each as `{id}` so the
-  // shared helper's default `key: 'id'` object contract applies uniformly to
-  // real and synthetic entries alike.
-  const modelChoices = providerModels.map((m) => ({ id: m }));
-  // 'auto' is a sentinel rendered as its own hardcoded option below, never a
-  // real catalog id — routing it through the helper would wrongly flag it as
-  // an unlisted pin and duplicate the `value="auto"` option.
-  const modelOptions = llmModel === 'auto'
-    ? modelChoices
-    : withUnlistedOption(modelChoices, llmModel, (id) => ({ id, current: true }));
-  const visionModelOptions = llmVisionModel === 'auto'
-    ? modelChoices
-    : withUnlistedOption(modelChoices, llmVisionModel, (id) => ({ id, current: true }));
-
-  // Code-agent delegation picker. Empty provider/model = "system default" (the
-  // CoS spawner's activeProvider + selectModelForTask). The saved choice is
-  // shown even when absent from the registry so the select never drops it.
-  const codeAgentCfg = cfg.llm.codeAgent || {};
-  const codeProvider = codeAgentCfg.provider || '';
-  const codeModel = codeAgentCfg.model || '';
-  const selectedCodeProvider = codeProviders.find((p) => p.id === codeProvider);
-  // Only flag a missing agent AFTER the registry loads — otherwise a saved
-  // agent is briefly mislabeled "(not a coding agent)" during the fetch (or if
-  // it fails and codeProviders stays []). Mirrors providerOptions above,
-  // but this picker suppresses the synthetic entirely while unloaded rather
-  // than showing an unannotated fallback.
-  const codeProviderOptions = codeProviders.length === 0
-    ? codeProviders
-    : withUnlistedOption(codeProviders, codeProvider, (id) => ({ id, name: `${id} (not a coding agent)` }));
-  const codeProviderModels = selectedCodeProvider?.models || [];
-  const codeModelChoices = codeProviderModels.map((m) => ({ id: m }));
-  const codeModelOptions = withUnlistedOption(codeModelChoices, codeModel, (id) => ({ id, current: true }));
-
-  // Fast-resolution cascade config + on-device availability pill.
-  const fastPathCfg = cfg.llm.fastPath || {};
-  const nanoUi = NANO_STATUS_UI[nanoStatus] || ['Checking…', 'text-gray-500', 'bg-gray-500'];
+  const ready = !loading && Boolean(cfg);
+  const sttEngine = cfg?.stt?.engine || 'whisper';
+  const ttsEngine = cfg?.tts?.engine || 'piper';
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-6">
-      <div className="flex items-center gap-2 text-white">
-        <Mic size={18} />
-        <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
-      </div>
-      <p className="text-xs text-gray-500 -mt-4">
-        Hands-free or push-to-talk voice. Whisper (STT) + local TTS + your chosen LLM
-        provider with tool calling for real actions (brain capture, goal updates, PM2 control, feed
-        digests, time, and more). Pick a local provider (LM Studio, Ollama) to keep everything on
-        this machine, or any OpenAI-compatible API.
-      </p>
-
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={cfg.enabled}
-          onChange={(e) => patch('enabled', e.target.checked)}
-          className="w-4 h-4 mt-0.5 shrink-0"
-        />
-        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-          <span className="text-sm text-white">Enable voice mode</span>
-          <span className="text-xs text-gray-500">
-            (toggling on installs missing binaries + downloads selected models)
-          </span>
-        </div>
-      </label>
-
-      <label className="flex items-start gap-3 cursor-pointer">
-        <input
-          type="checkbox"
-          checked={!widgetHidden}
-          onChange={(e) => toggleWidgetHidden(!e.target.checked)}
-          className="w-4 h-4 mt-0.5 shrink-0"
-        />
-        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-          <span className="text-sm text-white">Show floating voice widget</span>
-          <span className="text-xs text-gray-500">
-            (per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)
-          </span>
-        </div>
-      </label>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {status?.services && Object.entries(status.services).map(([k, probe]) => (
-          <ServiceBadge key={k} label={SERVICE_LABELS[k] || k} probe={probe} />
-        ))}
-      </div>
-
-      {isFeatureEnabled('facetime') && <section className="border border-port-border rounded-lg p-4 space-y-3">
-        <h3 className="text-base font-semibold text-white">FaceTime Audio</h3>
-        <p className="text-xs text-gray-500">Machine-local macOS call control. Save your identity before testing; it is not shared with peers.</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <FormField label="Target name"><input id="facetime-target-name" value={facetime.targetName || ''} onChange={(e) => patch('facetime.targetName', e.target.value)} className={inputCls} /></FormField>
-          <FormField label="Target handle" hint="E.164 phone number or email address."><input id="facetime-target-handle" value={facetime.targetHandle || ''} onChange={(e) => patch('facetime.targetHandle', e.target.value)} className={inputCls} /></FormField>
-          <FormField label="Maximum call length" hint="Minutes before PortOS hangs up on its own."><input id="facetime-max-call-minutes" type="number" min="1" max="120" value={facetime.maxCallMinutes ?? 15} onChange={(e) => patch('facetime.maxCallMinutes', Number(e.target.value))} className={inputCls} /></FormField>
-        </div>
-        {/* Two-way audio needs a real browser tab on this Mac: device
-            permissions and setSinkId do not work from the server. */}
-        <p className="text-xs text-gray-400">
-          Call audio runs in its own tab — <Link to="/voice/call-host" className="text-port-accent underline">open the call host</Link> on this Mac and attach it before placing a call. Without it, PortOS can dial but nobody can hear the call.
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {['probe', 'call', 'hangup'].map((action) => <button key={action} type="button" onClick={() => handleFaceTimeAction(action)} disabled={saving || faceTimeDirty || facetimeAction !== null} className="px-3 py-2 rounded bg-port-border text-sm text-white disabled:opacity-50">{facetimeAction === action ? 'Working…' : action === 'call' ? 'Test call' : action[0].toUpperCase() + action.slice(1)}</button>)}
-          <button type="button" onClick={refreshFaceTime} className="px-3 py-2 rounded bg-port-bg border border-port-border text-sm text-white">Check setup</button>
-        </div>
-        <div className="border-t border-port-border pt-3 space-y-2">
-          <h4 className="text-sm font-semibold text-white">Answer my calls</h4>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              id="facetime-auto-answer"
-              type="checkbox"
-              checked={facetime.autoAnswer === true}
-              onChange={(e) => patch('facetime.autoAnswer', e.target.checked)}
-              disabled={faceTimeDirty}
-              className="w-4 h-4 mt-0.5 shrink-0"
-            />
-            <div className="min-w-0 flex-1">
-              <span className="text-sm text-white">Automatically answer incoming calls</span>
-              <p className="text-xs text-gray-500">
-                Only calls from your own configured handle are ever answered — every other caller is left ringing. Needs the <Link to="/voice/call-host" className="text-port-accent underline">call host</Link> tab open on this Mac; without it, an authorized call rings unanswered and a notification tells you why.
-              </p>
-            </div>
-          </label>
-        </div>
-
-        <div className="border-t border-port-border pt-3 space-y-2">
-          <h4 className="text-sm font-semibold text-white">Call me when it matters</h4>
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              id="facetime-escalate-critical"
-              type="checkbox"
-              checked={facetime.escalateCritical === true}
-              onChange={(e) => patch('facetime.escalateCritical', e.target.checked)}
-              className="w-4 h-4 mt-0.5 shrink-0"
-            />
-            <div className="min-w-0 flex-1">
-              <span className="text-sm text-white">Escalate unread critical notifications to a call</span>
-              <p className="text-xs text-gray-500">Only when the notification is still unread after the delay below and no browser tab can speak it.</p>
-            </div>
-          </label>
-          <FormField label="Escalate after" hint="Minutes a critical notification may stay unread first.">
-            <input id="facetime-escalate-after-minutes" type="number" min="1" max="1440" value={facetime.escalateAfterMinutes ?? 10} onChange={(e) => patch('facetime.escalateAfterMinutes', Number(e.target.value))} className={inputCls} />
-          </FormField>
-          <p className="text-xs text-gray-500">
-            Escalations and Persistent Mind calls share one budget: at most 3 calls per rolling 24 hours, at least 30 minutes apart, never during voice quiet hours. The Persistent Mind can only place calls when its own <Link to="/cos/mind?panel=tools" className="text-port-accent underline">call grant</Link> is enabled.
-          </p>
-        </div>
-        {faceTimeDirty && <p className="text-xs text-port-warning">Set and save both identity fields before FaceTime controls are available.</p>}
-        {facetimeStatus && <ul className="text-xs text-gray-400">{Object.entries(facetimeStatus).map(([key, value]) => <li key={key}>{value.ok === 'ok' ? '✓' : '•'} {key}: {value.message}</li>)}</ul>}
-        {facetimeResult && <pre className="text-xs text-gray-400 whitespace-pre-wrap break-all">{JSON.stringify(facetimeResult, null, 2)}</pre>}
-      </section>}
-
-      <div className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
-        <Globe size={16} className="text-port-accent mt-0.5 shrink-0" />
-        <div className="text-xs text-gray-400 min-w-0">
-          <span className="text-white">Serve TTS as an API.</span>{' '}
-          Expose <code className="text-port-accent">POST /api/voice/public/synthesize</code> so other
-          machines on your tailnet can request audio (any engine/voice). Configure exposure and
-          passwordless/auth gating under{' '}
-          <Link to="/settings/api-access" className="text-port-accent hover:underline">Settings → API Access</Link>.
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="Hotkey" hint="Hold to talk (keyboard).">
-          <input
-            type="text"
-            value={cfg.hotkey}
-            onChange={(e) => patch('hotkey', e.target.value)}
-            className={inputCls}
-          />
-        </FormField>
-
-        <FormField label="TTS engine" hint={ttsEngineError
-          || (selectedEngineMetadataMissing
-            ? 'This server returned legacy engine metadata. Voice selection stays read-only until the server is updated.'
-            : engineMeta?.description || 'Choose a locally available speech engine.')}>
-          <select
-            value={engine}
-            onChange={(e) => patch('tts.engine', e.target.value)}
-            className={inputCls}
-          >
-            {ttsEngineOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>
-                {opt.label || opt.id}{opt.description ? ` (${opt.description})` : ''}
-              </option>
-            ))}
-          </select>
-        </FormField>
-
-        <FormField label={`${engineMeta?.label || engine} voice`} hint={engineConfigKey
-          ? engineMeta?.voiceHint
-          : 'Voice selection is read-only until engine configuration metadata is available.'}>
-          <div className="flex items-center gap-2">
-            <select
-              value={activeVoice || ''}
-              aria-label="Voice"
-              disabled={!engineConfigKey}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (!engineConfigKey) return;
-                patch(`tts.${engineConfigKey}.voice`, val);
-                if (engine !== 'piper') return;
-                const v = voices.find((x) => x.name === val);
-                if (v?.path) patch('tts.piper.voicePath', v.path);
-                patch('tts.piper.speakerId', null);
-                // Fetch voice on select so ▶ preview works without a save.
-                // Safe to kick off fire-and-forget — the UI disables the
-                // preview button while a download is in flight.
-                if (v && v.downloaded === false) {
-                  setDownloadingVoice(val);
-                  fetchPiperVoice(val, { silent: true })
-                    .then(() => listVoices('piper', { silent: true }))
-                    .then((fresh) => setVoices(Array.isArray(fresh?.voices) ? fresh.voices : []))
-                    .catch((err) => toast.error(`Voice download failed: ${err.message}`))
-                    .finally(() => setDownloadingVoice(null));
-                }
-              }}
-              className={`${inputCls} flex-1`}
-            >
-              {voiceOptions.map((v) => (
-                <option key={v.name} value={v.name}>{v.unlisted ? `${v.name} (current)` : formatVoiceLabel(v, engine)}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => handlePreviewVoice(activeVoice)}
-              disabled={!activeVoice || !!previewingVoice || !!downloadingVoice}
-              title={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'} aria-label={downloadingVoice ? `Downloading ${downloadingVoice}…` : 'Preview this voice'}
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
-            >
-              {previewingVoice === activeVoice || downloadingVoice === activeVoice
-                ? <BrailleSpinner />
-                : <Play size={14} />}
-            </button>
-          </div>
-          {voicesState === 'error' && (
-            <ListLoadError what="voices" error={voicesError} onRetry={retryVoices} className="mt-2" />
-          )}
-        </FormField>
-
-        {cfg.tts.retiredEngine === 'kokoro' && (
-          <p role="status" className="text-sm text-port-warning">
-            Kokoro has been retired. Your voice settings now use Piper. Choose a voice, then use Save &amp; Reconcile to install Piper and its voice model. Existing Kokoro character profiles must be replaced with a Piper preset.
-          </p>
-        )}
-
-        <FormField label="Speech rate" hint="0.5 = slow, 1.0 = normal, 2.0 = fast">
-          <input
-            type="number" min="0.5" max="2" step="0.1"
-            value={cfg.tts.rate ?? 1.0}
-            onChange={(e) => patch('tts.rate', parseFloat(e.target.value) || 1.0)}
-            className={inputCls}
-          />
-        </FormField>
-
-        <FormField label="STT engine" hint={webSpeechSupported
-          ? 'Web Speech = browser-native, zero-latency, but quality varies by browser and only works in Chrome/Edge. Whisper = local, consistent, offline.'
-          : 'Web Speech unavailable in this browser (Chrome/Edge only). Whisper it is.'}>
-          <select
-            value={sttEngine}
-            onChange={(e) => patch('stt.engine', e.target.value)}
-            className={inputCls}
-          >
-            {STT_ENGINES.map((opt) => (
-              <option key={opt.value} value={opt.value} disabled={opt.value === 'web-speech' && !webSpeechSupported}>
-                {opt.label}{opt.value === 'web-speech' && !webSpeechSupported ? ' — not supported here' : ''}
-              </option>
-            ))}
-          </select>
-        </FormField>
-
-        {sttEngine === 'whisper' && (
+    <>
+      {!ready && <BrailleSpinner text="Loading voice settings" />}
+      {/* Mount background-fetching sections on initial mount in the same tree position
+          so listVoiceEngines, getProviders, and nanoAvailability run in parallel with
+          getVoiceConfig without remounting once cfg arrives. */}
+      <div className={ready ? 'bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-6' : undefined}>
+        {ready && (
           <>
-            <FormField label="Whisper model" hint="Bigger = more accurate, slower, larger download.">
-              <select
-                value={cfg.stt.model || 'base.en'}
-                onChange={(e) => handleWhisperModel(e.target.value)}
-                className={inputCls}
-              >
-                {WHISPER_MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-            </FormField>
+            <div className="flex items-center gap-2 text-white">
+              <Mic size={18} />
+              <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
+            </div>
+            <p className="text-xs text-gray-500 -mt-4">
+              Hands-free or push-to-talk voice. Whisper (STT) + local TTS + your chosen LLM
+              provider with tool calling for real actions (brain capture, goal updates, PM2 control, feed
+              digests, time, and more). Pick a local provider (LM Studio, Ollama) to keep everything on
+              this machine, or any OpenAI-compatible API.
+            </p>
 
-            <FormField label="Whisper endpoint">
-              <input
-                type="text"
-                value={cfg.stt.endpoint}
-                onChange={(e) => patch('stt.endpoint', e.target.value)}
-                className={inputCls}
-              />
-            </FormField>
-          </>
-        )}
-
-        {providersError && (
-          <ListLoadError what="the provider registry (LLM and coding-agent pickers)" error={providersError} onRetry={loadProviders} className="md:col-span-2" />
-        )}
-        <FormField label="LLM provider" hint="Voice streams tokens, so only API providers (LM Studio, Ollama, OpenAI-compatible) are listed. Configure providers under Settings → Providers.">
-          {/* Streaming needs a direct API route, so a composed combination is
-              restricted to the `api` method. The model/vision selects below
-              carry their own 'auto' sentinel, so this is the provider only. */}
-          <ProviderModelSelector
-            compact
-            label="LLM provider"
-            providers={providerOptions}
-            selectedProviderId={llmProvider}
-            composeMethods={['api']}
-            onProviderChange={(id) => {
-              // Switching provider invalidates the old model — reset to 'auto'
-              // so we don't send a model the new provider doesn't have.
-              patch('llm.provider', id);
-              patch('llm.model', 'auto');
-              patch('llm.visionModel', 'auto');
-            }}
-          />
-        </FormField>
-
-        {/* Not wrapped in <FormField>: the select sits beside a refresh button,
-            so the id must land on the <select> (FormField injects it onto the
-            first child, which would be the flex wrapper — orphaning the
-            label). */}
-        <div className="space-y-1">
-          <label htmlFor="voice-llm-model" className="block text-sm text-gray-400">LLM model</label>
-          <p className="text-xs text-gray-500">'auto' uses the provider's default model, or the fastest loaded model for LM Studio / Ollama.</p>
-          <div className="flex items-center gap-2">
-            <select
-              id="voice-llm-model"
-              value={llmModel}
-              onChange={(e) => patch('llm.model', e.target.value)}
-              className={`${inputCls} flex-1`}
-            >
-              <option value="auto">auto</option>
-              {modelOptions.map((opt) => (
-                <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => handleRefreshModels(llmProvider)}
-              disabled={refreshingModels || providerMissing || apiProviders.length === 0}
-              aria-label="Refresh model list from the provider"
-              title="Refresh model list from the provider"
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
-            >
-              {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-1">
-          <label htmlFor="voice-vision-model" className="block text-sm text-gray-400">Vision model</label>
-          <p className="text-xs text-gray-500">'auto' uses the provider's vision-capable default for screen descriptions.</p>
-          <div className="flex items-center gap-2">
-            <select
-              id="voice-vision-model"
-              value={llmVisionModel}
-              onChange={(e) => patch('llm.visionModel', e.target.value)}
-              className={`${inputCls} flex-1`}
-            >
-              <option value="auto">auto</option>
-              {visionModelOptions.map((opt) => (
-                <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => handleRefreshModels(llmProvider)}
-              disabled={refreshingModels || providerMissing || apiProviders.length === 0}
-              aria-label="Refresh model list from the provider"
-              title="Refresh model list from the provider"
-              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 shrink-0 p-2 rounded-lg bg-port-border hover:bg-port-border/70 text-white disabled:opacity-50"
-            >
-              {refreshingModels ? <BrailleSpinner /> : <RefreshCw size={14} />}
-            </button>
-          </div>
-        </div>
-
-        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
-          <input
-            type="checkbox"
-            checked={cfg.llm.usePersonality !== false}
-            onChange={(e) => patch('llm.usePersonality', e.target.checked)}
-            className="w-4 h-4 mt-0.5 shrink-0"
-          />
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-            <span className="text-sm text-white">Use Chief-of-Staff personality (recommended)</span>
-            <span className="text-xs text-gray-500">
-              Composes the system prompt from the fields below. Turn off to use the raw prompt.
-            </span>
-          </div>
-        </label>
-
-        {cfg.llm.usePersonality !== false ? (
-          <>
-            <FormField label="Name" hint="What the assistant calls itself.">
-              <input
-                type="text"
-                value={cfg.llm.personality?.name ?? ''}
-                onChange={(e) => patch('llm.personality.name', e.target.value)}
-                className={inputCls}
-              />
-            </FormField>
-            <FormField label="Role" hint="The role it plays for you.">
-              <input
-                type="text"
-                value={cfg.llm.personality?.role ?? ''}
-                onChange={(e) => patch('llm.personality.role', e.target.value)}
-                className={inputCls}
-              />
-            </FormField>
-            <FormField label="Speech style" hint="e.g. 'casual and brief', 'formal and precise'.">
-              <input
-                type="text"
-                value={cfg.llm.personality?.speechStyle ?? ''}
-                onChange={(e) => patch('llm.personality.speechStyle', e.target.value)}
-                className={inputCls}
-              />
-            </FormField>
-            <FormField label="Traits (comma-separated)" hint="e.g. 'concise, warm, proactive'.">
-              <input
-                type="text"
-                value={(cfg.llm.personality?.traits || []).join(', ')}
-                onChange={(e) => patch('llm.personality.traits',
-                  e.target.value.split(',').map((s) => s.trim()).filter(Boolean))}
-                className={inputCls}
-              />
-            </FormField>
-            <FormField label="Custom prompt (optional)" className="md:col-span-2" hint="Any extra context or instructions appended to the system prompt.">
-              <textarea
-                value={cfg.llm.personality?.customPrompt ?? ''}
-                onChange={(e) => patch('llm.personality.customPrompt', e.target.value)}
-                rows={2}
-                className={`${inputCls} font-mono text-xs`}
-              />
-            </FormField>
-          </>
-        ) : (
-          <FormField label="System prompt" className="md:col-span-2">
-            <textarea
-              value={cfg.llm.systemPrompt}
-              onChange={(e) => patch('llm.systemPrompt', e.target.value)}
-              rows={2}
-              className={`${inputCls} font-mono text-xs`}
-            />
-          </FormField>
-        )}
-
-        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
-          <input
-            type="checkbox"
-            checked={cfg.llm.tools?.enabled === true}
-            onChange={(e) => patch('llm.tools.enabled', e.target.checked)}
-            className="w-4 h-4 mt-0.5 shrink-0"
-          />
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-            <span className="text-sm text-white">Enable tools (brain, goals, PM2, feeds, time, driving the page — click/fill/select/check…)</span>
-            <span className="text-xs text-gray-500">
-              Needs a tool-use-capable model (Qwen2.5, Hermes-3, etc.).
-            </span>
-          </div>
-        </label>
-
-        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
-          <input
-            type="checkbox"
-            checked={cfg.llm.codeAgent?.enabled === true}
-            onChange={(e) => patch('llm.codeAgent.enabled', e.target.checked)}
-            className="w-4 h-4 mt-0.5 shrink-0"
-          />
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-            <span className="text-sm text-white">Enable coding-agent delegation</span>
-            <span className="text-xs text-gray-500">
-              Lets you say "have the agent fix X" — dispatches a CLI coding agent in an isolated worktree that opens a PR. Needs tools enabled above.
-            </span>
-          </div>
-        </label>
-
-        {cfg.llm.codeAgent?.enabled === true && (
-          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 pl-7">
-            <FormField label="Coding agent" hint="Which CLI/TUI agent runs the task. 'System default' uses your active AI provider (Settings → Providers).">
-              <ProviderModelSelector
-                compact
-                label="Coding agent"
-                providers={codeProviderOptions}
-                selectedProviderId={codeProvider}
-                emptyProviderOption="System default"
-                composeMethods={['cli', 'tui']}
-                onProviderChange={(id) => {
-                  // Switching agent invalidates the old model — reset to default.
-                  patch('llm.codeAgent.provider', id);
-                  patch('llm.codeAgent.model', '');
-                }}
-              />
-            </FormField>
-            <FormField label="Model" hint="'System default' lets the agent pick per task complexity.">
-              <select
-                value={codeModel}
-                onChange={(e) => patch('llm.codeAgent.model', e.target.value)}
-                className={inputCls}
-              >
-                <option value="">System default</option>
-                {codeModelOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>{opt.id}{opt.current ? ' (current)' : ''}</option>
-                ))}
-              </select>
-            </FormField>
-            <label className="flex items-start gap-3 cursor-pointer sm:col-span-2">
-              <input
-                type="checkbox"
-                checked={cfg.llm.codeAgent?.announceOnComplete !== false}
-                onChange={(e) => patch('llm.codeAgent.announceOnComplete', e.target.checked)}
-                className="w-4 h-4 mt-0.5 shrink-0"
-              />
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={cfg.enabled} onChange={(e) => patch('enabled', e.target.checked)} className="w-4 h-4 mt-0.5 shrink-0" />
               <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-                <span className="text-sm text-white">Announce when a dispatched task finishes</span>
-                <span className="text-xs text-gray-500">
-                  Speaks the result when the agent completes. Still honors quiet hours.
-                </span>
+                <span className="text-sm text-white">Enable voice mode</span>
+                <span className="text-xs text-gray-500">(toggling on installs missing binaries + downloads selected models)</span>
               </div>
             </label>
-          </div>
-        )}
 
-        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
-          <input
-            type="checkbox"
-            checked={cfg.llm.proactive?.enabled === true}
-            onChange={(e) => patch('llm.proactive.enabled', e.target.checked)}
-            className="w-4 h-4 mt-0.5 shrink-0"
-          />
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-            <span className="text-sm text-white">Allow proactive speech</span>
-            <span className="text-xs text-gray-500">
-              CoS can speak first for alerts and reminders. Disabled by default.
-            </span>
-          </div>
-        </label>
-
-        {cfg.llm.proactive?.enabled === true && (
-          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 pl-7">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={cfg.llm.proactive?.quietHours?.enabled === true}
-                onChange={(e) => patch('llm.proactive.quietHours.enabled', e.target.checked)}
-                className="w-4 h-4 shrink-0"
-              />
-              <span className="text-sm text-white">Quiet hours</span>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={!widgetHidden} onChange={(e) => toggleWidgetHidden(!e.target.checked)} className="w-4 h-4 mt-0.5 shrink-0" />
+              <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+                <span className="text-sm text-white">Show floating voice widget</span>
+                <span className="text-xs text-gray-500">(per-browser preference — Safari on iPhone does not support the mic APIs this widget uses)</span>
+              </div>
             </label>
-            <FormField label="Start (HH:MM)" hint="Local time">
-              <input
-                type="time"
-                value={cfg.llm.proactive?.quietHours?.start || '22:00'}
-                onChange={(e) => patch('llm.proactive.quietHours.start', e.target.value)}
-                disabled={!cfg.llm.proactive?.quietHours?.enabled}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
-              />
-            </FormField>
-            <FormField label="End (HH:MM)" hint="Local time">
-              <input
-                type="time"
-                value={cfg.llm.proactive?.quietHours?.end || '07:00'}
-                onChange={(e) => patch('llm.proactive.quietHours.end', e.target.value)}
-                disabled={!cfg.llm.proactive?.quietHours?.enabled}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
-              />
-            </FormField>
-          </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {status?.services && Object.entries(status.services).map(([k, probe]) => (
+                <ServiceBadge key={k} label={SERVICE_LABELS[k] || k} probe={probe} />
+              ))}
+            </div>
+
+            {isFeatureEnabled('facetime') && (
+              <VoiceFaceTimeSection facetime={cfg.facetime || {}} savedFacetime={savedFacetime} saving={saving} patch={patch} inputCls={inputCls} />
+            )}
+
+            <div className="flex items-start gap-3 bg-port-bg border border-port-border rounded-lg p-3">
+              <Globe size={16} className="text-port-accent mt-0.5 shrink-0" />
+              <div className="text-xs text-gray-400 min-w-0">
+                <span className="text-white">Serve TTS as an API.</span>{' '}
+                Expose <code className="text-port-accent">POST /api/voice/public/synthesize</code> so other
+                machines on your tailnet can request audio (any engine/voice). Configure exposure and
+                passwordless/auth gating under{' '}
+                <Link to="/settings/api-access" className="text-port-accent hover:underline">Settings → API Access</Link>.
+              </div>
+            </div>
+          </>
         )}
 
-        {sttEngine === 'whisper' && (
-          <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
-            <input
-              type="checkbox"
-              checked={!!cfg.stt.coreml}
-              onChange={(e) => patch('stt.coreml', e.target.checked)}
-              className="w-4 h-4 mt-0.5 shrink-0"
-            />
-            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-              <span className="text-sm text-white">Use CoreML encoder for Whisper (macOS only)</span>
-              <span className="text-xs text-gray-500">2–3× faster STT on Apple Silicon.</span>
-            </div>
-          </label>
-        )}
-
-        {/* Fast-resolution cascade — lower spoken-turn latency by triaging most
-            turns before the (slow) server LLM. */}
-        <div className="md:col-span-2 border-t border-port-border/50 pt-4 space-y-3">
-          <div className="flex items-center gap-2 text-white">
-            <Zap size={15} className="text-port-accent" />
-            <span className="text-sm font-medium">Fast resolution (lower latency)</span>
-          </div>
-          <p className="text-xs text-gray-500 -mt-1">
-            Triage each turn through fast tiers before the server LLM: instant trigger commands →
-            on-device browser model (Gemini Nano) → your server provider above. Common turns
-            ("go to tasks", quick questions) skip the slow model entirely. Uses browser speech
-            recognition, so set the STT engine to Web Speech.
-          </p>
-
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={fastPathCfg.enabled === true}
-              onChange={(e) => patch('llm.fastPath.enabled', e.target.checked)}
-              className="w-4 h-4 mt-0.5 shrink-0"
-            />
-            <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-              <span className="text-sm text-white">Enable fast-resolution cascade</span>
-              <span className="text-xs text-gray-500">Off by default — turns run entirely on the server LLM.</span>
-            </div>
-          </label>
-
-          {fastPathCfg.enabled === true && (
-            <div className="pl-7 space-y-3">
-              {sttEngine !== 'web-speech' && (
-                <p className="text-xs text-port-warning">
-                  Fast resolution needs browser speech recognition. Set the STT engine to
-                  “Web Speech API” above, or spoken turns fall back to the server.
-                </p>
-              )}
-
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={fastPathCfg.triggers !== false}
-                  onChange={(e) => patch('llm.fastPath.triggers', e.target.checked)}
-                  className="w-4 h-4 mt-0.5 shrink-0"
-                />
-                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-                  <span className="text-sm text-white">Tier 1 — trigger commands (instant, offline)</span>
-                  <span className="text-xs text-gray-500">"go to tasks", "open daily log" navigate immediately — no LLM.</span>
-                </div>
-              </label>
-
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={fastPathCfg.browserLlm !== false}
-                  onChange={(e) => patch('llm.fastPath.browserLlm', e.target.checked)}
-                  className="w-4 h-4 mt-0.5 shrink-0"
-                />
-                <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
-                  <span className="text-sm text-white">Tier 2 — on-device browser model (Gemini Nano)</span>
-                  <span className="text-xs text-gray-500">Answers simple/conversational turns in the browser; escalates actions to the server.</span>
-                </div>
-              </label>
-
-              {fastPathCfg.browserLlm !== false && (
-                <div className="pl-7 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full ${nanoUi[2]}`} />
-                    <span className={`text-xs ${nanoUi[1]}`}>{nanoUi[0]}</span>
-                  </div>
-                  {(nanoStatus === 'no-api' || nanoStatus === 'unavailable') && (
-                    <p className="text-xs text-gray-500">
-                      Requires Chrome/Edge with the on-device model. Enable
-                      <code className="mx-1 text-gray-400">chrome://flags/#prompt-api-for-gemini-nano</code>
-                      and
-                      <code className="mx-1 text-gray-400">chrome://flags/#optimization-guide-on-device-model</code>,
-                      then restart the browser. Turns fall back to the server model when unavailable.
-                    </p>
-                  )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <FormField label="Temperature" hint="0 = deterministic, higher = more varied. Default 0.7.">
-                      <input
-                        type="number"
-                        min="0"
-                        max="2"
-                        step="0.1"
-                        value={fastPathCfg.browser?.temperature ?? 0.7}
-                        onChange={(e) => {
-                          const v = parseFloat(e.target.value);
-                          patch('llm.fastPath.browser.temperature', Number.isFinite(v) ? Math.min(2, Math.max(0, v)) : 0.7);
-                        }}
-                        className={inputCls}
-                      />
-                    </FormField>
-                    <FormField label="Top-K" hint="Sampling breadth. Default 3.">
-                      <input
-                        type="number"
-                        min="1"
-                        max="128"
-                        step="1"
-                        value={fastPathCfg.browser?.topK ?? 3}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value, 10);
-                          patch('llm.fastPath.browser.topK', Number.isFinite(v) ? Math.min(128, Math.max(1, v)) : 3);
-                        }}
-                        className={inputCls}
-                      />
-                    </FormField>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+        <div className={ready ? 'grid grid-cols-1 md:grid-cols-2 gap-4' : undefined}>
+          <VoiceSpeechSection cfg={ready ? cfg : null} patch={patch} inputCls={inputCls} onRegisterRetryVoices={registerRetryVoices} />
+          <VoiceLlmSection cfg={ready ? cfg : null} patch={patch} inputCls={inputCls} traitsSyncRef={traitsSyncRef} />
+          <VoiceFastPathSection fastPathCfg={ready ? (cfg.llm.fastPath || {}) : null} sttEngine={sttEngine} patch={patch} inputCls={inputCls} />
         </div>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-2">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
-        >
-          {saving ? <BrailleSpinner /> : <Save size={14} />}
-          Save & Reconcile
-        </button>
-        <button
-          onClick={handleTest}
-          disabled={testing}
-          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
-          title="Synthesize a test phrase with the active TTS engine"
-        >
-          {testing ? <BrailleSpinner /> : <Play size={14} />}
-          Test voice
-        </button>
-        <button
-          onClick={refreshStatus}
-          className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors"
-        >
-          <Zap size={14} />
-          Refresh
-        </button>
-      </div>
+        {ready && (
+          <>
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 pt-2">
+              <button onClick={handleSave} disabled={saving} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+                {saving ? <BrailleSpinner /> : <Save size={14} />}
+                Save & Reconcile
+              </button>
+              <button onClick={handleTest} disabled={testing} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors disabled:opacity-50" title="Synthesize a test phrase with the active TTS engine">
+                {testing ? <BrailleSpinner /> : <Play size={14} />}
+                Test voice
+              </button>
+              <button onClick={refreshStatus} className="inline-flex items-center justify-center gap-2 min-h-[40px] px-4 py-2 bg-port-border hover:bg-port-border/70 text-white text-sm rounded-lg transition-colors">
+                <Zap size={14} />
+                Refresh
+              </button>
+            </div>
 
-      <details className="text-xs text-gray-500">
-        <summary className="cursor-pointer">Binary + model paths</summary>
-        <dl className="mt-2 space-y-1 font-mono">
-          {sttEngine === 'whisper' ? (
-            <>
-              <div>whisper-server: {status?.binaries?.whisper || <em className="text-port-error">not found</em>}</div>
-              <div>STT model: {status?.models?.sttModel || <em className="text-port-error">missing</em>}</div>
-              {cfg.stt.coreml && (
-                <div>CoreML encoder: {status?.models?.coreml || <em className="text-port-error">missing</em>}</div>
-              )}
-            </>
-          ) : (
-            <div>STT: <em>Web Speech API (browser-native — no server binaries required)</em></div>
-          )}
-          {engine === 'piper' && (
-            <div>piper: {status?.binaries?.piper || <em className="text-port-error">not found</em>}</div>
-          )}
-          <div>TTS voice: {status?.models?.ttsVoice || <em className="text-port-error">missing</em>}</div>
-        </dl>
-      </details>
-    </div>
+            <details className="text-xs text-gray-500">
+              <summary className="cursor-pointer">Binary + model paths</summary>
+              <dl className="mt-2 space-y-1 font-mono">
+                {sttEngine === 'whisper' ? (
+                  <>
+                    <div>whisper-server: {status?.binaries?.whisper || <em className="text-port-error">not found</em>}</div>
+                    <div>STT model: {status?.models?.sttModel || <em className="text-port-error">missing</em>}</div>
+                    {cfg.stt.coreml && (
+                      <div>CoreML encoder: {status?.models?.coreml || <em className="text-port-error">missing</em>}</div>
+                    )}
+                  </>
+                ) : (
+                  <div>STT: <em>Web Speech API (browser-native — no server binaries required)</em></div>
+                )}
+                {ttsEngine === 'piper' && (
+                  <div>piper: {status?.binaries?.piper || <em className="text-port-error">not found</em>}</div>
+                )}
+                <div>TTS voice: {status?.models?.ttsVoice || <em className="text-port-error">missing</em>}</div>
+              </dl>
+            </details>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 

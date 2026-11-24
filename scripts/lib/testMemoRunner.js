@@ -224,30 +224,43 @@ export function vitestShardSlice(files, { repoRoot, scope, index, count, path = 
   return hashed.slice(start, end).map(({ rel }) => rel);
 }
 
-// Hosted durations from #17618. Two server shards pin only these files so the
-// rest keep today's SHA-1 owner (memo cache keys stay put). Shard 1 also runs
-// the 7s Smoke-boot step, so its pinned seconds sit just under shard 2.
-// Structural guards: 9.1s / 9.6s / 10.0s. Serial capture: 33.1s and 7.0s.
-// Parallel unmemoizable suites fill the remainder (33.2, 27, 25.1, 20.2, 19.5,
-// 15, 14, 13.8, 12.3, 11.4, 11.4, 11.1).
+// Balance heavy suites, always-run guards and the non-capture serial tail
+// across the two server jobs (#18336). The duration budget includes shard 1's
+// 7s Smoke-boot step. Other files keep their hash owner and memo cache lineage.
 export const SERVER_HEAVY_SHARD_OWNERS = {
   'server/test/guards/repo.guard.test.js': 1,
+  'server/test/guards/runtime.guard.test.js': 1,
   'server/scripts/run-local-code-review.test.js': 1,
+  'server/lib/workTracker.trackerInstructions.test.js': 1,
+  'server/services/databaseMaintenanceCutover.test.js': 1,
+  'server/services/creativeDirector/videoAssembly.test.js': 1,
+  'scripts/workspaceCaches.test.js': 1,
   'scripts/pregate.test.js': 1,
   'scripts/setup-image-video.test.js': 1,
   'scripts/lib/testMemo.test.js': 1,
-  'scripts/vitestTempRoot.test.js': 1,
-  'scripts/generate_ltx2.test.js': 1,
   'scripts/vitestSiblingSweep.test.js': 1,
   'scripts/update-headless-recovery.test.js': 1,
   'server/services/updateExecutor.deferred.test.js': 1,
+  'scripts/runCiTestsClientFixture.test.js': 1,
+  'server/services/musicVideo/castAndSetsService.test.js': 1,
+  'server/services/musicVideo/audioAnalysis.test.js': 1,
+  'server/lib/databaseMaintenanceWorker.test.js': 1,
   'server/test/guards/modules.guard.test.js': 2,
-  'server/test/guards/runtime.guard.test.js': 2,
   'scripts/ci-test-plan.test.js': 2,
+  'server/routes/cosAgentRoutes.ownershipResponse.test.js': 2,
+  'server/services/git.sharedRecovery.test.js': 2,
+  'server/services/musicVideo/publishKit.test.js': 2,
+  'server/services/musicVideo/sharingCopy.test.js': 2,
   'scripts/run-ci-tests.test.js': 2,
   'server/services/repoRepairCompletion.test.js': 2,
-  'scripts/runCiTestsClientFixture.test.js': 2,
   'scripts/lib/testMemoRunner.test.js': 2,
+  'scripts/vitestTempRoot.test.js': 2,
+  'scripts/generate_ltx2.test.js': 2,
+  'server/services/claimBranchCleanup.integration.test.js': 2,
+  'server/routes/musicVideoBlender.test.js': 2,
+  'server/services/eidoverseWorld.runtime.test.js': 2,
+  'scripts/setup-voice.ps1.test.js': 2,
+  'server/routes/musicVideoDcp.test.js': 2,
 };
 
 /**

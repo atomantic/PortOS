@@ -9,6 +9,7 @@ import EmptyState from '../components/EmptyState';
 import MediaImage from '../components/MediaImage';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
+import ReferenceImagesEditor from '../components/threejsModels/ReferenceImagesEditor';
 import SubjectFamilySelect from '../components/threejsModels/SubjectFamilySelect';
 import useThreejsModelFamilies, { GENERAL_FAMILY_ID } from '../hooks/useThreejsModelFamilies';
 import { createThreejsModel, listThreejsModels } from '../services/apiThreejsModels.js';
@@ -46,6 +47,7 @@ export default function ThreejsModels() {
   const { families, status: familiesStatus, retry: retryFamilies } = useThreejsModelFamilies();
   const [family, setFamily] = useState(GENERAL_FAMILY_ID);
   const [effort, setEffort] = useState('');
+  const [referenceImages, setReferenceImages] = useState([]);
   const [creating, setCreating] = useState(false);
   const {
     providers,
@@ -94,6 +96,7 @@ export default function ThreejsModels() {
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       family,
+      referenceImages,
       effort: effort || undefined,
     }, { silent: true }).catch((error) => {
       toast.error(error.message || 'Failed to start model generation');
@@ -178,6 +181,7 @@ export default function ThreejsModels() {
               className="w-full resize-y rounded-lg border border-port-border bg-port-bg px-3 py-2 text-sm text-white placeholder:text-gray-600 focus:border-port-accent focus:outline-none"
             />
           </div>
+          <ReferenceImagesEditor value={referenceImages} onChange={setReferenceImages} disabled={creating} primaryFilename={selectedImage?.filename || ''} />
           <ProviderModelSelector
             providers={providers}
             selectedProviderId={selectedProviderId}

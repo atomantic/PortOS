@@ -169,18 +169,28 @@ jobs:
       # somehow leaves the checkout without it.
       - name: Initialize slashdo submodule
         if: fromJSON(needs.impact.outputs.plan).slashdo
-        run: git submodule update --init lib/slashdo
+        run: git submodule update --init --depth 1 lib/slashdo || git submodule update --init lib/slashdo
 
       # scripts/ml/align_lyrics_ctc_test.py skips its Viterbi cases without numpy
-      # and still exits 0 (issue #15676). When the plan runs that suite, build a
-      # throwaway venv with the repo's numpy pin and make the suite fail rather
+      # and still exits 0 (issue #15676). When the plan runs that suite, cache and
+      # restore a venv with the repo's numpy pin and make the suite fail rather
       # than skip if no numpy interpreter resolves. Never touches system Python.
+      - name: Cache CTC numpy virtualenv
+        id: ctc-venv-cache
+        if: fromJSON(needs.impact.outputs.plan).server_mode == 'full' || (fromJSON(needs.impact.outputs.plan).server_mode == 'files' && contains(fromJSON(needs.impact.outputs.plan).server_files, 'scripts/align_lyrics_ctc.test.js'))
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ctc-venv
+          key: ctc-venv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ml/requirements/requirements-acestep-mlx.txt') }}
+
       - name: Provide numpy for the CTC Viterbi tests
         if: fromJSON(needs.impact.outputs.plan).server_mode == 'full' || (fromJSON(needs.impact.outputs.plan).server_mode == 'files' && contains(fromJSON(needs.impact.outputs.plan).server_files, 'scripts/align_lyrics_ctc.test.js'))
         run: |
-          pin="$(grep -m1 -E '^numpy==' scripts/ml/requirements/requirements-acestep-mlx.txt)"
-          python3 -m venv "$RUNNER_TEMP/ctc-venv"
-          "$RUNNER_TEMP/ctc-venv/bin/python" -m pip install --quiet "$pin"
+          if [ "${{ steps.ctc-venv-cache.outputs.cache-hit }}" != "true" ]; then
+            pin="$(grep -m1 -E '^numpy==' scripts/ml/requirements/requirements-acestep-mlx.txt)"
+            python3 -m venv "$RUNNER_TEMP/ctc-venv"
+            "$RUNNER_TEMP/ctc-venv/bin/python" -m pip install --quiet "$pin"
+          fi
           echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
           echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
 
@@ -430,17 +440,6 @@ jobs:
 
       - uses: ./.github/actions/setup-server
 
-      - name: Provision test database (portos_test)
-        run: npm run setup:db:test --prefix server
-
-      # pg_dump must match the service major. The step timeout backs up the
-      # helper's 390-second download budget; cache hits never skip setup.
-      - name: Install PostgreSQL client and audio verification tools
-        timeout-minutes: 9
-        uses: ./.github/actions/db-tools
-        with:
-          pg-major: '17'
-
       # The Postgres schema is not visible to a cache key; scripts/lib/testMemo.js
       # lists the tracked files that build it as db base inputs.
       - name: Restore the test memo
@@ -450,12 +449,34 @@ jobs:
           suite: db
           partition: db
 
+      - name: Check remaining DB tests
+        id: db-plan
+        env:
+          PGDATABASE: portos_test
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: full
+        run: node scripts/run-ci-tests.js db --check-remaining
+
+      - name: Provision test database (portos_test)
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
+        run: npm run setup:db:test --prefix server
+
+      # pg_dump must match the service major. The step timeout backs up the
+      # helper's 390-second download budget.
+      - name: Install PostgreSQL client and audio verification tools
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
+        timeout-minutes: 9
+        uses: ./.github/actions/db-tools
+        with:
+          pg-major: '17'
+
       # A real pg_dump from the service's pinned image, checked by
       # inspectDatabaseDump, prepared by prepareDatabaseReplay and replayed into
       # a scratch database, then the startup maintenance-schema probe. Outside
       # the memo, so a missing Docker engine, image or psql fails instead of
       # becoming a cached pass.
       - name: Restore a real pg_dump into a scratch database
+        if: fromJSON(needs.impact.outputs.plan).db_live_restore
         timeout-minutes: 5
         env:
           PORTOS_DB_RESTORE_LIVE: '1'
@@ -466,6 +487,7 @@ jobs:
       # `⏱ db full suite` duration line itself.
       - name: Run DB-backed tests (portos_test)
         id: db-tests
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
         env:
           PGDATABASE: portos_test
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
@@ -509,19 +531,6 @@ jobs:
         with:
           vitest-key-suffix: -browser-${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # The step timeout backs up the helper's download budget.
-      - name: Install audio verification tools
-        timeout-minutes: 9
-        uses: ./.github/actions/db-tools
-        with:
-          include-postgres: 'false'
-
-      # The test runner reads the runner's Chrome tree into the page cache
-      # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
-      - uses: ./.github/actions/setup-client
-        with:
-          setup-node: 'false'
-
       # Smoke uses both trusted full-run lineages because its shard owners
       # differ. Per-test keys still require compatible inputs and coverage.
       - name: Restore the test memo
@@ -530,13 +539,43 @@ jobs:
         with:
           suite: browser
           partition: browser-${{ matrix.shard }}of${{ strategy.job-total }}
-          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '2' || '0' }}
+          merge-shards: ${{ env.PORTOS_BROWSER_TEST_PROFILE == 'smoke' && '4' || '0' }}
+
+      # Plan before installing ffmpeg/client deps so shards 100% covered by the
+      # memo skip both. Uses the same env keys as the test step below.
+      - name: Check remaining browser suites
+        id: browser-plan
+        env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: files
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          PORTOS_CI_BROWSER_OWNER: browser
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
+          PORTOS_REQUIRE_BROWSER_SUITES: '1'
+          PORTOS_TEST_QUIET: 1
+        run: node scripts/run-ci-tests.js server --check-remaining
+
+      # The step timeout backs up the helper's download budget.
+      - name: Install audio verification tools
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        timeout-minutes: 9
+        uses: ./.github/actions/db-tools
+        with:
+          include-postgres: 'false'
+
+      # The test runner reads the runner's Chrome tree into the page cache
+      # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
+      - uses: ./.github/actions/setup-client
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        with:
+          setup-node: 'false'
 
       # Fail-closed: PORTOS_REQUIRE_BROWSER_SUITES makes the suites' canRun guard
       # throw (see server/lib/browserSuiteGate.js) when Chrome, ffmpeg or the
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
         id: browser-tests
+        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
@@ -836,6 +875,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        id: supercollider-node
         with:
           node-version: 26.x
           cache: npm
@@ -860,12 +900,35 @@ jobs:
           touch "$task_data_root/.portos-disposable-root"
           printf 'PORTOS_DATA_ROOT=%s\n' "$task_data_root" >> "$GITHUB_ENV"
 
-      - name: Install test dependencies without lifecycle scripts
-        run: |
-          npm ci --ignore-scripts
-          npm ci --ignore-scripts --prefix server
+      - name: Restore script-free server dependencies
+        id: supercollider-dependencies
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: server/node_modules
+          key: supercollider-server-ignore-scripts-${{ matrix.arch }}-${{ steps.supercollider-node.outputs.node-version }}-${{ hashFiles('server/package-lock.json', 'server/.npmrc') }}
+
+      - name: Install root dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Install server dependencies without lifecycle scripts
+        if: steps.supercollider-dependencies.outputs.cache-hit != 'true'
+        run: npm ci --ignore-scripts --prefix server
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Restore SuperCollider build layers
+        id: supercollider-layers
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sc-buildx-cache
+          key: supercollider-buildx-${{ matrix.arch }}-${{ hashFiles('docker/supercollider/**') }}
 
       - name: Build and prove the shipped runtime
+        # Exact hits only import layers. A cold build exports layers while
+        # still loading the runtime image for the first setup's probe.
+        env:
+          PORTOS_SUPERCOLLIDER_BUILDX_CACHE_FROM: ${{ steps.supercollider-layers.outputs.cache-hit == 'true' && format('{0}/sc-buildx-cache', runner.temp) || '' }}
+          PORTOS_SUPERCOLLIDER_BUILDX_CACHE_TO: ${{ steps.supercollider-layers.outputs.cache-hit != 'true' && format('{0}/sc-buildx-cache', runner.temp) || '' }}
         run: |
           npm run setup:supercollider -- --yes --verbose | tee "$RUNNER_TEMP/supercollider-first-setup.log"
           cp "$PORTOS_DATA_ROOT/data/supercollider/runtime-evidence.json" "$RUNNER_TEMP/supercollider-first-evidence.json"
@@ -931,6 +994,21 @@ jobs:
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'));
           for (const line of lines.filter(Boolean)) console.log(line);
           NODE
+
+      # Only successful runs on the default branch publish these caches.
+      - name: Save script-free server dependencies
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.supercollider-dependencies.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: server/node_modules
+          key: ${{ steps.supercollider-dependencies.outputs.cache-primary-key }}
+
+      - name: Save SuperCollider build layers
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && steps.supercollider-layers.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/sc-buildx-cache
+          key: ${{ steps.supercollider-layers.outputs.cache-primary-key }}
 
   gate:
     name: CI Gate

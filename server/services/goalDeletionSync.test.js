@@ -16,13 +16,13 @@ vi.mock('./instances.js', async (importOriginal) => mockNoPeers({}, {
   updatePeer: async () => {},
 }));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
-vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
+vi.mock('./sharing/peerOutboundCoverage.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));
 vi.mock('./mediaJobQueue/index.js', () => ({ getJob: () => null }));
 vi.mock('./sharing/annotationIdentity.js', () => ({ resolveBucketSourceName: async () => 'Test' }));
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn(() => { throw new Error('Unexpected network request'); }) }));
-vi.mock('./meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
+vi.mock('./meatspace/meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
 
 const dataSync = await import('./dataSync.js');
 const goalService = await import('./identity/goals.js');

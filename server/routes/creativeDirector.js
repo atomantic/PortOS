@@ -12,7 +12,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { creativeDirectorProjectCreateSchema, creativeDirectorProjectUpdateSchema, creativeDirectorTreatmentSchema, creativeDirectorVideoReviewActionSchema, creativeDirectorVideoStartSchema, creativeDirectorPlanSchema, creativeDirectorPlanStepActionSchema, creativeDirectorDirectiveSchema, creativeDirectorSceneUpdateSchema, creativeDirectorAutoCastApplySchema, creativeDirectorProjectQuerySchema, creativeDirectorProjectSlimQuerySchema } from '../lib/creativeDirectorValidation.js';
+import { creativeDirectorProjectCreateSchema, creativeDirectorProjectUpdateSchema, creativeDirectorTreatmentSchema, creativeDirectorVideoReviewActionSchema, creativeDirectorVideoStartSchema, creativeDirectorPlanSchema, creativeDirectorPlanStepActionSchema, creativeDirectorDirectiveSchema, creativeDirectorSceneUpdateSchema, creativeDirectorAutoCastApplySchema, creativeDirectorProjectQuerySchema, creativeDirectorProjectSlimQuerySchema, creativeDirectorToolsQuerySchema } from '../lib/creativeDirectorValidation.js';
 import {
   listProjects,
   getProjectsByIds,
@@ -33,7 +33,7 @@ import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.j
 import { stopProject } from '../services/creativeDirector/stopProject.js';
 import { resolveCreativeDirectorProjectCommand } from '../services/creativeDirector/projectCommands.js';
 
-import { getCommissionPlanError, getAllCreativeToolMetadata } from '../services/creative/toolRegistry.js';
+import { getCommissionPlanError, getAllCreativeToolMetadata, getProjectBudgetStatus } from '../services/creative/toolRegistry.js';
 import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAdvance.js';
 import { getCreativeAutonomyMode } from '../lib/domainAutonomy.js';
 import { getDomainBudgetStatus } from '../services/domainUsage.js';
@@ -76,14 +76,32 @@ router.get('/', asyncHandler(async (req, res) => {
 // action-budget status so the board can render a dry-run banner and flag steps
 // the gate would block (over budget). Registered before `/:id` so the literal
 // path can't be shadowed by the param route. Pure read — no LLM, no mutation.
-router.get('/tools', asyncHandler(async (_req, res) => {
+router.get('/tools', asyncHandler(async (req, res) => {
+  const { projectId } = validateRequest(creativeDirectorToolsQuerySchema, req.query);
   const state = await loadState().catch(() => ({ config: {} }));
   const mode = getCreativeAutonomyMode(state.config);
-  const budget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true, exceeded: null }));
+  const cosBudget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true, exceeded: null }));
+  let projectBudget = null;
+  if (projectId) {
+    const project = await getProject(projectId).catch(() => null);
+    const budgetCap = project?.directive?.constraints?.budgetCap;
+    if (budgetCap != null) {
+      projectBudget = await getProjectBudgetStatus(projectId, budgetCap)
+        .catch(() => ({ withinBudget: true, exceeded: null, budgetCap, used: 0 }));
+    }
+  }
+  const projectExhausted = projectBudget ? !projectBudget.withinBudget : false;
+  const withinBudget = cosBudget.withinBudget && !projectExhausted;
+  const exceeded = projectExhausted ? 'actions' : cosBudget.exceeded;
+  const reason = projectExhausted ? 'project-budget' : (!cosBudget.withinBudget ? 'budget' : null);
   res.json({
     tools: getAllCreativeToolMetadata(),
     mode,
-    budget: { withinBudget: budget.withinBudget, exceeded: budget.exceeded },
+    budget: {
+      withinBudget,
+      exceeded,
+      ...(projectBudget ? { reason, project: projectBudget } : {}),
+    },
   });
 }));
 

@@ -26,9 +26,13 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
   expect(screen.getAllByText('Stale · partial')).not.toHaveLength(0);
   expect(screen.getByText(/1\/18 applicable categories contribute/)).toBeInTheDocument();
-  expect(screen.queryByText(/Equal-weight mean/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Recency-weighted equal-weight mean/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
-  expect(screen.getByRole('tooltip')).toHaveTextContent(/Equal-weight mean/);
+  const tooltip = screen.getByRole('tooltip');
+  expect(tooltip).toHaveTextContent(/Recency-weighted equal-weight mean/);
+  expect(tooltip).toHaveTextContent(/re-auditing the same slice supersedes its older pre-fix run/);
+  expect(tooltip).toHaveTextContent(/90–100 no material defect · 85–89 healthy with minor polish · 70–84 localized moderate debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure/);
+  expect(tooltip).not.toHaveTextContent(/70–89/);
   // Metrics-only visitors never see the run or schedule forms until they ask.
   expect(screen.queryByText('Runner')).not.toBeInTheDocument();
   expect(screen.queryByText('Schedule form')).not.toBeInTheDocument();
@@ -177,20 +181,40 @@ describe('AppQuality snapshot publishing', () => {
     expect(screen.getByRole('menuitem', { name: 'Publish snapshot now' })).toBeInTheDocument();
   });
 
-  it('reports the pull request that carries the snapshot into the repo', async () => {
-    publishAppQualitySnapshot.mockResolvedValue({
-      success: true, published: true, hash: 'abc1234def', path: '.quality.json',
-      prUrl: 'https://github.com/example/app/pull/42',
-    });
+  const publish = async result => {
+    publishAppQualitySnapshot.mockResolvedValue({ success: true, path: '.quality.json', ...result });
     render(<MemoryRouter><AppQuality app={publishingApp} detail /></MemoryRouter>);
     await screen.findByText(/No scored assessments/);
-
     fireEvent.click(screen.getByRole('button', { name: 'More quality actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Publish snapshot now' }));
-
     await waitFor(() => expect(publishAppQualitySnapshot).toHaveBeenCalledWith('example'));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(
-      'Quality snapshot pull request opened; it merges immediately'));
+  };
+  const prUrl = 'https://github.com/example/app/pull/42';
+
+  it.each([
+    [{ merged: true, queuedMerge: false }, 'Quality snapshot pull request merged'],
+    [{ merged: false, queuedMerge: true }, 'Quality snapshot pull request opened; queued to merge when checks pass'],
+    [{ merged: false, queuedMerge: false }, 'Quality snapshot pull request opened; review or merge manually'],
+  ])('reports the actual outcome of the snapshot pull request %j', async (outcome, message) => {
+    await publish({ published: true, hash: 'abc1234def', prUrl, ...outcome });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(message));
+  });
+
+  it.each([
+    ['publish-pr-unreadable', /state of the quality snapshot pull request/],
+    ['ownership-unreadable', /who owns the quality snapshot branch/],
+    ['publish-branch-unreadable', /Could not read the quality snapshot branch/],
+    ['non-snapshot-changes', /changes beyond the snapshot file/],
+  ])('explains the deferred publication reason %s', async (reason, text) => {
+    await publish({ published: false, deferredPublication: true, reason });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.stringMatching(text)));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an owner message for any other deferred reason', async () => {
+    await publish({ published: false, deferredPublication: true, reason: 'branch-owned-by-agent' });
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(
+      'Quality snapshot publication deferred while another task owns the publish branch'));
   });
 
   it('explains a refusal instead of claiming a commit that never happened', async () => {
@@ -245,4 +269,23 @@ it('uses responsive classes for mobile cards and desktop table layout', async ()
   expect(tbody).toHaveClass('block', 'sm:table-row-group');
   const row = within(tbody).getByRole('row');
   expect(row).toHaveClass('grid', 'grid-cols-[1fr_auto]', 'sm:table-row');
+});
+
+it('never flags healthy categories as below the composite and shows the target-met pill', async () => {
+  const app = { id: 'example', quality: { score: 93, categories: [
+    { id: 'ux', label: 'UX', score: 90, coverage: 'broad', confidence: 'high' },
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', confidence: 'high' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByText('Target met (85+)')).toBeInTheDocument();
+  const rowFor = name => screen.getAllByRole('row').find(row => within(row).queryByRole('rowheader')?.textContent === name);
+  expect(rowFor('UX').className).not.toContain('bg-port-warning/10');
+  expect(rowFor('Security').className).toContain('bg-port-warning/10');
+});
+
+it('omits the target-met pill below the healthy threshold', async () => {
+  render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: 70, categories: [] } }} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.queryByText('Target met (85+)')).not.toBeInTheDocument();
 });

@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Settings as SettingsIcon } from 'lucide-react';
+import { Sparkles, Plus, Search, FileInput, Loader2, RefreshCw, Wand2, X, LayoutGrid, Library, FolderPlus, Download, Settings as SettingsIcon } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import Drawer from '../components/Drawer';
 import PageHeader from '../components/PageHeader';
@@ -32,6 +32,7 @@ import {
   getCatalogStats,
   getCatalogFacets,
   rerunCatalogMigration,
+  getCatalogExportUrl,
 } from '../services/apiCatalog';
 import { listUniverseNames } from '../services/apiUniverseBuilder';
 import { listPipelineSeriesNames } from '../services/apiPipeline';
@@ -614,6 +615,32 @@ export default function Catalog() {
               {syncing ? 'Syncing…' : <>Sync<span className="hidden lg:inline"> from Universes</span></>}
             </span>
           </button>
+          {(selectedSeries || selectedUniverse) && (
+            <details className="relative flex-1 sm:flex-none">
+              <summary
+                aria-label="Export this slice"
+                title="Download this universe/series slice for sharing or re-import via Ingest"
+                className="inline-flex w-full items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium cursor-pointer list-none"
+              >
+                <Download size={16} className="shrink-0" aria-hidden="true" />
+                Export
+              </summary>
+              <div className="absolute right-0 z-20 mt-1 min-w-[8rem] rounded-lg border border-port-border bg-port-card p-1 shadow-lg">
+                {[['json', 'JSON'], ['markdown', 'Markdown'], ['yaml', 'YAML']].map(([format, label]) => (
+                  <a
+                    key={format}
+                    href={getCatalogExportUrl(selectedSeries
+                      ? { refKind: 'series', refId: selectedSeries, format }
+                      : { refKind: 'universe', refId: selectedUniverse, format })}
+                    download
+                    className="block px-3 py-2 min-h-[40px] rounded text-sm text-white hover:bg-port-bg"
+                  >
+                    {label}
+                  </a>
+                ))}
+              </div>
+            </details>
+          )}
           <Link
             to="/catalog/ingest"
             className="inline-flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 py-2 min-h-[40px] rounded-lg border border-port-border bg-port-card hover:bg-port-bg text-white text-sm font-medium"

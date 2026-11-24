@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { refreshQuerySchema } from '../lib/queryValidation.js';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
-import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
+import { readLocalTranscriptUsage, refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
+import { nativeUsageEvents } from '../services/nativeUsageEvents.js';
 import { describeNativeUsageSources, refreshNativeUsageHistory } from '../services/nativeUsageHistory.js';
 import { dismissUsageRetentionTip, getUsageRetentionTips } from '../services/usageRetentionTips.js';
 import { getProviderQuotas } from '../services/provider/providerUsage.js';
@@ -192,13 +193,18 @@ router.get('/claude-code', asyncHandler(async (req, res) => {
 
 // GET /api/usage/claude-code/models - Claude Code tokens per model, priced at
 // API rates, across the fleet: every instance's per-day transcript history
-// (this machine's is refreshed first if stale) plus a combined per-model list.
+// (this machine's is refreshed in the background if stale) plus a combined per-model list.
 // Same ?period=7d|30d|90d|all or ?from/?to window as GET /api/usage.
 router.get('/claude-code/models', asyncHandler(async (req, res) => {
   const { from, to } = resolveUsageRange(validateRequest(usageQuerySchema, req.query));
-  const { refreshed, updatedAt } = await refreshLocalTranscriptUsage();
+  // Answer from the stored transcript history at once; a stale scan runs in the
+  // background and `usage:native-history-updated` tells the page to refetch.
+  const stored = await readLocalTranscriptUsage().catch(() => null);
+  refreshLocalTranscriptUsage()
+    .then((result) => { if (result.refreshed) nativeUsageEvents.emit('updated'); })
+    .catch((err) => console.error(`❌ Claude Code transcript refresh failed: ${err.message}`));
   const apiBilledInstanceIds = await getApiBilledInstanceIds();
-  res.json({ from, to, transcriptRefreshed: refreshed, transcriptUpdatedAt: updatedAt, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
+  res.json({ from, to, transcriptRefreshed: false, transcriptUpdatedAt: stored?.updatedAt ?? null, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
 }));
 
 // Historical transcript correction is deliberately user-triggered. Starting it

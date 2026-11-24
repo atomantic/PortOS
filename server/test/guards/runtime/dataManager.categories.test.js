@@ -51,8 +51,19 @@ function resolveConstant(source, identifier) {
   return source.match(declaration)?.[1] ?? null;
 }
 
+// Parallel test workers create and delete temp dirs under server/test/fixtures
+// while this walk runs, so a directory listed a moment ago may be gone (ENOENT).
+function listDir(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
 function walkJsFiles(dir, out = []) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of listDir(dir)) {
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) walkJsFiles(full, out);

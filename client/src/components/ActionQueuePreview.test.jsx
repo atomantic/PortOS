@@ -44,7 +44,7 @@ describe('canonical action previews', () => {
     const bell = await screen.findByRole('button', { name: 'Notifications (1 required action)' });
     expect(within(screen.getByRole('region', { name: 'Actions' })).getByText(update.title)).toBeInTheDocument();
     fireEvent.click(bell);
-    const panel = screen.getByRole('region', { name: 'Notifications' });
+    const panel = screen.getByRole('dialog', { name: 'Notifications' });
     expect(within(panel).getByRole('link', { name: /Node.js security update needed/ })).toHaveAttribute('href', '/review/updates%3Anode?view=today');
   });
 
@@ -63,7 +63,7 @@ describe('canonical action previews', () => {
     expect(within(actions).getByRole('heading', { name: 'Actions', level: 2 })).toBeInTheDocument();
     expect(within(actions).getByRole('heading', { name: 'Required', level: 3 })).toBeInTheDocument();
     fireEvent.click(bell);
-    const panel = screen.getByRole('region', { name: 'Notifications' });
+    const panel = screen.getByRole('dialog', { name: 'Notifications' });
     expect(within(panel).getByRole('heading', { name: 'Required', level: 3 })).toBeInTheDocument();
     expect(mock.getReviewQueue).toHaveBeenCalledTimes(1);
     for (const link of screen.getAllByRole('link', { name: /Disk needs attention/ })) {

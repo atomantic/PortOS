@@ -14,7 +14,7 @@ import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { _healthRestoreDrainingForTests, ingestHealthData, withLiveHealthRestore } from './appleHealthIngest.js';
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 
 // snapshotId validation + rsync filter construction + settings cache re-sync.
 // restoreSnapshot writes over the user's live data/ directory, so each of these
@@ -129,6 +129,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         // Machine-local admission state is never installed by a restore (#10064).
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
@@ -139,6 +140,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
         '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
         '--dry-run',
@@ -169,6 +171,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=._*',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[aA][dD][dD][rR]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN]',
         '--exclude=/[dD][aA][tT][aA][bB][aA][sS][eE]-[aA][uU][tT][hH][oO][rR][iI][tT][yY].[jJ][sS][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]',
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[cC][aA][tT][aA][lL][oO][gG].[jJ][sS][oO][nN]',
@@ -179,6 +182,7 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
         '--exclude=/[cC][oO][sS]/[aA][gG][eE][nN][tT][sS]/.[bB][rR][aA][nN][cC][hH]-[pP][oO][lL][iI][cC][yY]-[rR][eE][vV][iI][sS][iI][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
+        '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[fF][oO][rR][wW][aA][rR][dD][sS].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
       ]);

@@ -84,6 +84,9 @@ async function saveLongevity(birthDate, { withoutGenetics = false } = {}) {
     confidence,
     derivedAt: new Date().toISOString()
   };
+  // Explicit erasure marker: lets a peer merge prefer this marker-free record over
+  // older populated snapshots (see signalAwareLWW in digital-twin-sync.js).
+  if (withoutGenetics) longevity.geneticsClearedAt = longevity.derivedAt;
 
   await saveJSON(LONGEVITY_FILE, longevity);
   const markerCount = Object.keys(longevityMarkers).length + Object.keys(cardiovascularMarkers).length;

@@ -133,7 +133,7 @@ describe('IdeaLoom Markdown contract', () => {
     expect(parseIdeaLoomMarkdown('---\nid: "' + LIST_ID + '"\n---\n# Prompt').ok).toBe(false);
     expect(parseIdeaLoomMarkdown(rendered.replace('  - "idea-loom"', '  - "other-note"')).error)
       .toMatch(/idea-loom/);
-    expect(parseIdeaLoomMarkdown(rendered.replace(`title: "Next steps: \\\"small\\\""`, `title: "${'x'.repeat(201)}"`)).error)
+    expect(parseIdeaLoomMarkdown(rendered.replace(`title: "Next steps: \\"small\\""`, `title: "${'x'.repeat(201)}"`)).error)
       .toMatch(/limits/);
   });
 });

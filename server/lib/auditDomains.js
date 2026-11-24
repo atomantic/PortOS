@@ -1,5 +1,8 @@
 /** Active audit domains and the independently configured legacy task IDs whose findings they cover. */
 
+/** Pragmatic healthy floor of the 85-95 target band; chasing 100/100 is discouraged. */
+export const QUALITY_HEALTHY_THRESHOLD = 85;
+
 // A folded task is still its own executable schedule and measurement series.
 // Mapping it into a domain for selection or scoring must never merge its cron,
 // customized prompt, app override, pending request, or same-day snapshot row.

@@ -9,10 +9,21 @@ import { spawnSync } from 'child_process';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { inspectVoiceAsset } from '../server/lib/voiceModelAssets.js';
+import { createHash } from 'crypto';
+import {
+  PIPER_RELEASE_ARCHIVE_SHA256,
+  PIPER_VOICES_HF_COMMIT,
+  WHISPER_HF_COMMIT,
+  inspectVoiceAsset,
+} from '../server/lib/voiceModelAssets.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VOICE = 'en_US-test-low';
+// The curl stub's payloads; the real digest tables may be swapped under VITEST.
+const STUB_ARCHIVE_SHA256 = createHash('sha256').update('archive-ok').digest('hex');
+const STUB_WHISPER_SHA256 = createHash('sha256').update('whisper-v1').digest('hex');
+const STUB_ONNX_SHA256 = createHash('sha256').update('onnx-v1').digest('hex');
+const ARCHIVE_NAMES = Object.keys(PIPER_RELEASE_ARCHIVE_SHA256);
 const CURL_STUB = `#!/usr/bin/env bash
 dest=""; head=0; url=""
 while [[ $# -gt 0 ]]; do
@@ -33,11 +44,8 @@ if [[ -n "\${CURL_FAIL_MATCH:-}" && "$url" == *"\${CURL_FAIL_MATCH}"* ]]; then
   [[ -n "$dest" ]] && printf 'partial' > "$dest"
   exit 18
 fi
-if [[ -z "$dest" ]]; then
-  printf 'archive'
-  exit 0
-fi
 case "$url" in
+  *.tar.gz) printf 'archive-%s' "\${CURL_ARCHIVE_TAG:-ok}" > "$dest" ;;
   *.onnx.json) printf '{"audio":{"sample_rate":22050}}' > "$dest" ;;
   *.onnx) printf 'onnx-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
   *) printf 'whisper-%s' "\${CURL_TAG:-v1}" > "$dest" ;;
@@ -55,27 +63,32 @@ const SYSCTL_STUB = `#!/usr/bin/env bash
 printf '%s\\n' "\${FAKE_HW_ARM64:-0}"
 `;
 const UNZIP_STUB = `#!/usr/bin/env bash
-dest=""
+dest=""; archive=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d) dest="$2"; shift 2 ;;
-    *) shift ;;
+    -q|-o) shift ;;
+    *) archive="$1"; shift ;;
   esac
 done
-mkdir -p "$dest/ggml-test-encoder.mlmodelc"
+echo "extract $archive" >> "$CURL_LOG"
+base="\${MODEL_NAME:-ggml-test.bin}"
+base="\${base%.bin}"
+mkdir -p "$dest/\${base}-encoder.mlmodelc"
 if [[ -n "\${UNZIP_FAIL:-}" ]]; then exit 9; fi
-: > "$dest/ggml-test-encoder.mlmodelc/model.mil"
+: > "$dest/\${base}-encoder.mlmodelc/model.mil"
 `;
 const TAR_STUB = `#!/usr/bin/env bash
-dest=""
+dest=""; archive=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -C) dest="$2"; shift 2 ;;
+    xzf) archive="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
-cat >/dev/null
-if [[ "$dest" == *"/.portos/voice" ]]; then
+echo "extract $archive" >> "$CURL_LOG"
+if [[ "$archive" != *phonemize* ]]; then
   mkdir -p "$dest/piper"
   printf '#!/bin/sh\\n' > "$dest/piper/piper"
   chmod +x "$dest/piper/piper"
@@ -105,6 +118,7 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
       VOICE_NAME: VOICE,
       MODEL_NAME: 'ggml-test.bin',
       CURL_LOG: log,
+      PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify(Object.fromEntries(ARCHIVE_NAMES.map((n) => [n, STUB_ARCHIVE_SHA256]))),
       ...env,
     },
   });
@@ -184,6 +198,33 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Unsupported Piper platform: freebsd/x86_64');
     expect(downloads()).toEqual([]);
+  });
+
+  it('rejects a mismatched Piper archive before extracting and leaves the install untouched', () => {
+    const piperDir = join(home, '.portos/voice/piper');
+    rmSync(join(piperDir, 'piper')); // binary missing → archive is fetched; lib/ is the existing content
+    const result = run({ FAKE_UNAME_S: 'Linux', FAKE_UNAME_M: 'x86_64', CURL_ARCHIVE_TAG: 'evil' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SHA-256');
+    expect(readFileSync(log, 'utf8')).not.toContain('extract');
+    expect(readdirSync(piperDir)).toEqual(['lib']);
+    expect(readdirSync(join(home, '.portos/voice')).filter((f) => f.startsWith('.piper') || f.includes('.part.'))).toEqual([]);
+  });
+
+  it('rejects a mismatched phonemize archive before extracting and installs no libs', () => {
+    const piperDir = join(home, '.portos/voice/piper');
+    rmSync(join(piperDir, 'lib'), { recursive: true });
+    const result = run({ FAKE_UNAME_S: 'Linux', FAKE_UNAME_M: 'x86_64', PORTOS_TEST_ARCHIVE_SHA256: JSON.stringify({ 'piper-phonemize_linux_x86_64.tar.gz': '0'.repeat(64) }) });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SHA-256');
+    expect(readFileSync(log, 'utf8')).not.toContain('extract');
+    expect(existsSync(join(piperDir, 'lib'))).toBe(false);
+  });
+
+  it('rejects an archive with no pinned digest', () => {
+    const result = spawnSync('node', [join(ROOT, 'scripts/voice-asset.js'), 'verify-archive', 'piper_linux_riscv.tar.gz', join(ROOT, 'package.json')], { encoding: 'utf8' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('no pinned sha256');
   });
 
   it('repairs a poisoned ONNX with no sidecar instead of reporting ready', () => {
@@ -289,6 +330,111 @@ describe.skipIf(process.platform === 'win32')('setup-voice.sh model provisioning
       expect(downloads()).toEqual([]);
       expect(readFileSync(model(), 'utf8')).toBe('custom-model');
       expect(inspectVoiceAsset('whisper', model()).state).toBe('verified');
+    });
+  });
+
+  describe('pinned HuggingFace commits and catalog SHA-256 verification', () => {
+    const setupWhisperStub = () => {
+      writeFileSync(join(stubDir, 'whisper-server'), '#!/bin/sh\n');
+      chmodSync(join(stubDir, 'whisper-server'), 0o755);
+    };
+
+    it('uses pinned 40-char commit SHAs (never /resolve/main/) for Whisper, CoreML, and Piper downloads', () => {
+      setupWhisperStub();
+      const result = run({
+        STT_ENGINE: 'whisper',
+        TTS_ENGINE: 'piper',
+        INSTALL_COREML: '1',
+        FAKE_UNAME_S: 'Darwin',
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const urls = downloads();
+      expect(urls.length).toBeGreaterThanOrEqual(4);
+      for (const line of urls) {
+        expect(line).not.toContain('/resolve/main/');
+      }
+      expect(urls).toContain(`0 https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_HF_COMMIT}/ggml-test.bin`);
+      expect(urls).toContain(`0 https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_HF_COMMIT}/ggml-test-encoder.mlmodelc.zip`);
+      expect(urls).toContain(`0 https://huggingface.co/rhasspy/piper-voices/resolve/${PIPER_VOICES_HF_COMMIT}/en/en_US/test/low/en_US-test-low.onnx`);
+      expect(urls).toContain(`0 https://huggingface.co/rhasspy/piper-voices/resolve/${PIPER_VOICES_HF_COMMIT}/en/en_US/test/low/en_US-test-low.onnx.json`);
+    });
+
+    it('rejects a mismatched curated Whisper model before promotion, and promotes on match', () => {
+      setupWhisperStub();
+      const catalogModel = 'ggml-base.en.bin';
+      const target = join(models, catalogModel);
+      // Real frozen catalog table rejects stub payload without any test override.
+      const mismatched = run({ STT_ENGINE: 'whisper', TTS_ENGINE: 'qwen3-tts', MODEL_NAME: catalogModel });
+      expect(mismatched.status).not.toBe(0);
+      expect(mismatched.stderr).toContain('SHA-256');
+      expect(existsSync(target)).toBe(false);
+      expect(leftovers(models)).toEqual([]);
+
+      const matched = run({
+        STT_ENGINE: 'whisper',
+        TTS_ENGINE: 'qwen3-tts',
+        MODEL_NAME: catalogModel,
+        PORTOS_TEST_MODEL_SHA256: JSON.stringify({ [catalogModel]: STUB_WHISPER_SHA256 }),
+      });
+      expect(matched.status, `${matched.stdout}\n${matched.stderr}`).toBe(0);
+      expect(inspectVoiceAsset('whisper', target).state).toBe('verified');
+    });
+
+    it('rejects a mismatched curated CoreML zip before extracting, and extracts on match', () => {
+      setupWhisperStub();
+      const catalogModel = 'ggml-base.en.bin';
+      const catalogZip = 'ggml-base.en-encoder.mlmodelc.zip';
+      const encoderDir = join(models, 'ggml-base.en-encoder.mlmodelc');
+      // Only override the .bin hash so the CoreML zip fails against a mismatched pinned digest.
+      const mismatched = run({
+        STT_ENGINE: 'whisper',
+        TTS_ENGINE: 'qwen3-tts',
+        MODEL_NAME: catalogModel,
+        INSTALL_COREML: '1',
+        FAKE_UNAME_S: 'Darwin',
+        PORTOS_TEST_MODEL_SHA256: JSON.stringify({
+          [catalogModel]: STUB_WHISPER_SHA256,
+          [catalogZip]: '0'.repeat(64),
+        }),
+      });
+      expect(mismatched.status).not.toBe(0);
+      expect(mismatched.stderr).toContain('SHA-256');
+      expect(readFileSync(log, 'utf8')).not.toContain('extract');
+      expect(existsSync(encoderDir)).toBe(false);
+      expect(readdirSync(models).filter((f) => f.includes('.part.') || f.includes('.coreml.') || f.endsWith('.zip'))).toEqual([]);
+
+      const matched = run({
+        STT_ENGINE: 'whisper',
+        TTS_ENGINE: 'qwen3-tts',
+        MODEL_NAME: catalogModel,
+        INSTALL_COREML: '1',
+        FAKE_UNAME_S: 'Darwin',
+        PORTOS_TEST_MODEL_SHA256: JSON.stringify({
+          [catalogModel]: STUB_WHISPER_SHA256,
+          [catalogZip]: STUB_WHISPER_SHA256,
+        }),
+      });
+      expect(matched.status, `${matched.stdout}\n${matched.stderr}`).toBe(0);
+      expect(existsSync(join(encoderDir, 'model.mil'))).toBe(true);
+    });
+
+    it('rejects a mismatched curated Piper voice before promotion, and promotes on match', () => {
+      const catalogVoice = 'en_GB-jenny_dioco-medium';
+      const target = join(voices, `${catalogVoice}.onnx`);
+      // Real frozen catalog table rejects stub payload before even fetching the sidecar.
+      const mismatched = run({ VOICE_NAME: catalogVoice });
+      expect(mismatched.status).not.toBe(0);
+      expect(mismatched.stderr).toContain('SHA-256');
+      expect(existsSync(target)).toBe(false);
+      expect(existsSync(`${target}.json`)).toBe(false);
+      expect(leftovers(voices)).toEqual([]);
+
+      const matched = run({
+        VOICE_NAME: catalogVoice,
+        PORTOS_TEST_MODEL_SHA256: JSON.stringify({ [`${catalogVoice}.onnx`]: STUB_ONNX_SHA256 }),
+      });
+      expect(matched.status, `${matched.stdout}\n${matched.stderr}`).toBe(0);
+      expect(inspectVoiceAsset('piper', target).state).toBe('verified');
     });
   });
 });

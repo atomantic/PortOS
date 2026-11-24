@@ -8,13 +8,18 @@ vi.mock('fs/promises', () => {
   const mod = {
     readFile: vi.fn(),
     writeFile: writeFileMock,
-    mkdir: vi.fn()
+    mkdir: vi.fn(),
+    chmod: vi.fn()
   };
   return { ...mod, default: mod };
 });
 
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
+}));
+
+vi.mock('../lib/fileCore.js', () => ({
+  atomicWrite: vi.fn(async (p, data) => writeFileMock(p, typeof data === 'string' ? data : JSON.stringify(data))),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -32,7 +37,7 @@ vi.mock('../lib/httpClient.js', () => ({
   }))
 }));
 
-import { writeFile, mkdir } from 'fs/promises';
+import { chmod, writeFile, mkdir } from 'fs/promises';
 import { readJSONFile } from '../lib/fileUtils.js';
 import { createHttpClient } from '../lib/httpClient.js';
 import {
@@ -60,6 +65,7 @@ beforeEach(() => {
   readJSONFile.mockResolvedValue(EMPTY_CONFIG);
   writeFile.mockResolvedValue(undefined);
   mkdir.mockResolvedValue(undefined);
+  chmod.mockResolvedValue(undefined);
 });
 
 describe('DataDog Service', () => {
@@ -92,6 +98,7 @@ describe('DataDog Service', () => {
       expect(result.appKey).toBe('key2');
       expect(result.createdAt).toBeDefined();
       expect(writeFile).toHaveBeenCalled();
+      expect(chmod).toHaveBeenCalledWith('/mock/data/datadog.json', 0o600);
     });
 
     it('should preserve existing keys when not provided on update', async () => {

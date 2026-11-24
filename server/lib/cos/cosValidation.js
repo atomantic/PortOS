@@ -99,7 +99,7 @@ const optionalBoolInputSchema = z.preprocess(
   z.boolean().optional()
 );
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
-const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
+export const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 // Federated instance this task is PINNED to (#4520) — only that instance's CoS
 // evaluator claims and runs it. On create, '' from the picker's "Any instance"
 // option → undefined (no pin persisted). On update, ''/null must survive as null
@@ -512,6 +512,8 @@ export const createCosJobSchema = z.object({
   // and the raw/custom path.
   cronSchedule: recurrenceRuleSchema.nullable().optional(),
   enabled: z.boolean().optional(),
+  // Weekday-only firing (Mon–Fri); creation and update both honor it.
+  weekdaysOnly: z.boolean().optional(),
   priority: z.string().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
   promptTemplate: z.string().optional(),
@@ -593,9 +595,7 @@ export const createCosJobSchema = z.object({
   }).optional(),
 });
 
-export const updateCosJobSchema = createCosJobSchema.partial().extend({
-  weekdaysOnly: z.boolean().optional(),
-});
+export const updateCosJobSchema = createCosJobSchema.partial();
 
 // Manual "Run now", with an optional one-off configuration. The values are
 // merged over the job's stored `formValues` for THAT RUN ONLY — nothing is
@@ -907,7 +907,7 @@ export const pullRequestRunSettingsSchema = pullRequestProviderOverrideSchema
 // dialog is a valid "resume exactly as it was". `description` only matters on
 // the fallback path where the paused task is gone and a fresh one is queued.
 export const resumeCosAgentSchema = createCosTaskSchema
-  .pick({ description: true, context: true, model: true, provider: true, effort: true, app: true, screenshots: true })
+  .pick({ description: true, context: true, model: true, provider: true, effort: true, executionOptions: true, app: true, screenshots: true })
   .partial();
 
 // A relaunch is a resume aimed at a RUNNING agent: the point is swapping the
@@ -998,10 +998,10 @@ export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().d
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
   appId: nullishString,
-  provider: nonEmptyString.optional(),
+  provider: z.preprocess(emptyToUndefined, providerRefSchema.optional()),
   model: nonEmptyString.optional(),
-  effort: z.string().trim().nullable().optional(),
-  executionOptions: z.record(z.unknown()).optional(),
+  effort: effortUpdateSchema,
+  executionOptions: executionOptionsSchema.optional(),
   targetModels: z.array(nonEmptyString).nullable().optional(),
   targetPullRequest: z.union([z.number(), z.string()]).nullable().optional(),
 });

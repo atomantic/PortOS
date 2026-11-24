@@ -1,4 +1,4 @@
-import { meatspaceEvents } from '../meatspaceEvents.js';
+import { meatspaceEvents } from '../meatspace/meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';

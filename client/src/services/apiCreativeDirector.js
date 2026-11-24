@@ -67,7 +67,10 @@ export const createSmokeTestCreativeDirectorProject = (options = {}) => request(
 // hydrates per-step cost-class badges + approval affordances from it; `mode`
 // drives the dry-run banner. `options.silent` defers error toasting to a caller
 // that owns its own error UI.
-export const getCreativeToolCatalog = (options = {}) => request('/creative-director/tools', options);
+export const getCreativeToolCatalog = ({ projectId, ...options } = {}) => {
+  const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : '';
+  return request(`/creative-director/tools${query}`, options);
+};
 // Attach/replace a directive on an existing project ("convert to directive").
 // Clears any prior plan so the planner re-derives one; returns the updated
 // project for reactive state swap.

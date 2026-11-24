@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Readable, Writable } from 'stream';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
+
+const memoryMock = vi.hoisted(() => ({ getMemories: vi.fn(async () => ({ total: 0, memories: [] })) }));
+vi.mock('./memoryBackend.js', () => memoryMock);
+
 import {
   redactSecrets,
   buildBundleFiles,
@@ -248,6 +253,21 @@ describe('key decisions section (enriched derivation)', () => {
   });
 });
 
+describe('identity.json genome minimization', () => {
+  it('drops raw SNP markers, upload filename and marker maps from data/identity.json', () => {
+    const data = sampleData();
+    data.genome = { uploaded: true, uploadedAt: 'x', filename: 'Jane-Doe-23andme.txt', snpCount: 5, build: '37', markerCount: 1,
+      statusCounts: { concern: 1 }, lastScanAt: 'y', savedMarkers: { rs123: { genotype: 'AG', notes: 'SECRETNOTE' } } };
+    data.chronotype = { type: 'Lion', geneticMarkers: { rs1: 'AA' }, caffeineMarkers: { rs2: 'CC' } };
+    data.longevity = { estimatedLifeExpectancy: 90, longevityMarkers: { rs3: 'GG' }, cardiovascularMarkers: { rs4: 'TT' } };
+    const { files } = buildBundleFiles(data);
+    const json = files.find((f) => f.name === 'data/identity.json').data.toString();
+    for (const leak of ['Jane-Doe', 'rs123', 'SECRETNOTE', 'rs1', 'rs2', 'rs3', 'rs4', 'savedMarkers']) expect(json).not.toContain(leak);
+    expect(JSON.parse(json).genome).toMatchObject({ uploaded: true, snpCount: 5, markerCount: 1 });
+    expect(JSON.parse(json).longevity.estimatedLifeExpectancy).toBe(90);
+  });
+});
+
 describe('buildManifest', () => {
   it('hashes every file with a SHA-256 and stamps kind/schemaVersion', () => {
     const { files, sections } = buildBundleFiles(sampleData());
@@ -255,6 +275,7 @@ describe('buildManifest', () => {
     expect(manifest.kind).toBe('portos-legacy-export');
     expect(manifest.schemaVersion).toBe(1);
     expect(manifest.fileCount).toBe(files.length);
+    expect(manifest).not.toHaveProperty('host');
     for (const name of Object.keys(manifest.files)) {
       expect(manifest.files[name]).toMatch(/^[0-9a-f]{64}$/);
     }
@@ -373,5 +394,23 @@ describe('previewLegacyExport', () => {
 describe('getSectionKeys', () => {
   it('lists the known sections', () => {
     expect(getSectionKeys()).toEqual(['identity', 'autobiography', 'brain', 'goals', 'decisions', 'health']);
+  });
+});
+
+describe('gatherLegacyData memories', () => {
+  it('reads via memoryBackend and excludes Persistent Mind private memories', async () => {
+    memoryMock.getMemories.mockResolvedValueOnce({ total: 4, memories: [
+      { id: 'm1', content: 'regular', tags: ['family'] },
+      { id: 'm2', content: 'mind own', sourceAgentId: PERSISTENT_MIND_ID, tags: [] },
+      { id: 'm3', content: 'core', tags: ['mind:core-identity'] },
+      { id: 'm4', content: 'important', tags: ['mind:important'] },
+    ] });
+    const { gatherLegacyData } = await import('./legacyExport.js');
+    const data = await gatherLegacyData();
+    expect(data.memories.map((m) => m.id)).toEqual(['m1']);
+    const { files } = buildBundleFiles(data);
+    const brainJson = JSON.parse(files.find((f) => f.name === 'data/brain.json').data.toString());
+    expect(brainJson.memories.map((m) => m.id)).toEqual(['m1']);
+    expect(files.find((f) => f.name === 'brain/memories.md').data.toString()).not.toMatch(/mind own|core/);
   });
 });

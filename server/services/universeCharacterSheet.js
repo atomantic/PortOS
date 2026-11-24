@@ -512,7 +512,7 @@ function getVariantConfig(variant = LEGACY_SHEET_VARIANT_ID) {
   // Own-property check so `variant=constructor` / `toString` / `hasOwnProperty`
   // from an unfiltered request body can't return an inherited Object.prototype
   // member and have downstream `.build()` / `.storage` access crash with a 500.
-  if (!Object.prototype.hasOwnProperty.call(SHEET_VARIANTS, variant)) {
+  if (!Object.hasOwn(SHEET_VARIANTS, variant)) {
     throw new ServerError(`Unknown character sheet variant "${variant}"`, {
       status: 400, code: 'VALIDATION_ERROR',
     });
@@ -606,6 +606,7 @@ function subscribeToSheetJob(jobId, handlers) {
  * `{ editFromPortrait, referenceImages }` so a template can pick a layout that
  * suits an edit or name the images it was given. `identityGuide: false` drops
  * the single-character likeness line for a template that maps its own images.
+ * `referenceLimit` replaces the cast-guide ceiling; the renderer's own cap still applies.
  * `form` ({ label }) is the age or look being rendered: its own image is the
  * edit base (never the canonical portrait), canonical images guide likeness
  * only, and with no image of its own the render generates fresh.
@@ -626,6 +627,7 @@ export async function buildSheetRenderParams({
   family = { additions: [], candidates: [] },
   selfName = '',
   identityGuide = true,
+  referenceLimit,
 }) {
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
@@ -645,7 +647,7 @@ export async function buildSheetRenderParams({
   if (cloud && !cloud.enabled) throw cloud.disabledError;
   const localModel = !cloud && activeMode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, options.modelId) : null;
   const modelId = cloud ? cloud.modelId : localModel?.id || null;
-  const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel, editBaseCandidate);
+  const references = resolveCharacterSheetReferences([...referenceCandidates, ...family.candidates], activeMode, modelId, localModel, editBaseCandidate, referenceLimit);
   if (form) {
     const scopeLabel = { form: form.label, canonical: 'canonical · present story' };
     references.images = references.images.map((image) => (image.scope ? { ...image, source: `${image.source} · ${scopeLabel[image.scope]}` } : image));

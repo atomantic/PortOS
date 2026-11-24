@@ -5,12 +5,14 @@
  */
 
 import { Router } from 'express';
+import { isRemoteRequest } from '../lib/requestOrigin.js';
 import { verifyRequestSession } from '../services/auth.js';
 import { isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
 import { getSelf, updateSelf } from '../services/instanceIdentity.js';
-import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
+// Lazy: the sync orchestrator pulls ~30 modules a boot that never syncs doesn't need.
+const loadSyncOrchestrator = () => import('../services/syncOrchestrator.js');
 import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -145,7 +147,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const [self, peers, syncStatus] = await Promise.all([
     getSelf(),
     instances.getPeers(),
-    getSyncStatus({ includeChecksums: true })
+    (await loadSyncOrchestrator()).getSyncStatus({ includeChecksums: true })
   ]);
   // Redact each peer's stored proxy password (keep username + hasPassword) —
   // the browser never needs the secret. Mirrors providers' hasApiKey pattern.
@@ -189,7 +191,7 @@ const syncStatusQuerySchema = z.object({
 });
 router.get('/sync-status', asyncHandler(async (req, res) => {
   const { forPeer } = validateRequest(syncStatusQuerySchema, req.query);
-  const status = await getSyncStatus({ includeChecksums: true, forPeer });
+  const status = await (await loadSyncOrchestrator()).getSyncStatus({ includeChecksums: true, forPeer });
   res.json({
     brainSeq: status.local.brainSeq,
     memorySeq: status.local.memorySeq,
@@ -261,7 +263,8 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
     port: data.port,
     instanceId: data.instanceId,
     name: data.name,
-    host: data.host
+    host: data.host,
+    viaRemoteIngress: isRemoteRequest(req)
   });
 
   const self = await getSelf();
@@ -510,7 +513,7 @@ router.post('/peers/:id/sync', asyncHandler(async (req, res) => {
   if (probed?.status !== 'online') {
     throw new ServerError('Peer is offline — cannot sync', { status: 409, code: 'PEER_OFFLINE' });
   }
-  const result = await syncWithPeer(probed);
+  const result = await (await loadSyncOrchestrator()).syncWithPeer(probed);
   res.json({ ok: true, result });
 }));
 

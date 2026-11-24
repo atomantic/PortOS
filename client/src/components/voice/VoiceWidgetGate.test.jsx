@@ -98,7 +98,7 @@ vi.mock('../../services/browserLlm', () => ({ warmNano: vi.fn() }));
 vi.mock('../../services/apiPalette', () => ({ getPaletteManifest: vi.fn() }));
 vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
 vi.mock('../ui/Toast', () => ({ default: mocks.toast }));
-vi.mock('../../hooks/useVoiceUiSync', () => ({
+vi.mock('./useVoiceUiSync', () => ({
   useVoiceUiSync: vi.fn(),
   pushUiIndexAfterAction: vi.fn(),
 }));
@@ -111,6 +111,7 @@ vi.mock('../../services/uiInteract', () => ({
 vi.mock('../micrographics', () => ({ MicroGlyph: () => null }));
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
 
+import { warmNano } from '../../services/browserLlm';
 import VoiceWidgetGate from './VoiceWidgetGate';
 import VoiceToggleButton from './VoiceToggleButton';
 
@@ -194,6 +195,24 @@ describe('VoiceWidgetGate — voice stays out of the page until it is on', () =>
     // Turning voice on shows the controls; it does not open the mic.
     expect(mocks.startContinuous).not.toHaveBeenCalled();
     expect(mocks.getVoiceConfig).toHaveBeenCalledOnce();
+  });
+
+  it('applies a live personality change and re-warms Nano with it', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    mocks.getVoiceConfig.mockResolvedValue({
+      ...ENABLED_CONFIG,
+      llm: { fastPath: { enabled: true, browserLlm: true }, personality: { name: 'First' } },
+    });
+    warmNano.mockResolvedValue(undefined);
+    renderGate();
+    expect(await screen.findByRole('button', { name: WIDGET_MIC })).toBeInTheDocument();
+    await settle();
+    const before = warmNano.mock.calls.length;
+    expect(before).toBeGreaterThan(0);
+
+    act(() => emitSocket('voice:config:changed', { personality: { name: 'Second' } }));
+    await settle();
+    expect(warmNano.mock.calls.length).toBeGreaterThan(before);
   });
 
   it('keeps one config subscription and releases it on unmount', async () => {
@@ -569,6 +588,37 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     }));
     expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
       engine: 'kokoro', voice: 'new-voice', rate: 1.2,
+    });
+    unmount();
+  });
+
+  it('resolves qwen3-tts config key from GET /api/voice/config hydration and voice:config:changed', async () => {
+    mocks.getVoiceConfig.mockResolvedValue({
+      enabled: true,
+      hotkey: 'Space',
+      stt: { engine: 'web-speech', language: 'en' },
+      llm: { fastPath: { enabled: true } },
+      tts: { engine: 'qwen3-tts', qwen3: { voice: 'warm-narrator' }, rate: 1.1 },
+    });
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const { unmount } = renderGate();
+    await screen.findByRole('button', { name: WIDGET_MIC });
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
+    await act(async () => capture.routeFinal('example utterance'));
+    expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
+      engine: 'qwen3-tts', voice: 'warm-narrator', rate: 1.1,
+    });
+
+    act(() => emitSocket('voice:config:changed', {
+      ttsEngine: 'qwen3-tts',
+      ttsVoice: 'expressive-alto',
+      ttsRate: 1.25,
+    }));
+    await act(async () => capture.routeFinal('second utterance'));
+    expect(mocks.speakSynthesized).toHaveBeenLastCalledWith('Example reply', {
+      engine: 'qwen3-tts', voice: 'expressive-alto', rate: 1.25,
     });
     unmount();
   });

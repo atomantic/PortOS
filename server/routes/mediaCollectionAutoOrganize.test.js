@@ -63,8 +63,13 @@ afterAll(cleanupTempDataRoots);
 
 const { default: router } = await import('./mediaCollections.js');
 const { createMediaJobHookLoader } = await import('../services/mediaJobQueue/hookRegistry.js');
+const { registerMediaJobTerminalHooks } = await import('../services/bootHookRegistry.js');
 const { archive, mediaJobEvents } = await import('../services/mediaJobQueue/state.js');
 const collections = await import('../services/mediaCollections.js');
+registerMediaJobTerminalHooks([
+  [job => Boolean(job.params?.deckCard), () => import('../services/mediaCollectionCompletionHook.js').then(m => m.initMediaCollectionCompletionHook())],
+  [job => Boolean(job.params?.deckCard), () => import('../services/deckRenderHook.js').then(m => m.initDeckRenderHook())],
+]);
 
 const app = express();
 app.use('/api/media/collections', router);

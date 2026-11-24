@@ -5,24 +5,6 @@ import { fileURLToPath } from 'node:url';
 
 const ownershipKeys = new Set(['PORTOS_TEST_TEMP_ROOT', 'TMPDIR', 'VITEST', 'NODE_ENV']);
 
-function legacyBrowserProcesses(pids, exec) {
-  const output = exec('ps', [...(pids ? ['-p', pids.join(',')] : ['-A']), '-ww', '-o', 'pid=,ppid=,uid=,stat=,lstart=,args='], {
-    encoding: 'utf8', timeout: 5000, maxBuffer: 16 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' },
-  });
-  if (typeof output !== 'string') throw new SyntaxError('invalid process output');
-  return output.split('\n').filter(line => line.trim()).flatMap(line => {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.*)$/.exec(line);
-    if (!match) throw new SyntaxError('invalid process row');
-    if (Number(match[3]) !== process.getuid()) return [];
-    // Compatibility only: this is the pre-existing browser flag rule. Flat
-    // ps text is never used to infer generic argv or environment ownership.
-    const profile = /(?:^|\s)--user-data-dir=(\S+)/.exec(match[6])?.[1];
-    return [{ pid: Number(match[1]), ppid: Number(match[2]), start: `legacy:${match[5]}`, terminal: match[4].startsWith('Z'),
-      args: profile ? [`--user-data-dir=${profile}`] : [], env: {}, ownershipComplete: Boolean(profile) }];
-  });
-}
-
 function linuxIdentity(pid) {
   const path = `/proc/${pid}`;
   if (statSync(path).uid !== process.getuid()) return null;
@@ -54,15 +36,6 @@ function linuxProcess(pid) {
   } catch { return unavailable(); }
 }
 
-// Error text, command arguments and arbitrary error codes never leave the reader.
-function inspectionFailure(error) {
-  if (error?.code === 'ETIMEDOUT') return 'timeout';
-  if (['EACCES', 'EPERM'].includes(error?.code)) return 'permission-denied';
-  if (['ENOENT', 'ENOEXEC', 'EAGAIN'].includes(error?.code)) return 'spawn-failed';
-  if (error instanceof SyntaxError || error?.code === 'ENOBUFS') return 'invalid-output';
-  return 'reader-failed';
-}
-
 function validProcessRecords(records) {
   return Array.isArray(records) && records.every(record => record && Number.isSafeInteger(record.pid) && record.pid > 0
     && (record.args === undefined || (Array.isArray(record.args) && record.args.every(arg => typeof arg === 'string')))
@@ -71,43 +44,23 @@ function validProcessRecords(records) {
 }
 
 // The Darwin reader uses the existing system Python, with no installation or
-// cache. Missing capabilities fail closed; raw metadata never reaches a log.
-export function readTestProcesses(pids = null, { platform = process.platform, exec, onInspection = () => {}, now = () => performance.now() } = {}) {
-  const attempts = [];
-  const attempt = (reader, read) => {
-    const started = now();
-    let outcome = 'success';
-    try {
-      const records = read();
-      if (!validProcessRecords(records)) throw new SyntaxError('invalid process inventory');
-      return records;
-    } catch (error) {
-      outcome = inspectionFailure(error);
-      return null;
-    } finally {
-      const elapsed = now() - started;
-      attempts.push({ reader, outcome, elapsedMs: Number.isFinite(elapsed) ? Math.min(600000, Math.max(0, Math.round(elapsed))) : 0 });
-    }
-  };
-  const execute = exec ?? execFileSync;
-  let records = null;
-  if (platform === 'darwin') {
-    records = attempt('darwin-python', () => {
+// cache. Missing capabilities fail closed as null; raw metadata and OS error
+// payloads never leave this boundary.
+export function readTestProcesses(pids = null, { platform = process.platform, exec = execFileSync } = {}) {
+  try {
+    let records = null;
+    if (platform === 'darwin') {
       const reader = join(dirname(fileURLToPath(import.meta.url)), 'darwinTestProcesses.py');
-      return JSON.parse(execute('/usr/bin/python3', ['-I', '-S', reader], {
+      records = JSON.parse(exec('/usr/bin/python3', ['-I', '-S', reader], {
         input: JSON.stringify(pids), encoding: 'utf8', timeout: 5000,
         maxBuffer: 16 * 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
       }));
-    });
-    if (records === null) records = attempt('legacy-ps', () => legacyBrowserProcesses(pids, execute));
-  } else if (platform === 'linux') {
-    records = attempt('linux-proc', () => {
+    } else if (platform === 'linux') {
       const ids = pids ?? readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number);
-      return ids.map(linuxProcess).filter(Boolean);
-    });
-  }
-  onInspection({ reason: records === null ? (attempts.length ? 'reader-unavailable' : 'unsupported-platform') : 'available', attempts });
-  return records;
+      records = ids.map(linuxProcess).filter(Boolean);
+    }
+    return validProcessRecords(records) ? records : null;
+  } catch { return null; }
 }
 
 function rootUnder(path, parent, prefix) {
@@ -172,8 +125,6 @@ export function testProcessSettlement(record, records, probe = probeTestPid) {
   if (!current) return probe(record.pid) === false ? 'terminated' : 'unknown';
   if (typeof current.start !== 'string' || !current.start) return 'unknown';
   if (current.terminal === true) return 'terminated';
-  // A fallback reader uses a different identity encoding; that is not PID reuse.
-  if (current.start.startsWith('legacy:') !== record.start.startsWith('legacy:')) return 'unknown';
   if (current.start !== record.start) return 'terminated';
   return 'running';
 }

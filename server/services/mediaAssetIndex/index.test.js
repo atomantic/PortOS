@@ -19,7 +19,7 @@ vi.mock('./db.js', async () => ({ upsertAsset, reconcileMediaAssets, removeAsset
   queueMediaIndexRefresh: (await import('../../lib/fileWriteQueue.js')).createFileWriteQueue() }));
 vi.mock('../../lib/db.js', () => ({ checkHealth, ensureSchema }));
 vi.mock('../imageGen/local.js', () => ({ readImageSidecar, listGallery: vi.fn(async () => []) }));
-vi.mock('../videoGen/local.js', () => ({ loadHistory }));
+vi.mock('../videoGen/history.js', () => ({ loadHistory }));
 const clearRestoredMediaTombstones = vi.fn(async () => ({ videos: [], images: [] }));
 vi.mock('../mediaRestoreTombstones.js', () => ({ clearRestoredMediaTombstones }));
 

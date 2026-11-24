@@ -8,11 +8,8 @@ import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
  * summarization, and Claude settings env injection for agent processes.
  */
 
-import { join } from 'path';
-import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from '../../lib/childProcess.js';
-import { homedir } from 'os';
 import { cosEvents, emitLog } from '../cos/cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
 // `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
@@ -25,6 +22,7 @@ import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { finalizeAgentRunCommon } from './agentRunFinalize.js';
 import { activeAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { getClaudeSettingsEnv } from '../../lib/claudeSettingsEnv.js';
 import { createCliOutputPipeline } from './agentCliOutputStream.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { prepareCliPrompt } from '../../lib/cliProviderArgs.js';
@@ -96,34 +94,7 @@ export const isClaudeCliProvider = (provider) =>
  * between headless CLI/API runs and TUI shell sessions.
  */
 export { isTuiProvider } from '../../lib/provider/providerTypes.js';
-
-/**
- * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.
- * Ensures user's Bedrock/provider config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.)
- * is present in spawned agent environments even if PM2 was started without them.
- */
-let _claudeSettingsEnvCache = null;
-let _claudeSettingsEnvCacheTime = 0;
-const SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-export async function getClaudeSettingsEnv() {
-  if (_claudeSettingsEnvCache !== null && (Date.now() - _claudeSettingsEnvCacheTime) < SETTINGS_CACHE_TTL_MS) return _claudeSettingsEnvCache;
-  try {
-    const settingsPath = join(homedir(), '.claude', 'settings.json');
-    if (existsSync(settingsPath)) {
-      const raw = await readFile(settingsPath, 'utf-8');
-      const settings = JSON.parse(raw);
-      _claudeSettingsEnvCache = settings.env || {};
-    } else {
-      _claudeSettingsEnvCache = {};
-    }
-  } catch (err) {
-    console.warn(`⚠️ Failed to read claude settings: ${err.message}`);
-    _claudeSettingsEnvCache = {};
-  }
-  _claudeSettingsEnvCacheTime = Date.now();
-  return _claudeSettingsEnvCache;
-}
+export { getClaudeSettingsEnv };
 
 /**
  * What went wrong with a direct-CLI run, or `null` when there is nothing to

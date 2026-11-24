@@ -271,19 +271,19 @@ export const TOOLING_TESTS = [
 // Paths whose edit can break a tooling test with no import edge reaching it: the
 // scripts and workflows themselves, every dependency manifest, the Vitest configs,
 // and the Vitest environment modules the real configs load in the fixtures' child runs.
-export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|ownedBrowserDiagnostics|runTempRoot)\.js$)/;
+export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|runTempRoot)\.js$)/;
 
 export const toolingTestsFor = (changedFiles, trackedSet) => (
   changedFiles.some((path) => TOOLING_OWNER_RE.test(path)) ? TOOLING_TESTS.filter((path) => trackedSet.has(path)) : []);
 
 export const DB_RISK_RULES = [
-  /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
-  /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
-  /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
-  /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
+  /^scripts\/rehearsal-scratch-db(?:[./]|$)/i,
+  /^scripts\/generate-init-db-sql(?:[./]|$)/i,
+  /^scripts\/lib\/migrationFiles(?:[./]|$)/i,
+  /^scripts\/lib\/dbImage(?:[./]|$)/i,
   /^docker-compose\.yml$/i,
-  /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
-  /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
+  /^server\/lib\/databaseMaintenanceSchema(?:[./]|$)/i,
+  /^server\/services\/backupDatabaseDump(?:[./]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,
   /^server\/scripts\/.*db/i,
   /^server\/services\/(?:.*\/)?[^/]*DB(?:\/|\.|$)/i,
@@ -534,6 +534,42 @@ export const runnerForTest = (path) => {
   return null;
 };
 
+// Server-owned JSON seeds under `data.reference/` (provider catalog, prompt
+// defaults, shipped hashes, starter configs). Neither client production code nor
+// native Windows contracts consume them, so updates stay scoped to server
+// contract tests + boot smoke rather than forcing a full matrix (#18220).
+const SERVER_SEED_RE = /^data\.reference\/.+\.json$/i;
+export const isServerSeed = (path) => SERVER_SEED_RE.test(path);
+
+export const SERVER_SEED_OWNERS = [
+  {
+    re: /^data\.reference\/providers\.json$/i,
+    tests: [
+      'scripts/generate-provider-samples.test.js',
+      'server/cos-runner/allowedCommands.test.js',
+      'server/lib/aiToolkit/defaults/providersSeedParity.test.js',
+      'server/services/provider/providers.shape.test.js',
+      'server/services/provider/providerPresets.test.js',
+      'server/services/provider/providerReadiness.test.js',
+    ],
+  },
+  {
+    re: /^data\.reference\/prompts\/[^/]+\.json$/i,
+    tests: [
+      'scripts/migrations/shippedPromptHashes.test.js',
+      'scripts/regen-shipped-prompt-hashes.test.js',
+      'server/lib/promptSystemStages.test.js',
+    ],
+  },
+];
+
+export const serverSeedTestsFor = (path, trackedSet) => (
+  SERVER_SEED_OWNERS
+    .filter(({ re }) => re.test(path))
+    .flatMap(({ tests }) => tests)
+    .filter((test) => trackedSet.has(test) && runnerForTest(test))
+);
+
 export const featureDirectory = (path) => {
   for (const rule of FEATURE_DIRECTORY_RULES) {
     const match = path.match(rule);
@@ -549,10 +585,10 @@ export const featureDirectory = (path) => {
 const WORKSPACE_CACHE_COMMON_INPUTS = new Set([
   '.github/workflows/ci.yml', '.github/actions/setup-server/action.yml', 'package.json', 'scripts/lib/workspaceCacheFixture.js',
   'scripts/lib/vitestTempRootFixture.js', 'scripts/lib/vitestTempRoot.js',
-  'scripts/lib/vitestWatch.js', 'scripts/lib/testProcessAttribution.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
+  'scripts/lib/vitestWatch.js', 'scripts/lib/testOwnedProcesses.js', 'scripts/lib/darwinTestProcesses.py',
   'scripts/lib/vitestStaleRunRoots.js', 'scripts/lib/dbTestFiles.js', 'scripts/lib/workspaceTests.js',
   'scripts/vitestCiPool.js', 'scripts/vitestTempRootSetup.js', 'server/lib/killWithEscalation.js',
-  'server/test/ownedBrowserDiagnostics.js', 'server/lib/mockPathsDataRoot.js',
+  'server/lib/mockPathsDataRoot.js',
 ]);
 const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
   'server/package.json', 'server/package-lock.json',
@@ -562,7 +598,7 @@ const WORKSPACE_CACHE_SERVER_INPUTS = new Set([
 const WORKSPACE_CACHE_CLIENT_INPUTS = new Set([
   'ecosystem.config.cjs', 'client/package.json', 'client/package-lock.json',
   'client/vite.config.js', 'client/vite.buildEnv.js', 'client/vite.chunkGroups.js',
-  'client/vitest.config.js', 'client/src/test/timeouts.js', 'scripts/vitestProcessEnvironment.js',
+  'client/vitest.config.js', 'client/src/test/timeouts.js',
   'scripts/dev-start.js', 'scripts/publish-client-build.js',
   'scripts/lib/envFile.cjs', 'scripts/lib/databaseSettings.cjs',
   'lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js',

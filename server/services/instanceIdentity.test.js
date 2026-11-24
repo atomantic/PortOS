@@ -11,10 +11,22 @@ const INSTANCE_IDENTITY_SRC = readFileSync(
   fileURLToPath(new URL('./instanceIdentity.js', import.meta.url)), 'utf8'
 );
 
+const { ensureDirMock, atomicWriteMock } = vi.hoisted(() => ({
+  ensureDirMock: vi.fn().mockResolvedValue(undefined),
+  atomicWriteMock: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined)
+  rename: vi.fn().mockResolvedValue(undefined),
+  chmod: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock('../lib/fileCore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
@@ -22,8 +34,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
-  ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn().mockResolvedValue(undefined),
+  ensureDir: ensureDirMock,
+  atomicWrite: atomicWriteMock,
   PATHS: { data: '/mock/data' }
 }));
 
@@ -31,6 +43,7 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => (fn) => fn()
 }));
 
+import { chmod } from 'fs/promises';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   ensureSelf,
@@ -64,6 +77,7 @@ describe('instanceIdentity.js', () => {
     await withData(data => { data.peers[0].status = 'offline'; });
     expect(guard).not.toHaveBeenCalled();
     expect(atomicWrite).toHaveBeenCalledOnce();
+    expect(chmod).toHaveBeenCalledWith('/mock/data/instances.json', 0o600);
   });
 
   describe('ensureSelf', () => {

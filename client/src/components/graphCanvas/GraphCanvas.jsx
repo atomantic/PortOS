@@ -36,7 +36,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Maximize, Minus, Plus } from 'lucide-react';
-import useDragToPan from '../../hooks/useDragToPan';
+import useDragToPan from './useDragToPan';
 import { isTapGesture } from '../../lib/graphPicking';
 
 const DRAG_THRESHOLD_PX = 4;

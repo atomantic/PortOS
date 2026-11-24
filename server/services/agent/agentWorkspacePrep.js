@@ -36,7 +36,8 @@ import { updateTask, addTask } from '../cos/cosTaskStore.js';
 import { getAppById } from '../apps.js';
 import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
-import * as git from '../git.js';
+import { getRepoBranches, isRepo, notGitRepoMessage } from '../git/status.js';
+import { checkout, createBranch, ensureLatest, fetchOrigin } from '../git/sync.js';
 import { detectConflicts } from '../taskConflict.js';
 import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies, mergeBaseIntoFeatureWorktree } from '../worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../../lib/spawnCwd.js';
@@ -50,6 +51,7 @@ import { isNonCommittingCoordinatorTask, resolveTaskHookType } from '../taskType
 import { prHeldForOperator, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../../lib/claimContinuation.js';
 import { provisionClaimCheckout, serverClaimCheckoutBranch } from '../claimCheckoutProvision.js';
+import { matchesNotificationIssueRepository } from '../../lib/githubNotificationIssue.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -235,8 +237,8 @@ async function prepareRequestedWorktree({
 }) {
   // Fail before any git fetch/branch work: a non-git directory can never host a
   // worktree, and the raw `fatal: not a git repository` says nothing actionable.
-  if (!(await git.isRepo(workspacePath))) {
-    const reason = git.notGitRepoMessage(task.metadata?.app || basename(workspacePath));
+  if (!(await isRepo(workspacePath))) {
+    const reason = notGitRepoMessage(task.metadata?.app || basename(workspacePath));
     emitLog('warn', `🌳 ${reason}`, { taskId: task.id });
     await blockTask(task, reason, 'worktree-failed');
     return { outcome: 'blocked', reason };
@@ -252,7 +254,7 @@ async function prepareRequestedWorktree({
   // reads (a git-branches lookup vs. an agent-liveness + worktree-list check) —
   // kick both off before awaiting either so their I/O overlaps instead of
   // serializing on the spawn hot path.
-  const detectedBasePromise = git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+  const detectedBasePromise = getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
   // Resolve the branch holder ONCE before creation. `resumeWorktreePath` is a
   // cache of that answer, not a separate ownership rule: if it is gone or
   // stale, discovery finds the actual holder. This gives resume retries the
@@ -423,7 +425,7 @@ async function admitClaimContinuation({ task, agentId, sourceWorkspace, claimWor
  * @param {{ agentId: string, task: object }} params
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
-export async function prepareAgentWorkspace({ agentId, task, onPrepared = result => result }) {
+export async function prepareAgentWorkspace({ agentId, task, inboxEnv, onPrepared = result => result }) {
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityScratchCwd } = await import('../../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
@@ -525,7 +527,7 @@ export async function prepareAgentWorkspace({ agentId, task, onPrepared = result
   }
 
   const prepareAndRegister = async () => {
-    const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly });
+    const result = await prepareResolvedWorkspace({ agentId, task, workspacePath, resolvedApp, resolvedAppName, isReadOnly, inboxEnv });
     if (result.outcome === 'ready' && task.metadata?.pendingMergeGuardTarget) {
       const { validatePendingMergeRecovery } = await import('../pendingMergeRecovery.js');
       const refused = await validatePendingMergeRecovery({ target: task.metadata.pendingMergeGuardTarget, workspacePath: result.workspacePath, requireCheckout: true, launchTaskId: task.id });
@@ -693,7 +695,7 @@ async function pullSharedCheckout({ task, workspacePath, resolvedAppName, wantsW
   // gating it on a clean pull would defer it forever.
   const pullResult = wantsWorktree ? { skipped: 'isolated-task' }
     : isTruthyMeta(task.metadata?.gitConflictResolution) ? { skipped: 'git-conflict-resolver' }
-    : await git.ensureLatest(workspacePath).catch(err => {
+    : await ensureLatest(workspacePath).catch(err => {
       emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
       return { success: false, error: err.message };
     });
@@ -736,15 +738,15 @@ async function prepareJiraBranch({ task, workspacePath }) {
   let jiraBranchName = `feature/${jiraTicket.ticketId}-${slug}`;
 
   if (task.metadata?.app) {
-    await git.fetchOrigin(workspacePath).catch(() => {});
-    const { baseBranch: defaultBranch } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
+    await fetchOrigin(workspacePath).catch(() => {});
+    const { baseBranch: defaultBranch } = await getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
     if (defaultBranch) {
-      await git.checkout(workspacePath, defaultBranch).catch(() => {});
+      await checkout(workspacePath, defaultBranch).catch(() => {});
       await execGit(['merge', '--ff-only', `origin/${defaultBranch}`], workspacePath).catch(err => { emitLog('warn', `Fast-forward merge of ${defaultBranch} failed: ${err.message}`, { taskId: task.id }); });
     }
   }
 
-  await git.createBranch(workspacePath, jiraBranchName)
+  await createBranch(workspacePath, jiraBranchName)
     // `checkout -b` off a LOCAL branch doesn't auto-track under git's default
     // `branch.autoSetupMerge`, but a repo configured `always` records the base
     // branch as this one's upstream — and a config-derived push
@@ -848,9 +850,21 @@ async function provisionConflictWorktree({ agentId, task, workspacePath }) {
  * order and any refusal, deferral, continued claim or JIRA branch returns at
  * once, so a later step never has to infer an earlier outcome from a flag.
  */
-async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly }) {
+async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWorkspace, resolvedApp, resolvedAppName, isReadOnly, inboxEnv }) {
   const refusal = await refuseUnsafeLaunchTarget({ task, workspacePath: sourceWorkspace });
   if (refusal) return refusal;
+
+  const inboxIssue = task.metadata?.githubIssueClaim;
+  if (inboxIssue) {
+    const { resolveAppForgeTarget } = await import('../../lib/workTracker.js');
+    const { tracker, target } = resolvedApp ? await resolveAppForgeTarget(resolvedApp, { repoPath: sourceWorkspace }) : {};
+    if (tracker !== 'github' || !matchesNotificationIssueRepository(target, inboxIssue)
+      || String(task.metadata.claimTarget) !== String(inboxIssue.number)) {
+      const reason = 'The managed app no longer points to the GitHub issue requested in the inbox. Restore the repository and tracker or queue the claim again.';
+      await blockTask(task, reason, 'github-inbox-issue-mismatch');
+      return { outcome: 'blocked', reason };
+    }
+  }
 
   const remediationPin = resolveTaskPinnedHead(task.metadata);
   const explicitWorktree = isTruthyMeta(task.metadata?.useWorktree) || isTruthyMeta(task.metadata?.openPR) || remediationPin !== null;
@@ -877,6 +891,25 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWo
   const claim = remediationPin === null ? await admitClaimWorkspace({ task, agentId, workspacePath: sourceWorkspace }) : null;
   if (claim?.outcome) return claim;
   if (claim) return ready(claim);
+
+  // An already-owned continuation above has the claim's durable ownership proof.
+  // A new launch must prove the issue is still claimable before it cuts or marks
+  // a checkout. It can have closed or acquired an owner/PR while in the queue.
+  if (inboxIssue) {
+    const { prepareAppIssueClaim } = await import('../appIssues.js');
+    const result = inboxEnv && await prepareAppIssueClaim({ ...resolvedApp, repoPath: sourceWorkspace }, String(inboxIssue.number), 'github', {
+      expectedGithubIssue: { ...inboxIssue, login: task.metadata.githubAccount?.login },
+      readOnly: true,
+      inboxEnv,
+    }).then(() => ({ ok: true }), error => ({ code: error.code }));
+    if (!result?.ok) {
+      const reason = result?.code === 'ISSUE_IN_FLIGHT'
+        ? 'This GitHub issue is now closed, claimed, or covered by an open pull request.'
+        : 'PortOS could not verify that the GitHub issue is still claimable with the inbox account.';
+      await blockTask(task, reason, 'github-inbox-issue-unavailable');
+      return { outcome: 'blocked', reason };
+    }
+  }
 
   // A pinned forge claim whose prompt omits the checkout phase. Refusing is the
   // only safe answer when the checkout cannot be cut: the prompt tells the agent

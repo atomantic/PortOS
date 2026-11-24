@@ -51,7 +51,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [COMPANION_APP_API.md](./COMPANION_APP_API.md) | PortDeck native iOS companion client discovery and HTTP API contract |
 | [SETUP.md](./SETUP.md) | First install: Tailscale, MagicDNS, trusted HTTPS, exact launch URL, and AI-provider readiness |
 | [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md) | PortDeck VNC broker security, host setup, and session flow |
-| [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio provider wire contract and setup |
+| [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio, image, and video provider wire contract and setup |
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
 | [STORAGE_RECOVERY.md](./STORAGE_RECOVERY.md) | Operator recovery: workflow maintenance journal and reservations, legacy creative import retry, catalog rewrite window, Codex image usage backfill |
 | [DATABASE_MAINTENANCE.md](./DATABASE_MAINTENANCE.md) | Database maintenance journal: Docker ↔ native cutover lifecycle, offline transfer, verified restart, recovery commands |
@@ -77,6 +77,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
+| [features/blender-models.md](./features/blender-models.md) | Blender Models: agent-written Blender Python that builds one model, the `describe`/`build` contract, build checks and findings, GLB export and re-import verification, publishing and retention |
 | [features/music-video-blender.md](./features/music-video-blender.md) | Blender film render style: Python scripts that build every shot in Blender, the workspace and film contract, per-shot renders and staleness, cuts, the final render, and the Trusted local requirement |
 | [features/music-video-frame-capture.md](./features/music-video-frame-capture.md) | Shared paused-video/capture color interpretation, synthetic evidence and browser limits |
 | [features/music-video-photo-sequences.md](./features/music-video-photo-sequences.md) | Ordered existing photos within one still shot, frame/beat cadence, persistence and preview/export timing |

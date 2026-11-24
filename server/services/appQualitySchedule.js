@@ -301,6 +301,11 @@ export async function inapplicableAuditReason(appId, taskType) {
  * @param {{ ignoreTaskTypes?: string[] }} [options]
  * @returns {Promise<object[]>} One entry per occupying cron: `{ taskType, cron, origin, days, hours }`
  */
+// Continuous watchers and any cron firing at least this many hours a day
+// would otherwise mark every cell busy and leave the planner with 0 slots.
+export const NON_EXCLUSIVE_SCHEDULE_TASK_TYPES = new Set(['pr-watcher', 'pr-reviewer', 'issue-watcher']);
+export const MAX_BLOCKING_HOURS_PER_DAY = 12;
+
 export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {}) {
   const ignore = new Set(ignoreTaskTypes);
   const [schedule, overrides] = await Promise.all([loadSchedule(), getAppTaskTypeOverrides(app.id)]);
@@ -308,8 +313,9 @@ export async function collectBusyOccupancies(app, { ignoreTaskTypes = [] } = {})
 
   const add = (taskType, cron, origin) => {
     if (!isCronExpression(cron)) return;
+    if (NON_EXCLUSIVE_SCHEDULE_TASK_TYPES.has(taskType)) return;
     const occupancy = cronWeekdayHours(cron);
-    if (occupancy) sources.push({ taskType, cron, origin, ...occupancy });
+    if (occupancy && occupancy.hours.length < MAX_BLOCKING_HOURS_PER_DAY) sources.push({ taskType, cron, origin, ...occupancy });
   };
 
   for (const [taskType, config] of Object.entries(schedule.tasks || {})) {
@@ -337,9 +343,11 @@ const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
 /**
  * Read the form state back out of the overrides a previous Apply wrote.
  *
- * Pure inverse of `applyQualitySchedulePlan`: any saved audit override means the
- * app has a schedule, so reopening the form must show it instead of the factory
- * layout. Fields the overrides cannot answer fall back to the planner defaults.
+ * Pure inverse of `applyQualitySchedulePlan`: an enabled cron-scheduled audit
+ * override means the app has a schedule, so reopening the form must show it
+ * instead of the factory layout. Non-cron Schedule-page toggles and disabled-only
+ * entries do not count as a saved weekly schedule. Fields the overrides cannot
+ * answer fall back to the planner defaults.
  *
  * @param {object} existingOverrides - `getAppTaskTypeOverrides(app.id)`
  * @param {string[]} [auditTypes] - The audit task types the planner owns
@@ -347,12 +355,14 @@ const CLAIM_OFFSET_CHOICES = [1, 2, 3, 4, 5, 6, 8, 12];
  */
 export function inferSavedQualitySchedule(existingOverrides = {}, auditTypes = AUDIT_TASK_TYPE_LIST) {
   const saved = auditTypes.filter(type => existingOverrides[type]);
-  if (!saved.length) return { hasExistingSchedule: false };
+  const scheduledEnabled = saved.filter(
+    type => existingOverrides[type].enabled === true && isCronExpression(existingOverrides[type].interval)
+  );
+  if (!scheduledEnabled.length) return { hasExistingSchedule: false };
 
-  const enabled = saved.filter(type => existingOverrides[type].enabled === true);
   const fileIssuesByType = {};
   const checkHours = [];
-  for (const type of enabled) {
+  for (const type of scheduledEnabled) {
     const { fileIssues } = existingOverrides[type].taskMetadata || {};
     if (typeof fileIssues === 'boolean') fileIssuesByType[type] = fileIssues;
     checkHours.push(...(cronWeekdayHours(existingOverrides[type].interval)?.hours || []));
@@ -373,7 +383,7 @@ export function inferSavedQualitySchedule(existingOverrides = {}, auditTypes = A
     const gaps = checkHours.map(hour => claimStart - hour).filter(gap => CLAIM_OFFSET_CHOICES.includes(gap));
     if (gaps.length) options.claimOffsetHours = Math.min(...gaps);
   }
-  return { hasExistingSchedule: true, taskTypes: enabled, fileIssuesByType, options };
+  return { hasExistingSchedule: true, taskTypes: scheduledEnabled, fileIssuesByType, options };
 }
 
 /**
@@ -405,17 +415,28 @@ export async function buildQualitySchedulePlan(app, formOptions = {}, { hydrate 
 
   const taskTypes = requested ?? checks.filter(check => check.applicable).map(check => check.taskType);
 
-  const plan = planQualitySchedule({
-    taskTypes,
-    fileIssuesByType: options.fileIssuesByType || {},
-    busy: buildBusySlots(sources, settings),
-    options: settings,
-  });
+  const fileIssuesByType = options.fileIssuesByType || {};
+  let plan = planQualitySchedule({ taskTypes, fileIssuesByType, busy: buildBusySlots(sources, settings), options: settings });
+  // Padding can swallow every hour even when the raw crons leave gaps; an
+  // unpadded plan beats an empty one, with the trade-off stated.
+  if (!plan.slots.length && taskTypes.length && sources.length) {
+    const unpadded = planQualitySchedule({
+      taskTypes,
+      fileIssuesByType,
+      busy: buildBusySlots(sources, { padBeforeHours: 0, padAfterHours: 0 }),
+      options: settings,
+    });
+    if (unpadded.slots.length) {
+      plan = { ...unpadded, warnings: ['Padding around existing scheduled tasks left no free hours, so the plan ignores the padding and may sit directly beside them.', ...unpadded.warnings] };
+    }
+  }
   return {
     appId: app.id,
     appName: app.name,
     hasExistingSchedule: saved.hasExistingSchedule,
     plan,
+    selectedTaskTypes: taskTypes,
+    selectedFileIssuesByType: fileIssuesByType,
     checks,
     capabilities,
     scanned,

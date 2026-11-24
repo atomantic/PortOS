@@ -30,6 +30,8 @@ export default function TagPicker({
   const [suggestions, setSuggestions] = useState([]);
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState(null);
+  const [announcement, setAnnouncement] = useState('');
+  const refocusAfterCapRef = useRef(false);
   const listId = useId();
   const inputRef = useRef(null);
   const activeOptionRef = useRef(null);
@@ -58,8 +60,9 @@ export default function TagPicker({
     const key = canonicalTagKey(label);
     if (!key) return;
     if (selectedKeys.has(key)) { setInput(''); return; }
-    if (value.length >= maxTags) return;
+    if (value.length >= maxTags) { setAnnouncement(`Maximum of ${maxTags} tags reached`); return; }
     onChange?.([...value, label]);
+    setAnnouncement(value.length + 1 >= maxTags ? `Added tag ${label}. Maximum of ${maxTags} tags reached` : `Added tag ${label}`);
     setInput('');
     setSuggestions([]);
     setActiveId(null);
@@ -68,8 +71,10 @@ export default function TagPicker({
 
   const removeTag = (label) => {
     // Keep a live focus target so leaving the picker still commits pending text.
-    inputRef.current?.focus();
+    if (value.length >= maxTags) refocusAfterCapRef.current = true;
+    else inputRef.current?.focus();
     const key = canonicalTagKey(label);
+    setAnnouncement(`Removed tag ${label}`);
     onChange?.(value.filter((t) => canonicalTagKey(t) !== key));
   };
 
@@ -81,6 +86,14 @@ export default function TagPicker({
   useEffect(() => {
     activeOptionRef.current?.scrollIntoView({ block: 'nearest' });
   }, [activeId, activeIndex]);
+
+  // A disabled input cannot hold focus, so restore it once removal re-enables it.
+  useEffect(() => {
+    if (refocusAfterCapRef.current && value.length < maxTags) {
+      refocusAfterCapRef.current = false;
+      inputRef.current?.focus();
+    }
+  }, [value.length, maxTags]);
 
   const pickSuggestion = (label) => {
     // Assistive clicks can focus an option. Move focus before removing it.
@@ -154,11 +167,12 @@ export default function TagPicker({
           className="flex-1 min-w-[8ch] bg-transparent text-white text-sm focus:outline-none disabled:opacity-50"
         />
       </div>
+      <div role="status" aria-live="polite" className="sr-only">{announcement}</div>
       {expanded && (
         <div id={listId} role="listbox" aria-label="Tag suggestions" className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg">
           {visibleSuggestions.map((s, index) => (
-            <div key={s.id}>
               <button
+                key={s.id}
                 type="button"
                 role="option"
                 ref={activeIndex === index ? activeOptionRef : undefined}
@@ -178,7 +192,6 @@ export default function TagPicker({
                 )}
                 {s.label}
               </button>
-            </div>
           ))}
         </div>
       )}

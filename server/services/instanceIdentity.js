@@ -23,7 +23,8 @@
 
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
@@ -65,7 +66,7 @@ export async function loadData() {
 
 async function saveData(data) {
   await ensureDir(PATHS.data);
-  await atomicWrite(INSTANCES_FILE, data);
+  await writeSecureJson(INSTANCES_FILE, data);
 }
 
 export async function withData(fn) {

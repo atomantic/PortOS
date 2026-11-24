@@ -31,6 +31,16 @@ export const persistentMindContinuationNoteSchema = z.string().trim()
 export const isPersistentMindContinuationNote = (memory) => Array.isArray(memory?.tags)
   && memory.tags.includes(PERSISTENT_MIND_CONTINUATION_TAG);
 
+export const isPersistentMindChosenNameRecord = (memory) => Array.isArray(memory?.tags)
+  && memory.tags.includes(PERSISTENT_MIND_CHOSEN_NAME_TAG);
+
+/** The only sanctioned way to apply the chosen-name tag; persistentMindMemoryTags strips it from caller input. */
+export const persistentMindChosenNameTags = () => [
+  PERSISTENT_MIND_CHOSEN_NAME_TAG,
+  'name',
+  PERSISTENT_MIND_MEMORY_PROTECTION_TAGS['core-identity'],
+];
+
 export const persistentMindContinuationNoteTags = () => [
   PERSISTENT_MIND_CONTINUATION_TAG,
   PERSISTENT_MIND_MEMORY_PROTECTION_TAGS.important,
@@ -50,7 +60,7 @@ export function persistentMindMemoryProtection(memory) {
 
 export function persistentMindMemoryTags(tags, protection) {
   const level = persistentMindMemoryProtectionSchema.parse(protection);
-  const reserved = [...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS), PERSISTENT_MIND_CONTINUATION_TAG];
+  const reserved = [...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS), PERSISTENT_MIND_CONTINUATION_TAG, PERSISTENT_MIND_CHOSEN_NAME_TAG];
   const ordinary = [...new Set((Array.isArray(tags) ? tags : [])
     .filter((tag) => typeof tag === 'string' && tag && !reserved.includes(tag)))];
   const marker = PERSISTENT_MIND_MEMORY_PROTECTION_TAGS[level];

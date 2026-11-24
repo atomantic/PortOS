@@ -7,7 +7,7 @@ import { request } from '../lib/testHelper.js';
 // route's own branching (LLM cache-first, memory- prefix-strip dispatch,
 // adaptive/progression attachment on math, and the three ServerError throws) —
 // the services themselves already have dedicated unit coverage elsewhere.
-vi.mock('../services/meatspacePostDrillCache.js', () => ({
+vi.mock('../services/meatspace/meatspacePostDrillCache.js', () => ({
   // postValidation.js's postDrillCacheFillSchema enum-validates against this.
   getCacheStats: vi.fn(() => ({})),
   requestCacheFill: vi.fn(),
@@ -15,20 +15,20 @@ vi.mock('../services/meatspacePostDrillCache.js', () => ({
   triggerReplenish: vi.fn(),
 }));
 
-vi.mock('../services/meatspacePostLlm.js', () => ({
+vi.mock('../services/meatspace/meatspacePostLlm.js', () => ({
   generateLlmDrill: vi.fn(),
   scoreLlmDrill: vi.fn(),
 }));
 
-vi.mock('../services/meatspacePostMemory.js', () => ({
+vi.mock('../services/meatspace/meatspacePostMemory.js', () => ({
   generateMemoryDrill: vi.fn(),
 }));
 
-vi.mock('../services/meatspacePostRhetoric.js', () => ({
+vi.mock('../services/meatspace/meatspacePostRhetoric.js', () => ({
   evaluateRhetoricAttempt: vi.fn(),
 }));
 
-vi.mock('../services/meatspacePost.js', () => ({
+vi.mock('../services/meatspace/meatspacePost.js', () => ({
   generateDrill: vi.fn(),
   getPostReviewReps: vi.fn(),
   // The memory branch reads the saved config to scope generateMemoryDrill's
@@ -39,19 +39,19 @@ vi.mock('../services/meatspacePost.js', () => ({
 // resolveDrillConfig moved to the adaptive policy module (#5690); the stats and
 // recommendations siblings are stubbed because the route imports them too and
 // they would otherwise link against the meatspacePost.js mock above.
-vi.mock('../services/meatspacePostAdaptive.js', () => ({
+vi.mock('../services/meatspace/meatspacePostAdaptive.js', () => ({
   resolveDrillConfig: vi.fn(),
   getAdaptivePreview: vi.fn(),
 }));
-vi.mock('../services/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
-vi.mock('../services/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
 
-import { getCachedDrill, triggerReplenish } from '../services/meatspacePostDrillCache.js';
-import { generateLlmDrill } from '../services/meatspacePostLlm.js';
-import { generateMemoryDrill } from '../services/meatspacePostMemory.js';
-import { evaluateRhetoricAttempt } from '../services/meatspacePostRhetoric.js';
-import { generateDrill, getPostReviewReps, getPostConfig } from '../services/meatspacePost.js';
-import { resolveDrillConfig } from '../services/meatspacePostAdaptive.js';
+import { getCachedDrill, triggerReplenish } from '../services/meatspace/meatspacePostDrillCache.js';
+import { generateLlmDrill } from '../services/meatspace/meatspacePostLlm.js';
+import { generateMemoryDrill } from '../services/meatspace/meatspacePostMemory.js';
+import { evaluateRhetoricAttempt } from '../services/meatspace/meatspacePostRhetoric.js';
+import { generateDrill, getPostReviewReps, getPostConfig } from '../services/meatspace/meatspacePost.js';
+import { resolveDrillConfig } from '../services/meatspace/meatspacePostAdaptive.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

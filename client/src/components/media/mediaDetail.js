@@ -1,3 +1,4 @@
+import { isValidKey } from '../../../../server/lib/mediaItemKey.js';
 import { getGalleryImages, getVideoHistoryItem, listImageVariants } from '../../services/apiImageVideo';
 import { normalizeImage, normalizeVideo } from './normalize';
 
@@ -18,6 +19,17 @@ export function mediaRecordRef(item) {
   if (item?.kind === 'image' && item.filename) return item.filename;
   if (item?.kind === 'video' && item.id) return item.id;
   return null;
+}
+
+// Synthetic items can use the preview alone. Board items accept HTTP(S)
+// and single-slash app paths.
+export function resolveMoodBoardPin(item) {
+  const { key, previewUrl } = item ?? {};
+  const mediaKey = isValidKey(key) ? key : null;
+  const thumbUrl = typeof previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(previewUrl)
+    ? previewUrl
+    : null;
+  return mediaKey || thumbUrl ? { mediaKey, thumbUrl } : null;
 }
 
 // The media-annotations key (star/rating/note) for a viewer item. Gallery

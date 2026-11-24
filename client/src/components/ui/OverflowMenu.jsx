@@ -59,6 +59,8 @@ export default function OverflowMenu({
     position: 'below',
   });
 
+  const focusLastOnOpen = useRef(false);
+
   const close = useCallback((refocus) => {
     setOpen(false);
     if (refocus) triggerRef.current?.focus();
@@ -71,7 +73,11 @@ export default function OverflowMenu({
   // coordinates, but must not reset the user's selection within the menu.
   const ready = open && Boolean(style);
   useEffect(() => {
-    if (ready) popoverRef.current?.querySelector(ITEM_SELECTOR)?.focus();
+    if (!ready) return;
+    const nodes = popoverRef.current?.querySelectorAll(ITEM_SELECTOR) || [];
+    const target = focusLastOnOpen.current ? nodes[nodes.length - 1] : nodes[0];
+    focusLastOnOpen.current = false;
+    target?.focus();
   }, [ready]);
 
   // Nothing to demote (e.g. a row whose destructive actions are all withheld) —
@@ -87,7 +93,11 @@ export default function OverflowMenu({
   };
 
   const handleMenuKeyDown = (e) => {
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      const nodes = popoverRef.current?.querySelectorAll(ITEM_SELECTOR) || [];
+      nodes[e.key === 'Home' ? 0 : nodes.length - 1]?.focus();
+    } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       moveFocus(1);
     } else if (e.key === 'ArrowUp') {
@@ -107,7 +117,10 @@ export default function OverflowMenu({
         type="button"
         ref={triggerRef}
         onClick={() => setOpen(v => !v)}
-        onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); } }}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); focusLastOnOpen.current = true; setOpen(true); }
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}

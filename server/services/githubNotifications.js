@@ -8,7 +8,7 @@
  * text screened and sorted (githubNotificationAssist.js).
  *
  * Storage: `db-primary` (`github_notifications`, `github_notification_sync`,
- * `github_notification_events`, `github_notification_rules`,
+ * `github_notification_events`, `github_notification_rules`, `github_notification_mutes`,
  * `github_notification_audit_changes`, `github_notification_audit_reports`) —
  * machine-local, never federated, like the accounts they describe. Queried by
  * account, state and recency and joined to triage results, so Postgres. Only
@@ -18,6 +18,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { GITHUB_NOTIFICATION_CADENCES } from '../lib/githubValidation.js';
 import {
   linkHeaderHasNext,
@@ -29,12 +30,13 @@ import {
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
-import { refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
+import { createManagedAppsLoader, refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
 import {
   agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, REASON_KIND_SQL, threadAgentKind, threadReasonKind,
 } from '../lib/githubNotificationTriage.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { notificationIssueClaimTarget } from '../lib/githubNotificationIssue.js';
 import { notificationPullRequestView } from '../lib/githubNotificationPullRequest.js';
 
 const GH_TIMEOUT_MS = 30_000;
@@ -185,7 +187,7 @@ const SKIPPED_AUTOMATION = Object.freeze({ sorted: 0, acted: 0, handedOff: 0, ag
 // Autopilot hands threads to their lanes first, so a thread a lane now owns
 // is not also sorted by Assist. Loaded lazily: the hand-off reaches the CoS
 // task schedule, which itself registers this module's scheduled check.
-async function runAutomation(account, env, automate) {
+async function runAutomation(account, env, automate, managedApps) {
   if (!automate) return SKIPPED_AUTOMATION;
   // Observe still clears threads with nothing left to do, so a closed or
   // merged thread never waits on the operator; Assist does the same below.
@@ -194,10 +196,11 @@ async function runAutomation(account, env, automate) {
     return { sorted: 0, acted: cleared, handedOff: 0, agentRuns: 0 };
   }
   const autopilot = account.mode === 'autopilot'
-    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env)
+    ? await (await import('./githubNotificationAutopilot.js')).autopilotAccountNotifications(account, env, { managedApps })
     : { handedOff: 0, agentRuns: 0 };
   const assist = await assistAccountNotifications(account, env, {
-    act: (threadId, action, detail) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail, account, env }),
+    // emit: false, because syncAccountNow announces the whole pass once.
+    act: (threadId, action, detail, extra = {}) => applyNotificationAction(account.id, threadId, action, { actor: 'automation', detail, account, env, emit: false, ...extra }),
   });
   return { ...assist, handedOff: autopilot.handedOff, agentRuns: autopilot.agentRuns, ...(autopilot.merged ? { merged: autopilot.merged } : {}) };
 }
@@ -235,6 +238,7 @@ async function syncAccountNow(account, automate) {
   const env = await requireAccountEnv(account);
   const cursor = (await query('SELECT last_modified FROM github_notification_sync WHERE account_id = $1', [account.id])).rows[0];
   const listedAt = new Date();
+  const managedApps = createManagedAppsLoader();
   const inbox = await fetchListing(account, env, { all: true, ifModifiedSince: listingCursor(cursor?.last_modified) });
   if (inbox.notModified) {
     // The cursor only moves on new activity, not on reads: re-read the small
@@ -247,8 +251,8 @@ async function syncAccountNow(account, automate) {
     });
     const refreshed = await refreshOpenPullRequestStatus(account, env);
     // Threads past the last run's triage cap still need a decision.
-    const triage = await triageAccountNotifications(account, env);
-    const assist = await runAutomation(account, env, automate);
+    const triage = await triageAccountNotifications(account, env, { managedApps });
+    const assist = await runAutomation(account, env, automate, managedApps);
     if (readOnGithub || refreshed || triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
@@ -289,8 +293,8 @@ async function syncAccountNow(account, automate) {
     );
   });
   await refreshOpenPullRequestStatus(account, env);
-  const triage = await triageAccountNotifications(account, env);
-  const assist = await runAutomation(account, env, automate);
+  const triage = await triageAccountNotifications(account, env, { managedApps });
+  const assist = await runAutomation(account, env, automate, managedApps);
   githubNotificationEvents.emit('changed', { accountId: account.id });
   console.log(`📬 Synced ${records.length} GitHub notifications for ${account.host}${truncated ? ' (listing truncated)' : ''}, triaged ${triage.triaged}, sorted ${assist.sorted}, acted on ${assist.acted}, handed off ${assist.handedOff}`);
   return { accountId: account.id, changed: true, fetched: records.length, truncated, triage, assist };
@@ -300,6 +304,9 @@ async function syncAccountNow(account, automate) {
  * Fetch one account's GitHub inbox (read and unread), coalescing concurrent requests.
  * `automate: false` (a caller without host control) skips Assist/Autopilot.
  */
+// Independent accounts (separate hosts and tokens) sync side by side; bounded so a many-account install cannot flood `gh`.
+const ACCOUNT_SYNC_CONCURRENCY = 3;
+
 // A 'disabled' account stays configured but this instance never fetches or processes its notifications.
 const isActive = (account) => account.enabled && account.mode !== 'disabled';
 
@@ -315,13 +322,9 @@ export async function syncAccountNotifications(accountId, { automate = true } = 
 /** Sync every enabled account; one account's failure never hides another's result. */
 export async function syncAllNotifications(options = {}) {
   const accounts = (await listAccounts()).filter(isActive);
-  const results = [];
-  for (const account of accounts) {
-    results.push(await syncAccountNotifications(account.id, options)
-      .then((result) => ({ ...result, ok: true }))
-      .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
-  }
-  return results;
+  return mapWithConcurrency(accounts, ACCOUNT_SYNC_CONCURRENCY, (account) => syncAccountNotifications(account.id, options)
+    .then((result) => ({ ...result, ok: true }))
+    .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
 }
 
 // The inbox holds unread open threads, whatever their decision. The operator
@@ -332,12 +335,28 @@ const CLEARABLE_SQL = `state = 'open' AND NOT suspect AND (${FINISHED_SQL} OR NO
 // Each mark-done is one gh call; the rest wait for the next sync.
 const MAX_AUTO_DONE_PER_RUN = 50;
 const OPEN_UNREAD_SQL = "state = 'open' AND unread AND read_on_github_at IS NULL";
-const VIEW_FILTERS = {
-  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect`,
+// Apply before LIMIT so a repo with many muted notices cannot push visible
+// items off the page. Keep suspicious notices visible in the safety lane.
+const HAS_MUTE_SQL = `NOT github_notifications.suspect AND EXISTS (
+  SELECT 1 FROM github_notification_mutes m
+  WHERE m.account_id = github_notifications.account_id
+    AND m.repo_full_name = lower(github_notifications.repo_full_name)
+    AND m.reason = github_notifications.reason
+)`;
+const VISIBLE_SQL = `NOT (${HAS_MUTE_SQL})`;
+// The counts query joins mutes once per row and exposes the result as this
+// column, instead of repeating the correlated EXISTS in every FILTER clause.
+const JOINED_MUTE_COLUMN = 'muted_in_portos';
+const JOINED_VISIBLE_SQL = `NOT ${JOINED_MUTE_COLUMN}`;
+
+const viewFilters = (visibleSql) => ({
+  'needs-you': `${OPEN_UNREAD_SQL} AND NOT suspect AND ${visibleSql}`,
   suspect: `${OPEN_UNREAD_SQL} AND suspect`,
-  handled: "(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL)",
+  handled: `(state <> 'open' OR NOT unread OR read_on_github_at IS NOT NULL) AND ${visibleSql}`,
   all: 'TRUE',
-};
+});
+const VIEW_FILTERS = viewFilters(VISIBLE_SQL);
+const COUNT_VIEW_FILTERS = viewFilters(JOINED_VISIBLE_SQL);
 
 const toIso = (value) => (value instanceof Date ? value.toISOString() : value);
 
@@ -384,6 +403,14 @@ const subjectStatusView = (row) => {
   };
 };
 
+const notificationAudience = (row) => {
+  if (row.reason === 'mention' || row.reason === 'assign') return 'direct';
+  if (row.reason === 'team_mention') return 'team';
+  if (row.reason !== 'review_requested') return null;
+  const request = row.evidence?.reviewAudience;
+  return request?.forActivity === toIso(row.gh_updated_at) ? request?.audience ?? null : null;
+};
+
 const toApi = (row, accountsById) => {
   const account = accountsById.get(row.account_id);
   const login = account?.login?.toLowerCase();
@@ -395,6 +422,8 @@ const toApi = (row, accountsById) => {
     repoPrivate: row.repo_private,
     yourRepo: Boolean(login) && row.repo_owner.toLowerCase() === login,
     reason: row.reason,
+    mutedInPortOS: row.muted_in_portos === true,
+    audience: notificationAudience(row),
     subjectType: row.subject_type,
     title: row.subject_title,
     htmlUrl: deployment?.htmlUrl || row.html_url,
@@ -413,6 +442,7 @@ const toApi = (row, accountsById) => {
     reasonRuleKind: threadReasonKind(row),
     agent: agentView(account, row),
     agentFailed: agentFailedView(row),
+    claimIssue: notificationIssueClaimTarget(account, row)?.number ?? null,
     pullRequest: notificationPullRequestView(account, row),
     pullRequestAction: row.evidence?.pullRequestAction || null,
     pullRequestAttempt: row.evidence?.pullRequestAttempt || null,
@@ -427,7 +457,7 @@ export async function listActionableNotifications({ limit = 100 } = {}) {
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const { rows } = await query(
     `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${OPEN_UNREAD_SQL}
-       AND NOT COALESCE(${FINISHED_SQL}, FALSE)
+       AND NOT COALESCE(${FINISHED_SQL}, FALSE) AND ${VISIBLE_SQL}
      ORDER BY gh_updated_at DESC, account_id, thread_id LIMIT $2`,
     [accounts.map((account) => account.id), limit],
   );
@@ -438,24 +468,35 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
   const accounts = (await listAccounts()).filter(isActive);
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
   const ids = accounts.filter((account) => !accountId || account.id === accountId).map((account) => account.id);
-  const [rows, syncRows, countRows] = await Promise.all([
+  const [rows, syncRows, countRows, muteRows] = await Promise.all([
     query(
-      `SELECT * FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}
+      `SELECT *, (${HAS_MUTE_SQL}) AS muted_in_portos FROM github_notifications WHERE account_id = ANY($1::text[]) AND ${VIEW_FILTERS[view]}
        ORDER BY gh_updated_at DESC LIMIT ${LIST_LIMIT}`,
       [ids],
     ),
     query('SELECT account_id, last_sync_at, last_error, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])', [ids]),
     // Every view's size for the inbox's summary, plus the open threads an agent has.
     query(
-      `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
-         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off')::int AS "with-agents",
+      `SELECT ${NOTIFICATION_VIEWS.map((name) => `COUNT(*) FILTER (WHERE ${COUNT_VIEW_FILTERS[name]})::int AS "${name}"`).join(', ')},
+         COUNT(*) FILTER (WHERE state = 'open' AND decision = 'handed-off' AND ${JOINED_VISIBLE_SQL})::int AS "with-agents",
          COUNT(*) FILTER (WHERE state = 'open' AND NOT suspect AND ${FINISHED_SQL})::int AS finished,
-         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL})::int AS clearable
-       FROM github_notifications WHERE account_id = ANY($1::text[])`,
+         COUNT(*) FILTER (WHERE ${CLEARABLE_SQL} AND ${JOINED_VISIBLE_SQL})::int AS clearable
+       FROM (
+         SELECT n.*, (NOT n.suspect AND m.account_id IS NOT NULL) AS ${JOINED_MUTE_COLUMN}
+         FROM github_notifications n
+         LEFT JOIN github_notification_mutes m ON m.account_id = n.account_id
+           AND m.repo_full_name = lower(n.repo_full_name) AND m.reason = n.reason
+         WHERE n.account_id = ANY($1::text[])
+       ) github_notifications`,
       [ids],
     ),
+    query(`SELECT account_id, repo_full_name, reason FROM github_notification_mutes
+      WHERE account_id = ANY($1::text[]) ORDER BY repo_full_name, reason, account_id`, [ids]),
   ]);
   return {
+    mutes: muteRows.rows.map(({ account_id, repo_full_name, reason }) => ({
+      accountId: account_id, accountLabel: accountsById.get(account_id).label, repoFullName: repo_full_name, reason,
+    })),
     notifications: rows.rows.map((row) => toApi(row, accountsById)),
     counts: countRows.rows[0],
     sync: Object.fromEntries(syncRows.rows.map((row) => [row.account_id, {
@@ -464,6 +505,18 @@ export async function listNotifications({ accountId = null, view = 'needs-you' }
       pollIntervalSeconds: row.poll_interval_seconds,
     }])),
   };
+}
+
+export async function setNotificationMute({ accountId, repoFullName, reason, muted }) {
+  const account = await getAccount(accountId);
+  const repoKey = repoFullName.toLowerCase();
+  await query(muted
+    ? `INSERT INTO github_notification_mutes (account_id, repo_full_name, reason)
+       VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`
+    : 'DELETE FROM github_notification_mutes WHERE account_id = $1 AND repo_full_name = $2 AND reason = $3',
+  [account.id, repoKey, reason]);
+  githubNotificationEvents.emit('changed', { accountId });
+  return { accountId, repoFullName: repoKey, reason, muted };
 }
 
 /**
@@ -493,8 +546,9 @@ async function learnFromOperator(client, row, action) {
  * an automation's carry the decision behind it. A bulk caller passes `emit: false`
  * and announces the change once, and may pass the `account` and `env` it already
  * resolved so a per-thread loop does not respawn `gh auth token` for each thread.
+ * `evidencePatch` is merged into the row's evidence in the same write.
  */
-export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true, account: suppliedAccount, env: suppliedEnv } = {}) {
+export async function applyNotificationAction(accountId, threadId, action, { actor = 'operator', detail = {}, learn = actor === 'operator', emit = true, evidencePatch = null, account: suppliedAccount, env: suppliedEnv } = {}) {
   const spec = ACTION_SPECS[action];
   const account = suppliedAccount || await getAccount(accountId);
   const existing = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
@@ -516,9 +570,10 @@ export async function applyNotificationAction(accountId, threadId, action, { act
          unread = CASE WHEN $3::text IN ('read','done') THEN FALSE ELSE unread END,
          state = COALESCE($4::text, state),
          state_changed_at = CASE WHEN $4::text IS NULL THEN state_changed_at ELSE NOW() END,
+         evidence = evidence || $5::jsonb,
          updated_at = NOW()
-       WHERE account_id = $1 AND thread_id = $2 RETURNING *`,
-      [account.id, threadId, action, spec.state],
+       WHERE account_id = $1 AND thread_id = $2 RETURNING *, (${HAS_MUTE_SQL}) AS muted_in_portos`,
+      [account.id, threadId, action, spec.state, toPgJson(evidencePatch || {})],
     );
     await client.query(
       'INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, $3, $4, $5::jsonb)',
@@ -529,6 +584,9 @@ export async function applyNotificationAction(accountId, threadId, action, { act
   if (emit) githubNotificationEvents.emit('changed', { accountId: account.id });
   return toApi(row, new Map([[account.id, account]]));
 }
+
+// Concurrent gh writes per bulk action, matching the triage read fan-out.
+export const BULK_GH_CONCURRENCY = 5;
 
 const ACCOUNT_FAILURES = new Set(['GITHUB_ACCOUNT_DISABLED', 'GITHUB_ACCOUNT_UNAVAILABLE']);
 
@@ -543,28 +601,40 @@ async function markThreadsDone(account, whereSql, { actor = 'operator', limit = 
      ORDER BY gh_updated_at DESC${limit ? ` LIMIT ${limit}` : ''}`,
     [account.id],
   );
+  if (!rows.length) return { cleared: 0, failed: 0, matched: 0 };
+  // Resolved once up front: an account gh cannot act as fails every row at once
+  // instead of spawning a doomed `gh` process per thread.
+  let env = suppliedEnv;
+  if (!env) {
+    try {
+      env = await requireAccountEnv(account);
+    } catch (error) {
+      console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+      return { cleared: 0, failed: rows.length, matched: rows.length };
+    }
+  }
   let cleared = 0;
   let failed = 0;
-  // Resolved lazily so an account gh cannot act as still fails per the loop below.
-  let env = suppliedEnv;
-  for (const [index, row] of rows.entries()) {
+  let accountFailed = false;
+  await mapWithConcurrency(rows, BULK_GH_CONCURRENCY, async (row) => {
+    if (accountFailed) {
+      failed += 1;
+      return;
+    }
     const detail = actor === 'automation' ? { decision: row.decision, rule: row.rule } : { decision: row.decision, bulk: 'finished' };
-    const error = await (async () => {
-      env ||= await requireAccountEnv(account);
+    try {
       await applyNotificationAction(account.id, row.thread_id, 'done', { actor, learn: false, emit: false, detail, account, env });
-    })().then(() => null, (failure) => failure);
-    if (!error) {
       cleared += 1;
-      continue;
+    } catch (error) {
+      failed += 1;
+      if (ACCOUNT_FAILURES.has(error.code)) {
+        if (!accountFailed) console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
+        accountFailed = true;
+      } else {
+        console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
+      }
     }
-    if (ACCOUNT_FAILURES.has(error.code)) {
-      console.error(`❌ Could not mark finished GitHub notifications done for ${account.host}: ${error.message}`);
-      failed += rows.length - index;
-      break;
-    }
-    console.error(`❌ Could not mark GitHub notification ${row.thread_id} done for ${account.host}: ${error.message}`);
-    failed += 1;
-  }
+  });
   return { cleared, failed, matched: rows.length };
 }
 
@@ -578,7 +648,7 @@ export async function clearFinishedNotifications({ accountId = null } = {}) {
   let cleared = 0;
   let failed = 0;
   for (const account of accounts) {
-    const result = await markThreadsDone(account, CLEARABLE_SQL);
+    const result = await markThreadsDone(account, `${CLEARABLE_SQL} AND ${VISIBLE_SQL}`);
     cleared += result.cleared;
     failed += result.failed;
     if (result.matched) githubNotificationEvents.emit('changed', { accountId: account.id });
@@ -657,7 +727,7 @@ export async function deleteLearnedRule(id) {
 /** One thread with its triage evidence and action log, newest event first. */
 export async function getNotification(accountId, threadId) {
   const account = await getAccount(accountId);
-  const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+  const row = (await query(`SELECT *, (${HAS_MUTE_SQL}) AS muted_in_portos FROM github_notifications WHERE account_id = $1 AND thread_id = $2`, [account.id, threadId])).rows[0];
   if (!row) throw new ServerError('Notification not found', { status: 404, code: 'GITHUB_NOTIFICATION_NOT_FOUND' });
   const events = await query(
     'SELECT actor, kind, detail, created_at FROM github_notification_events WHERE account_id = $1 AND thread_id = $2 ORDER BY created_at DESC, id DESC LIMIT 50',
@@ -684,18 +754,16 @@ export async function runScheduledNotificationCheck({ now = Date.now() } = {}) {
     'SELECT account_id, last_sync_at, poll_interval_seconds FROM github_notification_sync WHERE account_id = ANY($1::text[])',
     [accounts.map((account) => account.id)],
   )).rows.map((row) => [row.account_id, row]));
-  const results = [];
-  for (const account of accounts) {
+  const results = await mapWithConcurrency(accounts, ACCOUNT_SYNC_CONCURRENCY, async (account) => {
     const cursor = cursors.get(account.id);
     const waitMs = Math.max(cursor?.poll_interval_seconds || 0, MIN_POLL_SECONDS) * 1000;
     if (cursor?.last_sync_at && now - new Date(cursor.last_sync_at).getTime() < waitMs) {
-      results.push({ accountId: account.id, ok: true, skipped: 'poll-interval' });
-      continue;
+      return { accountId: account.id, ok: true, skipped: 'poll-interval' };
     }
-    results.push(await syncAccountNotifications(account.id)
+    return syncAccountNotifications(account.id)
       .then((result) => ({ ...result, ok: true }))
-      .catch((error) => ({ accountId: account.id, ok: false, error: error.message })));
-  }
+      .catch((error) => ({ accountId: account.id, ok: false, error: error.message }));
+  });
   lastScheduledSummary = describeScheduledCheck(results);
   // Only the scheduled check sends the opt-in monthly audit report.
   const { sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -827,4 +895,10 @@ export async function actOnPullRequest(accountId, threadId, options) {
   const result = await actOnNotificationPullRequest(account, threadId, options);
   const row = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   return { notification: toApi(row, new Map([[account.id, account]])), ...result };
+}
+
+export async function claimIssue(accountId, threadId, pin) {
+  const account = await getAccount(accountId);
+  const { claimNotificationIssue } = await import('./githubNotificationIssue.js');
+  return claimNotificationIssue(account, threadId, pin);
 }

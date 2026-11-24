@@ -190,10 +190,11 @@ describe('ensureVaultKey', () => {
     expect(statSync(envPath).mode & 0o777).toBe(0o600);
   });
 
-  it.skipIf(process.platform === 'win32')('preserves an EXISTING .env file mode', async () => {
+  it.skipIf(process.platform === 'win32')('tightens an EXISTING 0644 .env file to 0600 when writing PRIVACY_VAULT_KEY', async () => {
     writeFileSync(envPath, 'OTHER_VAR=1\n', { mode: 0o644 });
+    chmodSync(envPath, 0o644);
     await ensureVaultKey({ envPath });
-    expect(statSync(envPath).mode & 0o777).toBe(0o644);
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
   });
 
   it('REPLACES an invalid PRIVACY_VAULT_KEY line instead of appending a duplicate', async () => {

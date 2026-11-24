@@ -4,7 +4,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalTodoList({
-  goal, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
+  goal, pendingActions, newTodoTitle, setNewTodoTitle, newTodoPriority, setNewTodoPriority,
   newTodoEstimate, setNewTodoEstimate, todoSubmitting, handleAddTodo, handleToggleTodo, handleDeleteTodo
 }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
@@ -22,17 +22,22 @@ export default function GoalTodoList({
             <div key={todo.id}>
             <div className="flex items-center gap-2 text-xs group">
               <button
+                type="button"
                 onClick={() => handleToggleTodo(todo)}
-                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                disabled={pendingActions.has(`todo:${todo.id}`)}
+                aria-label={todo.status === 'done' ? `Mark ${todo.title} as pending` : `Mark ${todo.title} as done`}
+                className="group/toggle pointer-coarse:min-h-11 pointer-coarse:min-w-11 flex items-center justify-center shrink-0 disabled:opacity-50"
+              >
+                <span aria-hidden="true" className={`w-4 h-4 rounded border flex items-center justify-center ${
                   todo.status === 'done'
                     ? 'bg-port-success/20 border-port-success text-port-success'
                     : todo.status === 'in-progress'
                       ? 'bg-port-accent/20 border-port-accent text-port-accent'
-                      : 'border-gray-600 hover:border-port-accent'
-                }`}
-              >
-                {todo.status === 'done' && <Check className="w-3 h-3" />}
-                {todo.status === 'in-progress' && <CircleDot className="w-2.5 h-2.5" />}
+                      : 'border-gray-600 group-hover/toggle:border-port-accent'
+                }`}>
+                  {todo.status === 'done' && <Check className="w-3 h-3" />}
+                  {todo.status === 'in-progress' && <CircleDot className="w-2.5 h-2.5" />}
+                </span>
               </button>
               <span className={`flex-1 ${todo.status === 'done' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
                 {todo.title}

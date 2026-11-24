@@ -3,7 +3,7 @@ import { Save, Loader2, MessageCircle, ShieldCheck, ShieldAlert, RefreshCw, Cloc
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
 import BrailleSpinner from '../../BrailleSpinner';
-import { useBeeperSettings } from '../../../hooks/useBeeperSettings';
+import { useBeeperSettings } from './useBeeperSettings';
 import useMounted from '../../../hooks/useMounted';
 import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import BeeperOutboxBreakerBanner from './BeeperOutboxBreakerBanner';
@@ -17,6 +17,7 @@ import {
   getBeeperAttachmentSummary,
   backfillBeeperAttachments,
 } from '../../../services/apiBeeper.js';
+import { pluralize } from '../../../lib/textUtils';
 
 // The Beeper connection story (#30 + #31, fork issue #1): ingestion settings,
 // the tri-state status card, the connect flow, token expiry, and the read-only
@@ -465,7 +466,7 @@ function TokenExpiryNotice({ status }) {
   const days = status.tokenExpiresInDays;
   const label = Number.isFinite(days) && days <= 0
     ? 'Token has expired — reconnect to keep syncing.'
-    : `Token expires in ${days} day(s) — reconnect soon.`;
+    : `Token expires in ${pluralize(days, 'day')} — reconnect soon.`;
   return (
     <p className="text-xs text-port-warning flex items-center gap-1.5">
       <Clock size={12} />
@@ -836,7 +837,7 @@ function AttachmentMirrorCard({ budgetGb, settingsDirty }) {
     setRunning(false);
     if (result) {
       toast.success(
-        `Mirrored ${result.fetched} attachment(s)${result.failed ? `, ${result.failed} unavailable` : ''}`
+        `Mirrored ${pluralize(result.fetched, 'attachment')}${result.failed ? `, ${result.failed} unavailable` : ''}`
         + `${result.stoppedForBudget ? ' — stopped at the disk budget' : ''}`,
       );
     }
@@ -869,7 +870,7 @@ function AttachmentMirrorCard({ budgetGb, settingsDirty }) {
           <div>
             <div className="flex items-center justify-between text-xs text-gray-400">
               <span>{formatBytes(usedBytes)} of {formatBytes(budgetBytes)}</span>
-              <span>{summary?.storedFiles || 0} file(s) mirrored</span>
+              <span>{pluralize(summary?.storedFiles || 0, 'file')} mirrored</span>
             </div>
             <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-port-bg">
               <div className="h-full rounded-full bg-port-accent" style={{ width: `${usedPercent}%` }} />
@@ -941,7 +942,7 @@ function BackfillConsentModal({ open, summary, onCancel, onConfirm }) {
           <h3 className="text-white font-medium">Mirror all attachments?</h3>
         </div>
         <p className="text-sm text-gray-400">
-          PortOS will download <span className="text-gray-200">{summary.pendingCount} attachment(s)</span>
+          PortOS will download <span className="text-gray-200">{pluralize(summary.pendingCount, 'attachment')}</span>
           {' '}from Beeper Desktop — about <span className="text-gray-200">{formatBytes(summary.pendingBytes)}</span>
           {unknown > 0 && <> plus {unknown} whose size Beeper did not report</>}.
           {' '}It stops when the mirror reaches its {formatBytes(summary.budgetBytes)} budget, skips anything over
@@ -965,7 +966,7 @@ function BackfillConsentModal({ open, summary, onCancel, onConfirm }) {
             className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-port-accent/20 px-3 text-xs text-port-accent transition-colors hover:bg-port-accent/30"
           >
             <Download size={12} />
-            Mirror {summary.pendingCount} attachment(s)
+            Mirror {pluralize(summary.pendingCount, 'attachment')}
           </button>
         </div>
       </div>

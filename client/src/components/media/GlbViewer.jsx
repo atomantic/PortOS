@@ -1,15 +1,18 @@
-import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import {
   Bounds,
   Environment,
   OrbitControls,
+  useBounds,
   useGLTF,
 } from '@react-three/drei';
+import { Box3, Color } from 'three';
 import { AlertTriangle, Download, RefreshCw, Rotate3d, SlidersHorizontal } from 'lucide-react';
 import ErrorBoundary from '../ErrorBoundary';
 import { GltfPrimitive } from '../../hooks/useClonedGltf';
 import { glbErrorText, glbFailureHint } from '../../lib/glbFailure';
+import { createGlbPoser } from '../../lib/glbPose';
 
 const DEFAULT_BACKGROUND = '#050505';
 const ENVIRONMENT_HDRI = '/hdri/studio-small-08-1k.hdr';
@@ -54,12 +57,107 @@ export function cloneGlbSceneWithOpaqueMaterials(scene) {
   return clone;
 }
 
-function GlbModel({ src, forceOpaque, onSceneLoaded }) {
+// The glTF node a mesh came from: the loader keeps the authored name in
+// `userData.name` (`name` itself is sanitized for animation bindings, dropping
+// dots). A node with several materials becomes a Group of unnamed meshes.
+function ownerNodeName(mesh) {
+  for (let object = mesh; object; object = object.parent) if (object.userData?.name) return object.userData.name;
+  return mesh.name;
+}
+
+/**
+ * Show only the meshes of the node named `nodeName`; returns the function that
+ * shows the rest again and the isolated part's bounds. Layers, not `visible`:
+ * hiding a parent part through `visible` would hide the child part on display.
+ * A name no mesh carries isolates nothing (`box` null).
+ */
+export function isolateGlbNode(scene, nodeName) {
+  const meshes = [];
+  scene.traverse((object) => { if (object.isMesh) meshes.push(object); });
+  const kept = meshes.filter((mesh) => ownerNodeName(mesh) === nodeName);
+  if (!kept.length) return { box: null, restore: () => {} };
+  scene.updateWorldMatrix(true, true);
+  const box = new Box3();
+  for (const mesh of kept) {
+    mesh.geometry.computeBoundingBox();
+    box.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));
+  }
+  const hidden = meshes.filter((mesh) => !kept.includes(mesh)).map((mesh) => ({ mesh, mask: mesh.layers.mask }));
+  for (const { mesh } of hidden) mesh.layers.disableAll();
+  return { box, restore: () => { for (const { mesh, mask } of hidden) mesh.layers.mask = mask; } };
+}
+
+// The cached scene is shared, so the cleanup puts every mesh back.
+function NodeIsolation({ scene, nodeName }) {
+  const bounds = useBounds();
+  // Bounds re-fits the whole model from a layout effect (first paint, resize); a later passive effect keeps the part framed.
+  const size = useThree((state) => state.size);
+  useEffect(() => {
+    if (!nodeName) return undefined;
+    const { box, restore } = isolateGlbNode(scene, nodeName);
+    if (!box) return undefined;
+    bounds.refresh(box).clip().fit();
+    return () => {
+      restore();
+      bounds.refresh(scene).clip().fit();
+    };
+  }, [bounds, scene, nodeName, size]);
+  return null;
+}
+
+const HIGHLIGHTS = [0xff8a1f, 0x19c3ff];
+
+/** Tint the meshes of the named nodes, each its own color; returns the function that puts their materials back. */
+export function highlightGlbNodes(scene, nodeNames) {
+  const tinted = [];
+  scene.traverse((mesh) => {
+    const index = mesh.isMesh ? nodeNames.indexOf(ownerNodeName(mesh)) : -1;
+    if (index < 0) return;
+    const color = new Color(HIGHLIGHTS[index % HIGHLIGHTS.length]);
+    const tint = (material) => {
+      const clone = material.clone();
+      clone.color?.lerp(color, 0.6);
+      clone.emissive?.copy(color);
+      if (clone.emissive) clone.emissiveIntensity = 0.35;
+      return clone;
+    };
+    const original = mesh.material;
+    mesh.material = Array.isArray(original) ? original.map(tint) : tint(original);
+    tinted.push({ mesh, original });
+  });
+  return () => {
+    for (const { mesh, original } of tinted) {
+      for (const material of [mesh.material].flat()) material.dispose();
+      mesh.material = original;
+    }
+  };
+}
+
+// Poses the scene by its own clips; unmounting puts the shared cached scene back.
+function ScenePose({ scene, animations, pose }) {
+  const poser = useRef(null);
+  useEffect(() => {
+    poser.current = createGlbPoser(scene, animations);
+    return () => {
+      poser.current.dispose();
+      poser.current = null;
+    };
+  }, [scene, animations]);
+  useEffect(() => { poser.current?.seek(pose); }, [pose, scene, animations]);
+  return null;
+}
+
+function NodeHighlight({ scene, nodeNames }) {
+  useEffect(() => highlightGlbNodes(scene, nodeNames), [scene, nodeNames]);
+  return null;
+}
+
+function GlbModel({ src, forceOpaque, onSceneLoaded, isolateNode, pose, highlightNodes }) {
   // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
   // `src`) parses fresh while revisiting the same mesh reuses the cache — no
   // manual cache-clear needed (clearing on unmount would force a full multi-MB
   // re-fetch every time the viewer remounts for the same URL).
-  const { scene } = useGLTF(src);
+  const { scene, animations } = useGLTF(src);
   const renderedScene = useMemo(
     () => (forceOpaque ? cloneGlbSceneWithOpaqueMaterials(scene) : scene),
     [forceOpaque, scene],
@@ -83,7 +181,14 @@ function GlbModel({ src, forceOpaque, onSceneLoaded }) {
     onSceneLoaded?.(renderedScene);
     return () => onSceneLoaded?.(null);
   }, [onSceneLoaded, renderedScene]);
-  return <GltfPrimitive object={renderedScene} />;
+  return (
+    <>
+      <GltfPrimitive object={renderedScene} />
+      {pose && <ScenePose scene={renderedScene} animations={animations} pose={pose} />}
+      {highlightNodes?.length > 0 && <NodeHighlight scene={renderedScene} nodeNames={highlightNodes} />}
+      {isolateNode !== undefined && <NodeIsolation scene={renderedScene} nodeName={isolateNode} />}
+    </>
+  );
 }
 
 // r3f prefixes every loader failure with "Could not load <url>", so this is what
@@ -176,6 +281,13 @@ export default function GlbViewer({
   // `null` when it unloads. Must be referentially stable (a `useState` setter or a
   // `useCallback`) — an inline arrow re-fires the effect on every render.
   onSceneLoaded,
+  // The glTF node to show alone and frame; null shows the whole model. Omit it
+  // on a viewer that never isolates parts.
+  isolateNode,
+  // `{ clipName: 0-1 }`: holds the model where those of its clips are, side by side. Memoize it.
+  pose,
+  // Names of glTF nodes to tint. Memoize it.
+  highlightNodes,
 }) {
   const backgroundInputId = useId();
   const controlsPanelId = useId();
@@ -283,7 +395,7 @@ export default function GlbViewer({
               </ErrorBoundary>
               <Suspense fallback={null}>
                 <Bounds fit clip observe margin={1.2}>
-                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} />
+                  <GlbModel src={src} forceOpaque={forceOpaque} onSceneLoaded={onSceneLoaded} isolateNode={isolateNode} pose={pose} highlightNodes={highlightNodes} />
                 </Bounds>
               </Suspense>
               <OrbitControls makeDefault enablePan enableZoom enableRotate />

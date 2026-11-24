@@ -385,6 +385,70 @@ describe('Three.js model generation orchestration', () => {
     expect(current.runs.at(-1).feedback).toContain('cross-part penetration check');
   });
 
+  it('records parts that pass through each other while a clip plays and feeds the warning back', async () => {
+    // Clear of the body at rest; the clip drives the lens straight into it.
+    const plungeSpec = {
+      ...spec,
+      parts: [
+        { id: 'body', name: 'Body', geometry: { type: 'box', width: 3, height: 3, depth: 3 }, material: 'body' },
+        { id: 'lens', name: 'Lens', geometry: { type: 'sphere', radius: 0.35 }, material: 'lens', position: [5, 0, 0] },
+      ],
+      animation: {
+        clips: [{
+          id: 'plunge',
+          name: 'Plunge',
+          durationSeconds: 2,
+          sequences: [{
+            id: 'drive-in',
+            name: 'Drive in',
+            partId: 'lens',
+            startSeconds: 0,
+            endSeconds: 2,
+            easing: 'linear',
+            channels: { position: { from: [5, 0, 0], to: [0, 0, 0] } },
+          }],
+        }],
+      },
+    };
+    let current = {
+      id: 'threejs-plunge',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      model: null,
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      penetration: null,
+      runs: [],
+    };
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify(plungeSpec),
+      runId: 'run-plunge',
+      provider: { id: 'vision-api' },
+      model: null,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    await vi.waitFor(() => expect(current.status).toBe('ready'));
+    expect(current.penetration).toMatchObject({ errorCount: 0, warningCount: 1, evaluatedPoseCount: 3 });
+    expect(current.penetration.findings[0]).toMatchObject({
+      code: 'clip-part-collision',
+      severity: 'warning',
+      clipId: 'plunge',
+      timeSeconds: 2,
+    });
+
+    await startGeneration(current.id, { providerId: 'vision-api' });
+    expect(current.runs.at(-1).feedback).toContain('pass through each other while a clip plays');
+  });
+
   it('records the material-plausibility gate and folds it into an unsteered refinement', async () => {
     // The body is named for oak and lit like polished chrome — valid against the
     // schema, implausible against the substance the id names.
@@ -471,6 +535,75 @@ describe('Three.js model generation orchestration', () => {
       screenshots: [],
       prompt: expect.stringContaining('/mock/data/images/example.png'),
     }));
+  });
+
+  describe('reference images', () => {
+    const baseRecord = () => ({
+      id: 'threejs-refs',
+      name: 'Example Beacon',
+      sourceImage: { filename: 'example.png' },
+      providerId: 'vision-api',
+      referenceImages: [{ filename: 'back.png', role: 'back', label: '' }],
+      prompt: '',
+      status: 'draft',
+      spec: null,
+      runs: [],
+    });
+    const wire = (record) => {
+      let current = record;
+      store.getModel.mockResolvedValue(current);
+      store.mutateModel.mockImplementation(async (_id, mutate) => {
+        const next = mutate(current);
+        if (next) current = next;
+        return current;
+      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(spec), runId: 'r', provider: { id: 'vision-api' }, model: null });
+      return () => current;
+    };
+
+    it('sends the primary then references in order, and records them on the run', async () => {
+      const get = wire(baseRecord());
+      await startGeneration('threejs-refs', { providerId: 'vision-api' });
+      await vi.waitFor(() => expect(get().status).toBe('ready'));
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+        screenshots: ['/mock/data/images/example.png', '/mock/data/images/back.png'],
+      }));
+      expect(get().runs[0].images).toEqual(['example.png', 'back.png']);
+    });
+
+    it('gives CLI providers the paths in the prompt and attaches nothing', async () => {
+      getProviderById.mockResolvedValue({ id: 'local-agent', name: 'Local', type: 'cli', enabled: true });
+      const get = wire(baseRecord());
+      await startGeneration('threejs-refs', { providerId: 'local-agent' });
+      await vi.waitFor(() => expect(get().status).toBe('ready'));
+      expect(runPromptThroughProvider).toHaveBeenCalledWith(expect.objectContaining({
+        screenshots: [],
+        prompt: expect.stringContaining('/mock/data/images/back.png'),
+      }));
+    });
+
+    it('absent keeps stored references while an empty array clears them', async () => {
+      const get = wire(baseRecord());
+      await startGeneration('threejs-refs', { providerId: 'vision-api' });
+      expect(get().referenceImages).toHaveLength(1);
+      await vi.waitFor(() => expect(get().status).toBe('ready'));
+      await startGeneration('threejs-refs', { providerId: 'vision-api', referenceImages: [] });
+      expect(get().referenceImages).toEqual([]);
+    });
+
+    it('refuses a deleted reference with a 409 naming it', async () => {
+      wire({ ...baseRecord(), referenceImages: [{ filename: 'missing.png', role: 'side', label: '' }] });
+      await expect(startGeneration('threejs-refs', { providerId: 'vision-api' }))
+        .rejects.toMatchObject({ status: 409, code: 'GALLERY_IMAGE_NOT_FOUND', message: expect.stringContaining('missing.png') });
+    });
+
+    it('refuses before the run when the provider image limit is lower, dropping nothing', async () => {
+      getProviderById.mockResolvedValue({ id: 'vision-api', name: 'Vision API', type: 'api', enabled: true, maxImages: 1 });
+      wire(baseRecord());
+      await expect(startGeneration('threejs-refs', { providerId: 'vision-api' }))
+        .rejects.toMatchObject({ status: 400, code: 'IMAGE_LIMIT_EXCEEDED', message: expect.stringContaining('2 images') });
+      expect(runPromptThroughProvider).not.toHaveBeenCalled();
+    });
   });
 
   describe('effort threading', () => {

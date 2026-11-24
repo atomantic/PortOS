@@ -715,6 +715,46 @@ describe('ThreejsModelPreview clips', () => {
     expect(screen.getByText('0.00/2.00s')).toBeInTheDocument();
   });
 
+  it('parks the playhead on a requested time, highlights the named parts and clears them on request', () => {
+    const { container } = renderPreview(
+      <><ThreejsModelPreview spec={clipSpec()} /><LocationProbe /></>,
+      '/?clip=deploy&time=0.5&highlight=blade,handle,noSuchPart',
+    );
+
+    expect(screen.getByText('0.50/2.00s')).toBeInTheDocument();
+    expect(positionOf(container, 'Blade')).toEqual([-1, 2, 0]);
+    expect(screen.getByText('Showing Blade and Handle')).toBeInTheDocument();
+    // The blade's relief rides it, so the two named parts light three meshes.
+    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear highlighted parts' }));
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('highlight');
+    expect(container.querySelectorAll('meshStandardMaterial[emissive="#38bdf8"]')).toHaveLength(0);
+  });
+
+  it('seeks again when the same moment is requested after scrubbing away, and clamps to the clip', () => {
+    const { rerender } = renderPreview(<ThreejsModelPreview spec={clipSpec()} seekToken={0} />, '/?time=1');
+    expect(screen.getByText('1.00/2.00s')).toBeInTheDocument();
+
+    scrub(0.25);
+    expect(screen.getByText('0.25/2.00s')).toBeInTheDocument();
+    rerender(<ThreejsModelPreview spec={clipSpec()} seekToken={1} />);
+    expect(screen.getByText('1.00/2.00s')).toBeInTheDocument();
+  });
+
+  it('ignores a malformed time and lets a clip change drop a stale seek', () => {
+    renderPreview(<><ThreejsModelPreview spec={clipSpec()} /><LocationProbe /></>, '/?time=soon');
+    expect(screen.getByText('0.00/2.00s')).toBeInTheDocument();
+  });
+
+  it('drops the requested time when another clip is opened', () => {
+    renderPreview(<><ThreejsModelPreview spec={clipSpec()} /><LocationProbe /></>, '/?clip=deploy&time=1');
+    expect(screen.getByText('1.00/2.00s')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Clip'), { target: { value: 'retract' } });
+    expect(screen.getByTestId('location-probe')).not.toHaveTextContent('time=');
+    expect(screen.getByText('0.00/1.00s')).toBeInTheDocument();
+  });
+
   it('falls back to the first clip when the URL names one this model does not have', () => {
     renderPreview(<ThreejsModelPreview spec={clipSpec()} />, '/?clip=noSuchClip');
     expect(screen.getByLabelText('Clip')).toHaveValue('deploy');

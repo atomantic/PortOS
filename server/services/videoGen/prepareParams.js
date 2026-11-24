@@ -62,13 +62,10 @@ import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
-import {
-  listVideoModels,
-  defaultVideoModelId,
-  BYOV_VIDEO_RUNTIMES,
-  loadHistory,
-  DEFAULT_NUM_FRAMES,
-} from './local.js';
+import { listVideoModels, defaultVideoModelId } from './modelCatalog.js';
+import { BYOV_VIDEO_RUNTIMES } from './runtimes.js';
+import { loadHistory } from './history.js';
+import { DEFAULT_NUM_FRAMES } from './renderArgs.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
@@ -87,8 +84,7 @@ import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles
 import { resolveVideoLoras } from './renderArgs.js';
 
 // A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
-const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
-export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
+export const unknownVideoModelMessage = (modelId) => (CLOUD_VIDEO_GEN_MODES.includes(modelId)
   ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
   : `Unknown modelId: ${modelId}`);
 

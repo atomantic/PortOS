@@ -421,14 +421,14 @@ describe('model-authored plan fields at the apply sink', () => {
       writeFixture(joinPath(outside, '.env'), 'PORT=3000\nSECRET=1\n');
       writeFixture(joinPath(outside, 'linked.env'), 'PORT=3000\nLINKED=1\n');
       symlinkSync(joinPath(outside, 'linked.env'), joinPath(repo, 'planted.env'));
-      const escape = relativePath(repo, joinPath(outside, '.env'));
+      const escapePath = relativePath(repo, joinPath(outside, '.env'));
       const plan = {
         currentState: { hasGit: false },
         proposedChanges: {
           ecosystemContent: `// ${PORTOS_ECOSYSTEM_MARKER}\nmodule.exports = { apps: [] };\n`,
           createEcosystem: true,
           strayPorts: [
-            { file: escape, variable: 'PORT', action: 'remove' },
+            { file: escapePath, variable: 'PORT', action: 'remove' },
             { file: 'planted.env', variable: 'PORT', action: 'remove' },
             { file: '.env', variable: '|', action: 'remove' },
             { file: '.env', variable: 'PORT', action: 'remove' },

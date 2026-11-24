@@ -24,7 +24,7 @@ vi.mock('./instances.js', async (importOriginal) => mockNoPeers({}, {
   updatePeer: async () => {},
 }));
 vi.mock('./instanceIdentity.js', () => mockTestIdentity());
-vi.mock('./sharing/peerSync.js', () => mockNoPeerSync({}, {
+vi.mock('./sharing/peerOutboundCoverage.js', () => mockNoPeerSync({}, {
   getOutboundCoverageForPeer: async () => ({ universe: new Set(), pipeline: new Set(), mediaCollections: new Set() }),
 }));
 // The queue owns data/media-jobs.json (its unreadable-snapshot latch is pinned in mediaJobQueue/index.lanes.test.js).
@@ -42,8 +42,8 @@ const subscriptions = await import('./sharing/subscriptions.js');
 const manifests = await import('./sharing/manifest.js');
 const importer = await import('./sharing/importer.js');
 const annotations = await import('./sharing/annotationsSync.js');
-const alcohol = await import('./meatspaceAlcohol.js');
-const nicotine = await import('./meatspaceNicotine.js');
+const alcohol = await import('./meatspace/meatspaceAlcohol.js');
+const nicotine = await import('./meatspace/meatspaceNicotine.js');
 const { PATHS } = await import('../lib/fileUtils.js');
 const { PORTOS_SCHEMA_VERSIONS } = await import('../lib/schemaVersions.js');
 const bucketPath = join(tempRoot, 'bucket');

@@ -56,7 +56,7 @@ import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
  * account id (#3532) — see mergeSocialAccounts.
  */
 
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 import { join } from 'path';
 import { documentFilenameSchema } from '../lib/digitalTwinSchemas.js';
 import { readdir, readFile, unlink } from 'fs/promises';
@@ -167,6 +167,12 @@ function chronotypeObservedHasSignal(rec) {
 function signalAwareLWW(local, remote, hasSignal, timestampField) {
   if (!isPlainObject(remote)) return { merged: local, changed: false };
   if (!isPlainObject(local)) return { merged: remote, changed: true };
+  // An explicit genetics erasure newer than the counterpart's derivation beats
+  // signal; absent the stamp the idle-peer protection below is unchanged.
+  const clearedBeats = (cleared, other) =>
+    Boolean(cleared.geneticsClearedAt) && compareNewerWins(cleared.geneticsClearedAt, other[timestampField]);
+  if (clearedBeats(remote, local)) return { merged: remote, changed: true };
+  if (clearedBeats(local, remote)) return { merged: local, changed: false };
   const localHasSignal = hasSignal(local);
   const remoteHasSignal = hasSignal(remote);
   const remoteWins = localHasSignal === remoteHasSignal
@@ -656,7 +662,10 @@ export function mergeMeta(local, remote) {
   }
 
   if (isPlainObject(remote.settings)) {
-    const settings = { ...remote.settings, ...(isPlainObject(local.settings) ? local.settings : {}) };
+    // includePrivacyContext is machine-local (it gates vault injection into this
+    // machine's prompts), so a peer's value is never adopted.
+    const { includePrivacyContext: _remoteOnly, ...remoteSettings } = remote.settings;
+    const settings = { ...remoteSettings, ...(isPlainObject(local.settings) ? local.settings : {}) };
     if (JSON.stringify(settings) !== JSON.stringify(local.settings || {})) {
       merged.settings = settings; changed = true;
     }
@@ -871,7 +880,13 @@ export async function getDigitalTwinSnapshot() {
       readJSONFile(AUTOBIO_STORIES_FILE, null, { strict: true }),
       readJSONFile(SOCIAL_ACCOUNTS_FILE, null, { strict: true }),
     ]);
-  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta, documents, autobiography: { stories }, socialAccounts };
+  // includePrivacyContext is machine-local: never on the wire or in checksums.
+  let wireMeta = meta;
+  if (isPlainObject(meta?.settings) && 'includePrivacyContext' in meta.settings) {
+    const { includePrivacyContext: _local, ...settings } = meta.settings;
+    wireMeta = { ...meta, settings };
+  }
+  const data = { identity, chronotype, longevity, feedback, taste, tasteObserved, chronotypeObserved, meta: wireMeta, documents, autobiography: { stories }, socialAccounts };
   // A field already present on one peer may be appended by the other on merge.
   return { data, checksum: canonicalSnapshotChecksum(data) };
 }

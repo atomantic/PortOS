@@ -89,7 +89,7 @@ export async function runVideoAssembly(projectId) {
     project = await getProject(projectId);
     if (!matches(project)) return;
     const timeline = await import('../videoTimeline/local.js');
-    const { loadHistory } = await import('../videoGen/local.js');
+    const { loadHistory } = await import('../videoGen/history.js');
     const { prepareVideoSoundtrack } = await import('./videoAudio.js');
     const { muxStripAudio, resolveMusicTrackPath } = await import('../pipeline/audioMux.js');
     const history = await loadHistory();

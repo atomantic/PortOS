@@ -6,13 +6,13 @@ import { request } from '../lib/testHelper.js';
 // that now lives centrally inside meatspacePost.js's updatePostConfig(), via
 // its postConfigEvents emitter, so any current or future caller of
 // updatePostConfig gets the reschedule for free. See:
-//   - server/services/meatspacePost.test.js for updatePostConfig emitting
+//   - server/services/meatspace/meatspacePost.test.js for updatePostConfig emitting
 //     postConfigEvents on every save.
-//   - server/services/meatspacePostReminder.test.js for the subscription
+//   - server/services/meatspace/meatspacePostReminder.test.js for the subscription
 //     that reschedules when the `reminder` slice is part of the patch.
 // This file is now a lean smoke test for the route itself: it validates the
 // body, delegates to postService.updatePostConfig, and returns the result.
-vi.mock('../services/meatspacePost.js', () => ({
+vi.mock('../services/meatspace/meatspacePost.js', () => ({
   getPostConfig: vi.fn(),
   updatePostConfig: vi.fn(),
 }));
@@ -21,14 +21,14 @@ vi.mock('../services/meatspacePost.js', () => ({
 // module (#5690), so a mocked meatspacePost.js needs these mocked too —
 // otherwise the real siblings link against the mock and fail on the exports it
 // does not stub.
-vi.mock('../services/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
-vi.mock('../services/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
-vi.mock('../services/meatspacePostAdaptive.js', () => ({
+vi.mock('../services/meatspace/meatspacePostStats.js', () => ({ getPostStats: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostRecommendations.js', () => ({ getPostRecommendations: vi.fn() }));
+vi.mock('../services/meatspace/meatspacePostAdaptive.js', () => ({
   resolveDrillConfig: vi.fn(),
   getAdaptivePreview: vi.fn(),
 }));
 
-import * as postService from '../services/meatspacePost.js';
+import * as postService from '../services/meatspace/meatspacePost.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import meatspacePostRoutes from './meatspacePostRoutes.js';
 

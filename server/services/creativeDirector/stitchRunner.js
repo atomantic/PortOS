@@ -19,7 +19,7 @@ import {
   getProject as getTimelineProject,
   getRenderJobStatus,
 } from '../videoTimeline/local.js';
-import { loadHistory } from '../videoGen/local.js';
+import { loadHistory } from '../videoGen/history.js';
 import { addItem as addCollectionItem } from '../mediaCollections.js';
 import { buildTimelineClips } from './orchestrator.js';
 import { getProject, updateProject } from './local.js';

@@ -10,19 +10,18 @@ const api = vi.hoisted(() => ({
   getPersistentMind: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-const providerHook = vi.hoisted(() => ({
-  setSelectedProviderId: vi.fn(),
-  setSelectedModel: vi.fn(),
-  // #8348 — the render-loop guard below flips this on to give the setters a
-  // new identity on every render (matching ChiefOfStaff.test.jsx's mock),
-  // then reads renderCount (bumped once per hook call, i.e. once per render).
-  unstableSetters: false,
-  renderCount: 0,
-}));
 const localLlm = vi.hoisted(() => ({
   getLocalLlmStatus: vi.fn(),
   getToolUseModels: vi.fn(),
+  installLocalLlmModel: vi.fn(),
 }));
+// Embeddings are the shared settings.embeddings store (#18296), not CoS config.
+const embeddingsApi = vi.hoisted(() => ({
+  updateSettings: vi.fn(),
+  getEmbeddingConfig: vi.fn(),
+}));
+vi.mock('../../../services/apiSystem', () => ({ updateSettings: embeddingsApi.updateSettings }));
+vi.mock('../../../services/apiMemory', () => ({ getEmbeddingConfig: embeddingsApi.getEmbeddingConfig }));
 
 const socket = vi.hoisted(() => {
   const handlers = new Map();
@@ -42,30 +41,17 @@ vi.mock('../../../services/apiAgents.js', () => ({
 }));
 vi.mock('../../../services/apiLocalLlm', () => localLlm);
 vi.mock('../../ui/Toast', () => ({ default: toast }));
-// The provider/model selector hook fetches providers over the network — stub it
-// so the test exercises only the config screen's own behavior.
+// PersistentMindProfileControls picks a provider over the network — stub the
+// hook so the test exercises only the config screen's own behavior.
 vi.mock('../../../hooks/useProviderModels', () => ({
-  default: () => {
-    providerHook.renderCount += 1;
-    // A real render loop never settles on its own — cap it here so a
-    // regression fails in milliseconds with a clear error instead of
-    // spinning the worker toward the heap limit (#8327/#8348).
-    if (providerHook.unstableSetters && providerHook.renderCount > 25) {
-      throw new Error(`ConfigTab render loop: useProviderModels invoked ${providerHook.renderCount} times`);
-    }
-    return {
-      providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
-      availableModels: ['gpt-5'],
-      setSelectedProviderId: providerHook.unstableSetters
-        ? (id) => providerHook.setSelectedProviderId(id)
-        : providerHook.setSelectedProviderId,
-      setSelectedModel: providerHook.unstableSetters
-        ? (model) => providerHook.setSelectedModel(model)
-        : providerHook.setSelectedModel,
-      selectedProviderId: '',
-      selectedModel: '',
-    };
-  },
+  default: () => ({
+    providers: [{ id: 'codex', name: 'Codex', models: ['gpt-5'], defaultModel: 'gpt-5' }],
+    availableModels: ['gpt-5'],
+    setSelectedProviderId: () => {},
+    setSelectedModel: () => {},
+    selectedProviderId: '',
+    selectedModel: '',
+  }),
 }));
 
 const ConfigTab = (await import('./ConfigTab')).default;
@@ -95,8 +81,7 @@ const renderConfig = (props = {}) => render(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  providerHook.unstableSetters = false;
-  providerHook.renderCount = 0;
+  embeddingsApi.getEmbeddingConfig.mockResolvedValue({ source: 'legacy', provider: 'lmstudio', model: 'text-embedding-nomic-embed-text-v2-moe', endpoint: null, disabled: false });
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
   localLlm.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
   localLlm.getToolUseModels.mockResolvedValue({ models: [] });
@@ -342,7 +327,7 @@ describe('persistent mind status', () => {
   });
 });
 
-describe('domain guardrails and embedding provider autosave', () => {
+describe('domain guardrails and embeddings', () => {
   it('saves an autonomy mode change immediately', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     renderConfig();
@@ -356,17 +341,66 @@ describe('domain guardrails and embedding provider autosave', () => {
     ));
   });
 
-  it('saves an embedding provider selection immediately', async () => {
+  it('renders Creative orchestrator inheriting CoS by default and saves explicit overrides and Inherit CoS clears', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
+    const { rerender } = renderConfig({
+      config: { ...config, domainAutonomy: { cos: 'dry-run' } },
+    });
+    await screen.findByText('Waiting for the next wake');
+
+    const group = screen.getByRole('group', { name: 'Creative orchestrator mode' });
+    const inheritButton = within(group).getByRole('button', { name: 'Inherit CoS auto-run' });
+    expect(inheritButton).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/Inheriting CoS \(Dry-run\)/)).toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Execute' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
+      { domainAutonomy: { creative: 'execute' } },
+      { silent: true },
+    ));
+
+    rerender(
+      <MemoryRouter>
+        <ConfigTab
+          config={{ ...config, domainAutonomy: { cos: 'dry-run', creative: 'execute' } }}
+          onUpdate={vi.fn()}
+          onEvaluate={vi.fn()}
+          avatarStyle="svg"
+        />
+      </MemoryRouter>,
+    );
+    expect(within(group).getByRole('button', { name: 'Execute' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(group).getByRole('button', { name: 'Inherit CoS auto-run' })).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Inherit CoS auto-run' }));
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenLastCalledWith(
+      { domainAutonomy: { creative: null } },
+      { silent: true },
+    ));
+    expect(within(group).getByRole('button', { name: 'Inherit CoS auto-run' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('saves the recommended embedding model to the shared settings.embeddings store, not CoS config', async () => {
+    localLlm.installLocalLlmModel.mockResolvedValue({ success: true });
+    embeddingsApi.updateSettings.mockResolvedValue({});
     renderConfig();
     await screen.findByText('Waiting for the next wake');
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Embedding provider' }), { target: { value: 'codex' } });
+    // The section shows the resolved backend and links to its one editor.
+    expect(await screen.findByText(/legacy Chief of Staff embedding provider/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Configure embeddings' })).toHaveAttribute('href', '/models/embeddings');
+    expect(screen.queryByRole('combobox', { name: 'Embedding provider' })).not.toBeInTheDocument();
 
-    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { embeddingProviderId: 'codex', embeddingModel: '' },
+    fireEvent.click(screen.getByRole('button', { name: 'Download nomic-embed-text' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Use for embeddings' }));
+
+    await waitFor(() => expect(embeddingsApi.updateSettings).toHaveBeenCalledWith(
+      { embeddings: { provider: 'ollama', model: 'nomic-embed-text' } },
       { silent: true },
     ));
+    expect(api.updateCosConfig).not.toHaveBeenCalled();
+    // The notice re-reads the backend it just switched to.
+    await waitFor(() => expect(embeddingsApi.getEmbeddingConfig).toHaveBeenCalledTimes(2));
   });
 
   it('saves a budget cap when its number field loses focus', async () => {
@@ -448,54 +482,6 @@ describe('boot startup compatibility', () => {
       { alwaysOn: false, autoStart: false },
       { silent: true },
     ));
-  });
-});
-
-// Regression coverage for #8327/#8348 — this file's own useProviderModels mock
-// returns STABLE setters, so it can never reproduce the render loop that fix
-// ade6d692d resolved. Only ChiefOfStaff.test.jsx's mock (fresh vi.fn() setters
-// per render) triggered it there, surfacing as a worker that grows to the
-// heap limit with no assertion pointing at ConfigTab. This test reproduces
-// the unstable-identity condition directly against ConfigTab so a regression
-// fails fast, here, with a clear render-count signal.
-describe('render loop guard (#8348)', () => {
-  it('settles instead of looping when the provider hook setters change identity every render', async () => {
-    providerHook.unstableSetters = true;
-    api.updateCosConfig.mockResolvedValue({ success: true });
-    renderConfig({ config: { ...config, embeddingProviderId: 'codex', embeddingModel: 'gpt-5' } });
-    await screen.findByText('Waiting for the next wake');
-
-    // "Waiting for the next wake" landing only proves the persistent-mind
-    // fetch resolved — the config-panel's OWN provider/model resync effect
-    // (re-run on every unstable setter identity) and the independent budget-
-    // usage fetch can each still have one more no-op flush in flight. Treat
-    // render count as settled only once two consecutive flushes agree,
-    // bounded so a genuine reintroduced loop (#8348) fails loudly here
-    // instead of silently accepting a runaway climb (see also the mocked
-    // hook's own >25 hard cap above).
-    let settledCount = providerHook.renderCount;
-    let settled = false;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      // sequential settle-detection, not parallelizable
-      await act(async () => {});
-      const nextCount = providerHook.renderCount;
-      if (nextCount === settledCount) {
-        settled = true;
-        break;
-      }
-      settledCount = nextCount;
-    }
-    expect(settled).toBe(true);
-    expect(settledCount).toBeLessThan(20);
-
-    // One more flush: a real loop keeps climbing here, a settled component does not.
-    await act(async () => {});
-    expect(providerHook.renderCount).toBe(settledCount);
-
-    // The guard must not pass just because the effect stopped running — the
-    // saved embedding pick still has to reach the provider hook.
-    expect(providerHook.setSelectedProviderId).toHaveBeenCalledWith('codex');
-    expect(providerHook.setSelectedModel).toHaveBeenCalledWith('gpt-5');
   });
 });
 

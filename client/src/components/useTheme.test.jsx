@@ -1,0 +1,160 @@
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import useTheme from './useTheme.js';
+import { DEFAULT_THEME_ID, THEME_IDS, THEMES } from '../themes/portosThemes.js';
+
+// Pick any non-default valid theme to prove in-memory switching still works.
+const OTHER_THEME_ID = THEME_IDS.find((id) => id !== DEFAULT_THEME_ID);
+
+beforeEach(() => {
+  // Neutralize the server-sync effect so tests exercise localStorage paths only.
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, json: async () => ({}) });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.documentElement.removeAttribute('style');
+  document.documentElement.removeAttribute('data-port-theme');
+  document.documentElement.removeAttribute('data-port-theme-effects');
+  window.localStorage.clear();
+  window.history.replaceState({}, '', '/');
+});
+
+describe('useTheme applies the manifest to <html>', () => {
+  const withEffects = THEMES['kestrel-neon'];
+  const withoutEffects = THEMES['classic-midnight'];
+  // Declared only by the effects theme — it must not survive the switch.
+  const privateToken = '--port-fx-overlay-blend';
+
+  it('publishes the effects list and clears it again for a theme with none', () => {
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setTheme(withEffects.id));
+    expect(document.documentElement.dataset.portThemeEffects).toBe(withEffects.effects.join(' '));
+
+    act(() => result.current.setTheme(withoutEffects.id));
+    expect(document.documentElement.dataset.portThemeEffects).toBeUndefined();
+  });
+
+  it('removes custom properties the next theme does not declare', async () => {
+    expect(privateToken in withEffects.tokens).toBe(true);
+    expect(privateToken in withoutEffects.tokens).toBe(false);
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setTheme(withEffects.id));
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue(privateToken)).not.toBe('');
+    });
+
+    act(() => result.current.setTheme(withoutEffects.id));
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue(privateToken)).toBe('');
+      expect(document.documentElement.style.getPropertyValue('--port-accent'))
+        .toBe(withoutEffects.colors['--port-accent']);
+    });
+  });
+
+  it('applies cached saved theme variables synchronously on cold boot with zero flash', () => {
+    const vars = { ...withoutEffects.colors, ...withoutEffects.tokens };
+    window.localStorage.setItem('portos-theme', withoutEffects.id);
+    window.localStorage.setItem('portos-theme-cache', JSON.stringify({
+      id: withoutEffects.id,
+      version: null,
+      vars,
+    }));
+
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(withoutEffects.id);
+    expect(document.documentElement.dataset.portTheme).toBe(withoutEffects.id);
+    expect(document.documentElement.style.getPropertyValue('--port-accent'))
+      .toBe(withoutEffects.colors['--port-accent']);
+  });
+
+  it('hydrates an uncached saved non-default theme dynamically and caches it', async () => {
+    window.localStorage.setItem('portos-theme', withoutEffects.id);
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(withoutEffects.id);
+    expect(document.documentElement.dataset.portTheme).toBe(withoutEffects.id);
+
+    await waitFor(() => {
+      expect(document.documentElement.style.getPropertyValue('--port-accent'))
+        .toBe(withoutEffects.colors['--port-accent']);
+    });
+    const cached = JSON.parse(window.localStorage.getItem('portos-theme-cache'));
+    expect(cached.id).toBe(withoutEffects.id);
+    expect(cached.vars['--port-accent']).toBe(withoutEffects.colors['--port-accent']);
+  });
+});
+
+describe('useTheme localStorage resilience', () => {
+  it('starts a fresh instance with Kestrel Neon', () => {
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe('kestrel-neon');
+    expect(document.documentElement.dataset.portTheme).toBe('kestrel-neon');
+  });
+
+  it('initializes to the default theme when reads throw (blocked storage)', () => {
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
+      throw new DOMException('The operation is insecure.', 'SecurityError');
+    });
+
+    let result;
+    // Initial render must not throw even though getItem throws.
+    expect(() => {
+      ({ result } = renderHook(() => useTheme()));
+    }).not.toThrow();
+
+    expect(result.current.themeId).toBe(DEFAULT_THEME_ID);
+  });
+
+  it('falls back to the default theme when stored value is invalid', () => {
+    window.localStorage.setItem('portos-theme', 'not-a-real-theme');
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(DEFAULT_THEME_ID);
+  });
+
+  it('keeps in-memory theme switching functional when writes throw', () => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError', 'QuotaExceededError');
+    });
+
+    const { result } = renderHook(() => useTheme());
+
+    // setTheme writes to localStorage (which throws) but must still update state.
+    expect(() => {
+      act(() => {
+        result.current.setTheme(OTHER_THEME_ID);
+      });
+    }).not.toThrow();
+
+    expect(result.current.themeId).toBe(OTHER_THEME_ID);
+    expect(result.current.theme.id).toBe(OTHER_THEME_ID);
+  });
+
+  it.each([
+    ['classic-midnight', 'classic-midnight'],
+    ['midnight', 'classic-midnight'],
+  ])('preserves stored theme %s as %s', (saved, expected) => {
+    window.localStorage.setItem('portos-theme', saved);
+    const { result } = renderHook(() => useTheme());
+    expect(result.current.themeId).toBe(expected);
+    expect(document.documentElement.dataset.portTheme).toBe(expected);
+  });
+
+  it('does not warn when the login screen receives the expected auth challenge', async () => {
+    window.history.replaceState({}, '', '/login');
+    globalThis.fetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Authentication required', code: 'AUTH_REQUIRED' })
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    renderHook(() => useTheme());
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

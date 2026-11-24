@@ -1,4 +1,4 @@
-import useMusicVideoPublishKit from '../../../hooks/useMusicVideoPublishKit.js';
+import useMusicVideoPublishKit from './useMusicVideoPublishKit.js';
 import { PUBLISH_TARGETS } from '../PublishPostingPanel.jsx';
 
 // Publish counts every platform the director turned on (#9287), not just any one post.

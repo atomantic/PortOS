@@ -9,7 +9,13 @@ import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 
 const ideaProps = vi.hoisted(() => []);
-vi.mock('../hooks/usePipelineProgress', () => ({ usePipelineProgress: () => ({ latest: null, frames: [] }) }));
+const progress = vi.hoisted(() => ({ latest: null, latestUrl: null, closed: false, frames: [], enabledSeen: [] }));
+vi.mock('../hooks/usePipelineProgress', () => ({
+  usePipelineProgress: (_builder, ids, { enabled }) => {
+    progress.enabledSeen.push({ id: ids[0], enabled });
+    return progress;
+  },
+}));
 vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getPipelineConfig: vi.fn(async () => ({ arcRoles: [] })),
@@ -18,7 +24,7 @@ vi.mock('../services/apiPipeline.js', async (importOriginal) => ({
   updatePipelineIssue: vi.fn(),
   startPipelineAutoRunText: vi.fn(),
   cancelPipelineAutoRunText: vi.fn(async () => ({})),
-  pipelineAutoRunSseUrl: () => '/sse',
+  pipelineAutoRunSseUrl: (id) => `/sse/${id}`,
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 vi.mock('../components/pipeline/stages/IdeaStage', () => ({
@@ -42,7 +48,7 @@ vi.mock('../components/pipeline/ArcRolePicker', () => ({ default: () => null }))
 vi.mock('../components/CatalogCastPanel', () => ({ default: () => null }));
 vi.mock('../components/pipeline/stages/VisualGenSettings', () => ({ VisualGenSettingsPanel: () => null }));
 
-import { getPipelineIssue, updatePipelineIssue, getPipelineSeries } from '../services/apiPipeline.js';
+import { getPipelineIssue, updatePipelineIssue, getPipelineSeries, startPipelineAutoRunText } from '../services/apiPipeline.js';
 import PipelineIssue from './PipelineIssue';
 
 const issue = (id, title, ideaStatus = 'ready') => ({
@@ -70,7 +76,9 @@ describe('PipelineIssue across an issue switch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ideaProps.length = 0;
+    Object.assign(progress, { latest: null, latestUrl: null, closed: false, frames: [], enabledSeen: [] });
     getPipelineIssue.mockImplementation(async (id) => ISSUES[id]);
+    getPipelineSeries.mockImplementation(async (id) => ({ id, name: 'Example series', targetFormat: 'video' }));
   });
 
   it('ignores a lock PATCH for the previous issue that answers late', async () => {
@@ -135,5 +143,63 @@ describe('PipelineIssue across an issue switch', () => {
     });
 
     expect(screen.getByTestId('idea-stage')).toHaveTextContent('issue-b:ready:series-b');
+  });
+
+  describe('auto-run state', () => {
+    const autoRunButton = () => screen.getByRole('button', { name: /Auto-run text/ });
+    const startAutoRun = async (user) => {
+      startPipelineAutoRunText.mockResolvedValue({ started: true });
+      await user.click(autoRunButton());
+      await vi.waitFor(() => expect(autoRunButton()).toBeDisabled());
+    };
+
+    it('re-enables controls and opens no stream for the new issue after a switch mid-run', async () => {
+      const user = userEvent.setup();
+      await renderAndSwitch(() => startAutoRun(user));
+
+      expect(autoRunButton()).toBeEnabled();
+      expect(progress.enabledSeen.filter((c) => c.id === 'issue-b').every((c) => c.enabled === false)).toBe(true);
+    });
+
+    it('recovers when the stream closes without a terminal frame', async () => {
+      const user = userEvent.setup();
+      const router = createMemoryRouter(
+        [{ path: '/pipeline/issues/:issueId/:stage', element: <PipelineIssue /> }],
+        { initialEntries: ['/pipeline/issues/issue-a/idea'] },
+      );
+      render(<RouterProvider router={router} />);
+      await screen.findByRole('heading', { name: /Issue A/ });
+      await startAutoRun(user);
+      getPipelineIssue.mockClear();
+
+      progress.closed = true;
+      await act(() => router.navigate('/pipeline/issues/issue-a/prose'));
+      await vi.waitFor(() => expect(autoRunButton()).toBeEnabled());
+      await vi.waitFor(() => expect(getPipelineIssue).toHaveBeenCalledWith('issue-a'));
+    });
+
+    it('does not refetch for a stale terminal frame retained from the previous issue', async () => {
+      const user = userEvent.setup();
+      await renderAndSwitch(async () => {
+        await startAutoRun(user);
+        progress.latest = { type: 'stage:complete', stage: 'idea' };
+        progress.latestUrl = '/sse/issue-a';
+      });
+
+      // Only the load effect's silent read happens for issue-b; no un-silent one.
+      const unsilent = getPipelineIssue.mock.calls.filter(([id, opts]) => id === 'issue-b' && !opts);
+      expect(unsilent).toHaveLength(0);
+    });
+
+    it('ignores a start request for the previous issue that resolves after the switch', async () => {
+      const user = userEvent.setup();
+      let resolveStart;
+      startPipelineAutoRunText.mockImplementation(() => new Promise((resolve) => { resolveStart = resolve; }));
+      await renderAndSwitch(() => user.click(autoRunButton()));
+
+      await act(async () => { resolveStart({ started: true }); });
+      expect(autoRunButton()).toBeEnabled();
+      expect(progress.enabledSeen.filter((c) => c.id === 'issue-b').every((c) => c.enabled === false)).toBe(true);
+    });
   });
 });

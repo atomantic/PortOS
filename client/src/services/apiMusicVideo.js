@@ -945,6 +945,12 @@ export const getMusicVideoBlenderFile = (id, path, options = {}) => request(`${b
 export const saveMusicVideoBlenderFile = (id, { path, content }, options = {}) => request(`${blenderPath(id)}/file`, blenderJson('PUT', { path, content }, options));
 export const deleteMusicVideoBlenderFile = (id, path, options = {}) =>
   request(`${blenderPath(id)}/file?path=${encodeURIComponent(path)}`, blenderJson('DELETE', null, options));
+// 3D models copied from the library into src/models/: { models: [{ slug, kind, name, updateAvailable, sourceMissing, snippet }] }.
+export const listMusicVideoBlenderModels = (id, options = {}) => request(`${blenderPath(id)}/models`, options);
+// Body: { kind: 'image-to-3d' | 'threejs', id, variant?, slug?, replace? } → 201 { model, snippet }; a taken slug is 409 unless replace.
+export const addMusicVideoBlenderModel = (id, body, options = {}) => request(`${blenderPath(id)}/models`, blenderJson('POST', body, options));
+// Re-copies one model from its library source → { model, snippet }; never runs by itself.
+export const updateMusicVideoBlenderModel = (id, slug, options = {}) => request(`${blenderPath(id)}/models/${encodeURIComponent(slug)}/update`, blenderJson('POST', {}, options));
 // Starts the film's describe step as a background job → 202 { job }; when it ends the shots are
 // mirrored to storyboard scenes. 409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT asks for `replaceScenes: true`.
 export const syncMusicVideoBlender = (id, body = {}, options = {}) => request(`${blenderPath(id)}/sync`, blenderJson('POST', body, options));
@@ -961,6 +967,13 @@ export const cancelMusicVideoBlenderJobs = (id, options = {}) => request(`${blen
 export const assembleMusicVideoBlenderCut = (id, body, options = {}) => request(`${blenderPath(id)}/cut`, blenderJson('POST', body, options));
 export const saveMusicVideoBlenderShotNote = (id, shotId, body, options = {}) =>
   request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/note`, blenderJson('PUT', body, options));
+// Replaces a shot's motion references (timing-only clips, at most three) → the film state.
+// Body: { references: [{ id?, filename, inSec, outSec, speed, note }] }.
+export const saveMusicVideoBlenderMotionReferences = (id, shotId, references, options = {}) =>
+  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references`, blenderJson('PUT', { references }, options));
+// Tiles one reference on a contact sheet's grid (`sheet`: its media path; omitted, the newest) → { file, path, every, columns, tiles, available }.
+export const makeMusicVideoBlenderMotionStrip = (id, shotId, refId, body = {}, options = {}) =>
+  request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/motion-references/${encodeURIComponent(refId)}/strip`, blenderJson('POST', body, options));
 export const openMusicVideoBlenderShot = (id, shotId, options = {}) =>
   request(`${blenderPath(id)}/shots/${encodeURIComponent(shotId)}/open`, blenderJson('POST', null, options));
 // A file under the workspace's renders/ folder (shot video, frame, still, cut), for a media element's src.

@@ -396,7 +396,7 @@ export async function syncAllBrainData({ dryRun = false, refresh = false, onlyMi
         continue;
       }
       if (dryRun) {
-        console.log(`🧠🔗 [dry-run] Would sync ${type}/${record.id}: ${record.name || record.title || '(untitled)'}`);
+        console.log(`🧠🔗 [dry-run] Would sync ${type}/${record.id}`);
         stats.synced++;
         continue;
       }
@@ -559,7 +559,7 @@ export async function getEmbeddingCoverage() {
 // we re-read each record's canonical state and re-embed or archive accordingly.
 
 const RESYNC_DEBOUNCE_MS = 250;
-const pendingResync = new Map(); // bridgeKey → { type, id, hardDelete } (dedups repeated touches)
+const pendingResync = new Map(); // bridgeKey → { type, id, hardDelete, purgeMissing? } (dedups repeated touches)
 let resyncTimer = null;
 let resyncFlushing = false; // single-flight guard so two flushes can't overlap
 
@@ -582,7 +582,7 @@ const journalResyncTimers = new Map(); // journal id (the ISO date) → timer
 // queued entries, the batch a flush is working through, and journal days still
 // inside their debounce window. Persisted so a restart replays the work instead
 // of leaving stale embeddings or still-searchable deleted records behind.
-const durablePending = new Map(); // bridgeKey → { type, id, hardDelete }
+const durablePending = new Map(); // bridgeKey → { type, id, hardDelete, purgeMissing? }
 let pendingWriteTail = Promise.resolve();
 let pendingWriteQueued = false;
 
@@ -630,7 +630,7 @@ export async function replayPersistedResync() {
   }
   if (!Array.isArray(entries) || entries.length === 0) return 0;
   const valid = entries.filter((entry) => entry && typeof entry.id === 'string' && TYPE_MAP[entry.type]);
-  queueResync(valid.map(({ type, id, hardDelete }) => ({ type, id, hardDelete: hardDelete === true })));
+  queueResync(valid);
   console.log(`🧠🔗 Replaying ${valid.length} brain resync(s) interrupted by a restart`);
   return valid.length;
 }
@@ -704,10 +704,12 @@ function reconcileBrainRecord(brainType, id, options = {}) {
  *   delete (a `{type}:deleted` event), so a tombstoned record should hard-prune
  *   the mapped memory row + embedding rather than soft-archive it (issue #1318).
  *   Synced-in deletes (sync:applied) pass false so they stay resurrectable.
+ * @param {boolean} [opts.purgeMissing=false] A prune can purge only when no
+ *   stored record or tombstone remains.
  */
-export async function resyncBrainRecord(brainType, id, { hardDelete = false } = {}) {
+export async function resyncBrainRecord(brainType, id, { hardDelete = false, purgeMissing = false } = {}) {
   if (!id || !TYPE_MAP[brainType]) return;
-  const { record } = await reconcileBrainRecord(brainType, id, { hardDelete });
+  const { record } = await reconcileBrainRecord(brainType, id, { hardDelete, purgeMissing });
   if (record) await syncBrainRecord(brainType, record);
 }
 
@@ -732,9 +734,9 @@ export async function flushPendingResync() {
     while (pendingResync.size > 0) {
       const batch = [...pendingResync.values()];
       pendingResync.clear();
-      for (const { type, id, hardDelete } of batch) {
+      for (const { type, id, hardDelete, purgeMissing } of batch) {
         try {
-          await resyncBrainRecord(type, id, { hardDelete });
+          await resyncBrainRecord(type, id, { hardDelete, purgeMissing });
         } catch (err) {
           // Keep the failed entry durable for replay without retrying in this flush.
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
@@ -757,7 +759,7 @@ export async function flushPendingResync() {
 export function queueResync(records) {
   if (!Array.isArray(records)) return;
   let queued = false;
-  for (const { type, id, hardDelete } of records) {
+  for (const { type, id, hardDelete, purgeMissing } of records) {
     if (!id || !TYPE_MAP[type]) continue;
     const key = bridgeKey(type, id);
     // Sticky hard-delete on coalesce: once a real local `{type}:deleted` marks a
@@ -766,8 +768,10 @@ export function queueResync(records) {
     // a soft archive, or the dead embedding lingers. Safe to keep sticky because
     // resyncBrainRecord's record-present branch upserts a resurrected record
     // regardless of the flag, so a true intent can never hard-delete a live row.
-    const prevHardDelete = durablePending.get(key)?.hardDelete;
-    const entry = { type, id, hardDelete: !!hardDelete || !!prevHardDelete };
+    const previous = durablePending.get(key);
+    const entry = { type, id, hardDelete: hardDelete === true || previous?.hardDelete === true };
+    // Replay a prune only if the tombstone is still gone.
+    if (purgeMissing === true || previous?.purgeMissing) entry.purgeMissing = true;
     pendingResync.set(key, entry);
     durablePending.set(key, entry);
     queued = true;
@@ -838,16 +842,11 @@ export function initBridge() {
   brainEvents.on('journals:upserted', ({ entry }) => {
     if (entry?.id) queueJournalResync(entry.id);
   });
-  // handleJournalDeleted is async and awaits loadBridgeMap(); wrap the call
-  // in a .catch so a rejection becomes a logged error instead of an
-  // unhandled-rejection warning (or a process crash under strict modes).
   brainEvents.on('journals:deleted', ({ entry }) => {
-    // Drop any debounced re-embed for the day first — the hard-delete below
-    // prunes the mapped memory, and a later flush would only re-read a tombstone.
-    if (entry?.id) cancelPendingJournalResync(entry.id);
-    handleJournalDeleted(entry).catch((err) => {
-      console.error(`❌ Brain bridge delete sync failed for journals/${entry?.id}: ${err.message}`);
-    });
+    if (!entry?.id) return;
+    clearTimeout(journalResyncTimers.get(entry.id));
+    journalResyncTimers.delete(entry.id);
+    queueResync([{ type: 'journals', id: entry.id, hardDelete: true }]);
   });
 
   // Peer-synced records (issue #1080) — applyRemoteRecord is event-silent to
@@ -862,9 +861,7 @@ export function initBridge() {
   // memory copy (text + embedding) kept for resurrection is purged now.
   brainEvents.on('tombstone:pruned', ({ type, id } = {}) => {
     if (!id || !RECONCILABLE_TYPES.includes(type)) return;
-    reconcileBrainRecord(type, id, { purgeMissing: true }).catch((err) => {
-      console.error(`❌ Brain bridge tombstone purge failed for ${type}/${id}: ${err.message}`);
-    });
+    queueResync([{ type, id, purgeMissing: true }]);
   });
 
   console.log('🧠🔗 Brain→Memory bridge initialized');
@@ -890,24 +887,4 @@ function queueJournalResync(id) {
   // Don't hold the event loop open for a pending journal re-embed.
   if (typeof timer.unref === 'function') timer.unref();
   journalResyncTimers.set(id, timer);
-}
-
-/**
- * Drop a day's pending re-embed. Called when the day is deleted: the delete
- * path prunes the mapped memory immediately, so letting the debounce fire
- * afterwards would just re-read a tombstone. Also exported for tests.
- */
-export function cancelPendingJournalResync(id) {
-  clearTimeout(journalResyncTimers.get(id));
-  journalResyncTimers.delete(id);
-  settleDurable(bridgeKey('journals', id), id);
-}
-
-async function handleJournalDeleted(entry) {
-  if (!entry?.id) return;
-  // deleteJournal (the local user action) is the only emitter of
-  // 'journals:deleted'; synced-in journal deletes flow through sync:applied →
-  // resyncBrainRecord and stay soft-archived. So a local journal delete hard-
-  // prunes the mapped memory row + embedding (issue #1318).
-  await reconcileBrainRecord('journals', entry.id, { hardDelete: true });
 }

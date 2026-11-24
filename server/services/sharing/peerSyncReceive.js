@@ -24,7 +24,7 @@ import {
 import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';
 import { SERIES_ID_RE } from '../pipeline/series.js';
-import { diffWorkBodyManifest } from '../writersRoom/sync.js';
+import { diffWorkBodyManifest, getWorkForSync } from '../writersRoom/sync.js';
 import {
   diffAssetManifestAgainstLocal,
   referenceCollectionAssetManifest,
@@ -356,12 +356,11 @@ async function takeHostedRecordAssets({ kind, record, desc, issues, collection, 
  * Writers Room: the file-primary draft `.md` bodies and bible docs ride their
  * own manifests (the generic asset pipeline keys on a flat basename + single dir
  * per kind). Diff against local disk and background-pull the missing ones from
- * the sender. `includeMismatched: workMergeApplied` is the data-safety gate — a
- * present-but-different local body is only replaced when the receiver also
- * accepted the remote record (so a stale push can't clobber newer local prose);
- * an absent body is always pulled. Returns the draft bodies still missing.
+ * the sender. The data-safety gate is the persisted local manifest hash (see
+ * diffWorkBodyManifest): a stale push can't clobber newer local prose, and a
+ * retry after a failed pull still converges. Returns the draft bodies still missing.
  */
-async function reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, workMergeApplied, sourceInstanceId, pending }) {
+async function reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, sourceInstanceId, pending }) {
   const { diffWorkBibleManifest } = await import('../writersRoom/bibleSync.js');
   // Scope the manifests to THIS work: an entry's path is works/<workId>/..., so
   // an entry for another workId would write bytes into a DIFFERENT local work's
@@ -369,7 +368,10 @@ async function reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManif
   const ownBodies = Array.isArray(draftBodyManifest)
     ? draftBodyManifest.filter((e) => e && e.workId === record.id)
     : [];
-  const missingDraftBodies = await diffWorkBodyManifest(ownBodies, { includeMismatched: workMergeApplied });
+  // Gate on the persisted post-merge manifest, not this push's merge outcome.
+  const localWork = await getWorkForSync(record.id);
+  const expectedHashes = new Map((localWork?.drafts ?? []).filter((d) => d?.id && d.contentHash).map((d) => [d.id, d.contentHash]));
+  const missingDraftBodies = await diffWorkBodyManifest(ownBodies, { expectedHashes });
   const ownBibles = Array.isArray(bibleManifest) ? bibleManifest.filter((e) => e?.workId === record.id) : [];
   const bibleDiffFailed = (err) => {
     pending.add('bibleSyncPending');
@@ -530,9 +532,6 @@ export async function applyIncomingPush(payload, authorization) {
     : null;
   // #1922: true only once the bundled linkedTrack merge ran and succeeded.
   let linkedTrackApplied = false;
-  // Set true when a writersRoomWork merge accepted the remote (insert/remote-won)
-  // — gates whether a present-but-different local draft body may be overwritten.
-  let workMergeApplied = false;
   // Merge into local state via the existing LWW path, dispatched through the
   // same per-kind table isSubscriptionRecordTombstone/buildPushPayload use —
   // every PEER_SUBSCRIBABLE_KINDS entry has a descriptor (the registry guard
@@ -546,8 +545,6 @@ export async function applyIncomingPush(payload, authorization) {
   const mergeResult = await desc.merge([record], { source, senderSchemaVersions });
   if (kind === 'series') {
     await mergeSeriesSidecars({ record, issues, manuscriptReview, reverseOutline, localEphemeral, bundlesMergeable, source, senderSchemaVersions, markPending });
-  } else if (kind === 'writersRoomWork') {
-    workMergeApplied = mergeResult?.applied === true;
   } else if (kind === 'musicVideoProject') {
     linkedTrackApplied = await mergeLinkedTrack({ record, linkedTrack, bundlesMergeable, source, markPending });
   }
@@ -611,7 +608,7 @@ export async function applyIncomingPush(payload, authorization) {
 
   // Writers Room draft bodies and bibles (see reconcileWriterRoomBodies).
   const missingDraftBodies = kind === 'writersRoomWork' && bundlesMergeable
-    ? await reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, workMergeApplied, sourceInstanceId, pending })
+    ? await reconcileWriterRoomBodies({ record, draftBodyManifest, bibleManifest, sourceInstanceId, pending })
     : [];
 
   return {

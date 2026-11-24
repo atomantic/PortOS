@@ -28,6 +28,7 @@ import { execGh, ensureForgeReachable } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
+import { matchesNotificationIssueRepository } from '../lib/githubNotificationIssue.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { CONTRIBUTOR_LABELS, EPIC_LABEL, IN_PROGRESS_LABEL, dispatchLabelSpec, titleMarksEpic } from '../lib/dispatchLabels.js';
 import { withGlabJson } from '../lib/glabArgs.js';
@@ -385,15 +386,16 @@ async function probeIssueLinkedWork({ tracker, target, issueNumber, repoPath, cw
  * the authoritative `issueContext`, `issueAuthor`, `forgeContext`, `commentsClear`,
  * `linkedWorkClear`, and `linkedItems` so the agent can start implementing on Turn 1.
  */
-export async function prepareAppIssueClaim(app, issueNumber, tracker, { includePreflight = false } = {}) {
+export async function prepareAppIssueClaim(app, issueNumber, tracker, { includePreflight = false, expectedGithubIssue, readOnly = false, inboxEnv } = {}) {
   const { tracker: resolvedTracker, target } = await resolveAppForgeTarget(app);
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
     throw new ServerError('Could not resolve the issue tracker for this claim', { status: 400, code: 'CLAIM_TRACKER_MISMATCH' });
   }
-  const { cwd, env } = await resolveForgeExecOptions(
-    tracker === 'github' ? app?.repoPath : null,
-    { forgeAccount: app?.forgeAccount }
-  );
+  if (expectedGithubIssue && !matchesNotificationIssueRepository(target, expectedGithubIssue)) {
+    throw new ServerError('The managed app no longer points to this GitHub repository', { status: 409, code: 'CLAIM_TRACKER_MISMATCH' });
+  }
+  const { cwd, env } = inboxEnv ? { cwd: app.repoPath, env: { ...process.env, ...inboxEnv } }
+    : await resolveForgeExecOptions(tracker === 'github' ? app?.repoPath : null, { forgeAccount: app?.forgeAccount });
 
   let accountLookup;
   const readAccount = async () => {
@@ -404,9 +406,19 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker, { includeP
     return account.toLowerCase();
   };
 
+  if (expectedGithubIssue) {
+    const login = await (accountLookup ??= readAccount().catch(() => null));
+    if (!login || login !== expectedGithubIssue.login?.toLowerCase()) {
+      throw new ServerError('The managed app uses a different GitHub login from this notification. Check its Forge Account setting.', {
+        status: 409, code: 'CLAIM_ACCOUNT_MISMATCH',
+      });
+    }
+  }
+
   let epic = false;
   let lastIssue = null;
-  const ghIssueFields = includePreflight ? 'labels,assignees,state,title,body,url,author' : 'labels,assignees,state,title';
+  const ghIssueFields = includePreflight ? 'labels,assignees,state,title,body,url,author'
+    : expectedGithubIssue ? 'labels,assignees,state,title,author' : 'labels,assignees,state,title';
   const readLabels = async () => {
     const raw = tracker === 'github'
       ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', ghIssueFields], undefined, { cwd, env })
@@ -414,6 +426,10 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker, { includeP
     const issue = safeJSONParse(raw, null);
     if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
       throw new ServerError('Could not read issue labels before claiming', { status: 502, code: 'CLAIM_LABELS_UNAVAILABLE' });
+    }
+    if (expectedGithubIssue && (typeof issue.author?.login !== 'string'
+      || issue.author.login.toLowerCase() !== expectedGithubIssue.author?.toLowerCase())) {
+      throw new ServerError('Could not verify the issue author seen in the inbox', { status: 409, code: 'CLAIM_AUTHOR_CHANGED' });
     }
     const names = issue.labels.map(label => typeof label === 'string' ? label : label.name);
     if (!Array.isArray(issue.assignees) || typeof issue.state !== 'string') {
@@ -457,6 +473,9 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker, { includeP
   if (changeNumbers.has(Number(issueNumber))) {
     throw new ServerError('An open PR/MR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
   }
+  // Launch admission reuses exactly the same evidence, but never edits labels
+  // or imports the issue description into the already-pinned task.
+  if (readOnly) return { epic };
   if (labels.length) {
     if (tracker === 'github') {
       await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
@@ -510,15 +529,17 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker, { includeP
  * before any commit). Never touches an issue assigned to another user (such as a
  * volunteer handoff) or already closed.
  */
-export async function releaseAppIssueClaim(app, issueNumber) {
+export async function releaseAppIssueClaim(app, issueNumber, { inboxIssue, inboxLogin, inboxEnv } = {}) {
   const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
   if (!target || target.forge !== tracker || !['github', 'gitlab'].includes(tracker)) {
     return { released: false, reason: 'tracker-unresolved' };
   }
-  const { cwd, env } = await resolveForgeExecOptions(
-    tracker === 'github' ? app?.repoPath : null,
-    { forgeAccount: app?.forgeAccount }
-  );
+  if (inboxIssue && (!inboxEnv || !inboxLogin || String(inboxIssue.number) !== String(issueNumber)
+    || !matchesNotificationIssueRepository(target, inboxIssue))) {
+    return { released: false, reason: 'inbox-target-unavailable' };
+  }
+  const { cwd, env } = inboxIssue ? { cwd: app.repoPath, env: { ...process.env, ...inboxEnv } }
+    : await resolveForgeExecOptions(tracker === 'github' ? app?.repoPath : null, { forgeAccount: app?.forgeAccount });
   const run = tracker === 'github'
     ? args => execGh(args, undefined, { cwd, env })
     : args => execGlab(args, app.repoPath, undefined, { rejectOnError: true });
@@ -535,6 +556,9 @@ export async function releaseAppIssueClaim(app, issueNumber) {
   if (!issue || !account) return { released: false, reason: 'state-unavailable' };
   if (!['open', 'opened'].includes(String(issue.state || '').toLowerCase())) {
     return { released: false, reason: 'not-open' };
+  }
+  if (inboxIssue && account.toLowerCase() !== inboxLogin.toLowerCase()) {
+    return { released: false, reason: 'inbox-account-mismatch' };
   }
   const selfLower = String(account).toLowerCase();
   const field = tracker === 'github' ? 'login' : 'username';
@@ -569,10 +593,13 @@ export async function releaseAppIssueClaim(app, issueNumber) {
  * attempted even when the other fails; a failure throws naming what is missing,
  * and the prompt tells the agent to set any marker it finds absent.
  */
-export async function markAppIssueClaimed(app, issueNumber) {
+export async function markAppIssueClaimed(app, issueNumber, { inboxIssue, inboxEnv } = {}) {
   const { tracker, target } = await resolveAppForgeTarget(app);
   if (!target || target.forge !== tracker || !['github', 'gitlab'].includes(tracker)) {
     throw new Error('the issue tracker could not be resolved');
+  }
+  if (inboxIssue && (!inboxEnv || String(inboxIssue.number) !== issueNumber || !matchesNotificationIssueRepository(target, inboxIssue))) {
+    throw new Error('the GitHub inbox issue no longer matches this claim');
   }
   const cli = tracker === 'github' ? 'gh' : 'glab';
   const spec = dispatchLabelSpec(IN_PROGRESS_LABEL, { cli });
@@ -580,7 +607,8 @@ export async function markAppIssueClaimed(app, issueNumber) {
   let assignArgs;
   let labelArgs;
   if (tracker === 'github') {
-    const { cwd, env } = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+    const { cwd, env } = inboxIssue ? { cwd: app.repoPath, env: { ...process.env, ...inboxEnv } }
+      : await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
     run = args => execGh(args, undefined, { cwd, env });
     assignArgs = ['issue', 'edit', issueNumber, '--repo', target.repoSpec, '--add-assignee', '@me'];
     labelArgs = ['issue', 'edit', issueNumber, '--repo', target.repoSpec, '--add-label', spec.name];

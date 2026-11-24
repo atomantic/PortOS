@@ -19,12 +19,12 @@ import { fileURLToPath } from 'node:url';
 import { addTask, reviveBlockedTask } from '../cos/cosTaskStore.js';
 import { cosEvents } from '../cos/cosEvents.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../creativeDirectorPrompts.js';
-import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
 import { resolveStagePin } from './projectsLogic.js';
 import { llmRoutePinNamesProvider, pickLlmRoutePinLayer } from '../../lib/llmRoutePin.js';
 import { recordRun } from './local.js';
 import { DELIVERABLE_KINDS, deliverableMark } from './deliverableGate.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 // Treatment and production planning are CoS tasks, so unlike scene evaluation
 // they need a CLI/TUI provider with an agent harness. Resolution order:
@@ -270,6 +270,7 @@ export async function enqueuePlanTask(project) {
     project = effectiveVideoProject(project);
   }
   const targetAbility = project?.directive?.constraints?.targetAbility || null;
+  const { getToolSpecs } = await loadLateBoundService('creativeToolRegistry');
   const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs({ targetAbility }).filter(tool => project.workspace !== 'video' || tool.function?.name === 'media_enqueueVideoJob').map(tool => project.workspace === 'video' ? { ...tool, function: { ...tool.function, description: `${tool.function.description} Each step renders exactly one clip; set params.durationSeconds between 1 and 10. Match the saved timed shot plan. Do not batch or chain clips.` } } : tool) });
   const built = await buildTaskRecord(project, 'plan', null, context);
   return built ? persistAndEmit(built, project, 'plan', null) : null;

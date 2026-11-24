@@ -17,7 +17,6 @@
  */
 
 import { createHash } from 'crypto';
-import { hostname } from 'os';
 import { createZip } from '../lib/zipWriter.js';
 import { getCurrentVersion } from './updateChecker.js';
 import { exportDigitalTwin } from './digital-twin-export.js';
@@ -27,11 +26,13 @@ import { getTasteProfile } from './taste-questionnaire.js';
 import { getChronotype, getLongevity } from './identity.js';
 import { getTraits } from './digital-twin-analysis.js';
 import { getAll as getBrainAll } from './brainStorage.js';
-import { getMemories } from './memory.js';
+import { getMemories } from './memoryBackend.js';
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistent/persistentMindMemory.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMindChosenName.js';
 import { getGoalsTree } from './identity/goals.js';
 import { getLatestMetricValues } from './appleHealthQuery.js';
 
-const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
 
 // Brain entity stores that belong in a personal legacy bundle. We deliberately
 // skip operational stores (`admin`, `buckets`, `inbox`) — they're workflow
@@ -105,6 +106,15 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * when running file-only) degrades to an empty section instead of failing the
  * whole export.
  */
+// The resident mind's memories are machine-local, never part of the human's
+// portable export (ETHOS; mirrors memorySync's outbound filter).
+const MIND_PRIVATE_TAGS = new Set([
+  PERSISTENT_MIND_CHOSEN_NAME_TAG,
+  ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS),
+]);
+const isMindPrivateMemory = (mem) => mem?.sourceAgentId === PERSISTENT_MIND_ID
+  || (Array.isArray(mem?.tags) && mem.tags.some((t) => MIND_PRIVATE_TAGS.has(t)));
+
 export async function gatherLegacyData() {
   const brainEntries = {};
   await Promise.all(BRAIN_LEGACY_TYPES.map(async (type) => {
@@ -138,10 +148,31 @@ export async function gatherLegacyData() {
     longevity: longevity || null,
     traits: traits || null,
     brain: brainEntries,
-    memories: Array.isArray(memoriesResult?.memories) ? memoriesResult.memories : [],
+    memories: Array.isArray(memoriesResult?.memories)
+      ? memoriesResult.memories.filter((m) => !isMindPrivateMemory(m))
+      : [],
     goals: Array.isArray(goalsTree?.flat) ? goalsTree.flat : [],
     health: healthValues || {},
   };
+}
+
+// identity.json is a portable archive, so raw SNP data never leaves the machine:
+// the genome keeps only aggregate counts (no rsids/genotypes/notes, no upload
+// filename that often embeds a legal name), and the marker maps are dropped.
+const CHRONOTYPE_MARKER_KEYS = ['geneticMarkers', 'caffeineMarkers'];
+const LONGEVITY_MARKER_KEYS = ['longevityMarkers', 'cardiovascularMarkers'];
+
+function omitKeys(obj, keys) {
+  if (!obj || typeof obj !== 'object') return obj || null;
+  const out = { ...obj };
+  for (const k of keys) delete out[k];
+  return out;
+}
+
+function genomeAggregates(g) {
+  if (!g) return null;
+  const { uploaded, uploadedAt, snpCount, build, markerCount, statusCounts, lastScanAt } = g;
+  return { uploaded, uploadedAt, snpCount, build, markerCount, statusCounts, lastScanAt };
 }
 
 // === Section descriptors ===
@@ -163,10 +194,10 @@ const SECTIONS = [
       out.push({ name: 'identity/profile.md', data: buildIdentityProfileMd(d) });
       out.push({ name: 'data/identity.json', data: jsonFile({
         traits: d.traits || null,
-        chronotype: d.chronotype || null,
-        longevity: d.longevity || null,
+        chronotype: omitKeys(d.chronotype, CHRONOTYPE_MARKER_KEYS),
+        longevity: omitKeys(d.longevity, LONGEVITY_MARKER_KEYS),
         taste: d.taste || null,
-        genome: d.genome || null,
+        genome: genomeAggregates(d.genome),
       }) });
       return out;
     },
@@ -518,7 +549,6 @@ export function buildManifest(files, { sections, portosVersion, generatedAt, pdf
     kind: 'portos-legacy-export',
     generatedAt,
     portosVersion,
-    host: MACHINE_HOST,
     sections,
     files: fileHashes,
     fileCount: files.length,
@@ -571,7 +601,7 @@ function toWinAnsi(text) {
     .replace(/…/g, '...')
     .replace(/₂/g, '2')   // subscript 2 (VO₂)
     .replace(/[•·]/g, '-') // bullet / middot → ASCII dash (U+2022 is > 0xFF, would otherwise be stripped)
-    .replace(/[✅⚠️⚡]/g, '')  // ✅ ⚠ emoji-variation ⚡
+    .replace(/✅|⚠️|⚡/g, '')  // ✅ ⚠ emoji-variation ⚡
     .replace(/\t/g, ' ')
     .replace(/[\x00-\x1F\x7F-\x9F]/g, '')  // control bytes WinAnsi can't encode
     .replace(/[^\x00-\xFF]/g, '');         // anything still above the WinAnsi range

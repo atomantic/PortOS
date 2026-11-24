@@ -1,20 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Check, Database, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import LoadFailedState from '../ui/LoadFailedState';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
+import { getCatalogStats, backfillCatalogEmbeddings } from '../../services/apiCatalog';
+import EmbeddingSourceNotice from './EmbeddingSourceNotice';
 
-// Provider-agnostic embeddings configuration. Powers the creative catalog's
-// semantic search + the memory system's vector storage. Vector dim is pinned
+// Provider-agnostic embeddings configuration: the single store (#18296) behind
+// the creative catalog's semantic search AND memory (Brain, Chief of Staff)
+// retrieval; other surfaces only link here. Vector dim is pinned
 // to 768 (matches the live `vector(768)` columns); the dropdown calls out
 // known 768-dim models so the user picks one that won't get rejected.
 
 const PROVIDERS = [
-  { id: 'none', label: 'Disabled', description: "Don't embed at ingest. Rows persist; semantic search returns empty until you backfill." },
+  { id: 'none', label: 'Disabled', description: "Don't embed catalog or memory records. Rows persist; semantic search falls back to text until you backfill." },
   { id: 'ollama', label: 'Ollama', description: 'Use a locally installed Ollama embedding model.' },
   { id: 'lmstudio', label: 'LM Studio', description: 'Use an LM Studio embedding model.' },
 ];
@@ -26,12 +29,18 @@ const KNOWN_768_DIM = {
   lmstudio: ['nomic-ai/nomic-embed-text-v1.5-GGUF', 'text-embedding-nomic-embed-text-v1.5'],
 };
 
+// Rows per backfill request; the tab drains batches sequentially.
+const BACKFILL_BATCH = 50;
+
 const EMBEDDING_HINT_RE = /embed|bge|nomic|mxbai|gte|e5|arctic/i;
 
 export default function EmbeddingsTab() {
   const [provider, setProvider] = useState('none');
   const [model, setModel] = useState('');
   const [saved, setSaved] = useState({ provider: 'none', model: '' });
+  // settings.embeddings never saved: memory still runs on the legacy CoS
+  // config, which the notice names, until the first save here.
+  const [unsaved, setUnsaved] = useState(false);
   const [models, setModels] = useState({ ollama: [], lmstudio: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,6 +53,11 @@ export default function EmbeddingsTab() {
   // A reachable status endpoint still reports a backend whose model list failed
   // as `modelsError` beside an empty `models` array.
   const [backendListErrors, setBackendListErrors] = useState({});
+  // Catalog coverage (`withEmbeddings` of `total`); null = unread or failed.
+  const [stats, setStats] = useState(null);
+  const [backfill, setBackfill] = useState(null); // { includeStale, embedded, failed } while running
+  const cancelRef = useRef(false);
+  const mountedRef = useRef(false);
 
   const refreshModels = async () => {
     setModelsLoading(true);
@@ -85,13 +99,27 @@ export default function EmbeddingsTab() {
     }
     setSettingsFailed(false);
     const cfg = settings.embeddings || {};
+    setUnsaved(!cfg.provider);
     setProvider(cfg.provider || 'none');
     setModel(cfg.model || '');
     setSaved({ provider: cfg.provider || 'none', model: cfg.model || '' });
     refreshModels();
   };
 
-  useEffect(() => { loadSettings(); }, []);
+  const refreshStats = async () => {
+    const next = await getCatalogStats({ silent: true }).catch(() => null);
+    if (mountedRef.current) setStats(next);
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    loadSettings();
+    refreshStats();
+    return () => {
+      mountedRef.current = false;
+      cancelRef.current = true;
+    };
+  }, []);
 
   const candidateModels = useMemo(() => {
     if (provider === 'none') return [];
@@ -119,10 +147,38 @@ export default function EmbeddingsTab() {
       embeddings: { provider, model: model.trim() || null },
     }, { silent: true }).then(() => {
       setSaved({ provider, model: model.trim() || '' });
+      setUnsaved(false);
       toast.success('Embeddings settings saved');
     }).catch((err) => {
       toast.error(`Save failed: ${err?.message || 'unknown error'}`);
     }).finally(() => setSaving(false));
+  };
+
+  const runBackfill = async (includeStale) => {
+    if (backfill) return;
+    cancelRef.current = false;
+    let embedded = 0;
+    let failed = 0;
+    setBackfill({ includeStale, embedded, failed });
+    let error = null;
+    while (!cancelRef.current) {
+      const batch = await backfillCatalogEmbeddings({ limit: BACKFILL_BATCH, includeStale }, { silent: true })
+        .catch((err) => { error = err; return null; });
+      if (!batch) break;
+      embedded += batch.embedded;
+      failed += batch.failed;
+      if (!mountedRef.current) return;
+      setBackfill({ includeStale, embedded, failed });
+      // Failed rows come back in the next batch, so stop once a batch embeds
+      // nothing (or the queue is short) rather than re-requesting forever.
+      if (batch.processed < BACKFILL_BATCH || batch.embedded === 0) break;
+    }
+    if (!mountedRef.current) return;
+    const cancelled = cancelRef.current;
+    setBackfill(null);
+    if (error) toast.error(`Backfill failed: ${error.message || 'unknown error'}`);
+    else toast.success(`${cancelled ? 'Backfill cancelled' : 'Backfill finished'}: ${embedded} embedded${failed ? `, ${failed} failed` : ''}`);
+    refreshStats();
   };
 
   if (loading) return <BrailleSpinner text="Loading embeddings settings" />;
@@ -140,9 +196,12 @@ export default function EmbeddingsTab() {
     <div className="space-y-6">
       <p className="text-sm text-gray-400">
         Vector embeddings power semantic search across the creative catalog (Characters, Ideas,
-        Scenes, …) and the memory system. PortOS expects 768-dimensional vectors;
-        pick a 768-dim model below or your saves will be rejected.
+        Scenes, …) and the memory system (Brain, Chief of Staff retrieval). PortOS expects
+        768-dimensional vectors; pick a 768-dim model below or your saves will be rejected.
+        Switching models changes the vector space, so re-embed afterwards (Brain → Config →
+        Reprocess for memory, the catalog backfill for ingredients).
       </p>
+      {unsaved && <EmbeddingSourceNotice inPlace />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       {/* Provider picker */}
@@ -224,6 +283,55 @@ export default function EmbeddingsTab() {
           )}
         </div>
       )}
+      </div>
+
+      <div className="space-y-2 border-t border-port-border pt-4">
+        <h3 className="text-sm font-medium text-gray-300">Catalog backfill</h3>
+        <p className="text-xs text-gray-500" data-testid="embedding-coverage">
+          {stats
+            ? `${stats.withEmbeddings} of ${stats.total} catalog ingredients embedded`
+            : 'Catalog embedding coverage unavailable'}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => runBackfill(false)}
+            disabled={provider === 'none' || saved.provider === 'none' || dirty || !!backfill}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded"
+          >
+            <Database size={14} />
+            Embed missing
+          </button>
+          <button
+            type="button"
+            onClick={() => runBackfill(true)}
+            disabled={provider === 'none' || saved.provider === 'none' || dirty || !!backfill}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded"
+          >
+            <RefreshCw size={14} />
+            Re-embed stale / all
+          </button>
+          {backfill && (
+            <button
+              type="button"
+              onClick={() => { cancelRef.current = true; }}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-300 hover:text-white"
+            >
+              <X size={14} />
+              Cancel
+            </button>
+          )}
+        </div>
+        {backfill && (
+          <p className="text-xs text-gray-400" role="status">
+            Embedding… {backfill.embedded} embedded{backfill.failed ? `, ${backfill.failed} failed` : ''}
+          </p>
+        )}
+        {(provider === 'none' || dirty) && (
+          <p className="text-xs text-gray-500">
+            {dirty ? 'Save your changes before backfilling.' : 'Pick a provider and save to enable backfill.'}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 pt-2">

@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
+import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { notificationPullRequestTarget, notificationPullRequestView } from '../lib/githubNotificationPullRequest.js';
 import { agentRunPin, pullRequestAutomationFilter, pullRequestAutomationRule } from '../lib/githubNotificationTriage.js';
@@ -14,6 +15,9 @@ import { githubReviewAccountSelector } from './githubAccounts.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 
 const queue = createKeyCachedQueue();
+/** A refused PR is not re-polled this soon unless its thread saw new GitHub activity. */
+export const PR_ATTEMPT_RETRY_MS = 5 * 60 * 1000;
+const PR_AUTOMATION_CONCURRENCY = 5;
 const refuse = (message, code = 'GITHUB_PR_ACTION_REFUSED') => new ServerError(message, { status: 409, code });
 
 async function recordAction(account, row, action, result) {
@@ -33,8 +37,9 @@ async function recordAction(account, row, action, result) {
 }
 
 /** The button and Autopilot both dispatch through the app PR actions' services. */
-export async function actOnNotificationPullRequest(account, threadId, options, { automatic = false, env: suppliedEnv, app: suppliedApp } = {}) {
-  const initial = (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
+export async function actOnNotificationPullRequest(account, threadId, options, { automatic = false, env: suppliedEnv, app: suppliedApp, row: loaded } = {}) {
+  // A caller that just selected the row skips the duplicate read; the queued read below stays authoritative.
+  const initial = loaded || (await query('SELECT * FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, threadId])).rows[0];
   if (!initial) throw new ServerError('Notification not found', { status: 404 });
   const target = notificationPullRequestTarget(account, initial);
   if (!target) throw refuse('This notification does not identify a pull request on this account');
@@ -101,7 +106,7 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
     // a failed mark-done must not fail the action: the row keeps `suggest-mark-read`
     // and the operator's Mark done button still works.
     if (result.merged) {
-      await applyNotificationAction(account.id, row.thread_id, 'done', { actor: automatic ? 'automation' : 'operator', learn: false })
+      await applyNotificationAction(account.id, row.thread_id, 'done', { actor: automatic ? 'automation' : 'operator', learn: false, account, env })
         .catch(err => console.warn(`⚠️ Merged PR #${target.number} but could not mark its notification done: ${err.message}`));
     }
     return result;
@@ -109,28 +114,31 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
 }
 
 /** Pending CI is checked again on the next scheduled run, even without thread activity. */
-export async function automateNotificationPullRequests(account, env) {
+export async function automateNotificationPullRequests(account, env, { now = Date.now(), managedApps = managedAppsByRepoKey } = {}) {
   if (account.mode !== 'autopilot') return { merged: 0, reviews: 0 };
-  const filter = pullRequestAutomationFilter(account.agentRules);
+  const filter = pullRequestAutomationFilter(account.agentRules, 3);
   const { rows } = await query(`SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
     AND subject_type = 'PullRequest' AND COALESCE(decision, '') <> 'handed-off'
     AND COALESCE(evidence->>'subjectState', '') NOT IN ('closed', 'merged')
+    AND ((evidence->'pullRequestAttempt'->>'at') IS NULL
+      OR (evidence->'pullRequestAttempt'->>'at')::timestamptz <= $2
+      OR (evidence->'pullRequestAttempt'->>'at')::timestamptz < gh_updated_at)
     AND (${filter.sql}) ORDER BY (evidence->'pullRequestAttempt'->>'at')::timestamptz ASC NULLS FIRST, gh_updated_at DESC LIMIT 50`,
-  [account.id, ...filter.params]);
+  [account.id, new Date(now - PR_ATTEMPT_RETRY_MS).toISOString(), ...filter.params]);
   const counts = { merged: 0, reviews: 0 };
-  const apps = rows.length ? await managedAppsByRepoKey() : new Map();
-  for (const row of rows) {
+  const apps = rows.length ? await managedApps() : new Map();
+  await mapWithConcurrency(rows, PR_AUTOMATION_CONCURRENCY, async row => {
     const rule = pullRequestAutomationRule(account, row);
-    if (!rule) continue;
+    if (!rule) return;
     const result = await actOnNotificationPullRequest(account, row.thread_id, { action: rule.action,
       method: rule.mergeMethod, deleteBranch: rule.deleteBranch },
-    { automatic: true, env, app: apps.get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null })
+    { automatic: true, env, row, app: apps.get(`${account.host}/${row.repo_full_name}`.toLowerCase()) || null })
       .catch(error => ({ refused: error.code || 'GITHUB_PR_ACTION_FAILED' }));
     if (result.refused) {
       // Keep the reason bounded and visible; no raw forge output or thread text.
       await query(`UPDATE github_notifications SET evidence = evidence || jsonb_build_object('pullRequestAttempt', $3::jsonb)
         WHERE account_id = $1 AND thread_id = $2`, [account.id, row.thread_id, toPgJson({ action: rule.action, reason: result.refused, at: new Date().toISOString() })]);
     } else counts[result.merged ? 'merged' : 'reviews'] += 1;
-  }
+  });
   return counts;
 }

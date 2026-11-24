@@ -76,6 +76,12 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
+// The ACTIVE embedding model (from settings.embeddings) differs from the
+// DEFAULT above, so a writer that stamped the default would fail these (#18296).
+vi.mock('./memoryEmbeddings.js', () => ({
+  getActiveEmbeddingModel: vi.fn().mockResolvedValue('active-settings-model')
+}));
+
 import { existsSync } from 'fs';
 import { ensureDirs, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
@@ -229,10 +235,11 @@ describe('memory service', () => {
       const result = await createMemory(data, embedding);
 
       expect(result.embedding).toEqual([0.1, 0.2, 0.3]);
-      expect(result.embeddingModel).toBe('test-embedding-model');
-      // Should save embeddings file
+      expect(result.embeddingModel).toBe('active-settings-model');
+      // Should save embeddings file, stamped with the model that made the vectors
       const embeddingsCall = atomicWrite.mock.calls.find(c => c[0].includes('embeddings.json'));
       expect(embeddingsCall).toBeDefined();
+      expect(JSON.parse(embeddingsCall[1]).model).toBe('active-settings-model');
     });
 
     it('should not save embeddings file when no embedding provided', async () => {
@@ -674,7 +681,7 @@ describe('memory service', () => {
       const result = await updateMemoryEmbedding('mem-1', embedding);
 
       expect(result.embedding).toEqual([0.5, 0.6, 0.7]);
-      expect(result.embeddingModel).toBe('test-embedding-model');
+      expect(result.embeddingModel).toBe('active-settings-model');
     });
 
     it('should return null for non-existent memory', async () => {
@@ -756,7 +763,9 @@ describe('memory service', () => {
       });
 
       // Exercise the real approval-count side effect behind the public memory workflow.
+      const { registerLateBoundService } = await import('../lib/lateBoundServices.js');
       const lifecycle = await import('./cos/cosAgentLifecycle.js');
+      registerLateBoundService('cosAgentLifecycle', () => Promise.resolve(lifecycle));
       lifecycle.getAgent.mockResolvedValue({ memoryExtraction: { pendingApproval: 2, created: 4 } });
       lifecycle.updateAgent.mockResolvedValue(undefined);
       const actualConfig = await vi.importActual('./memoryConfig.js');
@@ -1645,6 +1654,21 @@ describe('memory service', () => {
       const result = await applyDecay(0.01);
 
       expect(result.updated).toBeGreaterThanOrEqual(0);
+    });
+
+    it('decays but never archives Persistent Mind memories (#18322)', async () => {
+      const oldDate = new Date(Date.now() - 400 * 24 * 60 * 60 * 1000).toISOString();
+      const rec = (id, sourceAgentId) => ({ id, status: 'active', importance: 0.15, createdAt: oldDate, lastAccessed: null, sourceAgentId });
+      const records = { mind: rec('mind', 'cos-persistent-mind'), other: rec('other', 'other-agent') };
+      readJSONFile.mockImplementation((path, def) => {
+        if (path.includes('index.json')) return Promise.resolve({ version: 1, lastUpdated: '', count: 2, memories: Object.values(records) });
+        const id = Object.keys(records).find(k => path.includes(`/${k}/`));
+        return Promise.resolve(id ? { ...records[id] } : def);
+      });
+      await applyDecay(0.01);
+      const archivedPaths = atomicWrite.mock.calls.filter(c => String(c[0]).endsWith('memory.json') && c[1]?.status === 'archived').map(c => String(c[0]));
+      expect(archivedPaths.some(p => p.includes('/mind/'))).toBe(false);
+      expect(archivedPaths.some(p => p.includes('/other/'))).toBe(true);
     });
 
     it('should return zero updates when no memories exist', async () => {

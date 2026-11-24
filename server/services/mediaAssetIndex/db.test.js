@@ -89,6 +89,26 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect(after.some((x) => x.filename === `${PFX}a.png`)).toBe(false);
   });
 
+  it('persists provenance_refs on insert and update, and ensureSchema backfills NULL image rows', async () => {
+    const { imageToRow } = await import('./logic.js');
+    const filename = `${PFX}prov.png`;
+    const item = { filename, createdAt: '2026-01-01T00:00:00.000Z', cleanedFrom: `${PFX}src.png`, requestedInputImages: [{ filename: `${PFX}req.png` }] };
+    await db.upsertAsset(imageToRow(item));
+    const read = async () => (await query(`SELECT provenance_refs FROM media_assets WHERE ref = $1`, [filename])).rows[0].provenance_refs;
+    expect((await read()).sort()).toEqual([`${PFX}req.png`, `${PFX}src.png`]);
+
+    await db.upsertAsset(imageToRow({ ...item, cleanedFrom: undefined, upscaledFrom: `${PFX}up.png` }));
+    expect((await read()).sort()).toEqual([`${PFX}req.png`, `${PFX}up.png`]);
+
+    // Simulate a pre-upgrade row: column present but NULL, then re-run the DDL.
+    await query(`ALTER TABLE media_assets ALTER COLUMN provenance_refs DROP NOT NULL`);
+    await query(`UPDATE media_assets SET provenance_refs = NULL WHERE ref = $1`, [filename]);
+    await ensureSchema({ force: true });
+    expect((await read()).sort()).toEqual([`${PFX}req.png`, `${PFX}up.png`]);
+    const nullable = await query(`SELECT is_nullable FROM information_schema.columns WHERE table_name = 'media_assets' AND column_name = 'provenance_refs'`);
+    expect(nullable.rows[0].is_nullable).toBe('NO');
+  });
+
   it('countAssets matches listAssets().length without materializing rows', async () => {
     // countAssets is the cheap COUNT(*) the character skill registry reads on every
     // GET /api/character. Pin it against listAssets so the two can never disagree.

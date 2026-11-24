@@ -15,7 +15,7 @@ import { lintClips } from '../lib/videoPromptLinter.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import {
   generateContinuousVideoEpisode, composeEpisodeClips, attachEpisodeSseClient, CONTINUOUS_VIDEO_BACKENDS,
-  resolveEpisodeContinuity,
+  resolveEpisodeContinuity, listActiveContinuousVideoEpisodes, cancelContinuousVideoEpisode,
 } from '../services/videoGen/continuousVideo.js';
 
 const router = Router();
@@ -136,6 +136,23 @@ router.post('/', asyncHandler(async (req, res) => {
   });
 
   res.json({ jobId, generationId: jobId, status: 'running' });
+}));
+
+router.get('/active', (_req, res) => {
+  const episodes = listActiveContinuousVideoEpisodes();
+  res.json({
+    activeEpisodes: episodes,
+    activeEpisode: episodes.length ? episodes[episodes.length - 1] : null,
+  });
+});
+
+router.post('/:jobId/cancel', asyncHandler(async (req, res) => {
+  const result = await cancelContinuousVideoEpisode(req.params.jobId);
+  if (!result.ok) {
+    const status = result.code === 'ALREADY_TERMINAL' ? 409 : 404;
+    throw new ServerError(result.error || 'Cancel failed', { status, code: result.code || 'NOT_FOUND' });
+  }
+  res.json(result);
 }));
 
 router.get('/:jobId/events', (req, res) => {

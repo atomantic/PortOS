@@ -5,7 +5,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { normalizeBlenderRecord } from '../lib/musicVideo/musicVideoBlender.js';
 import {
   musicVideoBlenderCutSchema, musicVideoBlenderFileQuerySchema, musicVideoBlenderFileWriteSchema, musicVideoBlenderMediaQuerySchema,
-  musicVideoBlenderNoteSchema, musicVideoBlenderRenderSchema, musicVideoBlenderSettingsSchema, musicVideoBlenderSyncSchema,
+  musicVideoBlenderModelAddSchema, musicVideoBlenderModelSlugSchema, musicVideoBlenderMotionReferencesSchema, musicVideoBlenderMotionStripSchema, musicVideoBlenderNoteSchema, musicVideoBlenderRenderSchema, musicVideoBlenderSettingsSchema, musicVideoBlenderSyncSchema,
   musicVideoBlenderWorkspaceSchema,
 } from '../lib/musicVideo/musicVideoBlenderValidation.js';
 
@@ -75,6 +75,32 @@ router.delete('/:id/blender/file', asyncHandler(async (req, res) => {
   res.json(await stateOf(await ownerOf(req)));
 }));
 
+// Library 3D models copied into src/models/ (services/film/models.js).
+router.get('/:id/blender/models', asyncHandler(async (req, res) => {
+  const { listFilmModels } = await import('../services/film/models.js');
+  res.json(await listFilmModels(await ownerOf(req)));
+}));
+
+router.post('/:id/blender/models', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoBlenderModelAddSchema, req.body ?? {});
+  const { addFilmModel } = await import('../services/film/models.js');
+  const { announceBlenderState } = await import('../services/film/record.js');
+  const owner = await ownerOf(req);
+  const added = await addFilmModel(owner, input);
+  announceBlenderState(owner);
+  res.status(201).json(added);
+}));
+
+router.post('/:id/blender/models/:slug/update', asyncHandler(async (req, res) => {
+  const { slug } = validateRequest(musicVideoBlenderModelSlugSchema, { slug: req.params.slug });
+  const { updateFilmModel } = await import('../services/film/models.js');
+  const { announceBlenderState } = await import('../services/film/record.js');
+  const owner = await ownerOf(req);
+  const updated = await updateFilmModel(owner, slug);
+  announceBlenderState(owner);
+  res.json(updated);
+}));
+
 // describe is the operator's code and may run for minutes: the sync is a job, not a held request.
 router.post('/:id/blender/sync', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoBlenderSyncSchema, req.body ?? {});
@@ -120,6 +146,20 @@ router.put('/:id/blender/shots/:shotId/note', asyncHandler(async (req, res) => {
   const { saveBlenderShotNote } = await import('../services/film/record.js');
   await saveBlenderShotNote(await ownerOf(req), req.params.shotId, input);
   res.json(await stateOf(await ownerOf(req)));
+}));
+
+router.put('/:id/blender/shots/:shotId/motion-references', asyncHandler(async (req, res) => {
+  const { references } = validateRequest(musicVideoBlenderMotionReferencesSchema, req.body ?? {});
+  const { saveBlenderMotionReferences } = await import('../services/film/motionReferences.js');
+  await saveBlenderMotionReferences(await ownerOf(req), req.params.shotId, references);
+  res.json(await stateOf(await ownerOf(req)));
+}));
+
+// Tiles the reference on a contact sheet's grid → { file, path, every, columns, tiles, sheet, available }.
+router.post('/:id/blender/shots/:shotId/motion-references/:refId/strip', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoBlenderMotionStripSchema, req.body ?? {});
+  const { makeBlenderMotionStrip } = await import('../services/film/motionReferences.js');
+  res.json(await makeBlenderMotionStrip(await ownerOf(req), req.params.shotId, req.params.refId, input));
 }));
 
 router.post('/:id/blender/shots/:shotId/open', asyncHandler(async (req, res) => {

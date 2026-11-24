@@ -15,7 +15,7 @@ describe('release.yml full-ci permissions', () => {
     expect(fullCi).toBeTruthy();
     const granted = new Set([...fullCi.matchAll(/^ {6}(\w+): (?:read|write)$/gm)].map((m) => m[1]));
     for (const [id, body] of Object.entries(workflowJobs(read('.github/workflows/ci.yml')))) {
-      const block = body.match(/\n    permissions:\n((?:      \w+: (?:read|write)\n)+)/);
+      const block = body.match(/\n {4}permissions:\n((?: {6}\w+: (?:read|write)\n)+)/);
       for (const m of (block?.[1] ?? '').matchAll(/ {6}(\w+): /g)) {
         expect(granted.has(m[1]), `${id} needs ${m[1]}`).toBe(true);
       }

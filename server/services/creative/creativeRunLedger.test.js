@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { argsDigest, appendCreativeLedgerEntry, readCreativeLedger, MAX_LEDGER_ENTRIES } from './creativeRunLedger.js';
+import { argsDigest, appendCreativeLedgerEntry, readCreativeLedger, countDailyBudgetedEntries, utcDayKey, MAX_LEDGER_ENTRIES } from './creativeRunLedger.js';
 
 describe('argsDigest', () => {
   it("returns 'none' for null / non-object", () => {
@@ -61,5 +61,38 @@ describe('creative run ledger store', () => {
 
   it('returns [] for an absent ledger', async () => {
     expect(await readCreativeLedger('missing', { dir })).toEqual([]);
+  });
+});
+
+describe('countDailyBudgetedEntries / utcDayKey', () => {
+  it('resolves UTC calendar day keys and rejects invalid timestamps', () => {
+    expect(utcDayKey('2026-11-23T23:59:59.000Z')).toBe('2026-11-23');
+    expect(utcDayKey('2026-11-23T22:00:00-05:00')).toBe('2026-11-24');
+    expect(utcDayKey(null)).toBeNull();
+    expect(utcDayKey('not-a-date')).toBeNull();
+  });
+
+  it('counts only same-UTC-day executed budgeted non-selfBudgeted entries', () => {
+    const entries = [
+      { at: '2026-11-23T00:05:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'executed' },
+      { at: '2026-11-23T01:00:00.000Z', tool: 'media_enqueueImageJob', costClass: 'render', outcome: 'executed' },
+      // Free tool does not count
+      { at: '2026-11-23T02:00:00.000Z', tool: 'pipeline_createSeries', costClass: 'free', outcome: 'executed' },
+      // Self-budgeted tool does not count
+      { at: '2026-11-23T03:00:00.000Z', tool: 'pipeline_startSeriesAutopilot', costClass: 'llm', outcome: 'executed' },
+      // Non-executed outcomes do not count
+      { at: '2026-11-23T04:00:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'planned' },
+      { at: '2026-11-23T05:00:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'rejected' },
+      { at: '2026-11-23T06:00:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'budget-exceeded' },
+      { at: '2026-11-23T07:00:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'error' },
+      // Prior UTC day does not count
+      { at: '2026-11-22T23:59:59.999Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'executed' },
+      // Next UTC day does not count
+      { at: '2026-11-24T00:00:00.000Z', tool: 'pipeline_generateStage', costClass: 'llm', outcome: 'executed' },
+    ];
+    expect(countDailyBudgetedEntries(entries, {
+      dayKey: '2026-11-23',
+      isSelfBudgeted: (name) => name === 'pipeline_startSeriesAutopilot',
+    })).toBe(2);
   });
 });

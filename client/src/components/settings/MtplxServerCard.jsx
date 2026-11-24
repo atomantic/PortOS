@@ -102,8 +102,8 @@ export default function MtplxServerCard({
       ) : !status.installed ? (
         <div className="bg-port-warning/10 border border-port-warning/30 rounded-lg p-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-1">
-            <p className="font-semibold">`mtplx` was not detected on system PATH.</p>
-            <p className="text-gray-300">Installs from upstream's Homebrew tap, or with pip on a host without Homebrew.</p>
+            <p className="font-semibold"><code>mtplx</code> was not detected on system PATH.</p>
+            <p className="text-gray-300">Install MTPLX creates a PortOS-private, hash-verified Python runtime under <code>data/tools/mtplx</code>. It does not change Homebrew or your system Python.</p>
           </div>
           <button onClick={onInstall} disabled={busy} className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}>
             {actionInProgress === 'runtime-install-mtplx' ? <BrailleSpinner /> : <Download size={13} />}
@@ -145,10 +145,10 @@ export default function MtplxServerCard({
           <div className="space-y-1">
             <p className="font-semibold">Installed — runtime not yet downloaded.</p>
             <p className="text-gray-300">
-              Homebrew installs a wrapper that fetches MTPLX itself (several hundred megabytes of
-              Python and MLX) the first time it runs. PortOS will not do that inside a status poll
-              or a server start, so run it here — it streams into the install progress and takes a
-              few minutes.
+              The Homebrew wrapper on PATH would fetch MTPLX itself (several hundred megabytes of
+              Python and MLX) with an unpinned bootstrap the first time it runs. Downloading here
+              instead installs PortOS's own private, hash-verified runtime, which takes precedence
+              over the wrapper. It streams into the install progress and takes a few minutes.
             </p>
           </div>
           <button onClick={onInstall} disabled={busy} className={`${btnClass} bg-port-accent/20 hover:bg-port-accent/30 text-port-accent shrink-0`}>

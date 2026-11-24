@@ -21,6 +21,15 @@ if (!process.env.PORTOS_MEDIA_MODELS_FILE) {
   throw new Error('Server tests require the configured media registry environment or an explicit registry fixture');
 }
 
+// Agent sessions inject the forge identity as GIT_AUTHOR_*/GIT_COMMITTER_* env, which
+// overrides every git fixture's per-repo `git config user.*` and makes identity-dependent
+// assertions order/host dependent (#18416, #18423). Each test file runs in its own
+// worker env, so scrubbing here isolates every suite; a suite that needs a specific
+// identity sets it itself (`vi.stubEnv` or an explicit child env).
+for (const key of ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_AUTHOR_DATE', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL', 'GIT_COMMITTER_DATE']) {
+  delete process.env[key];
+}
+
 // With console interception off (see the config) `--silent=passed-only` can't suppress
 // expected logs; CI sets this flag to keep output useful. vi.spyOn on the no-ops still records.
 if (process.env.PORTOS_TEST_QUIET === '1') {

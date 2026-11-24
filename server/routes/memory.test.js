@@ -38,7 +38,9 @@ vi.mock('../lib/db.js', () => ({
 vi.mock('../services/memoryEmbeddings.js', () => ({
   generateQueryEmbedding: vi.fn(),
   generateMemoryEmbedding: vi.fn(),
-  checkAvailability: vi.fn()
+  checkAvailability: vi.fn(),
+  resolveEmbeddingSource: vi.fn(),
+  embeddingsSettingsPage: () => 'Models → Embeddings'
 }));
 
 vi.mock('../services/memoryRunUsage.js', () => ({
@@ -578,5 +580,37 @@ describe('Memory reject API', () => {
     const response = await request(app).post('/api/memory/gone-1/reject').send({});
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({ success: true, alreadyResolved: true });
+  });
+});
+
+describe('Memory embedding config API (#18296)', () => {
+  const makeApp = async () => {
+    const { errorMiddleware } = await import('../lib/errorHandler.js');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/memory', memoryRoutes);
+    app.use(errorMiddleware);
+    return app;
+  };
+
+  it('GET /embeddings/config reports the resolved backend without probing it', async () => {
+    const embeddings = await import('../services/memoryEmbeddings.js');
+    embeddings.checkAvailability.mockClear();
+    embeddings.resolveEmbeddingSource.mockResolvedValue({
+      source: 'settings', provider: 'ollama', model: 'nomic-embed-text', endpoint: 'http://192.0.2.10:11434/v1/embeddings', disabled: false,
+    });
+    const response = await request(await makeApp()).get('/api/memory/embeddings/config');
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ source: 'settings', provider: 'ollama', model: 'nomic-embed-text', disabled: false });
+    expect(embeddings.checkAvailability).not.toHaveBeenCalled();
+  });
+
+  it('search names the disabled setting instead of blaming LM Studio', async () => {
+    const embeddings = await import('../services/memoryEmbeddings.js');
+    embeddings.generateQueryEmbedding.mockResolvedValue(null);
+    embeddings.resolveEmbeddingSource.mockResolvedValue({ source: 'settings', provider: 'none', model: null, endpoint: null, disabled: true });
+    const response = await request(await makeApp()).post('/api/memory/search').send({ query: 'anything' });
+    expect(response.status).toBe(503);
+    expect(JSON.stringify(response.body)).toContain('Models → Embeddings');
   });
 });

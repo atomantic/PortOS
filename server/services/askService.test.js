@@ -37,6 +37,11 @@ vi.mock('./memoryEmbeddings.js', () => ({
   generateQueryEmbedding: vi.fn(),
 }));
 
+// The catalog's own embedder (the backend that wrote the ingredient rows).
+vi.mock('./embeddings.js', () => ({
+  embedSearchQuery: vi.fn(),
+}));
+
 vi.mock('./brainStorage.js', () => ({
   getInboxLog: vi.fn(),
   getProjects: vi.fn(),
@@ -84,6 +89,7 @@ const EXPECT_GROUP = process.platform !== 'win32';
 const catalogDB = await import('./catalog/catalogDB.js');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');
+const catalogEmbeddings = await import('./embeddings.js');
 const brainStorage = await import('./brainStorage.js');
 const autobiography = await import('./autobiography.js');
 const identity = await import('./identity.js');
@@ -99,6 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Sensible defaults — each test overrides what it cares about.
   memoryEmbeddings.generateQueryEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+  catalogEmbeddings.embedSearchQuery.mockResolvedValue([0.9, 0.8, 0.7]);
   memoryBackend.hybridSearchMemories.mockResolvedValue({ memories: [] });
   memoryBackend.peekMemories.mockResolvedValue([]);
   memoryBackend.recordMemoryAccess.mockResolvedValue([]);
@@ -114,19 +121,23 @@ beforeEach(() => {
 });
 
 describe('gatherSources', () => {
-  it('requests the query embedding once and shares it across memory and catalog retrieval', async () => {
-    await askService.gatherSources('shared embedding');
+  it('queries memory and catalog each with the vector from the embedder that wrote those rows (#18296)', async () => {
+    await askService.gatherSources('which embedder');
     expect(memoryEmbeddings.generateQueryEmbedding).toHaveBeenCalledTimes(1);
-    expect(catalogDB.hybridSearchIngredients).toHaveBeenCalledWith('shared embedding', [0.1, 0.2, 0.3], expect.any(Object));
+    expect(catalogEmbeddings.embedSearchQuery).toHaveBeenCalledTimes(1);
+    expect(catalogEmbeddings.embedSearchQuery).toHaveBeenCalledWith('which embedder');
+    // Catalog rows were written by embeddings.js — the memory vector must never reach them.
+    expect(catalogDB.hybridSearchIngredients).toHaveBeenCalledWith('which embedder', [0.9, 0.8, 0.7], expect.any(Object));
+    expect(memoryBackend.hybridSearchMemories).toHaveBeenCalledWith('which embedder', [0.1, 0.2, 0.3], expect.any(Object));
   });
 
-  it('falls back to FTS-only catalog search when the embedding request fails', async () => {
+  it('falls back to FTS-only catalog search when the catalog embedder yields no vector', async () => {
     memoryEmbeddings.generateQueryEmbedding.mockRejectedValue(new Error('embed down'));
+    catalogEmbeddings.embedSearchQuery.mockResolvedValue(null);
     catalogDB.hybridSearchIngredients.mockResolvedValue([
       { ingredient: { id: 'cat-1', type: 'idea', name: 'Heist', tags: [], payload: {} }, rrfScore: 0.5 },
     ]);
     const sources = await askService.gatherSources('heist');
-    expect(memoryEmbeddings.generateQueryEmbedding).toHaveBeenCalledTimes(1);
     expect(catalogDB.hybridSearchIngredients).toHaveBeenCalledWith('heist', null, expect.any(Object));
     expect(sources.some((x) => x.kind === 'catalog')).toBe(true);
     expect(memoryBackend.hybridSearchMemories).not.toHaveBeenCalled();

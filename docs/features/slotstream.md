@@ -57,14 +57,16 @@ same port would silently steal its traffic instead of failing loudly.
 ## Setup
 
 1. **Install** from **Local Runtime Servers**. `installSlotstream()`
-   downloads the Apple Silicon release from GitHub Releases
-   (`gh release download --repo carloslfu/slotstream`) into
-   `~/.slotstream/bin` and extracts it — it needs the GitHub CLI (`gh`) on
+   downloads the pinned Apple Silicon release
+   (`SLOTSTREAM_RELEASE_TAG`, currently `v0.2.30`, from `carloslfu/slotstream`)
+   into an isolated temporary directory, verifies the archive's SHA-256 digest
+   against the pinned value before extracting, checks the extracted binary is a
+   regular file, then atomically renames it into `~/.slotstream/bin`. It needs the GitHub CLI (`gh`) on
    `PATH`; without it the install refuses with
    `SLOTSTREAM_INSTALL_UNAVAILABLE` rather than trying an unauthenticated
    fallback. This step never downloads model weights.
 2. **Download a checkpoint** from the Slotstream card's **Add a checkpoint**
-   picker — a curated list (`SLOTSTREAM_CATALOG` in
+   picker — a curated dropdown (`SLOTSTREAM_CATALOG` in
    `server/lib/slotstreamCatalog.js`) of three Hugging Face MoE checkpoints
    sized from "small enough to verify the install end to end" up to the
    235B-class headline case. Picking one and pressing **Download checkpoint**
@@ -75,9 +77,10 @@ same port would silently steal its traffic instead of failing loudly.
    press. Every downloaded file is checked against the hash Hugging Face
    published for it (`expectedSha256` in `streamResumableDownload`) before it
    counts as finished; a mismatch fails the install and removes the partial
-   file rather than leaving a silently corrupt checkpoint on disk. PortOS also
-   accepts a plain Hugging Face `owner/name` outside the curated list, as long
-   as the repo is a Slotstream-loadable MoE checkpoint. Nothing downloads
+   file rather than leaving a silently corrupt checkpoint on disk. The card offers
+   only the curated catalog; the API (`POST /api/local-llm/slotstream/models/download`)
+   additionally accepts a plain Hugging Face `owner/name` outside it, as long as
+   the repo is a Slotstream-loadable MoE checkpoint. Nothing downloads
    without this explicit press.
 3. **Start Slotstream** on the card, or **Save configuration** to store the
    choice for a later on-demand start without starting it now. Either way,
@@ -138,7 +141,7 @@ downloader always agree on where the cache is. A checkpoint downloaded through
 the catalog picker lands at `<cache>/<owner>__<name>` (the repo id's `/`
 flattened to `__`, since the directory name is also the id a start selects).
 Before that download, PortOS looks for the same repo in every root declared
-in `lib/modelRoots.js` (the hub cache included). A servable copy is linked
+in `server/lib/modelRoots.js` (the hub cache included). A servable copy is linked
 into the cache instead of fetched again — Slotstream still starts by
 directory name, so the link has to live in this cache. The confirm step
 names the provider, the repo, and the size, and says when it will link
@@ -188,9 +191,8 @@ released server returns exactly as configured rather than re-guessing.
 **Only PortOS traffic counts** toward the idle timer; a client hitting the
 Slotstream port directly is invisible to it.
 
-Unlike MTPLX, the Local Runtime Servers row also offers a manual **Start**
-button once a checkpoint is cached — Slotstream does not rely on lazy start
-alone.
+The Local Runtime Servers row also offers a manual **Start** button once a
+checkpoint is cached — Slotstream does not rely on lazy start alone.
 
 ## Startup at boot
 
@@ -211,8 +213,9 @@ it just is not in the dump a reboot replays.
 | `GET /slotstream/status` | Binary presence, running state, endpoint, memory plan, cached checkpoints, cache directory/error, the curated catalog, recent log lines. |
 | `POST /slotstream/start` | Launch `slotstream serve` under PM2 with the given (or saved) checkpoint/port/memory cap; streams progress. |
 | `POST /slotstream/stop` | Stop the managed process. |
-| `POST /slotstream/install` | Download and extract the Apple Silicon binary. |
+| `POST /slotstream/install` | Download the pinned Apple Silicon binary, verify its SHA-256, and install it. |
 | `POST /slotstream/models/download` | Fetch one catalog (or `owner/name`) checkpoint into the cache; streams byte progress on the `slotstream:download` socket event. |
+| `POST /slotstream/models/download/cancel` | Cancel the in-flight checkpoint download (body: `{ model }`). |
 
 `POST /api/local-llm/download-preflight` also accepts `{ kind: 'slotstream', model }` to
 preview a checkpoint download's size and free-disk verdict before the confirm

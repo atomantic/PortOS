@@ -41,9 +41,13 @@ vi.mock('../branchReconcile.js', () => ({
   cleanupMerged: async () => ({ cleaned: [] }),
   driveToMerge: pr => `merge ${pr} with --match-head-commit <verified-head>`,
 }));
-vi.mock('../git.js', () => ({
+vi.mock('../git/status.js', () => ({
   getDefaultBranch: async () => 'main',
+}));
+vi.mock('../git/branchEvidence.js', () => ({
   hasBranchMergeEvidence: async () => false,
+}));
+vi.mock('../forgeAuth.js', () => ({
   resolveForgeForRepo: async () => ({ cli: 'gh', env: null }),
 }));
 vi.mock('../github.js', () => ({ findPullRequestForBranch: vi.fn() }));

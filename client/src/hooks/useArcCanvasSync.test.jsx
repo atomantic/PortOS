@@ -224,4 +224,13 @@ describe('useArcCanvasSync', () => {
       expect(result.current.isDirty).toBe(true);
     });
   });
+
+  it('ignores a server record for a different series than the one loaded', () => {
+    const b = { id: 'sB', name: 'B', logline: 'LB', llm: null };
+    const { result } = renderHook(() => useHarness(b, [], { flushFields: FLUSH_FIELDS }));
+    act(() => { result.current.updateSeriesFromServer({ id: 'sA', name: 'A', logline: 'LA', llm: null }); });
+    expect(result.current.series).toEqual(b);
+    // Baseline untouched: B is not dirty and a flush has nothing to send.
+    expect(result.current.isDirty).toBe(false);
+  });
 });

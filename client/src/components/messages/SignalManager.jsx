@@ -7,6 +7,7 @@ import {
   setSignalBlocklist,
 } from '../../services/apiSignal.js';
 import toast from '../ui/Toast';
+import { pluralize } from '../../lib/textUtils';
 
 // Loaded explicitly: settings does not fetch message history until requested.
 export default function SignalManager() {
@@ -56,13 +57,13 @@ export default function SignalManager() {
       </form>
       <p className="text-xs text-gray-400">Showing up to 500 conversations. Search all imported history to narrow results.</p>
       <ul className="space-y-2">{data.map((row) => <li key={row.conversationId} className="border border-port-border rounded p-3 flex flex-wrap gap-2 items-center">
-        <span className="flex-1 min-w-0 break-words">{row.title} · {row.eventCount} events {row.blocked && '(blocked)'}</span>
+        <span className="flex-1 min-w-0 break-words">{row.title} · {pluralize(row.eventCount, 'event')} {row.blocked && '(blocked)'}</span>
         <button disabled={busy || !row.conversationId} onClick={() => setConfirm({ id: row.conversationId, block: false })} className="min-h-10 p-2 text-port-error">Purge</button>
         <button disabled={busy || !row.conversationId} onClick={() => setConfirm({ id: row.conversationId, block: true })} className="min-h-10 p-2">Block and purge</button>
       </li>)}</ul>
       {confirm && <div className="border border-port-warning rounded p-3">
         <p>{confirm.block ? 'Block this conversation and purge its imported history?' : 'Purge this conversation’s imported history?'}</p>
-        <button disabled={busy} onClick={() => run(perform)} className="min-h-10 p-2 text-port-error">Confirm purge</button>
+        <button disabled={busy} onClick={() => run(perform)} className="min-h-10 p-2 text-port-error">{confirm.block ? 'Block and purge' : 'Purge history'}</button>
         <button disabled={busy} onClick={() => setConfirm(null)} className="min-h-10 p-2">Cancel</button>
       </div>}
       <label htmlFor="signal-blocked-handles" className="block">Blocked handles (one per line)<textarea disabled={busy} id="signal-blocked-handles" value={handles} onChange={(event) => setHandles(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2" /></label>

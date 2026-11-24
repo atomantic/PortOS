@@ -182,10 +182,10 @@ describe('Calendar Routes — normalized error handling', () => {
       expect(response.body.error).toMatch(/Google OAuth not configured/);
     });
 
-    it('GET /google/auth/url surfaces a 400 when no credentials are configured', async () => {
+    it('POST /google/auth/url surfaces a 400 when no credentials are configured', async () => {
       googleAuth.getAuthUrl.mockRejectedValue(new ServerError('No Google OAuth credentials configured', { status: 400 }));
 
-      const response = await request(app).get('/api/calendar/google/auth/url');
+      const response = await request(app).post('/api/calendar/google/auth/url');
 
       expect(response.status).toBe(400);
       expect(response.body.error).toBe('No Google OAuth credentials configured');
@@ -226,23 +226,49 @@ describe('Calendar Routes — normalized error handling', () => {
       expect(calendarSync.syncAccount.mock.calls[0][0]).toBe(ACCOUNT_ID);
     });
 
-    it('GET /google/auth/url returns the url', async () => {
+    it('POST /google/auth/url returns the url', async () => {
       googleAuth.getAuthUrl.mockResolvedValue({ url: 'https://accounts.google.com/o/oauth2/auth?x=1' });
 
-      const response = await request(app).get('/api/calendar/google/auth/url');
+      const response = await request(app).post('/api/calendar/google/auth/url');
 
       expect(response.status).toBe(200);
       expect(response.body.url).toMatch(/^https:\/\/accounts\.google\.com/);
       expect(googleAuth.getAuthUrl).toHaveBeenCalledWith('calendar');
     });
 
-    it('GET /google/auth/url preserves a Messages return target', async () => {
-      googleAuth.getAuthUrl.mockResolvedValue({ url: 'https://accounts.google.com/o/oauth2/auth?state=messages' });
+    it('POST /google/auth/url preserves a Messages return target', async () => {
+      googleAuth.getAuthUrl.mockResolvedValue({ url: 'https://accounts.google.com/o/oauth2/auth?state=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' });
 
-      const response = await request(app).get('/api/calendar/google/auth/url?returnTo=messages');
+      const response = await request(app).post('/api/calendar/google/auth/url?returnTo=messages');
 
       expect(response.status).toBe(200);
       expect(googleAuth.getAuthUrl).toHaveBeenCalledWith('messages');
+    });
+
+    it('PUT /accounts/:id/subcalendars updates subcalendars, triggers purge, and fails closed on purge errors (#18229)', async () => {
+      const io = { emit: vi.fn() };
+      app.set('io', io);
+      const subcalendars = [
+        { calendarId: 'work', name: 'Work', enabled: true, dormant: false },
+        { calendarId: 'personal', name: 'Personal', enabled: false, dormant: false },
+      ];
+      const updated = { id: ACCOUNT_ID, subcalendars };
+      calendarAccounts.updateSubcalendars.mockResolvedValue(updated);
+      calendarSync.purgeDisabledSubcalendars.mockResolvedValueOnce({ purged: 2, remaining: 1 });
+
+      const ok = await request(app).put(`/api/calendar/accounts/${ACCOUNT_ID}/subcalendars`).send({ subcalendars });
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual(updated);
+      expect(calendarSync.purgeDisabledSubcalendars).toHaveBeenCalledWith(ACCOUNT_ID);
+      expect(io.emit).toHaveBeenCalledWith('calendar:changed', {});
+
+      io.emit.mockClear();
+      errorEvents.once('error', observeError);
+      calendarSync.purgeDisabledSubcalendars.mockRejectedValueOnce(new Error('Synthetic DB outage'));
+      const failed = await request(app).put(`/api/calendar/accounts/${ACCOUNT_ID}/subcalendars`).send({ subcalendars });
+      expect(failed.status).toBe(500);
+      expect(observeError).toHaveBeenCalledWith(expect.objectContaining({ status: 500 }), expect.any(Object));
+      expect(io.emit).not.toHaveBeenCalledWith('calendar:changed', {});
     });
   });
 
@@ -320,47 +346,48 @@ describe('Calendar Routes — normalized error handling', () => {
   });
 
   describe('GET /google/oauth/callback stays browser-friendly (redirects, never JSON errors)', () => {
-    it('redirects to the config page on success', async () => {
-      googleAuth.handleCallback.mockResolvedValue({ success: true });
+    const state = 'a'.repeat(32);
 
-      const response = await request(app).get('/api/calendar/google/oauth/callback?code=ok');
+    it('redirects to the config page on success', async () => {
+      googleAuth.handleCallback.mockResolvedValue({ success: true, returnTo: 'calendar' });
+
+      const response = await request(app).get(`/api/calendar/google/oauth/callback?code=ok&state=${state}`);
 
       expect(response.body).toEqual({ landed: true, oauthError: null });
-      expect(googleAuth.handleCallback).toHaveBeenCalledWith('ok');
+      expect(googleAuth.handleCallback).toHaveBeenCalledWith({ code: 'ok', state });
     });
 
     it('returns to Messages when authorization started there', async () => {
-      googleAuth.handleCallback.mockResolvedValue({ success: true });
+      googleAuth.handleCallback.mockResolvedValue({ success: true, returnTo: 'messages' });
 
-      const response = await request(app).get('/api/calendar/google/oauth/callback?code=ok&state=messages');
+      const response = await request(app).get(`/api/calendar/google/oauth/callback?code=ok&state=${state}`);
 
       expect(response.body).toEqual({ landed: true, destination: 'messages', oauthError: null });
-      expect(googleAuth.handleCallback).toHaveBeenCalledWith('ok');
+      expect(googleAuth.handleCallback).toHaveBeenCalledWith({ code: 'ok', state });
     });
 
-    it('redirects with oauthError when the code is missing', async () => {
-      const response = await request(app).get('/api/calendar/google/oauth/callback');
+    it('redirects with oauthError when state is missing', async () => {
+      const response = await request(app).get('/api/calendar/google/oauth/callback?code=ok');
 
       expect(response.body.landed).toBe(true);
-      expect(response.body.oauthError).toBe('Missing authorization code');
+      expect(response.body.oauthError).toMatch(/OAuth state/);
       expect(googleAuth.handleCallback).not.toHaveBeenCalled();
     });
 
-    it('treats a malformed (repeated) code as missing and still redirects', async () => {
-      const response = await request(app).get('/api/calendar/google/oauth/callback?code=a&code=b');
+    it('rejects a malformed (repeated) code with a redirect', async () => {
+      const response = await request(app).get(`/api/calendar/google/oauth/callback?code=a&code=b&state=${state}`);
 
       expect(response.body.landed).toBe(true);
-      expect(response.body.oauthError).toBe('Missing authorization code');
+      expect(response.body.oauthError).toMatch(/OAuth state/);
       expect(googleAuth.handleCallback).not.toHaveBeenCalled();
     });
 
     it('redirects with oauthError when the token exchange fails', async () => {
-      googleAuth.handleCallback.mockRejectedValue(new ServerError('invalid_grant', { status: 400 }));
+      googleAuth.handleCallback.mockResolvedValue({ returnTo: 'messages', error: 'invalid_grant' });
 
-      const response = await request(app).get('/api/calendar/google/oauth/callback?code=bad');
+      const response = await request(app).get(`/api/calendar/google/oauth/callback?code=bad&state=${state}`);
 
-      expect(response.body.landed).toBe(true);
-      expect(response.body.oauthError).toBe('invalid_grant');
+      expect(response.body).toEqual({ landed: true, destination: 'messages', oauthError: 'invalid_grant' });
     });
   });
 });

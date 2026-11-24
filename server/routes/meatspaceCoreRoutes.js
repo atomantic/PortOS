@@ -9,8 +9,8 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { configUpdateSchema, lifestyleUpdateSchema } from '../lib/meatspaceValidation.js';
 import { birthDateInputSchema } from '../lib/identityValidation.js';
-import * as meatspaceService from '../services/meatspace.js';
-import { getLoggingStats } from '../services/meatspaceLoggingStats.js';
+import * as meatspaceService from '../services/meatspace/meatspace.js';
+import { getLoggingStats } from '../services/meatspace/meatspaceLoggingStats.js';
 
 const router = Router();
 

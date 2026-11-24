@@ -7,7 +7,7 @@
  * — shares one definition instead of re-deriving the tri-state contract.
  */
 
-import * as git from './git.js';
+import { resolveForgeForRepo } from './forgeAuth.js';
 import { execGit } from '../lib/execGit.js';
 
 // The single `gh pr view` reader lives in a leaf so `git.js` can use it without
@@ -32,7 +32,7 @@ const withTimeout = (promise, ms, fallback) => {
 
 /** The repo's forge CLI + credential overlay, or null when it cannot be resolved. */
 const resolveForge = (sourceWorkspace) => withTimeout(
-  git.resolveForgeForRepo(sourceWorkspace).catch(() => null),
+  resolveForgeForRepo(sourceWorkspace).catch(() => null),
   FORGE_RESOLVE_TIMEOUT_MS,
   null
 );
@@ -117,7 +117,7 @@ async function probeMergedHead(sourceWorkspace, branchName, head) {
   if (!observed || !branchName) return null;
   // Awaited without `resolveForge`'s abandon-on-timeout race: removal follows this
   // answer, so no forge lookup may still be running git in the checkout afterwards.
-  const forge = await git.resolveForgeForRepo(sourceWorkspace).catch(() => null);
+  const forge = await resolveForgeForRepo(sourceWorkspace).catch(() => null);
   if (!forge?.cli) return null;
   const probe = await probePrForBranch(sourceWorkspace, branchName, forge).catch(() => null);
   return isExactMergedPrHead(probe, observed) ? probe : null;

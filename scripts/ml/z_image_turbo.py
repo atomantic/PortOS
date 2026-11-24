@@ -54,7 +54,7 @@ from _runner_common import (  # noqa: E402
 from lora_utils import apply_loras  # noqa: E402
 
 
-def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: str, dtype):
+def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: str, dtype, revision=None):
     """Load a separately-distributed text encoder + its tokenizer.
 
     HiDream-I1 needs Llama-3.1-8B-Instruct as `text_encoder_4` / `tokenizer_4`,
@@ -91,8 +91,9 @@ def load_external_text_encoder(repo: str, encoder_class: str, tokenizer_class: s
             output_hidden_states=True,
             output_attentions=True,
             torch_dtype=dtype,
+            revision=revision,
         )
-        tokenizer = tok_cls.from_pretrained(repo)
+        tokenizer = tok_cls.from_pretrained(repo, revision=revision)
     return text_encoder, tokenizer
 
 
@@ -104,6 +105,8 @@ def load_pipeline(
     text_encoder_repo: str = "",
     text_encoder_class: str = "",
     tokenizer_class: str = "",
+    revision=None,
+    text_encoder_revision=None,
 ):
     # When the registry pins a pipeline class (e.g. ErnieImagePipeline,
     # HiDreamImagePipeline, QwenImagePipeline) load it directly. Falls back
@@ -123,7 +126,8 @@ def load_pipeline(
             print("❌ --text-encoder-repo set but --text-encoder-class missing", file=sys.stderr)
             sys.exit(2)
         text_encoder, tokenizer = load_external_text_encoder(
-            text_encoder_repo, text_encoder_class, tokenizer_class, dtype
+            text_encoder_repo, text_encoder_class, tokenizer_class, dtype,
+            revision=text_encoder_revision,
         )
         extra_kwargs["text_encoder_4"] = text_encoder
         extra_kwargs["tokenizer_4"] = tokenizer
@@ -143,7 +147,7 @@ def load_pipeline(
                 )
                 sys.exit(2)
             pipe = cls.from_pretrained(
-                repo, torch_dtype=dtype, low_cpu_mem_usage=True, **extra_kwargs
+                repo, torch_dtype=dtype, low_cpu_mem_usage=True, revision=revision, **extra_kwargs
             )
         else:
             from diffusers import AutoPipelineForText2Image
@@ -151,6 +155,7 @@ def load_pipeline(
                 repo,
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
+                revision=revision,
                 **extra_kwargs,
             )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
@@ -267,10 +272,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Z-Image-Turbo runner")
     p.add_argument("--repo", required=True, help="HF repo for the pipeline weights")
     add_common_image_args(p, default_guidance=1.0)
+    p.add_argument("--revision", default=None, help="immutable HF commit SHA for --repo (omitted only for user forks)")
     p.add_argument("--reference-images", nargs="+", default=[], help="Qwen 2.1 reference images (10 inputs total)")
     p.add_argument("--pipeline-class", default="", help="optional explicit diffusers pipeline class (e.g. ErnieImagePipeline, HiDreamImagePipeline)")
     p.add_argument("--use-pe", action="store_true", help="enable the prompt enhancer (ERNIE-Image's use_pe kwarg)")
     p.add_argument("--text-encoder-repo", default="", help="HF repo for an external text encoder (HiDream → Llama-3.1-8B-Instruct)")
+    p.add_argument("--text-encoder-revision", default=None, help="immutable HF commit SHA for --text-encoder-repo")
     p.add_argument("--text-encoder-class", default="", help="transformers class name for the external text encoder (e.g. LlamaForCausalLM)")
     p.add_argument("--tokenizer-class", default="", help="transformers class name for the external tokenizer (defaults to AutoTokenizer)")
     return p.parse_args()
@@ -426,6 +433,8 @@ def main() -> None:
         text_encoder_repo=args.text_encoder_repo,
         text_encoder_class=args.text_encoder_class,
         tokenizer_class=args.tokenizer_class,
+        revision=args.revision,
+        text_encoder_revision=args.text_encoder_revision,
     )
     emit_image_execution_marker(
         "diffusers-image",

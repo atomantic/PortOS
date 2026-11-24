@@ -1,0 +1,187 @@
+/**
+ * Test double for the Blender tool a model build runs through: an execution
+ * report, a `resolveBlenderTool` and a worker that plays the model driver's
+ * part without starting Blender. It reads the staged job.json, writes
+ * model.blend and model.glb where the real driver would, and prints the driver
+ * events recorded from a real Blender 5.3 build of the shipped starter
+ * (py/starter/model.py, draft quality) on macOS. `control.edit(events)` alters
+ * the recorded events before they are printed.
+ *
+ * `control.bake` makes a full build play the bake stages recorded from a real
+ * Blender 5.3 bake of the portos_model kit on macOS: the build stops after
+ * saving model.blend (`saved.deferred`) and prints one `bakeSet` per set, a
+ * `bake` job writes the set's three PNGs and a `bake-export` job writes the GLB.
+ */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { ServerError } from '../../lib/errorHandler.js';
+
+const line = (event) => `PORTOS_MODEL ${JSON.stringify(event)}`;
+
+/** The starter's events as the real driver printed them (output paths are filled in per job). */
+export const recordedStarterEvents = () => [
+  { event: 'start', blender: '5.3.0', quality: 'draft' },
+  { event: 'part', id: 'base', label: 'Weighted base', parent: null },
+  { event: 'part', id: 'stem', label: 'Stem', parent: 'base' },
+  { event: 'part', id: 'shade', label: 'Shade', parent: 'stem' },
+  { event: 'described', title: 'Desk lamp', sizeMeters: { x: 0.22, y: 0.22, z: 0.52 }, triangleBudget: 2000, controls: null, partsTruncated: false },
+  { event: 'mesh', name: 'base', parent: null, triangles: 60, min: [-0.09000000357627869, -0.09000000357627869, 0.0], max: [0.09000000357627869, 0.09000000357627869, 0.019999999552965164], scale: [1.0, 1.0, 1.0], negative: false, materials: 1 },
+  { event: 'mesh', name: 'stem', parent: 'base', triangles: 60, min: [-0.012000000104308128, -0.012000000104308128, 0.019999995827674866], max: [0.012000000104308128, 0.012000000104308128, 0.3799999952316284], scale: [1.0, 1.0, 1.0], negative: false, materials: 1 },
+  { event: 'mesh', name: 'shade', parent: 'stem', triangles: 60, min: [-0.10999999940395355, -0.10999999940395355, 0.3799999952316284], max: [0.10999999940395355, 0.10999999940395355, 0.5199999809265137], scale: [1.0, 1.0, 1.0], negative: false, materials: 1 },
+  { event: 'scene', objects: 3, meshes: 3, triangles: 180, materials: 2, images: 0, actions: 0, min: [-0.10999999940395355, -0.10999999940395355, 0.0], max: [0.10999999940395355, 0.10999999940395355, 0.5199999809265137], truncated: false },
+  { event: 'saved', blend: null, glb: null, glbBytes: 12484 },
+  { event: 'reimport', objects: 3, meshes: 3, triangles: 180, materials: 2, images: 0, actions: 0, min: [-0.10999999940395355, -0.10999999940395355, 0.0], max: [0.10999999940395355, 0.10999999940395355, 0.5199999809265137] },
+  { event: 'done', sec: 0.279 },
+];
+
+/** The starter's bake plan (its describe().bake: two sets) with a `hash` per set standing for the set's content. */
+export const starterBake = ({ metalHash = 'a'.repeat(64), clothHash = 'b'.repeat(64) } = {}) => ({
+  size: 1024,
+  samples: 8,
+  sets: [{ id: 'metal', partIds: ['base', 'stem'], hash: metalHash }, { id: 'cloth', partIds: ['shade'], hash: clothHash }],
+});
+
+const PNG = Buffer.from('89504e470d0a1a0a', 'hex');
+
+export const FAKE_GLB = Buffer.from('glTF\u0002\u0000\u0000\u0000example-binary-model');
+
+export const createFakeModelBlender = () => {
+  const control = {
+    executionMode: 'trusted-local',
+    ready: true,
+    // Every build job.json the worker was handed, in order, and every review one.
+    jobs: [],
+    reviews: [],
+    // A promise a review waits on before its last view.
+    reviewHold: null,
+    // Rewrites the recorded events for one test.
+    edit: null,
+    // A promise the build waits on after `described` (to cancel mid-build).
+    hold: null,
+    // `{ message }`: the model raises after `described`, as a real crash reports it.
+    crash: null,
+    // A plan from starterBake(): a full build then leaves export to the bake stages.
+    bake: null,
+    // { [setId]: 'missing' | 'black' | 'overlap' }: what goes wrong with a set.
+    bakeFault: {},
+    // Every bake and bake-export job.json, in order, and a promise a bake waits on before it writes.
+    bakes: [],
+    exports: [],
+    bakeHold: null,
+    // { message }: the bake process raises, as a real Blender failure reports it.
+    bakeCrash: null,
+  };
+
+  const review = async (job, { onStdoutLine, signal }) => {
+    control.reviews.push(job);
+    onStdoutLine(line({ event: 'start', blender: '5.2.3', quality: null }));
+    for (const look of job.looks) {
+      for (const view of job.views) {
+        writeFileSync(join(job.out, `${view.id}-${look}.png`), `${look} ${view.id}`);
+        onStdoutLine(line({ event: 'view', id: view.id, look }));
+      }
+    }
+    if (control.reviewHold && !signal?.aborted) await Promise.race([control.reviewHold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+    if (signal?.aborted) return { status: 'terminated', reason: 'canceled', exitCode: null, signal: null };
+    onStdoutLine(line({ event: 'done', sec: 1 }));
+    return { status: 'completed', reason: null, exitCode: 0, signal: null };
+  };
+
+  const canceled = { status: 'terminated', reason: 'canceled', exitCode: null, signal: null };
+
+  const bakeSet = async (job, { onStdoutLine, signal }) => {
+    control.bakes.push(job);
+    onStdoutLine(line({ event: 'start', blender: '5.3.0', quality: null }));
+    if (control.bakeHold && !signal?.aborted) await Promise.race([control.bakeHold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+    if (signal?.aborted) return canceled;
+    if (control.bakeCrash) {
+      onStdoutLine(line({ event: 'error', message: control.bakeCrash.message, traceback: 'Traceback (most recent call last):\nRuntimeError: example' }));
+      return { status: 'failed', reason: 'exit', exitCode: 1, signal: null };
+    }
+    const fault = control.bakeFault[job.set.id];
+    mkdirSync(job.out, { recursive: true });
+    const images = [['baseColor', 'base_color.png'], ['normal', 'normal.png'], ['orm', 'orm.png']];
+    for (const [, file] of images) if (fault !== 'missing') writeFileSync(join(job.out, file), Buffer.concat([PNG, Buffer.from(job.set.id)]));
+    onStdoutLine(line({ event: 'bakeResult', id: job.set.id, size: job.size, samples: job.samples, device: 'CPU', images: images.map(([name, file]) => ({ name, file, max: fault === 'black' ? 0 : 200 })) }));
+    onStdoutLine(line({ event: 'done', sec: 1 }));
+    return { status: 'completed', reason: null, exitCode: 0, signal: null };
+  };
+
+  const bakeExport = async (job, { onStdoutLine, signal }) => {
+    control.exports.push(job);
+    if (signal?.aborted) return canceled;
+    const recorded = recordedStarterEvents();
+    const images = job.sets.length * 3;
+    onStdoutLine(line({ event: 'start', blender: '5.3.0', quality: null }));
+    onStdoutLine(line({ ...recorded.find((event) => event.event === 'scene'), materials: job.sets.length, images }));
+    writeFileSync(job.glb, FAKE_GLB);
+    onStdoutLine(line({ event: 'saved', blend: job.blend, glb: job.glb, glbBytes: FAKE_GLB.length }));
+    onStdoutLine(line({ ...recorded.find((event) => event.event === 'reimport'), materials: job.sets.length, images }));
+    onStdoutLine(line({ event: 'done', sec: 1 }));
+    return { status: 'completed', reason: null, exitCode: 0, signal: null };
+  };
+
+  // The recorded build stops after `scene` when a bake is deferred: it prints each set's facts and saves only model.blend.
+  const deferBake = (events, job) => {
+    if (!control.bake) return events;
+    const plan = control.bake;
+    const listed = { size: plan.size, samples: plan.samples, sets: plan.sets.map(({ id, partIds }) => ({ id, partIds })) };
+    const described = events.map((event) => (event.event === 'described' ? { ...event, bake: plan.raw ?? listed } : event));
+    // A draft build still lists the bake in describe(); it just does not run it.
+    if (job.quality !== 'full') return described;
+    const prepared = plan.sets.map((set) => ({ event: 'bakeSet', id: set.id, partIds: set.partIds, hash: set.hash, uvOverlap: control.bakeFault[set.id] === 'overlap' ? 0.2 : 0, unwrapped: true }));
+    return [
+      ...described.filter((event) => event.event !== 'reimport' && event.event !== 'done')
+        .map((event) => (event.event === 'saved' ? { ...event, glb: null, glbBytes: null, deferred: true } : event))
+        .flatMap((event) => (event.event === 'saved' ? [...prepared, event] : [event])),
+      { event: 'done', sec: 0.3 },
+    ];
+  };
+
+  const worker = async ({ files, onStdoutLine = () => {}, signal }) => {
+    const job = JSON.parse(String(files.find((file) => file.path === 'job.json').content));
+    if (job.mode === 'review') return review(job, { onStdoutLine, signal });
+    if (job.mode === 'bake') return bakeSet(job, { onStdoutLine, signal });
+    if (job.mode === 'bake-export') return bakeExport(job, { onStdoutLine, signal });
+    control.jobs.push({ ...job, staged: files.map((file) => file.path).sort() });
+    const events = deferBake(control.edit ? control.edit(recordedStarterEvents()) : recordedStarterEvents(), job);
+    for (const event of events) {
+      if (event.event === 'mesh' && control.hold) {
+        await Promise.race([control.hold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+      }
+      if (signal?.aborted) return { status: 'terminated', reason: 'canceled', exitCode: null, signal: null };
+      if (event.event === 'mesh' && control.crash) {
+        onStdoutLine(line({ event: 'error', message: control.crash.message, traceback: 'Traceback (most recent call last):\n  File "model.py", line 1\nRuntimeError: example' }));
+        return { status: 'failed', reason: 'exit', exitCode: 1, signal: null };
+      }
+      if (event.event === 'saved') {
+        mkdirSync(job.out, { recursive: true });
+        writeFileSync(join(job.out, 'model.blend'), 'BLENDER-example');
+        if (event.deferred) {
+          onStdoutLine(line({ ...event, blend: join(job.out, 'model.blend') }));
+          continue;
+        }
+        writeFileSync(join(job.out, 'model.glb'), FAKE_GLB);
+        onStdoutLine(line({ ...event, blend: join(job.out, 'model.blend'), glb: join(job.out, 'model.glb'), glbBytes: FAKE_GLB.length }));
+        continue;
+      }
+      onStdoutLine(line(event));
+      if (event.event === 'described') onStdoutLine('Built the lamp with 16 sides');
+    }
+    return { status: 'completed', reason: null, exitCode: 0, signal: null };
+  };
+
+  const getCodeAnimationExecution = async () => ({
+    executionMode: control.executionMode,
+    lanes: { blender: { ready: control.ready, reason: control.ready ? null : 'Run the execution check first.' } },
+    tools: { blender: { engine: 'BLENDER_EEVEE_NEXT', executable: '/opt/example/Blender' } },
+    probe: control.ready ? { tools: { blender: { version: '5.3.0' } } } : null,
+  });
+
+  const resolveBlenderTool = async () => {
+    if (!control.ready) throw new ServerError('Run the execution check first', { status: 409, code: 'CODE_ANIMATION_BLENDER_NOT_READY' });
+    return { executable: '/opt/example/Blender', executionMode: control.executionMode, version: '5.3.0', worker };
+  };
+
+  return { control, worker, getCodeAnimationExecution, resolveBlenderTool };
+};

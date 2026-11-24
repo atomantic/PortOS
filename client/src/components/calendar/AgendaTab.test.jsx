@@ -319,3 +319,55 @@ it('reconciles configuration and reconnect without resurrecting a superseded eve
   await act(async () => {});
   expect(screen.queryByText('Old meeting')).toBeNull();
 });
+
+describe('AgendaTab narrow-viewport layout', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('clamps account select and wraps/truncates event card badges and metadata cleanly', async () => {
+    const narrowAccounts = [
+      { id: 'a1', name: 'A Very Long Calendar Account Name That Exceeds Mobile Width', enabled: true },
+      { id: 'a2', name: 'Work', enabled: true },
+    ];
+    const timedEvent = event('timed', '2099-01-01T10:00:00', '2099-01-01T11:00:00', {
+      title: 'Quarterly Planning Review',
+      location: 'Building 42, Floor 3, Conference Room Orion with a very long address',
+      attendees: ['a@example.com', 'b@example.com'],
+      myStatus: 'accepted',
+    });
+    const allDayEvent = event('allday', '2099-01-02T00:00:00', '2099-01-03T00:00:00', {
+      title: 'Company Holiday',
+      isAllDay: true,
+    });
+    getCalendarEvents.mockResolvedValue({ events: [timedEvent, allDayEvent], total: 2 });
+
+    await renderAgenda(narrowAccounts);
+
+    const accountSelect = screen.getByLabelText('Filter by account');
+    expect(accountSelect).toHaveClass('max-w-full');
+
+    const allDayPill = screen.getByText('All day');
+    expect(allDayPill).toHaveClass('shrink-0');
+
+    const rsvpPill = screen.getByText('accepted');
+    expect(rsvpPill).toHaveClass('shrink-0');
+
+    const locationText = screen.getByText(timedEvent.location);
+    expect(locationText).toHaveClass('truncate');
+    const locationWrapper = locationText.parentElement;
+    expect(locationWrapper).toHaveClass('flex', 'min-w-0', 'max-w-full');
+    expect(locationWrapper.querySelector('svg')).toHaveClass('shrink-0');
+
+    const metadataRow = locationWrapper.parentElement;
+    expect(metadataRow).toHaveClass('flex', 'flex-wrap', 'gap-x-3', 'gap-y-1');
+
+    const attendeesSpan = screen.getByText('2').closest('span');
+    expect(attendeesSpan).toHaveClass('shrink-0');
+    expect(attendeesSpan.querySelector('svg')).toHaveClass('shrink-0');
+
+    const timeSpan = metadataRow.querySelector('span');
+    expect(timeSpan).toHaveClass('shrink-0');
+    expect(timeSpan.querySelector('svg')).toHaveClass('shrink-0');
+  });
+});

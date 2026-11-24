@@ -10,8 +10,13 @@ vi.mock('../services/stackerNews.js', () => ({
     username,
     apiKeyConfigured: true,
   })),
-  createAction: vi.fn(),
+  createActionWithOutcome: vi.fn(),
   executeApprovedAction: vi.fn(),
+  getAccount: vi.fn(),
+  listTerritories: vi.fn(async () => []),
+  listItems: vi.fn(async () => []),
+  listActions: vi.fn(async () => []),
+  updateActionState: vi.fn(),
   listAccounts: vi.fn(async () => []),
   verifyConnection: vi.fn(async () => ({ configured: true, connected: true, transport: 'browser', username: 'example_steward' })),
 }));
@@ -55,11 +60,35 @@ describe('Stacker News routes', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(stackerNews.createAction).not.toHaveBeenCalled();
+    expect(stackerNews.createActionWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['draft_post', { territoryId: '10000000-0000-4000-8000-000000000002', payload: { title: 'New post', body: 'Post body' } }],
+    ['publish_post', { territoryId: '10000000-0000-4000-8000-000000000002', payload: { title: 'New post', body: 'Post body' } }],
+    ['draft_comment', { itemId: '10000000-0000-4000-8000-000000000003', payload: { body: 'Comment body' } }],
+    ['publish_comment', { itemId: '10000000-0000-4000-8000-000000000003', payload: { body: 'Comment body' } }],
+  ])('accepts a %s with only its own target', async (kind, fields) => {
+    const data = { accountId: '10000000-0000-4000-8000-000000000001', kind, ...fields };
+    stackerNews.createActionWithOutcome.mockResolvedValueOnce({
+      action: { ...data, id: 'queued-action', state: 'pending_review' },
+      created: true,
+      changed: true,
+    });
+
+    const response = await request(app).post('/api/stacker-news/actions').send(data);
+
+    expect(response.status).toBe(201);
+    expect(stackerNews.createActionWithOutcome).toHaveBeenCalledExactlyOnceWith(data);
+    expect(response.body).toMatchObject({ id: 'queued-action', state: 'pending_review' });
   });
 
   it('accepts only named manual item handoff intents', async () => {
-    stackerNews.createAction.mockResolvedValue({ id: 'action', accountId: '00000000-0000-4000-8000-000000000001' });
+    stackerNews.createActionWithOutcome.mockResolvedValue({
+      action: { id: 'action', accountId: '00000000-0000-4000-8000-000000000001' },
+      created: true,
+      changed: true,
+    });
     const accepted = await request(app).post('/api/stacker-news/actions').send({
       accountId: '00000000-0000-4000-8000-000000000001',
       itemId: '00000000-0000-4000-8000-000000000002',
@@ -68,7 +97,7 @@ describe('Stacker News routes', () => {
       payload: { intent: 'moderate' },
     });
     expect(accepted.status).toBe(201);
-    expect(stackerNews.createAction).toHaveBeenCalledWith(expect.objectContaining({ payload: { intent: 'moderate' } }));
+    expect(stackerNews.createActionWithOutcome).toHaveBeenCalledWith(expect.objectContaining({ payload: { intent: 'moderate' } }));
 
     const rejected = await request(app).post('/api/stacker-news/actions').send({
       accountId: '00000000-0000-4000-8000-000000000001',
@@ -80,6 +109,36 @@ describe('Stacker News routes', () => {
     expect(rejected.status).toBe(400);
   });
 
+  it('returns the same action body on replay and broadcasts only when the transaction changed state', async () => {
+    const emit = vi.fn();
+    app.set('io', { emit });
+    const accountId = '00000000-0000-4000-8000-000000000001';
+    const action = { id: 'action', accountId };
+    stackerNews.createActionWithOutcome
+      .mockResolvedValueOnce({ action, created: true, changed: true })
+      .mockResolvedValueOnce({ action, created: false, changed: false })
+      .mockResolvedValueOnce({ action, created: false, changed: true });
+    const submit = () => request(app).post('/api/stacker-news/actions').send({
+      accountId, kind: 'draft_post', territoryId: '00000000-0000-4000-8000-000000000002',
+      payload: { title: 'Example post', body: 'Example text' },
+    });
+
+    const created = await submit();
+    expect(created.status).toBe(201);
+    expect(created.body).toEqual(action);
+    expect(emit).toHaveBeenCalledExactlyOnceWith('stacker-news:changed', { accountId });
+
+    emit.mockClear();
+    const replay = await submit();
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(action);
+    expect(emit).not.toHaveBeenCalled();
+
+    const transitioned = await submit();
+    expect(transitioned.status).toBe(200);
+    expect(emit).toHaveBeenCalledExactlyOnceWith('stacker-news:changed', { accountId });
+  });
+
   it('executes only through the dedicated approved-action primitive', async () => {
     stackerNews.executeApprovedAction.mockResolvedValue({
       id: '00000000-0000-4000-8000-000000000010',
@@ -89,6 +148,29 @@ describe('Stacker News routes', () => {
     const response = await request(app).post('/api/stacker-news/actions/00000000-0000-4000-8000-000000000010/execute').send({});
     expect(response.status).toBe(200);
     expect(stackerNews.executeApprovedAction).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000010');
+  });
+
+  it('answers 404 for a missing action and 409 only for a wrong-state one', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const missing = Object.assign(new Error('Stacker News action not found'), { status: 404 });
+    stackerNews.updateActionState.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/review`).send({ state: 'approved' })).status).toBe(404);
+    stackerNews.updateActionState.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/review`).send({ state: 'approved' })).status).toBe(409);
+    stackerNews.executeApprovedAction.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/execute`).send({})).status).toBe(404);
+    stackerNews.executeApprovedAction.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/stacker-news/actions/${id}/execute`).send({})).status).toBe(409);
+  });
+
+  it.each(['territories', 'items', 'actions'])('404s %s for an unknown account and 200s an empty list for a real one', async (kind) => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    stackerNews.getAccount.mockResolvedValueOnce(null);
+    expect((await request(app).get(`/api/stacker-news/accounts/${id}/${kind}`)).status).toBe(404);
+    stackerNews.getAccount.mockResolvedValueOnce({ id });
+    const ok = await request(app).get(`/api/stacker-news/accounts/${id}/${kind}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body[kind]).toEqual([]);
   });
 
   it('accepts a read transport on create and rejects one outside the two named transports', async () => {

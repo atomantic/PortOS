@@ -58,7 +58,7 @@ export function streamAttachment(res, stream, {
 
   res.set('Content-Type', contentType);
   // Quote the filename at the boundary rather than trusting callers to have slugged it (a quote or newline in a record-derived name would break out of the header).
-  const safeName = String(filename).replace(/[^\w.\-]+/g, '_') || 'download';
+  const safeName = String(filename).replace(/[^\w.-]+/g, '_') || 'download';
   res.set('Content-Disposition', `${disposition}; filename="${safeName}"`);
   // Attachments are never meant to be sniffed into an executable type.
   res.set('X-Content-Type-Options', 'nosniff');

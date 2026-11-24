@@ -10,7 +10,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
 import { MAX_CONSECUTIVE_MISSED_DELIVERABLES } from '../../lib/creativeDirectorPresets.js';
+
+registerLateBoundService('creativeToolRegistry', () => import('../creative/toolRegistry.js'));
 
 // ---- pure derivation (no mocks needed) -------------------------------------
 import { deriveNextPlanAction, lastRenderedVideoJobId, resolvePlanStepArgs } from './planAdvance.js';
@@ -385,6 +388,26 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     expect(p.plan.steps[0].result).toEqual({ id: 's1', seriesId: 's1' });
   });
 
+  it('retains workId alongside id/status/universeId in summarized step results', async () => {
+    const read = makeStore(planProject([
+      step('u', { toolName: 'universe_createUniverse' }),
+      step('s', { toolName: 'pipeline_createSeries', dependsOn: ['u'] }),
+      step('w', { toolName: 'writersRoom_createWork', dependsOn: ['s'] }),
+      step('a', { toolName: 'writersRoom_runAnalysis', dependsOn: ['w'] }),
+    ]));
+    mockDispatch
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'u-1', name: 'World', premise: 'ignored' } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'ser-1', universeId: 'u-1', name: 'Arc', logline: 'ignored' } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'work-1', title: 'Draft', drafts: [] } })
+      .mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'story-craft', workId: 'work-1', status: 'complete', result: { score: 9 } } });
+    await advanceAfterPlanStepSettled('cd-1');
+    const steps = read().plan.steps;
+    expect(steps[0].result).toEqual({ id: 'u-1', name: 'World' });
+    expect(steps[1].result).toEqual({ id: 'ser-1', universeId: 'u-1', name: 'Arc' });
+    expect(steps[2].result).toEqual({ id: 'work-1' });
+    expect(steps[3].result).toEqual({ id: 'story-craft', workId: 'work-1', status: 'complete' });
+  });
+
   it('pauses with residuals when the gate rejects a step (over budget)', async () => {
     const read = makeStore(planProject([step('a', { toolName: 'pipeline_generateStage' })]));
     mockDispatch.mockResolvedValue({ ok: false, rejected: true, reason: 'budget' });
@@ -393,6 +416,39 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     expect(p.status).toBe('paused');
     expect(p.plan.steps[0].status).toBe('blocked');
     expect(p.failureReason).toMatch(/budget/);
+  });
+
+  it('forwards directive budgetCap (including 0) into dispatchCreativeTool and pauses clearly on project-budget', async () => {
+    const read = makeStore(planProject(
+      [step('a', { toolName: 'pipeline_generateStage' })],
+      { directive: { goal: 'do it', deliverables: [], constraints: { budgetCap: 0 } } },
+    ));
+    mockDispatch.mockResolvedValue({
+      ok: false,
+      rejected: true,
+      reason: 'project-budget',
+      exceeded: 'actions',
+      budgetCap: 0,
+      used: 0,
+    });
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockDispatch).toHaveBeenCalledWith('pipeline_generateStage', {}, { projectId: 'cd-1', budgetCap: 0 });
+    const p = read();
+    expect(p.status).toBe('paused');
+    expect(p.plan.steps[0].status).toBe('blocked');
+    expect(p.plan.steps[0].result).toEqual({ reason: 'project-budget', budgetCap: 0, used: 0 });
+    expect(p.failureReason).toMatch(/project-budget/);
+    expect(p.failureReason).toMatch(/0\/0 autonomous actions today/);
+  });
+
+  it('omits budgetCap from dispatchCreativeTool ctx when directive budgetCap is null', async () => {
+    makeStore(planProject(
+      [step('a', { toolName: 'pipeline_createSeries' })],
+      { directive: { goal: 'do it', deliverables: [], constraints: { budgetCap: null } } },
+    ));
+    mockDispatch.mockResolvedValue({ ok: true, mode: 'execute', result: { id: 's1' } });
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockDispatch).toHaveBeenCalledWith('pipeline_createSeries', {}, { projectId: 'cd-1' });
   });
 
   it('bounded re-plan: a failed step re-enqueues the planner until MAX_REPLAN_ROUNDS, then pauses', async () => {
@@ -468,7 +524,8 @@ describe('advanceAfterPlanStepSettled — runAutopilot plan step', () => {
     await advanceAfterPlanStepSettled('cd-1');
     // Emit the terminal frame the live autopilot run would broadcast.
     ap.autopilotEvents.emit('ser-1', { type: 'complete', runId: 'r1', steps: 7, craftGapIssues: 1 });
-    await flush();
+    // Step b loads its tool registry late, so the settle takes more than one flush.
+    await vi.waitFor(() => expect(read().status).toBe('complete'));
     const p = read();
     expect(p.plan.steps[0].status).toBe('done');
     // The complete frame's qualifier counters land in the step result.

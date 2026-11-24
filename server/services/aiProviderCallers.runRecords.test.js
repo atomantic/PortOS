@@ -15,6 +15,10 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { mockJsonResponse } from '../lib/testHelper.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-caller-runs-' });
+const defaultProvider = {
+  id: 'example-api', name: 'Example API', type: 'api', enabled: true,
+  endpoint: 'https://api.example.com/v1', defaultModel: 'example-model', models: ['example-model'],
+};
 const shared = vi.hoisted(() => ({
   provider: {
     id: 'example-api', name: 'Example API', type: 'api', enabled: true,
@@ -25,6 +29,7 @@ const shared = vi.hoisted(() => ({
   recordSession: vi.fn(async () => {}),
   recordRunUsage: vi.fn(async () => {}),
 }));
+const findProvider = (id) => [shared.provider, ...shared.moreProviders].find(p => p.id === id) || shared.provider;
 
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('./aiStatusEvents.js', () => ({ startAIOp: () => ({ update: () => {}, complete: () => {}, error: () => {} }) }));
@@ -39,10 +44,10 @@ vi.mock('./usage.js', async (importOriginal) => ({
 }));
 vi.mock('./provider/providers.js', async (importOriginal) => ({
   ...await importOriginal(),
-  getProviderById: async () => shared.provider,
+  getProviderById: async (id) => findProvider(id),
   getActiveProvider: async () => shared.provider,
   getAllProviders: async () => ({ activeProvider: shared.provider.id, providers: [shared.provider, ...shared.moreProviders] }),
-  listProviders: async () => [shared.provider],
+  listProviders: async () => [shared.provider, ...shared.moreProviders],
 }));
 vi.mock('./settings.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -127,6 +132,7 @@ const goal = (id) => ({
 
 let runner;
 beforeEach(async () => {
+  shared.provider = { ...defaultProvider };
   shared.moreProviders = [];
   await rm(tempRoot, { recursive: true, force: true });
   await mkdir(tempRoot, { recursive: true });
@@ -134,7 +140,7 @@ beforeEach(async () => {
   vi.resetModules();
   runner = createRunnerService({
     dataDir: tempRoot, hooks,
-    providerService: { getProviderById: async () => shared.provider, getAllProviders: async () => ({ providers: [shared.provider] }) },
+    providerService: { getProviderById: async (id) => findProvider(id), getAllProviders: async () => ({ providers: [shared.provider, ...shared.moreProviders] }) },
   });
   // `resetModules` gives each test fresh service modules; the toolkit state
   // module is re-imported with them, so load it through the same registry.
@@ -242,6 +248,47 @@ describe('callers of callProviderAISimple leave one run and one usage session pe
     // One request, to the first provider only, and the plain list as the summary.
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(await records()).toHaveLength(1);
+    expect(report.statusSummary).toContain('EX-1');
+  });
+
+  it('jiraReports: skips disabled providers and falls back to plain summary', async () => {
+    shared.provider = { ...defaultProvider, enabled: false };
+    shared.moreProviders = [{ ...defaultProvider, id: 'disabled-api-2', name: 'Disabled API 2', enabled: false }];
+    vi.stubGlobal('fetch', vi.fn(async () => reply('should not be called')));
+    const { generateReport } = await import('./jiraReports.js');
+
+    const report = await generateReport('example-app', {
+      name: 'Example App', jira: { enabled: true, instanceId: 'example-instance', projectKey: 'EX' },
+    });
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(report.statusSummary).toContain('EX-1');
+  });
+
+  it('jiraReports: local active provider failure never falls over to external cloud API provider', async () => {
+    shared.provider = {
+      ...defaultProvider,
+      id: 'local-api',
+      name: 'Local API',
+      endpoint: 'http://127.0.0.1:11434/v1',
+    };
+    shared.moreProviders = [{
+      ...defaultProvider,
+      id: 'cloud-api',
+      name: 'Cloud API',
+      endpoint: 'https://api.example.com/v1',
+    }];
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    }));
+    const { generateReport } = await import('./jiraReports.js');
+
+    const report = await generateReport('example-app', {
+      name: 'Example App', jira: { enabled: true, instanceId: 'example-instance', projectKey: 'EX' },
+    });
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch.mock.calls[0][0]).toContain('127.0.0.1:11434');
     expect(report.statusSummary).toContain('EX-1');
   });
 

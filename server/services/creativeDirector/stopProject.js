@@ -24,6 +24,7 @@
 import { getProject, updateProject, updateRun, updateScene, updatePlanStep, mutateVideoProject } from './local.js';
 import { RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
+import { loadLateBoundService } from '../../lib/lateBoundServices.js';
 
 const nowISO = () => new Date().toISOString();
 
@@ -97,7 +98,7 @@ export async function retireRuns(projectId, { runs = [], reason = 'Stopped', tas
   if (!taskIds.size) return { runs: runs.length, tasks: 0, agents: 0 };
 
   // An agent that already exited is absent from the active list (killAgent 404s): not an error.
-  const { getActiveAgents, killAgent } = await loadOrEmpty(() => import('../agent/agentManagement.js'), 'agent', projectId);
+  const { getActiveAgents, killAgent } = await loadOrEmpty(() => loadLateBoundService('agentManagement'), 'agent', projectId);
   if (getActiveAgents && killAgent) {
     for (const agent of getActiveAgents().filter((a) => taskIds.has(a.taskId))) {
       agents += await tally(killAgent(agent.id), `kill agent ${agent.id}`, projectId);

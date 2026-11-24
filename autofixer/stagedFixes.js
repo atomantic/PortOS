@@ -1,6 +1,28 @@
-import { readFile, writeFile, rename } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
+import { writeHistoryJson } from './historyFiles.js';
+
+// Session IDs name a directory under sessions/, so they stay inside one
+// filesystem-safe segment. PM2 names may contain dots (lib/pm2ProcessName.js);
+// new IDs encode each dot as `_2e_` and keep the real name in metadata.
+const SESSION_ID_RE = /^autofixer_[A-Za-z0-9_-]+$/;
+// Compatibility for IDs generated before the encoding, which embedded the raw
+// name. Anchored on the generated `_<epoch ms>_<base36>` suffix and still free
+// of any path separator, so malformed or unrelated directories stay ineligible.
+const LEGACY_DOTTED_SESSION_ID_RE = /^autofixer_[A-Za-z0-9_][A-Za-z0-9._-]*\.[A-Za-z0-9._-]*_\d+_[a-z0-9]+$/;
+
+export const isAutofixerSessionId = id => typeof id === 'string'
+  && (SESSION_ID_RE.test(id) || LEGACY_DOTTED_SESSION_ID_RE.test(id));
+
+export const buildAutofixerSessionId = (processName, now = Date.now(), random = Math.random()) =>
+  `autofixer_${processName.replaceAll('.', '_2e_')}_${now}_${random.toString(36).slice(2, 11)}`;
+
+// Best-effort inverse for recovering a name from an ID when no metadata exists.
+export const processNameFromSessionId = (id) => {
+  const encoded = typeof id === 'string' ? id.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] : null;
+  return encoded ? encoded.replaceAll('_2e_', '.') : null;
+};
 
 // Session metadata is the authority for patch disposition. The history index is
 // written by the monitor. Manual and automatic promotion share this queue so
@@ -8,6 +30,7 @@ import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './san
 export function createStagedFixStore({ root, loadApps, execPm2 }) {
   let tail = Promise.resolve();
   let stopping = false;
+  const restarting = new Set();
   const serialize = (operation) => {
     const run = tail.then(() => {
       if (stopping) throw new Error('Autofixer is shutting down');
@@ -16,8 +39,7 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     tail = run.catch(() => {});
     return run;
   };
-  const sessionDir = (id) => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id)
-    ? join(root, 'sessions', id) : null;
+  const sessionDir = id => isAutofixerSessionId(id) ? join(root, 'sessions', id) : null;
   const metadata = async (id) => {
     const dir = sessionDir(id);
     if (!dir) return null;
@@ -58,11 +80,18 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
       if (record.processName === 'portos-autofixer') {
         // Commit the applied disposition before dispatching a restart that
         // waits for this daemon to exit. The shutdown drain cannot await it.
-        await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+        restarting.add(id);
+        try {
+          await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+        } catch (error) {
+          restarting.delete(id);
+          throw error;
+        }
         void execPm2(['restart', record.processName])
           .catch(error => serialize(() => rollback(error.message)))
           .then(message => { if (message) console.error(`❌ [Autofixer] ${message}`); })
-          .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`));
+          .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`))
+          .finally(() => restarting.delete(id));
         return { success: true, disposition: 'applied', status: 202 };
       }
       const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
@@ -73,14 +102,23 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     await save(id, updated);
     return { success: true, disposition };
   };
-  const save = async (id, record) => {
-    const destination = join(sessionDir(id), 'metadata.json');
-    await writeFile(`${destination}.tmp`, JSON.stringify(record, null, 2));
-    await rename(`${destination}.tmp`, destination);
-  };
+  const save = (id, record) => writeHistoryJson(join(sessionDir(id), 'metadata.json'), record);
   return {
     read,
     serialize,
+    async canPrune(id) {
+      const dir = sessionDir(id);
+      if (!dir || restarting.has(id)) return false;
+      try {
+        const record = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'));
+        return record?.staged !== true && !restarting.has(id);
+      } catch (error) {
+        // A partial session can have no metadata. Other failures leave its
+        // staged disposition unknown until a later cleanup pass.
+        if (error.code === 'ENOENT') return !restarting.has(id);
+        throw error;
+      }
+    },
     stopMutations: () => {
       stopping = true;
       return tail;

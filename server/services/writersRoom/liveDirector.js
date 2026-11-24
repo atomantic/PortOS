@@ -21,7 +21,7 @@ import {
 } from './local.js';
 import { createProject, setTreatment, deleteProject, updateProject } from '../creativeDirector/local.js';
 import { deleteCollection } from '../mediaCollections.js';
-import { defaultVideoModelId } from '../videoGen/local.js';
+import { defaultVideoModelId } from '../videoGen/modelCatalog.js';
 import { badRequest } from './_shared.js';
 import { appendPreviousShotNote } from '../../lib/previousShotNote.js';
 

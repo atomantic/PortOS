@@ -379,7 +379,7 @@ function keyedReviewerPinNormalizer(normalizeOne) {
       if (!token) continue;
       const value = normalizeOne(rawValue, token);
       if (!value && value !== 0) continue;
-      if (Object.prototype.hasOwnProperty.call(out, token)) continue;
+      if (Object.hasOwn(out, token)) continue;
       out[token] = value;
     }
     return { ...out };

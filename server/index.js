@@ -31,11 +31,14 @@ import { allowSocketRequest, authGate, hostControlRouteGate, socketAuthGate } fr
 // seam `pipeline/episodeVideo.js` starts a CD project through. Arm it before
 // the first pipeline request, including when the CD router has never loaded.
 import './services/creativeDirector/completionHook.js';
+// Side-effect import (#17896): binds every late-bound service name to its module.
+import './services/serviceLoaders.js';
 import './services/localModelObservations.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
+import { closeEidoverseProxySockets } from './services/eidoverseProxy.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { syncLocalProviderModels } from './services/localLlm.js';
 import { errorMiddleware } from './lib/errorHandler.js';
@@ -200,6 +203,7 @@ const filmStylesRoutes = createLazyRouter(() => import('./routes/filmStyles.js')
 const codeAnimationRoutes = createLazyRouter(() => import('./routes/codeAnimation.js'));
 const codeAnimationExecutionRoutes = createLazyRouter(() => import('./routes/codeAnimationExecution.js'));
 const imageTo3dRoutes = createLazyRouter(() => import('./routes/imageTo3d.js'));
+const blenderModelsRoutes = createLazyRouter(() => import('./routes/blenderModels.js'));
 const riggingRoutes = createLazyRouter(() => import('./routes/rigging.js'));
 const writersRoomRoutes = createLazyRouter(() => import('./routes/writersRoom.js'));
 const universeBuilderRoutes = createLazyRouter(() => import('./routes/universeBuilder/index.js'));
@@ -259,6 +263,7 @@ authEvents.on('sessions:revoked-all', () => remoteDesktopBroker.revokeAll('PortO
 // Eidoverse same-origin path + root allowlist (active only after the on-demand
 // host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
 mountEidoverseOnServer(null, [httpServer, localHttpServer]);
+authEvents.on('sessions:revoked-all', closeEidoverseProxySockets);
 
 // Close unclaimed upgrade sockets after a bounded timeout (replaces engine.io's
 // destroyUpgrade timer so reverse proxies with slow upstreams aren't cut short).
@@ -499,6 +504,7 @@ app.use('/api/film-styles', filmStylesRoutes);
 app.use('/api/code-animation/execution', codeAnimationExecutionRoutes);
 app.use('/api/code-animation', codeAnimationRoutes);
 app.use('/api/image-to-3d', imageTo3dRoutes);
+app.use('/api/blender-models', blenderModelsRoutes);
 app.use('/api/rigging', riggingRoutes);
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/writers-room', writersRoomRoutes);

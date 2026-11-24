@@ -3,6 +3,7 @@ import { isRemoteMediaJob } from './remoteMediaJob.js';
 import { recordQuotaCooldown, recordRateLimitCooldown } from './limits.js';
 import { persist } from './persistence.js';
 import { mediaJobEvents, isTopazUpscale, trackTerminalOperation, videoHolds } from './state.js';
+import { loadMediaRuntimeModule } from '../bootHookRegistry.js';
 
 // Public status remains running until the terminal outcome is durable.
 // The synchronous claim is transient: neither persistence nor public job
@@ -93,7 +94,7 @@ export function createJobHandlers(job, { sseEntry, permit, terminate, enqueueJob
             job.params = { ...job.params, visualProfileSource: result };
             await persist();
             controller.signal.throwIfAborted();
-            const { finishVisualProfileImage } = await import('../imageGen/finishVisualProfile.js');
+            const { finishVisualProfileImage } = await loadMediaRuntimeModule('finishVisualProfile');
             const finished = await finishVisualProfileImage({ result, profile: job.params.visualProfile,
               revision: job.params.visualProfileRevision, applyFilmFinish, signal: controller.signal, onCleanupFailure: () => permit.markUnsettled() });
             controller.signal.throwIfAborted();
@@ -112,7 +113,7 @@ export function createJobHandlers(job, { sseEntry, permit, terminate, enqueueJob
       if (job.kind === 'image' && result?.filename) {
         trackTerminalOperation(permit.run(async () => {
           try {
-            const { getVerifierSettings, verifyImage } = await import('../imageVerifier.js');
+            const { getVerifierSettings, verifyImage } = await loadMediaRuntimeModule('imageVerifier');
             const vs = await getVerifierSettings().catch(() => null);
             if (vs?.enabledForGeneration || job.params?.verifyImage === true) {
               const verification = await verifyImage({

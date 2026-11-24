@@ -50,7 +50,8 @@ import {
   listBrokers, getBroker, listBrokerCases, transitionCase,
 } from './privacyBrokers.js';
 import { listScanEligibleValues } from './privacyVault.js';
-import { buildSearchVectors, parseCityState, probeBroker } from './privacyScan.js';
+import { buildSearchVectors, probeBroker } from './privacyScan.js';
+import { parseCityState } from '../lib/cityState.js';
 import { createDraft, approveDraft } from './messageDrafts.js';
 import { pickEmailSenderAccount, sendViaForAccountType } from '../lib/messageTransport.js';
 import { listAccounts } from './messageAccounts.js';
@@ -449,10 +450,10 @@ export async function runVerificationPass({
       if (hit) {
         await transitionCase(c.id, 'verification_pending', {
           channel: c.channel || undefined,
-          evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, url: hit.s.verificationUrl, score: hit.s.score } },
+          evidence: { ...(c.evidence || {}), verification: { messageId: hit.m.id, score: hit.s.score }, ...(hit.s.verificationUrl ? { verification_url: hit.s.verificationUrl } : {}) },
           now,
         });
-        advanced.push({ caseId: c.id, brokerId: c.brokerId, verificationUrl: hit.s.verificationUrl });
+        advanced.push({ caseId: c.id, brokerId: c.brokerId });
       }
     }
   }

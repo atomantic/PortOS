@@ -42,22 +42,24 @@ import {
   WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord,
   WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord,
 } from './syncLogic.js';
+import { queueWorkWrite, queueFolderWrite, queueExerciseWrite } from './_shared.js';
 import { toPgJson } from '../../lib/pgJson.js';
 
 /**
  * Shared per-record LWW merge for a body-less Writers Room record (folder /
  * exercise) — both federate as of #1645 (follow-up to #1565). Same posture as
- * `mergeWorksFromSync` minus the draft-row decomposition: lock the row, rebuild
+ * `mergeWorksFromSync` minus the draft-row decomposition: take the shared write
+ * queue (a local mutator holds it across its own read/write), lock the row, rebuild
  * the local record from its `data` JSONB, run the shared pure decision, journal
  * the about-to-be-overwritten local version when remote wins, and persist + seed
  * the conflict-journal base hash. `table` is a hardcoded constant (never user
  * input). Returns `{ applied, count }`.
  */
-async function mergeBodylessFromSync(table, kind, mergeFn, persistFn, remoteRecords, source) {
+async function mergeBodylessFromSync(table, kind, queue, mergeFn, persistFn, remoteRecords, source) {
   if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
   let changed = 0;
   for (const remote of remoteRecords) {
-    const applied = await withTransaction(async (client) => {
+    const applied = await queue(() => withTransaction(async (client) => {
       const sel = await client.query(`SELECT data FROM ${table} WHERE id = $1 FOR UPDATE`, [remote?.id]);
       const local = sel.rows[0]?.data ?? null;
       const { next, inserted, remoteWins, changed: didChange } = mergeFn(local, remote);
@@ -69,7 +71,7 @@ async function mergeBodylessFromSync(table, kind, mergeFn, persistFn, remoteReco
       await persistFn(client, next);
       await setSyncBaseHash(kind, next.id, contentHashForRecord(kind, next));
       return true;
-    });
+    }));
     if (applied) changed += 1;
   }
   await flushBaseHashes();
@@ -173,9 +175,11 @@ export async function writeFolder(folder) {
  */
 export async function deleteFolder(id) {
   await withTransaction(async (client) => {
-    const sel = await client.query(`SELECT data FROM writers_room_folders WHERE id = $1 FOR UPDATE`, [id]);
-    const current = sel.rows[0]?.data;
-    if (!current || current.deleted === true) return;
+    const sel = await client.query(`SELECT deleted, data FROM writers_room_folders WHERE id = $1 FOR UPDATE`, [id]);
+    const row = sel.rows[0];
+    const current = row?.data;
+    // A split-brain row (column FALSE, data.deleted true) must still be repairable (#17919).
+    if (!row || (row.deleted === true && current?.deleted === true)) return;
     const now = new Date().toISOString();
     await persistFolderTx(client, { ...current, deleted: true, deletedAt: now, updatedAt: now });
   });
@@ -183,7 +187,7 @@ export async function deleteFolder(id) {
 
 /** Merge an incoming batch of folder records from a peer (LWW, tombstone-aware). */
 export async function mergeFoldersFromSync(remoteFolders, { source = { via: 'sync', peerId: null } } = {}) {
-  return mergeBodylessFromSync('writers_room_folders', WRITERS_ROOM_FOLDER_KIND, mergeFolderRecord, persistFolderTx, remoteFolders, source);
+  return mergeBodylessFromSync('writers_room_folders', WRITERS_ROOM_FOLDER_KIND, queueFolderWrite, mergeFolderRecord, persistFolderTx, remoteFolders, source);
 }
 
 /** Hard-remove tombstoned folders whose `deleted_at` is older than the cutoff. */
@@ -258,7 +262,7 @@ export async function writeExercise(exercise) {
 
 /** Merge an incoming batch of exercise records from a peer (LWW, tombstone-aware). */
 export async function mergeExercisesFromSync(remoteExercises, { source = { via: 'sync', peerId: null } } = {}) {
-  return mergeBodylessFromSync('writers_room_exercises', WRITERS_ROOM_EXERCISE_KIND, mergeExerciseRecord, persistExerciseTx, remoteExercises, source);
+  return mergeBodylessFromSync('writers_room_exercises', WRITERS_ROOM_EXERCISE_KIND, queueExerciseWrite, mergeExerciseRecord, persistExerciseTx, remoteExercises, source);
 }
 
 /** Hard-remove tombstoned exercises whose `deleted_at` is older than the cutoff. */
@@ -503,9 +507,11 @@ async function persistWorkTx(client, manifest) {
  */
 export async function deleteWork(id) {
   await withTransaction(async (client) => {
-    const sel = await client.query(`SELECT data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [id]);
-    const current = sel.rows[0]?.data;
-    if (!current || current.deleted === true) return;
+    const sel = await client.query(`SELECT deleted, data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [id]);
+    const row = sel.rows[0];
+    const current = row?.data;
+    // A split-brain row (column FALSE, data.deleted true) must still be repairable (#17919).
+    if (!row || (row.deleted === true && current?.deleted === true)) return;
     const now = new Date().toISOString();
     await persistWorkTx(client, { ...current, drafts: undefined, deleted: true, deletedAt: now, updatedAt: now });
   });
@@ -513,8 +519,10 @@ export async function deleteWork(id) {
 
 /**
  * Merge an incoming batch of work records from a peer (per-record push). Each
- * record's read-modify-write runs inside `withTransaction` + `SELECT … FOR
- * UPDATE` so a concurrent local edit can't lose to (or clobber) the merge. LWW
+ * record's read-modify-write holds `queueWorkWrite(id)`, because a local mutator
+ * reads its manifest outside any transaction and the row lock alone would let it
+ * write that stale snapshot over the merge; `SELECT … FOR UPDATE` covers the
+ * unqueued row writers. LWW
  * on `updatedAt` (tombstone-aware) via the shared `mergeWorkRecord` decision —
  * identical to the file backend so the two can't drift. Mirrors
  * `mergeProjectsFromSync`: seeds/advances the conflict-journal base hash and
@@ -525,7 +533,7 @@ export async function mergeWorksFromSync(remoteWorks, { source = { via: 'sync', 
   if (!Array.isArray(remoteWorks)) return { applied: false, count: 0 };
   let changed = 0;
   for (const remote of remoteWorks) {
-    const applied = await withTransaction(async (client) => {
+    const applied = await queueWorkWrite(remote?.id, () => withTransaction(async (client) => {
       // Lock the work row, then rebuild the local manifest (row data + its draft
       // rows) so the LWW comparison + journaled snapshot see the full record.
       const sel = await client.query(`SELECT data FROM writers_room_works WHERE id = $1 FOR UPDATE`, [remote?.id]);
@@ -549,7 +557,7 @@ export async function mergeWorksFromSync(remoteWorks, { source = { via: 'sync', 
       await persistWorkTx(client, next);
       await setSyncBaseHash(WRITERS_ROOM_WORK_KIND, next.id, contentHashForRecord(WRITERS_ROOM_WORK_KIND, next));
       return true;
-    });
+    }));
     if (applied) changed += 1;
   }
   await flushBaseHashes();
@@ -557,31 +565,35 @@ export async function mergeWorksFromSync(remoteWorks, { source = { via: 'sync', 
   return { applied: true, count: changed };
 }
 
+/** Ids of works whose tombstone is older than the cutoff (GC candidates). */
+export async function listPrunableWorkIds(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return [];
+  const { rows } = await query(
+    `SELECT id FROM writers_room_works
+     WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1`,
+    [new Date(olderThanMs).toISOString()],
+  );
+  return rows.map((r) => r.id);
+}
+
 /**
- * Hard-remove tombstoned works (+ their draft rows) whose deletedAt is older than
- * the cutoff. Called by tombstone GC once every subscribed peer has acked the
- * deletion. Returns the pruned ids so the facade (sync.js) can rm the on-disk .md
- * dirs + evict each work's conflict-journal base hash. Mirrors
- * `pruneTombstonedProjects` (the base-hash eviction lives in the facade here
- * because the .md cleanup is a facade concern too).
+ * Hard-remove one tombstoned work (+ its draft rows) if its tombstone is STILL
+ * older than the cutoff: the candidate may have been revived since it was listed.
+ * Returns whether it was removed. The facade (sync.js) holds the work's write
+ * queue and a backup lease, and rm's the on-disk dir.
  */
-export async function pruneTombstonedWorks(olderThanMs) {
-  if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
-  const cutoffIso = new Date(olderThanMs).toISOString();
-  const ids = await withTransaction(async (client) => {
+export async function pruneTombstonedWork(id, olderThanMs) {
+  return withTransaction(async (client) => {
     const { rows } = await client.query(
       `DELETE FROM writers_room_works
-       WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1
+       WHERE id = $1 AND deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $2
        RETURNING id`,
-      [cutoffIso],
+      [id, new Date(olderThanMs).toISOString()],
     );
-    const pruned = rows.map((r) => r.id);
-    if (pruned.length > 0) {
-      await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = ANY($1::text[])`, [pruned]);
-    }
-    return pruned;
+    if (rows.length === 0) return false;
+    await client.query(`DELETE FROM writers_room_draft_versions WHERE work_id = $1`, [id]);
+    return true;
   });
-  return { pruned: ids.length, ids };
 }
 
 /**

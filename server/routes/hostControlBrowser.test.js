@@ -26,6 +26,7 @@ const svc = vi.hoisted(() => ({
   navigateToUrlPinned: vi.fn(async (url) => ({ id: 'tab-1', url })),
   getOpenPages: vi.fn(async () => [{ id: 'p1', title: 'Inbox', url: 'https://example.com/inbox' }]),
   getDownloads: vi.fn(async () => ({ downloadDir: '/d', files: [{ name: 'secret.json' }] })),
+  getRecentLogs: vi.fn(async () => ({ stdout: 'browser ok', stderr: '' })),
   resolveDownload: vi.fn(async () => null),
 }));
 vi.mock('../services/browserService.js', () => ({ browserEvents: new EventEmitter(), ...svc }));
@@ -50,6 +51,7 @@ const listings = [
   ['get', '/api/browser/pages', undefined, svc.getOpenPages, 200],
   ['get', '/api/browser/downloads', undefined, svc.getDownloads, 200],
   ['get', '/api/browser/downloads/secret.json', undefined, svc.resolveDownload, 404],
+  ['get', '/api/browser/logs', undefined, svc.getRecentLogs, 200],
 ];
 
 beforeEach(() => {

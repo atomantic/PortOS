@@ -8,7 +8,7 @@
  * records stay out of the app DB until that boundary is designed.
  */
 
-import { invalidateMeatspace } from './meatspaceEvents.js';
+import { invalidateMeatspace } from './meatspace/meatspaceEvents.js';
 import { join } from 'path';
 import { atomicWrite, PATHS, ensureDir, readJSONFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';

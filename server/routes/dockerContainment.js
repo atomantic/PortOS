@@ -28,13 +28,18 @@ async function readGate() {
   return { enabled, settings: settings?.[DOCKER_CONTAINMENT_SETTINGS_KEY] ?? {} };
 }
 
-const featureOff = (res) => res.status(409).json({
-  status: 'refused',
-  code: CONTAINMENT_UNAVAILABLE,
-  state: 'disabled',
-  reason: 'Docker containment is off. Turn it on in Settings > Features first.',
-  contained: false,
-});
+const featureOff = (res) => {
+  const reason = 'Docker containment is off. Turn it on in Settings > Features first.';
+  return res.status(409).json({
+    status: 'refused',
+    code: CONTAINMENT_UNAVAILABLE,
+    state: 'disabled',
+    reason,
+    error: reason,
+    contained: false,
+    timestamp: Date.now(),
+  });
+};
 
 router.get('/status', asyncHandler(async (_req, res) => {
   res.json(await getDockerContainmentStatus(await readGate()));
@@ -45,7 +50,14 @@ router.post('/pull', asyncHandler(async (req, res) => {
   const gate = await readGate();
   if (!gate.enabled) return featureOff(res);
   const result = await pullDockerContainmentImage({ major, settings: gate.settings });
-  res.status(result.ok ? 200 : 409).json(result);
+  if (!result.ok) {
+    return res.status(409).json({
+      code: CONTAINMENT_UNAVAILABLE,
+      timestamp: Date.now(),
+      ...result,
+    });
+  }
+  res.json(result);
 }));
 
 router.post('/run', asyncHandler(async (req, res) => {
@@ -59,7 +71,14 @@ router.post('/run', asyncHandler(async (req, res) => {
     worktree, phase, command, settings: gate.settings, dataDir: PATHS.data,
     timeoutMs: timeoutMinutes ? timeoutMinutes * 60_000 : undefined, signal: controller.signal,
   });
-  res.status(result.status === 'refused' ? 409 : 200).json(result);
+  if (result.status === 'refused') {
+    return res.status(409).json({
+      error: result.reason,
+      timestamp: Date.now(),
+      ...result,
+    });
+  }
+  res.json(result);
 }));
 
 export default router;

@@ -167,7 +167,7 @@ const SCENE_ENTRY_RE = /^\s*(?:[-*+]\s|\d{1,3}[.)]\s|Scene\s+\d)/i;
 const LIST_MARKER_RE = /^\s*(?:[-*+]|\d{1,3}[.)])\s*/;
 // Strip a leading `Scene N` token (with an optional —/–/:/-/. separator),
 // capturing the scene number.
-const SCENE_PREFIX_RE = /^Scene\s+(\d{1,3})\b\s*[—–:.\-]?\s*(.*)$/i;
+const SCENE_PREFIX_RE = /^Scene\s+(\d{1,3})\b\s*[—–:.-]?\s*(.*)$/i;
 
 /**
  * Parse the beat sheet's canonical `## Scenes` list (#1552) into a lightweight

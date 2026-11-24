@@ -131,7 +131,7 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
 
   it('requires both ffmpeg tools before reporting a mere.run install ready', () => {
     const strictGate = source.match(
-      /if \[\[ "\$INSTALL_MERERUN" == "1" \]\]; then\n  MISSING_REF2VA_TOOLS=\(\)\n(?:.*\n)*?^fi$/m,
+      /if \[\[ "\$INSTALL_MERERUN" == "1" \]\]; then\n {2}MISSING_REF2VA_TOOLS=\(\)\n(?:.*\n)*?^fi$/m,
     )?.[0];
     expect(strictGate).toContain('for command_name in ffmpeg ffprobe');
     expect(strictGate).toContain('exit 1');
@@ -786,7 +786,7 @@ cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
     const alternatePython = join(home, 'alternate-python');
     writeFileSync(alternatePython, readFileSync(python));
     chmodSync(alternatePython, 0o755);
-    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.7/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
+    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.7/bin/uv'), `[[ "$1" == --version ]] || echo 'stale execute' >> "$LOG"; echo 'uv ${privateVersion}'`);
     const run = (extra = {}) => {
       writeFileSync(log, '');
       return spawnSync(resolveBashBinary(), ['-c', `
@@ -1224,7 +1224,7 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
     executable('python3', 'exit 0');
     executable('ffmpeg', 'exit 0');
     executable('ffprobe', 'exit 0');
-    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.7'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
+    executable('uv', `if [[ "$1" == --version ]]; then echo 'uv 0.13.7'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
 if [[ "$1" == venv ]]; then
   root="\${@: -1}"
   mkdir -p "$root/$PY_LAYOUT"
@@ -1242,7 +1242,7 @@ fi`);
       writeFileSync(tool, readFileSync(join(bin, 'uv')));
       chmodSync(tool, 0o755);
     }
-    executable('uv', 'echo \"Ambient uv must not execute\" >&2; exit 96');
+    executable('uv', 'echo "Ambient uv must not execute" >&2; exit 96');
     const fakePy = join(dir, 'fake-python');
     writeFileSync(fakePy, `#!/bin/bash
 set -eu
@@ -1543,7 +1543,7 @@ ${section}`;
 describe('MuScriptor Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-muscriptor-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_MUSCRIPTOR" == "1"'), source.indexOf('INSTALL_FLUX2="${'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const [appleBranch, otherBranch] = section.split(/^ {2}else$/m);
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1575,7 +1575,7 @@ describe('MuScriptor Apple Silicon install is hash-pinned', () => {
 describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-audioldm2-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_AUDIOLDM2" == "1"'), source.indexOf('INSTALL_ACESTEP="${'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const [appleBranch, otherBranch] = section.split(/^ {2}else$/m);
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1765,7 +1765,7 @@ ${block}`;
 describe('FLUX.2 install is hash-pinned on every platform', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-flux2-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('FLUX.2 venv built but'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const [appleBranch, otherBranch] = section.split(/^ {2}else$/m);
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1919,7 +1919,7 @@ ${section}`;
 describe('ACE-Step Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('if [[ "$INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
-  const [, otherBranch] = section.split(/^  else$/m);
+  const [, otherBranch] = section.split(/^ {2}else$/m);
   const runBlock = ({ repair = false, oldPython = false, appleSilicon = true, failure = '' } = {}) => {
     const dir = mkdtempSync(join(tmpdir(), 'portos-acestep-test-'));
     tempVenvs.push(dir);
@@ -2085,7 +2085,7 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
 describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REQUIREMENTS_DIR, 'requirements-acestep15-mlx.lock.txt'), 'utf8');
   const section = source.slice(source.indexOf('INSTALL_ACESTEP15" == "1"'), source.indexOf('INSTALL_MINIMAX_MUSIC3="${'));
-  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+  const [appleBranch, otherBranch] = section.split(/^ {2}else$/m);
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));

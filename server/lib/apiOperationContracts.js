@@ -52,7 +52,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       },
     },
   },
-  '/api/logs/{processName}': {
+  '/api/logs/:processName': {
     get: {
       summary: 'Read or follow one PM2 process log',
       parameters: [
@@ -63,14 +63,16 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       ],
       responses: {
         200: { description: 'Process log tail or server-sent log stream' },
-        400: { description: 'Invalid process name or query', 'x-portos-error-codes': ['INVALID_PROCESS_NAME', 'VALIDATION_ERROR'] },
+        400: { description: 'Invalid process name, unknown process, or invalid query', 'x-portos-error-codes': ['INVALID_PROCESS_NAME', 'UNKNOWN_PROCESS', 'VALIDATION_ERROR'] },
+        403: { description: 'Caller lacks host authority', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
       },
     },
   },
-  '/api/apps/{id}/logs': {
+  '/api/apps/:id/logs': {
     get: {
       summary: 'Read logs for a process owned by this app',
       parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
         { name: 'process', in: 'query', required: false, schema: zodToOpenApiSchema(pm2ProcessNameSchema), description: 'Must belong to the app; defaults to its first PM2 process.' },
         { name: 'lines', in: 'query', required: false, schema: { type: 'integer', default: 100 } },
       ],
@@ -192,6 +194,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
       responses: {
         200: { description: 'WAV audio', content: { 'audio/wav': { schema: { type: 'string', format: 'binary' } } } },
         400: { description: 'Invalid payload or unknown voice', 'x-portos-error-codes': ['VALIDATION_ERROR', 'UNKNOWN_VOICE'] },
+        403: { description: 'Voice API is disabled and caller lacks host control', 'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'] },
       },
       'x-portos-tool': {
         name: 'voice.synthesize', version: 1,
@@ -266,7 +269,10 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     post: {
       summary: 'Acknowledge image options',
       description: 'Compatibility endpoint. PortOS does not switch its underlying model from this request.',
-      responses: { 200: { description: 'Acknowledgement' } },
+      responses: {
+        200: { description: 'Acknowledgement' },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
     },
   },
   '/sdapi/v1/progress': {
@@ -280,7 +286,13 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     },
   },
   '/sdapi/v1/portos/video-models': {
-    get: { summary: 'List PortOS video models', responses: { 200: { description: 'Video model catalog and default' } } },
+    get: {
+      summary: 'List PortOS video models',
+      responses: {
+        200: { description: 'Video model catalog and default' },
+        403: { description: 'A1111 API exposure is disabled' },
+      },
+    },
   },
   '/api/cos/tools': {
     get: {
@@ -304,6 +316,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
         400: { description: 'Invalid call or arguments' },
         403: { description: 'Scope, capability, or authentication denied' },
         409: { description: 'Idempotency conflict' },
+        422: { description: 'Tool execution failed' },
       },
     },
   },

@@ -158,7 +158,9 @@ vi.mock('../services/videoGen/trim.js', () => ({
   trimHistoryItem: vi.fn(),
 }));
 
-vi.mock('../services/videoGen/local.js', () => ({
+// The route and prepareParams.js reach these through different modules
+// (local.js facade vs the catalog/history leaves); one set of fns serves both.
+const videoGenLeaves = vi.hoisted(() => ({
   // The route checks `runtime` on the default model when validating a2v —
   // include it so the a2v happy-path tests don't trip the runtime capability
   // guard. Tests that need to exercise the legacy runtime override the mock
@@ -169,6 +171,19 @@ vi.mock('../services/videoGen/local.js', () => ({
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   getHistoryItem: vi.fn(async () => null),
+}));
+vi.mock('../services/videoGen/modelCatalog.js', () => ({
+  listVideoModels: videoGenLeaves.listVideoModels,
+  defaultVideoModelId: videoGenLeaves.defaultVideoModelId,
+}));
+vi.mock('../services/videoGen/history.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadHistory: videoGenLeaves.loadHistory,
+  getHistoryItem: videoGenLeaves.getHistoryItem,
+}));
+
+vi.mock('../services/videoGen/local.js', () => ({
+  ...videoGenLeaves,
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
   // The route imports setHistoryItemHidden too — without this entry, ESM
   // module linking fails when the route is loaded inside the test process.
@@ -3317,6 +3332,18 @@ describe('videoGen routes', () => {
       expect(r.body.activeJob.jobId).toBe('running-1');
       expect(r.body.activeJob.status).toBe('running');
       expect(r.body.activeJob.params.prompt).toBe('P running');
+    });
+
+    it('echoes batchSize, resolution and generateAudio for reload restore', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'local-1', kind: 'video', status: 'running', params: { prompt: 'p', batchSize: 3 } },
+        { id: 'fal-1', kind: 'video', status: 'running', params: { prompt: 'p', mode: 'fal', resolution: '720p', generateAudio: true } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      const byId = Object.fromEntries(r.body.activeJobs.map((j) => [j.jobId, j.params]));
+      expect(byId['local-1'].batchSize).toBe(3);
+      expect(byId['fal-1']).toMatchObject({ resolution: '720p', generateAudio: true });
     });
 
     it('restores only gallery-backed reference images into the editable picker', async () => {

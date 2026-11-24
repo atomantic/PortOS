@@ -19,6 +19,7 @@ vi.mock('../services/apiCatalog', () => ({
   getCatalogStats: vi.fn(),
   getCatalogFacets: vi.fn(),
   rerunCatalogMigration: vi.fn(),
+  getCatalogExportUrl: ({ refKind, refId, format }) => `/api/catalog/export?refKind=${refKind}&refId=${refId}&format=${format}`,
 }));
 
 // Bulk "Add to universe/series" sources its menu from the FULL live lists (so
@@ -110,6 +111,25 @@ beforeEach(() => {
 });
 
 describe('Catalog page', () => {
+  it('offers slice exports only when scoped to a universe or series', async () => {
+    renderCatalog();
+    await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());
+    expect(screen.queryByLabelText('Export this slice')).toBeNull();
+  });
+
+  it.each([
+    ['/catalog?series=s-1', 'series', 's-1'],
+    ['/catalog?universe=u-1', 'universe', 'u-1'],
+  ])('links JSON/Markdown/YAML downloads for %s', async (entry, refKind, refId) => {
+    renderCatalog(entry);
+    await waitFor(() => expect(screen.getByLabelText('Export this slice')).toBeTruthy());
+    for (const [label, format] of [['JSON', 'json'], ['Markdown', 'markdown'], ['YAML', 'yaml']]) {
+      const link = screen.getByRole('link', { name: label, hidden: true });
+      expect(link.getAttribute('href')).toBe(`/api/catalog/export?refKind=${refKind}&refId=${refId}&format=${format}`);
+      expect(link.hasAttribute('download')).toBe(true);
+    }
+  });
+
   it('opens catalog type settings in a deep-linkable feature drawer', async () => {
     renderCatalog();
     await waitFor(() => expect(screen.getByText('Echo Saint')).toBeTruthy());

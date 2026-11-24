@@ -50,6 +50,7 @@ async function captureFrames(frames, onFrame, signal) {
   } finally {
     // A failed owned close preserves its evidence and must not report success.
     try { await page?.close(); }
+    // biome-ignore lint/correctness/noUnsafeFinally: cleanup-verification failure must surface and deliberately supersedes the body outcome
     catch (error) { maintenance.markCurrentUnsettled(); throw error; }
     finally { await rm(scratch, { recursive: true, force: true }); }
   }

@@ -329,7 +329,7 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
       }
     } else if (textBuf != null) {
       const value = textBuf.toString('utf-8');
-      if (Object.prototype.hasOwnProperty.call(body, currentName)) {
+      if (Object.hasOwn(body, currentName)) {
         if (Array.isArray(body[currentName])) body[currentName].push(value);
         else body[currentName] = [body[currentName], value];
       } else {

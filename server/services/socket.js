@@ -2,10 +2,9 @@ import { catalogIdentityEvents } from './catalogIdentity/events.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { registerModelObservationSocket } from './modelObservation.js';
 import { registerBrowserStatusSocket } from './browserStatus.js';
-import { registerFleetHostSocket } from './fleetHostNotify.js';
 import { spriteEvents } from './sprites/events.js';
 import { modelLifecycleEvents } from './modelLifecycleEvents.js';
-import { meatspaceEvents } from './meatspaceEvents.js';
+import { meatspaceEvents } from './meatspace/meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
 import { nativeUsageEvents } from './nativeUsageEvents.js';
@@ -21,7 +20,7 @@ import { updateEvents } from './updateChecker.js';
 import { digitalTwinEvents } from './digital-twin-meta.js';
 import { brainEvents, BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
-import { beeperSocketEvents } from './beeperSocketEvents.js';
+import { beeperSocketEvents } from './beeper/beeperSocketEvents.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { sanitizePeerForClient } from './instances.js';
@@ -63,19 +62,33 @@ import { detachShellSocket, registerShellHandlers } from '../sockets/shell.js';
 import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
-import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
+import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl, verifyPeerToken } from './authGate.js';
 import { runEventLogEvents } from './agent/agentRunEventLog.js';
 import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
 import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
-import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
-import { broadcastToCommandSubscribers, commandSubscribers, getIo, setIo } from './socketIo.js';
+import { peerSyncBus } from './peerSyncEventBus.js';
+import { deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncDelivery.js';
+import { broadcastToCommandSubscribers, commandSubscribers, emitToOperators, getIo, setIo, PEER_SOCKET_ROOM } from './socketIo.js';
+import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
 
 export { broadcastToCommandSubscribers, getIo };
 
 // Store CoS subscribers
 const cosSubscribers = new Set();
+// Peer sockets that sent `cos:subscribe`. Kept apart from the operator set so a
+// paired peer receives only the agent stream peerSocketRelay consumes.
+const peerCosSubscribers = new Set();
+const PEER_COS_EVENTS = new Set(['cos:agent:spawned', 'cos:agent:updated', 'cos:agent:output', 'cos:agent:completed']);
+
+// Peer-authenticated handshake, or (auth off, so no credential was checked) a
+// socket that names a peer instance. Either way it is never an operator.
+const isPeerSocket = (socket) => {
+  const method = socket.data?.portosAuthMethod;
+  if (method === 'peer' || method === 'basic') return true;
+  return method !== 'session' && Boolean(socket.handshake?.headers?.[PEER_INSTANCE_HEADER.toLowerCase()]);
+};
 // Store error subscribers for auto-fix notifications
 const errorSubscribers = new Set();
 // Store notification subscribers
@@ -93,7 +106,7 @@ const codeAnimationSubscribers = new Set();
 const beeperSubscribers = new Set();
 const fableLoomSubscribers = new Set();
 const mediaQueueSubscribers = new Set();
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, peerCosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, codeAnimationSubscribers, beeperSubscribers, fableLoomSubscribers, commandSubscribers, mediaQueueSubscribers];
 
 export function emitCodeAnimationChanged(id, kind) {
   emitCodeAnimationChangedToBus(id, kind);
@@ -111,11 +124,11 @@ function broadcastToSet(set, event, data) {
 function registerSubscriber(socket, namespace, set) {
   socket.on(`${namespace}:subscribe`, (options) => {
     if (namespace === 'cos' && ['invalidate', 'full'].includes(options?.taskLists)) socket.cosTaskLists = options.taskLists;
-    set.add(socket);
+    (typeof set === 'function' ? set(socket) : set).add(socket);
     socket.emit(`${namespace}:subscribed`);
   });
   socket.on(`${namespace}:unsubscribe`, () => {
-    set.delete(socket);
+    (typeof set === 'function' ? set(socket) : set).delete(socket);
     socket.emit(`${namespace}:unsubscribed`);
   });
 }
@@ -183,8 +196,11 @@ function registerAuthHandlers(socket, _io) {
         }
         if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();
         const peerAuthMethod = socket.data?.portosAuthMethod;
-        if ((peerAuthMethod === 'peer' || peerAuthMethod === 'basic') && PEER_RELAY_ALLOWED_EVENTS.has(event)) {
-          return next();
+        if (PEER_RELAY_ALLOWED_EVENTS.has(event)) {
+          if (peerAuthMethod === 'basic') return next();
+          // A peer socket is only as good as its token now: a disabled,
+          // removed or re-keyed peer is dropped on its next event (#17905).
+          if (peerAuthMethod === 'peer' && await verifyPeerToken(socket.handshake?.headers)) return next();
         }
         socket.disconnect(true);
       } catch (err) {
@@ -211,7 +227,7 @@ function registerImporterHandlers(socket, _io) {
 }
 
 function registerSubscriptionHandlers(socket, _io) {
-  registerSubscriber(socket, 'cos', cosSubscribers);
+  registerSubscriber(socket, 'cos', (s) => (isPeerSocket(s) ? peerCosSubscribers : cosSubscribers));
   registerSubscriber(socket, 'errors', errorSubscribers);
   registerSubscriber(socket, 'notifications', notificationSubscribers);
   registerSubscriber(socket, 'agents', agentSubscribers);
@@ -262,6 +278,20 @@ function registerLifecycleHandlers(socket, _io) {
   });
 }
 
+// The fleet host observer statically imports the whole host service; load it on first use so it
+// stays out of the boot closure. One shared promise keeps handler order per socket.
+let fleetHostNotify = null;
+const loadFleetHostNotify = () => (fleetHostNotify ??= import('./fleetHostNotify.js'));
+const onFleetHost = (socket, event, method) => socket.on(event, () => {
+  loadFleetHostNotify().then(mod => mod[method](socket)).catch(err => console.error(`❌ Fleet host socket handler failed: ${err.message}`));
+});
+function registerFleetHostSocket(socket) {
+  onFleetHost(socket, 'fleet-host:subscribe', 'subscribeFleetHostSocket');
+  onFleetHost(socket, 'fleet-host:unsubscribe', 'releaseFleetHostSocket');
+  // A socket that never subscribed must not load the observer just to disconnect.
+  socket.on('disconnect', () => { if (fleetHostNotify) fleetHostNotify.then(mod => mod.releaseFleetHostSocket(socket)).catch(() => {}); });
+}
+
 const SOCKET_HANDLER_REGISTRARS = [
   registerAuthHandlers,
   registerReadinessSocket,
@@ -300,6 +330,7 @@ const noPayload = () => ({});
 // omitted means forward the first argument unchanged.
 const SIMPLE_BRIDGES = [
   { emitter: modelLifecycleEvents, event: 'image-to-3d:changed', channel: 'image-to-3d:changed' },
+  { emitter: modelLifecycleEvents, event: 'blender-model:changed', channel: 'blender-model:changed' },
   { emitter: modelLifecycleEvents, event: 'threejs-model:changed', channel: 'threejs-model:changed' },
   { emitter: modelLifecycleEvents, event: 'html-page-run:changed', channel: 'html-page-run:changed' },
   { emitter: meatspaceEvents, event: 'death-clock:changed', channel: 'meatspace:death-clock:changed' },
@@ -376,7 +407,7 @@ function setupEventForwarding() {
   if (forwardingRegistered) return;
   forwardingRegistered = true;
   for (const { emitter, event, channel, payload } of SIMPLE_BRIDGES) {
-    emitter.on(event, (...args) => getIo()?.emit(channel, payload ? payload(...args) : args[0]));
+    emitter.on(event, (...args) => emitToOperators(channel, payload ? payload(...args) : args[0]));
   }
   runEventLogEvents.on('mind:event', (event) => broadcastToCos('cos:mind:event', event));
   setupCosEventForwarding();
@@ -448,6 +479,7 @@ export function initSocket(io) {
     // Each registrar hangs its own per-socket cleanup on 'disconnect' (13+
     // today), past Node's default cap of 10 — which warned on every connect.
     socket.setMaxListeners(50);
+    if (isPeerSocket(socket)) socket.join?.(PEER_SOCKET_ROOM);
     for (const registerHandlers of SOCKET_HANDLER_REGISTRARS) {
       registerHandlers(socket, io);
     }
@@ -482,6 +514,7 @@ export const __testing = { registerAuthHandlers, PEER_RELAY_ALLOWED_EVENTS, regi
 
 // Broadcast to CoS subscribers only
 function broadcastToCos(event, data) {
+  if (PEER_COS_EVENTS.has(event)) broadcastToSet(peerCosSubscribers, event, data);
   if (event !== 'cos:tasks:changed') {
     broadcastToSet(cosSubscribers, event, data);
     return;
@@ -695,15 +728,13 @@ function setupBrainEventForwarding() {
   brainEvents.on('meta:changed', () => changed('meta'));
 
   brainEvents.on('classified', (data) => {
-    if (getIo()) {
-      getIo().emit('brain:classified', data);
-    }
+    emitToOperators('brain:classified', data);
   });
   brainEvents.on('threads:upserted', (data) => {
-    if (getIo()) getIo().emit('brain:threads:changed', data);
+    emitToOperators('brain:threads:changed', data);
   });
   brainEvents.on('threads:deleted', (data) => {
-    if (getIo()) getIo().emit('brain:threads:changed', data);
+    emitToOperators('brain:threads:changed', data);
   });
 }
 
@@ -736,6 +767,24 @@ function setupInstanceEventForwarding() {
   // Redact each peer's stored proxy password before it reaches the browser
   // (keep username + hasPassword) — same secret-stripping the GET /instances
   // route applies. `data` is the full peers array.
+  // A disabled, removed or re-keyed peer must lose its inbound sockets at once,
+  // not only on its next event (it may be a passive subscriber).
+  instanceEvents.on('peer:auth-revoked', async ({ peerId, instanceId } = {}) => {
+    try {
+      const sockets = await getIo()?.fetchSockets() ?? [];
+      let dropped = 0;
+      for (const socket of sockets) {
+        const { portosAuthMethod, portosPeerId, portosPeerInstanceId } = socket.data ?? {};
+        if (portosAuthMethod !== 'peer') continue;
+        if (portosPeerId !== peerId && (!instanceId || portosPeerInstanceId !== instanceId)) continue;
+        socket.disconnect(true);
+        dropped++;
+      }
+      if (dropped > 0) console.log(`🔐 Peer auth revoked — disconnected ${dropped} inbound socket(s)`);
+    } catch (err) {
+      console.error(`❌ Peer auth revocation failed: ${err?.message ?? err}`);
+    }
+  });
   instanceEvents.on('peers:updated', (data) => {
     const sequence = ++peerUpdateSequence;
     const publishIfCurrent = (peers) => {
@@ -776,18 +825,18 @@ function setupReviewEventForwarding() {
     if (getIo()) getIo().emit('review:queue:changed');
   });
   reviewEvents.on('item:created', (data) => {
-    if (getIo()) getIo().emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:updated', (data) => {
-    if (getIo()) getIo().emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:deleted', (data) => {
-    if (getIo()) getIo().emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
+    emitToOperators('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   // Bulk status changes ("Mark all read" / "Complete all") carry only ids, a
   // status and a timestamp — nothing to redact.
   reviewEvents.on('items:bulk-updated', (data) => {
-    if (getIo()) getIo().emit('review:items:bulk-updated', data);
+    emitToOperators('review:items:bulk-updated', data);
   });
 }
 
@@ -854,29 +903,29 @@ function broadcastToMediaQueue(event, data) { broadcastToSet(mediaQueueSubscribe
 // onto Socket.IO so client UIs can subscribe via `image-gen:*` / `video-gen:*`.
 function setupMediaGenEventForwarding() {
   imageGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('image-gen:started', data);
+    emitToOperators('image-gen:started', data);
   });
   imageGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('image-gen:progress', data);
+    emitToOperators('image-gen:progress', data);
   });
   imageGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('image-gen:completed', data);
+    emitToOperators('image-gen:completed', data);
   });
   imageGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('image-gen:failed', data);
+    emitToOperators('image-gen:failed', data);
   });
 
   videoGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('video-gen:started', data);
+    emitToOperators('video-gen:started', data);
   });
   videoGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('video-gen:progress', data);
+    emitToOperators('video-gen:progress', data);
   });
   videoGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('video-gen:completed', data);
+    emitToOperators('video-gen:completed', data);
   });
   videoGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('video-gen:failed', data);
+    emitToOperators('video-gen:failed', data);
   });
 
   // Audio (first-pass music-bed, #1928/#1933) rides the same gen-event contract
@@ -885,16 +934,16 @@ function setupMediaGenEventForwarding() {
   // populating `project.musicBed` silently (or silently failing) with the user
   // left to poll the Render Queue to notice a crash/OOM/sidecar error.
   audioGenEvents.on('started', (data) => {
-    if (getIo()) getIo().emit('audio-gen:started', data);
+    emitToOperators('audio-gen:started', data);
   });
   audioGenEvents.on('progress', (data) => {
-    if (getIo()) getIo().emit('audio-gen:progress', data);
+    emitToOperators('audio-gen:progress', data);
   });
   audioGenEvents.on('completed', (data) => {
-    if (getIo()) getIo().emit('audio-gen:completed', data);
+    emitToOperators('audio-gen:completed', data);
   });
   audioGenEvents.on('failed', (data) => {
-    if (getIo()) getIo().emit('audio-gen:failed', data);
+    emitToOperators('audio-gen:failed', data);
   });
 
   // Map a media-job kind to its gen-event namespace prefix. image/video/audio
@@ -952,7 +1001,7 @@ function setupMediaGenEventForwarding() {
     if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    getIo().emit(`${prefix}:canceled`, { generationId: job.id });
+    emitToOperators(`${prefix}:canceled`, { generationId: job.id });
   });
 
   // Bridge media-job FAILURE onto a `*-gen:failed` socket event keyed by
@@ -969,7 +1018,7 @@ function setupMediaGenEventForwarding() {
     if (!getIo() || !job?.id) return;
     const prefix = genEvtPrefix(job.kind);
     if (!prefix) return;
-    getIo().emit(`${prefix}:failed`, { generationId: job.id, error: job.error });
+    emitToOperators(`${prefix}:failed`, { generationId: job.id, error: job.error });
   });
 }
 

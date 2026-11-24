@@ -52,10 +52,10 @@ export const PROFILE_EXPRESSION = `(() => {
   const pageText = document.body.innerText || '';
   const links = [...document.querySelectorAll('a[href]')];
   const handleLink = links.find((node) => /^@[A-Za-z0-9_]{1,15}$/.test((node.textContent || '').trim()));
-  const followerLink = links.find((node) => /\/(?:followers|verified_followers)$/.test(node.getAttribute('href') || ''));
-  const followingLink = links.find((node) => /\/following$/.test(node.getAttribute('href') || ''));
+  const followerLink = links.find((node) => /\\/(?:followers|verified_followers)$/.test(node.getAttribute('href') || ''));
+  const followingLink = links.find((node) => /\\/following$/.test(node.getAttribute('href') || ''));
   const parseProfileCount = (value) => {
-    const match = String(value || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)(?:\s*([KMB]))?/i);
+    const match = String(value || '').replace(/,/g, '').match(/(\\d+(?:\\.\\d+)?)(?:\\s*([KMB]))?/i);
     if (!match) return null;
     const multiplier = { K: 1_000, M: 1_000_000, B: 1_000_000_000 }[String(match[2] || '').toUpperCase()] || 1;
     return Math.round(Number(match[1]) * multiplier);
@@ -63,12 +63,12 @@ export const PROFILE_EXPRESSION = `(() => {
   const heading = [...document.querySelectorAll('main h2')].map((node) => (node.innerText || '').trim()).find((value) => value && !/posts?$/i.test(value));
   return {
     profile: {
-      displayName: (heading || '').replace(/\s+Verified account$/i, '').trim(),
+      displayName: (heading || '').replace(/\\s+Verified account$/i, '').trim(),
       username: (handleLink?.textContent || '').trim().replace(/^@/, ''),
       bio: (document.querySelector('[data-testid="UserDescription"]')?.innerText || '').slice(0, ${MAX_BIO_LENGTH}),
       followers: parseProfileCount(followerLink?.textContent),
       following: parseProfileCount(followingLink?.textContent),
-      postCount: parseProfileCount(pageText.match(/([\d,.]+)\s+posts?/i)?.[1]),
+      postCount: parseProfileCount(pageText.match(/([\\d,.]+)\\s+posts?/i)?.[1]),
       url: location.href,
     },
     posts: postRows(),

@@ -28,4 +28,20 @@ describe('db-migration 016 - music video song style', () => {
     await up({ query: bare });
     expect(bare).toHaveBeenCalledTimes(1);
   });
+
+  it('repairs a lone surrogate split at slice(0, 2000) so jsonb accepts the bound payload', async () => {
+    const updates = [];
+    const promptWithSplitEmoji = `${'a'.repeat(1999)}🚀`;
+    const query = vi.fn(async (sql, params) => {
+      if (sql.includes('to_regclass')) return { rows: [{ projects: 'music_video_projects', tracks: 'tracks' }] };
+      if (sql.startsWith('SELECT')) return { rows: [{ id: 'p1', concept: { style: 'other' }, prompt: promptWithSplitEmoji }] };
+      updates.push(params);
+      return { rows: [] };
+    });
+    await up({ query });
+    expect(updates).toHaveLength(1);
+    const [, rawJson] = updates[0];
+    expect(rawJson).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+    expect(JSON.parse(rawJson).songStyle).toBe(`${'a'.repeat(1999)}\ufffd`);
+  });
 });

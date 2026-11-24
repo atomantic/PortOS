@@ -33,15 +33,11 @@ function Have-Command($cmd) {
     [bool](Get-Command $cmd -ErrorAction SilentlyContinue)
 }
 
-function Download-File($url, $dest) {
-    Write-Host "⬇️  $(Split-Path $dest -Leaf)"
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-}
-
 # ── Completion contract (shared with setup-voice.sh via scripts/voice-asset.js) ─
-# Staged files are unique temp siblings of the final path; the finally block at
-# the model sections removes whatever a failed transfer left behind.
+# Staged files/dirs are unique temp siblings of the final path; the finally block at
+# the install sections removes whatever a failed transfer left behind.
 $script:StagedFiles = @()
+$script:StagedDirs = @()
 
 function Invoke-VoiceAsset {
     $out = & node (Join-Path $PSScriptRoot 'voice-asset.js') @args
@@ -56,6 +52,15 @@ function Get-AssetState($kind, $path) {
 function Test-PiperConfig($path) {
     & node (Join-Path $PSScriptRoot 'voice-asset.js') check-config $path
     return ($LASTEXITCODE -eq 0)
+}
+
+function Get-VoiceAssetUrl($kind, $name) {
+    [string](Invoke-VoiceAsset url $kind $name | Select-Object -Last 1).Trim()
+}
+
+function Verify-VoiceModel($assetName, $path) {
+    & node (Join-Path $PSScriptRoot 'voice-asset.js') verify-model $assetName $path
+    if ($LASTEXITCODE -ne 0) { throw "$assetName failed SHA-256 verification — refusing to promote" }
 }
 
 # Content-Length of a remote file, or $null when it cannot be determined.
@@ -83,9 +88,9 @@ function Download-Staged($url, $final) {
 
 function Ensure-WhisperModel {
     $path = Join-Path $MODELS_DIR $MODEL_NAME
-    $url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL_NAME"
     $state = Get-AssetState 'whisper' $path
     if ($state -eq 'verified') { return }
+    $url = Get-VoiceAssetUrl 'whisper' $MODEL_NAME
     if ($state -eq 'unverified') {
         # Installed before completion receipts (or user-supplied). A partial
         # transfer looks identical to a complete file, so compare against the
@@ -105,6 +110,7 @@ function Ensure-WhisperModel {
     }
     Write-Host "⬇️  Whisper model → $path"
     $tmp = Download-Staged $url $path
+    Verify-VoiceModel $MODEL_NAME $tmp
     Move-Item -LiteralPath $tmp -Destination $path -Force
     Invoke-VoiceAsset receipt whisper $path | Out-Null
 }
@@ -123,16 +129,10 @@ function Ensure-PiperVoice {
         Invoke-VoiceAsset receipt piper $onnxPath | Out-Null
         return
     }
-    # en_US-ryan-high  →  en / en_US / ryan / high
-    $locale  = ($VOICE_NAME -split '-')[0]           # en_US
-    $lang    = ($locale -split '_')[0]               # en
-    $rest    = $VOICE_NAME.Substring($locale.Length + 1)  # ryan-high
-    $parts   = $rest -split '-'
-    $speaker = $parts[0]                             # ryan
-    $quality = $parts[1]                             # high
-    $base    = "https://huggingface.co/rhasspy/piper-voices/resolve/main/$lang/$locale/$speaker/$quality"
+    $base    = Get-VoiceAssetUrl 'piper' $VOICE_NAME
     Write-Host "⬇️  Piper voice → $onnxPath"
     $onnxTmp = Download-Staged "$base/$VOICE_NAME.onnx" $onnxPath
+    Verify-VoiceModel "$VOICE_NAME.onnx" $onnxTmp
     $jsonTmp = Download-Staged "$base/$VOICE_NAME.onnx.json" $jsonPath
     if (-not (Test-PiperConfig $jsonTmp)) {
         throw "Downloaded Piper config for $VOICE_NAME is not a valid voice config"
@@ -166,32 +166,56 @@ if ($STT_ENGINE -eq 'whisper') {
 }
 
 # ── piper TTS binary ──────────────────────────────────────────────────────────
-if ($TTS_ENGINE -eq 'piper') {
+# The archive is downloaded to a unique temp file, its pinned sha256 is verified BEFORE
+# extraction, and the tree is extracted into a staging dir; $PIPER_DIR is only replaced by an
+# atomic rename once the staged tree is complete.
+function Ensure-PiperBinary {
     $piperExe = Join-Path $PIPER_DIR 'piper.exe'
-    if (-not (Test-Path $piperExe)) {
-        $PIPER_VERSION = '2023.11.14-2'
-        $arch = if ([System.Environment]::Is64BitOperatingSystem) { 'amd64' } else { 'x86' }
-        $zipName = "piper_windows_${arch}.zip"
-        $url = "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${zipName}"
-        $tmp = Join-Path $env:TEMP $zipName
-        Write-Host "⬇️  Piper TTS → $PIPER_DIR"
-        try {
-            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
-            New-Item -ItemType Directory -Force -Path $PIPER_DIR | Out-Null
-            Expand-Archive -Path $tmp -DestinationPath $VOICE_HOME -Force
-        } finally {
-            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-        }
+    if (Test-Path $piperExe) { return }
+    $PIPER_VERSION = '2023.11.14-2'
+    $arch = if ([System.Environment]::Is64BitOperatingSystem) { 'amd64' } else { 'x86' }
+    $zipName = "piper_windows_${arch}.zip"
+    $url = "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/${zipName}"
+    $nonce = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    # Expand-Archive insists on a .zip extension, so the unique part goes before it.
+    $zip = Join-Path $VOICE_HOME ".piper-$nonce.zip"
+    $stage = Join-Path $VOICE_HOME ".piper-stage-$nonce"
+    $script:StagedFiles += $zip
+    $script:StagedDirs += $stage
+    Write-Host "⬇️  Piper TTS → $PIPER_DIR"
+    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+    & node (Join-Path $PSScriptRoot 'voice-asset.js') verify-archive $zipName $zip
+    if ($LASTEXITCODE -ne 0) { throw "$zipName failed SHA-256 verification — refusing to extract" }
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    Expand-Archive -Path $zip -DestinationPath $stage -Force
+    if (-not (Test-Path -LiteralPath (Join-Path $stage 'piper\piper.exe'))) {
+        throw "$zipName did not contain piper\piper.exe"
+    }
+    $old = $null
+    if (Test-Path -LiteralPath $PIPER_DIR) {
+        $old = "$PIPER_DIR.old.$nonce"
+        Move-Item -LiteralPath $PIPER_DIR -Destination $old
+        $script:StagedDirs += $old
+    }
+    try {
+        Move-Item -LiteralPath (Join-Path $stage 'piper') -Destination $PIPER_DIR
+    } catch {
+        if ($old) { Move-Item -LiteralPath $old -Destination $PIPER_DIR }
+        throw
     }
 }
 
 # ── Whisper GGUF model + Piper voice (ONNX + JSON sidecar) ────────────────────
 try {
+    if ($TTS_ENGINE -eq 'piper') { Ensure-PiperBinary }
     if ($STT_ENGINE -eq 'whisper') { Ensure-WhisperModel }
     if ($TTS_ENGINE -eq 'piper') { Ensure-PiperVoice }
 } finally {
     foreach ($staged in $script:StagedFiles) {
         Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($staged in $script:StagedDirs) {
+        Remove-Item -LiteralPath $staged -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

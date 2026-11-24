@@ -38,7 +38,7 @@ import { injectPreviewHead } from '../../lib/htmlPreviewHead.js';
 import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { extname } from 'path';
 import { loadHistory } from '../videoGen/history.js';
-import { readDocumentFiles, documentMimeType } from './compositionDocument.js';
+import { readDocumentFiles, documentMimeType } from './compositionDocumentRead.js';
 import {
   buildDocumentData, documentRenderClock, documentSongDuration, resolveSceneMedia,
   DOCUMENT_FRAME_SIZES, documentAspect,

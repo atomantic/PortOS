@@ -243,6 +243,14 @@ describe('mergeTaste', () => {
 });
 
 describe('mergeMeta', () => {
+  it('never adopts a remote includePrivacyContext (machine-local) and keeps the local value', () => {
+    const remote = { settings: { includePrivacyContext: true, maxContextTokens: 1 } };
+    const off = mergeMeta({ settings: { maxContextTokens: 2 } }, remote).merged;
+    expect(off.settings.includePrivacyContext ?? false).toBe(false);
+    const on = mergeMeta({ settings: { includePrivacyContext: true } }, { settings: { includePrivacyContext: false } }).merged;
+    expect(on.settings.includePrivacyContext).toBe(true);
+  });
+
   it('unions documents by filename (add-only) and keeps local entry on conflict', () => {
     const local = { documents: [{ id: '1', filename: 'SOUL.md', weight: 9 }] };
     const remote = { documents: [{ id: '1', filename: 'SOUL.md', weight: 1 }, { id: '2', filename: 'FAVORITES.md', weight: 5 }] };

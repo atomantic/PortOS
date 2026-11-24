@@ -62,25 +62,37 @@ export const HOST_CONTROL_GET_ROUTES = Object.freeze([
   // Which binaries, args and endpoints a provider can run with (#8721).
   'GET /api/providers/:id/execution-options',
   // The managed browser carries the operator's signed-in sessions and saves
-  // downloads silently, so listing its pages or downloads is operator work
-  // (#12488); browser and harness update checks belong to the gated installers (#8798).
+  // downloads silently, so listing its pages/downloads or reading its PM2 logs
+  // is operator work (#12488, #18224); browser and harness update checks belong
+  // to the gated installers (#8798).
   'GET /api/browser/update-preflight',
   'GET /api/browser/pages',
   'GET /api/browser/downloads',
   'GET /api/browser/downloads/:name',
+  'GET /api/browser/logs',
   'GET /api/harnesses/update-reference',
   // The private FableLoom package an export produced.
   'GET /api/fableloom/:id/export/:jobId/download',
   // Reads the Signal Safe Storage keychain secret and the database it decrypts.
   'GET /api/signal/setup-check',
+  // Open the TCC-protected chat.db and AddressBook databases and return host paths (#18279).
+  'GET /api/imessage/setup-check',
+  'GET /api/contacts/setup-check',
   // Decodes the song master with ffmpeg; the client shows a refusal as unavailable.
   'GET /api/music-video/:id/dependency-impact',
   // Re-encodes the video with ffmpeg on every request (#13156).
   'GET /api/video-gen/history/:id/sharing-download',
+  // Mints a paid Reactor.inc session JWT using the owner's REACTOR_API_KEY (#18240).
+  'GET /api/video-gen/reactor/token',
   // Opens or reuses a tab in the signed-in managed browser and reads it.
   'GET /api/youtube/setup-check',
   // The local recovery command checks private runner process and workspace identities.
   'GET /api/system/maintenance/runner-owner/:agentId',
+  // Spawns `pm2 logs` per request or streams live PM2 output (#18224).
+  'GET /api/logs/:processName',
+  'GET /api/apps/:id/logs',
+  // Runs `brew update --quiet` and host runtime probes on `fresh=1` or cache miss (#18224).
+  'GET /api/update/software/homebrew',
 ]);
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);

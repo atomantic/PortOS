@@ -8,6 +8,8 @@
  * untouched copy. Idempotent: rows already carrying `songStyle` are skipped.
  */
 
+import { toPgJson } from '../../lib/pgJson.js';
+
 /** The concept a legacy project gets, or null when nothing changes. */
 export function migrateSongStyle(concept, trackPrompt) {
   const songStyle = typeof trackPrompt === 'string' ? trackPrompt.trim().slice(0, 2000) : '';
@@ -26,6 +28,6 @@ export async function up(client) {
     const next = migrateSongStyle(concept, prompt);
     if (!next) continue;
     await client.query(`UPDATE music_video_projects SET data = jsonb_set(data, '{concept}', $2::jsonb)
-      WHERE id = $1 AND NOT COALESCE(data->'concept' ? 'songStyle', FALSE)`, [id, JSON.stringify(next)]);
+      WHERE id = $1 AND NOT COALESCE(data->'concept' ? 'songStyle', FALSE)`, [id, toPgJson(next)]);
   }
 }

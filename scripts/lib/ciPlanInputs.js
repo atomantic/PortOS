@@ -157,6 +157,18 @@ function collectClientDependencies(graph) {
 // unresolved and computed imports retain conservative prerequisite coverage.
 const collectTestDependencies = (graph, entries) => graph.closure(entries, graph.testDependencies);
 
+// Union of the suites' own closures, each pruned at what that suite mocks out
+// (#17896); null when any one of them is uncertain.
+const collectSuiteDependencies = (graph, suites) => {
+  const members = new Set();
+  for (const suite of suites) {
+    const closure = graph.suiteClosure(suite);
+    if (closure === null) return null;
+    closure.forEach((file) => members.add(file));
+  }
+  return [...members].sort();
+};
+
 /**
  * Collect the repository-derived inputs that surround the pure plan builder.
  *
@@ -244,11 +256,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
     && MODULE_SOURCE_RE.test(path) && !isTestFile(path));
   const hasRelatedServerSource = relatedServerSources.length > 0;
   const dbDependencies = hasRelatedServerSource
-    ? collectTestDependencies(graph, resolveDbTestFiles(dependencyFiles))
+    ? collectSuiteDependencies(graph, resolveDbTestFiles(dependencyFiles))
+    : [];
+  const dbLiveRestoreInputs = hasRelatedServerSource
+    ? graph.suiteClosure('server/services/backupDatabaseDump.restore.live.test.js')
     : [];
   const browserDependencies = hasRelatedServerSource
     ? Object.fromEntries(browserSuitesIn(presentFiles).map((suite) => [suite,
-      collectTestDependencies(graph, [suite])]))
+      graph.suiteClosure(suite)]))
     : {};
 
   // Each changed manifest at the diff base vs the tree under test (the working
@@ -330,7 +345,7 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
   const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd, graph) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
+    clientDependencies, clientTestDependencies, dbDependencies, dbLiveRestoreInputs, browserDependencies, dependencyChanges,
     linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, clientReach, clientBrowserReach,
     gatedChangedFiles, gatedDependencyChanges };
 }

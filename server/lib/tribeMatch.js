@@ -139,7 +139,7 @@ export function classifyNetworkHandle(value) {
 
 /**
  * A `beeper_participants.tribe_person_id` cache column plus the joined `tribe_people.deleted` flag, collapsed to ONE answer. `tribe.deletePerson` is a SOFT delete (the FK's ON DELETE CASCADE never fires),
- * so the raw column can point at a person who no longer counts. Both row shapers (`services/beeperConversations.js`, `services/beeperTribe.js`) call this so a soft-deleted link reads as unlinked everywhere (`null`,
+ * so the raw column can point at a person who no longer counts. Both row shapers (`services/beeper/beeperConversations.js`, `services/beeper/beeperTribe.js`) call this so a soft-deleted link reads as unlinked everywhere (`null`,
  * never a dead id with no re-link affordance); extracted because two copies had drifted (one nulled the id, the other did not).
  */
 export function resolveLinkedPersonId(tribePersonId, tribePersonDeleted) {
@@ -153,4 +153,31 @@ export function resolveLinkedPersonId(tribePersonId, tribePersonDeleted) {
 export function calendarTouchpointDedupeKey(accountId, event) {
   const eventKey = event?.externalId || event?.id;
   return eventKey ? `cal:${accountId}:${eventKey}` : null;
+}
+
+/** Normalize an optional array of filter IDs into unique non-empty strings. */
+export function normalizeFilterIds(values) {
+  return Array.isArray(values)
+    ? [...new Set(values.map(String).filter((v) => v.length > 0))]
+    : [];
+}
+
+/**
+ * Build a parameterized SQL predicate matching `metadata.subcalendarId` and/or
+ * a legacy event-ID column (`calendar_event_id` or `metadata->>'externalId'`)
+ * without letting an event ID shared across subcalendars erase rows owned by
+ * another enabled subcalendar (#18229). Returns `null` when both lists are empty.
+ */
+export function buildCalendarSubcalendarClause({ subcalendars, calendarEvents, eventIdColumn, params }) {
+  if (subcalendars.length === 0 && calendarEvents.length === 0) return null;
+  if (subcalendars.length > 0 && calendarEvents.length > 0) {
+    params.push(subcalendars, calendarEvents);
+    return `(metadata->>'subcalendarId' = ANY($${params.length - 1}::text[]) OR (NULLIF(metadata->>'subcalendarId', '') IS NULL AND ${eventIdColumn} = ANY($${params.length}::text[])))`;
+  }
+  if (subcalendars.length > 0) {
+    params.push(subcalendars);
+    return `metadata->>'subcalendarId' = ANY($${params.length}::text[])`;
+  }
+  params.push(calendarEvents);
+  return `${eventIdColumn} = ANY($${params.length}::text[])`;
 }

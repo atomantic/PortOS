@@ -20,14 +20,18 @@ import MemoryEmbeddingRecommendation from '../MemoryEmbeddingRecommendation';
 import {
   AVATAR_STYLE_LABELS,
   AUTONOMY_DOMAINS,
+  CREATIVE_DOMAIN,
+  CREATIVE_DOMAIN_MODES,
   DOMAIN_AUTONOMY_MODES,
   DOMAIN_BUDGET_FIELDS,
+  getCreativeAutonomyMode,
+  getCreativeAutonomyOverride,
   getDomainBudget,
   getDomainMode,
   normalizeBudgetLimit,
 } from '../constants';
-import ProviderModelSelector from '../../ProviderModelSelector';
-import useProviderModels from '../../../hooks/useProviderModels';
+import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
+import { updateSettings } from '../../../services/apiSystem';
 import { coverageSummary, isRiggedAvatarStyle, riggedRecordForStyle } from '../../../hooks/useAvatarCapabilities';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -100,6 +104,10 @@ function SectionHeading({ icon: Icon, title, description }) {
 }
 
 function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange }) {
+  const creativeOverride = getCreativeAutonomyOverride(config);
+  const effectiveCreativeMode = getCreativeAutonomyMode(config);
+  const effectiveCreativeLabel = DOMAIN_AUTONOMY_MODES.find((mode) => mode.id === effectiveCreativeMode)?.label || effectiveCreativeMode;
+
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {AUTONOMY_DOMAINS.map((domain) => {
@@ -168,9 +176,51 @@ function DomainAutomationControl({ config, usage, onDomainChange, onBudgetChange
           </article>
         );
       })}
+
+      <article className="rounded-lg border border-port-border bg-port-card p-4 md:col-span-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h5 className="text-sm font-medium text-port-text">{CREATIVE_DOMAIN.label}</h5>
+            <p className="mt-1 text-xs leading-relaxed text-port-text-muted">{CREATIVE_DOMAIN.description}</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-port-bg px-2 py-1 text-[11px] text-port-text-muted">
+            {creativeOverride
+              ? `Override: ${effectiveCreativeLabel} · Uses CoS budget`
+              : `Inheriting CoS (${effectiveCreativeLabel}) · Uses CoS budget`}
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-1 sm:grid-cols-4" role="group" aria-label={`${CREATIVE_DOMAIN.label} mode`}>
+          {CREATIVE_DOMAIN_MODES.map((mode) => {
+            const active = creativeOverride === mode.id;
+            const colors = mode.id === null
+              ? {
+                  base: 'border-port-accent/30 text-port-accent hover:bg-port-accent/10',
+                  active: 'border-port-accent bg-port-accent text-white',
+                }
+              : DOMAIN_MODE_COLORS[mode.id];
+            return (
+              <button
+                key={mode.id ?? 'inherit'}
+                type="button"
+                aria-pressed={active}
+                title={mode.description}
+                onClick={() => onDomainChange(CREATIVE_DOMAIN.id, mode.id)}
+                className={`rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${active ? colors.active : colors.base}`}
+              >
+                {mode.label}
+              </button>
+            );
+          })}
+        </div>
+      </article>
     </div>
   );
 }
+
+const getSavedDomainSelection = (config, domainId) => (
+  domainId === CREATIVE_DOMAIN.id ? getCreativeAutonomyOverride(config) : getDomainMode(config, domainId)
+);
 
 const MIND_STATUS_EVENTS = ['cos:mind:event', 'cos:mind:status', 'cos:config:changed'];
 
@@ -219,22 +269,15 @@ function PersistentMindStatus({ mind, loaded, error }) {
 }
 
 export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, riggedAvatars = [] }) {
-  const {
-    providers,
-    availableModels,
-    setSelectedProviderId: setProviderHook,
-    setSelectedModel: setModelHook,
-    selectedProviderId: hookProviderId,
-    selectedModel: hookModel,
-  } = useProviderModels();
-  const [embeddingProviderId, setEmbeddingProviderId] = useState(config?.embeddingProviderId || 'lmstudio');
-  const [embeddingModel, setEmbeddingModel] = useState(config?.embeddingModel || '');
   const [formData, setFormData] = useState(() => getDefaultFormData(config, avatarStyle));
   const [domainAutonomyOverrides, setDomainAutonomyOverrides] = useState({});
   const [domainBudgetOverrides, setDomainBudgetOverrides] = useState({});
   const [saveStatus, setSaveStatus] = useState('idle');
   const [profileSaving, setProfileSaving] = useState(false);
   const [budgetUsage, setBudgetUsage] = useState({});
+  // Remounts the embeddings notice after the recommendation saves, so it
+  // re-reads the backend it just switched to.
+  const [embeddingSaves, setEmbeddingSaves] = useState(0);
   const configSaveQueueRef = useRef(Promise.resolve());
   const pendingSaveCountRef = useRef(0);
   const failedSaveKeysRef = useRef(new Set());
@@ -315,7 +358,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
     })));
 
     setDomainAutonomyOverrides((current) => Object.fromEntries(Object.entries(current).filter(
-      ([domainId, mode]) => getDomainMode(config, domainId) !== mode,
+      ([domainId, mode]) => getSavedDomainSelection(config, domainId) !== mode,
     )));
     setDomainBudgetOverrides((current) => Object.fromEntries(Object.entries(current).flatMap(([domainId, fields]) => {
       const savedBudget = getDomainBudget(config, domainId);
@@ -323,32 +366,6 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
       return Object.keys(remaining).length ? [[domainId, remaining]] : [];
     })));
   }, [config, avatarStyle]);
-
-  // Kept apart from the form resync above: this one also re-runs when the
-  // provider hook's setters change identity (they do once its providers load,
-  // and it re-applies the saved embedding pick over the hook's initial one).
-  // Every write here is a primitive, so a re-run with nothing new settles
-  // instead of rebuilding the form object and re-rendering without end.
-  useEffect(() => {
-    const savedProviderId = config?.embeddingProviderId;
-    if (savedProviderId !== undefined) {
-      const pendingProviderId = pendingConfigFieldsRef.current.get('embeddingProviderId');
-      if (!pendingConfigFieldsRef.current.has('embeddingProviderId') || pendingProviderId === savedProviderId) {
-        pendingConfigFieldsRef.current.delete('embeddingProviderId');
-        setEmbeddingProviderId(savedProviderId);
-        setProviderHook(savedProviderId);
-      }
-    }
-    const savedModel = config?.embeddingModel;
-    if (savedModel !== undefined) {
-      const pendingModel = pendingConfigFieldsRef.current.get('embeddingModel');
-      if (!pendingConfigFieldsRef.current.has('embeddingModel') || pendingModel === savedModel) {
-        pendingConfigFieldsRef.current.delete('embeddingModel');
-        setEmbeddingModel(savedModel);
-        setModelHook(savedModel);
-      }
-    }
-  }, [config, setProviderHook, setModelHook]);
 
   const displayConfig = useMemo(() => {
     const domainBudgets = { ...(config?.domainBudgets || {}) };
@@ -402,7 +419,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
   }, [formData.avatarStyle, riggedAvatars]);
 
   const handleDomainChange = (domainId, mode) => {
-    if (getDomainMode(displayConfig, domainId) === mode) return Promise.resolve();
+    if (getSavedDomainSelection(displayConfig, domainId) === mode) return Promise.resolve();
     setDomainAutonomyOverrides((current) => ({ ...current, [domainId]: mode }));
     return saveConfigPatch({ domainAutonomy: { [domainId]: mode } }, {
       failureKeys: [`domainAutonomy:${domainId}`],
@@ -559,46 +576,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
 
       <section className="space-y-3" aria-labelledby="embeddings-heading">
         <div id="embeddings-heading">
-          <SectionHeading icon={Database} title="Memory embeddings" description="Provider and model used to index CoS memory for semantic retrieval." />
+          <SectionHeading icon={Database} title="Memory embeddings" description="The shared embedding provider and model that index CoS memory and the creative catalog for semantic retrieval." />
         </div>
         <div className="rounded-lg border border-port-border bg-port-card p-4">
-          <ProviderModelSelector
-            providers={providers}
-            selectedProviderId={providers?.some((provider) => provider.id === embeddingProviderId)
-              ? embeddingProviderId
-              : providers?.some((provider) => provider.id === hookProviderId) ? hookProviderId : ''}
-            selectedModel={embeddingModel || hookModel}
-            availableModels={availableModels}
-            onProviderChange={(id) => {
-              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
-              pendingConfigFieldsRef.current.set('embeddingModel', '');
-              setEmbeddingProviderId(id);
-              setProviderHook(id);
-              setEmbeddingModel('');
-              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: '' }, {
-                failureKeys: ['embeddingProviderId', 'embeddingModel'],
-              });
-            }}
-            onModelChange={(model) => {
-              pendingConfigFieldsRef.current.set('embeddingModel', model);
-              setEmbeddingModel(model);
-              setModelHook(model);
-              return saveConfigPatch({ embeddingModel: model }, { failureKeys: ['embeddingModel'] });
-            }}
-            label="Embedding provider"
-          />
+          <EmbeddingSourceNotice key={embeddingSaves} />
           <MemoryEmbeddingRecommendation
-            disabled={saveStatus === 'saving'}
-            onSelect={(id, model) => {
-              pendingConfigFieldsRef.current.set('embeddingProviderId', id);
-              pendingConfigFieldsRef.current.set('embeddingModel', model);
-              setEmbeddingProviderId(id);
-              setProviderHook(id);
-              setEmbeddingModel(model);
-              setModelHook(model);
-              return saveConfigPatch({ embeddingProviderId: id, embeddingModel: model }, {
-                failureKeys: ['embeddingProviderId', 'embeddingModel'],
-              });
+            onSelect={async (provider, model) => {
+              // Writes the shared settings.embeddings store (#18296); the server
+              // re-points memory and catalog embedding on this save.
+              await updateSettings({ embeddings: { provider, model } }, { silent: true })
+                .then(() => {
+                  setEmbeddingSaves((n) => n + 1);
+                  toast.success(`Embeddings now use ${model}`);
+                })
+                .catch((err) => toast.error(`Save failed: ${err?.message || 'unknown error'}`));
             }}
           />
         </div>

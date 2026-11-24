@@ -34,6 +34,7 @@ import {
   resampleTo16k,
   rmsLevel,
 } from '../lib/callAudioBridge';
+import { getVoiceConfig } from '../services/apiVoice';
 
 // A worklet has to be loaded from a URL, and this one is four lines, so it is
 // built from source at runtime rather than carried as a separate build entry.
@@ -52,6 +53,19 @@ registerProcessor('portos-call-tap', CallTapProcessor);
 
 const DEFAULT_INPUT_LABEL = 'BlackHole 16ch';
 const DEFAULT_OUTPUT_LABEL = 'BlackHole 2ch';
+const DEFAULT_LABELS = { input: DEFAULT_INPUT_LABEL, output: DEFAULT_OUTPUT_LABEL };
+
+// Device labels come from Settings > Voice (facetime.blackHole*Label); a failed
+// read keeps the stock names so the host still works offline from config.
+const loadDeviceLabels = () => Promise.resolve().then(() => getVoiceConfig({ silent: true }))
+  .then((cfg) => ({
+    input: cfg?.facetime?.blackHole16chLabel || DEFAULT_INPUT_LABEL,
+    output: cfg?.facetime?.blackHole2chLabel || DEFAULT_OUTPUT_LABEL,
+  }))
+  .catch(() => DEFAULT_LABELS);
+
+const LEVEL_INTERVAL_MS = 100;
+const LEVEL_DEADBAND = 0.002;
 const MODES = ['call', 'capture'];
 
 // Shown when the re-attach after a socket reconnect is refused: the server
@@ -83,11 +97,22 @@ export default function VoiceCallHost() {
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
+  const [labels, setLabels] = useState(DEFAULT_LABELS);
+  useEffect(() => {
+    let cancelled = false;
+    loadDeviceLabels().then((next) => { if (!cancelled) setLabels((prev) => (prev.input === next.input && prev.output === next.output ? prev : next)); });
+    return () => { cancelled = true; };
+  }, []);
+
   const [blocked, setBlocked] = useState(null);
   const [attached, setAttached] = useState(false);
   const [callState, setCallState] = useState(null);
   const [captureState, setCaptureState] = useState(null);
   const [level, setLevel] = useState(0);
+  const [starting, setStarting] = useState(false);
+  // Synchronous twin of `starting`: a second click lands before React re-renders.
+  const startingRef = useRef(null);
+  const lastLevelRef = useRef({ at: 0, value: 0 });
   const [notice, setNotice] = useState(null);
   const audio = useRef({ context: null, stream: null, node: null, source: null, playing: new Set(), outputId: null, pending: [] });
   const testTones = useRef(new Set());
@@ -123,6 +148,7 @@ export default function VoiceCallHost() {
     audio.current = { context: null, stream: null, node: null, source: null, playing: new Set(), outputId: current.outputId, pending: [] };
     ownsSessionRef.current = false;
     linkRef.current = 'ok';
+    lastLevelRef.current = { at: 0, value: 0 };
     setLevel(0);
   }, []);
 
@@ -153,7 +179,7 @@ export default function VoiceCallHost() {
     }
   }, []);
 
-  const start = useCallback(async () => {
+  const runStart = useCallback(async () => {
     const generation = startGenRef.current;
     setNotice(null);
     const missing = missingCallHostApis(window);
@@ -198,25 +224,26 @@ export default function VoiceCallHost() {
     }
 
     const currentMode = modeRef.current;
+    const deviceLabels = await loadDeviceLabels();
     const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
     if (generation !== startGenRef.current) {
       releaseStartLock();
       return;
     }
     const problem = describeDeviceProblem(devices, {
-      inputLabel: DEFAULT_INPUT_LABEL,
+      inputLabel: deviceLabels.input,
       // Capture only listens — it never plays a reply back, so it has no
       // BlackHole 2ch requirement.
-      outputLabel: currentMode === 'call' ? DEFAULT_OUTPUT_LABEL : undefined,
+      outputLabel: currentMode === 'call' ? deviceLabels.output : undefined,
     });
     if (problem) {
       setBlocked(problem);
       releaseStartLock();
       return;
     }
-    const input = devices.find((device) => device.label === DEFAULT_INPUT_LABEL && device.kind === 'audioinput');
+    const input = devices.find((device) => device.label === deviceLabels.input && device.kind === 'audioinput');
     const output = currentMode === 'call'
-      ? devices.find((device) => device.label === DEFAULT_OUTPUT_LABEL && device.kind === 'audiooutput')
+      ? devices.find((device) => device.label === deviceLabels.output && device.kind === 'audiooutput')
       : null;
 
     let stream;
@@ -234,7 +261,7 @@ export default function VoiceCallHost() {
         },
       });
     } catch (error) {
-      if (generation === startGenRef.current) setBlocked(`Could not open ${DEFAULT_INPUT_LABEL}: ${error.message}`);
+      if (generation === startGenRef.current) setBlocked(`Could not open ${deviceLabels.input}: ${error.message}`);
       releaseStartLock();
       return;
     }
@@ -284,7 +311,15 @@ export default function VoiceCallHost() {
     let carry = [];
     node.port.onmessage = (event) => {
       const mono = downmixToMono(event.data);
-      setLevel(rmsLevel(mono));
+      // 375 quanta/s would re-render the whole page each time: publish at most
+      // every 100 ms, and only when the level moved past a small deadband.
+      const now = performance.now();
+      const rms = rmsLevel(mono);
+      const last = lastLevelRef.current;
+      if (now - last.at >= LEVEL_INTERVAL_MS && Math.abs(rms - last.value) >= LEVEL_DEADBAND) {
+        lastLevelRef.current = { at: now, value: rms };
+        setLevel(rms);
+      }
       // Offline emits would pile up in socket.io's sendBuffer and be flushed
       // (then discarded by the server) on reconnect, so drop them instead.
       if (!socket.connected) {
@@ -314,6 +349,24 @@ export default function VoiceCallHost() {
     else socket.emit('voice:capture:start');
     setBlocked(null);
   }, []);
+
+  // Guards the whole async startup: the lock is taken early, so a second click
+  // while devices/worklet load would collide with this tab's own lock and
+  // report a false "another tab owns the call host".
+  const start = useCallback(async () => {
+    if (startingRef.current) return;
+    const token = {};
+    startingRef.current = token;
+    setStarting(true);
+    try {
+      await runStart();
+    } finally {
+      if (startingRef.current === token) {
+        startingRef.current = null;
+        setStarting(false);
+      }
+    }
+  }, [runStart]);
 
   const stop = useCallback(() => {
     startGenRef.current += 1;
@@ -480,9 +533,9 @@ export default function VoiceCallHost() {
         <h1 className="flex items-center gap-2 text-xl font-semibold text-white"><PhoneCall size={20} />Call host</h1>
         <p className="text-sm text-gray-400">
           Keep this tab open on the Mac running PortOS. In <strong>Call</strong> mode it carries the
-          audio for a FaceTime Audio call: FaceTime plays into {DEFAULT_INPUT_LABEL}, and PortOS
-          answers through {DEFAULT_OUTPUT_LABEL}. In <strong>Capture system audio</strong> mode it only
-          listens to {DEFAULT_INPUT_LABEL} and transcribes — route any meeting app's output there via a
+          audio for a FaceTime Audio call: FaceTime plays into {labels.input}, and PortOS
+          answers through {labels.output}. In <strong>Capture system audio</strong> mode it only
+          listens to {labels.input} and transcribes — route any meeting app's output there via a
           Multi-Output Device to capture it into the daily journal and the Brain inbox.
         </p>
       </header>
@@ -492,8 +545,8 @@ export default function VoiceCallHost() {
       <TabPills
         variant="pills"
         tabs={[
-          { id: 'call', label: 'Call', icon: PhoneCall, disabled: attached },
-          { id: 'capture', label: 'Capture system audio', icon: Radio, disabled: attached },
+          { id: 'call', label: 'Call', icon: PhoneCall, disabled: attached || starting },
+          { id: 'capture', label: 'Capture system audio', icon: Radio, disabled: attached || starting },
         ]}
         activeTab={mode}
         onChange={setMode}
@@ -507,7 +560,7 @@ export default function VoiceCallHost() {
         <div className="flex flex-wrap items-center gap-2">
           {attached
             ? <button type="button" onClick={stop} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50"><MicOff size={16} />{isCall ? 'Detach call host' : 'Stop capture'}</button>
-            : <button type="button" onClick={start} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30"><Mic size={16} />{isCall ? 'Attach call host' : 'Start capture'}</button>}
+            : <button type="button" onClick={start} disabled={starting} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent/20 px-3 text-sm text-port-accent hover:bg-port-accent/30 disabled:opacity-50"><Mic size={16} />{isCall ? 'Attach call host' : 'Start capture'}</button>}
           {isCall && (
             <button type="button" onClick={playTestTone} disabled={!attached} className="flex min-h-[44px] items-center gap-2 rounded border border-port-border px-3 text-sm text-gray-300 hover:bg-port-border/50 disabled:opacity-50"><Volume2 size={16} />Test tone</button>
           )}

@@ -33,7 +33,7 @@ vi.mock('./jobStore.js', () => ({
 const { startCodeAnimationExport } = await import('./export.js');
 const { renderComposition } = await import('../htmlComposition/index.js');
 const { openComposition } = await import('../htmlComposition/browser.js');
-const { PATHS } = await import('../../lib/fileUtils.js');
+const { PATHS } = await import('../../lib/paths.js');
 
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();

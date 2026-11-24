@@ -236,7 +236,8 @@ describe('brainMemoryBridge — tombstone:pruned purge', () => {
     bridge.initBridge();
 
     brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
-    await vi.waitFor(() => expect(purgeMemory).toHaveBeenCalledWith('mem-old'));
+    await bridge.flushPendingResync();
+    expect(purgeMemory).toHaveBeenCalledWith('mem-old');
     expect(JSON.parse(bridgeFileContents)).not.toHaveProperty(bridge.bridgeKey('people', 'p1'));
   });
 
@@ -253,7 +254,8 @@ describe('brainMemoryBridge — tombstone:pruned purge', () => {
     brainEvents.emit('tombstone:pruned', { type: 'links', id: 'l1' });
     brainEvents.emit('tombstone:pruned', { type: 'people', id: 'unmapped' });
     brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
-    await vi.waitFor(() => expect(purgeMemory).toHaveBeenCalledWith('mem-sentinel'));
+    await bridge.flushPendingResync();
+    expect(purgeMemory).toHaveBeenCalledWith('mem-sentinel');
     expect(purgeMemory).toHaveBeenCalledTimes(1);
   });
 
@@ -444,8 +446,7 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
     bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('journals', '2026-06-09')]: 'mem-day' });
 
     brainEvents.emit('journals:deleted', { date: '2026-06-09', entry: { id: '2026-06-09' } });
-    // handleJournalDeleted is async; flush the microtask queue.
-    await new Promise((r) => setImmediate(r));
+    await bridge.flushPendingResync();
 
     expect(purgeMemory).toHaveBeenCalledWith('mem-day');
     expect(updateMemory).not.toHaveBeenCalled();
@@ -520,8 +521,7 @@ describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)',
     await emitSave(brainEvents, '2026-06-09', 'about to be deleted');
     journals.delete('2026-06-09');
     brainEvents.emit('journals:deleted', { date: '2026-06-09', entry: { id: '2026-06-09' } });
-    // handleJournalDeleted is async; flush microtasks (setImmediate is faked here).
-    await vi.advanceTimersByTimeAsync(0);
+    await bridge.flushPendingResync();
 
     // The pending flush must not resurrect work against a tombstoned day.
     await vi.advanceTimersByTimeAsync(31_000);
@@ -578,7 +578,7 @@ describe('brainMemoryBridge — overlapping canonical writes', () => {
   const journal = { id: '2026-06-09', date: '2026-06-09', content: 'Example daily log' };
   const person = { id: 'p1', name: 'Earlier name', updatedAt: '2026-06-09T12:00:00Z' };
 
-  it('purges a journal during its in-flight resync embedding and leaves it unmapped', async () => {
+  it('queues a purge during in-flight journal embedding and leaves it unmapped', async () => {
     const bridge = await loadBridge();
     const { brainEvents } = await import('./brainStorage.js');
     const { upsertBrainMemory } = await import('./memoryBackend.js');
@@ -594,14 +594,17 @@ describe('brainMemoryBridge — overlapping canonical writes', () => {
       await embedding.started;
       getJournal.mockResolvedValue(null);
       brainEvents.emit('journals:deleted', { entry: journal });
-      await vi.waitFor(() => expect(JSON.parse(bridgeFileContents)).toEqual({}));
-      expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-day');
+      await bridge.flushPendingResyncWrites();
+      expect(JSON.parse(pendingFileContents).entries).toEqual([
+        { type: 'journals', id: journal.id, hardDelete: true },
+      ]);
     } finally {
       embedding.release();
       await flush;
     }
 
     expect(upsertBrainMemory).not.toHaveBeenCalled();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-day');
     expect(await bridge.loadBridgeMap()).toEqual({});
     await bridge.flushPendingResyncWrites();
     expect(JSON.parse(pendingFileContents)).toEqual({ entries: [] });
@@ -1188,6 +1191,69 @@ describe('brainMemoryBridge — pending resyncs survive a restart (#11756)', () 
     await second.flushPendingResyncWrites();
     expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
     expect(await second.loadBridgeMap()).not.toHaveProperty(first.bridgeKey('people', 'deleted'));
+    expect(persisted()).toEqual([]);
+  });
+
+  it.each([
+    {
+      type: 'journals',
+      id: '2026-01-02',
+      event: 'journals:deleted',
+      payload: { entry: { id: '2026-01-02' } },
+      intent: { hardDelete: true },
+    },
+    {
+      type: 'people',
+      id: 'p1',
+      event: 'tombstone:pruned',
+      payload: { type: 'people', id: 'p1' },
+      intent: { hardDelete: false, purgeMissing: true },
+    },
+  ])('replays the failed purge from $event after a restart', async ({ type, id, event, payload, intent }) => {
+    const first = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    const key = first.bridgeKey(type, id);
+    bridgeFileContents = JSON.stringify({ [key]: 'mem-deleted' });
+    hasStoredRecord.mockResolvedValue(false);
+    purgeMemory.mockRejectedValueOnce(new Error('database unavailable'));
+    first.initBridge();
+
+    if (type === 'journals') brainEvents.emit('journals:upserted', payload);
+    brainEvents.emit(event, payload);
+    await first.flushPendingResync();
+    await first.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(JSON.parse(pendingFileContents).entries).toEqual([{ type, id, ...intent }]);
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(purgeMemory).toHaveBeenCalledTimes(1);
+
+    purgeMemory.mockClear();
+    const second = await loadBridge();
+    expect(await second.replayPersistedResync()).toBe(1);
+    await second.flushPendingResync();
+    await second.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(await second.loadBridgeMap()).not.toHaveProperty(key);
+    expect(persisted()).toEqual([]);
+  });
+
+  it('keeps the archived memory when a newer tombstone exists at prune replay', async () => {
+    const first = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    const key = first.bridgeKey('people', 'p1');
+    bridgeFileContents = JSON.stringify({ [key]: 'mem-recoverable' });
+    first.initBridge();
+    brainEvents.emit('tombstone:pruned', { type: 'people', id: 'p1' });
+    await first.flushPendingResyncWrites();
+
+    hasStoredRecord.mockResolvedValue(true);
+    const second = await loadBridge();
+    expect(await second.replayPersistedResync()).toBe(1);
+    await second.flushPendingResync();
+    await second.flushPendingResyncWrites();
+    expect(purgeMemory).not.toHaveBeenCalled();
+    expect(updateMemory).toHaveBeenCalledExactlyOnceWith('mem-recoverable', { status: 'archived' });
+    expect(await second.loadBridgeMap()).toHaveProperty(key, 'mem-recoverable');
     expect(persisted()).toEqual([]);
   });
 

@@ -1,4 +1,3 @@
-import { channel } from 'node:diagnostics_channel';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm, access, constants } from 'node:fs/promises';
 import { tmpdir, constants as osConstants } from 'node:os';
@@ -17,12 +16,6 @@ import { drainBrowserProcessGroup, observeBrowserProcessGroup, signalBrowserProc
 // Chrome launches in testBrowserCleanup.js; production keeps the sandbox.
 const sandboxArgs = () => (isVitestRunner() && process.getuid?.() === 0 ? ['--no-sandbox'] : []);
 
-// Passive test observers receive only exact owned capabilities. No subscriber
-// means no persistence, process inspection, or additional lifecycle work.
-const lifecycle = channel('portos.composition-browser.lifecycle');
-const observe = (event, profile, details) => {
-  if (lifecycle.hasSubscribers) lifecycle.publish({ event, profile, ...details });
-};
 // Raw browser output can hold private paths, so a startup failure names a
 // recognized cause instead of copying stderr.
 const ROOT_SANDBOX_REFUSAL = /Running as root without --no-sandbox is not supported/;
@@ -132,7 +125,6 @@ export async function launchCompositionBrowser({
     if (browserTemp) await removeProfile(browserTemp);
     throw error;
   }
-  observe('allocated', profile);
   let proc;
   let transport;
   let startupPipeError;
@@ -183,7 +175,6 @@ export async function launchCompositionBrowser({
           const deadline = (closeDeadlineExpired ? performance.now() : terminationStarted ?? performance.now()) + shutdownMs;
           await drainBrowserProcessGroup(proc.pid, deadline, Math.min(1000, shutdownMs / 2), groupTermination);
         }
-        observe('remove-start', profile);
         try {
           await removeProfile(profile);
         } finally {
@@ -191,11 +182,6 @@ export async function launchCompositionBrowser({
           if (browserTemp) await removeProfile(browserTemp);
         }
       })();
-      // Observe settlement without replacing the cached promise or its verdict.
-      if (lifecycle.hasSubscribers) profileCleanup.then(
-        () => observe('remove-resolved', profile),
-        error => observe('remove-rejected', profile, { code: TRANSIENT_RM.has(error?.code) || ['EACCES', 'ENOENT'].includes(error?.code) ? error.code : 'other' }),
-      );
     }
     return profileCleanup;
   };
@@ -337,7 +323,6 @@ export async function launchCompositionBrowser({
     proc.once('exit', onExit);
     proc.once('close', onClose);
     proc.on('error', onError);
-    observe('child', profile, { child: proc });
     transport = createCdpPipeTransport(proc);
     transport.on('error', onPipeError);
     await new Promise((resolve, reject) => {

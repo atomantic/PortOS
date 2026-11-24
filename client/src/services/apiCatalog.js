@@ -9,7 +9,7 @@
  * preview/apply/history/recovery.
  */
 
-import { request } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
 import { fetchByIds, normalizeIds } from './apiBatch.js';
 
 // Creative Ingredients Catalog API surface. Every helper takes an optional
@@ -23,6 +23,15 @@ import { fetchByIds, normalizeIds } from './apiBatch.js';
 const enc = encodeURIComponent;
 
 export const getCatalogStats = (options) => request('/catalog/stats', options);
+
+// One batch of the embedding backfill; the caller drains by repeating until
+// `processed` is 0 or nothing embedded.
+export const backfillCatalogEmbeddings = ({ limit, includeStale } = {}, options) =>
+  request('/catalog/embeddings/backfill', {
+    method: 'POST',
+    body: JSON.stringify({ limit, includeStale }),
+    ...options,
+  });
 
 // Faceted counts (#1762) driving the filter dropdowns + album headers:
 // { types, universes, series, tags, unlinkedCount, orphanedCount, total }.
@@ -292,6 +301,11 @@ export const removeCatalogPointerSheet = (id, variant, filename, options) =>
   request(`/catalog/ingredients/${enc(id)}/sheets/pointer?variant=${enc(variant)}&filename=${enc(filename)}`, { method: 'DELETE', ...options });
 
 // --- Bulk import / export ----------------------------------------------
+
+// Same-origin download URL for a universe/series slice; the server answers with
+// an attachment (json | markdown | yaml) that round-trips through bulk-import.
+export const getCatalogExportUrl = ({ refKind, refId, format = 'json' }) =>
+  `${API_BASE}/catalog/export?${new URLSearchParams({ refKind, refId, format })}`;
 
 export const bulkImportCatalogIngredients = (body, options) =>
   request('/catalog/bulk-import', { method: 'POST', body: JSON.stringify(body), ...options });

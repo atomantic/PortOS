@@ -15,8 +15,8 @@
 import { dirname } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { isAnyDownloadInFlight, sweepOrphanedPartials, ORPHANED_PARTIAL_MAX_AGE_MS } from '../lib/downloadPreflight.js';
-import { SPEC_DECODE_PRESETS, SPEC_MODEL_ROLES } from '../lib/specDecodePresets.js';
-import { resolveSpecModelPath } from './specDecodeModels.js';
+import { SPEC_DECODE_PRESETS, SPEC_MODEL_ROLES, resolveSpecModelPath } from '../lib/specDecodePresets.js';
+import './specDecodeModels.js';
 import { getModelsDir as getOllamaModelsDir } from './ollamaManager.js';
 import { getModelsDir as getLmStudioModelsDir } from './lmStudioManager.js';
 import { slotstreamCacheDir } from '../lib/slotstreamModels.js';

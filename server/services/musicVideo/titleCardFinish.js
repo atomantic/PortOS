@@ -1,6 +1,6 @@
 /** Draw the steady card after a composed cut's frame hold, on the unheld song clock. */
-import { rename, rm } from 'node:fs/promises';
-import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { rm } from 'node:fs/promises';
+import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, installEncodedVideo, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { titleCardOverlayCues } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays } from './compositionRender.js';
@@ -32,7 +32,8 @@ export async function applyTitleCardFinish({ project, path, jobId, width, height
     ] });
     signal?.throwIfAborted();
     if (!result.ok) throw new ServerError(`Title card finish failed: ${result.reason}`, { status: 500, code: 'TITLE_CARD_FINISH_ENCODE' });
-    await rename(finished, path);
+    const installed = await installEncodedVideo(finished, path, 'title card finish');
+    if (!installed.ok) throw new ServerError(installed.reason, { status: 500, code: 'TITLE_CARD_FINISH_INSTALL' });
     return true;
   } finally {
     await rm(finished, { force: true }).catch(() => {});

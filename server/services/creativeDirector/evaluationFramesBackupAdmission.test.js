@@ -28,7 +28,7 @@ vi.mock('./local.js', () => ({
 
 // The sampler writes its frames with ffmpeg; this one writes a placeholder file.
 let framesDir;
-vi.mock('../videoGen/local.js', () => ({
+vi.mock('../videoGen/frameExtraction.js', () => ({
   extractLastFrame: async () => null,
   sampleEvaluationFrames: async (jobId) => {
     await mkdir(framesDir, { recursive: true });

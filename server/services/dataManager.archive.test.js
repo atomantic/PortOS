@@ -108,6 +108,26 @@ describe('Data Manager recovery archives (#10697)', () => {
     expect(await archiveBytes(second, 'calendar/example.json')).toBe('second example');
   });
 
+  it('excludes calendar/google-auth secrets from calendar archives and refuses secret-bearing categories (#18128)', async () => {
+    await mkdir(join(root, 'calendar', 'google-auth'), { recursive: true });
+    await writeFile(join(root, 'calendar', 'sync-state.json'), '{"cursor":"abc"}');
+    await writeFile(join(root, 'calendar', 'google-auth', 'credentials.json'), '{"client_secret":"secret"}');
+    await writeFile(join(root, 'calendar', 'google-auth', 'tokens.json'), '{"refresh_token":"secret"}');
+
+    const result = await archiveCategory('calendar');
+    const members = execFileSync('tar', ['-tzf', resolve(result.archivePath)], { encoding: 'utf8' })
+      .trim()
+      .split('\n');
+    expect(members.some(m => m.includes('google-auth'))).toBe(false);
+    expect(archiveBytes(result, 'calendar/sync-state.json')).toBe('{"cursor":"abc"}');
+
+    for (const category of ['spotify', 'openclaw']) {
+      await mkdir(join(root, category), { recursive: true });
+      await writeFile(join(root, category, 'tokens.json'), '{"token":"secret"}');
+      await expect(archiveCategory(category)).rejects.toMatchObject({ status: 403, code: 'CATEGORY_NOT_ARCHIVABLE' });
+    }
+  });
+
   it('cleans only its scratch and keeps health sources when tar fails', async () => {
     await seedHealth();
     await mkdir(backup);

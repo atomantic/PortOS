@@ -79,6 +79,6 @@ export async function reviewDeployment(accountId, threadId, { state, environment
     [account.id, row.thread_id, state === 'approved' ? 'deployment-approved' : 'deployment-rejected', toPgJson({ runId, environments })],
   );
   console.log(`🚦 ${state === 'approved' ? 'Approved' : 'Rejected'} deployment of run ${runId} to ${environments.join(', ')} in ${row.repo_full_name}`);
-  await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, detail: { deployment: state, runId } });
+  await applyNotificationAction(account.id, row.thread_id, 'done', { learn: false, detail: { deployment: state, runId }, account, env });
   return getNotification(account.id, row.thread_id);
 }

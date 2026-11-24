@@ -15,6 +15,7 @@ import { Link } from 'react-router';
 import { useSocketResource } from '../../hooks/useSocketResource';
 import { formatDateTime } from '../../utils/formatters';
 import { formatCount } from '../../utils/formatters';
+import { normalizeMemoryType } from '../../lib/legacyMemoryType';
 
 const EMPTY_MEMORY = {
   content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5, protection: 'standard',
@@ -309,7 +310,7 @@ function MemoryEditor({ memory, onSaved }) {
   const [draft, setDraft] = useState({
     content: memory.content || '',
     summary: memory.summary || '',
-    type: memory.type || 'observation',
+    type: normalizeMemoryType(memory.type),
     category: memory.category || 'other',
     tags: (memory.tags || []).filter((tag) => !tag.startsWith('mind:')).join(', '),
     importance: memory.importance ?? 0.5,
@@ -338,10 +339,12 @@ function MemoryEditor({ memory, onSaved }) {
       .catch((nextError) => setError(nextError?.message || 'Could not save the memory'))
       .finally(() => setSaving(false));
   };
+  // The server refuses edits to the chosen-name record (MIND_CHOSEN_NAME_READ_ONLY); it changes only by choosing a new name.
+  const chosenName = (memory.tags || []).includes('mind:chosen-name');
   return (
     <details className="rounded border border-port-border p-3">
       <summary className="cursor-pointer text-sm text-port-text"><span className="font-medium">{memory.summary || memory.content}</span> <span className="text-xs text-port-text-muted">· {memory.type}/{memory.category}</span>{memory.protection && memory.protection !== 'standard' && <span className="ml-2 rounded border border-port-success/40 px-2 py-0.5 text-xs text-port-success">{memory.protection === 'core-identity' ? 'Core identity' : 'Important'} · Protected</span>}</summary>
-      <form onSubmit={save} className="mt-3 grid gap-3">
+      {chosenName ? <p className="mt-3 text-xs text-port-text-muted">The chosen name is read-only here. The mind changes it by choosing a new name.</p> : <form onSubmit={save} className="mt-3 grid gap-3">
         <label htmlFor={`${id}-content`} className="text-xs font-medium text-port-text">Content<textarea id={`${id}-content`} rows={4} required maxLength={10240} value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" /></label>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label htmlFor={`${id}-summary`} className="text-xs font-medium text-port-text">Summary<input id={`${id}-summary`} maxLength={500} value={draft.summary} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
@@ -354,7 +357,7 @@ function MemoryEditor({ memory, onSaved }) {
         <label htmlFor={`${id}-tags`} className="text-xs font-medium text-port-text">Tags, comma-separated<input id={`${id}-tags`} value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
         {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
         <div className="flex justify-end"><button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><Save size={14} aria-hidden="true" /> {saving ? 'Saving…' : 'Save memory'}</button></div>
-      </form>
+      </form>}
     </details>
   );
 }

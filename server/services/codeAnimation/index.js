@@ -52,6 +52,9 @@ import {
 } from './prompt.js';
 import { assertProvider, assertVisionRunUsedImages, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 import { getProviderById } from '../provider/providers.js';
+import { admittedRenderMap } from '../renderActivity.js';
+import { stopRun } from '../runner.js';
+import { isRunCanceledError } from '../../lib/aiToolkit/errorDetection.js';
 import { moveToNativeTrash } from '../../lib/nativeTrash.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
@@ -59,10 +62,16 @@ const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: I
 const resolveUploadAudio = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
 const resolveMusicAudio = makePathResolver(() => PATHS.music, { extensions: SUPPORTED_AUDIO_EXTENSIONS });
 
-// This process-local set distinguishes live work from persisted jobs left
-// running by a previous server process. Those are marked interrupted when the
-// gallery or job detail is next read.
-const activeJobs = new Set();
+const CANCEL_CODE = 'CODE_ANIMATION_GENERATION_CANCELED';
+const canceledError = () => new ServerError('Generation canceled', { status: 409, code: CANCEL_CODE });
+
+// This process-local map distinguishes live work from persisted jobs left
+// running by a previous server process, and reports active runs to
+// Live Activity and maintenance admission.
+const activeJobs = admittedRenderMap('code-animation-fast', {
+  noun: 'Code Animation generation',
+  link: (id) => `/code-animation/${encodeURIComponent(id)}`,
+});
 
 export function getCodeAnimationOptions() {
   return {
@@ -476,8 +485,21 @@ const codeAnimationRunTimeout = (provider) => (provider?.type === 'api'
   ? Math.max(provider.timeout || 0, CODE_ANIMATION_API_STALL_MS)
   : 0);
 
-async function runGeneration({ provider, model, effort, prompt, referencePaths }) {
-  const result = await runPromptThroughProvider({
+async function runGeneration({ provider, model, effort, prompt, referencePaths, signal, ownedRuns, onRunId }) {
+  signal.throwIfAborted();
+  const stopping = new Map();
+  const stopProvider = (runId) => {
+    if (stopping.has(runId)) return;
+    const stopped = stopRun(runId).catch((error) => {
+      console.error(`❌ Code Animation generation provider cancellation failed: ${error.message}`);
+    });
+    stopping.set(runId, stopped);
+  };
+  const stopOwned = () => {
+    for (const runId of ownedRuns) stopProvider(runId);
+  };
+
+  const providerPromise = runPromptThroughProvider({
     provider,
     model: model || undefined,
     effort: effort || undefined,
@@ -495,7 +517,39 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
     // (0 = unbounded); API runs read it as a no-progress bound, which stays.
     timeout: codeAnimationRunTimeout,
     absoluteTimeoutMs: 0,
+    beforeExecute: () => signal.throwIfAborted(),
+    onRunCreated: (runId) => {
+      ownedRuns.add(runId);
+      onRunId?.(runId);
+      if (signal.aborted) stopProvider(runId);
+    },
+    onRunSettled: (runId) => ownedRuns.delete(runId),
   });
+  // A late provider settlement after cancellation must not surface as an unhandled rejection.
+  providerPromise.catch(() => {});
+
+  let onAbort;
+  const aborted = new Promise((_, reject) => {
+    onAbort = () => {
+      stopOwned();
+      Promise.all(stopping.values()).then(
+        () => reject(signal.reason || canceledError()),
+        () => reject(signal.reason || canceledError()),
+      );
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+  });
+
+  let result;
+  try {
+    result = await Promise.race([providerPromise, aborted]);
+    signal.throwIfAborted();
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+    await Promise.all(stopping.values());
+  }
+
   // A fallback to a non-vision provider must not silently drop the references.
   if (referencePaths.length && canAttachImages(provider)) assertVisionRunUsedImages(result, provider);
   const html = extractAnimationHtml(result.text);
@@ -536,19 +590,38 @@ export async function startCodeAnimationGeneration(input) {
     completedAt: null,
     updatedAt: now,
   };
-  activeJobs.add(id);
-  await saveCodeAnimationJobRecord(job).catch((error) => {
+  const controller = new AbortController();
+  const ownedRuns = new Set();
+  const active = { controller, ownedRuns, committing: false, done: null };
+  activeJobs.set(id, active);
+  try {
+    await saveCodeAnimationJobRecord(job);
+  } catch (error) {
     activeJobs.delete(id);
     throw error;
-  });
+  }
   emitCodeAnimationChanged(id);
   console.log(`🎞️ Code animation generation ${id.slice(0, 8)} started on ${provider.id}`);
-  runGeneration({ provider, model: input.model, effort: input.effort, prompt: built.prompt, referencePaths: built.referencePaths })
+  let lastRunId = null;
+  active.done = activeJobs.run(id, () => runGeneration({
+    provider,
+    model: input.model,
+    effort: input.effort,
+    prompt: built.prompt,
+    referencePaths: built.referencePaths,
+    signal: controller.signal,
+    ownedRuns,
+    onRunId: (runId) => { lastRunId = runId; },
+  })
     .then(async ({ html, provider: ranOn, model, runId }) => {
+      if (controller.signal.aborted) throw canceledError();
       // The HTML file and the completed row that first names it are one
       // backup-admitted workflow (#9982), so a snapshot never dumps a
       // completed job whose file its copy missed.
+      let committed = false;
       await withBackupAssetPublication(async () => {
+        if (controller.signal.aborted) return;
+        active.committing = true;
         await saveCodeAnimationHtml(id, html);
         const completedAt = new Date().toISOString();
         await saveCodeAnimationJobRecord({
@@ -560,9 +633,11 @@ export async function startCodeAnimationGeneration(input) {
           completedAt,
           updatedAt: completedAt,
         });
+        committed = true;
       });
-      emitCodeAnimationChanged(id);
+      if (!committed) throw canceledError();
       activeJobs.delete(id);
+      emitCodeAnimationChanged(id);
       console.log(`✅ Code animation generation ${id.slice(0, 8)} completed (${html.length} chars)`);
       // Detached: the gallery shows a placeholder until the poster lands.
       import('./poster.js').then(({ captureCodeAnimationPoster }) => captureCodeAnimationPoster(id)).catch((error) => {
@@ -570,16 +645,41 @@ export async function startCodeAnimationGeneration(input) {
       });
     })
     .catch(async (error) => {
-      const message = String(error?.message || error || 'Generation failed').slice(0, 2_000);
+      const canceled = controller.signal.aborted || error?.code === CANCEL_CODE || isRunCanceledError(error);
       const completedAt = new Date().toISOString();
-      const failed = { ...job, status: 'failed', error: message, completedAt, updatedAt: completedAt };
-      await saveCodeAnimationJobRecord(failed).then(() => emitCodeAnimationChanged(id)).catch((persistError) => {
+      const message = String(error?.message || error || 'Generation failed').slice(0, 2_000);
+      const terminal = canceled
+        ? { ...job, status: 'canceled', error: null, ...(lastRunId ? { runId: lastRunId } : {}), completedAt, updatedAt: completedAt }
+        : { ...job, status: 'failed', error: message, ...(lastRunId ? { runId: lastRunId } : {}), completedAt, updatedAt: completedAt };
+      let saved = false;
+      await saveCodeAnimationJobRecord(terminal).then(() => { saved = true; }).catch((persistError) => {
+        activeJobs.markUnsettled(id);
         console.error(`❌ Code animation generation ${id.slice(0, 8)} status could not be saved: ${persistError.message}`);
       });
       activeJobs.delete(id);
-      console.error(`❌ Code animation generation ${id.slice(0, 8)} failed: ${message}`);
-    });
+      if (saved) emitCodeAnimationChanged(id);
+      if (canceled) console.log(`🛑 Code animation generation ${id.slice(0, 8)} canceled`);
+      else console.error(`❌ Code animation generation ${id.slice(0, 8)} failed: ${message}`);
+    }));
   return job;
+}
+
+/** Cancel an active Fast HTML generation, stopping any tracked provider run. */
+export async function cancelCodeAnimationGeneration(id) {
+  const active = activeJobs.get(id);
+  if (!active) {
+    const job = isCodeAnimationJobId(id) ? await getCodeAnimationJobRecord(id) : null;
+    if (!job) throw new ServerError('Generation job not found', { status: 404, code: 'NOT_FOUND' });
+    if (job.status === 'canceled') return job;
+    if (job.status === 'running') await reconcileJob(job);
+    throw new ServerError('This animation is no longer generating', { status: 409, code: 'CODE_ANIMATION_NOT_RUNNING' });
+  }
+  if (active.committing) {
+    throw new ServerError('The completed animation is being saved and can no longer be canceled', { status: 409, code: 'CODE_ANIMATION_COMMITTING' });
+  }
+  active.controller.abort(canceledError());
+  await active.done;
+  return (await getCodeAnimationJobRecord(id)) ?? { id, status: 'canceled' };
 }
 
 export { codeAnimationPosterPath } from './jobStore.js';

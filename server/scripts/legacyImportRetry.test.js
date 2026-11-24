@@ -23,7 +23,7 @@ const db = vi.fn(async (sql, params) => {
   rows.set(params[0], params);
   return { rowCount: 1 };
 });
-vi.mock('../lib/db.js', () => ({ query: (...args) => db(...args), close: vi.fn() }));
+vi.mock('../lib/db.js', () => ({ query: (...args) => db(...args), withTransaction: async (fn) => fn({ query: (...args) => db(...args) }), close: vi.fn() }));
 
 import { migrateSeriesToDB } from './migrateSeriesToDB.js';
 import { migrateIssuesToDB } from './migrateIssuesToDB.js';

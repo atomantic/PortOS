@@ -608,6 +608,29 @@ export const getDomainMode = (config, domainId) => {
   return DOMAIN_AUTONOMY_MODES.some(m => m.id === candidate) ? candidate : DEFAULT_DOMAIN_MODE;
 };
 
+// Creative orchestrator autonomy (#2183, #18144). Kept outside AUTONOMY_DOMAINS so
+// an absent/null override mirrors `cos` without a separate budget/usage ledger.
+export const CREATIVE_DOMAIN = {
+  id: 'creative',
+  label: 'Creative orchestrator',
+  description: 'Automatically run creative-suite tools (universe, story, pipeline, media) from an orchestrating agent. Defaults to mirror CoS auto-run.',
+};
+
+export const CREATIVE_DOMAIN_MODES = [
+  { id: null, label: 'Inherit CoS auto-run', description: 'Mirror the CoS auto-run mode above (default).' },
+  ...DOMAIN_AUTONOMY_MODES,
+];
+
+// Explicit creative override (`'off' | 'dry-run' | 'execute'`) or `null` when inheriting CoS.
+export const getCreativeAutonomyOverride = (config) => {
+  const explicit = config?.domainAutonomy?.[CREATIVE_DOMAIN.id];
+  return DOMAIN_AUTONOMY_MODES.some(m => m.id === explicit) ? explicit : null;
+};
+
+// Effective creative mode: valid explicit override wins, else mirrors `cos`.
+export const getCreativeAutonomyMode = (config) =>
+  getCreativeAutonomyOverride(config) ?? getDomainMode(config, 'cos');
+
 // Per-domain daily autonomy budgets (#711). Mirrors server/lib/domainBudgets.js.
 // Each domain caps autonomous work on two measurable dimensions; an empty/0 cap
 // means unlimited. (No token/$ caps — CLI subscription providers expose no

@@ -348,8 +348,8 @@ const BALLOON_STYLE_HINTS = [
   // style WITHOUT the "not in panel" claim (that's reserved for unambiguous
   // broadcast/off-panel/V.O. above).
   { test: /\b(EARPIECE|RADIO|COMMS?|TRANSMISSION|PHONE|HOLO|HOLOGRAM|TV|MONITOR|VIDEO|COMLINK|CHANNEL)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
-  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with the tail pointing past the panel border', disembodied: true },
-  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon', disembodied: true },
+  { test: /\b(OFF[- ]?PANEL|OFF[- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with the tail pointing past the panel border', disembodied: true },
+  { test: /\b(NARRATION|VOICE[- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon', disembodied: true },
   { test: /\b(WHISPER(?:ED|S|ING)?|SOTTO|HUSHED|QUIET)\b/, hint: 'dashed-outline whisper balloon' },
   { test: /\b(SHOUT(?:ED|S|ING)?|YELL(?:ED|S|ING)?|SCREAM(?:ED|S|ING)?|ANGRY|BURST)\b/, hint: 'spiked/burst-shaped balloon' },
   { test: /\b(THOUGHT|THINKING|INTERNAL)\b/, hint: 'cloud-outline thought balloon with chain-of-bubbles tail' },

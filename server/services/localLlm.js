@@ -36,6 +36,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { fileURLToPath } from 'url'
 import { pipeline } from 'stream/promises'
+import { createHash } from 'crypto'
 import { Readable, Transform } from 'stream'
 import { ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
 import { readPortosEnvValue, upsertPortosEnvLine } from '../lib/portosEnv.js'
@@ -431,7 +432,8 @@ const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
  * deadline (which would abort slow-but-progressing links): the response headers
  * must arrive within `headerMs`, then every body chunk resets an idle timer that
  * aborts after `idleMs` without bytes. `signal` aborts early (client gone).
- * Resolves `{ error }` on any failure, `{}` on success — never throws.
+ * Resolves `{ error }` on any failure, `{ sha256 }` (hex digest of the bytes
+ * written) on success — never throws.
  */
 async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLOAD_HEADER_TIMEOUT_MS, idleMs = DOWNLOAD_IDLE_TIMEOUT_MS } = {}) {
   const ac = new AbortController()
@@ -450,9 +452,10 @@ async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLO
     if (!dl?.ok || !dl.body) return { error: `Download failed: ${dl?.statusText || 'no response body'}` }
     const idleMessage = `Download stalled — no data for ${Math.round(idleMs / 1000)} s. Check the connection and retry.`
     arm(idleMs, idleMessage)
-    const touch = new Transform({ transform(chunk, _enc, cb) { arm(idleMs, idleMessage); cb(null, chunk) } })
+    const hash = createHash('sha256')
+    const touch = new Transform({ transform(chunk, _enc, cb) { arm(idleMs, idleMessage); hash.update(chunk); cb(null, chunk) } })
     await pipeline(Readable.fromWeb(dl.body), touch, createWriteStream(destPath), { signal: ac.signal })
-    return {}
+    return { sha256: hash.digest('hex') }
   } catch (err) {
     if (stall) return { error: stall }
     if (signal?.aborted) return { error: 'Download cancelled.' }
@@ -461,6 +464,40 @@ async function downloadWithStallGuard(url, destPath, signal, { headerMs = DOWNLO
     clearTimeout(timer)
     signal?.removeEventListener('abort', onExternalAbort)
   }
+}
+
+const OLLAMA_RELEASE_DOWNLOAD_PREFIX = 'https://github.com/ollama/ollama/releases/download/'
+// Apple Developer Team ID that signs official Ollama.app releases.
+const OLLAMA_TEAM_ID = '3MU9H2V9Y9'
+
+// Trusted SHA-256 for a release asset: GitHub's `asset.digest` ("sha256:<hex>"),
+// else the release's `sha256sum.txt` asset. Returns null when neither yields one
+// so the caller fails closed.
+async function resolveOllamaAssetDigest(release, asset) {
+  const fromApi = /^sha256:([0-9a-f]{64})$/i.exec(String(asset.digest || ''))
+  if (fromApi) return fromApi[1].toLowerCase()
+  const sums = (release.assets || []).find((a) => a.name === 'sha256sum.txt')
+  if (!sums?.browser_download_url?.startsWith(OLLAMA_RELEASE_DOWNLOAD_PREFIX)) return null
+  const text = await fetch(sums.browser_download_url, { signal: AbortSignal.timeout(15000) })
+    .then((r) => (r.ok ? r.text() : ''), () => '')
+  for (const line of text.split('\n')) {
+    const m = /^([0-9a-f]{64})\s+\*?(?:\.\/)?(\S+)$/i.exec(line.trim())
+    if (m && m[2] === asset.name) return m[1].toLowerCase()
+  }
+  return null
+}
+
+// Verify the extracted bundle's code signature and that it is signed by Ollama's
+// Team ID. Returns an error string, or null when trusted.
+async function verifyOllamaBundleSignature(bundlePath) {
+  const verify = await runStreaming('codesign', ['--verify', '--deep', '--strict', bundlePath], () => {}, 120_000)
+  if (!verify.success) return `codesign verification failed: ${verify.error}`
+  const lines = []
+  // `codesign -dv` writes its report to stderr; runStreaming merges both streams.
+  await runStreaming('codesign', ['-dv', '--verbose=2', bundlePath], (l) => lines.push(l), 30_000)
+  const team = lines.map((l) => /^TeamIdentifier=(\S+)/.exec(l.trim())?.[1]).find(Boolean)
+  if (team !== OLLAMA_TEAM_ID) return `unexpected code-signing TeamIdentifier (${team || 'none'})`
+  return null
 }
 
 async function upgradeOllamaMacApp(emit, signal) {
@@ -475,6 +512,14 @@ async function upgradeOllamaMacApp(emit, signal) {
   const asset = (release.assets || []).find((a) => a.name === 'Ollama-darwin.zip')
   if (!asset?.browser_download_url) {
     return { success: false, error: `Latest Ollama release ${release.tag_name} has no Ollama-darwin.zip asset — try downloading from ${DOWNLOAD_URL.ollama}.` }
+  }
+
+  if (!asset.browser_download_url.startsWith(OLLAMA_RELEASE_DOWNLOAD_PREFIX)) {
+    return { success: false, error: `Refusing to download Ollama-darwin.zip from an unexpected origin; try ${DOWNLOAD_URL.ollama}.` }
+  }
+  const expectedSha256 = await resolveOllamaAssetDigest(release, asset)
+  if (!expectedSha256) {
+    return { success: false, error: `Release ${release.tag_name} publishes no SHA-256 digest for Ollama-darwin.zip, so it cannot be verified and the upgrade was not attempted. Install from ${DOWNLOAD_URL.ollama}.` }
   }
 
   const before = await readOllamaVersion()
@@ -493,15 +538,10 @@ async function upgradeOllamaMacApp(emit, signal) {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     return { success: false, error: dl.error }
   }
-
-  emit('Stopping running Ollama…')
-  await ollamaManager.stopServer().catch(() => null)
-  // Force-kill stragglers — the menu-bar .app launches `ollama serve` as a child
-  // that doesn't always exit cleanly via the service stop above.
-  await runStreaming('pkill', ['-x', 'Ollama'], () => {}, 10_000).catch(() => null)
-  await runStreaming('pkill', ['-x', 'ollama'], () => {}, 10_000).catch(() => null)
-  // Brief settle so the OS releases the bundle before we replace it.
-  await sleep(1500)
+  if (dl.sha256 !== expectedSha256) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: 'Downloaded Ollama-darwin.zip failed SHA-256 verification; discarded it and left your install untouched.' }
+  }
 
   emit('Extracting…')
   const unzip = await runStreaming('unzip', ['-q', '-o', zipPath, '-d', tmpDir], emit, 5 * 60 * 1000)
@@ -514,6 +554,22 @@ async function upgradeOllamaMacApp(emit, signal) {
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     return { success: false, error: 'Extracted archive did not contain Ollama.app — release layout may have changed.' }
   }
+
+  emit('Verifying code signature…')
+  const sigError = await verifyOllamaBundleSignature(extractedApp)
+  if (sigError) {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    return { success: false, error: `Downloaded Ollama.app failed signature verification (${sigError}); your install was left untouched.` }
+  }
+
+  emit('Stopping running Ollama…')
+  await ollamaManager.stopServer().catch(() => null)
+  // Force-kill stragglers — the menu-bar .app launches `ollama serve` as a child
+  // that doesn't always exit cleanly via the service stop above.
+  await runStreaming('pkill', ['-x', 'Ollama'], () => {}, 10_000).catch(() => null)
+  await runStreaming('pkill', ['-x', 'ollama'], () => {}, 10_000).catch(() => null)
+  // Brief settle so the OS releases the bundle before we replace it.
+  await sleep(1500)
 
   emit('Installing /Applications/Ollama.app…')
   // Stage-and-swap: move the existing bundle ASIDE rather than deleting it. `mv`
@@ -1278,7 +1334,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
   if (backend === 'ollama') {
     const importSpec = getOllamaImportSpec(modelId)
     const result = importSpec
-      ? await ollamaManager.importModelFromHfSafetensors(importSpec, onProgress)
+      ? await (await import('./ollamaSafetensorsImport.js')).importModelFromHfSafetensors(importSpec, onProgress)
       : await ollamaManager.pullModel(modelId, onProgress, { signal })
     if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
@@ -1498,7 +1554,7 @@ async function tryLocalImport(to, model, targetId, resolved, mode, onProgress) {
   const verb = mode === 'link' ? 'Linking' : 'Copying'
   onProgress({ event: 'start', message: `${verb} ${name} onto ${to} (no download)…` })
   const r = to === 'ollama'
-    ? await ollamaManager.importModelFromGguf({ name, ggufPath: resolved.ggufPath, mode })
+    ? await (await import('./ollamaDiskImport.js')).importModelFromGguf({ name, ggufPath: resolved.ggufPath, mode })
     : await lmStudioManager.importModelFromGguf({ lmstudioId: name, ggufPath: resolved.ggufPath, projectorPath: resolved.projectorPath, mode })
   if (!r.success) {
     onProgress({ event: 'start', message: `Local import of ${model.id} failed (${r.error}); re-pulling…` })
@@ -1559,7 +1615,8 @@ export async function migrateBackend(to, { mode = 'link', onProgress = () => {} 
   const results = []
   for (const model of sourceModels) {
     const { targetId, exact } = mapModelToBackend(from, model.id, to)
-    const resolved = await manager(from).resolveLocalModel(model.id).catch(() => null)
+    const resolveLocal = from === 'ollama' ? (await import('./ollamaDiskImport.js')).resolveLocalModel : lmStudioManager.resolveLocalModel
+    const resolved = await resolveLocal(model.id).catch(() => null)
 
     // 1) Fast path — link/copy the GGUF locally (no download) when we can.
     const imported = await tryLocalImport(to, model, targetId, resolved, mode, onProgress)

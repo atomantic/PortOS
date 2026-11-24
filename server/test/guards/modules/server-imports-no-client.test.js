@@ -44,7 +44,7 @@ const LEGACY_TEST_CROSS_IMPORTS = new Set([
   'server/lib/privacyValidation.mirror.test.js',
   'server/lib/spriteAnimationTracks.test.js',
   'server/services/imageTo3d/renderOptions.parity.test.js',
-  'server/services/meatspaceHealth.test.js',
+  'server/services/meatspace/meatspaceHealth.test.js',
   'server/services/rounds.test.js',
 ]);
 

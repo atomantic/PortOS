@@ -51,7 +51,7 @@ const templateVariables = ({ name, kind, direction, chromaKey }) => ({
 export function renderPromptTemplate(template, args) {
   const vars = templateVariables(args || {});
   return String(template).replace(/\{\{\s*([a-zA-Z][a-zA-Z0-9_]*)\s*\}\}/g, (match, key) => (
-    Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : match
+    Object.hasOwn(vars, key) ? vars[key] : match
   ));
 }
 

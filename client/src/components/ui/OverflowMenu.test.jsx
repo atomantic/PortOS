@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import OverflowMenu from './OverflowMenu';
+import Modal from './Modal';
 
 const positioning = vi.hoisted(() => ({ controlled: false, style: null }));
 vi.mock('../../hooks/usePopoverPosition.js', async (importOriginal) => {
@@ -230,5 +231,36 @@ describe('OverflowMenu', () => {
     // The activated anchor unmounts with the menu, so focus has to be handed
     // back or a keyboard user is stranded on <body>.
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('supports Home, End and trigger ArrowUp', async () => {
+    const user = userEvent.setup();
+    render(<OverflowMenu label="More actions" items={items()} />);
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    trigger.focus();
+    await user.keyboard('{ArrowUp}');
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Delete' }));
+    await user.keyboard('{Home}');
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Archive' }));
+    await user.keyboard('{End}');
+    expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Delete' }));
+  });
+
+  it.each([true, false])('Escape closes only the menu inside a Modal (closeOnEsc=%s)', async (closeOnEsc) => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Modal open onClose={onClose} closeOnEsc={closeOnEsc} ariaLabel="dlg">
+        <OverflowMenu label="More actions" items={items()} />
+      </Modal>
+    );
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(onClose).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(closeOnEsc ? 1 : 0);
   });
 });

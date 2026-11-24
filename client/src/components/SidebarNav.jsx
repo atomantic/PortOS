@@ -6,8 +6,9 @@ import {
   Search, Settings, Sparkles, Terminal, Wrench, Zap,
 } from 'lucide-react';
 import useFocusTrap from '../hooks/useFocusTrap.js';
+import { useEscLayer } from './ui/Modal';
 import { TRUSTED_BUNDLE_STAMP, describeBuild } from '../lib/buildStamp.js';
-import { useNavWorkingSet, useResolvedNavWorkingSet } from '../hooks/useNavWorkingSet.js';
+import { useNavWorkingSet, useResolvedNavWorkingSet } from './useNavWorkingSet.js';
 import { migrateLegacyNavPath } from '../utils/navWorkingSet.js';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
@@ -20,15 +21,15 @@ import {
 import { PORTS } from '../lib/ports.js';
 import { getNavCommandForPath, getSectionNavGroups, getSectionNavTabForPath, NAV_COMMANDS, SECTION_FEATURE } from '../../../server/lib/navManifest.js';
 import { useSidebarApps } from '../hooks/useSidebarApps.js';
-import { useSidebarMusicVideos } from '../hooks/useSidebarMusicVideos.js';
-import { useSidebarSeries } from '../hooks/useSidebarSeries.js';
-import { useSidebarUniverses } from '../hooks/useSidebarUniverses.js';
+import { useSidebarMusicVideos } from './useSidebarMusicVideos.js';
+import { useSidebarSeries } from './useSidebarSeries.js';
+import { useSidebarUniverses } from './useSidebarUniverses.js';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 import Logo from './Logo';
 import { NotificationBell } from './NotificationBell.jsx';
 import SidebarFlyout from './SidebarFlyout.jsx';
 import ThemeModeToggle from './ThemeModeToggle.jsx';
-import ThemeSwitcher from './ThemeSwitcher';
+import ThemeSwitcherGate from './ThemeSwitcherGate';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 
 const SECTION_PRESENTATION = {
@@ -224,6 +225,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
   const sidebarCollapsed = collapsed && !mobileOpen;
   const mobileNavActive = mobileOpen && !desktopNav;
   useFocusTrap(mobileNavActive, sidebarRef);
+  useEscLayer(mobileNavActive, closeMobileNav);
 
   const [expandedSections, setExpandedSections] = useState({});
   const [expandedSubSections, setExpandedSubSections] = useState({});
@@ -235,6 +237,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
     setFlyout(null);
   }, [cancelCloseFlyout]);
   const flyoutId = useId();
+  const navId = useId();
   const flyoutTriggerRef = useRef(null);
   // Restoring focus to the trigger fires its row's onFocus; without this latch
   // that would immediately reopen the flyout the user just dismissed.
@@ -580,6 +583,94 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         : 'text-gray-400 hover:text-white hover:bg-port-border/50'
     }`;
 
+    const renderChild = (child, childIndex) => {
+      if (child.separator) {
+        return <div key={`child-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
+      }
+      const ChildIcon = child.icon;
+      if (child.external) {
+        const childHref = child.dynamicHost
+          ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
+          : child.href;
+        return (
+          <a
+            key={child.href}
+            href={childHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={child.label}
+            className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <ChildIcon size={16} className="shrink-0 mt-0.5" />
+              <span className="min-w-0 break-words leading-snug">{child.label}</span>
+            </div>
+            <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
+          </a>
+        );
+      }
+      const childActive = child.end
+        ? location.pathname === child.to
+        : isActive(child.to);
+      const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
+      const grandChildrenExpanded = expandedSubSections[child.to] !== false;
+      const childIsPinned = isPinned(child.to);
+      return (
+        <div key={child.to} className="min-w-0">
+          <div className="flex items-center min-w-0">
+            <div className="min-w-0 flex-1">
+              <WorkingSetRow
+                entry={{ path: child.to, label: child.label, icon: ChildIcon, end: child.end }}
+                pinned={childIsPinned}
+                onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
+                onNavigate={() => closeMobileNav()}
+                isActive={childActive}
+              />
+            </div>
+            {grandChildren.length > 0 && (
+              <button
+                type="button"
+                aria-label={grandChildrenExpanded ? `Collapse ${child.label}` : `Expand ${child.label}`}
+                aria-expanded={grandChildrenExpanded}
+                onClick={() => toggleSubSection(child.to)}
+                className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
+              >
+                {grandChildrenExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              </button>
+            )}
+          </div>
+          {grandChildren.length > 0 && grandChildrenExpanded && (
+            <div className="ml-6 mt-0.5 mb-1 border-l border-port-border/50 pl-2 min-w-0">
+              {grandChildren.map((gc) => {
+                // Prefer the explicit prefix (e.g. `/pipeline/issues/<id>`)
+                // so the row stays highlighted across stage tabs — the
+                // `to` link points at a specific default stage but the
+                // user may navigate to siblings.
+                const prefix = gc.activePathPrefix || gc.to;
+                const gcActive = location.pathname === prefix
+                  || location.pathname.startsWith(prefix + '/');
+                return (
+                  <NavLink
+                    key={gc.to}
+                    to={gc.to}
+                    onClick={() => closeMobileNav()}
+                    title={gc.title || gc.label}
+                    className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
+                      gcActive
+                        ? 'text-port-accent'
+                        : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
+                    }`}
+                  >
+                    {gc.label}
+                  </NavLink>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    };
+
     const hasChildrenForFlyout = railActive && Array.isArray(item.children) && item.children.length > 0;
 
     return (
@@ -628,100 +719,15 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         {/* Children items */}
         {expandedSections[item.label] && !sidebarCollapsed && (
           <div className="ml-4 mt-1 min-w-0">
-            {(item.groups?.length
-              ? item.groups.flatMap((group) => [...(group.label ? [{ groupLabel: group.label }] : []), ...group.children])
-              : item.children
-            ).map((child, childIndex) => {
-              if (child.groupLabel) {
-                return (
-                  <div key={`child-group-${child.groupLabel}`} className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500" role="heading" aria-level="3">
-                    {child.groupLabel}
-                  </div>
-                );
-              }
-              if (child.separator) {
-                return <div key={`child-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
-              }
-              const ChildIcon = child.icon;
-              if (child.external) {
-                const childHref = child.dynamicHost
-                  ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
-                  : child.href;
-                return (
-                  <a
-                    key={child.href}
-                    href={childHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={child.label}
-                    className="flex items-center min-h-[44px] lg:min-h-0 pointer-coarse:min-h-11 justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
-                  >
-                    <div className="flex items-start gap-3 min-w-0">
-                      <ChildIcon size={16} className="shrink-0 mt-0.5" />
-                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
-                    </div>
-                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
-                  </a>
-                );
-              }
-              const childActive = child.end
-                ? location.pathname === child.to
-                : isActive(child.to);
-              const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
-              const grandChildrenExpanded = expandedSubSections[child.to] !== false;
-              const childIsPinned = isPinned(child.to);
+            {(item.groups?.length ? item.groups : [{ label: '', children: item.children }]).map((group) => {
+              if (!group.label) return group.children.map(renderChild);
+              const labelId = `${navId}-${item.label}-${group.label}`.replace(/\s+/g, '-');
               return (
-                <div key={child.to} className="min-w-0">
-                  <div className="flex items-center min-w-0">
-                    <div className="min-w-0 flex-1">
-                      <WorkingSetRow
-                        entry={{ path: child.to, label: child.label, icon: ChildIcon, end: child.end }}
-                        pinned={childIsPinned}
-                        onTogglePin={() => (childIsPinned ? unpin(child.to) : pin(child.to))}
-                        onNavigate={() => closeMobileNav()}
-                        isActive={childActive}
-                      />
-                    </div>
-                    {grandChildren.length > 0 && (
-                      <button
-                        type="button"
-                        aria-label={grandChildrenExpanded ? `Collapse ${child.label}` : `Expand ${child.label}`}
-                        aria-expanded={grandChildrenExpanded}
-                        onClick={() => toggleSubSection(child.to)}
-                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-2 text-gray-500 hover:text-white hover:bg-port-border/50 rounded-lg"
-                      >
-                        {grandChildrenExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </button>
-                    )}
+                <div key={`child-group-${group.label}`} role="group" aria-labelledby={labelId} className="min-w-0">
+                  <div id={labelId} className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                    {group.label}
                   </div>
-                  {grandChildren.length > 0 && grandChildrenExpanded && (
-                    <div className="ml-6 mt-0.5 mb-1 border-l border-port-border/50 pl-2 min-w-0">
-                      {grandChildren.map((gc) => {
-                        // Prefer the explicit prefix (e.g. `/pipeline/issues/<id>`)
-                        // so the row stays highlighted across stage tabs — the
-                        // `to` link points at a specific default stage but the
-                        // user may navigate to siblings.
-                        const prefix = gc.activePathPrefix || gc.to;
-                        const gcActive = location.pathname === prefix
-                          || location.pathname.startsWith(prefix + '/');
-                        return (
-                          <NavLink
-                            key={gc.to}
-                            to={gc.to}
-                            onClick={() => closeMobileNav()}
-                            title={gc.title || gc.label}
-                            className={`min-h-[44px] flex items-center lg:min-h-0 lg:block pointer-coarse:min-h-11 pointer-coarse:flex pointer-coarse:items-center px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
-                              gcActive
-                                ? 'text-port-accent'
-                                : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
-                            }`}
-                          >
-                            {gc.label}
-                          </NavLink>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {group.children.map(renderChild)}
                 </div>
               );
             })}
@@ -740,13 +746,9 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
         id="app-sidebar"
         inert={!desktopNav && !mobileNavActive}
         aria-hidden={!desktopNav && !mobileNavActive ? true : undefined}
-        onKeyDown={(event) => {
-          // Portaled child popovers own their Escape dismissal.
-          if (mobileNavActive && event.key === 'Escape' && !event.defaultPrevented && event.currentTarget.contains(event.target)) {
-            event.stopPropagation();
-            closeMobileNav();
-          }
-        }}
+        role={mobileNavActive ? 'dialog' : undefined}
+        aria-modal={mobileNavActive ? 'true' : undefined}
+        aria-label={mobileNavActive ? 'Navigation menu' : undefined}
         className={`
           port-app-sidebar
           fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
@@ -853,7 +855,7 @@ export default function SidebarNav({ collapsed, setCollapsed, mobileOpen, closeM
                 <Search size={18} />
               </button>
               <ThemeModeToggle />
-              <ThemeSwitcher className={collapsed ? 'lg:hidden' : ''} />
+              <ThemeSwitcherGate className={collapsed ? 'lg:hidden' : ''} />
               <VoiceToggleButton className={collapsed ? 'lg:hidden' : ''} />
               <NotificationBell />
             </div>

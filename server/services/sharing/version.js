@@ -9,21 +9,29 @@
  * writes the local version. `producedByVersion` (app version) is informational only.
  */
 
+import { readFile } from 'fs/promises';
+
 export const SHARING_SCHEMA_VERSION = 2;
 
+const PACKAGE_JSON_URL = new URL('../../../package.json', import.meta.url);
 let cachedAppVersion = null;
 let cachedAt = 0;
 
 /**
- * App version from package.json, cached 60s; "unknown" on read failure. `updateChecker` is
- * imported lazily because its module body evaluates `PATHS.data` at load time, which would
- * drag eager PATHS into every consumer's tests.
+ * App version from package.json, cached 60s; "unknown" on read failure.
+ * Reads package.json directly instead of importing `updateChecker.js`, keeping
+ * sharing leaves off both eager `PATHS.data` evaluation and the GitHub/PR/CoS graph.
  */
 export async function getProducedByVersion() {
   const now = Date.now();
   if (cachedAppVersion && now - cachedAt < 60_000) return cachedAppVersion;
-  const { getCurrentVersion } = await import('../updateChecker.js');
-  const v = await getCurrentVersion().catch(() => null);
+  let v = null;
+  try {
+    const raw = await readFile(PACKAGE_JSON_URL, 'utf8');
+    v = JSON.parse(raw)?.version ?? null;
+  } catch {
+    v = null;
+  }
   cachedAppVersion = (typeof v === 'string' && v) ? v : 'unknown';
   cachedAt = now;
   return cachedAppVersion;

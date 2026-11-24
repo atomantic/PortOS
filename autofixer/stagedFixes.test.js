@@ -1,9 +1,9 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { chmod, mkdtemp, mkdir, stat, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
-import { createStagedFixStore } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId, buildAutofixerSessionId, processNameFromSessionId } from './stagedFixes.js';
 let root, repo, store, restart;
 const id = 'autofixer_example_123';
 // git apply/checkout on Windows applies autocrlf, so compare with LF endings.
@@ -30,6 +30,18 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 describe('staged repair lifecycle', () => {
+  it.skipIf(process.platform === 'win32')('replaces legacy metadata with a private file even after a stale temp write', async () => {
+    const metadata = join(root, 'sessions', id, 'metadata.json');
+    const temp = `${metadata}.tmp`;
+    await chmod(metadata, 0o644);
+    await writeFile(temp, 'interrupted write');
+    await chmod(temp, 0o644);
+
+    expect(await store.mutate(id, 'discard')).toEqual({ success: true, disposition: 'discarded' });
+    expect((await stat(metadata)).mode & 0o777).toBe(0o600);
+    await expect(stat(temp)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('shows the proposal, applies its actual git patch once, and persists history disposition', async () => {
     expect((await store.read(id)).patch).toBe(patch);
     const results = await Promise.all([store.mutate(id, 'apply'), store.mutate(id, 'apply')]);
@@ -84,11 +96,64 @@ describe('staged repair lifecycle', () => {
     expect(await readExample(repo)).toBe('old\n');
     expect((await store.read(id)).patch).toBe(patch);
   });
+
+  it('protects a self-restart session until the staged fix is restored after a restart failure', async () => {
+    const processName = 'portos-autofixer';
+    await writeFile(join(root, 'sessions', id, 'metadata.json'), JSON.stringify({
+      sessionId: id, appId: 'example', repoPath: repo, processName, staged: true,
+    }));
+    const result = Promise.withResolvers();
+    restart.mockReturnValue(result.promise);
+    store = createStagedFixStore({ root, execPm2: restart,
+      loadApps: async () => [{ id: 'example', repoPath: repo, pm2ProcessNames: [processName] }] });
+
+    expect(await store.mutate(id, 'apply')).toMatchObject({ status: 202 });
+    try {
+      expect(await store.canPrune(id)).toBe(false);
+    } finally {
+      result.reject(new Error('example restart failure'));
+    }
+    await vi.waitFor(async () => expect((await store.read(id)).patch).toBe(patch));
+    expect(await store.canPrune(id)).toBe(false);
+  });
+
   it('discards without applying and rejects traversal IDs', async () => {
     expect((await store.read('../outside')).status).toBe(404);
     expect(await store.mutate(id, 'discard')).toEqual({ success: true, disposition: 'discarded' });
     expect((await store.read(id)).status).toBe(404);
     expect(await readExample(repo)).toBe('old\n');
     expect(restart).not.toHaveBeenCalled();
+  });
+});
+
+describe('session IDs for dotted PM2 process names', () => {
+  it('encodes new IDs to a filesystem-safe grammar and recovers the name', () => {
+    const generated = buildAutofixerSessionId('example.worker', 1700000000000, 0.123456789);
+    expect(generated).toMatch(/^autofixer_example_2e_worker_1700000000000_[a-z0-9]+$/);
+    expect(isAutofixerSessionId(generated)).toBe(true);
+    expect(processNameFromSessionId(generated)).toBe('example.worker');
+  });
+
+  it('keeps pre-encoding dotted IDs operable but rejects malformed, traversal and unrelated names', () => {
+    expect(isAutofixerSessionId('autofixer_example.worker_1700000000000_abc123def')).toBe(true);
+    for (const bad of ['autofixer_example.worker', 'autofixer_a/../b.c_1_x', 'autofixer_a.b_1_x/..',
+      'autofixer_a\\b.c_1_x', '../autofixer_a.b_1_x', 'other_a.b_1_x', 'autofixer_.._1_x', '', null]) {
+      expect(isAutofixerSessionId(bad)).toBe(false);
+    }
+  });
+
+  it.each([
+    ['encoded', 'autofixer_example_2e_worker_1700000000000_abc123def'],
+    ['legacy', 'autofixer_example.worker_1700000000000_abc123def'],
+  ])('reads, discards and prunes a %s dotted session', async (_label, dotted) => {
+    await mkdir(join(root, 'sessions', dotted), { recursive: true });
+    await writeFile(join(root, 'sessions', dotted, 'metadata.json'), JSON.stringify({
+      sessionId: dotted, appId: 'example', repoPath: repo, processName: 'example.worker', staged: true,
+    }));
+    await writeFile(join(root, 'sessions', dotted, 'fix.patch'), patch);
+    expect((await store.read(dotted)).patch).toBe(patch);
+    expect(await store.canPrune(dotted)).toBe(false);
+    expect(await store.mutate(dotted, 'discard')).toEqual({ success: true, disposition: 'discarded' });
+    expect(await store.canPrune(dotted)).toBe(true);
   });
 });

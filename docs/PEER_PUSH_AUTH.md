@@ -75,11 +75,13 @@ the list does not admit.
 | POST | `/api/instances/peers/announce`, `/api/instances/peers/sync-categories` | Registration handshake |
 | GET | `/api/brain/sync`, `/api/brain/reconcile/{checksum,snapshot,manifest}` | Brain sync and parity |
 | GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
+| GET | `/api/catalog/identity/peer/{snapshot,status}` | Catalog identity parity |
 | GET | `/api/peer-sync/{manifest,library-manifest,cos-history-manifest,cos-tasks,eidoverse-foundations,cos-agent-archive,record,subscriptions}` | Record, manifest, and archive pulls. `/subscriptions` returns only the subscriptions targeting the calling peer; `/integrity` is operator-only |
 | POST | `/api/peer-sync/push` | Record push |
 | POST | `/api/peer-media/delete` | Remote media delete (also needs this install's media-delete capability for the peer) |
 | POST | `/api/peer-media/copy` | Verify a local gallery file. A request with a digest may fetch missing bytes from the authenticated caller only, with the media-delete grant. |
 | POST | `/api/peer-media/release` | Trash a redundant copy and stream from a verified primary, with the media-delete grant. Collection moves also require matching SHA-256 digests. |
+| POST | `/api/federation/admin/v1/{preflight,plans,receipt,execute,execution/preflight,execution/dispatch,execution/status}` | Peer administration (`planning-v1` and receiver-granted `execution-v1`; each requires a current pair identity and host-local action grant) |
 | any | `/api/federation/media/v1/*` | Federated media provider |
 | GET | `/api/providers/fleet-host` | Fleet LLM host discovery |
 | POST | `/api/providers/fleet-host/key` | Fleet LLM host key |
@@ -181,12 +183,16 @@ one-time remote bootstrap requires the saved instance password and is restricted
 to installing a generated pair secret on the caller's matching peer record.
 Existing host-issued operator session tokens also work.
 
-## Administration planning extension (draft)
+## Peer administration extension
 
-The exact POST `/api/federation/admin/v1/{preflight,plans,receipt,execute}` routes
-add only [bounded administration planning](features/peer-administration.md).
-They independently require a current pair identity plus an expiring, host-local
-per-action `planning-v1` grant. Basic, a display name, sync configuration and
-network reachability do not authorize them. Execution is unavailable; paired
-credentials still cannot call ordinary host-control routes. Grant setup and
-outbound preview are operator-only under `/api/peer-administration`.
+[Peer administration](features/peer-administration.md) provides both bounded planning
+(`planning-v1` under `/api/federation/admin/v1/{preflight,plans,receipt,execute}`)
+and separate receiver-granted execution (`execution-v1` under
+`/api/federation/admin/v1/execution/{preflight,dispatch,status}`).
+Every endpoint independently requires a current pair identity plus an expiring,
+host-local per-action grant (`planning-v1` grants remain planning-only;
+`execution-v1` requires explicit receiver confirmation). Basic, a display name,
+sync configuration, and network reachability do not authorize them, and paired
+credentials still cannot call ordinary host-control routes. Grant setup,
+catalog review, and outbound preview are operator-only under
+`/api/peer-administration`.

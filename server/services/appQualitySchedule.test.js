@@ -250,6 +250,40 @@ describe('collectBusyOccupancies', () => {
   });
 });
 
+describe('continuous watchers and fallback', () => {
+  it('does not let watchers or >=12 hour/day crons block placement', async () => {
+    loadSchedule.mockResolvedValue({
+      tasks: {
+        'pr-watcher': { type: 'cron', enabled: true, cronExpression: '*/15 * * * *' },
+        'pr-reviewer': { type: 'cron', enabled: true, cronExpression: '0 * * * *' },
+        'custom-frequent': { type: 'cron', enabled: true, cronExpression: '0 */2 * * *' },
+        'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' },
+      },
+    });
+    getAppTaskTypeOverrides.mockResolvedValue({
+      'pr-watcher': { enabled: true }, 'pr-reviewer': { enabled: true }, 'custom-frequent': { enabled: true }, 'do-release': { enabled: true },
+    });
+    const sources = await collectBusyOccupancies({ id: 'a' });
+    expect(sources.map(source => source.taskType)).toEqual(['do-release']);
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE));
+    expect(built.plan.slots.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to unpadded busy slots with a warning when padding leaves no hours', async () => {
+    loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '0 0,4,8,12,16,20 * * *' } } });
+    getAppTaskTypeOverrides.mockResolvedValue({ 'do-release': { enabled: true } });
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE));
+    expect(built.plan.slots.length).toBeGreaterThan(0);
+    expect(built.plan.warnings.join(' ')).toMatch(/padding/i);
+  });
+
+  it('returns the intended selection even when the plan is empty', async () => {
+    const built = await buildQualitySchedulePlan(appWith(NODE_SERVICE), { taskTypes: ['security'], fileIssuesByType: { security: true } });
+    expect(built.selectedTaskTypes).toEqual(['security']);
+    expect(built.selectedFileIssuesByType).toEqual({ security: true });
+  });
+});
+
 describe('buildQualitySchedulePlan', () => {
   it('plans only the applicable checks and works around the app release window', async () => {
     loadSchedule.mockResolvedValue({ tasks: { 'do-release': { type: 'cron', enabled: true, cronExpression: '30 3 * * *' } } });
@@ -280,6 +314,48 @@ describe('saved schedule hydration', () => {
 
   it('reports no saved schedule when no audit override exists', () => {
     expect(inferSavedQualitySchedule({ 'claim-work': { enabled: true, interval: '0 9 * * *' } })).toEqual({ hasExistingSchedule: false });
+  });
+
+  it('ignores non-cron enabled toggles, disabled entries, and legacy pre-consolidation overrides', () => {
+    expect(inferSavedQualitySchedule({
+      security: { enabled: true, interval: null },
+      accessibility: { enabled: true },
+      'api-contract': { enabled: true, interval: undefined },
+      'better-dependency-freedom': { enabled: false, interval: null },
+      simplify: { enabled: true, interval: '0 8 * * *' },
+      'better-complexity': { enabled: true, interval: null },
+    })).toEqual({ hasExistingSchedule: false });
+
+    expect(inferSavedQualitySchedule({
+      security: { enabled: true, interval: '0 9 * * 1', taskMetadata: { fileIssues: false } },
+      privacy: { enabled: true, interval: null, taskMetadata: { fileIssues: true } },
+    })).toEqual({
+      hasExistingSchedule: true,
+      taskTypes: ['security'],
+      fileIssuesByType: { security: false },
+      options: { windowStartHour: 9, windowEndHour: 9, claimBetween: false },
+    });
+  });
+
+  it('hydrates all applicable domains when only non-cron toggles and legacy overrides exist', async () => {
+    getAppTaskTypeOverrides.mockResolvedValue({
+      security: { enabled: true, interval: null },
+      accessibility: { enabled: true },
+      'api-contract': { enabled: true, interval: null },
+      'better-dependency-freedom': { enabled: true },
+      simplify: { enabled: true },
+      'better-complexity': { enabled: true, interval: '0 8 * * *' },
+    });
+    const fullStackApp = appWith([
+      ...NODE_SERVICE,
+      'client/src/App.jsx',
+      'src/index.ts',
+      'Dockerfile',
+    ]);
+    const built = await buildQualitySchedulePlan(fullStackApp, {}, { hydrate: true });
+    expect(built.hasExistingSchedule).toBe(false);
+    expect(built.checks).toHaveLength(16);
+    expect(built.selectedTaskTypes).toHaveLength(16);
   });
 
   it('derives selection, delivery modes, window and claim drain from the overrides', () => {

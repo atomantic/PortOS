@@ -174,7 +174,7 @@ Full catalog (including design plans, ADRs, and research notes): [docs/README.md
 - [Companion App API](./docs/COMPANION_APP_API.md) — PortDeck native mobile client discovery and HTTP API contract
 - [Setup Guide](./docs/SETUP.md) — Tailscale, MagicDNS, trusted HTTPS, launch URLs, and AI-provider readiness
 - [Remote Desktop Broker](./docs/REMOTE_DESKTOP.md) — PortDeck VNC broker security, host setup, and session flow
-- [Federated Media Providers](./docs/FEDERATED_MEDIA_PROVIDERS.md) — Authenticated, capacity-aware peer audio provider wire contract and setup
+- [Federated Media Providers](./docs/FEDERATED_MEDIA_PROVIDERS.md) — Authenticated, capacity-aware peer audio, image, and video provider wire contract and setup
 - [Storage Classification Contract](./docs/STORAGE.md) — when data belongs in PostgreSQL vs the filesystem, plus the new-data-store checklist
 - [Backup & Restore](./docs/BACKUP.md) — filesystem snapshots + mandatory PostgreSQL dumps and how to restore them
 - [Port Allocation](./docs/PORTS.md) — Port conventions (5553-5569) and allocation guide

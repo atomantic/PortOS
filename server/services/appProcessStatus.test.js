@@ -17,11 +17,13 @@ vi.mock('./pm2.js', () => ({
 import { getAllApps } from './apps.js';
 import { listProcessesStrict } from './pm2.js';
 import {
+  PORTOS_MANAGED_DAEMONS,
   annotateExpectedExit,
   getAppStatuses,
   getAppStatusSummary,
   getDesktopProcessNames,
   resolvePm2HomeForProcess,
+  resolveRegisteredProcess,
 } from './appProcessStatus.js';
 
 const setApps = (...apps) => {
@@ -82,6 +84,35 @@ describe('resolvePm2HomeForProcess', () => {
 
     await expect(resolvePm2HomeForProcess('example-api')).resolves.toBeNull();
     await expect(resolvePm2HomeForProcess('missing')).resolves.toBeNull();
+  });
+});
+
+describe('resolveRegisteredProcess', () => {
+  it('resolves registered app PM2 and native launch processes with optional custom pm2Home', async () => {
+    setApps(
+      { id: 'default', type: 'express', pm2ProcessNames: ['example-api'] },
+      { id: 'custom', type: 'express', pm2Home: '/tmp/example-pm2', pm2ProcessNames: ['example-worker'], nativeLaunch: { processName: 'mixed-game' } },
+    );
+
+    await expect(resolveRegisteredProcess('example-api')).resolves.toEqual({ pm2Home: null });
+    await expect(resolveRegisteredProcess('example-worker')).resolves.toEqual({ pm2Home: '/tmp/example-pm2' });
+    await expect(resolveRegisteredProcess('mixed-game')).resolves.toEqual({ pm2Home: '/tmp/example-pm2' });
+  });
+
+  it('allows PortOS-managed daemons even when not present in the apps list', async () => {
+    setApps();
+
+    for (const daemon of PORTOS_MANAGED_DAEMONS) {
+      await expect(resolveRegisteredProcess(daemon)).resolves.toEqual({ pm2Home: null });
+    }
+    expect(getAllApps).not.toHaveBeenCalled();
+  });
+
+  it('returns null for "all" and unregistered host PM2 process names', async () => {
+    setApps({ id: 'default', type: 'express', pm2ProcessNames: ['example-api'] });
+
+    await expect(resolveRegisteredProcess('all')).resolves.toBeNull();
+    await expect(resolveRegisteredProcess('unregistered-daemon')).resolves.toBeNull();
   });
 });
 

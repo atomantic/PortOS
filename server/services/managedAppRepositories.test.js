@@ -22,10 +22,15 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
   getOriginInfo: mock.getOriginInfo,
   readRemoteUrl: mock.readRemoteUrl,
 }));
-vi.mock('./git.js', () => ({
+vi.mock('../lib/execGit.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   execGitSafe: mock.execGit,
+}));
+vi.mock('./git/fetch.js', () => ({
   fetchOrigin: mock.fetchOrigin,
   isFetchFresh: mock.isFetchFresh,
+}));
+vi.mock('./forgeAuth.js', () => ({
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));

@@ -249,26 +249,43 @@ describe('claim flow Use auto-merge', () => {
 });
 
 describe('claim flow workflow-scope handoff', () => {
-  it('names the missing scope only when the probe reports it missing', () => {
+  it('treats a missing scope as advisory and hands off only a confirmed permission denial', () => {
     const missing = buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' } });
     expect(missing).toContain('lacks the `workflow` scope');
     expect(missing).toContain('gh auth refresh -h github.com -s workflow');
     expect(missing).toContain('status "blocked"');
     expect(missing).toContain('"mode":"approval"');
-    expect(missing).toContain('Never refresh credentials or retry the denied merge yourself.');
+    expect(missing).toContain('This is a warning, not a merge refusal.');
+    expect(missing).toContain('After the configured review and required CI gates pass');
+    expect(missing).toContain('one normal head-pinned merge attempt using the assigned credential');
+    expect(missing).toContain('If GitHub explicitly refuses the operation for missing workflow permission');
+    expect(missing).toContain('A generic branch-policy or merge conflict error is not proof');
+    expect(missing).toContain('Only a confirmed merge for this exact PR and head');
+    expect(missing).toContain('Never refresh credentials or retry a denied merge yourself.');
+    expect(missing).not.toContain('skip every merge');
     for (const status of ['granted', 'unknown']) {
       expect(buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status } })).not.toContain('lacks the `workflow` scope');
     }
   });
 
-  it('defers the missing workflow-scope handoff behind a staged pointer when provided', () => {
+  it('does not offer a merge attempt when the claim policy leaves the PR open', () => {
+    const prompt = buildClaimFlowCompletionSection({
+      prStaysOpen: true,
+      workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' },
+    });
+    expect(prompt).toContain('PR completion policy: LEAVE OPEN');
+    expect(prompt).not.toContain('one normal head-pinned merge attempt');
+  });
+
+  it('defers the advisory workflow-scope note behind a staged pointer when provided', () => {
     const staged = buildClaimFlowCompletionSection({
       rawPrCompletion: 'merge-on-green',
       workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' },
       workflowScopeStagedPath: '/install/data/cos/slashdo-resolved/claim-workflow-scope-abc.md',
     });
     expect(staged).toContain('READ `/install/data/cos/slashdo-resolved/claim-workflow-scope-abc.md`');
-    expect(staged).not.toContain('Never refresh credentials or retry the denied merge yourself.');
+    expect(staged).toContain('normal head-pinned merge or a confirmed permission-denial handoff');
+    expect(staged).not.toContain('Never refresh credentials or retry a denied merge yourself.');
   });
 
   it('replaces the full claim ownership binding block with a concise note for server-provisioned checkouts', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mock = vi.hoisted(() => ({ getRiggingReadiness: vi.fn() }));
 vi.mock('../../services/apiRigging.js', () => ({ getRiggingReadiness: mock.getRiggingReadiness }));
@@ -68,6 +68,29 @@ describe('RiggingRuntimeCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Recheck runtime' }));
     await waitFor(() => expect(mock.getRiggingReadiness).toHaveBeenCalledWith({ refresh: true, silent: true }));
+  });
+
+  it.each(['success', 'failure'])('ignores stale Retry %s after a newer Retry completes', async (outcome) => {
+    const older = Promise.withResolvers();
+    const newer = Promise.withResolvers();
+    mock.getRiggingReadiness.mockRejectedValueOnce(new Error('readiness unavailable'))
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    render(<RiggingRuntimeCard />);
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    fireEvent.click(retry);
+    fireEvent.click(retry);
+
+    await act(async () => { newer.resolve(READY); });
+    expect(screen.getByText('Runtime installed')).toBeInTheDocument();
+
+    await act(async () => {
+      if (outcome === 'success') older.resolve(HALF_INSTALLED);
+      else older.reject(new Error('stale error'));
+    });
+    expect(screen.getByText('Runtime installed')).toBeInTheDocument();
+    expect(screen.queryByText(HALF_INSTALLED.detail)).not.toBeInTheDocument();
+    expect(screen.queryByText('stale error')).not.toBeInTheDocument();
   });
 
   it('reports a failed read inline rather than blanking the card', async () => {

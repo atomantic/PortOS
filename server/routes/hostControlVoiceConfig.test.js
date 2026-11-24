@@ -70,7 +70,7 @@ vi.mock('../services/voice/proactiveSpeech.js', () => ({
   MAX_PROACTIVE_TEXT_LEN: 500,
 }));
 vi.mock('../services/voice/facetimeBridge.js', () => ({
-  checkSetup: vi.fn(), probe: vi.fn(), call: vi.fn(), hangup: vi.fn(),
+  checkSetup: vi.fn(), probe: vi.fn(), call: vi.fn(), hangup: vi.fn(), answer: vi.fn(),
 }));
 
 import voiceRoutes from './voice.js';

@@ -279,4 +279,27 @@ describe('Codex accounting inventory', () => {
     expect(fresh.coverage.filesCached).toBe(0);
     expect(fresh.coverage.decodedBytes).toBeGreaterThan(0);
   });
+
+  it('prunes sessions date partitions older than the window but keeps non-date and archived directories', async () => {
+    const recent = Date.parse('2026-07-02T12:00:00Z');
+    const touch = async path => utimes(path, new Date(recent), new Date(recent));
+    const paths = {
+      oldYear: await source('sessions/2020/01/01/old.jsonl', rollout('s-old-year')),
+      oldMonth: await source('sessions/2026/03/15/old.jsonl', rollout('s-old-month')),
+      oldDay: await source('sessions/2026/06/20/old.jsonl', rollout('s-old-day')),
+      yesterday: await source('sessions/2026/07/01/keep.jsonl', rollout('s-yesterday')),
+      today: await source('sessions/2026/07/02/keep.jsonl', rollout('s-today')),
+      nonDate: await source('sessions/misc/keep.jsonl', rollout('s-misc')),
+      archived: await source('archived_sessions/2020/01/01/keep.jsonl', rollout('s-archived'))
+    };
+    for (const path of Object.values(paths)) await touch(path);
+    const pruned = await read({ modifiedSince: recent - 1000 });
+    const inspected = pruned.sessions.flatMap(session => session.paths).sort();
+    expect(inspected).toEqual([paths.yesterday, paths.today, paths.nonDate, paths.archived].sort());
+    expect(pruned.coverage.filesDiscovered).toBe(4);
+    expect(sources.isStaleDatePartition(['2026', '07', '01'], recent - 1000)).toBe(false);
+    expect(sources.isStaleDatePartition(['2026', '06', '30'], recent - 1000)).toBe(true);
+    expect(sources.isStaleDatePartition(['2020'], null)).toBe(false);
+    expect(sources.isStaleDatePartition(['misc'], recent)).toBe(false);
+  });
 });

@@ -33,7 +33,7 @@ import {
 } from '../writersRoom/liveDirector.js';
 import { getIssue } from '../pipeline/issues.js';
 import { getSeries } from '../pipeline/series.js';
-import { defaultVideoModelId } from '../videoGen/local.js';
+import { defaultVideoModelId } from '../videoGen/modelCatalog.js';
 import { createProject, setTreatment, deleteProject } from './local.js';
 import { applyAutoCastToProject } from './autoCast.js';
 import { deleteCollection } from '../mediaCollections.js';

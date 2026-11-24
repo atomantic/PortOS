@@ -166,14 +166,14 @@ async function listAutopilotCandidates(account) {
 // The DB suite checks the SQL prefilter against `autopilotHandoff` row by row.
 export const __testing = { listAutopilotCandidates, candidateFilter };
 
-export async function autopilotAccountNotifications(account, env = null) {
+export async function autopilotAccountNotifications(account, env = null, { managedApps = managedAppsByRepoKey } = {}) {
   if (account.mode !== 'autopilot') return { handedOff: 0, agentRuns: 0 };
   const { automateNotificationPullRequests } = await import('./githubNotificationPullRequest.js');
-  const pullRequests = await automateNotificationPullRequests(account, env);
+  const pullRequests = await automateNotificationPullRequests(account, env, { managedApps });
   const rows = await listAutopilotCandidates(account);
   const plans = rows.map((row) => ({ row, plan: withRunPin(account, autopilotHandoff({ account, row })) })).filter((entry) => entry.plan);
   if (!plans.length) return { handedOff: pullRequests.reviews, agentRuns: pullRequests.reviews, merged: pullRequests.merged };
-  const apps = await managedAppsByRepoKey();
+  const apps = await managedApps();
   const batches = new Map();
   const skipped = [];
   for (const entry of plans) {

@@ -659,9 +659,22 @@ describe('start and end frames', () => {
     // The end frame renders from the start frame unless another frame is picked; the start frame from its prompt.
     fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
     expect(onGenerateEndFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'start.png' });
+    // An end-frame override survives an unrelated start-frame take, then is consumed by just one end take.
+    fireEvent.click(within(pair).getByRole('button', { name: 'Image model for this end frame take' }));
+    const endModel = within(within(pair).getByRole('group', { name: 'One-take image model' }));
+    fireEvent.change(endModel.getByLabelText('Render on'), { target: { value: 'codex' } });
+    fireEvent.change(endModel.getByLabelText('Model'), { target: { value: 'end-take-model' } });
     fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'end' } });
     fireEvent.click(within(pair).getByRole('button', { name: 'New frame take' }));
     expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'end.png' });
+
+    fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
+    expect(onGenerateEndFrame).toHaveBeenLastCalledWith(scene, {
+      referenceImageId: 'start.png', imageTarget: { mode: 'codex', cloudModel: 'end-take-model' },
+    });
+    expect(within(pair).queryByRole('group', { name: 'One-take image model' })).toBeNull();
+    fireEvent.click(within(pair).getByRole('button', { name: 'New end frame take' }));
+    expect(onGenerateEndFrame).toHaveBeenLastCalledWith(scene, { referenceImageId: 'start.png' });
 
     // Both frames' takes show at once, each under its own frame.
     expect(within(pair).getByRole('list', { name: /^Frame takes/ })).toBeTruthy();

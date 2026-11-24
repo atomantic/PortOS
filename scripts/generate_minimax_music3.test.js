@@ -69,7 +69,7 @@ describe.skipIf(!hasNumpy)('generate_minimax_music3 sidecar helpers', () => {
         'r = mod.to_numpy(a, np, torch)',
         'print(json.dumps([isinstance(r, np.ndarray), list(r.shape)]))',
       ].join('\n'));
-      expect(JSON.parse(out)).toEqual([true, [2, 8]]);
+      expect(JSON.parse(out.split('\n').at(-1))).toEqual([true, [2, 8]]);
     });
 
     it('unwraps a torch tensor via detach/float/cpu/numpy', () => {
@@ -78,7 +78,7 @@ describe.skipIf(!hasNumpy)('generate_minimax_music3 sidecar helpers', () => {
         'r = mod.to_numpy(Tensor(a), np, torch)',
         'print(json.dumps([isinstance(r, np.ndarray), list(r.shape)]))',
       ].join('\n'));
-      expect(JSON.parse(out)).toEqual([true, [2, 8]]);
+      expect(JSON.parse(out.split('\n').at(-1))).toEqual([true, [2, 8]]);
     });
 
     it('unwraps a list/tuple batch before converting', () => {
@@ -87,7 +87,7 @@ describe.skipIf(!hasNumpy)('generate_minimax_music3 sidecar helpers', () => {
         'r = mod.to_numpy([(Tensor(a),)], np, torch)',
         'print(json.dumps(list(r.shape)))',
       ].join('\n'));
-      expect(JSON.parse(out)).toEqual([2, 8]);
+      expect(JSON.parse(out.split('\n').at(-1))).toEqual([2, 8]);
     });
   });
 
@@ -106,7 +106,7 @@ describe.skipIf(!hasNumpy)('generate_minimax_music3 sidecar helpers', () => {
         'r = mod.to_stereo(a, np)',
         'print(json.dumps([list(r.shape), str(r.dtype)]))',
       ].join('\n'));
-      expect(JSON.parse(out)).toEqual([expected, 'float32']);
+      expect(JSON.parse(out.split('\n').at(-1))).toEqual([expected, 'float32']);
     });
 
     it('duplicates a mono channel rather than transposing it', () => {
@@ -115,7 +115,7 @@ describe.skipIf(!hasNumpy)('generate_minimax_music3 sidecar helpers', () => {
         'r = mod.to_stereo(a, np)',
         'print(json.dumps(r.tolist()))',
       ].join('\n'));
-      expect(JSON.parse(out)).toEqual([[1, 2, 3], [1, 2, 3]]);
+      expect(JSON.parse(out.split('\n').at(-1))).toEqual([[1, 2, 3], [1, 2, 3]]);
     });
 
     it('raises on a shape it cannot orient', () => {
@@ -204,5 +204,74 @@ describe.skipIf(!pyBin)('generate_minimax_music3 CUDA placement', () => {
       pair: ['condition_encoder_101'],
       other: ['condition_encoder_101', 'language_model_102', 'rvq_depth_decoder_103'],
     });
+  });
+});
+
+describe.skipIf(!pyBin)('generate_minimax_music3 offline loading', () => {
+  it('passes local_files_only=True and pinned --revision to ModularPipeline.from_pretrained', () => {
+    const out = runPythonWithoutNumpy([
+      'import tempfile, types',
+      'from pathlib import Path',
+      'calls = []',
+      'class FakeArray:',
+      '    def __init__(self): self.shape = (2, 16)',
+      '    def astype(self, _): return self',
+      '    @property',
+      '    def ndim(self): return 2',
+      '    @property',
+      '    def T(self): return self',
+      '    def __mul__(self, _): return self',
+      '    def tobytes(self): return b"\\x00" * 64',
+      '    def __len__(self): return 16',
+      'fake_np = types.ModuleType("numpy")',
+      'fake_np.float32 = "float32"',
+      'fake_np.int16 = "int16"',
+      'fake_np.asarray = lambda v: v',
+      'fake_np.squeeze = lambda v: v',
+      'fake_np.clip = lambda v, a, b: FakeArray()',
+      'class FakePipe:',
+      '    sampling_rate = 32000',
+      '    def load_components(self, **kwargs): pass',
+      '    def to(self, device): return self',
+      '    def __call__(self, **kwargs): return [FakeArray()]',
+      'class FakeModularPipeline:',
+      '    @classmethod',
+      '    def from_pretrained(cls, model, **kwargs):',
+      '        calls.append({"model": model, **kwargs})',
+      '        return FakePipe()',
+      'class FakeComponentsManager: pass',
+      'fake_torch = types.ModuleType("torch")',
+      'fake_torch.Tensor = type("Tensor", (), {})',
+      'fake_torch.bfloat16 = "bfloat16"',
+      'fake_torch.cuda = types.SimpleNamespace(is_available=lambda: True, reset_peak_memory_stats=lambda: None, synchronize=lambda: None, max_memory_allocated=lambda: 0, max_memory_reserved=lambda: 0)',
+      'fake_diffusers = types.ModuleType("diffusers")',
+      'fake_diffusers.ModularPipeline = FakeModularPipeline',
+      'fake_modular = types.ModuleType("diffusers.modular_pipelines")',
+      'fake_modular.ComponentsManager = FakeComponentsManager',
+      'sys.modules["numpy"] = fake_np',
+      'sys.modules["torch"] = fake_torch',
+      'sys.modules["diffusers"] = fake_diffusers',
+      'sys.modules["diffusers.modular_pipelines"] = fake_modular',
+      'mod.place_minimax_pipeline = lambda pipe, cm, t: "cuda-bf16-full"',
+      'with tempfile.TemporaryDirectory() as tmp:',
+      '    out_wav = str(Path(tmp) / "out.wav")',
+      '    sys.argv = ["generate_minimax_music3.py", "--model", "MiniMaxAI/MiniMax-Music3", "--revision", "1b525ccb685ae809f33027c51c351eeb5833cf72", "--text", "pop", "--lyrics", "[outro]", "--duration", "5", "--output", out_wav]',
+      '    mod.main()',
+      '    sys.argv = ["generate_minimax_music3.py", "--model", "MiniMaxAI/MiniMax-Music3", "--text", "pop", "--lyrics", "[outro]", "--duration", "5", "--output", out_wav]',
+      '    mod.main()',
+      'print(json.dumps([{"model": c["model"], "revision": c.get("revision"), "local_files_only": c.get("local_files_only")} for c in calls]))',
+    ].join('\n'));
+    expect(JSON.parse(out.split('\n').at(-1))).toEqual([
+      {
+        model: 'MiniMaxAI/MiniMax-Music3',
+        revision: '1b525ccb685ae809f33027c51c351eeb5833cf72',
+        local_files_only: true,
+      },
+      {
+        model: 'MiniMaxAI/MiniMax-Music3',
+        revision: null,
+        local_files_only: true,
+      },
+    ]);
   });
 });

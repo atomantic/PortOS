@@ -66,11 +66,8 @@ Sharpen the mind alongside everything else. **POST** delivers a daily 5-minute s
 
 - **Multi-Modal Identity Capture**: Voice, video, and image-based identity modeling beyond text
 - **Chronotype-Aware Scheduling**: Align task scheduling to natural energy patterns derived from genome sleep markers
-- **Music & Audio Production**: MusicGen-style local generation, whole-episode audio mixing strategy, audio recording / podcast studio (deferred until 128GB hardware arrives)
-- **Inspiration & Mood Board**: A dedicated canvas for collecting visual / textual references that feed into Universe Builder, Writers Room, and Creative Director — distinct from raw Media History
-- **Sketch & Annotation Canvas**: Lightweight drawing surface for storyboarding, panel sketches, and marking up generated images before re-rendering
+- **Music & Audio Production**: audio mixing and podcast studio (deferred until 128GB hardware arrives)
 - **Federated Sharing**: Direct peer-to-peer distribution between PortOS instances on the same Tailnet, beyond the cloud-bucket-based Sharing system
-- **Cross-Domain Insights Engine**: M42 P5 — connect genome ↔ health ↔ taste ↔ identity ↔ creative output into narrative insights surfaced in Brain
 
 ## Non-Goals
 

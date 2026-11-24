@@ -83,6 +83,8 @@ export default function EntityCombobox({
   // Reset on result change to avoid stale Enter target.
   useEffect(() => { setActiveIdx(0); }, [filtered.length, showCreateOption]);
 
+  const hasOptions = totalItems > 0;
+
   const activeOptionId = open
     ? (activeIdx < filtered.length
       ? optionId(filtered[activeIdx]?.id)
@@ -152,6 +154,7 @@ export default function EntityCombobox({
           value={value}
           onChange={(e) => { onChange(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
+          onBlur={(e) => { if (!wrapRef.current?.contains(e.relatedTarget)) setOpen(false); }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder || `Search ${noun}s or type a new name…`}
           className="w-full bg-port-bg border border-port-border rounded pl-8 pr-9 py-2 text-white focus:outline-none focus:border-port-accent"
@@ -160,11 +163,12 @@ export default function EntityCombobox({
           role="combobox"
           aria-autocomplete="list"
           aria-expanded={open}
-          aria-controls={listId}
+          aria-controls={open && hasOptions ? listId : undefined}
           aria-activedescendant={activeOptionId}
         />
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => setOpen((p) => !p)}
           className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-[44px] min-w-[44px] text-gray-500 hover:text-white"
           aria-label={open ? `Close ${noun} list` : `Open ${noun} list`}
@@ -173,69 +177,72 @@ export default function EntityCombobox({
           <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
       </div>
-      {open && (
+      {open && !hasOptions && (
+        <div
+          role="status"
+          aria-live="polite"
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute left-0 right-0 top-full mt-1 z-30 bg-port-card border border-port-border rounded shadow-lg px-3 py-2 text-xs text-gray-500"
+        >
+          {list.length === 0
+            ? (emptyNoItems || `No ${noun}s yet — type a name.`)
+            : 'No matches'}
+        </div>
+      )}
+      {open && hasOptions && (
         <div
           ref={listboxRef}
           id={listId}
           role="listbox"
+          aria-label={`${noun} options`}
+          // Keep focus on the input so clicking an option doesn't blur-close first.
+          onMouseDown={(e) => e.preventDefault()}
           className="absolute left-0 right-0 top-full mt-1 z-30 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg"
         >
-          {filtered.length === 0 && !showCreateOption && (
-            <div className="px-3 py-2 text-xs text-gray-500">
-              {list.length === 0
-                ? (emptyNoItems || `No ${noun}s yet — type a name.`)
-                : 'No matches'}
-            </div>
-          )}
           {filtered.map((u, i) => (
-            <div key={u.id}>
-              <button
-                type="button"
-                ref={i === activeIdx ? activeOptionRef : null}
-                id={optionId(u.id)}
-                role="option"
-                aria-selected={u.id === selectedId}
-                // Virtually focused via the input's `aria-activedescendant`
-                // (WAI-ARIA combobox pattern) — tabIndex={-1} keeps a native
-                // <button>'s default tab stop from pulling focus off the
-                // input, matching every other option row in this codebase.
-                tabIndex={-1}
-                onClick={() => { onPick(u); setOpen(false); }}
-                onMouseEnter={() => setActiveIdx(i)}
-                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
-                  i === activeIdx ? 'bg-port-bg text-white' : 'text-gray-300 hover:bg-port-bg'
-                }`}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium truncate">{u.name}</div>
-                  {u.subtitle ? <div className="text-[11px] text-gray-500 truncate">{u.subtitle}</div> : null}
-                </div>
-                {u.id === selectedId && <Check size={14} className="text-port-accent" />}
-              </button>
-            </div>
+            <button
+              key={u.id}
+              type="button"
+              ref={i === activeIdx ? activeOptionRef : null}
+              id={optionId(u.id)}
+              role="option"
+              aria-selected={i === activeIdx}
+              // Virtually focused via the input's `aria-activedescendant`
+              // (WAI-ARIA combobox pattern); tabIndex={-1} keeps focus on the input.
+              tabIndex={-1}
+              onClick={() => { onPick(u); setOpen(false); }}
+              onMouseEnter={() => setActiveIdx(i)}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
+                i === activeIdx ? 'bg-port-bg text-white' : 'text-gray-300 hover:bg-port-bg'
+              }`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="font-medium truncate">{u.name}</div>
+                {u.subtitle ? <div className="text-[11px] text-gray-500 truncate">{u.subtitle}</div> : null}
+              </div>
+              {u.id === selectedId && <Check size={14} className="text-port-accent" />}
+            </button>
           ))}
           {showCreateOption && (
-            <div>
-              <button
-                type="button"
-                ref={activeIdx === filtered.length ? activeOptionRef : null}
-                id={createOptionId}
-                role="option"
-                aria-selected={false}
-                tabIndex={-1}
-                disabled={busy}
-                onClick={() => { onCreate(); setOpen(false); }}
-                onMouseEnter={() => setActiveIdx(filtered.length)}
-                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t border-port-border disabled:opacity-50 ${
-                  activeIdx === filtered.length
-                    ? 'bg-port-accent/20 text-port-accent'
-                    : 'text-port-accent hover:bg-port-accent/15'
-                }`}
-              >
-                {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                {createPrefix} &ldquo;{trimmed}&rdquo;
-              </button>
-            </div>
+            <button
+              type="button"
+              ref={activeIdx === filtered.length ? activeOptionRef : null}
+              id={createOptionId}
+              role="option"
+              aria-selected={activeIdx === filtered.length}
+              tabIndex={-1}
+              disabled={busy}
+              onClick={() => { onCreate(); setOpen(false); }}
+              onMouseEnter={() => setActiveIdx(filtered.length)}
+              className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t border-port-border disabled:opacity-50 ${
+                activeIdx === filtered.length
+                  ? 'bg-port-accent/20 text-port-accent'
+                  : 'text-port-accent hover:bg-port-accent/15'
+              }`}
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              {createPrefix} &ldquo;{trimmed}&rdquo;
+            </button>
           )}
         </div>
       )}

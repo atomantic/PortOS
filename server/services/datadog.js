@@ -6,7 +6,8 @@
 import { createHttpClient } from '../lib/httpClient.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 import path from 'path';
-import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
 
@@ -48,7 +49,7 @@ export async function hasConfiguredInstances() {
  * Save DataDog instances configuration
  */
 export async function saveInstances(config) {
-  await atomicWrite(DATADOG_CONFIG_FILE, config);
+  await writeSecureJson(DATADOG_CONFIG_FILE, config);
 }
 
 /**

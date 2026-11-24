@@ -54,15 +54,51 @@ function attributeIssueLanes(issue, lanes = auditLanes()) {
 // A repository-relative source path with at least one directory and an
 // extension, as the audit filing contract's `path/to/file.js:LINE` writes it.
 // Must follow a boundary character so URL path segments never match.
-const FILE_REFERENCE = /(?:^|[\s`'"(\[<,;])\.?\/?((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)(?::\d+(?::\d+)?)?(?=$|[\s`'"),\]>:;.!?])/g;
+const FILE_REFERENCE = /(?:^|[\s`'"([<,;])\.?\/?((?:[\w.-]+\/)+[\w.-]+\.[A-Za-z0-9]+)(?::\d+(?::\d+)?)?(?=$|[\s`'"),\]>:;.!?])/g;
+
+// A path with a `..` segment is a broken traversal (`./../lib/x.js`), never a
+// repository-relative citation. The match includes its boundary character, so
+// test the whole match as well as the captured path.
+const TRAVERSAL = /(?:^|[^\w.-])\.\.\//;
 
 /** Sorted unique `path/to/file.ext` references cited in an issue body or title. */
-function extractFileReferences(text) {
+export function extractFileReferences(text) {
   if (typeof text !== 'string' || !text) return [];
   const paths = new Set();
-  for (const match of text.matchAll(FILE_REFERENCE)) paths.add(match[1]);
+  for (const match of text.matchAll(FILE_REFERENCE)) {
+    const segments = match[1].split('/');
+    if (TRAVERSAL.test(match[0]) || segments.includes('..')) continue;
+    const path = segments.filter((segment, index) => !(segment === '.' && index === 0)).join('/');
+    if (path.includes('/')) paths.add(path);
+  }
   return [...paths].sort();
 }
+
+const AUDIT_KEY = /<!--\s*portos-audit:([^:\s>]+):([^\s>]+?)\s*-->/g;
+
+/** Sorted unique `category:key` pairs from `<!-- portos-audit:<category>:<key> -->` markers in a body. */
+export function extractAuditKeys(body) {
+  if (typeof body !== 'string' || !body) return [];
+  return [...new Set([...body.matchAll(AUDIT_KEY)].map((match) => `${match[1]}:${match[2]}`))].sort();
+}
+
+const SOLUTION_HEADING = /^#{1,6}[ \t]*(?:impact|fix|proposed fix|acceptance)\b/im;
+
+/**
+ * File references from the title plus the problem part of the body — the text
+ * before an Impact / Fix / Proposed Fix / Acceptance heading, or the whole body
+ * when it has none. Fix and context citations of hub files are not the defect.
+ */
+export function extractProblemFileReferences(title, body) {
+  const text = typeof body === 'string' ? body : '';
+  const cut = text.search(SOLUTION_HEADING);
+  return extractFileReferences(`${title || ''}\n${cut >= 0 ? text.slice(0, cut) : text}`);
+}
+
+const TITLE_STOPWORDS = new Set(['with', 'from', 'that', 'this', 'when', 'were', 'have', 'into', 'then', 'than', 'only', 'does', 'over', 'under', 'after', 'before', 'their', 'there', 'which', 'while', 'using', 'used', 'uses', 'should', 'would', 'could', 'fix', 'fixes', 'issue', 'finding']);
+const titleTokens = (title) => new Set(String(title || '').toLowerCase().split(/[^a-z0-9]+/)
+  .filter((token) => token.length >= 4 && !TITLE_STOPWORDS.has(token)));
+const MIN_SHARED_TITLE_TOKENS = 2;
 
 const shaTokens = (text) => [...String(text || '').matchAll(/\b[0-9a-f]{7,40}\b/g)].map((match) => match[0]);
 
@@ -150,8 +186,19 @@ export function computeLaneHealth({
       .sort((a, b) => parseTime(a.createdAt) - parseTime(b.createdAt) || (a.number ?? 0) - (b.number ?? 0));
     const closedRefs = laneIssues
       .filter((issue) => isClosed(issue) && parseTime(issue.closedAt) !== null)
-      .map((issue) => ({ issue, closedAt: parseTime(issue.closedAt), paths: extractFileReferences(`${issue.title || ''}\n${issue.body || ''}`) }))
-      .filter((entry) => entry.paths.length);
+      .map((issue) => ({
+        issue,
+        closedAt: parseTime(issue.closedAt),
+        reason: closeReason(issue),
+        paths: extractProblemFileReferences(issue.title, issue.body),
+        keys: extractAuditKeys(issue.body),
+        tokens: titleTokens(issue.title),
+        reverted: null,
+      }));
+    const wasReverted = (entry) => {
+      entry.reverted ??= revertsFor(entry.issue, pullRequestsByNumber, commits).length > 0;
+      return entry.reverted;
+    };
     const inWindow = laneIssues.filter((issue) => {
       const created = parseTime(issue.createdAt);
       return created >= from && created <= now;
@@ -180,15 +227,32 @@ export function computeLaneHealth({
         counts.open += 1;
       }
       const created = parseTime(issue.createdAt);
-      const paths = extractFileReferences(`${issue.title || ''}\n${issue.body || ''}`);
-      const earlier = paths.length
-        ? closedRefs.find((entry) => entry.issue !== issue && entry.issue.number !== issue.number
-            && entry.closedAt <= created && created - entry.closedAt <= refileMs
-            && entry.paths.some((path) => paths.includes(path)))
-        : null;
+      const paths = extractProblemFileReferences(issue.title, issue.body);
+      const keys = extractAuditKeys(issue.body);
+      const tokens = titleTokens(issue.title);
+      const sharedPath = (entry) => entry.paths.find((path) => paths.includes(path));
+      // Same finding again: an exact audit key, a path an earlier close rejected
+      // or had reverted, or a completed fix to the same file on the same topic.
+      // A shared hub file alone is not a repeat.
+      const refiledOf = (entry) => {
+        if (entry.keys.some((key) => keys.includes(key))) return { key: entry.keys.find((key) => keys.includes(key)), path: sharedPath(entry) };
+        const path = sharedPath(entry);
+        if (!path) return null;
+        if (entry.reason !== 'completed' || wasReverted(entry)) return { path };
+        const shared = [...entry.tokens].filter((token) => tokens.has(token)).length;
+        return shared >= MIN_SHARED_TITLE_TOKENS ? { path } : null;
+      };
+      let earlier = null;
+      for (const entry of closedRefs) {
+        if (entry.issue === issue || entry.issue.number === issue.number
+          || entry.closedAt > created || created - entry.closedAt > refileMs) continue;
+        const hit = refiledOf(entry);
+        if (hit) { earlier = { entry, hit }; break; }
+      }
       if (earlier) {
         counts.refiled += 1;
-        reasons.push({ kind: 're-filed', of: earlier.issue.number, path: earlier.paths.find((path) => paths.includes(path)) });
+        const { hit } = earlier;
+        reasons.push({ kind: 're-filed', of: earlier.entry.issue.number, ...(hit.path && { path: hit.path }), ...(hit.key && { key: hit.key }) });
       }
       if (reasons.length) {
         flagged.push({ number: issue.number, title: String(issue.title || '').trim(), url: issue.url || null, reasons });

@@ -59,12 +59,16 @@ export async function readRecentAuditSlices(appId, taskType, deps = {}) {
   const categories = [id, ...(CONSOLIDATED_AUDIT_DOMAINS[id]?.members || [])];
   if (categories.includes('ui-lifecycle')) categories.push('react-lifecycle');
   const result = await (deps.query || query)(
-    `SELECT assessed_at, slice FROM app_quality_measurements
+    `SELECT assessed_at, slice, report FROM app_quality_measurements
      WHERE app_id = $1 AND category = ANY($2::text[]) AND slice IS NOT NULL
      ORDER BY assessed_at DESC, agent_id DESC LIMIT $3`,
     [appId, categories, AUDIT_SLICE_HISTORY_RUNS]
   );
-  return result.rows.map(row => ({ assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice }));
+  return result.rows.map(row => {
+    const report = row.report; // jsonb column, already parsed by pg
+    const score = report && typeof report === 'object' ? (report.version === 2 ? report.sliceScore : report.score) : null;
+    return { assessedAt: new Date(row.assessed_at).toISOString(), slice: row.slice, sliceScore: Number.isFinite(score) ? score : null };
+  });
 }
 
 /**
@@ -80,8 +84,8 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
   // newest run per category is kept past it as the row's evidence (#12076).
   const now = deps.now ?? Date.now();
   const result = await (deps.query || query)(
-    `SELECT app_id, category, agent_id, assessed_at, report FROM (
-       SELECT app_id, category, agent_id, assessed_at, report,
+    `SELECT app_id, category, agent_id, assessed_at, report, slice FROM (
+       SELECT app_id, category, agent_id, assessed_at, report, slice,
          row_number() OVER (PARTITION BY app_id, category ORDER BY assessed_at DESC, agent_id DESC) AS run_rank
        FROM app_quality_measurements WHERE app_id = ANY($1::text[])) runs
      WHERE run_rank = 1 OR assessed_at >= $2`,

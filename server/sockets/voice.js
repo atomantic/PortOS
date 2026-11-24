@@ -104,6 +104,16 @@ export const truncateOnWordBoundary = (text, max) => {
   return `${cut.slice(0, lastWs > 0 ? lastWs : max)}…`;
 };
 
+// Persisted voice.vad thresholds -> endpointer options. Absent keys are omitted
+// (not undefined) because createCallEndpointer spreads options over its defaults.
+export const vadEndpointerOptions = (config) => {
+  const { endOfSpeechMs, minUtteranceMs } = config?.vad || {};
+  return {
+    ...(Number.isFinite(endOfSpeechMs) && { silenceMs: endOfSpeechMs }),
+    ...(Number.isFinite(minUtteranceMs) && { minUtteranceMs }),
+  };
+};
+
 const audioByteLength = (audio) => {
   if (Buffer.isBuffer(audio)) return audio.byteLength;
   if (audio instanceof ArrayBuffer) return audio.byteLength;
@@ -446,7 +456,7 @@ export const registerVoiceHandlers = (socket) => {
   // `runTurn` utterances the microphone produces, and the destination of the
   // reply, which is played into the call rather than out of the speakers.
   // ---------------------------------------------------------------------------
-  const call = { endpointer: null, busy: false, ctrl: null, openingLine: '', openingLineFailures: 0 };
+  const call = { endpointer: null, endpointerOptions: undefined, busy: false, ctrl: null, openingLine: '', openingLineFailures: 0 };
   // Call and capture share one host; a stop, switch or disconnect supersedes
   // startup even while the enabled check is still reading configuration.
   let hostRequestGeneration = 0;
@@ -461,7 +471,7 @@ export const registerVoiceHandlers = (socket) => {
         socket.emit('voice:error', { stage, message: 'voice mode disabled' });
         return;
       }
-      attach();
+      attach(config);
     } catch (err) {
       if (!isCurrent()) return;
       console.error(`❌ voice ${stage} startup failed: ${err.message}`);
@@ -564,7 +574,7 @@ export const registerVoiceHandlers = (socket) => {
     }
   };
 
-  socket.on('voice:call:attach', () => startHostWhenEnabled('call', () => {
+  socket.on('voice:call:attach', () => startHostWhenEnabled('call', (config) => {
     // Mutually exclusive with meeting capture: both want the same BlackHole
     // input device and the same host tab, and a call also wants BlackHole
     // 2ch to talk back through — running both at once would fight over the
@@ -580,7 +590,8 @@ export const registerVoiceHandlers = (socket) => {
       socket.emit('voice:call:state', { error: claim.reason, hostAttached: false, active: false, state: 'idle' });
       return;
     }
-    call.endpointer = createCallEndpointer();
+    call.endpointerOptions = vadEndpointerOptions(config);
+    call.endpointer = createCallEndpointer(call.endpointerOptions);
     setCallStateListener(emitCallState);
     emitCallState(claim.state);
   }));
@@ -602,7 +613,7 @@ export const registerVoiceHandlers = (socket) => {
         // audio buffered before connect cannot finish as the first utterance.
         const phase = getCallState().state;
         if (phase !== 'listening' && phase !== 'speaking') {
-          call.endpointer = createCallEndpointer();
+          call.endpointer = createCallEndpointer(call.endpointerOptions);
           return;
         }
         const wasSpeaking = Boolean(call.endpointer.speaking);
@@ -698,7 +709,7 @@ export const registerVoiceHandlers = (socket) => {
     return capture.queue;
   };
 
-  socket.on('voice:capture:start', () => startHostWhenEnabled('capture', () => {
+  socket.on('voice:capture:start', () => startHostWhenEnabled('capture', (config) => {
     if (isCallActive() || getCallHost() === socket) {
       socket.emit('voice:capture:state', { error: 'call-active', hostAttached: false, active: false, state: 'idle' });
       return;
@@ -713,7 +724,7 @@ export const registerVoiceHandlers = (socket) => {
       socket.emit('voice:capture:state', { error: started.reason, hostAttached: true, active: false, state: 'idle' });
       return;
     }
-    capture.endpointer = createCallEndpointer();
+    capture.endpointer = createCallEndpointer(vadEndpointerOptions(config));
     capture.queue = Promise.resolve();
     setCaptureStateListener(emitCaptureState);
     emitCaptureState(started.state);

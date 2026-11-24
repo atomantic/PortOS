@@ -1,3 +1,4 @@
+import * as callSession from '../services/voice/callSession.js';
 import { voiceObservation } from '../services/localModelObservations.js';
 import { observeModelMutations } from '../services/modelObservation.js';
 import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
@@ -9,7 +10,7 @@ import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
  */
 
 import { Router } from 'express';
-import { TTS_ENGINE_IDS } from '../lib/voiceEngines.js';
+import { TTS_ENGINE_IDS, TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -52,9 +53,16 @@ const validEngine = (v) => VALID_ENGINES.has(v) ? v : undefined;
 
 const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
+// Older clients/configs still send `trigger`; it was never read, so drop it
+// before .strict() validation instead of 400ing them.
+const stripLegacyTrigger = (body) => {
+  if (!body || typeof body !== 'object' || !('trigger' in body)) return body;
+  const { trigger: _trigger, ...rest } = body;
+  return rest;
+};
+
 const voiceConfigPatchSchema = z.object({
   enabled: z.boolean().optional(),
-  trigger: z.enum(['push-to-talk', 'hotword', 'vad']).optional(),
   hotkey: z.string().max(32).optional(),
   facetime: z.object({
     maxCallMinutes: z.number().int().min(1).max(120).optional(),
@@ -148,7 +156,7 @@ router.get('/config', asyncHandler(async (_req, res) => {
 
 // PUT /api/voice/config — deep-merge patch, save, and reconcile PM2 state
 router.put('/config', asyncHandler(async (req, res) => {
-  const parsed = voiceConfigPatchSchema.safeParse(req.body || {});
+  const parsed = voiceConfigPatchSchema.safeParse(stripLegacyTrigger(req.body) || {});
   if (!parsed.success) {
     throw new ServerError(
       `Invalid voice config: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
@@ -169,10 +177,12 @@ router.put('/config', asyncHandler(async (req, res) => {
     sttEngine: next.stt?.engine,
     sttLanguage: next.stt?.language,
     ttsEngine: next.tts?.engine,
-    ttsVoice: next.tts?.[next.tts?.engine]?.voice,
+    ttsVoice: next.tts?.[TTS_ENGINE_CONFIG_KEYS[next.tts?.engine] ?? next.tts?.engine]?.voice,
     ttsRate: next.tts?.rate,
     hotkey: next.hotkey,
+    vad: { endOfSpeechMs: next.vad?.endOfSpeechMs, minUtteranceMs: next.vad?.minUtteranceMs },
     fastPath: next.llm?.fastPath || null,
+    personality: next.llm?.usePersonality === false ? null : (next.llm?.personality || null),
   });
   res.json({ config: next, reconciliation });
 }));
@@ -186,13 +196,43 @@ router.get('/facetime/status', asyncHandler(async (_req, res) => {
   res.json(await facetimeBridge.checkSetup());
 }));
 
-const facetimeActions = { probe: facetimeBridge.probe, call: facetimeBridge.call, hangup: facetimeBridge.hangup };
-for (const command of ['probe', 'call', 'hangup']) {
-  router.post(`/facetime/${command}`, asyncHandler(async (req, res) => {
-    validateRequest(facetimeActionSchema, req.body || {});
-    res.json(await facetimeActions[command]());
-  }));
-}
+router.post('/facetime/probe', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  res.json(await facetimeBridge.probe());
+}));
+
+const FACETIME_CALL_REFUSALS = {
+  'no-call-host': { code: 'NO_CALL_HOST', message: 'No FaceTime call host tab is attached' },
+  'call-in-progress': { code: 'CALL_IN_PROGRESS', message: 'A FaceTime call is already in progress' },
+  'dial-failed': { code: 'DIAL_FAILED', message: 'FaceTime dial failed' },
+};
+
+// Call/hangup go through callSession so the attached Call Host's PCM frames are
+// accepted (sockets/voice.js drops frames while the session is idle) and
+// transcript journaling stays in sync with the FaceTime window.
+router.post('/facetime/call', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  const result = await callSession.startCall({ origin: 'user' });
+  if (!result.ok) {
+    const mapped = FACETIME_CALL_REFUSALS[result.reason];
+    throw new ServerError(result.message || mapped?.message || 'FaceTime call refused', {
+      status: 409,
+      code: mapped?.code || 'FACETIME_CALL_REFUSED',
+      context: { command: 'call', reason: result.reason },
+    });
+  }
+  res.json({ ok: true, command: 'call', state: result.state });
+}));
+
+router.post('/facetime/hangup', asyncHandler(async (req, res) => {
+  validateRequest(facetimeActionSchema, req.body || {});
+  if (callSession.isCallActive()) {
+    await callSession.endCall('user-hangup');
+    return res.json({ ok: true, command: 'hangup', state: callSession.getCallState() });
+  }
+  // Idle: still hang up so an orphaned FaceTime window can be closed.
+  res.json(await facetimeBridge.hangup());
+}));
 
 router.get('/voices', asyncHandler(async (req, res) => {
   res.json(await listVoices(validEngine(validateRequest(voiceEngineQuerySchema, req.query).engine)));
@@ -382,7 +422,7 @@ router.post('/profiles/clone', asyncHandler(async (req, res) => {
   const body = validateRequest(voiceCloneCandidateSchema, req.body || {});
   const audioBuffer = Buffer.from(body.audioBase64, 'base64');
   if (audioBuffer.length > MAX_BASE64_UPLOAD_BYTES) {
-    throw new ServerError('FILE_TOO_LARGE', `Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`);
+    throw new ServerError(`Audio file exceeds maximum size limit of ${MAX_BASE64_UPLOAD_BYTES} bytes`, { status: 413, code: 'FILE_TOO_LARGE' });
   }
   const profile = await createClonedVoiceCandidate({
     ...body,

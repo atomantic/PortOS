@@ -6,7 +6,7 @@ import MediaHostsChip from './MediaHostsChip';
 import MediaUsageChip from './MediaUsageChip';
 import PinToMoodBoardMenu from './PinToMoodBoardMenu';
 import AssetReferenceActions from './AssetReferenceActions.jsx';
-import { mediaRecordRef } from './mediaDetail.js';
+import { mediaRecordRef, resolveMoodBoardPin } from './mediaDetail.js';
 import MediaDeleteConfirm from './MediaDeleteConfirm';
 import { loraDisplayName } from './normalize';
 import { formatBytes, formatDurationMs } from '../../utils/formatters';
@@ -25,15 +25,6 @@ const TONE = {
   neutral: 'bg-port-border hover:bg-port-border/70 text-white',
   danger: 'bg-port-error/20 hover:bg-port-error/40 text-port-error',
 };
-
-// Mirrors PinToMoodBoardMenu's render gate (valid image/video key, or an
-// http(s)/app-path thumbnail). Kept here so a test mock of that menu does
-// not have to re-export the predicate. A hidden trigger must not reserve a
-// file-row cell.
-function moodBoardTriggerVisible(item) {
-  if (/^(image|video):[^:]+$/.test(item?.key || '')) return true;
-  return typeof item?.previewUrl === 'string' && /^(https?:\/\/|\/(?!\/))/.test(item.previewUrl);
-}
 
 // Five file actions fit one row once the card interior is ~176px (the five-up
 // recent-renders column). Narrower — two-up on a phone — keeps three columns
@@ -60,6 +51,195 @@ function CreateAction({ tone, icon: Icon, label, title, ariaLabel, onClick, clas
       <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </button>
+  );
+}
+
+function buildCreateActions(item, isVideo, {
+  onRemix, onSendToImage, onSendToVideo, onSendTo3d, onAnnotate,
+  onContinue, onFinish, finishTitle, onUpscale, onMakeVertical, onToggleVerticalPicker,
+}) {
+  // Send actions come before Draw so the image-gen card (no annotate handler)
+  // stays a 2×2: Remix, i2i, Video, 3D. Draw wraps under that set when present.
+  return [
+    onRemix && {
+      key: 'remix', tone: TONE.accent, icon: Sparkles, label: 'Remix',
+      title: 'Reuse prompt and settings', onClick: () => onRemix(item),
+    },
+    !isVideo && onSendToImage && {
+      key: 'i2i', tone: TONE.accent, icon: Wand2, label: 'i2i',
+      title: 'Open this image in Image Gen as the image-to-image source',
+      ariaLabel: 'Send to image-to-image', onClick: () => onSendToImage(item),
+    },
+    !isVideo && onSendToVideo && {
+      key: 'video', tone: TONE.success, icon: Film, label: 'Video',
+      title: 'Send to Video', ariaLabel: 'Send to Video', onClick: () => onSendToVideo(item),
+    },
+    !isVideo && onSendTo3d && {
+      key: '3d', tone: TONE.purple, icon: Box, label: '3D',
+      title: 'Send this image to the 3D page to generate a mesh',
+      ariaLabel: 'Send to 3D', onClick: () => onSendTo3d(item),
+    },
+    !isVideo && onAnnotate && {
+      key: 'draw', tone: TONE.accent, icon: Pencil, label: 'Draw',
+      title: 'Annotate (draw over this image)', ariaLabel: 'Annotate image',
+      onClick: () => onAnnotate(item),
+    },
+    isVideo && onContinue && {
+      key: 'continue', tone: TONE.accent, icon: ImageIcon, label: 'Continue',
+      title: 'Use last frame as Image Gen source', onClick: () => onContinue(item),
+    },
+    isVideo && onFinish && {
+      key: 'finish', tone: TONE.success, icon: Sparkles, label: 'Finish',
+      title: finishTitle, onClick: () => onFinish(item),
+    },
+    isVideo && onUpscale && !item.upscaledFrom && {
+      key: 'upscale', tone: TONE.neutral, icon: Maximize2, label: '2×',
+      title: 'Upscale 2×', ariaLabel: 'Upscale 2×', onClick: () => onUpscale(item),
+    },
+    isVideo && onMakeVertical && !item.verticalFrom && {
+      key: 'vertical', tone: TONE.neutral, icon: Smartphone, label: 'Tall',
+      title: 'Make a vertical copy (blurred fill)', ariaLabel: 'Make vertical', onClick: onToggleVerticalPicker,
+    },
+  ].filter(Boolean);
+}
+
+function MediaCardTile({ item, isVideo, prompt, disabled, onClick, onPreview }) {
+  const { kind, previewUrl, thumbnailUrl, downloadUrl } = item;
+  const videoPreviewUrl = isVideo && item.filename ? downloadUrl : undefined;
+  const handleTileClick = onClick || (() => onPreview?.(item));
+  return (
+    <button
+      type="button"
+      onClick={() => handleTileClick(item)}
+      aria-label={prompt || `Select ${isVideo ? 'video' : 'image'}`}
+      disabled={disabled}
+      className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {previewUrl || videoPreviewUrl ? (
+        <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined}
+          fallbackVideoSrc={videoPreviewUrl} assetSrc={isVideo ? videoPreviewUrl : previewUrl}
+          alt={prompt} className="w-full h-full object-cover" loading="lazy" />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-gray-600">
+          {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
+        </div>
+      )}
+    </button>
+  );
+}
+
+function MediaCardOverlays({ item, selectionLabel, onToggleStar, starred, rating, hasNote }) {
+  return (
+    <>
+      {selectionLabel != null && (
+        <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center pointer-events-none">
+          {selectionLabel}
+        </div>
+      )}
+      {(onToggleStar || starred || hasNote || rating) && (
+        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 pointer-events-none">
+          {onToggleStar && (
+            <button
+              type="button"
+              onClick={() => onToggleStar(item)}
+              className="pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full"
+              title={starred ? 'Unfavorite' : 'Favorite'}
+              aria-label={starred ? 'Unfavorite' : 'Favorite'}
+              aria-pressed={starred}
+            >
+              {/* The hit target stays 44px; the disc is smaller so a favorite
+                  doesn't cover the render the way a full circle did. */}
+              <span className={`w-7 h-7 rounded-full flex items-center justify-center port-media-overlay-item ${starred ? 'bg-port-warning/90 text-black' : 'port-media-overlay-strong text-port-text-muted'}`}>
+                <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
+              </span>
+            </button>
+          )}
+          {rating && (
+            <span
+              className={`pointer-events-auto p-1 rounded-full text-white ${rating === 'good' ? 'bg-port-success/90' : 'bg-port-error/90'}`}
+              title={rating === 'good' ? 'Rated good' : 'Rated bad'}
+              aria-label={rating === 'good' ? 'Rated good' : 'Rated bad'}
+            >
+              {rating === 'good' ? <ThumbsUp className="w-3 h-3" /> : <ThumbsDown className="w-3 h-3" />}
+            </span>
+          )}
+          {hasNote && (
+            <span
+              className="pointer-events-auto p-1 rounded-full bg-port-accent/80 text-white"
+              title="Has note"
+              aria-label="Has note"
+            >
+              <MessageSquare className="w-3 h-3" />
+            </span>
+          )}
+        </div>
+      )}
+      {/* The container is click-through so the tile stays clickable behind it,
+          but each badge takes pointer events back — a `title` tooltip needs
+          them, and these badges are the only thing explaining "frame". */}
+      <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5 pointer-events-none">
+        {[
+          item.verification?.verdict === 'pass' && { label: '✓ verified', cls: 'bg-port-success/80 text-white', title: item.verification.summary || 'Verified clean' },
+          item.verification?.verdict === 'fail' && { label: '⚠ defect', cls: 'bg-port-error/90 text-white', title: item.verification.summary || 'Defect detected' },
+          item.verification?.overridden && { label: 'override', cls: 'bg-purple-600/80 text-white', title: item.verification.overrideNotes || 'Operator override' },
+          item.stitchedFrom && { label: 'stitched', cls: 'bg-port-success/80 text-white' },
+          item.upscaledFrom && { label: '2×', cls: 'bg-port-accent/80 text-white' },
+          item.trimmedFrom && { label: 'trimmed', cls: 'bg-port-border text-white', title: 'Starts at a later frame of another clip' },
+          item.handheldFrom && { label: 'handheld', cls: 'bg-port-border text-white', title: 'Another clip re-shot with handheld camera motion' },
+          item.extractedFromVideoId && { label: 'frame', cls: 'bg-port-warning/80 text-black', title: 'Extracted from video' },
+        ].filter(Boolean).map((b) => (
+          <span key={b.label} title={b.title} className={`pointer-events-auto text-[9px] px-1 py-0.5 rounded ${b.cls}`}>{b.label}</span>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function MediaCardMetadata({ item, isVideo, hosts, usages, hideActions }) {
+  const { modelId } = item;
+  return (
+    <>
+      <div className="flex flex-wrap gap-1 text-[9px]">
+        {modelId && <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{modelId}</span>}
+        {item.width && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.width}×{item.height}</span>}
+        {isVideo && isLowResVideo(item) && (
+          <span title="Under 720p: upscale it before a 1080p render" className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded">low-res</span>
+        )}
+        {item.steps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.steps}st</span>}
+        {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
+        {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}
+        {item.fileSizeBytes != null && (
+          <span title="Original file size" className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{formatBytes(item.fileSizeBytes)}</span>
+        )}
+        {item.seed != null && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">seed {item.seed}</span>}
+        {/* How long this render took, once the queue picked it up (see the
+            renderMs contract in normalize.js). Absent renders no chip at all,
+            rather than a placeholder, so the row stays scannable. */}
+        {item.renderMs != null && (
+          <span
+            title="Render time — measured from when the queue started this job, so it excludes queue wait"
+            className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded inline-flex items-center gap-0.5"
+          >
+            <Timer className="w-2.5 h-2.5" aria-hidden="true" />{formatDurationMs(item.renderMs)}
+          </span>
+        )}
+        <MediaHostsChip entry={hosts} disabled={hideActions} />
+        <MediaUsageChip usages={usages} />
+      </div>
+      {Array.isArray(item.loraNames) && item.loraNames.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 text-[9px]" title={item.loraNames.map(loraDisplayName).join(', ')}>
+          <Wand2 className="w-2.5 h-2.5 text-purple-300 shrink-0" />
+          {item.loraNames.slice(0, 2).map((fn) => (
+            <span key={fn} className="px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded truncate max-w-[120px]">
+              {loraDisplayName(fn)}
+            </span>
+          ))}
+          {item.loraNames.length > 2 && (
+            <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded">+{item.loraNames.length - 2}</span>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -110,59 +290,19 @@ function MediaCard({
   // `onDelete(item, { force: true })`.
   usages = null,
 }) {
-  const { kind, prompt, modelId, previewUrl, thumbnailUrl, downloadUrl } = item;
+  const { kind, prompt, downloadUrl } = item;
   const isVideo = kind === 'video';
-  const videoPreviewUrl = isVideo && item.filename ? downloadUrl : undefined;
-  const handleTileClick = onClick || (() => onPreview?.(item));
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [pickingVertical, setPickingVertical] = useState(false);
   const pendingDelete = Boolean(item.pendingDelete);
   const canDelete = Boolean(onDelete) && !pendingDelete;
-  // Send actions come before Draw so the image-gen card (no annotate handler)
-  // stays a 2×2: Remix, i2i, Video, 3D. Draw wraps under that set when present.
-  const createActions = [
-    onRemix && {
-      key: 'remix', tone: TONE.accent, icon: Sparkles, label: 'Remix',
-      title: 'Reuse prompt and settings', onClick: () => onRemix(item),
-    },
-    !isVideo && onSendToImage && {
-      key: 'i2i', tone: TONE.accent, icon: Wand2, label: 'i2i',
-      title: 'Open this image in Image Gen as the image-to-image source',
-      ariaLabel: 'Send to image-to-image', onClick: () => onSendToImage(item),
-    },
-    !isVideo && onSendToVideo && {
-      key: 'video', tone: TONE.success, icon: Film, label: 'Video',
-      title: 'Send to Video', ariaLabel: 'Send to Video', onClick: () => onSendToVideo(item),
-    },
-    !isVideo && onSendTo3d && {
-      key: '3d', tone: TONE.purple, icon: Box, label: '3D',
-      title: 'Send this image to the 3D page to generate a mesh',
-      ariaLabel: 'Send to 3D', onClick: () => onSendTo3d(item),
-    },
-    !isVideo && onAnnotate && {
-      key: 'draw', tone: TONE.accent, icon: Pencil, label: 'Draw',
-      title: 'Annotate (draw over this image)', ariaLabel: 'Annotate image',
-      onClick: () => onAnnotate(item),
-    },
-    isVideo && onContinue && {
-      key: 'continue', tone: TONE.accent, icon: ImageIcon, label: 'Continue',
-      title: 'Use last frame as Image Gen source', onClick: () => onContinue(item),
-    },
-    isVideo && onFinish && {
-      key: 'finish', tone: TONE.success, icon: Sparkles, label: 'Finish',
-      title: finishTitle, onClick: () => onFinish(item),
-    },
-    isVideo && onUpscale && !item.upscaledFrom && {
-      key: 'upscale', tone: TONE.neutral, icon: Maximize2, label: '2×',
-      title: 'Upscale 2×', ariaLabel: 'Upscale 2×', onClick: () => onUpscale(item),
-    },
-    isVideo && onMakeVertical && !item.verticalFrom && {
-      key: 'vertical', tone: TONE.neutral, icon: Smartphone, label: 'Tall',
-      title: 'Make a vertical copy (blurred fill)', ariaLabel: 'Make vertical', onClick: () => setPickingVertical((open) => !open),
-    },
-  ].filter(Boolean);
+  const createActions = buildCreateActions(item, isVideo, {
+    onRemix, onSendToImage, onSendToVideo, onSendTo3d, onAnnotate,
+    onContinue, onFinish, finishTitle, onUpscale, onMakeVertical,
+    onToggleVerticalPicker: () => setPickingVertical((open) => !open),
+  });
   const fileActionCount = (showCollectionMenu ? 1 : 0)
-    + (showMoodBoardMenu && moodBoardTriggerVisible(item) ? 1 : 0)
+    + (showMoodBoardMenu && resolveMoodBoardPin(item) ? 1 : 0)
     + 1
     + (onToggleHidden ? 1 : 0)
     + (canDelete ? 1 : 0);
@@ -175,126 +315,12 @@ function MediaCard({
           positioned wrapper instead, with the overlays click-through so the
           tile stays clickable behind them. */}
       <div className="relative aspect-square rounded-t-xl overflow-hidden bg-port-bg">
-        <button
-          type="button"
-          onClick={() => handleTileClick(item)}
-          aria-label={prompt || `Select ${isVideo ? 'video' : 'image'}`}
-          disabled={disabled}
-          className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {previewUrl || videoPreviewUrl ? (
-            <MediaImage src={thumbnailUrl || previewUrl} fallbackSrc={kind === 'image' ? previewUrl : undefined}
-              fallbackVideoSrc={videoPreviewUrl} assetSrc={isVideo ? videoPreviewUrl : previewUrl}
-              alt={prompt} className="w-full h-full object-cover" loading="lazy" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-gray-600">
-              {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
-            </div>
-          )}
-        </button>
-        {selectionLabel != null && (
-          <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center pointer-events-none">
-            {selectionLabel}
-          </div>
-        )}
-        {(onToggleStar || starred || hasNote || rating) && (
-          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 pointer-events-none">
-            {onToggleStar && (
-              <button
-                type="button"
-                onClick={() => onToggleStar(item)}
-                className="pointer-events-auto min-h-[44px] min-w-[44px] flex items-center justify-center rounded-full"
-                title={starred ? 'Unfavorite' : 'Favorite'}
-                aria-label={starred ? 'Unfavorite' : 'Favorite'}
-                aria-pressed={starred}
-              >
-                {/* The hit target stays 44px; the disc is smaller so a favorite
-                    doesn't cover the render the way a full circle did. */}
-                <span className={`w-7 h-7 rounded-full flex items-center justify-center port-media-overlay-item ${starred ? 'bg-port-warning/90 text-black' : 'port-media-overlay-strong text-port-text-muted'}`}>
-                  <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
-                </span>
-              </button>
-            )}
-            {rating && (
-              <span
-                className={`pointer-events-auto p-1 rounded-full text-white ${rating === 'good' ? 'bg-port-success/90' : 'bg-port-error/90'}`}
-                title={rating === 'good' ? 'Rated good' : 'Rated bad'}
-                aria-label={rating === 'good' ? 'Rated good' : 'Rated bad'}
-              >
-                {rating === 'good' ? <ThumbsUp className="w-3 h-3" /> : <ThumbsDown className="w-3 h-3" />}
-              </span>
-            )}
-            {hasNote && (
-              <span
-                className="pointer-events-auto p-1 rounded-full bg-port-accent/80 text-white"
-                title="Has note"
-                aria-label="Has note"
-              >
-                <MessageSquare className="w-3 h-3" />
-              </span>
-            )}
-          </div>
-        )}
-        {/* The container is click-through so the tile stays clickable behind it,
-            but each badge takes pointer events back — a `title` tooltip needs
-            them, and these badges are the only thing explaining "frame". */}
-        <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5 pointer-events-none">
-          {[
-            item.verification?.verdict === 'pass' && { label: '✓ verified', cls: 'bg-port-success/80 text-white', title: item.verification.summary || 'Verified clean' },
-            item.verification?.verdict === 'fail' && { label: '⚠ defect', cls: 'bg-port-error/90 text-white', title: item.verification.summary || 'Defect detected' },
-            item.verification?.overridden && { label: 'override', cls: 'bg-purple-600/80 text-white', title: item.verification.overrideNotes || 'Operator override' },
-            item.stitchedFrom && { label: 'stitched', cls: 'bg-port-success/80 text-white' },
-            item.upscaledFrom && { label: '2×', cls: 'bg-port-accent/80 text-white' },
-            item.trimmedFrom && { label: 'trimmed', cls: 'bg-port-border text-white', title: 'Starts at a later frame of another clip' },
-            item.handheldFrom && { label: 'handheld', cls: 'bg-port-border text-white', title: 'Another clip re-shot with handheld camera motion' },
-            item.extractedFromVideoId && { label: 'frame', cls: 'bg-port-warning/80 text-black', title: 'Extracted from video' },
-          ].filter(Boolean).map((b) => (
-            <span key={b.label} title={b.title} className={`pointer-events-auto text-[9px] px-1 py-0.5 rounded ${b.cls}`}>{b.label}</span>
-          ))}
-        </div>
+        <MediaCardTile item={item} isVideo={isVideo} prompt={prompt} disabled={disabled} onClick={onClick} onPreview={onPreview} />
+        <MediaCardOverlays item={item} selectionLabel={selectionLabel} onToggleStar={onToggleStar} starred={starred} rating={rating} hasNote={hasNote} />
       </div>
       <div className="p-2 space-y-1.5">
         <p className="text-[11px] text-gray-300 line-clamp-2" title={prompt}>{prompt}</p>
-        <div className="flex flex-wrap gap-1 text-[9px]">
-          {modelId && <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{modelId}</span>}
-          {item.width && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.width}×{item.height}</span>}
-          {isVideo && isLowResVideo(item) && (
-            <span title="Under 720p: upscale it before a 1080p render" className="px-1.5 py-0.5 bg-port-warning/20 text-port-warning rounded">low-res</span>
-          )}
-          {item.steps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.steps}st</span>}
-          {item.numFrames && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.numFrames}f</span>}
-          {item.fps && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{item.fps}fps</span>}
-          {item.fileSizeBytes != null && (
-            <span title="Original file size" className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{formatBytes(item.fileSizeBytes)}</span>
-          )}
-          {item.seed != null && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">seed {item.seed}</span>}
-          {/* How long this render took, once the queue picked it up (see the
-              renderMs contract in normalize.js). Absent renders no chip at all,
-              rather than a placeholder, so the row stays scannable. */}
-          {item.renderMs != null && (
-            <span
-              title="Render time — measured from when the queue started this job, so it excludes queue wait"
-              className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded inline-flex items-center gap-0.5"
-            >
-              <Timer className="w-2.5 h-2.5" aria-hidden="true" />{formatDurationMs(item.renderMs)}
-            </span>
-          )}
-          <MediaHostsChip entry={hosts} disabled={hideActions} />
-          <MediaUsageChip usages={usages} />
-        </div>
-        {Array.isArray(item.loraNames) && item.loraNames.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1 text-[9px]" title={item.loraNames.map(loraDisplayName).join(', ')}>
-            <Wand2 className="w-2.5 h-2.5 text-purple-300 shrink-0" />
-            {item.loraNames.slice(0, 2).map((fn) => (
-              <span key={fn} className="px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded truncate max-w-[120px]">
-                {loraDisplayName(fn)}
-              </span>
-            ))}
-            {item.loraNames.length > 2 && (
-              <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-300 rounded">+{item.loraNames.length - 2}</span>
-            )}
-          </div>
-        )}
+        <MediaCardMetadata item={item} isVideo={isVideo} hosts={hosts} usages={usages} hideActions={hideActions} />
         {pendingDelete && (
           <div role="status" className="flex items-center justify-between gap-2 rounded border border-port-warning/40 bg-port-warning/10 pl-2 text-[11px] text-port-warning">
             <span className="min-w-0 break-words">Delete pending on {pendingPeerName || 'the owning machine'}</span>

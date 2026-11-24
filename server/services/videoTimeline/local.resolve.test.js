@@ -21,7 +21,7 @@ const h = vi.hoisted(() => ({
   hasAudio: true,
 }));
 
-vi.mock('../videoGen/local.js', () => ({
+vi.mock('../videoGen/history.js', () => ({
   loadHistory: async () => h.history,
   mutateVideoHistory: async (fn) => fn([]),
 }));

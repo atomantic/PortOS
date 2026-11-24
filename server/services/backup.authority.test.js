@@ -214,7 +214,7 @@ describe('restoreSnapshot manifest verification', () => {
       });
     });
 
-    for (const path of ['tailcat-serve.json', 'tailcat-serve.addr', 'Tailcat-Serve.json', 'tailcat-serve.json.example.tmp', 'peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
+    for (const path of ['tailcat-serve.json', 'tailcat-serve.addr', 'Tailcat-Serve.json', 'tailcat-serve.json.example.tmp', 'tailcat-forwards.json', 'Tailcat-Forwards.json', 'tailcat-forwards.json.example.tmp', 'peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
       it(`preserves non-rewound execution authority and ownership at ${path} (#10127)`, async context => {
         await withRealRsync(context, async () => {
           const localPath = joinPath(PATHS.data, path);

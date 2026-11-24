@@ -24,7 +24,7 @@ const TARGET_TASK = 'branch-reconcile';
 const CARRY_FIELDS = ['enabled', 'providerId', 'model'];
 
 const isObject = (value) => value && typeof value === 'object' && !Array.isArray(value);
-const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const hasOwn = (value, key) => Object.hasOwn(value, key);
 
 async function readJson(path) {
   const raw = await readFile(path, 'utf-8').catch((err) => {

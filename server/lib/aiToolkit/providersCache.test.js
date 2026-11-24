@@ -9,6 +9,7 @@ let diskContent = '';
 
 vi.mock('fs', () => ({ existsSync: () => true }));
 vi.mock('fs/promises', () => ({
+  chmod: vi.fn(async () => {}),
   readFile: vi.fn(async () => { readCount += 1; return diskContent; }),
   rename: vi.fn(async () => {}),
 }));

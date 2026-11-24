@@ -19,7 +19,7 @@ import { plannedTransitions, sceneCutEffect, sceneCutEffects } from '../../lib/m
 import { blenderSceneClips } from '../../lib/musicVideoBlender.js';
 import {
   ANIMATIC_FPS, CLIP_PRELOAD_SHOTS, filmScene, hasTimedLyrics,
-  playedScene, shotAt, timedShots, useShotClock, withFilmGaps,
+  playedScene, shotAt, shotStillIds, timedShots, useImagePreload, useShotClock, withFilmGaps,
 } from './animaticTiming.js';
 
 // How long a seek may wait for its `portos-mv:seeked` reply before the next one goes anyway.
@@ -388,6 +388,8 @@ export default function useAnimaticPlayback({ project, seekRequest, onEditShot, 
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
   const loadedShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS);
+  // Their stills too: the base picture and the cut's glitch draw from the still the moment the shot starts.
+  useImagePreload(film ? [] : loadedShots.flatMap((scene) => shotStillIds(playedScene(scene, allScenes))));
   const clipShots = film
     ? loadedShots.map((scene, offset) => ({ scene: filmScene(scene), offset, clip: filmClips.get(scene.sceneId) })).filter((item) => item.clip)
     : loadedShots.map((scene, offset) => ({ scene: playedScene(scene, allScenes), offset }))

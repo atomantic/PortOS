@@ -574,6 +574,44 @@ describe('voice playback cancellation', () => {
     }
   });
 
+  describe('persisted vad thresholds', () => {
+    // 800ms of trailing silence: past the built-in 600ms turn end, short of a custom 2000ms.
+    const speakThenPause = async (vad) => {
+      const onSpeechEnd = vi.fn();
+      await voiceClient.startContinuous({ onSpeechEnd, vad });
+      const frame = FakeAudioWorkletNode.last.port.onmessage;
+      let now = 1700;
+      performance.now.mockImplementation(() => now);
+      frame({ data: new Float32Array(128) });
+      for (let i = 0; i < 40; i++) {
+        now += 5;
+        frame({ data: new Float32Array(128).fill(0.5) });
+      }
+      now += 20;
+      frame({ data: new Float32Array(128) });
+      now += 800;
+      frame({ data: new Float32Array(128) });
+      await voiceClient.stopContinuous();
+      return onSpeechEnd;
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        configurable: true,
+        value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+      });
+      vi.spyOn(performance, 'now').mockImplementation(() => 1000);
+    });
+
+    it('ends the turn after the built-in 600ms without overrides', async () => {
+      expect(await speakThenPause(undefined)).toHaveBeenCalled();
+    });
+
+    it('honors a longer vad.endOfSpeechMs', async () => {
+      expect(await speakThenPause({ endOfSpeechMs: 2000, minUtteranceMs: 250 })).not.toHaveBeenCalled();
+    });
+  });
+
   it('ignores VAD worklet frames and async submissions after owner disposal', async () => {
     const previousMediaDevices = navigator.mediaDevices;
     const track = { stop: vi.fn() };
@@ -795,6 +833,57 @@ describe('voice playback cancellation', () => {
   });
 });
 
+describe('screen-share capture teardown', () => {
+  let client;
+  const makeStream = () => {
+    const track = { stop: vi.fn(), addEventListener: vi.fn() };
+    return { track, active: true, getTracks: () => [track], getVideoTracks: () => [track] };
+  };
+
+  beforeAll(async () => {
+    client = await import('./voiceClient.js');
+  });
+
+  afterEach(() => {
+    client.disableVisionCapture();
+    delete navigator.mediaDevices;
+  });
+
+  const pendingPicker = () => {
+    let resolve;
+    const picker = new Promise((r) => { resolve = r; });
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getDisplayMedia: vi.fn(() => picker) },
+    });
+    return resolve;
+  };
+
+  it.each([
+    ['disableVisionCapture', () => client.disableVisionCapture()],
+    ['disposeCaptureOwner', () => client.disposeCaptureOwner()],
+  ])('stops a stream that resolves after %s ran while the picker was open', async (_name, teardown) => {
+    const resolvePicker = pendingPicker();
+    const enabling = client.enableVisionCapture();
+    teardown();
+    const stream = makeStream();
+    resolvePicker(stream);
+    await expect(enabling).resolves.toBe(false);
+    expect(stream.track.stop).toHaveBeenCalledTimes(1);
+    expect(client.isVisionCaptureEnabled()).toBe(false);
+  });
+
+  it('keeps a stream that resolves with no teardown in between', async () => {
+    const resolvePicker = pendingPicker();
+    const enabling = client.enableVisionCapture();
+    const stream = makeStream();
+    resolvePicker(stream);
+    await expect(enabling).resolves.toBe(true);
+    expect(stream.track.stop).not.toHaveBeenCalled();
+    expect(client.isVisionCaptureEnabled()).toBe(true);
+  });
+});
+
 // The module now loads lazily, the first time voice is on, which is usually
 // after the socket connected: the `connect` handler that used to register the
 // tab has already been missed by then.
@@ -837,5 +926,63 @@ describe('voice output candidacy at module load', () => {
     socket.emit.mockClear();
     listeners.get('connect').at(-1)();
     expect(emittedEvents()).toEqual(['voice:output:available', 'voice:output:claim']);
+  });
+});
+
+describe('speakSynthesized error envelope handling', () => {
+  let client;
+
+  beforeAll(async () => {
+    client = await import('./voiceClient.js');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('redirects to /login on 401 AUTH_REQUIRED and preserves API error fields', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('window', { location: { pathname: '/voice', search: '?tab=1', replace } });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Sign in required', code: 'AUTH_REQUIRED' }),
+    });
+
+    await expect(client.speakSynthesized('hello')).rejects.toMatchObject({
+      message: 'Sign in required',
+      code: 'AUTH_REQUIRED',
+      status: 401,
+    });
+    expect(replace).toHaveBeenCalledWith('/login?next=%2Fvoice%3Ftab%3D1');
+  });
+
+  it.each([
+    {
+      status: 400,
+      body: { error: 'Text is required', code: 'VALIDATION_ERROR', context: { field: 'text' } },
+    },
+    {
+      status: 403,
+      body: { error: 'Voice synthesis disabled', code: 'FORBIDDEN', context: { feature: 'voice' } },
+    },
+    {
+      status: 503,
+      body: { error: 'TTS runtime unavailable', code: 'TTS_UNAVAILABLE', context: { engine: 'qwen3-tts' } },
+    },
+  ])('propagates message, code, status, and context on HTTP $status errors', async ({ status, body }) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status,
+      json: async () => body,
+    });
+
+    await expect(client.speakSynthesized('hello')).rejects.toMatchObject({
+      message: body.error,
+      code: body.code,
+      status,
+      context: body.context,
+    });
   });
 });

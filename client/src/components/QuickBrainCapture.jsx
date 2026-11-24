@@ -5,7 +5,7 @@ import toast from './ui/Toast';
 import { getYoutubeIngestSettings, captureBrainThought } from '../services/apiBrain.js';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool.js';
 import { useRepoIntake } from '../hooks/useRepoIntake.js';
-import useYoutubeIngest from '../hooks/useYoutubeIngest.js';
+import useYoutubeIngest from './useYoutubeIngest.js';
 import { parseBareUrl } from '../lib/bareUrl';
 import { readClipboard } from '../lib/clipboard';
 import { INGEST_OPTIONS, defaultIngestOptions, ingestOptionsFromSettings, isYoutubeVideoUrl } from '../lib/youtubeUrl';

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { resolvePm2HomeForProcess } from '../services/appProcessStatus.js';
+import { resolveRegisteredProcess } from '../services/appProcessStatus.js';
 import * as pm2Service from '../services/pm2.js';
 import { spawnPm2 } from '../services/pm2.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -29,7 +29,11 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   }
 
   const safeProcessName = parsedName.data;
-  const pm2Home = await resolvePm2HomeForProcess(safeProcessName);
+  const resolved = await resolveRegisteredProcess(safeProcessName);
+  if (!resolved) {
+    throw new ServerError('Unknown process', { status: 400, code: 'UNKNOWN_PROCESS' });
+  }
+  const { pm2Home } = resolved;
 
   if (!followBool) {
     // Static log fetch
@@ -45,7 +49,7 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   res.write(`event: connected\ndata: ${JSON.stringify({ processName: safeProcessName, timestamp: Date.now() })}\n\n`);
 
   // Spawn pm2 logs with --raw flag for clean output
-  // Security: safeProcessName is validated above to only contain safe characters
+  // Security: safeProcessName is validated above against pm2ProcessNameSchema and registered apps/daemons
   const logProcess = spawnPm2(
     ['logs', safeProcessName, '--raw', '--lines', String(lines)],
     { env: pm2Service.buildEnv(pm2Home) }

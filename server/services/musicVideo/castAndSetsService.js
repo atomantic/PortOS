@@ -896,7 +896,7 @@ function applyApproval(project, now) {
   let next = {
     ...project,
     visualSpec: {
-      references: [], palette: [], typography: '', cameraRules: '', moodBoardId: null,
+      palette: [], typography: '', cameraRules: '', moodBoardId: null,
       ...(project.visualSpec || {}),
       references,
     },

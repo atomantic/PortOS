@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
+import { registerMediaJobTerminalHooks } from '../bootHookRegistry.js';
 import { createMediaJobHookLoader } from './hookRegistry.js';
 
 describe('media job hook registration', () => {
+  it('fails loudly when default hooks are requested before boot registration and uses them after', async () => {
+    expect(() => createMediaJobHookLoader()).toThrow(/not registered/);
+    const ran = vi.fn().mockResolvedValue(undefined);
+    registerMediaJobTerminalHooks([[job => Boolean(job.params?.registered), ran]]);
+    const prepare = createMediaJobHookLoader();
+    await prepare({ params: { registered: true } });
+    expect(ran).toHaveBeenCalledTimes(1);
+  });
+
   it('loads only matching modules and retains successful siblings across a retry', async () => {
     const ready = Promise.withResolvers();
     const subscribe = vi.fn(() => ready.promise);

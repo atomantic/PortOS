@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
-vi.mock('./compositionDocument.js', () => ({
+vi.mock('./compositionDocumentRead.js', () => ({
   isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine'),
   isStaleShippedHelper: (_rel, bytes) => bytes.toString().startsWith('// older shipped helper'),
 }));

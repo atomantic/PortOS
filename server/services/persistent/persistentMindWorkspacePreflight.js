@@ -190,7 +190,7 @@ const expandWorkspacePattern = (repoPath, pattern, dependencies) => {
   const segments = normalized.split('/');
   const hasGlob = segments.some((segment) => segment === '*');
   if (!hasGlob) return Promise.resolve({ paths: [pathForWorkspace(repoPath, normalized)], truncated: false });
-  if (segments.some((segment) => segment !== '*' && /[*?\[\]]/.test(segment))) {
+  if (segments.some((segment) => segment !== '*' && /[*?[\]]/.test(segment))) {
     return Promise.resolve({ paths: [], truncated: true });
   }
 

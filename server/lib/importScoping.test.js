@@ -27,6 +27,8 @@ import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { staticImportClosure as walkImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
 import {
+  BOOT_CLOSURE_GROWTH_LIMIT,
+  compareImportGrowth,
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
   measureClosures,
@@ -120,14 +122,20 @@ describe('instance identity stays a leaf (#6836)', () => {
 const MUSIC_VIDEO_STORE = /^services\/musicVideo\/(?:projects|requireProject)\.js$/;
 const MUSIC_VIDEO_STORE_UPWARD = /^services\/(?:musicVideo\/(?:projectPresentation|editResult|plateReview|shotSegments|pacingRecut|handoff|projectBoardEdits|projectFilmActions|blender\/[^/]+)\.js|storyboards\/followShots\.js|trackSunoImport\.js|imageGen\/local\.js|film\/[^/]+\.js)$/;
 const SELECTION_CUTS = [
+  ['services/llamaServerManager.js', 'services/specDecodeModels.js',
+    'resolves launcher paths from the leaf preset module so the download stack stays out of its closure'],
   ['services/branchReconcile/classify.js', /^services\/(?:git\.js$|worktreeManager\.js$|branchReconcile\.js$|cos\/)/,
     'classifies observed facts without importing reconciliation or CoS orchestration'],
   ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
     'never re-exports boot observers into notification producers'],
-  ['services/memoryConfig.js', 'services/cos/cos.js',
-    'updates memory approval counts through the declaring agent lifecycle module'],
+  ['services/memoryConfig.js', /^services\/cos\//,
+    'updates memory approval counts through lib/lateBoundServices.js without importing CoS'],
+  ['services/sharing/version.js', 'services/updateChecker.js',
+    'reads package.json directly so sharing leaves stay off updateChecker/github/CoS'],
+  ['services/codeAnimation/export.js', 'services/codeAnimation/soundtrack.js',
+    'resolves finished soundtracks through soundtrackTrack.js without pulling pipeline/musicGen.js'],
   ['services/worktreeManager.js', 'services/cos/cosClaimOwnership.js',
     'shares the ownership fence and trusted reader without reconciliation dependencies'],
   ['services/promptRunner.js', 'services/compositeProviders.js',
@@ -136,6 +144,8 @@ const SELECTION_CUTS = [
     'keeps boot subscriptions in systemActivityWatchers.js'],
   ['services/pm2.js', 'services/readinessNotify.js',
     'notifies readiness subscribers through the readinessSignal.js leaf'],
+  ['services/fleetLlmHost.js', 'services/fleetHostNotify.js',
+    'signals host changes through the fleetHostSignal.js leaf'],
   ['services/promptRunner.js', 'services/autoFixer.js',
     'reports fallback lifecycle through handlers initAutoFixer() registers in providerRecoveryHooks.js'],
   // #17499: lazy imports whose target statically imported the importer.
@@ -144,6 +154,10 @@ const SELECTION_CUTS = [
   ['services/git.js', 'services/prProbe.js',
     'reads the merged PR through the prView.js leaf'],
   ['services/git.js', 'services/branchReconcile.js',
+    'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
+  ['services/git/prs.js', 'services/prProbe.js',
+    'reads the merged PR through the prView.js leaf'],
+  ['services/git/cleanup.js', 'services/branchReconcile.js',
     'retires merged branches through the cleanup registerBootHooks() registers in bootHookRegistry.js'],
   // #17692: boot recovery must not pull the render pipeline into the static closure or into this file's import list.
   ['services/bootstrap.js', /^services\/musicVideo\/(?:render|excerptRender)\.js$/,
@@ -164,6 +178,29 @@ const SELECTION_CUTS = [
   ].map(entry => [entry, 'services/musicVideo/render.js', 'resolves the master through masterAudioPath.js and render activity through renderActivityState.js']),
   ['services/musicVideo/shotSegments.js', 'services/musicVideo/render.js',
     'plans through renderPlan.js, builds args with renderFfmpegArgs.js and reads render activity from renderActivityState.js'],
+  // #17896: the edges that tied nearly every service into one test-selection cluster.
+  ...[
+    ['services/authGate.js', 'services/managedVisitors.js'],
+    ['services/autonomousJobs/scriptHandlers.js', 'services/eidoverseWorld.js'],
+    ['services/cos/cos.js', 'services/persistent/persistentMindAdapter.js'],
+    ['services/creativeDirector/agentBridge.js', 'services/creative/toolRegistry.js'],
+    ['services/creativeDirector/planAdvance.js', 'services/creative/toolRegistry.js'],
+    ['services/creativeDirector/local.js', 'services/creativeDirector/firstPassGen.js'],
+    ['services/creativeDirector/stopProject.js', 'services/agent/agentManagement.js'],
+    ['services/instanceFeatures.js', /^services\/eidoverse(?:Runtime)?\.js$/],
+    ['services/mindToolRecipes.js', 'services/cos/cosToolRegistry.js'],
+    ['services/prWatcher.js', 'services/agent/agentWorktreeCleanup.js'],
+  ].map(([entry, target]) => [entry, target, 'loads it by name through lib/lateBoundServices.js']),
+  ['services/apps.js', 'services/layeredIntelligence.js',
+    'reads the effective config from layeredIntelligence/config.js'],
+  ['services/backupRestoreRecovery.js', 'services/syncOrchestrator.js',
+    'rewinds peer cursors through the syncCursors.js leaf'],
+  ['services/dataSync.js', 'services/sharing/peerSync.js',
+    'reads outbound coverage from sharing/peerOutboundCoverage.js'],
+  ['services/privacyVault.js', 'services/privacyScan.js',
+    'parses addresses with lib/cityState.js'],
+  ['services/runner.js', 'services/agent/agentCliSpawning.js',
+    'reads Claude settings from lib/claudeSettingsEnv.js'],
   // #17577: the Music Video project store and the siblings it imports never import back up.
   ['services/musicVideo/projects.js', MUSIC_VIDEO_STORE_UPWARD,
     'is the low-level store; board edits and film workflows import it from projectBoardEdits.js and projectFilmActions.js'],
@@ -212,8 +249,10 @@ const SELECTION_CUTS = [
     'runs the re-time handler songRevision.js and the route hand in'],
 ];
 
-// Runtimes that import the queue back load through bootHookRegistry.js (#17499).
+// Runtimes, helpers, and terminal hooks registered in bootHooks.js (#17499, #18217).
+// Only pure event/mode/recorder leaves from those directories may be imported by mediaJobQueue.
 const QUEUE_IMPORTING_RUNTIME = /^services\/(?:videoGen\/(?:topazJob|upscaleJob|stitchJob|verticalJob)|loraTraining\/index)\.js$/;
+const MEDIA_QUEUE_BOOT_REGISTERED = /^services\/(?:creativeDirector\/|cos\/|pipeline\/|audioGen\/(?!events\.js$)|videoGen\/(?!events\.js$|executionRecorder\.js$)|imageGen\/(?!modes\.js$)|musicVideo\/|fableLoom\/|htmlComposition\/|superColliderRender\.js$|imageVerifier\.js$|loraTraining\/(?!events\.js$))/;
 const productionModulesIn = (dir) => readdirSync(abs(dir))
   .filter(file => file.endsWith('.js') && !file.endsWith('.test.js') && !file.endsWith('.test.fixture.js'))
   .map(file => `${dir}/${file}`);
@@ -238,11 +277,12 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     }
   });
 
-  it('keeps every media queue module off the runtimes that import the queue', () => {
+  it('keeps every media queue module off domain runtimes, helpers, and terminal hooks (#17499, #18217)', () => {
     const entries = productionModulesIn('services/mediaJobQueue');
     expect(entries).toContain('services/mediaJobQueue/execution.js');
+    expect(entries).toContain('services/mediaJobQueue/hookRegistry.js');
     for (const entry of entries) {
-      expect(importTargets(entry), entry).not.toContainEqual(expect.stringMatching(QUEUE_IMPORTING_RUNTIME));
+      expect(importTargets(entry), entry).not.toContainEqual(expect.stringMatching(MEDIA_QUEUE_BOOT_REGISTERED));
     }
   });
 
@@ -258,6 +298,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
   it('the leaves the cut entries import stay import-free', () => {
     for (const leaf of [
       'services/readinessSignal.js',
+      'services/fleetHostSignal.js',
       'services/provider/providerRecoveryHooks.js',
       'services/bootHookRegistry.js',
       'services/socketIo.js',
@@ -277,16 +318,25 @@ describe('CI-selection cuts stay cut (#12285)', () => {
     expect(importTargets('services/musicVideo/processPins.js')).toContain('services/musicVideo/castAndSets.js');
   });
 
-  // Positive control for the media scan: the boot owner still names every runtime.
+  // Positive control for the media scan: the boot owner still names every runtime and helper.
   it('still sees the runtime loaders bootHooks.js registers', () => {
-    expect(importTargets('services/bootHooks.js').filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
-    expect(importTargets('services/bootHooks.js')).toEqual(expect.arrayContaining([
+    const bootTargets = importTargets('services/bootHooks.js');
+    expect(bootTargets.filter(target => QUEUE_IMPORTING_RUNTIME.test(target))).toHaveLength(5);
+    expect(bootTargets).toEqual(expect.arrayContaining([
       'services/musicVideo/render.js',
       'services/musicVideo/excerptRender.js',
+      'services/creativeDirector/videoExecution.js',
+      'services/audioGen/local.js',
+      'services/imageVerifier.js',
+      'services/pipeline/comicPagesFilenameHook.js',
     ]));
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
+  it('still sees the static edges fleetHostNotify.js keeps', () => {
+    expect(importTargets('services/fleetHostNotify.js')).toEqual(expect.arrayContaining(['services/fleetLlmHost.js', 'services/fleetHostSignal.js']));
+  });
+
   it('still sees the dynamic edges readinessNotify.js keeps', () => {
     expect(importTargets('services/readinessNotify.js')).toContain('services/systemHealthSnapshot.js');
   });
@@ -328,7 +378,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 const HOISTED = [
   ['routes/imageGen.multipart.test.js', './imageGen.js',
     'the route graph costs ~30s to transform cold, which a beforeAll charges to hookTimeout'],
-  ['services/beeperOutboxHumanGate.test.js', './cos/cosToolRegistry.js',
+  ['services/beeper/beeperOutboxHumanGate.test.js', '../cos/cosToolRegistry.js',
     'the CoS tool registry costs ~35s to transform cold, which an it() charges to testTimeout'],
   ['routes/settings.secretsStrip.test.js', './settings.js',
     'warms the graph once so each vi.resetModules() re-import costs under a second'],
@@ -382,7 +432,7 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
   // Positive control: the regex must actually FIND a registration in a file
   // that has one, or every row above would pass by comparing against -1.
   it('recognizes a test registration in a file that plainly has one', () => {
-    const src = readFileSync(abs('services/beeperOutboxHumanGate.test.js'), 'utf-8');
+    const src = readFileSync(abs('services/beeper/beeperOutboxHumanGate.test.js'), 'utf-8');
     expect(src.search(FIRST_REGISTRATION)).toBeGreaterThan(-1);
     expect(FIRST_REGISTRATION.test("  it('does a thing', () => {")).toBe(true);
     expect(FIRST_REGISTRATION.test('beforeAll(async () => {')).toBe(true);
@@ -394,12 +444,31 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
 
 const REPO_ROOT = dirname(SERVER_DIR);
 
+// Shared across both growth checks in this file so base/head git walks run once.
+let cachedHeadMeasurement = null;
+function getHeadMeasurement() {
+  if (!cachedHeadMeasurement) cachedHeadMeasurement = measureWorkingTree(REPO_ROOT);
+  return cachedHeadMeasurement;
+}
+
+let cachedGrowthReport = null;
+function getGrowthReport() {
+  if (!cachedGrowthReport) {
+    cachedGrowthReport = evaluateWorkingTreeImportGrowth({
+      repoRoot: REPO_ROOT,
+      headMeasurement: cachedHeadMeasurement,
+      measureHead: () => getHeadMeasurement(),
+    });
+  }
+  return cachedGrowthReport;
+}
+
 describe('server suite import growth (#7993)', () => {
-  // One head walk feeds both the growth comparison and the instances.js
-  // reach count. evaluateWorkingTreeImportGrowth used to walk again.
+  // One head walk feeds the growth comparison, the boot-closure delta, and the
+  // instances.js reach count so neither guard walks the tree again.
   let headMeasurement;
   beforeAll(() => {
-    headMeasurement = measureWorkingTree(REPO_ROOT);
+    headMeasurement = getHeadMeasurement();
   }, 60_000);
 
   it('memoized closure walk agrees with staticImportClosure', () => {
@@ -422,8 +491,8 @@ describe('server suite import growth (#7993)', () => {
   // per-edge regressions. It fails closed when the base commit cannot be
   // read — a timeout or a throw here is a guard failure, not a pass.
   it('does not fan a heavy subtree into existing suites relative to the merge base', () => {
-    const report = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, headMeasurement });
-    expect(report.ok, formatImportGrowthReport(report)).toBe(true);
+    const report = getGrowthReport();
+    expect(report.skipped ? report.ok : report.suiteOk, formatImportGrowthReport(report)).toBe(true);
     if (!report.skipped) expect(report.timings.headCollectMs).toBeNull();
   }, 60_000);
 
@@ -496,15 +565,40 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  // Measured at 1,433 after boot recovery of the music-video render pipeline
-  // moved behind registerBootHooks() (#17692). The cap keeps 40 modules of
-  // headroom so a few independent PRs can each add a boot-reachable leaf and
-  // still merge. A boot-reachable addition that would cross this cap has to
-  // defer or offset that import in the same change; do not raise the cap to
-  // absorb it.
-  it('loads at most 1,473 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1473);
-    expect(closure.files.size).toBeLessThanOrEqual(1473 - 25);
+  // Base-relative boot-closure growth guard (#18119): replaces the fixed 1,448
+  // absolute cap so ordinary incremental growth across unrelated PRs does not
+  // exhaust shared headroom, while any single PR adding more than
+  // BOOT_CLOSURE_GROWTH_LIMIT (15) boot-reachable modules fails and names them.
+  it(`adds at most ${BOOT_CLOSURE_GROWTH_LIMIT} boot-reachable local modules relative to the base commit`, () => {
+    const report = getGrowthReport();
+    expect(report.skipped ? report.ok : report.bootClosure?.ok, formatImportGrowthReport(report)).toBe(true);
+    if (report.skipped) return;
+    expect(report.bootClosure, 'server/index.js boot closure must be measured').toBeTruthy();
+    expect(report.bootClosure.head).toBe(closure.files.size);
+  }, 60_000);
+  it('allows small boot-closure growth and rejects regressions over +15 modules', () => {
+    const buildBoot = (extraCount) => {
+      const files = {
+        'server/index.js': Array.from({ length: extraCount }, (_, i) => `import './leaf-${i}.js';`).join('\n') + '\n',
+      };
+      for (let i = 0; i < extraCount; i += 1) files[`server/leaf-${i}.js`] = `export const v = ${i};\n`;
+      return measureClosures([], (rel) => files[rel] ?? null);
+    };
+    const base = buildBoot(1);
+    const smallReport = compareImportGrowth(base, buildBoot(4));
+    expect(smallReport.ok).toBe(true);
+    expect(smallReport.bootClosure.delta).toBe(3);
+
+    const failReport = compareImportGrowth(base, buildBoot(1 + BOOT_CLOSURE_GROWTH_LIMIT + 1));
+    expect(failReport.ok).toBe(false);
+    expect(failReport.bootClosure.ok).toBe(false);
+    expect(failReport.bootClosure.delta).toBe(BOOT_CLOSURE_GROWTH_LIMIT + 1);
+    expect(formatImportGrowthReport(failReport)).toContain(`server/leaf-${BOOT_CLOSURE_GROWTH_LIMIT + 1}.js`);
+  });
+  it('skips boot-closure growth enforcement on release promotions', () => {
+    const skippedReport = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, env: { GITHUB_BASE_REF: 'release' } });
+    expect(skippedReport).toEqual({ ok: true, skipped: expect.stringMatching(/release cycle/) });
+    expect(formatImportGrowthReport(skippedReport)).toMatch(/not measured/);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);

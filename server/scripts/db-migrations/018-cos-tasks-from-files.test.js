@@ -140,4 +140,21 @@ describe('db-migration 018 — CoS tasks from the Markdown files', () => {
     const bump = queries.find((q) => /INSERT INTO cos_task_lists/.test(q.sql));
     expect(bump.sql).toMatch(/\('user', 1\), \('internal', 1\)/);
   });
+
+  it('repairs NUL and lone surrogate characters before binding task JSON to jsonb', async () => {
+    write('data/TASKS.md', `# Tasks
+
+## Pending
+- [ ] #task-bad-chars | HIGH | Task with\0nul and \ud83d surrogate
+  - prompt: Body with\0nul and \udc00 trail
+`);
+    await up(client());
+    const [user] = inserts();
+    const rawJson = user.params[7][0];
+    expect(rawJson).not.toContain('\\u0000');
+    expect(rawJson).not.toMatch(/\\ud[89a-f][0-9a-f]{2}/i);
+    const parsed = JSON.parse(rawJson);
+    expect(parsed.description).toBe('Task with\ufffdnul and \ufffd surrogate');
+    expect(parsed.metadata.prompt).toBe('Body with\ufffdnul and \ufffd trail');
+  });
 });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModels from './ThreejsModels';
 
 vi.mock('../services/apiThreejsModels.js', () => ({
+  getThreejsProductSheet: vi.fn(async () => ({ sheet: null })),
   createThreejsModel: vi.fn(),
   listThreejsModelFamilies: vi.fn(),
   listThreejsModels: vi.fn(),
@@ -78,6 +79,7 @@ describe('ThreejsModels', () => {
       providerId: 'vision-api',
       model: 'vision-pro',
       family: 'general',
+      referenceImages: [],
     }, { silent: true }));
     expect(await screen.findByText('Model workspace opened')).toBeInTheDocument();
   });

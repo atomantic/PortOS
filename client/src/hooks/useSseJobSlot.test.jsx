@@ -140,3 +140,33 @@ it.each(['throw', 'reject'])('recovers a completion callback %s and accepts the 
   expect(result.current.active).toBe(true);
   expect(lastEventSource().url).toBe('/events/next-job');
 });
+
+describe('cancel feedback', () => {
+  const setup = (cancelRequest, onSettled) => {
+    const hook = renderHook(() => useSseJobSlot({ eventsUrl: id => `/events/${id}`, cancelRequest, onSettled }));
+    act(() => { hook.result.current.attach('synthetic-job', 'synthetic-ctx'); });
+    return hook;
+  };
+
+  it('toasts and reports cancel-rejected when the server answers { ok: false }', async () => {
+    const onSettled = vi.fn();
+    const { result } = setup(vi.fn().mockResolvedValue({ ok: false }), onSettled);
+    await act(async () => result.current.cancel());
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(onSettled).toHaveBeenCalledExactlyOnceWith('cancel-rejected', 'synthetic-ctx');
+  });
+
+  it('toasts the failure when the cancel request rejects', async () => {
+    const onSettled = vi.fn();
+    const { result } = setup(vi.fn().mockRejectedValue(new Error('Synthetic 500')), onSettled);
+    await act(async () => result.current.cancel());
+    expect(toast.error).toHaveBeenCalledWith('Synthetic 500');
+    expect(onSettled).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet on a successful cancel', async () => {
+    const { result } = setup(vi.fn().mockResolvedValue({ ok: true }), vi.fn());
+    await act(async () => result.current.cancel());
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});

@@ -120,7 +120,7 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
       : hop === 2
       ? `${count} suite(s) two imports away from ${source} beyond the ${RELATED_SUITE_CAP}-per-source and ${SECOND_HOP_RUN_CAP}-per-run caps`
       : `${count} suite(s) referencing ${source} beyond the ${RELATED_SUITE_CAP}-suite cap`;
-    uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run <files>`; CI runs them' });
+    uncovered.push({ suite: 'related tests', reason, remedy: 'run the referencing suites directly with `server/node_modules/.bin/vitest run --configLoader runner <files>`; CI runs them' });
   }
   return uncovered;
 }

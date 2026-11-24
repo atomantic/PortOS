@@ -31,6 +31,7 @@ import { resolveContinuityRequest, continuationContract, contextPrefixFrames, ex
 import { broadcastSse, closeJobAfterDelay, attachSseClient as attachSse } from '../../lib/sseUtils.js';
 import { compileScriptToClips } from '../../lib/scriptVideoCompiler.js';
 import { lintClips } from '../../lib/videoPromptLinter.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { videoGenEvents } from './events.js';
 import { extractLastFrame } from './frameExtraction.js';
 import { getHistoryItem } from './history.js';
@@ -49,12 +50,67 @@ const BACKEND_MODULES = {
   fal: () => import('./fal.js'),
 };
 
-// Process-local outer-job registry for episode SSE progress — separate from
-// videoJobState (local-lane only) and from reactor.js/fal.js's own per-backend
-// job maps, because one episode's chain can run against any single backend.
+// Local clips run through mediaJobQueue so they serialize on the single-flight
+// GPU lane instead of colliding with queued local renders via direct generateVideo().
+const loadMediaJobQueue = () => import('../mediaJobQueue/index.js');
+
+// Live in-flight episodes tracked in renderActivity so Live Activity and the
+// unattended updater observe active episodes and clear immediately on settlement.
+const activeEpisodes = trackedRenderMap('continuous-video', {
+  noun: 'continuous-video episode',
+  link: () => '/video-gen?episode=1',
+});
+
+// Process-local outer-job SSE replay registry — kept separate from activeEpisodes
+// so closeJobAfterDelay can linger terminal frames for late subscribers without
+// keeping renderActivity busy after settlement.
 const episodeJobs = new Map();
 
+const createAbortError = () => {
+  const err = new Error('Episode canceled');
+  err.name = 'AbortError';
+  err.code = 'EPISODE_CANCELED';
+  return err;
+};
+
+const isAbortError = (err) => err?.name === 'AbortError' || err?.code === 'EPISODE_CANCELED';
+
 export const attachEpisodeSseClient = (jobId, res) => attachSse(episodeJobs, jobId, res);
+
+export function listActiveContinuousVideoEpisodes() {
+  return [...activeEpisodes.values()].map((ep) => ({
+    jobId: ep.id,
+    generationId: ep.id,
+    backend: ep.backend,
+    status: ep.cancelRequested ? 'canceling' : 'running',
+    totalClips: ep.totalClips,
+    startedAt: ep.startedAt,
+    progress: typeof ep.outerJob.lastPayload?.progress === 'number' ? ep.outerJob.lastPayload.progress : 0,
+    message: ep.outerJob.lastPayload?.message || null,
+  }));
+}
+
+export async function cancelContinuousVideoEpisode(jobId) {
+  const episode = activeEpisodes.get(jobId);
+  if (!episode) {
+    const existing = episodeJobs.get(jobId);
+    if (existing && existing.status !== 'running') {
+      return { ok: false, code: 'ALREADY_TERMINAL', status: existing.status, error: `Episode is already ${existing.status}` };
+    }
+    return { ok: false, code: 'NOT_FOUND', error: 'Episode job not found' };
+  }
+  episode.cancelRequested = true;
+  episode.outerJob.status = 'canceling';
+  episode.abortController.abort(createAbortError());
+  if (episode.activeInner?.cancel) {
+    try {
+      await episode.activeInner.cancel();
+    } catch (err) {
+      console.log(`⚠️ Continuous video [${jobId.slice(0, 8)}] inner cancel reported error: ${err?.message || err}`);
+    }
+  }
+  return { ok: true, jobId, status: 'canceling' };
+}
 
 // The route awaits this before returning a running descriptor; direct callers
 // recheck it before any clip can reach a backend.
@@ -164,13 +220,9 @@ const backendJobParams = ({ backend, clip, conditioning, renderOptions, continua
 // SYNCHRONOUSLY (before it ever gets to emit 'failed') can still unregister
 // these listeners itself — otherwise they leak on videoGenEvents forever,
 // each holding a promise nothing will ever settle.
-function awaitClipCompletion(innerJobId) {
+function awaitClipCompletion(innerJobId, signal) {
   let detach;
   const promise = new Promise((resolve, reject) => {
-    detach = () => {
-      videoGenEvents.off('completed', onCompleted);
-      videoGenEvents.off('failed', onFailed);
-    };
     const onCompleted = (e) => {
       if (e.generationId !== innerJobId) return;
       detach();
@@ -181,10 +233,117 @@ function awaitClipCompletion(innerJobId) {
       detach();
       reject(new Error(e.error || 'clip generation failed'));
     };
+    const onAbort = () => {
+      detach();
+      reject(createAbortError());
+    };
+    detach = () => {
+      videoGenEvents.off('completed', onCompleted);
+      videoGenEvents.off('failed', onFailed);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
     videoGenEvents.on('completed', onCompleted);
     videoGenEvents.on('failed', onFailed);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
   return { promise, detach };
+}
+
+// Run one local-backend clip through mediaJobQueue so it serializes on the
+// single-flight GPU lane instead of bypassing queue admission with a direct
+// generateVideo() call (which collides with active local renders on 409
+// HEAVY_LOCAL_JOB_BUSY).
+async function runLocalClipViaQueue({ params, outerJobId, episode, queueMod, signal }) {
+  if (signal.aborted) throw createAbortError();
+  const { enqueueJob, cancelJob, mediaJobEvents } = queueMod;
+  const { jobId: _unusedJobId, ...queueParams } = params;
+
+  let innerJobId = null;
+  let settled = false;
+  let cancelPromise = null;
+  const earlyTerminal = new Map();
+
+  const triggerCancel = () => {
+    if (!innerJobId) return Promise.resolve();
+    if (!cancelPromise) {
+      cancelPromise = Promise.resolve()
+        .then(() => cancelJob(innerJobId))
+        .catch((err) => {
+          console.log(`⚠️ Continuous video [${outerJobId.slice(0, 8)}] local queue cancel warning: ${err?.message || err}`);
+        });
+    }
+    return cancelPromise;
+  };
+
+  return new Promise((resolve, reject) => {
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      for (const [state, listener] of listeners) mediaJobEvents.off(state, listener);
+      signal.removeEventListener('abort', onAbort);
+      if (episode.activeInner?.jobId === innerJobId) episode.activeInner = null;
+      earlyTerminal.clear();
+      fn(value);
+    };
+
+    const handleTerminal = (state, job) => {
+      if (state === 'completed') {
+        finish(resolve, { innerJobId: job.id });
+        return;
+      }
+      if (state === 'canceled' || signal.aborted) {
+        finish(reject, createAbortError());
+        return;
+      }
+      finish(reject, new Error(job?.error || 'clip generation failed'));
+    };
+
+    const listeners = ['completed', 'failed', 'canceled'].map((state) => [state, (job) => {
+      if (!job?.id) return;
+      if (innerJobId === null) {
+        earlyTerminal.set(job.id, { state, job });
+        return;
+      }
+      if (job.id !== innerJobId) return;
+      handleTerminal(state, job);
+    }]);
+
+    const onAbort = () => {
+      const cancel = triggerCancel();
+      void cancel.finally(() => finish(reject, createAbortError()));
+    };
+
+    for (const [state, listener] of listeners) mediaJobEvents.on(state, listener);
+    signal.addEventListener('abort', onAbort, { once: true });
+
+    enqueueJob({ kind: 'video', owner: `continuous-video:${outerJobId}`, params: queueParams }).then(
+      (queued) => {
+        innerJobId = queued.jobId;
+        if (signal.aborted) {
+          void triggerCancel();
+          finish(reject, createAbortError());
+          return;
+        }
+        episode.activeInner = { backend: 'local', jobId: innerJobId, cancel: triggerCancel };
+        const early = earlyTerminal.get(innerJobId);
+        earlyTerminal.clear();
+        if (early) {
+          handleTerminal(early.state, early.job);
+          return;
+        }
+        if (queued.status === 'canceled') {
+          handleTerminal('canceled', { id: innerJobId, status: 'canceled' });
+        } else if (queued.status === 'failed') {
+          handleTerminal('failed', { id: innerJobId, status: 'failed', error: queued.error });
+        }
+      },
+      (err) => finish(reject, signal.aborted ? createAbortError() : err),
+    );
+  });
 }
 
 // Build the conditioning the NEXT clip needs from the clip that just
@@ -247,11 +406,26 @@ export async function generateContinuousVideoEpisode({
     };
   }
 
-  const continuation = await resolveEpisodeContinuity({ backend, renderOptions });
-  const runtimeContract = continuationContract(continuation?.runtime);
-  const { generateVideo: generate } = await BACKEND_MODULES[backend]();
-  const outerJob = { id: outerJobId, clients: [], status: 'running' };
+  // Register before the first await so an immediate SSE attach after POST
+  // returns 200 never 404s during cold backend import or continuity checks,
+  // Live Activity / update preflight observe the episode immediately, and
+  // pre-loop setup throws reach the SSE error broadcast below.
+  const startedAt = new Date().toISOString();
+  const abortController = new AbortController();
+  const { signal } = abortController;
+  const outerJob = { id: outerJobId, clients: [], status: 'running', backend, totalClips: clips.length, startedAt };
+  const episode = {
+    id: outerJobId,
+    outerJob,
+    backend,
+    totalClips: clips.length,
+    startedAt,
+    abortController,
+    cancelRequested: false,
+    activeInner: null,
+  };
   episodeJobs.set(outerJobId, outerJob);
+  activeEpisodes.set(outerJobId, episode);
 
   // `progress` is CLIPS COMPLETED / total — index/clips.length while clip
   // `index` is still in flight, so the fraction only reaches 1.0 once every
@@ -264,37 +438,119 @@ export async function generateContinuousVideoEpisode({
     broadcastSse(outerJob, { type: 'progress', progress, message: fullMessage });
   };
 
-  const runOneClip = async (clip, conditioning) => {
-    const innerJobId = randomUUID();
-    const params = backendJobParams({
-      backend, clip, conditioning, renderOptions, continuation, jobId: innerJobId,
-    });
-    // Listeners are registered BEFORE `generate` is even invoked, so no
-    // completion event it emits can fire before we're listening for it. If
-    // `generate` itself throws/rejects (a synchronous validation error, never
-    // reaching its own 'failed' emit), detach here — otherwise these
-    // listeners would leak on videoGenEvents forever.
-    const { promise: completion, detach } = awaitClipCompletion(innerJobId);
-    await generate(params).catch((err) => {
-      detach();
-      throw err;
-    });
-    await completion;
-    return { innerJobId };
-  };
-
   const clipIds = [];
   const scratchPaths = [];
   const trims = new Map();
   let previousClip = null;
+
+  const cleanupScratch = async () => {
+    const paths = scratchPaths.splice(0, scratchPaths.length);
+    if (paths.length) {
+      await Promise.all(paths.map((path) => unlinkGuarded(path).catch(() => {})));
+    }
+  };
+
+  const settleCanceled = async () => {
+    activeEpisodes.delete(outerJobId);
+    await cleanupScratch();
+    outerJob.status = 'canceled';
+    videoGenEvents.emit('canceled', { generationId: outerJobId });
+    broadcastSse(outerJob, { type: 'canceled', jobId: outerJobId, message: 'Episode canceled' });
+    closeJobAfterDelay(episodeJobs, outerJobId);
+    return {
+      ok: false, canceled: true, jobId: outerJobId, stage: 'canceled', clipIds,
+    };
+  };
+
+  const settleError = async (stage, eventMessage, { returnError = eventMessage, ...extra } = {}) => {
+    activeEpisodes.delete(outerJobId);
+    await cleanupScratch();
+    outerJob.status = 'error';
+    videoGenEvents.emit('failed', { generationId: outerJobId, error: eventMessage });
+    broadcastSse(outerJob, { type: 'error', error: eventMessage });
+    closeJobAfterDelay(episodeJobs, outerJobId);
+    return {
+      ok: false, jobId: outerJobId, stage, error: returnError, clipIds, ...extra,
+    };
+  };
+
   try {
+    const continuation = await resolveEpisodeContinuity({ backend, renderOptions });
+    if (signal.aborted) return await settleCanceled();
+    const runtimeContract = continuationContract(continuation?.runtime);
+    const queueMod = backend === 'local' ? await loadMediaJobQueue() : null;
+    const backendMod = backend === 'local' ? null : await BACKEND_MODULES[backend]();
+    if (signal.aborted) return await settleCanceled();
+
+    const runOneClip = async (clip, conditioning) => {
+      if (signal.aborted) throw createAbortError();
+      if (backend === 'local') {
+        const params = backendJobParams({
+          backend, clip, conditioning, renderOptions, continuation,
+        });
+        return runLocalClipViaQueue({ params, outerJobId, episode, queueMod, signal });
+      }
+      const innerJobId = randomUUID();
+      const params = backendJobParams({
+        backend, clip, conditioning, renderOptions, continuation, jobId: innerJobId,
+      });
+      let innerCancelState = 'idle';
+      let innerCancelPromise = null;
+      const cancelInner = () => {
+        if (innerCancelState === 'done') return Promise.resolve(true);
+        if (innerCancelPromise) return innerCancelPromise;
+        innerCancelState = 'pending';
+        innerCancelPromise = Promise.resolve()
+          .then(() => backendMod.cancel?.(innerJobId))
+          .then((res) => {
+            innerCancelState = res === false ? 'idle' : 'done';
+            return res;
+          })
+          .finally(() => {
+            innerCancelPromise = null;
+          });
+        return innerCancelPromise;
+      };
+      episode.activeInner = { backend, jobId: innerJobId, cancel: cancelInner };
+      // Listeners are registered BEFORE `generateVideo` is even invoked, so no
+      // completion event it emits can fire before we're listening for it. If
+      // `generateVideo` itself throws/rejects (a synchronous validation error, never
+      // reaching its own 'failed' emit), detach here — otherwise these
+      // listeners would leak on videoGenEvents forever.
+      const { promise: completion, detach } = awaitClipCompletion(innerJobId, signal);
+      try {
+        await backendMod.generateVideo(params).catch((err) => {
+          detach();
+          throw err;
+        });
+        // If cancel arrived before generateVideo registered innerJobId, re-signal now.
+        if (signal.aborted) {
+          detach();
+          await cancelInner().catch(() => {});
+          throw createAbortError();
+        }
+        await completion;
+        return { innerJobId };
+      } catch (err) {
+        if (signal.aborted && innerCancelState === 'idle') {
+          await cancelInner().catch(() => {});
+        }
+        throw err;
+      } finally {
+        detach();
+        if (episode.activeInner?.jobId === innerJobId) episode.activeInner = null;
+      }
+    };
+
     for (let i = 0; i < clips.length; i++) {
+      if (signal.aborted) return await settleCanceled();
       const clip = clips[i];
       emitProgress(i, clip.cutType === 'continue' ? 'continuing' : 'establishing');
       const wantsContinuation = clip.cutType === 'continue' && previousClip;
       let conditioning = wantsContinuation && continuation?.effectiveStrategy !== 'window'
         ? await buildConditioning(backend, previousClip)
         : {};
+      if (signal.aborted) return await settleCanceled();
 
       if (wantsContinuation && continuation?.effectiveStrategy === 'window') {
         const sourcePath = join(PATHS.videos, `${previousClip}.mp4`);
@@ -311,28 +567,27 @@ export async function generateContinuousVideoEpisode({
           // Own the destination before ffmpeg writes: partial failures also clean up.
           scratchPaths.push(contextPath);
           const cut = await trimVideoFromFrame(sourcePath, contextPath, { startFrame, fps: clips[i - 1].fps });
+          if (signal.aborted) return await settleCanceled();
           if (!cut.ok) throw new ServerError(`Failed to prepare temporal episode history: ${cut.reason}`, { status: 400, code: 'VIDEO_CONTINUITY_HISTORY_FAILED' });
           conditioning = { extendFromVideoPath: contextPath };
           continuation.actualHistoryFrames = frames - startFrame;
         }
       }
 
-      let outcome = await runOneClip(clip, conditioning).catch((err) => ({ error: err.message }));
+      let outcome = await runOneClip(clip, conditioning).catch((err) => ({ error: err.message, aborted: isAbortError(err) }));
+      if (signal.aborted || outcome.aborted) return await settleCanceled();
       if (outcome.error && wantsContinuation && continuation?.effectiveStrategy !== 'window') {
         console.log(`⚠️ Continuous video [${outerJobId.slice(0, 8)}] clip ${i + 1}/${clips.length} continuation failed (${outcome.error}) — re-establishing fresh`);
-        outcome = await runOneClip(clip, {}).catch((err) => ({ error: err.message }));
+        outcome = await runOneClip(clip, {}).catch((err) => ({ error: err.message, aborted: isAbortError(err) }));
+        if (signal.aborted || outcome.aborted) return await settleCanceled();
       }
       if (outcome.error) {
-        videoGenEvents.emit('failed', { generationId: outerJobId, error: outcome.error });
-        broadcastSse(outerJob, { type: 'error', error: outcome.error });
-        closeJobAfterDelay(episodeJobs, outerJobId);
-        return {
-          ok: false, jobId: outerJobId, stage: 'generation', failedClipIndex: i, error: outcome.error, clipIds,
-        };
+        return await settleError('generation', outcome.error, { failedClipIndex: i });
       }
       clipIds.push(outcome.innerJobId);
       if (continuation?.effectiveStrategy === 'window') {
         const frames = await probeFrameCount(join(PATHS.videos, `${outcome.innerJobId}.mp4`));
+        if (signal.aborted) return await settleCanceled();
         if (!Number.isInteger(frames) || frames <= 0) {
           throw new ServerError('Cannot measure the temporal episode output.', { status: 400, code: 'VIDEO_CONTINUITY_OUTPUT_UNMEASURABLE' });
         }
@@ -348,6 +603,7 @@ export async function generateContinuousVideoEpisode({
       previousClip = outcome.innerJobId;
     }
 
+    if (signal.aborted) return await settleCanceled();
     videoGenEvents.emit('progress', { generationId: outerJobId, progress: 1, message: 'Stitching episode' });
     broadcastSse(outerJob, { type: 'progress', progress: 1, message: 'Stitching episode' });
 
@@ -359,15 +615,14 @@ export async function generateContinuousVideoEpisode({
       requireExactTrims: continuation?.effectiveStrategy === 'window',
       continuation,
     }).catch((err) => ({ error: err.message }));
+    if (signal.aborted) return await settleCanceled();
     if (stitched?.error) {
-      videoGenEvents.emit('failed', { generationId: outerJobId, error: `Stitch failed: ${stitched.error}` });
-      broadcastSse(outerJob, { type: 'error', error: `Stitch failed: ${stitched.error}` });
-      closeJobAfterDelay(episodeJobs, outerJobId);
-      return {
-        ok: false, jobId: outerJobId, stage: 'stitch', error: stitched.error, clipIds,
-      };
+      return await settleError('stitch', `Stitch failed: ${stitched.error}`, { returnError: stitched.error });
     }
 
+    activeEpisodes.delete(outerJobId);
+    await cleanupScratch();
+    outerJob.status = 'complete';
     const result = {
       ok: true,
       jobId: outerJobId,
@@ -381,11 +636,10 @@ export async function generateContinuousVideoEpisode({
     closeJobAfterDelay(episodeJobs, outerJobId);
     return result;
   } catch (error) {
-    videoGenEvents.emit('failed', { generationId: outerJobId, error: error.message });
-    broadcastSse(outerJob, { type: 'error', error: error.message });
-    closeJobAfterDelay(episodeJobs, outerJobId);
-    return { ok: false, jobId: outerJobId, stage: 'generation', error: error.message, clipIds };
+    if (signal.aborted || isAbortError(error)) return await settleCanceled();
+    return await settleError('generation', error.message);
   } finally {
-    await Promise.all(scratchPaths.map((path) => unlinkGuarded(path).catch(() => {})));
+    activeEpisodes.delete(outerJobId);
+    await cleanupScratch();
   }
 }

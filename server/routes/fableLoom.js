@@ -72,7 +72,9 @@ import {
   feedbackSeriesPlan,
   generateEpisodeOutline,
   generateSeriesPlan,
+  cancelFalVideoAutomation,
   getFalVideoAutomation,
+  listActiveFalVideoAutomations,
   getEpisodeProductionBatch,
   getLatestEpisodeProductionBatch,
   getHostedSession,
@@ -105,7 +107,7 @@ import {
   startFableLoomEditorialAutopilot,
 } from '../services/fableLoom/index.js';
 
-import { preflightFableLoomExport, startFableLoomExport, getFableLoomExport, cancelFableLoomExport, getFableLoomExportDownload } from '../services/fableLoom/exports.js';
+import { preflightFableLoomExport, startFableLoomExport, getFableLoomExport, getLatestFableLoomExport, cancelFableLoomExport, getFableLoomExportDownload } from '../services/fableLoom/exports.js';
 const router = Router();
 
 // Summaries only — a woven episode carries pages of prose per node, and the
@@ -139,6 +141,10 @@ router.post('/:id/export/preflight', asyncHandler(async (req, res) => {
 router.post('/:id/export', asyncHandler(async (req, res) => {
   const input = validateRequest(exportOptionsSchema, req.body ?? {});
   res.status(202).json(await startFableLoomExport(req.params.id, input));
+}));
+
+router.get('/:id/export/latest', asyncHandler(async (req, res) => {
+  res.json({ job: await getLatestFableLoomExport(req.params.id) });
 }));
 
 router.get('/:id/export/:jobId', asyncHandler(async (req, res) => {
@@ -307,6 +313,20 @@ router.get('/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId', asyncHandl
     req.params.nodeId,
     req.params.jobId,
   ));
+}));
+
+router.post('/:id/episodes/:episodeId/nodes/:nodeId/fal-video/:jobId/cancel', asyncHandler(async (req, res) => {
+  res.json(cancelFalVideoAutomation(
+    req.params.id,
+    req.params.episodeId,
+    req.params.nodeId,
+    req.params.jobId,
+  ));
+}));
+
+// Reload recovery: lets the client reattach to renders the server still runs.
+router.get('/:id/episodes/:episodeId/fal-video', asyncHandler(async (req, res) => {
+  res.json(listActiveFalVideoAutomations(req.params.id, req.params.episodeId));
 }));
 
 // --- Transitions ------------------------------------------------------------

@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('creativeToolRegistry', () => import('../creative/toolRegistry.js'));
 
 const mocks = vi.hoisted(() => ({
   addTask: vi.fn(),

@@ -10,6 +10,7 @@ import { formatDateShort } from '../../utils/formatters';
 import { publishAppQualitySnapshot } from '../../services/apiApps';
 import toast from '../ui/Toast';
 import InfoTooltip from '../ui/InfoTooltip';
+import { QUALITY_HEALTHY_THRESHOLD } from '../../../../server/lib/auditDomains.js';
 import OverflowMenu from '../ui/OverflowMenu';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
@@ -33,7 +34,20 @@ const PUBLISH_SKIPPED = {
   'repository-mismatch': 'The quality file belongs to a different repository. Publish left it in place.',
   'unsupported-format': 'The committed quality file is in an unsupported format. Publish left it in place.',
   'invalid-evidence': 'The current measurements could not be written as a snapshot. Publish left the file in place.',
+  'publish-pr-unreadable': 'Could not read the state of the quality snapshot pull request; publication was deferred',
+  'ownership-unreadable': 'Could not confirm who owns the quality snapshot branch; publication was deferred',
+  'publish-branch-unreadable': 'Could not read the quality snapshot branch; publication was deferred',
+  'non-snapshot-changes': 'The quality snapshot branch has changes beyond the snapshot file; publication was deferred',
 };
+const PUBLISH_DEFERRED = 'Quality snapshot publication deferred while another task owns the publish branch';
+
+// Success wording follows what the server actually did with the pull request.
+function publishedMessage(result) {
+  if (!result.prUrl) return 'Quality snapshot published to .quality.json';
+  if (result.merged) return 'Quality snapshot pull request merged';
+  if (result.queuedMerge) return 'Quality snapshot pull request opened; queued to merge when checks pass';
+  return 'Quality snapshot pull request opened; review or merge manually';
+}
 
 export default function AppQuality({ app, detail = false }) {
   const [params] = useSearchParams();
@@ -48,11 +62,11 @@ export default function AppQuality({ app, detail = false }) {
     setPublishing(false);
     if (result?.failure) return toast.error(result.failure.message || 'Could not publish the quality snapshot');
     if (result?.published) {
-      return toast.success(result.prUrl
-        ? 'Quality snapshot pull request opened; it merges immediately'
-        : 'Quality snapshot published to .quality.json');
+      return toast.success(publishedMessage(result));
     }
-    toast(PUBLISH_SKIPPED[result?.reason] || 'Nothing to publish to .quality.json');
+    toast(PUBLISH_SKIPPED[result?.reason]
+      || (result?.deferredPublication === true ? PUBLISH_DEFERRED : null)
+      || 'Nothing to publish to .quality.json');
   };
   const quality = app.quality;
   const score = quality?.score;
@@ -113,9 +127,11 @@ export default function AppQuality({ app, detail = false }) {
           <div className="min-w-0">
             <h3 className="flex flex-wrap items-center gap-1.5 font-semibold text-white">
               {label}
+              {score != null && score >= QUALITY_HEALTHY_THRESHOLD && <span className="rounded-full border border-port-success/40 bg-port-success/10 px-2 py-0.5 text-xs font-medium text-port-success">Target met ({QUALITY_HEALTHY_THRESHOLD}+)</span>}
               <InfoTooltip label="How the quality score works" placement="below" align="start" width={320}>
-                <p>Equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
-                <p className="mt-1.5">Each run rates only the slice it deep-reviewed, as the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 70–89 localized debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
+                <p>Recency-weighted equal-weight mean of the category scores. Each category score is the confidence-weighted mean of its last five qualifying runs from the last 30 days (broad signal coverage, medium/high confidence, scored); re-auditing the same slice supersedes its older pre-fix run, and one run’s slice pick no longer swings the figure. Missing, partial, low-confidence and stale runs are excluded, not counted as perfect. Assessments describe the code before fixes.</p>
+                <p className="mt-1.5">Each run rates only the slice it deep-reviewed, as the auditing agent’s evidence-based judgment, not an issue count: 90–100 no material defect · 85–89 healthy with minor polish · 70–84 localized moderate debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure. A run with no findings can score below 100.</p>
+                <p className="mt-1.5">Target: 85–95 is healthy. Categories at {QUALITY_HEALTHY_THRESHOLD}+ are not flagged; chasing 100/100 invites over-engineering.</p>
                 {federation && <p className="mt-1.5">Unified score: the recent runs per category across this install and sync peers with the same repository, one per day. Offline peers do not contribute.</p>}
                 {score == null && !hasAssessments && <p className="mt-1.5">Maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively.</p>}
               </InfoTooltip>
@@ -174,7 +190,7 @@ export default function AppQuality({ app, detail = false }) {
                   <CategoryRow
                     key={category.id}
                     category={category}
-                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < score}
+                    below={score != null && category.score != null && category.coverage !== 'not-applicable' && category.score < QUALITY_HEALTHY_THRESHOLD && category.score < score}
                     runLink={panelLink('run', category.id)}
                   />
                 ))}

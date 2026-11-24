@@ -8,6 +8,7 @@ import {
   THREEJS_MODEL_FAMILY_IDS,
   THREEJS_MODEL_FAMILY_OPTIONS,
 } from '../lib/threejsModelFamilies.js';
+import { THREEJS_REFERENCE_ROLES, MAX_THREEJS_REFERENCE_IMAGES } from '../services/threejsModels/prompt.js';
 import { emptyToNull } from '../lib/zodCompat.js';
 import {
   listModels,
@@ -17,6 +18,7 @@ import {
   deleteModel,
   getModelSource,
 } from '../services/threejsModels/index.js';
+import { findProductSheetForImage } from '../services/threejsModels/productSheet.js';
 
 const router = Router();
 
@@ -47,6 +49,13 @@ const familySchema = z.preprocess((value) => {
   return THREEJS_MODEL_FAMILY_IDS.includes(value) ? value : GENERAL_FAMILY_ID;
 }, z.enum(THREEJS_MODEL_FAMILY_IDS).optional());
 
+// Absent keeps the record's references on refine; an empty array clears them.
+const referenceImagesSchema = z.array(z.object({
+  filename: galleryFilenameSchema,
+  role: z.enum(THREEJS_REFERENCE_ROLES),
+  label: z.string().trim().max(120).default(''),
+})).max(MAX_THREEJS_REFERENCE_IMAGES).optional();
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(120),
   filename: galleryFilenameSchema,
@@ -55,6 +64,7 @@ const createSchema = z.object({
   model: z.string().trim().max(256).optional(),
   effort: effortSchema,
   family: familySchema,
+  referenceImages: referenceImagesSchema,
 });
 
 const generateSchema = z.object({
@@ -63,6 +73,7 @@ const generateSchema = z.object({
   effort: effortSchema,
   prompt: z.string().trim().max(2_000).optional(),
   family: familySchema,
+  referenceImages: referenceImagesSchema,
   feedback: z.string().trim().max(2_000).default(''),
 });
 
@@ -82,6 +93,15 @@ router.post('/', asyncHandler(async (req, res) => {
 router.get('/families', (_req, res) => {
   res.json(THREEJS_MODEL_FAMILY_OPTIONS);
 });
+
+const productSheetQuerySchema = z.object({ filename: galleryFilenameSchema });
+
+// Literal path ahead of `/:id`. Read-only: `sheet` is null for an image that is
+// not a Casting object's or whose object has no product sheet.
+router.get('/product-sheet', asyncHandler(async (req, res) => {
+  const { filename } = validateRequest(productSheetQuerySchema, req.query);
+  res.json({ sheet: await findProductSheetForImage(filename) });
+}));
 
 router.get('/:id/source', asyncHandler(async (req, res) => {
   const result = await getModelSource(req.params.id);

@@ -26,6 +26,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { checkHealth, ensureSchema, close, query, withTransaction, POOL_CONFIG } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { extractImageProvenanceRefs } from '../services/mediaAssetIndex/logic.js';
 
 // Universe canon writes use the same disposable PostgreSQL as catalog rows.
 vi.mock('../lib/pgFileFacade.js', async (importOriginal) => {
@@ -139,8 +140,8 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
       const filename = `${prefix}${suffix}.png`;
       const key = `image:${filename}`;
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, toPgJson({ mode, inputProvenance, referenceImageFilenames: [primary] }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, toPgJson({ mode, inputProvenance, referenceImageFilenames: [primary] }), [primary], '2026-01-01T00:00:00.000Z']);
     }
     const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
     expect(result.status).toBe(200);
@@ -180,9 +181,10 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
     for (const [suffix, data] of rows) {
       const filename = `${prefix}${suffix}.png`;
       const key = `image:${filename}`;
+      const record = { filename, createdAt: '2026-01-01T00:00:00.000Z', ...data };
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, JSON.stringify({ filename, createdAt: '2026-01-01T00:00:00.000Z', ...data }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, JSON.stringify(record), extractImageProvenanceRefs(record), '2026-01-01T00:00:00.000Z']);
     }
     const url = `/api/catalog/ingredients/${ing.id}/related-images`;
     const first = await request(makeApp()).get(`${url}?limit=2`);
@@ -223,8 +225,8 @@ describe.skipIf(!runDb)('GET /api/catalog/ingredients/:id/related-images', () =>
       const filename = `${prefix}${suffix}-render.png`;
       const key = `image:${filename}`;
       relatedImageKeys.add(key);
-      await query('INSERT INTO media_assets (media_key, kind, ref, data, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)',
-        [key, 'image', filename, JSON.stringify({ referenceImageFilenames: [`${prefix}${suffix}.png`] }), '2026-01-01T00:00:00.000Z']);
+      await query('INSERT INTO media_assets (media_key, kind, ref, data, provenance_refs, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::text[], $6)',
+        [key, 'image', filename, JSON.stringify({ referenceImageFilenames: [`${prefix}${suffix}.png`] }), [`${prefix}${suffix}.png`], '2026-01-01T00:00:00.000Z']);
     }
     const result = await request(makeApp()).get(`/api/catalog/ingredients/${ing.id}/related-images`);
     expect(result.status).toBe(200);
@@ -380,6 +382,36 @@ describe.skipIf(!runDb)('POST /api/catalog/bulk-import — export-bundle ref rec
 describe.skipIf(!runDb)('catalog export identity round trip', () => {
   const send = (bundle) => request(makeApp()).post('/api/catalog/bulk-import')
     .send({ format: 'json', payload: JSON.stringify(bundle) });
+
+  it('exports a slice as JSON, Markdown and YAML attachments and validates the query', async () => {
+    const refId = `export-fmt-${NONCE}`;
+    const ing = await catalogDB.createIngredient({ type: 'idea', name: 'Export format probe' });
+    createdIngredientIds.add(ing.id);
+    await catalogDB.linkIngredientToRef(ing.id, 'series', refId, 'cast');
+    const app = makeApp();
+    const get = (format) => request(app).get(`/api/catalog/export?refKind=series&refId=${refId}${format ? `&format=${format}` : ''}`);
+
+    const json = await get();
+    expect(json.status).toBe(200);
+    expect(json.headers['content-type']).toMatch(/application\/json/);
+    expect(json.headers['content-disposition']).toContain(`catalog-series-${refId}.json`);
+    expect(JSON.parse(json.text).ingredients.map((i) => i.name)).toEqual(['Export format probe']);
+
+    const md = await get('markdown');
+    expect(md.status).toBe(200);
+    expect(md.headers['content-type']).toMatch(/text\/markdown/);
+    expect(md.headers['content-disposition']).toContain('.md"');
+    expect(md.text).toContain('Export format probe');
+
+    const yaml = await get('yaml');
+    expect(yaml.status).toBe(200);
+    expect(yaml.headers['content-type']).toMatch(/application\/yaml/);
+    expect(yaml.headers['content-disposition']).toContain('.yaml"');
+    expect(yaml.text).toContain('Export format probe');
+
+    expect((await get('xml')).status).toBe(400);
+    expect((await request(app).get(`/api/catalog/export?refKind=bogus&refId=${refId}`)).status).toBe(400);
+  });
 
   it('imports an exported slice twice and reuses IDs, shared scraps and media while applying edits', async () => {
     const refId = `roundtrip-${NONCE}`;

@@ -101,6 +101,7 @@ vi.mock('../services/apiBrain.js', () => ({
 }));
 vi.mock('../services/apiGithub.js', () => ({
   applyGitHubNotificationAction: vi.fn(),
+  setGitHubNotificationMute: vi.fn(),
   resolveGitHubNotificationWithAgent: vi.fn(),
   actOnGitHubNotificationPullRequest: vi.fn(),
   getGitHubDeploymentReview: vi.fn(),
@@ -159,6 +160,7 @@ import {
 import { getHarnessUpdateReference } from '../services/apiHarnesses.js';
 import {
   applyGitHubNotificationAction,
+  setGitHubNotificationMute,
   actOnGitHubNotificationPullRequest,
   getGitHubDeploymentReview,
   reviewGitHubDeployment,
@@ -308,6 +310,24 @@ describe('GitHub alerts in central Actions', () => {
     await waitFor(() => expect(screen.queryByRole('link', { name: GITHUB_NOTIFICATION.title })).not.toBeInTheDocument());
     expect(applyGitHubNotificationAction).toHaveBeenCalledWith('example-account', '42', 'done');
     expect(resolveReviewQueueItem).not.toHaveBeenCalled();
+  });
+
+  it('mutes only the notification type in PortOS and allows the same row back after unmute', async () => {
+    getReviewQueue.mockResolvedValueOnce(githubQueue());
+    setGitHubNotificationMute.mockResolvedValue({ muted: true });
+    render(<Review />);
+    await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title });
+    fireEvent.click(screen.getByRole('button', { name: /More actions/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mute "Review requested" for acme/app in PortOS' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: GITHUB_NOTIFICATION.title })).not.toBeInTheDocument());
+    expect(setGitHubNotificationMute).toHaveBeenCalledWith(expect.objectContaining({
+      accountId: 'example-account', repoFullName: 'acme/app', reason: 'review_requested', muted: true,
+    }));
+    expect(applyGitHubNotificationAction).not.toHaveBeenCalled();
+
+    getReviewQueue.mockResolvedValueOnce(githubQueue());
+    await act(async () => socketHandler('github:notifications:changed')?.({ accountId: 'example-account' }));
+    expect(await screen.findByRole('link', { name: GITHUB_NOTIFICATION.title })).toBeInTheDocument();
   });
 
   it('keeps failed actions visible and preserves the server refusal for suspicious alerts', async () => {

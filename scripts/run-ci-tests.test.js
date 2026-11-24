@@ -26,12 +26,13 @@ import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
 import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
-import { BROWSER_SUITES } from './lib/browserSuites.js';
+import { BROWSER_SUITES, browserShardSlice } from './lib/browserSuites.js';
 import { staticImportClosure } from '../server/lib/staticImportGraph.js';
 import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js';
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
+import { workflowJobs } from './lib/workflowJobs.js';
 import { getAlwaysRunTests } from './ci-test-plan.js';
 import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
 import { mergeTestMemoDirs } from './merge-test-memo.js';
@@ -219,6 +220,66 @@ describe('test memo through the real runner', () => {
       rmSync(fixture, { recursive: true, force: true });
     }
   }, 200_000);
+
+  it.each([
+    ['server', 'scripts/lib/releaseTitle.test.js'],
+    ['db', 'server/lib/db/schema/initDbSql.db.test.js'],
+  ])('reports remaining %s tests via --check-remaining without running tests', (scope, test) => {
+    const fixture = mkdtempSync(join(tmpdir(), 'portos-check-remaining-'));
+    const memoDir = join(fixture, 'memo');
+    const outputFile = join(fixture, 'github_output');
+    try {
+      installFakeNpm(fixture, [
+        'const fs = require("fs");',
+        'const selection = JSON.parse(fs.readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8"));',
+        'const out = process.argv.find(a => a.startsWith("--outputFile.json=")).slice("--outputFile.json=".length);',
+        `const repo = ${JSON.stringify(join(import.meta.dirname, '..'))};`,
+        'const testResults = selection.include.map(rel => ({ name: require("path").resolve(repo, "server", rel), status: "passed", assertionResults: [{ status: "passed" }] }));',
+        'fs.writeFileSync(out, JSON.stringify({ testResults }));',
+        'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
+        'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
+      ].join('\n'));
+      const invoke = (args, extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), scope, ...args], {
+        encoding: 'utf8', timeout: 120000,
+        env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
+          PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir,
+          ...(scope === 'db' ? { PGDATABASE: 'portos_test', PORTOS_REQUIRE_DB: '1' } : {}),
+          GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: outputFile, GITHUB_EVENT_NAME: 'push', ...extraEnv },
+      });
+
+      writeFileSync(outputFile, '');
+      const coldPlan = invoke(['--check-remaining']);
+      expect(coldPlan.status, coldPlan.stderr).toBe(0);
+      expect(coldPlan.stdout).not.toContain('RAN ');
+      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=1\n');
+
+      const record = invoke([]);
+      expect(record.status, record.stderr).toBe(0);
+      expect(record.stdout).toContain('RAN ');
+
+      writeFileSync(outputFile, '');
+      const warmPlan = invoke(['--check-remaining'], { GITHUB_EVENT_NAME: 'pull_request' });
+      expect(warmPlan.status, warmPlan.stderr).toBe(0);
+      expect(warmPlan.stdout).toContain('skipped 1 of 1 selected files');
+      expect(warmPlan.stdout).toContain(`No ${scope} tests left to run.`);
+      expect(warmPlan.stdout).not.toContain('RAN ');
+      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+
+      if (scope === 'server') {
+        writeFileSync(outputFile, '');
+        const deferred = invoke(['--check-remaining'], {
+          PORTOS_BROWSER_TEST_PROFILE: 'smoke',
+          CI_TEST_FILES: JSON.stringify(['server/routes/musicVideoRichAuthoring.browser.test.js']),
+        });
+        expect(deferred.status, deferred.stderr).toBe(0);
+        expect(deferred.stdout).toContain('Fidelity-only inputs require separate evidence.');
+        expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+      }
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  }, 150_000);
 
   it('selects the same files as `vitest related` on a fixture graph with a dynamic import', () => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-related-parity-'));
@@ -680,14 +741,31 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('memoizes the serial database job through the db scope', () => {
-    const body = CI_JOBS.database;
-    const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
-    const step = body.slice(start, body.indexOf('- name:', start + 1));
-    expect(step).toContain('run: node scripts/run-ci-tests.js db');
-    expect(step).toContain('CI_TEST_MODE: full');
-    expect(step).toContain('PGDATABASE: portos_test');
-    expect(step).toContain('PORTOS_TEST_MEMO_DIR:');
-    expect(body).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    const body = workflowJobs(WORKFLOW).database;
+    const steps = body.split(/^ {6}- name: /m).slice(1);
+    const names = steps.map(step => step.split('\n')[0]);
+    expect(names).toEqual([
+      'Restore the test memo', 'Check remaining DB tests', 'Provision test database (portos_test)',
+      'Install PostgreSQL client and audio verification tools', 'Restore a real pg_dump into a scratch database',
+      'Run DB-backed tests (portos_test)', 'Save the test memo',
+    ]);
+    const [memo, plan, provision, tools, restore, run, save] = steps;
+    expect(memo).toContain('uses: ./.github/actions/test-memo');
+    expect(memo).toContain('partition: db');
+    expect(CI_JOBS.database).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    expect(plan).toContain('id: db-plan');
+    expect(plan).toContain('run: node scripts/run-ci-tests.js db --check-remaining\n');
+    expect(run).toContain('run: node scripts/run-ci-tests.js db\n');
+    for (const step of [plan, run]) {
+      expect(step).toContain('CI_TEST_MODE: full');
+      expect(step).toContain('PGDATABASE: portos_test');
+      expect(step).toContain('PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo');
+    }
+    const liveRestore = 'fromJSON(needs.impact.outputs.plan).db_live_restore';
+    const dbGate = `if: fromJSON(steps.db-plan.outputs.remaining) > 0 || ${liveRestore}\n`;
+    for (const step of [provision, tools, run]) expect(step).toContain(dbGate);
+    expect(restore).toContain(`if: ${liveRestore}\n`);
+    expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
     expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
   });
 
@@ -709,6 +787,25 @@ describe('ci.yml shard wiring', () => {
     // The client workspace must be installed before the suites bundle it.
     expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
     expect(body.indexOf('npm ci --prefix client')).toBeLessThan(start);
+    // Restore the test memo and check remaining suites before paying for db-tools or setup-client.
+    const memoIndex = body.indexOf('- name: Restore the test memo');
+    const planIndex = body.indexOf('- name: Check remaining browser suites');
+    const toolsIndex = body.indexOf('- name: Install audio verification tools');
+    const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
+    expect(memoIndex).toBeGreaterThan(0);
+    expect(memoIndex).toBeLessThan(planIndex);
+    expect(planIndex).toBeLessThan(toolsIndex);
+    expect(toolsIndex).toBeLessThan(clientIndex);
+    expect(clientIndex).toBeLessThan(start);
+    const planStep = body.slice(planIndex, toolsIndex);
+    expect(planStep).toContain('id: browser-plan');
+    expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
+    expect(planStep).toContain('PORTOS_CI_BROWSER_OWNER: browser');
+    expect(planStep).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
+    const gate = 'if: fromJSON(steps.browser-plan.outputs.remaining) > 0';
+    expect(body.slice(toolsIndex, clientIndex)).toContain(gate);
+    expect(body.slice(clientIndex, start)).toContain(gate);
+    expect(step).toContain(gate);
   });
 
   it('uploads every failed synthetic template comparison without including arbitrary diagnostics', () => {
@@ -1402,5 +1499,34 @@ describe('shouldWarmTestChrome (#17750)', () => {
   });
   it('never warms outside CI', () => {
     expect(shouldWarmTestChrome({ scope: 'client', run: [browser], env: {} })).toBe(false);
+  });
+});
+
+describe('browser shard ownership', () => {
+  it.each([1, 2, 3, 4])('covers every registered suite exactly once across %i shards', (count) => {
+    for (const profile of ['full', 'smoke']) {
+      const slices = Array.from({ length: count }, (_, i) => browserShardSlice(BROWSER_SUITES, { index: i + 1, count }, profile));
+      expect(slices.flat().toSorted()).toEqual([...BROWSER_SUITES].toSorted());
+    }
+  });
+
+  it('gives document render its own runner in both four-shard profiles', () => {
+    for (const profile of ['full', 'smoke']) {
+      const shard = index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, profile);
+      expect(shard(1)).toEqual(['server/services/musicVideo/documentRender.browser.test.js']);
+      expect(shard(3)).toContain('server/services/musicVideo/documentTemplateParity.browser.test.js');
+      expect(shard(4)).toContain('server/services/musicVideo/documentRenderGeneration.browser.test.js');
+    }
+  });
+
+  it('keeps the four heaviest serial capture suites on separate four-shard runners', () => {
+    const heavy = [
+      'server/services/musicVideo/documentRender.browser.test.js',
+      'server/services/htmlComposition/index.test.js',
+      'server/services/musicVideo/animaticCapture.browser.test.js',
+      'server/lib/filmLookGpu.browser.test.js',
+    ];
+    const shardOf = (file) => [1, 2, 3, 4].find(index => browserShardSlice(BROWSER_SUITES, { index, count: 4 }, 'smoke').includes(file));
+    expect(heavy.map(shardOf)).toEqual([1, 2, 3, 4]);
   });
 });

@@ -32,7 +32,7 @@ import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { markerExists, writeMarker } from '../lib/migrationMarker.js';
-import { query } from '../lib/db.js';
+import { query, withTransaction } from '../lib/db.js';
 import { readLegacyJSON, legacyDirectory, parkLegacyFile, incompleteImport } from './legacyImport.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -41,22 +41,34 @@ const ROOT_DIRNAME = 'writers-room';
 const MARKER_FILENAME = 'writers-room.migrated.json';
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 
+// Tombstone state must land in BOTH the `deleted`/`deleted_at` columns (live
+// queries filter on them) and the `data` JSONB (deleteWork/merge read it);
+// a split-brain row resurrects as a live record that can't be deleted (#17919).
+function tombstoneState(record, fallbackTs) {
+  const deleted = record?.deleted === true;
+  const deletedAt = deleted ? mirrorTimestamp(record?.deletedAt, fallbackTs) : null;
+  return { deleted, deletedAt, data: { ...record, deleted, deletedAt } };
+}
+
 export async function importFolder(folder, execute = query) {
   if (!folder || typeof folder.id !== 'string' || !folder.id) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(folder.createdAt, now);
+  const tomb = tombstoneState(folder, now);
   const result = await execute(
-    `INSERT INTO writers_room_folders (id, parent_id, name, sort_order, data, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+    `INSERT INTO writers_room_folders (id, parent_id, name, sort_order, data, created_at, updated_at, deleted, deleted_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
      ON CONFLICT (id) DO NOTHING`,
     [
       folder.id,
       typeof folder.parentId === 'string' && folder.parentId ? folder.parentId : null,
       String(folder.name ?? ''),
       Number.isInteger(folder.sortOrder) ? folder.sortOrder : 0,
-      toPgJson(folder),
+      toPgJson(tomb.data),
       createdAt,
       mirrorTimestamp(folder.updatedAt, createdAt),
+      tomb.deleted,
+      tomb.deletedAt,
     ],
   );
   return result.rowCount > 0;
@@ -64,37 +76,49 @@ export async function importFolder(folder, execute = query) {
 
 export async function importExercise(exercise, execute = query) {
   if (!exercise || typeof exercise.id !== 'string' || !exercise.id) return null;
+  const tomb = tombstoneState(exercise, new Date().toISOString());
   const result = await execute(
-    `INSERT INTO writers_room_exercises (id, work_id, status, data, started_at, finished_at)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+    `INSERT INTO writers_room_exercises (id, work_id, status, data, started_at, finished_at, deleted, deleted_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
      ON CONFLICT (id) DO NOTHING`,
     [
       exercise.id,
       typeof exercise.workId === 'string' && exercise.workId ? exercise.workId : null,
       typeof exercise.status === 'string' ? exercise.status.slice(0, 16) : null,
-      toPgJson(exercise),
+      toPgJson(tomb.data),
       mirrorTimestamp(exercise.startedAt, null),
       mirrorTimestamp(exercise.finishedAt, null),
+      tomb.deleted,
+      tomb.deletedAt,
     ],
   );
   return result.rowCount > 0;
 }
 
 // A work manifest → one work row (manifest minus drafts[]) + one draft-version
-// row per draft entry. All existing works import as deleted = FALSE.
-export async function importWork(manifest, execute = query) {
+// row per draft entry. Tombstone state is preserved. With the default executor
+// the work + drafts commit atomically and a work that already exists in
+// Postgres skips its drafts (a retried import must not resurrect deleted draft
+// rows); a custom executor (recoverLegacyImports) keeps per-row selectivity.
+export async function importWork(manifest, execute) {
+  if (execute) return importWorkWith(manifest, execute, false);
+  return withTransaction(client => importWorkWith(manifest, (sql, params) => client.query(sql, params), true));
+}
+
+async function importWorkWith(manifest, execute, skipDraftsIfExists) {
   if (!manifest || typeof manifest.id !== 'string' || !manifest.id) return null;
   if (manifest.drafts !== undefined && (!Array.isArray(manifest.drafts) || manifest.drafts.some(draft => !draft || typeof draft.id !== 'string' || !draft.id))) return null;
   const now = new Date().toISOString();
   const createdAt = mirrorTimestamp(manifest.createdAt, now);
-  const { drafts: draftList, ...workData } = manifest;
+  const { drafts: draftList, ...rawWorkData } = manifest;
+  const tomb = tombstoneState(rawWorkData, now);
   const drafts = Array.isArray(draftList) ? draftList : [];
   const result = await execute(
     `INSERT INTO writers_room_works
        (id, folder_id, title, kind, status, active_draft_version_id,
         pipeline_series_id, pipeline_issue_id, cd_project_id, media_collection_id,
         data, created_at, updated_at, deleted, deleted_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,FALSE,NULL)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15)
      ON CONFLICT (id) DO NOTHING`,
     [
       manifest.id,
@@ -107,11 +131,14 @@ export async function importWork(manifest, execute = query) {
       typeof manifest.pipelineIssueId === 'string' ? manifest.pipelineIssueId : null,
       typeof manifest.cdProjectId === 'string' ? manifest.cdProjectId : null,
       typeof manifest.mediaCollectionId === 'string' ? manifest.mediaCollectionId : null,
-      toPgJson(workData),
+      toPgJson(tomb.data),
       createdAt,
       mirrorTimestamp(manifest.updatedAt, createdAt),
+      tomb.deleted,
+      tomb.deletedAt,
     ],
   );
+  if (skipDraftsIfExists && result.rowCount === 0) return false;
   for (const draft of drafts) {
     await execute(
       `INSERT INTO writers_room_draft_versions

@@ -4,6 +4,8 @@ import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 const probe = vi.hoisted(() => vi.fn());
 const command = vi.hoisted(() => vi.fn());
 const patchedUv = vi.hoisted(() => vi.fn());
+const inspect = vi.hoisted(() => vi.fn());
+vi.mock('../../lib/hfCache.js', () => ({ inspectModelCache: (...args) => inspect(...args) }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: (...args) => probe(...args) }));
 vi.mock('../../lib/streamingSpawn.js', () => ({ runStreamingCommand: (...args) => command(...args) }));
 vi.mock('../../lib/pythonSetup.js', () => ({ resolvePatchedUv: (...args) => patchedUv(...args) }));
@@ -11,7 +13,7 @@ vi.mock('../../lib/platform.js', () => ({ isAppleSilicon: () => true }));
 vi.mock('node:os', async original => ({ ...await original(), release: () => '25.0.0' }));
 
 import { readFileSync } from 'node:fs';
-import { diagnoseFlux3Runtime, flux3Python, flux3LockPath, installFlux3Runtime } from './flux3Runtime.js';
+import { diagnoseFlux3Runtime, flux3Python, flux3LockPath, installFlux3Runtime, flux3Env, resolveFlux3Snapshot, flux3RenderArgs } from './flux3Runtime.js';
 let restore;
 let restoreArch;
 beforeEach(() => {
@@ -125,5 +127,24 @@ describe('FLUX.3 runtime lock', () => {
       .split('\n').filter(line => /^[a-z0-9]/i.test(line)).map(line => line.trim().split('=='));
     expect(direct.length).toBeGreaterThan(0);
     for (const [name, version] of direct) expect(locked[name], name).toBe(version);
+  });
+});
+
+describe('FLUX.3 pinned snapshot', () => {
+  it('forces HF_HUB_OFFLINE even when a caller env tries to enable the Hub', () => {
+    expect(flux3Env({ HF_HUB_OFFLINE: '0', HF_TOKEN: 'fixture-token' })).toMatchObject({ HF_HUB_OFFLINE: '1', HF_TOKEN: 'fixture-token' });
+  });
+  it('refuses an unpinned model and an uncached pinned revision, and returns the verified snapshot otherwise', async () => {
+    const model = { id: 'flux3-klein-q4', repo: 'mflux-community/example', revision: 'a'.repeat(40) };
+    await expect(resolveFlux3Snapshot({ ...model, revision: '' })).rejects.toMatchObject({ code: 'FLUX3_REVISION_UNPINNED' });
+    inspect.mockResolvedValueOnce({ cached: false, snapshotPath: null });
+    await expect(resolveFlux3Snapshot(model)).rejects.toMatchObject({ code: 'FLUX3_WEIGHTS_NOT_CACHED' });
+    inspect.mockResolvedValueOnce({ cached: true, snapshotPath: '/hf/snapshots/pinned' });
+    await expect(resolveFlux3Snapshot(model)).resolves.toBe('/hf/snapshots/pinned');
+    expect(inspect).toHaveBeenLastCalledWith(model.repo, { revision: model.revision });
+  });
+  it('requires the verified snapshot path for render args', () => {
+    expect(() => flux3RenderArgs({ model: { repo: 'mflux-community/example' }, prompt: 'p', width: 512, height: 512, steps: 4, seed: 1, outputPath: '/tmp/o.png' }))
+      .toThrow(/verified local snapshot/);
   });
 });

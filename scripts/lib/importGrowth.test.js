@@ -15,6 +15,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'url';
 import { staticImportClosure, staticImportSpecifiers, staticImportSpecifiersFromSource } from '../../server/lib/staticImportGraph.js';
 import {
+  BOOT_CLOSURE_GROWTH_LIMIT,
+  BOOT_ENTRY,
   EXISTING_SUITE_GROWTH_LIMIT,
   HEAVY_REGRESSION_BAND,
   HISTORICAL_PROXY_TOTALS,
@@ -128,6 +130,81 @@ describe('import-growth threshold (#6009, #6156)', () => {
     expect(report.existingSuiteShrink).toBeGreaterThan(0);
     expect(report.existingSuiteGrowth).toBeGreaterThan(10);
     expect(report.ok).toBe(false);
+  });
+
+  it('passes small boot-closure growth and fails regressions above BOOT_CLOSURE_GROWTH_LIMIT', () => {
+    expect(BOOT_ENTRY).toBe('server/index.js');
+    expect(BOOT_CLOSURE_GROWTH_LIMIT).toBe(15);
+
+    const makeBootTree = (count) => {
+      const files = {
+        'server/a.test.js': 'export const ok = true;\n',
+        'server/index.js': Array.from({ length: count }, (_, i) => `import './boot/m${i}.js';`).join('\n') + '\n',
+      };
+      for (let i = 0; i < count; i += 1) {
+        files[`server/boot/m${i}.js`] = `export const m${i} = ${i};\n`;
+      }
+      return measure(files);
+    };
+
+    const base = makeBootTree(2);
+    expect(base.testCount).toBe(1);
+    expect(base.total).toBe(1);
+    expect(base.bootClosure?.size).toBe(3);
+
+    const smallPass = compareImportGrowth(base, makeBootTree(2 + 3));
+    expect(smallPass.ok).toBe(true);
+    expect(smallPass.suiteOk).toBe(true);
+    expect(smallPass.bootClosure).toEqual({
+      ok: true,
+      limit: BOOT_CLOSURE_GROWTH_LIMIT,
+      base: 3,
+      head: 6,
+      delta: 3,
+      added: ['server/boot/m2.js', 'server/boot/m3.js', 'server/boot/m4.js'],
+    });
+
+    const atLimit = compareImportGrowth(base, makeBootTree(2 + BOOT_CLOSURE_GROWTH_LIMIT));
+    expect(atLimit.ok).toBe(true);
+    expect(atLimit.bootClosure.delta).toBe(BOOT_CLOSURE_GROWTH_LIMIT);
+
+    const regression = compareImportGrowth(base, makeBootTree(2 + BOOT_CLOSURE_GROWTH_LIMIT + 1));
+    expect(regression.ok).toBe(false);
+    expect(regression.suiteOk).toBe(true);
+    expect(regression.bootClosure.ok).toBe(false);
+    expect(regression.bootClosure.delta).toBe(BOOT_CLOSURE_GROWTH_LIMIT + 1);
+    expect(regression.bootClosure.added).toHaveLength(BOOT_CLOSURE_GROWTH_LIMIT + 1);
+    expect(regression.bootClosure.added).toContain('server/boot/m17.js');
+
+    const text = formatImportGrowthReport(regression);
+    expect(text).toContain('Boot closure (server/index.js): 3 → 19 (+16, limit +15).');
+    expect(text).toContain('server/boot/m17.js');
+    expect(text).toContain('BOOT_CLOSURE_GROWTH_LIMIT');
+    expect(text).not.toContain('EXISTING_SUITE_GROWTH_LIMIT');
+  });
+
+  it('treats boot-closure shrinkage and renames as non-growing', () => {
+    const base = measure({
+      'server/index.js': "import './a.js';\nimport './b.js';\n",
+      'server/a.js': 'export const a = 1;\n',
+      'server/b.js': 'export const b = 1;\n',
+    });
+    const shrunk = measure({
+      'server/index.js': "import './a.js';\n",
+      'server/a.js': 'export const a = 1;\n',
+    });
+    const shrinkReport = compareImportGrowth(base, shrunk);
+    expect(shrinkReport.ok).toBe(true);
+    expect(shrinkReport.bootClosure.delta).toBe(-1);
+
+    const renamed = measure({
+      'server/index.js': "import './a.js';\nimport './b2.js';\n",
+      'server/a.js': 'export const a = 1;\n',
+      'server/b2.js': 'export const b = 1;\n',
+    });
+    const renameReport = compareImportGrowth(base, renamed);
+    expect(renameReport.ok).toBe(true);
+    expect(renameReport.bootClosure.delta).toBe(0);
   });
 
   it('describes a failure as a proxy and names the suites and dependencies', () => {
@@ -323,6 +400,25 @@ describe('git base versus worktree head', () => {
     const report = compareImportGrowth(measureGitTree(root, sha), measureWorkingTree(root));
     expect(report.existingSuiteGrowth).toBe(0);
     expect(report.ok).toBe(true);
+  });
+
+  it('measures server/index.js boot-closure growth across git base and dirty worktree', () => {
+    const { root, write, commit } = repo();
+    write('server/index.js', "import './boot-a.js';\n");
+    write('server/boot-a.js', 'export const a = 1;\n');
+    const sha = commit();
+
+    const extraImports = Array.from({ length: 16 }, (_, i) => {
+      write(`server/extra-${i}.js`, `export const e = ${i};\n`);
+      return `import './extra-${i}.js';`;
+    }).join('\n');
+    write('server/index.js', `import './boot-a.js';\n${extraImports}\n`);
+
+    const report = compareImportGrowth(measureGitTree(root, sha), measureWorkingTree(root));
+    expect(report.ok).toBe(false);
+    expect(report.bootClosure.ok).toBe(false);
+    expect(report.bootClosure.delta).toBe(16);
+    expect(report.bootClosure.added).toContain('server/extra-15.js');
   });
 });
 

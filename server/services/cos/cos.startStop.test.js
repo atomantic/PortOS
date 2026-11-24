@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { registerLateBoundService } from '../../lib/lateBoundServices.js';
+
+registerLateBoundService('persistentMindAdapter', () => import('../persistent/persistentMindAdapter.js'));
 
 const scheduled = new Set();
 const handlers = new Map();
@@ -99,7 +102,7 @@ vi.mock('../prWatcher.js', () => ({
   cancelHandoffFollowUps: () => { handoffFollowUp.gate = null; },
 }));
 
-const { start, stop, getStatus, resumeDeferredCompletions } = await import('./cos.js');
+const { start, stop, init, getStatus, resumeDeferredCompletions } = await import('./cos.js');
 // The daemon reaches agent recovery only through the handlers bootHooks.js registers at boot.
 (await import('../bootHookRegistry.js')).registerCosOrphanRecoveryHandlers({
   cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
@@ -109,8 +112,8 @@ const { cosEvents } = await import('./cosEvents.js');
 const { isDaemonRunning } = await import('./cosState.js');
 
 const cosEventIds = () => [...scheduled].filter(id => id.startsWith('cos-') || id.startsWith('job:'));
-const waitFor = async (predicate) => {
-  for (let i = 0; i < 200 && !predicate(); i++) await new Promise(r => setImmediate(r));
+const waitFor = async (predicate, spins = 200) => {
+  for (let i = 0; i < spins && !predicate(); i++) await new Promise(r => setImmediate(r));
   expect(predicate()).toBe(true);
 };
 
@@ -246,5 +249,35 @@ describe('CoS daemon start/stop lifecycle (#11860)', () => {
     await expect(restarting).resolves.toEqual({ success: true });
     expect(isDaemonRunning()).toBe(true);
     expect(cosEventIds()).toEqual(expect.arrayContaining(['cos-health-check', 'cos-pending-merge-sweep']));
+  });
+
+  it('concurrent start() callers share one boot instead of booting the daemon twice', async () => {
+    const calls = Promise.all([start(), start()]);
+    await waitFor(() => typeof releaseRecovery === 'function');
+    releaseRecovery();
+    const [a, b] = await calls;
+    expect(a).toEqual({ success: true });
+    expect(b).toEqual({ success: true });
+    expect(boot.cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it('init() resumes the daemon when the previous process left running=true on disk', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    persisted = { ...persisted, running: true, config: { ...persisted.config, alwaysOn: false, autoStart: false } };
+    expect(isDaemonRunning()).toBe(false);
+    const initializing = init();
+    // init() dynamically imports real listener modules before reaching start().
+    await waitFor(() => typeof releaseRecovery === 'function', 20000);
+    releaseRecovery();
+    await initializing;
+    expect(isDaemonRunning()).toBe(true);
+    expect(boot.cleanupOrphanedAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it('init() leaves a stopped daemon stopped when nothing asks for auto-start', async () => {
+    persisted = { ...persisted, running: false, config: { ...persisted.config, alwaysOn: false, autoStart: false } };
+    await init();
+    expect(isDaemonRunning()).toBe(false);
+    expect(boot.cleanupOrphanedAgents).not.toHaveBeenCalled();
   });
 });

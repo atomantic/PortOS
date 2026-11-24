@@ -1,11 +1,12 @@
-import { readFile, writeFile, mkdir, access, rename } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, writeFile, mkdir, access, chmod, lstat, readdir, rm } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 // Dependency-light shared module (node builtins + pure arg builder only), so
 // importing it from this standalone process doesn't pull in the AI toolkit.
 // Lets the autofixer honor the user's configured CLI provider/model instead
 // of hardcoding `claude -p`.
 import { runCliProviderPrompt } from '../server/lib/cliProviderRun.js';
 import { signalDetachedGroups } from '../server/lib/credentialBootstrap.js';
+import { scrubSecretTokens } from '../server/lib/secretText.js';
 import { agentGuardEnv } from '../server/lib/agentGuard/index.js';
 import {
   sanitizeChildEnv,
@@ -23,7 +24,8 @@ import {
   revertDiffFromLive,
   runVerifyCommand,
 } from './sandbox.js';
-import { createStagedFixStore } from './stagedFixes.js';
+import { createStagedFixStore, isAutofixerSessionId, buildAutofixerSessionId, processNameFromSessionId } from './stagedFixes.js';
+import { writeHistoryFile, writeHistoryJson } from './historyFiles.js';
 import { startAutofixerUi } from './ui.js';
 import { execPm2, listProcessesStrict, DATA_DIR, AUTOFIXER_DIR, INDEX_FILE, loadApps } from './shared.js';
 
@@ -40,6 +42,7 @@ const stagedFixes = createStagedFixStore({ root: AUTOFIXER_DIR, loadApps, execPm
 const PROVIDERS_FILE = join(DATA_DIR, 'providers.json');
 const SETTINGS_FILE = join(DATA_DIR, 'settings.json');
 const SESSIONS_DIR = join(AUTOFIXER_DIR, 'sessions');
+const SESSION_HISTORY_LIMIT = 100;
 // Disposable worktrees for isolated repair runs (gitignored under data/).
 const WORKTREES_DIR = join(AUTOFIXER_DIR, 'worktrees');
 // Bound the agent-proposed patch before it can reach the live checkout.
@@ -66,7 +69,7 @@ async function readJsonSafe(file, fallback) {
   try {
     return JSON.parse(data);
   } catch (err) {
-    console.error(`❌ [Autofixer] Corrupt JSON in ${file}: ${err.message}`);
+    console.error(`❌ [Autofixer] Corrupt JSON in ${basename(file)} (${err.code || 'parse error'})`);
     return fallback;
   }
 }
@@ -129,7 +132,7 @@ async function sweepInterruptedRepairs() {
     // partial output; a second empty write would destroy that evidence.
     const alreadyRecorded = await access(join(SESSIONS_DIR, sessionId, 'metadata.json')).then(() => true, () => false);
     if (alreadyRecorded) continue;
-    const processName = sessionId.match(/^autofixer_(.+)_\d+_[a-z0-9]+$/)?.[1] || 'unknown';
+    const processName = processNameFromSessionId(sessionId) || 'unknown';
     const now = new Date().toISOString();
     await recordInterrupted({ sessionId, processName, startTime: now }).catch((err) => {
       console.error(`❌ [Autofixer] Could not record interrupted session ${sessionId}: ${err.message}`);
@@ -139,9 +142,14 @@ async function sweepInterruptedRepairs() {
 }
 
 async function ensureHistoryDir() {
-  await mkdir(SESSIONS_DIR, { recursive: true });
-  await access(INDEX_FILE).catch(async () => {
-    await writeFile(INDEX_FILE, JSON.stringify([], null, 2));
+  await mkdir(SESSIONS_DIR, { recursive: true, mode: 0o700 });
+  // Restrict access to existing session artifacts and abandoned temp files too.
+  await chmod(AUTOFIXER_DIR, 0o700);
+  await chmod(SESSIONS_DIR, 0o700);
+  await chmod(INDEX_FILE, 0o600).catch(async error => {
+    if (error.code !== 'ENOENT') throw error;
+    await writeFile(INDEX_FILE, '[]', { flag: 'wx', mode: 0o600 });
+    await chmod(INDEX_FILE, 0o600);
   });
 }
 
@@ -153,14 +161,35 @@ async function loadIndex() {
   if (!Array.isArray(index)) {
     throw new Error('Autofixer history index must be an array');
   }
+  if (index.some(entry => typeof entry?.sessionId !== 'string')) {
+    throw new Error('Autofixer history index contains an invalid session entry');
+  }
   return index;
 }
 
-async function saveIndex(index) {
-  // Temp + rename: a signal mid-write must not truncate the live index.
-  const tmp = `${INDEX_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(index, null, 2));
-  await rename(tmp, INDEX_FILE);
+async function canPruneSession(sessionId) {
+  return stagedFixes.canPrune(sessionId).catch(() => {
+    console.error('❌ [Autofixer] Could not determine a session’s staged disposition during cleanup');
+    return false;
+  });
+}
+
+async function removeSessionDirectory(sessionId) {
+  await rm(join(SESSIONS_DIR, sessionId), { recursive: true, force: true }).catch(() => {
+    console.error('❌ [Autofixer] Could not remove a retired session directory');
+  });
+}
+
+async function sweepOrphanedSessions() {
+  const indexed = new Set((await loadIndex()).map(entry => entry.sessionId));
+  if (!(await lstat(SESSIONS_DIR)).isDirectory()) return;
+  // Remove one session at a time so a legacy backlog cannot fan out I/O.
+  for (const entry of await readdir(SESSIONS_DIR, { withFileTypes: true })) {
+    if (entry.isDirectory() && isAutofixerSessionId(entry.name)
+      && !indexed.has(entry.name) && await canPruneSession(entry.name)) {
+      await removeSessionDirectory(entry.name);
+    }
+  }
 }
 
 function saveSession(sessionId, prompt, output, metadata, patch) {
@@ -171,21 +200,21 @@ function saveSession(sessionId, prompt, output, metadata, patch) {
 
 async function writeSession(sessionId, prompt, output, metadata, patch) {
   const sessionDir = join(SESSIONS_DIR, sessionId);
-  await mkdir(sessionDir, { recursive: true });
+  await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+  await chmod(sessionDir, 0o700);
 
-  await writeFile(join(sessionDir, 'prompt.txt'), prompt);
-  await writeFile(join(sessionDir, 'output.txt'), output);
+  const scrubbedOutput = scrubSecretTokens(output);
+  await writeHistoryFile(join(sessionDir, 'prompt.txt'), prompt);
+  await writeHistoryFile(join(sessionDir, 'output.txt'), scrubbedOutput);
   // The staged/applied patch is the human-reviewable artifact of the fix — keep
   // it beside the session so a user can inspect (and, when auto-promote is off,
   // manually apply) exactly what the agent proposed.
   if (typeof patch === 'string' && patch.trim().length > 0) {
-    await writeFile(join(sessionDir, 'fix.patch'), patch);
+    await writeHistoryFile(join(sessionDir, 'fix.patch'), patch);
   }
 
   // Publish metadata only once the patch is readable.
-  const metadataPath = join(sessionDir, 'metadata.json');
-  await writeFile(`${metadataPath}.tmp`, JSON.stringify(metadata, null, 2));
-  await rename(`${metadataPath}.tmp`, metadataPath);
+  await writeHistoryJson(join(sessionDir, 'metadata.json'), metadata);
 
   const index = await loadIndex();
   const indexEntry = {
@@ -198,19 +227,35 @@ async function writeSession(sessionId, prompt, output, metadata, patch) {
     staged: metadata.staged || false,
     processName: metadata.processName,
     appName: metadata.appName,
-    promptPreview: prompt.substring(0, 200),
-    outputSize: output.length
+    outputSize: scrubbedOutput.length
   };
 
   // One row per session: a re-save replaces the earlier row instead of duplicating it.
   const existing = index.findIndex(entry => entry.sessionId === sessionId);
   if (existing >= 0) index.splice(existing, 1);
   index.unshift(indexEntry);
-  if (index.length > 100) {
-    index.splice(100);
+  const evicted = new Set();
+  if (index.length > SESSION_HISTORY_LIMIT) {
+    const overflow = index.splice(SESSION_HISTORY_LIMIT);
+    // Metadata reflects manual apply/discard; the staged flag in the index
+    // records only the original repair outcome.
+    for (const entry of overflow) {
+      if (!isAutofixerSessionId(entry.sessionId)) continue;
+      if (!await canPruneSession(entry.sessionId)) {
+        index.push(entry);
+      } else {
+        evicted.add(entry.sessionId);
+      }
+    }
   }
 
-  await saveIndex(index);
+  await writeHistoryJson(INDEX_FILE, index.map(({ promptPreview, ...entry }) => entry));
+  if (evicted.size && (await lstat(SESSIONS_DIR)).isDirectory()) {
+    const retained = new Set(index.map(entry => entry.sessionId));
+    for (const id of evicted) {
+      if (!retained.has(id) && await canPruneSession(id)) await removeSessionDirectory(id);
+    }
+  }
 }
 
 async function getProcessLogs(processName) {
@@ -249,7 +294,7 @@ function markAsFixed(processName) {
 //      the diff to the live checkout and restart the process; otherwise the
 //      validated patch is staged beside the session for manual review.
 async function fixProcess(processName, app, errorLogs, outputLogs) {
-  const sessionId = `autofixer_${processName}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const sessionId = buildAutofixerSessionId(processName);
   const startTime = new Date().toISOString();
 
   console.log(`🔧 [Autofixer] Starting isolated fix for ${processName}: ${sessionId}`);
@@ -320,7 +365,7 @@ async function fixProcess(processName, app, errorLogs, outputLogs) {
   // ISOLATION REQUIREMENT: no git checkout ⇒ no rollback boundary ⇒ we refuse
   // to run an autonomous, file-editing agent driven by untrusted logs.
   if (!(await isGitRepo(app.repoPath))) {
-    const reason = `refusing autonomous repair: ${app.repoPath} is not a git checkout (no rollback boundary)`;
+    const reason = `refusing autonomous repair for ${processName}: app checkout is not a git repository (no rollback boundary)`;
     console.error(`🛑 [Autofixer] ${reason}`);
     return finalize({ success: false, exitCode: -1, error: reason, extra: { isolated: false } });
   }
@@ -550,6 +595,10 @@ async function main() {
   if (shuttingDown) return;
   await sweepInterruptedRepairs().catch((err) => {
     console.error(`❌ [Autofixer] Worktree sweep failed: ${err.message}`);
+  });
+  if (shuttingDown) return;
+  await sweepOrphanedSessions().catch(() => {
+    console.error('❌ [Autofixer] Could not sweep orphaned session directories');
   });
 
   if (shuttingDown) return;

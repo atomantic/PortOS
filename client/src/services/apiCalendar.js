@@ -15,7 +15,7 @@ export const getCalendarEvents = (params = {}, options = {}) => {
   return request(`/calendar/events${str ? `?${str}` : ''}`, options);
 };
 export const getCalendarAgenda = (options = {}) => request('/calendar/agenda', options);
-export const getCalendarTokenStatus = () => request('/calendar/debug/token-status');
+export const getCalendarTokenStatus = (options = {}) => request('/calendar/debug/token-status', options);
 export const testCalendarToken = (provider) => request('/calendar/debug/test-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const clearCalendarToken = (provider) => request('/calendar/debug/clear-token', { method: 'POST', body: JSON.stringify({ provider }) });
 export const updateSubcalendars = (accountId, data, options = {}) => request(`/calendar/accounts/${accountId}/subcalendars`, { method: 'PUT', body: JSON.stringify(data), ...options });
@@ -25,7 +25,7 @@ export const getGoogleAuthStatus = (options = {}) => request('/calendar/google/a
 export const saveGoogleAuthCredentials = (data, options = {}) => request('/calendar/google/auth/credentials', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getGoogleAuthUrl = ({ returnTo, ...options } = {}) => {
   const query = returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : '';
-  return request(`/calendar/google/auth/url${query}`, options);
+  return request(`/calendar/google/auth/url${query}`, { method: 'POST', ...options });
 };
 export const clearGoogleAuth = () => request('/calendar/google/auth/clear', { method: 'POST' });
 export const apiSyncGoogleCalendar = (accountId, options = {}) => request(`/calendar/sync/${accountId}/api`, { method: 'POST', ...options });

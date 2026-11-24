@@ -9,6 +9,10 @@ const mocks = {
   getHttpsEnabledAtBoot: vi.fn(),
 };
 
+vi.mock('../lib/fileCore.js', () => ({
+  atomicWrite: (...args) => mocks.atomicWrite(...args),
+}));
+
 vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (...parts) => `/tmp/${parts.join('/')}`,
   ensureDir: (...args) => mocks.ensureDir(...args),
@@ -28,7 +32,7 @@ vi.mock('../lib/httpsState.js', () => ({
   getHttpsEnabledAtBoot: (...args) => mocks.getHttpsEnabledAtBoot(...args),
 }));
 
-import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, handleCallback, SPOTIFY_SCOPES } from './spotifyAuth.js';
+import { isTokenExpired, withExpiry, getRedirectUri, getAuthStatus, getAccessToken, getAuthUrl, handleCallback, SPOTIFY_SCOPES } from './spotifyAuth.js';
 
 describe('spotifyAuth pure helpers', () => {
   describe('withExpiry', () => {
@@ -247,22 +251,28 @@ describe('handleCallback', () => {
     ]);
   });
 
-  it('single-flights and replays a successful callback without reusing the code', async () => {
+  it('refuses a replay during and after the first callback', async () => {
     mocks.tryReadFile.mockImplementation(async (path) => (
       String(path).endsWith('credentials.json')
         ? JSON.stringify({ clientId: 'cid', clientSecret: 'secret' })
         : null
     ));
+    const url = new URL((await getAuthUrl({ origin: 'https://example.test' })).url);
+    const state = url.searchParams.get('state');
     let resolveFetch;
     mocks.fetchWithTimeout.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
 
-    const first = handleCallback('one-time-code');
-    const second = handleCallback('one-time-code');
-    while (mocks.fetchWithTimeout.mock.calls.length === 0) await new Promise((resolve) => setTimeout(resolve, 0));
+    const callback = { code: 'one-time-code', state };
+    const first = handleCallback(callback);
+    const refusal = { error: expect.stringMatching(/OAuth state/) };
+    await expect(handleCallback(callback)).resolves.toEqual(refusal);
     resolveFetch({ ok: true, json: async () => ({ access_token: 'fresh', refresh_token: 'refresh', expires_in: 3600 }) });
 
-    await expect(Promise.all([first, second])).resolves.toEqual([{ success: true }, { success: true, duplicate: true }]);
-    await expect(handleCallback('one-time-code')).resolves.toMatchObject({ success: true, duplicate: true });
+    await expect(first).resolves.toEqual({ success: true });
+    await expect(handleCallback(callback)).resolves.toEqual(refusal);
+    await expect(handleCallback({ ...callback, state: 'z'.repeat(32) })).resolves.toEqual(refusal);
     expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
+    const [, options] = mocks.fetchWithTimeout.mock.calls[0];
+    expect(new URLSearchParams(options.body).get('redirect_uri')).toBe(url.searchParams.get('redirect_uri'));
   });
 });

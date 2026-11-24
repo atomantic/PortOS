@@ -40,6 +40,7 @@ vi.mock('../services/creativeDirector/planAdvance.js', () => ({
 vi.mock('../services/creative/toolRegistry.js', () => ({
   getAllCreativeToolMetadata: vi.fn(() => [{ id: 'universe_create', costClass: 'free', longRunning: false, destructive: false }]),
   getCommissionPlanError: vi.fn(() => null),
+  getProjectBudgetStatus: vi.fn(async () => ({ withinBudget: true, exceeded: null, budgetCap: null, used: 0 })),
 }));
 vi.mock('../lib/domainAutonomy.js', () => ({ getCreativeAutonomyMode: vi.fn(() => 'dry-run') }));
 vi.mock('../services/domainUsage.js', () => ({ getDomainBudgetStatus: vi.fn(async () => ({ withinBudget: false, exceeded: 'actions' })) }));
@@ -820,6 +821,50 @@ describe('creativeDirector routes', () => {
       expect(r.body.tools).toEqual([{ id: 'universe_create', costClass: 'free', longRunning: false, destructive: false }]);
       expect(r.body.mode).toBe('dry-run');
       expect(r.body.budget).toEqual({ withinBudget: false, exceeded: 'actions' });
+    });
+
+    it('reports project-budget exhaustion when ?projectId has a saturated budgetCap', async () => {
+      const domainUsage = await import('../services/domainUsage.js');
+      domainUsage.getDomainBudgetStatus.mockResolvedValueOnce({ withinBudget: true, exceeded: null });
+      cdService.getProject.mockResolvedValueOnce({
+        id: 'cd-1',
+        directive: { goal: 'Make a noir series', constraints: { budgetCap: 2 } },
+      });
+      creativeTools.getProjectBudgetStatus.mockResolvedValueOnce({
+        withinBudget: false,
+        exceeded: 'actions',
+        budgetCap: 2,
+        used: 2,
+      });
+
+      const r = await request(app).get('/api/creative-director/tools?projectId=cd-1');
+      expect(r.status).toBe(200);
+      expect(creativeTools.getProjectBudgetStatus).toHaveBeenCalledWith('cd-1', 2);
+      expect(r.body.budget).toEqual({
+        withinBudget: false,
+        exceeded: 'actions',
+        reason: 'project-budget',
+        project: { withinBudget: false, exceeded: 'actions', budgetCap: 2, used: 2 },
+      });
+    });
+
+    it('defers to shared cos budget when ?projectId has budgetCap = null', async () => {
+      const domainUsage = await import('../services/domainUsage.js');
+      domainUsage.getDomainBudgetStatus.mockResolvedValueOnce({ withinBudget: true, exceeded: null });
+      cdService.getProject.mockResolvedValueOnce({
+        id: 'cd-1',
+        directive: { goal: 'Make a noir series', constraints: { budgetCap: null } },
+      });
+
+      const r = await request(app).get('/api/creative-director/tools?projectId=cd-1');
+      expect(r.status).toBe(200);
+      expect(creativeTools.getProjectBudgetStatus).not.toHaveBeenCalled();
+      expect(r.body.budget).toEqual({ withinBudget: true, exceeded: null });
+    });
+
+    it('400s on a malformed array projectId query parameter', async () => {
+      const r = await request(app).get('/api/creative-director/tools?projectId=a&projectId=b');
+      expect(r.status).toBe(400);
     });
   });
 

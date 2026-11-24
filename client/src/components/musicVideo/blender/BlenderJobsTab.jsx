@@ -5,7 +5,7 @@ import Pill from '../../ui/Pill';
 import ProgressBar from '../../ui/ProgressBar';
 import { useTimeTick } from '../../../hooks/useTimeTick.js';
 import {
-  BLENDER_JOB_PARAM, BLENDER_JOB_STATUS_LABELS, blenderJobPercent, blenderJobTitle, isBlenderJobActive, sortBlenderJobs,
+  BLENDER_JOB_PARAM, blenderJobPercent, blenderJobStatusLabel, blenderJobTitle, isBlenderJobActive, sortBlenderJobs,
 } from '../../../lib/musicVideoBlender.js';
 import { useFilmApi } from './FilmApiContext.jsx';
 import { formatCount, formatDurationMs } from '../../../utils/formatters.js';
@@ -68,13 +68,14 @@ function JobLog({ projectId, job }) {
 }
 
 /**
- * Blender jobs for this film: the ones at work and waiting, then recently
+ * Blender jobs for this film (or, through the model page's adapter, this model's builds; `emptyText`
+ * replaces the film's empty note): the ones at work and waiting, then recently
  * finished ones, each with its progress, seconds per frame and time taken, a
  * Cancel while it can still be stopped, and its log. The job whose log is
  * open is `?bjob=<jobId>`. Jobs live in the server's memory: a restart
  * clears the list, and finished frames stay on disk.
  */
-export default function BlenderJobsTab({ blender }) {
+export default function BlenderJobsTab({ blender, emptyText = null }) {
   const { state, pending, projectId } = blender;
   const [searchParams, setSearchParams] = useSearchParams();
   const jobs = sortBlenderJobs(state.jobs);
@@ -88,6 +89,7 @@ export default function BlenderJobsTab({ blender }) {
   }, { replace: true });
 
   if (!jobs.length) {
+    if (emptyText) return <p className="text-xs text-port-text-muted">{emptyText}</p>;
     // The list lives in the server's memory, so "none" may only mean "none since it started".
     return (
       <p className="text-xs text-port-text-muted">
@@ -114,7 +116,7 @@ export default function BlenderJobsTab({ blender }) {
             <li key={job.id} className={`min-w-0 space-y-1 px-2 py-1.5 ${selected?.id === job.id ? 'bg-port-accent/10' : ''}`}>
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 <span className="min-w-0 break-words text-sm">{blenderJobTitle(job)}</span>
-                <Pill size="xs" tone={STATUS_TONES[job.status] || 'muted'}>{BLENDER_JOB_STATUS_LABELS[job.status] || job.status}</Pill>
+                <Pill size="xs" tone={STATUS_TONES[job.status] || 'muted'}>{blenderJobStatusLabel(job)}</Pill>
                 <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 text-port-text-muted">
                   {/* A render counts frames; a cut reports how far its assembly is. */}
                   {job.kind === 'render' && job.total > 0 && Number.isFinite(job.index) && <span>frame {formatCount(job.index)} of {formatCount(job.total)}</span>}
@@ -142,7 +144,7 @@ export default function BlenderJobsTab({ blender }) {
           );
         })}
       </ul>
-      {requested && !selected && <p role="status" className="text-xs text-port-warning">That job is no longer in the list. Its log may still be in the workspace under renders/logs.</p>}
+      {requested && !selected && <p role="status" className="text-xs text-port-warning">That job is no longer in the list. {emptyText ? '' : ' Its log may still be in the workspace under renders/logs.'}</p>}
       {selected && <JobLog key={selected.id} projectId={projectId} job={selected} />}
     </div>
   );

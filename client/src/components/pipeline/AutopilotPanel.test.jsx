@@ -35,8 +35,9 @@ vi.mock('../ui/Toast', () => ({
 // test simulate a stale terminal frame left over from a previous run.
 let sseLatest = null;
 let sseFrames = [];
+let sseClosed = false;
 vi.mock('../../hooks/usePipelineProgress', () => ({
-  usePipelineProgress: () => ({ latest: sseLatest, frames: sseFrames }),
+  usePipelineProgress: () => ({ latest: sseLatest, frames: sseFrames, closed: sseClosed }),
 }));
 
 import {
@@ -63,6 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   sseLatest = null;
   sseFrames = [];
+  sseClosed = false;
   getPipelineAutopilotStatus.mockResolvedValue({ autopilot: null, active: false });
   getPipelineAutopilotModelMetrics.mockResolvedValue({ evidenceRuns: 0, minimumQualitySamples: 2, metrics: [], recommendations: {} });
   getPipelineSeries.mockResolvedValue(null);
@@ -80,6 +82,68 @@ beforeEach(() => {
 });
 
 describe('AutopilotPanel', () => {
+  const rerenderSeries = (view, id) => view.rerender(
+    <MemoryRouter>
+      <AutopilotPanel series={{ id, targetFormat: 'comic' }} onSeriesUpdate={vi.fn()} onIssuesUpdate={vi.fn()} />
+    </MemoryRouter>,
+  );
+
+  it('drops a live run\'s controls when switching to an idle series', async () => {
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: true, start: { runId: 'rA', mode: 'execute' } });
+    const view = renderPanel({ id: 'sA', targetFormat: 'comic' });
+    await screen.findByRole('button', { name: /pause safely/i });
+    getPipelineAutopilotStatus.mockResolvedValue({ active: false });
+    rerenderSeries(view, 'sB');
+    await waitFor(() => expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
+  });
+
+  it('drops a dry-run plan when switching to another series', async () => {
+    startPipelineAutopilot.mockResolvedValue({ runId: 'dry1', mode: 'dry-run' });
+    const view = renderPanel({ id: 'sA', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalled());
+    sseLatest = { type: 'complete', runId: 'dry1', dryRun: true, plan: [{ label: 'plan-step-a' }] };
+    sseFrames = [sseLatest];
+    rerenderSeries(view, 'sA');
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Autopilot plan ready'));
+    sseLatest = null;
+    sseFrames = [];
+    rerenderSeries(view, 'sB');
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledWith('sB', { silent: true }));
+    expect(screen.queryByText(/dry-run/i)).not.toBeInTheDocument();
+  });
+
+  it('recovers from a stream that closes without a terminal frame', async () => {
+    getPipelineAutopilotStatus.mockResolvedValueOnce({ active: true, start: { runId: 'rA', mode: 'execute' } });
+    const onSeriesUpdate = vi.fn();
+    const series = { id: 'sA', targetFormat: 'comic' };
+    getPipelineSeries.mockResolvedValue({ id: 'sA', fresh: true });
+    const view = renderPanel(series, { onSeriesUpdate });
+    await screen.findByRole('button', { name: /pause safely/i });
+    getPipelineAutopilotStatus.mockResolvedValue({ active: false });
+    sseClosed = true;
+    view.rerender(<MemoryRouter><AutopilotPanel series={series} onSeriesUpdate={onSeriesUpdate} onIssuesUpdate={vi.fn()} /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument());
+    await waitFor(() => expect(onSeriesUpdate).toHaveBeenCalledWith({ id: 'sA', fresh: true }));
+    expect(listPipelineIssues).toHaveBeenCalledWith('sA', { silent: true });
+  });
+
+  it('does not activate series B when a start for series A resolves after the switch', async () => {
+    let resolveStart;
+    startPipelineAutopilot.mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
+    const view = renderPanel({ id: 'sA', targetFormat: 'comic' });
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /run autopilot/i }));
+    await waitFor(() => expect(startPipelineAutopilot).toHaveBeenCalledWith('sA', expect.anything(), { silent: true }));
+    rerenderSeries(view, 'sB');
+    await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalledWith('sB', { silent: true }));
+    await act(async () => resolveStart({ runId: 'rA', mode: 'execute' }));
+    expect(screen.getByRole('button', { name: /run autopilot/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /pause safely/i })).not.toBeInTheDocument();
+  });
+
   it('starts an autopilot run with the default options', async () => {
     renderPanel({ id: 's1', targetFormat: 'comic' });
     await waitFor(() => expect(getPipelineAutopilotStatus).toHaveBeenCalled());

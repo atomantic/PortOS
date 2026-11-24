@@ -18,6 +18,7 @@ import {
   CheckCheck,
   Circle
 } from 'lucide-react';
+import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
@@ -91,7 +92,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleRemoveFeed = async (id) => {
-    await removeFeed(id).catch(() => null);
+    const ok = await removeFeed(id).then(() => true, () => false);
+    if (!ok) return;
     toast.success('Feed removed');
     setConfirmingDeleteId(null);
     setFeeds(prev => prev.filter(f => f.id !== id));
@@ -121,7 +123,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkRead = async (itemId) => {
-    await markFeedItemRead(itemId).catch(() => null);
+    const ok = await markFeedItemRead(itemId).then(() => true, () => false);
+    if (!ok) return;
     // Track which feed to update before modifying items state
     setItems(prev => {
       const item = prev.find(i => i.id === itemId);
@@ -135,7 +138,8 @@ export default function FeedsTab({ onRefresh }) {
   };
 
   const handleMarkAllRead = async () => {
-    await markAllFeedItemsRead(selectedFeedId).catch(() => null);
+    const ok = await markAllFeedItemsRead(selectedFeedId).then(() => true, () => false);
+    if (!ok) return;
     setItems(prev => prev.map(i => {
       if (!selectedFeedId || i.feedId === selectedFeedId) return { ...i, read: true };
       return i;
@@ -197,7 +201,7 @@ export default function FeedsTab({ onRefresh }) {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setSelectedFeedId(null)}
-            className={`px-3 py-1.5 text-sm rounded-lg transition-colors min-h-[36px] ${
+            className={`px-3 py-1.5 text-sm rounded-lg transition-colors min-h-[44px] pointer-fine:sm:min-h-[36px] ${
               !selectedFeedId
                 ? 'bg-port-accent/20 text-port-accent border border-port-accent/30'
                 : 'bg-port-card text-gray-400 hover:text-white border border-port-border'
@@ -210,7 +214,7 @@ export default function FeedsTab({ onRefresh }) {
           </button>
           <button
             onClick={() => setUnreadOnly(!unreadOnly)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors min-h-[36px] ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors min-h-[44px] pointer-fine:sm:min-h-[36px] ${
               unreadOnly
                 ? 'bg-port-warning/20 text-port-warning border border-port-warning/30'
                 : 'bg-port-card text-gray-400 hover:text-white border border-port-border'
@@ -224,7 +228,7 @@ export default function FeedsTab({ onRefresh }) {
           {items.some(i => !i.read) && (
             <button
               onClick={handleMarkAllRead}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors min-h-[36px]"
+              className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-0"
               title="Mark all as read"
             >
               <CheckCheck size={14} />
@@ -235,7 +239,7 @@ export default function FeedsTab({ onRefresh }) {
             <button
               onClick={handleRefreshAll}
               disabled={refreshing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors disabled:opacity-50 min-h-[36px]"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded-lg transition-colors disabled:opacity-50 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-0 justify-center"
               title="Refresh all feeds"
             >
               <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
@@ -294,25 +298,14 @@ export default function FeedsTab({ onRefresh }) {
                   </button>
                 </div>
 
-                {/* Delete confirmation */}
                 {confirmingDeleteId === feed.id && (
-                  <div className="absolute left-0 top-full z-10 mt-1 p-2 bg-port-card border border-port-error/30 rounded-lg shadow-lg min-w-[200px]">
-                    <p className="text-xs text-white mb-2">Remove this feed?</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleRemoveFeed(feed.id)}
-                        className="px-2 py-1 text-xs bg-port-error text-white rounded hover:bg-port-error/80"
-                      >
-                        Remove
-                      </button>
-                      <button
-                        onClick={() => setConfirmingDeleteId(null)}
-                        className="px-2 py-1 text-xs text-gray-400 hover:text-white"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
+                  <InlineConfirmRow
+                    className="mt-1"
+                    question="Remove this feed?"
+                    confirmText="Remove"
+                    onConfirm={() => handleRemoveFeed(feed.id)}
+                    onCancel={() => setConfirmingDeleteId(null)}
+                  />
                 )}
               </div>
             ))}

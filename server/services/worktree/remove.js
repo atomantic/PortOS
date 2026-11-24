@@ -33,7 +33,7 @@ export function deleteCompletedLocalBranch(repoPath, branch, expectedHead, { bef
   let callbackError;
   return queueWorktreeCreate(repoPath, async (commonDir) => {
     if (PROTECTED_BRANCHES.includes(branch)) return false;
-    const { getDefaultBranch } = await import('../git.js');
+    const { getDefaultBranch } = await import('../git/status.js');
     const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
     if (!defaultBranch || branch === defaultBranch) return false;
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return false;
@@ -304,7 +304,9 @@ async function cleanupWorktreeBranch(sourceWorkspace, branchName, {
       sourceWorkspace, { ignoreExitCode: true },
     ).catch(() => null);
     if (localRef?.exitCode === 1) return;
-    const { getDefaultBranch, hasBranchMergeEvidence } = await import('../git.js');
+    const [{ getDefaultBranch }, { hasBranchMergeEvidence }] = await Promise.all([
+      import('../git/status.js'), import('../git/branchEvidence.js'),
+    ]);
     const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
     // A caller holding the claim-ownership lock passes a target it resolved earlier:
     // the fetch must not run under that lock (#12764), and merge evidence against a
@@ -423,7 +425,7 @@ export async function removeWorktreeNow(agentId, sourceWorkspace, branchName, op
   };
   // Fetched between sections, only once a removal needs it, and reused by every
   // check under the lock: a branch merged into origin/<default> stays merged.
-  const { getDefaultBranch } = await import('../git.js');
+  const { getDefaultBranch } = await import('../git/status.js');
   let mergeTarget = null;
   const resolveTarget = async () => {
     if (mergeTarget || await detachedCheckout()) return;
@@ -539,7 +541,7 @@ export async function removeWorktreeNow(agentId, sourceWorkspace, branchName, op
  * (real changes to preserve), or `{}` (ready for removal).
  */
 async function inspectWorktreeForRemoval({ agentId, sourceWorkspace, worktreePath, branchName, options, warnings, ignoredPaths, ownershipHold, detachedCheckout, cleanupBranch, held }) {
-  const { getDefaultBranch } = await import('../git.js');
+  const { getDefaultBranch } = await import('../git/status.js');
   const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
   const protectedReason = PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch
     ? 'protected-branch' : !defaultBranch ? 'default-branch-unavailable' : null;
@@ -653,7 +655,7 @@ async function mergeAgentBranchIntoDefault({ sourceWorkspace, branchName, warnin
 
   // Defense-in-depth: NEVER merge the agent branch into a non-default branch.
   // See shouldRefuseDefaultBranchMerge for the rationale.
-  const { getDefaultBranch } = await import('../git.js');
+  const { getDefaultBranch } = await import('../git/status.js');
   const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
   if (shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch)) {
     console.log(`🌳 Refusing auto-merge of ${branchName} into '${currentBranch}' (default branch is '${defaultBranch || 'unknown'}'). Use \`gh pr merge\` for non-default targets.`);
@@ -700,7 +702,9 @@ async function removalCompletionHold({ ownershipHold, sourceWorkspace, branchNam
   const { readBranchCompletionHold } = await import('../branchCompletionPolicy.js');
   const policy = await readBranchCompletionHold({ repoPath: sourceWorkspace, branch: branchName, retirement: true });
   if (policy) return policy;
-  const { getDefaultBranch, hasBranchMergeEvidence } = await import('../git.js');
+  const [{ getDefaultBranch }, { hasBranchMergeEvidence }] = await Promise.all([
+    import('../git/status.js'), import('../git/branchEvidence.js'),
+  ]);
   const defaultBranch = await getDefaultBranch(sourceWorkspace, { strict: true }).catch(() => null);
   if (!defaultBranch || !mergeTarget) return 'default-branch-unavailable';
   if (PROTECTED_BRANCHES.includes(branchName) || branchName === defaultBranch) return 'protected-branch';

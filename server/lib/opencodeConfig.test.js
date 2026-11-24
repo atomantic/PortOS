@@ -411,6 +411,45 @@ describe('buildOpencodeEnvVars', () => {
     expect(cfg.provider.ollama.models).toBeUndefined();
   });
 
+  it('round-trips assistant reasoning for Ollama Inkling without changing other backend model entries', () => {
+    const model = 'inkling-2-mini:26b-a5b-nvfp4';
+    const ollama = JSON.parse(buildOpencodeEnvVars({
+      command: 'opencode', ollamaBacked: true, models: ['inkling-2-mini', 'qwen3.8'],
+      defaultModel: 'inkling-2-mini:latest',
+    }, `ollama/${model}`).OPENCODE_CONFIG_CONTENT);
+    for (const id of ['inkling-2-mini', 'inkling-2-mini:latest', model]) {
+      expect(ollama.provider.ollama.models[id]).toEqual({
+        name: id,
+        tool_call: true,
+        reasoning: true,
+        interleaved: { field: 'reasoning' },
+      });
+    }
+    expect(ollama.provider.ollama.models['qwen3.8']).toEqual({ name: 'qwen3.8', tool_call: true });
+    const mtplx = JSON.parse(buildOpencodeEnvVars({
+      command: 'opencode', mtplxBacked: true,
+    }, model).OPENCODE_CONFIG_CONTENT);
+    expect(mtplx.provider.mtplx.models[model]).toEqual({ name: model, tool_call: true });
+  });
+
+  it('adds the Ollama Inkling transport default to an existing model entry without losing customization', () => {
+    const model = 'inkling-2-mini:26b-a5b';
+    const otherTag = 'inkling-2-mini:26b-a5b-nvfp4';
+    const base = { provider: { ollama: { models: {
+      [model]: { name: 'Inkling remote', limit: { context: 65536 } },
+      [otherTag]: { interleaved: { field: 'reasoning_content' } },
+    } } } };
+    const cfg = JSON.parse(buildOpencodeEnvVars({
+      command: 'opencode', ollamaBacked: true, models: [otherTag],
+      envVars: { OPENCODE_CONFIG_CONTENT: JSON.stringify(base) },
+    }, model).OPENCODE_CONFIG_CONTENT);
+    expect(cfg.provider.ollama.models[model]).toEqual({
+      name: 'Inkling remote', limit: { context: 65536 }, tool_call: true,
+      reasoning: true, interleaved: { field: 'reasoning' },
+    });
+    expect(cfg.provider.ollama.models[otherTag].interleaved).toEqual({ field: 'reasoning_content' });
+  });
+
   it('falls back to defaultModel when no run model is passed', () => {
     const result = buildOpencodeEnvVars({ command: 'opencode', ollamaBacked: true, models: [], defaultModel: 'qwen2.5:7b' }, null);
     const cfg = JSON.parse(result.OPENCODE_CONFIG_CONTENT);

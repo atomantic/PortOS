@@ -123,6 +123,11 @@ export function registerFableLoomHostedNamespace(io) {
         const oldSocket = ns.sockets.get(session.audienceSocketId);
         if (oldSocket) {
           oldSocket.emit('hosted:session:replaced', { reason: 'Another audience device joined this session.' });
+          // The old socket's disconnect handler runs after audienceSocketId points at
+          // the new device, so the listening turn must be aborted here.
+          if (session.turnPhase === 'listening') {
+            abortHostedTurn(sessionId, { reason: 'audience_replaced', io });
+          }
           oldSocket.disconnect(true);
         }
       }
@@ -247,6 +252,7 @@ export function registerFableLoomHostedNamespace(io) {
           code: 'UTTERANCE_TOO_LARGE',
           message: `audio too large (over ${MAX_UTTERANCE_BYTES} bytes)`,
         });
+        abortHostedTurn(sessionId, { reason: 'mic_overflow', io });
         return;
       }
 
@@ -269,6 +275,7 @@ export function registerFableLoomHostedNamespace(io) {
             code: complete === AUDIO_TOO_LARGE ? 'UTTERANCE_TOO_LARGE' : 'INVALID_AUDIO_FRAME',
             message: 'audio must be a binary buffer within the utterance limit',
           });
+          abortHostedTurn(sessionId, { reason: 'invalid_audio', io });
           return;
         }
         finalAudio = complete;
@@ -279,7 +286,10 @@ export function registerFableLoomHostedNamespace(io) {
 
       // A truncated buffer would hand the LLM half a sentence with no signal,
       // so an overflowed turn is refused outright; the error already went out.
-      if (overflowed) return;
+      if (overflowed) {
+        abortHostedTurn(sessionId, { reason: 'mic_overflow', io });
+        return;
+      }
 
       try {
         await processHostedUtterance(sessionId, { audioBuffer: finalAudio, io });
@@ -345,6 +355,9 @@ export function registerFableLoomHostedNamespace(io) {
         session.hostSocketId = null;
       } else if (socket.hostedRole === 'audience' && session.audienceSocketId === socket.id) {
         session.audienceSocketId = null;
+        if (session.turnPhase === 'listening') {
+          abortHostedTurn(sessionId, { reason: 'audience_disconnected', io });
+        }
       }
       ns.to(room).emit('hosted:peer:status', {
         hasHostConnected: !!session.hostSocketId,

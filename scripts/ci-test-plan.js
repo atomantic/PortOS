@@ -18,9 +18,9 @@ import {
   MAX_CHANGED_CODE_FILES, NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_SOURCE_FILES, SLASHDO_CONTRACT_TEST_FILES,
   SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_PATH_RE, browserSuitesIn, featureDirectory, fixtureOwnerFor,
   fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGeneratedData,
-  isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isSharedClientDependency, isTestFile,
-  TOOLING_TESTS, pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
-  uniqueSorted, windowsContractTests, windowsSelectionFor,
+  isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isServerSeed, isSharedClientDependency,
+  isTestFile, TOOLING_TESTS, pathMatchesFeature, runnerForTest, serverSeedTestsFor, splitByRunner,
+  structuralTestsFor, toolingTestsFor, touchesJobInputs, uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
   FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, fansOut, reachCount, shardIndexes,
@@ -33,10 +33,10 @@ export { BROWSER_SUITES } from './lib/browserSuites.js';
 export {
   DOCKER_CONTAINMENT_LIVE_ENTRIES, DOCKER_CONTAINMENT_LIVE_PATH_RE, EXPLICIT_ALWAYS_RUN_TESTS, FIXTURE_OWNERS,
   LINUX_CONTAINMENT_PATH_RE, LINUX_CONTAINMENT_TESTS, MACOS_NATIVE_PATH_RE, MACOS_NATIVE_TESTS,
-  NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_ENTRIES,
-  SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS, WINDOWS_RISK_RULES,
-  getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, sourceReferencePattern, splitByRunner,
-  structuralTestsFor,
+  NODE_MINIMUM_PATH_RE, SERVER_SEED_OWNERS, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH,
+  SUPERCOLLIDER_LIVE_ENTRIES, SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS,
+  WINDOWS_RISK_RULES, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
+  sourceReferencePattern, splitByRunner, structuralTestsFor,
 } from './lib/ciPlanRules.js';
 export {
   PLATFORM_PACKAGE_RES, WINDOWS_INSTALLED_WORKSPACES, classifyDependencyChange,
@@ -176,6 +176,7 @@ function buildSuitePlan(changedFiles, {
   clientTestDependencies = {},
   // Includes literal deferred imports; null means discovery was inconclusive.
   dbDependencies = [],
+  dbLiveRestoreInputs = [],
   // Registered suite → reachable files; null retains that suite conservatively.
   browserDependencies = {},
   // Changed dependency manifest → classifyDependencyChange() verdict. A
@@ -240,6 +241,7 @@ function buildSuitePlan(changedFiles, {
       client: alwaysRunClient.length > 0 ? { mode: 'files', files: alwaysRunClient, sources: [] } : skippedRunner(),
       browserFiles: browserSuitesIn(alwaysRun),
       db: false,
+      dbLiveRestore: false,
       lint: { mode: 'skip', files: [] },
       build: false,
       smoke: false,
@@ -284,7 +286,7 @@ function buildSuitePlan(changedFiles, {
   const directTests = executable.filter(isTestFile).filter((path) => trackedSet.has(path));
   const sourceFiles = executable.filter((path) => !isTestFile(path));
   const unsupportedSources = sourceFiles.filter((path) => (
-    !isServerRunnerFile(path) && !path.startsWith('client/')
+    !isServerRunnerFile(path) && !isServerSeed(path) && !path.startsWith('client/')
   ));
   if (unsupportedSources.length > 0) {
     return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly, trackedSet });
@@ -306,10 +308,19 @@ function buildSuitePlan(changedFiles, {
   }
   const clientDependencySet = new Set(clientDependencies || []);
   const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
-  const features = uniqueSorted(jsSources.map(featureDirectory).filter(Boolean));
+  const serverSources = jsSources.filter(isServerRunnerFile);
+  const clientSources = jsSources.filter(isClientSource);
+  const serverSeeds = jsSources.filter(isServerSeed);
+  const hasServerSource = serverSources.length > 0;
+  const hasClientSource = clientSources.length > 0;
+  const hasServerSeed = serverSeeds.length > 0;
+  const serverFeatures = uniqueSorted(serverSources.map(featureDirectory).filter(Boolean));
+  const clientFeatures = uniqueSorted(clientSources.map(featureDirectory).filter(Boolean));
+  const features = uniqueSorted([...serverFeatures, ...clientFeatures]);
   const selectedTests = [
     ...directTests,
     ...fixtureTests,
+    ...serverSeeds.flatMap((seed) => serverSeedTestsFor(seed, trackedSet)),
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
     ...toolingTestsFor(changed, trackedSet),
@@ -342,8 +353,17 @@ function buildSuitePlan(changedFiles, {
     selectedTests.push(...namedTests);
   }
 
+  // Scope feature-directory matching by workspace (#17895): a client-only
+  // component edit must not select server/DB/browser suites, and a server-only
+  // service edit must not fan out client tests. Cross-workspace edges stay
+  // explicit through pathContractTests, clientDependencies and clientTestDependencies.
   for (const testFile of trackedFiles.filter(isTestFile)) {
-    if (features.some((feature) => pathMatchesFeature(testFile, feature))) {
+    const runner = runnerForTest(testFile);
+    if ((runner === 'server' || runner === 'db')
+      && serverFeatures.some((feature) => pathMatchesFeature(testFile, feature))) {
+      selectedTests.push(testFile);
+    } else if (runner === 'client'
+      && clientFeatures.some((feature) => pathMatchesFeature(testFile, feature))) {
       selectedTests.push(testFile);
     }
   }
@@ -354,12 +374,6 @@ function buildSuitePlan(changedFiles, {
     .filter((path) => trackedSet.has(path));
   const serverFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'server'));
   const clientFiles = uniqueSorted(runnable.filter((path) => runnerForTest(path) === 'client'));
-
-  const hasServerSource = jsSources.some(isServerRunnerFile);
-  const hasClientSource = jsSources.some(isClientSource);
-
-  const serverSources = jsSources.filter(isServerRunnerFile);
-  const clientSources = jsSources.filter(isClientSource);
 
   // Feature-name matches, basename contracts, direct tests and guards are
   // additive explicit selectors; they never replace import-graph traversal. A
@@ -381,8 +395,9 @@ function buildSuitePlan(changedFiles, {
       : skippedRunner();
 
   const dbTests = new Set(resolveDbTestFiles(trackedFiles));
-  const db = selectedTests.some((path) => dbTests.has(path))
-    || executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+  const dbLiveRestore = executable.some((path) => DB_RISK_RULES.some((rule) => rule.test(path)))
+    || serverSources.some((path) => dbLiveRestoreInputs === null || dbLiveRestoreInputs.includes(path));
+  const db = dbLiveRestore || selectedTests.some((path) => dbTests.has(path))
     || serverSources.some((path) => dbDependencies === null || dbDependencies.includes(path));
 
   const windows = hasWindowsRiskFile(changed);
@@ -392,6 +407,7 @@ function buildSuitePlan(changedFiles, {
   if (features.length) reason = `targeted features: ${features.join(', ')}`;
   else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
   else if (jsSources.length === 0 && fixtureTests.length > 0) reason = 'text fixture owners';
+  else if (serverSources.length === 0 && clientSources.length === 0 && pythonSources.length === 0 && hasServerSeed) reason = 'server seed contracts';
 
   return finishPlan({
     full: false,
@@ -406,6 +422,7 @@ function buildSuitePlan(changedFiles, {
           || browserDependencies[suite]?.includes(source))),
     ]),
     db,
+    dbLiveRestore,
     lint: {
       // Same deleted-path guard as directTests above — ESLint given a
       // nonexistent explicit path exits non-zero instead of skipping it.
@@ -413,7 +430,7 @@ function buildSuitePlan(changedFiles, {
       files: changed.filter((path) => isLintSurface(path) && trackedSet.has(path)),
     },
     build: hasClientSource,
-    smoke: hasServerSource,
+    smoke: hasServerSource || hasServerSeed,
     windows,
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
@@ -439,7 +456,9 @@ const finishPlan = (plan, options = {}) => {
   const shards = {
     server: linuxShards('server'),
     client: linuxShards('client'),
-    browser: plan.browserFiles.length > 1 ? [1, 2] : [1],
+    // Four shards put the serial-capture backlog on separate runners; see
+    // scripts/lib/browserSuites.js for the balanced owner tables.
+    browser: plan.browserFiles.length >= 4 ? [1, 2, 3, 4] : plan.browserFiles.length > 1 ? [1, 2] : [1],
     // The native contract set stays on one runner and never follows the
     // application import graph, even when the primary jobs run full suites.
     windows: [1],
@@ -464,6 +483,7 @@ function fullPlan(changedFiles, reason, options = {}) {
     client: { mode: 'full', files: [], sources: [] },
     browserFiles: browserSuitesIn([...trackedSet]),
     db: true,
+    dbLiveRestore: true,
     lint: { mode: 'full', files: [] },
     build: true,
     smoke: true,
@@ -511,7 +531,8 @@ function main() {
   }
   const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
   const {
-    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
+    changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies,
+    dbDependencies, dbLiveRestoreInputs, browserDependencies,
     dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
     clientReach, clientBrowserReach, gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
@@ -531,6 +552,7 @@ function main() {
     clientDependencies,
     clientTestDependencies,
     dbDependencies,
+    dbLiveRestoreInputs,
     browserDependencies,
     dependencyChanges,
     linuxContainmentInputs,

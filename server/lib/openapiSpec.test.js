@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import { buildApiCatalog } from './apiCatalog.js';
+import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
 import { buildInternalOpenApiSpec, buildOpenApiSpec } from './openapiSpec.js';
 import { synthesizeBodySchema as routeSchema } from '../routes/voicePublic.js';
 import { VALID_ENGINES } from './voiceEngines.js';
 import { voiceSynthesizeBodySchema } from './apiContractSchemas.js';
+import { pm2ProcessNameSchema } from './sharedSchemas.js';
 
 const exposed = (apiAccess) => ({ apiAccess });
 
@@ -100,5 +103,54 @@ describe('buildInternalOpenApiSpec', () => {
     expect(spec.paths['/api/voice/public/synthesize'].post.requestBody).toBeDefined();
     expect(spec.paths['/api/apps'].get['x-portos-contract-status']).toBe('generated');
     expect(spec.paths['/api/apps'].get.responses.default).toBeDefined();
+  });
+
+  it('resolves every key in API_OPERATION_CONTRACTS to a modeled route in buildApiCatalog', () => {
+    const catalog = buildApiCatalog({});
+    const byKey = new Map(catalog.operations.map((operation) => [`${operation.method} ${operation.path}`, operation]));
+    for (const [path, pathItem] of Object.entries(API_OPERATION_CONTRACTS)) {
+      for (const method of Object.keys(pathItem)) {
+        const key = `${method.toUpperCase()} ${path}`;
+        expect(byKey.get(key)?.contractStatus, `Expected ${key} to resolve as modeled`).toBe('modeled');
+      }
+    }
+  });
+
+  it('models log endpoints with required path params, query params, pm2 schema, and error codes', () => {
+    const spec = buildInternalOpenApiSpec({}, {});
+    const pm2Pattern = z.toJSONSchema(pm2ProcessNameSchema).pattern;
+
+    const processLogs = spec.paths['/api/logs/{processName}'].get;
+    expect(processLogs['x-portos-contract-status']).toBe('modeled');
+    expect(processLogs.parameters).toContainEqual(expect.objectContaining({
+      name: 'processName', in: 'path', required: true, schema: expect.objectContaining({ type: 'string', pattern: pm2Pattern }),
+    }));
+    expect(processLogs.parameters.map((parameter) => parameter.name)).toEqual(
+      expect.arrayContaining(['processName', 'lines', 'follow']),
+    );
+    expect(processLogs.responses[400]['x-portos-error-codes']).toEqual(['INVALID_PROCESS_NAME', 'UNKNOWN_PROCESS', 'VALIDATION_ERROR']);
+
+    const appLogs = spec.paths['/api/apps/{id}/logs'].get;
+    expect(appLogs['x-portos-contract-status']).toBe('modeled');
+    expect(appLogs.parameters).toContainEqual({
+      name: 'id', in: 'path', required: true, schema: { type: 'string' },
+    });
+    expect(appLogs.parameters).toContainEqual(expect.objectContaining({
+      name: 'process', in: 'query', required: false, schema: expect.objectContaining({ type: 'string', pattern: pm2Pattern }),
+    }));
+    expect(appLogs.parameters).toContainEqual(expect.objectContaining({
+      name: 'lines', in: 'query', required: false,
+    }));
+    expect(appLogs.responses[400]['x-portos-error-codes']).toEqual(['MISSING_PROCESS', 'INVALID_PROCESS_NAME']);
+  });
+
+  it('documents 422 and 403 refusal responses on CoS tool call, voice synthesize, and sdapi endpoints', () => {
+    const spec = buildInternalOpenApiSpec({}, {});
+    expect(spec.paths['/api/cos/tools/call'].post.responses[422]).toBeDefined();
+    expect(spec.paths['/api/voice/public/synthesize'].post.responses[403]).toMatchObject({
+      'x-portos-error-codes': ['HOST_CONTROL_FORBIDDEN'],
+    });
+    expect(spec.paths['/sdapi/v1/options'].post.responses[403]).toBeDefined();
+    expect(spec.paths['/sdapi/v1/portos/video-models'].get.responses[403]).toBeDefined();
   });
 });

@@ -21,6 +21,9 @@ const handoffSchema = z.object({ kind: z.enum(['profile', 'latest', 'people', 's
 const requireId = (value, label = 'ID') => {
   if (!uuid.safeParse(value).success) throw new ServerError(`Invalid ${label}`, { status: 400 });
 };
+const requireAccount = async (id) => {
+  if (!(await x.getAccount(id))) throw new ServerError('X account not found', { status: 404 });
+};
 const emitChanged = (req, accountId) => req.app.get('io')?.emit('x:changed', { accountId });
 
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await x.listAccounts() })));
@@ -74,11 +77,13 @@ router.post('/accounts/:id/open', asyncHandler(async (req, res) => {
 
 router.get('/accounts/:id/posts', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
+  await requireAccount(req.params.id);
   res.json({ posts: await x.listPosts(req.params.id) });
 }));
 
 router.get('/accounts/:id/drafts', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
+  await requireAccount(req.params.id);
   res.json({ drafts: await x.listDrafts(req.params.id) });
 }));
 

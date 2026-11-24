@@ -12,7 +12,7 @@ const numeric = new Set(['x', 'y', 'x1', 'x2', 'y1', 'y2', 'cx', 'cy', 'r', 'rx'
 const paint = /^(?:none|transparent|currentColor|[a-z]{1,30}|#[a-f0-9]{3,8}|rgba?\([0-9.,%\s]+\)|url\(#[A-Za-z0-9_-]{1,100}\))$/i;
 const list = /^[-+0-9.eE,\s]+$/;
 const SAFE_STYLE = new Set(['fill', 'stroke', 'stroke-width', 'opacity', 'fill-opacity', 'stroke-opacity', 'font-size', 'font-family', 'font-weight', 'text-anchor', 'dominant-baseline', 'letter-spacing']);
-const caption = value => xml(value.replace(/[\r\n\u2028\u2029]+/g, ' ')).replace(/[\[\]\\]/g, character => escapeRegExp(character));
+const caption = value => xml(value.replace(/[\r\n\u2028\u2029]+/g, ' ')).replace(/[[\]\\]/g, character => escapeRegExp(character));
 
 // CSS is never rendered or fetched. Notice graphics that stripping CSS would
 // silently lose, including escaped property names and external style imports.

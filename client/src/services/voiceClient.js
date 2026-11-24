@@ -8,6 +8,7 @@
 // Both emit 'voice:turn' over Socket.IO and play incoming TTS via Web Audio.
 
 import socket from './socket';
+import { throwApiError } from './apiCore.js';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
@@ -627,6 +628,10 @@ export const onVoiceEvent = (event, handler) => {
 // the VoiceWidget wires to a button), we keep that stream alive, and
 // captureScreenForVision grabs a frame from it on demand without re-prompting.
 let visionStream = null;
+// Bumped by every enable/disable/dispose so a getDisplayMedia() picker that
+// resolves AFTER teardown can detect it was superseded and release its stream
+// (visionStream is still null while the picker is open, so clear can't see it).
+let visionGeneration = 0;
 // Optional callback invoked whenever the authorized stream ends — either via
 // disableVisionCapture() or because the user clicked "Stop sharing" in the
 // browser's own chrome (track 'ended'). Lets the UI sync its toggle state
@@ -634,6 +639,7 @@ let visionStream = null;
 let onVisionEndedCb = null;
 
 const clearVisionStream = ({ notify = true } = {}) => {
+  visionGeneration += 1;
   const stream = visionStream;
   // Null the global BEFORE stopping tracks: t.stop() synchronously fires the
   // track 'ended' handler, and that handler no-ops unless `visionStream === its
@@ -664,11 +670,16 @@ export const onVisionCaptureEnded = (cb) => {
 export const enableVisionCapture = async () => {
   if (!navigator.mediaDevices?.getDisplayMedia) return false;
   if (isVisionCaptureEnabled()) return true;
+  const generation = ++visionGeneration;
   const stream = await navigator.mediaDevices.getDisplayMedia({
     video: { displaySurface: 'browser' },
     audio: false,
   }).catch(() => null);
   if (!stream) return false;
+  if (generation !== visionGeneration) {
+    stream.getTracks().forEach((t) => t.stop());
+    return false;
+  }
   visionStream = stream;
   // User-stopped (browser chrome) → clear + notify the UI so the toggle flips.
   // Guard on `visionStream === stream` so a late 'ended' from a SUPERSEDED
@@ -743,7 +754,7 @@ export const speakSynthesized = async (text, { engine, voice, rate, signal } = {
     body: JSON.stringify(body),
     signal,
   });
-  if (!res.ok) throw new Error(`synthesize failed: ${res.status}`);
+  if (!res.ok) await throwApiError(res);
   const wav = await res.arrayBuffer();
   // Superseded while the synth was in flight — drop this stale audio rather than
   // playing it over/after the newer turn's reply.
@@ -760,6 +771,9 @@ export const whenPlaybackDrained = () => playback.queue.then(() => !isTtsActive(
 // AudioWorklet streams PCM, RMS-based VAD auto-submits on silence, and
 // barge-in (voice:interrupt + cancelVoicePlayback) fires when the user talks over
 // the bot. Thresholds are auto-calibrated from ambient noise at startup.
+
+// Persisted voice.vad overrides (callbacks.vad); anything not a positive number keeps the built-in default.
+const vadThreshold = (override, fallback) => (Number.isFinite(override) && override > 0 ? override : fallback);
 
 const VAD = {
   minOnRms: 0.010,
@@ -1002,11 +1016,11 @@ const handleFrame = (frame, capture) => {
 
   if (rms < vad.offRms) {
     if (!vad.silenceStartedAt) vad.silenceStartedAt = now;
-    if (now - vad.silenceStartedAt >= VAD.silenceMs) {
+    if (now - vad.silenceStartedAt >= vadThreshold(capture.callbacks?.vad?.endOfSpeechMs, VAD.silenceMs)) {
       const speechMs = vad.silenceStartedAt - vad.speechStartedAt;
       returnToIdle(vad);
       capture.callbacks?.onSpeechEnd?.();
-      if (speechMs >= VAD.minSpeechMs) {
+      if (speechMs >= vadThreshold(capture.callbacks?.vad?.minUtteranceMs, VAD.minSpeechMs)) {
         submitUtterance(capture).catch((err) => console.warn('[voice] submit failed:', err));
       } else {
         // Too short to submit — notify the widget so it leaves 'thinking'
@@ -1281,6 +1295,7 @@ export const isWebSpeechCapturing = () => webSpeechShouldListen;
  */
 export const disposeCaptureOwner = () => {
   captureOwnerGeneration += 1;
+  visionGeneration += 1;
 
   const activeRecorder = recorder;
   recorder = null;

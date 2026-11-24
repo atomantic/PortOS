@@ -25,6 +25,17 @@ export function getIo() {
   return ioInstance;
 }
 
+// Room joined by every peer-authenticated socket (paired peer token, legacy
+// Basic relay, or a peer-identified socket on a password-free install). Peers
+// are not operators: global frames that carry local private records go through
+// `emitToOperators`, never a bare `getIo().emit`.
+export const PEER_SOCKET_ROOM = 'peer-sockets';
+
+/** Emit to every connected socket except peer sockets. */
+export function emitToOperators(event, data) {
+  getIo()?.except(PEER_SOCKET_ROOM).emit(event, data);
+}
+
 // Operator command-runner output (#12019). Never a global emit: the stream
 // carries host command output, and a peer relay socket (restricted to
 // `cos:subscribe`) must not receive it. `socket.js` registers subscribers

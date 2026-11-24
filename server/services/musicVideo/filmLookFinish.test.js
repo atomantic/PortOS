@@ -17,6 +17,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 const { seen } = vi.hoisted(() => ({ seen: { webAdmitted: false, webFail: null, webAbort: null, webCheck: null, geometryFrames: 48, opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
+  installEncodedVideo: async (tmp, target) => { const { rename: move } = await import('node:fs/promises'); await move(tmp, target); return { ok: true, outPath: target }; },
   findFfmpeg: async () => 'ffmpeg',
   // 48 frames at 24 fps: the container reports a hair more than the frames hold.
   probeVideoGeometry: async () => ({ width: 1280, height: 720, fps: 24, numFrames: seen.geometryFrames, durationSec: seen.geometryFrames / 24 + 0.04 }),
@@ -68,7 +69,7 @@ vi.mock('../htmlComposition/encode.js', () => ({
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
-const { FILM_LOOK_FINISH_SCRATCH_DIR, applyFilmLookFinish, filmLookFinishNeeded } = await import('./filmLookFinish.js');
+const { FILM_LOOK_FINISH_SCRATCH_DIR, applyFilmLookFinish, filmLookFinishNeeded, sweepFilmLookScratch } = await import('./filmLookFinish.js');
 
 const look = { preset: 'super8', grain: 0.5, halation: 0.4 };
 let path;
@@ -90,6 +91,17 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => cleanupTempDataRoots());
+
+describe('sweepFilmLookScratch', () => {
+  it('removes staged scratch from an interrupted pass and tolerates none', async () => {
+    const staged = join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR, 'job-crashed', 'media');
+    await mkdir(staged, { recursive: true });
+    await writeFile(join(staged, 'source.mp4'), 'staged');
+    await sweepFilmLookScratch();
+    expect(existsSync(join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR))).toBe(false);
+    await expect(sweepFilmLookScratch()).resolves.toBeUndefined();
+  });
+});
 
 // A page whose GPU path draws `gpuPng` in `gpuMs` and whose SVG filter draws
 // `svgPng` in `svgMs`, on a fake clock the seek advances. Records each switch.

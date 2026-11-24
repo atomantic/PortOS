@@ -13,7 +13,9 @@ vi.mock('./githubAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ host:
 
 const { query, withTransaction } = await import('../lib/db.js');
 const { execGh } = await import('./github.js');
-const { triageAccountNotifications, refreshOpenPullRequestStatus } = await import('./githubNotificationTriage.js');
+const { triageAccountNotifications, refreshOpenPullRequestStatus, createManagedAppsLoader, threadDiscussionVouched } = await import('./githubNotificationTriage.js');
+const { getAllApps } = await import('./apps.js');
+const { readOriginRemoteUrl } = await import('../lib/gitRemote.js');
 
 const account = { id: 'acct', host: 'github.com', login: 'octocat', mode: 'observe', trust: 'public' };
 const NOW = Date.parse('2026-11-21T00:00:00Z');
@@ -58,7 +60,8 @@ describe('triageAccountNotifications reads', () => {
     vi.mocked(withTransaction).mockImplementation(async (fn) => fn({
       query: vi.fn(async (sql, params) => {
         writes.push([sql, params]);
-        return { rows: [], rowCount: 1 };
+        // The batched verdict CAS reports every thread as transitioned.
+        return /RETURNING n\.thread_id/.test(sql) ? { rows: params[1].map((thread_id) => ({ thread_id })), rowCount: params[1].length } : { rows: [], rowCount: 1 };
       }),
     }));
   });
@@ -81,6 +84,11 @@ describe('triageAccountNotifications reads', () => {
     expect(calls.filter((endpoint) => endpoint === 'repos/acme/widgets')).toHaveLength(1);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(5);
+    // One batched verdict CAS and one batched event insert, not a statement per thread.
+    expect(writes.filter(([sql]) => /RETURNING n\.thread_id/.test(sql))).toHaveLength(1);
+    const eventInserts = writes.filter(([sql]) => /INSERT INTO github_notification_events/.test(sql));
+    expect(eventInserts).toHaveLength(1);
+    expect(eventInserts[0][1][1]).toHaveLength(12);
   });
 
   it('keeps per-thread spam history and writes verdicts in input order', async () => {
@@ -92,8 +100,9 @@ describe('triageAccountNotifications reads', () => {
       return { rows: [] };
     });
     await triageAccountNotifications(account, {}, { now: NOW });
-    const updated = writes.filter(([sql]) => /SET decision/.test(sql)).map(([, params]) => params[1]);
-    expect(updated).toEqual(['t1', 't2']);
+    const verdictWrites = writes.filter(([sql]) => /RETURNING n\.thread_id/.test(sql));
+    expect(verdictWrites).toHaveLength(1);
+    expect(verdictWrites[0][1][1]).toEqual(['t1', 't2']);
   });
 });
 
@@ -110,5 +119,42 @@ describe('refreshOpenPullRequestStatus', () => {
     expect(vi.mocked(query).mock.calls.filter(([sql]) => /UPDATE github_notifications/.test(sql))).toHaveLength(12);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('managed app lookup', () => {
+  it('reads each managed app origin once per loader however many stages ask', async () => {
+    vi.mocked(getAllApps).mockClear();
+    vi.mocked(readOriginRemoteUrl).mockClear();
+    vi.mocked(getAllApps).mockResolvedValueOnce([{ id: 'a', repoPath: '/repo/a' }, { id: 'b', repoPath: '/repo/b' }]);
+    const load = createManagedAppsLoader();
+
+    const [first, second, third] = await Promise.all([load(), load(), load()]);
+
+    expect(first).toBe(second);
+    expect(second).toBe(third);
+    expect(getAllApps).toHaveBeenCalledTimes(1);
+    expect(readOriginRemoteUrl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('threadDiscussionVouched', () => {
+  it('fetches the issue, review-comment and review lists concurrently', async () => {
+    vi.mocked(execGh).mockReset();
+    let active = 0;
+    let peak = 0;
+    vi.mocked(execGh).mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return '';
+    });
+
+    const vouched = await threadDiscussionVouched(account, {}, row(7));
+
+    expect(vouched).toBe(true);
+    expect(vi.mocked(execGh)).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(3);
   });
 });

@@ -1,7 +1,23 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { encodePcm16Wav, parseWhisperCliWords } from './lyricAlignCore.js';
-import { resolveAlignmentTranscriber } from './lyricTranscriber.js';
+import {
+  ALIGN_MODEL_FILE,
+  ALIGN_MODEL_SHA256,
+  ALIGN_MODEL_URL,
+  ensureAlignmentModel,
+  resolveAlignmentTranscriber,
+} from './lyricTranscriber.js';
+import {
+  VOICE_MODEL_SHA256,
+  WHISPER_HF_COMMIT,
+  inspectVoiceAsset,
+  voiceAssetReceiptPath,
+  writeVoiceAssetReceipt,
+} from '../../lib/voiceModelAssets.js';
 
 // A whisper-cli `-ml 1 -sow -ojf` file: one entry per word, offsets in ms,
 // special tokens and empty entries mixed in, a contraction split over two
@@ -130,4 +146,93 @@ it('does not substitute non-DTW endpoint timing for an independent placement che
     voiceConfig: async () => ({ stt: { endpoint: 'http://127.0.0.1:5562' } }), probeEndpoint,
   })).rejects.toMatchObject({ code: 'LYRIC_VERIFY_DTW_UNAVAILABLE' });
   expect(probeEndpoint).not.toHaveBeenCalled();
+});
+
+describe('ensureAlignmentModel integrity contract', () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'lyric-align-model-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('pins ALIGN_MODEL_URL to a 40-char commit SHA and ALIGN_MODEL_SHA256 to the catalog digest', () => {
+    expect(ALIGN_MODEL_URL).not.toContain('/resolve/main/');
+    expect(ALIGN_MODEL_URL).toBe(`https://huggingface.co/ggerganov/whisper.cpp/resolve/${WHISPER_HF_COMMIT}/${ALIGN_MODEL_FILE}`);
+    expect(ALIGN_MODEL_SHA256).toBe(VOICE_MODEL_SHA256[ALIGN_MODEL_FILE]);
+    expect(ALIGN_MODEL_SHA256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('downloads with the pinned URL and SHA-256 and writes a completion receipt', async () => {
+    const payload = 'large-v3-turbo-weights';
+    const download = vi.fn(async ({ destPath, url, expectedSha256 }) => {
+      expect(url).toBe(ALIGN_MODEL_URL);
+      expect(expectedSha256).toBe(ALIGN_MODEL_SHA256);
+      writeFileSync(destPath, payload);
+    });
+
+    const target = await ensureAlignmentModel({ modelDir: dir, download });
+    expect(target).toBe(join(dir, ALIGN_MODEL_FILE));
+    expect(download).toHaveBeenCalledOnce();
+    expect(existsSync(voiceAssetReceiptPath(target))).toBe(true);
+    expect(inspectVoiceAsset('whisper', target).state).toBe('verified');
+
+    // A subsequent call reuses the verified asset without downloading again.
+    const second = await ensureAlignmentModel({ modelDir: dir, download });
+    expect(second).toBe(target);
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it('re-downloads when an existing target is empty or truncated against its receipt', async () => {
+    const target = join(dir, ALIGN_MODEL_FILE);
+    const download = vi.fn(async ({ destPath }) => {
+      writeFileSync(destPath, 'complete-repaired-weights');
+    });
+
+    // Empty file must not satisfy readiness (bare existsSync would have returned it).
+    writeFileSync(target, '');
+    await ensureAlignmentModel({ modelDir: dir, download });
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(inspectVoiceAsset('whisper', target).state).toBe('verified');
+
+    // Truncating after a valid receipt marks the asset incomplete and forces repair.
+    writeFileSync(target, 'short');
+    expect(inspectVoiceAsset('whisper', target).state).toBe('incomplete');
+    await ensureAlignmentModel({ modelDir: dir, download });
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(inspectVoiceAsset('whisper', target).state).toBe('verified');
+  });
+
+  it('reuses a usable configured large model and rejects an incomplete configured large model', async () => {
+    const configured = join(dir, 'ggml-large-v3.bin');
+    const download = vi.fn(async ({ destPath }) => {
+      writeFileSync(destPath, 'downloaded-turbo');
+    });
+
+    // Empty configured model is incomplete → must fall back to downloading alignment model.
+    writeFileSync(configured, '');
+    const downloaded = await ensureAlignmentModel({ modelDir: dir, configuredModelPath: configured, download });
+    expect(downloaded).toBe(join(dir, ALIGN_MODEL_FILE));
+    expect(download).toHaveBeenCalledOnce();
+
+    // Remove the alignment model and make the configured large model verified → reuse it.
+    rmSync(downloaded, { force: true });
+    rmSync(voiceAssetReceiptPath(downloaded), { force: true });
+    writeFileSync(configured, 'real-large-v3-weights');
+    await writeVoiceAssetReceipt('whisper', configured);
+    const reused = await ensureAlignmentModel({ modelDir: dir, configuredModelPath: configured, download });
+    expect(reused).toBe(configured);
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it('fails with LYRIC_ALIGN_MODEL_DOWNLOAD_FAILED and writes no receipt when download verification fails', async () => {
+    const target = join(dir, ALIGN_MODEL_FILE);
+    const download = vi.fn(async () => {
+      throw new Error('Download failed SHA-256 verification');
+    });
+    await expect(ensureAlignmentModel({ modelDir: dir, download })).rejects.toMatchObject({
+      status: 502,
+      code: 'LYRIC_ALIGN_MODEL_DOWNLOAD_FAILED',
+    });
+    expect(existsSync(voiceAssetReceiptPath(target))).toBe(false);
+  });
 });

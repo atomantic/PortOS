@@ -2,7 +2,7 @@ import {
   describe, it, expect, vi, beforeEach,
 } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+import { request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/settings.js', () => ({
@@ -13,6 +13,8 @@ vi.mock('../services/videoGen/continuousVideo.js', () => ({
   composeEpisodeClips: vi.fn(),
   attachEpisodeSseClient: vi.fn(() => false),
   resolveEpisodeContinuity: vi.fn(async () => null),
+  listActiveContinuousVideoEpisodes: vi.fn(() => []),
+  cancelContinuousVideoEpisode: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND', error: 'Episode job not found' })),
   CONTINUOUS_VIDEO_BACKENDS: ['local', 'reactor', 'fal'],
 }));
 vi.mock('../lib/videoPromptLinter.js', () => ({ lintClips: vi.fn() }));
@@ -34,6 +36,8 @@ describe('continuousVideoEpisode routes', () => {
     vi.clearAllMocks();
     continuousVideo.composeEpisodeClips.mockReturnValue([{ prompt: 'A quiet street.', cutType: 'fresh' }]);
     continuousVideo.resolveEpisodeContinuity.mockResolvedValue(null);
+    continuousVideo.listActiveContinuousVideoEpisodes.mockReturnValue([]);
+    continuousVideo.cancelContinuousVideoEpisode.mockResolvedValue({ ok: false, code: 'NOT_FOUND', error: 'Episode job not found' });
     lintClips.mockReturnValue({ pass: true, results: [] });
   });
 
@@ -119,10 +123,165 @@ describe('continuousVideoEpisode routes', () => {
     });
   });
 
+  describe('GET /active', () => {
+    it('returns empty activeEpisodes and null activeEpisode when none are running', async () => {
+      const r = await request(app).get('/api/continuous-video/active');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ activeEpisodes: [], activeEpisode: null });
+    });
+
+    it('returns running episodes with the most recent as activeEpisode', async () => {
+      const ep1 = { jobId: 'ep-1', generationId: 'ep-1', backend: 'local', status: 'running', totalClips: 2, progress: 0.5, message: 'Clip 2/2' };
+      const ep2 = { jobId: 'ep-2', generationId: 'ep-2', backend: 'fal', status: 'running', totalClips: 3, progress: 0, message: 'Clip 1/3' };
+      continuousVideo.listActiveContinuousVideoEpisodes.mockReturnValue([ep1, ep2]);
+      const r = await request(app).get('/api/continuous-video/active');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ activeEpisodes: [ep1, ep2], activeEpisode: ep2 });
+    });
+  });
+
+  describe('POST /:jobId/cancel', () => {
+    it('cancels an active episode and returns 200', async () => {
+      continuousVideo.cancelContinuousVideoEpisode.mockResolvedValueOnce({ ok: true, jobId: 'ep-1', status: 'canceling' });
+      const r = await request(app).post('/api/continuous-video/ep-1/cancel');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, jobId: 'ep-1', status: 'canceling' });
+      expect(continuousVideo.cancelContinuousVideoEpisode).toHaveBeenCalledExactlyOnceWith('ep-1');
+    });
+
+    it('returns 404 when the episode id does not exist', async () => {
+      const r = await request(app).post('/api/continuous-video/missing/cancel');
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('NOT_FOUND');
+    });
+
+    it('returns 409 when the episode already settled', async () => {
+      continuousVideo.cancelContinuousVideoEpisode.mockResolvedValueOnce({
+        ok: false, code: 'ALREADY_TERMINAL', status: 'complete', error: 'Episode is already complete',
+      });
+      const r = await request(app).post('/api/continuous-video/ep-done/cancel');
+      expect(r.status).toBe(409);
+      expect(r.body.code).toBe('ALREADY_TERMINAL');
+    });
+  });
+
   describe('GET /:jobId/events', () => {
     it('404s when the job is not found', async () => {
       const r = await request(app).get('/api/continuous-video/missing/events');
       expect(r.status).toBe(404);
+    });
+
+    it('attaches SSE immediately after POST while cold module import is still pending and streams setup rejection', async () => {
+      vi.resetModules();
+      vi.doUnmock('../services/videoGen/continuousVideo.js');
+      vi.doUnmock('../lib/videoPromptLinter.js');
+      vi.doMock('../services/mediaJobQueue/index.js', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return {
+          get enqueueJob() { throw new Error('cold import crashed'); },
+          cancelJob: vi.fn(),
+        };
+      });
+
+      const { default: realRouter } = await import('./continuousVideoEpisode.js');
+      const liveApp = express();
+      liveApp.use(express.json());
+      liveApp.use('/api/continuous-video', realRouter);
+      liveApp.use(errorMiddleware);
+
+      const server = await startLoopbackServer(liveApp);
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const postRes = await fetch(`${baseUrl}/api/continuous-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenes, bible, backend: 'local' }),
+        });
+        expect(postRes.status).toBe(200);
+        const { jobId } = await postRes.json();
+
+        // Attach immediately while dynamic queue module import is still blocked.
+        const sseRes = await fetch(`${baseUrl}/api/continuous-video/${jobId}/events`);
+        expect(sseRes.status).toBe(200);
+        expect(sseRes.headers.get('content-type')).toContain('text/event-stream');
+
+        const reader = sseRes.body.getReader();
+        const { value } = await reader.read();
+        const text = new TextDecoder().decode(value);
+        expect(text).toContain('"type":"error"');
+        expect(text).toContain('cold import crashed');
+        await reader.cancel();
+      } finally {
+        server.closeAllConnections?.();
+        await closeLoopbackServer(server);
+        vi.resetModules();
+      }
+    });
+
+    it('discovers a running episode via GET /active and cancels it via POST /:jobId/cancel with a canceled SSE frame', async () => {
+      vi.resetModules();
+      vi.doUnmock('../services/videoGen/continuousVideo.js');
+      vi.doUnmock('../lib/videoPromptLinter.js');
+      let capturedInnerId = null;
+      const falCancelMock = vi.fn(() => true);
+      vi.doMock('../services/videoGen/fal.js', () => ({
+        generateVideo: vi.fn(async ({ jobId }) => {
+          capturedInnerId = jobId;
+          return { jobId };
+        }),
+        cancel: falCancelMock,
+      }));
+
+      const { default: realRouter } = await import('./continuousVideoEpisode.js');
+      const liveApp = express();
+      liveApp.use(express.json());
+      liveApp.use('/api/continuous-video', realRouter);
+      liveApp.use(errorMiddleware);
+
+      const server = await startLoopbackServer(liveApp);
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const postRes = await fetch(`${baseUrl}/api/continuous-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenes, bible, backend: 'fal' }),
+        });
+        expect(postRes.status).toBe(200);
+        const { jobId } = await postRes.json();
+
+        await vi.waitFor(() => expect(capturedInnerId).toBeTruthy());
+
+        const activeRes = await fetch(`${baseUrl}/api/continuous-video/active`);
+        expect(activeRes.status).toBe(200);
+        const activeBody = await activeRes.json();
+        expect(activeBody.activeEpisode).toMatchObject({ jobId, backend: 'fal', status: 'running' });
+
+        const sseRes = await fetch(`${baseUrl}/api/continuous-video/${jobId}/events`);
+        expect(sseRes.status).toBe(200);
+        const reader = sseRes.body.getReader();
+
+        const cancelRes = await fetch(`${baseUrl}/api/continuous-video/${jobId}/cancel`, { method: 'POST' });
+        expect(cancelRes.status).toBe(200);
+        expect(falCancelMock).toHaveBeenCalledExactlyOnceWith(capturedInnerId);
+
+        let received = '';
+        while (!received.includes('"type":"canceled"')) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += new TextDecoder().decode(value);
+        }
+        expect(received).toContain('"type":"canceled"');
+        await reader.cancel();
+
+        const afterActiveRes = await fetch(`${baseUrl}/api/continuous-video/active`);
+        expect(await afterActiveRes.json()).toEqual({ activeEpisodes: [], activeEpisode: null });
+      } finally {
+        server.closeAllConnections?.();
+        await closeLoopbackServer(server);
+        vi.resetModules();
+      }
     });
   });
 });

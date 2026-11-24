@@ -13,11 +13,8 @@ import { ensureDir } from '../../lib/fileCore.js';
 import { FFMPEG_FRAME_TIMEOUT_MS, findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { detectVideoSceneCuts } from '../../lib/videoSceneCuts.js';
 import { PATHS } from '../../lib/paths.js';
-import { makePathResolver } from '../../lib/pathSafety.js';
+import { resolveGalleryVideo } from '../../lib/pathSafety.js';
 import { trimTo } from '../../lib/textUtils.js';
-
-const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'm4v'];
-const resolveGalleryVideo = makePathResolver(() => PATHS.videos, { extensions: VIDEO_EXTENSIONS });
 
 const thumbUrl = (name) => `/data/video-thumbnails/${encodeURIComponent(name)}`;
 

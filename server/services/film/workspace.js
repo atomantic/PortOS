@@ -20,17 +20,16 @@
  */
 import { lstat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
-import { ServerError } from '../../lib/errorHandler.js';
-import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { readJSONFileStrict } from '../../lib/jsonIo.js';
-import { MUSIC_VIDEO_BLENDER_SHOT_ID, blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideo/musicVideoBlender.js';
+import { assertInsideWithoutSymlinks, blenderRefusal } from '../blenderWorkspace/containment.js';
+import { resolveSourceFile } from '../blenderWorkspace/sourceTree.js';
+
+export { assertInsideWithoutSymlinks, blenderRefusal };
 
 const MEDIA_TYPES = Object.freeze({
   mp4: 'video/mp4', png: 'image/png', jpg: 'image/jpeg', log: 'text/plain; charset=utf-8',
 });
-
-export const blenderRefusal = (message, code, status = 400, context = null) =>
-  new ServerError(message, { status, code, ...(context ? { context } : {}) });
 
 export const blenderWorkspaceDir = (owner) => owner.workspaceDir;
 
@@ -40,6 +39,8 @@ export const blenderSrcDir = (owner) => join(blenderWorkspaceDir(owner), 'src');
 export const blenderRendersDir = (owner) => join(blenderWorkspaceDir(owner), 'renders');
 export const blenderManifestFile = (owner) => join(blenderWorkspaceDir(owner), 'manifest.json');
 export const blenderSongFile = (owner) => join(blenderWorkspaceDir(owner), 'song.json');
+/** The `{ workspace, src }` pair the shared source-tree helpers take. */
+export const blenderSourceDirs = (owner) => ({ workspace: blenderWorkspaceDir(owner), src: blenderSrcDir(owner) });
 
 export function assertBlenderShotId(shotId) {
   if (typeof shotId !== 'string' || !MUSIC_VIDEO_BLENDER_SHOT_ID.test(shotId)) {
@@ -61,36 +62,10 @@ export const blenderScratchDir = (owner, jobId) => join(blenderRendersDir(owner)
 export const blenderMediaPath = (owner, absolute) => relative(blenderRendersDir(owner), absolute).split(sep).join('/');
 
 /**
- * Refuse `absolute` unless it sits inside `root` and no existing component from
- * `root` down is a symlink. A component that does not exist yet is fine: the
- * caller is about to create it.
- */
-export async function assertInsideWithoutSymlinks(root, absolute) {
-  if (!isPathInsideDir(root, absolute)) throw blenderRefusal('That path is outside the Blender workspace', 'MUSIC_VIDEO_BLENDER_PATH');
-  const parts = relative(root, absolute).split(sep).filter(Boolean);
-  let current = root;
-  for (const part of [null, ...parts]) {
-    if (part) current = join(current, part);
-    const info = await lstat(current).catch((error) => {
-      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-      throw error;
-    });
-    if (!info) return;
-    if (info.isSymbolicLink()) throw blenderRefusal('Symbolic links are not followed inside the Blender workspace', 'MUSIC_VIDEO_BLENDER_PATH');
-  }
-}
-
-/**
  * One file under src/ named by a request: `{ absolute, kind }` (`kind` is
  * `'text'` or `'binary'`). Throws 400 for a path src/ may not hold.
  */
-export async function resolveBlenderSourceFile(owner, path) {
-  const kind = blenderSourceFileKind(path);
-  if (!kind) throw blenderRefusal('That is not a file the Blender workspace can hold (check the folder depth and the file type)', 'MUSIC_VIDEO_BLENDER_PATH');
-  const absolute = join(blenderSrcDir(owner), ...path.split('/'));
-  await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), absolute);
-  return { absolute, kind };
-}
+export const resolveBlenderSourceFile = (owner, path) => resolveSourceFile(blenderSourceDirs(owner), path);
 
 /** A regular file under renders/ to serve, with its media type; 404 otherwise. */
 export async function resolveBlenderMedia(owner, path) {

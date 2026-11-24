@@ -28,6 +28,10 @@ const open = vi.hoisted(() => ({
   saveBlenderShotNote: vi.fn(async () => ({})),
   cancelBlenderProjectJobs: vi.fn(() => true),
 }));
+const motion = vi.hoisted(() => ({
+  saveBlenderMotionReferences: vi.fn(async () => ({})),
+  makeBlenderMotionStrip: vi.fn(async () => ({ file: 's010/references/mr-example.jpg' })),
+}));
 
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -52,6 +56,7 @@ vi.mock('../services/film/queue.js', async (importOriginal) => ({
 }));
 vi.mock('../services/musicVideo/blender/cuts.js', async (importOriginal) => ({ ...await importOriginal(), startBlenderCut: sink.startBlenderCut }));
 vi.mock('../services/film/open.js', async (importOriginal) => ({ ...await importOriginal(), openBlenderShot: sink.openBlenderShot }));
+vi.mock('../services/film/motionReferences.js', async (importOriginal) => ({ ...await importOriginal(), ...motion }));
 vi.mock('../services/film/record.js', async (importOriginal) => ({
   ...await importOriginal(), saveBlenderSettings: open.saveBlenderSettings, saveBlenderShotNote: open.saveBlenderShotNote,
 }));
@@ -72,6 +77,9 @@ const workflows = [
   // Records and cancellation: nothing here chooses or starts what runs.
   ['put', `${FILM}/settings`, { fps: 30 }, open.saveBlenderSettings, 200],
   ['put', `${FILM}/shots/s010/note`, { text: 'Example note' }, open.saveBlenderShotNote, 200],
+  ['put', `${FILM}/shots/s010/motion-references`, { references: [] }, motion.saveBlenderMotionReferences, 200],
+  // Runs ffmpeg on a Media History clip, but nothing the film or the operator authored.
+  ['post', `${FILM}/shots/s010/motion-references/mr-example/strip`, {}, motion.makeBlenderMotionStrip, 200],
   ['post', `${FILM}/cancel`, {}, open.cancelBlenderProjectJobs, 200],
 ];
 

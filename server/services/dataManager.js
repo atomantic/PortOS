@@ -31,6 +31,8 @@ const DATA_DIR = PATHS.data;
 //   archivable — worth tarring into `data/backup/`. False for large binary trees
 //     (the tarball lands *inside* data/, so archiving them grows the very number
 //     the user came here to shrink) and for anything holding secrets.
+//   archiveExcludes — optional array of tar `--exclude` patterns relative to
+//     `data/` for archivable categories that hold secrets in a subdirectory.
 //   deletable  — the bytes are genuinely reproducible (caches, ephemeral working
 //     dirs, re-downloadable assets) or are already duplicated elsewhere. False
 //     whenever purging would destroy the only copy of generated or uploaded work.
@@ -65,6 +67,7 @@ export const CATEGORIES = {
   'backup-admission': { label: 'Backup Admission', description: 'Active publication and snapshot ownership — reconcile through backup recovery', archivable: false, deletable: false },
   // data/backup/ also holds the backup service's state.json and .archive-* staging; the purge is archives-only.
   'backup': { label: 'Backups', description: 'Data backup archives', archivable: false, deletable: true, purgeScope: 'category', purgeFilter: name => ARCHIVE_FILENAME.test(name) },
+  'blender-models': { label: 'Blender Models', description: 'Blender model workspaces — authored src/ code (the only copy) and immutable builds; records live in Postgres', archivable: false, deletable: false },
   'brain': { label: 'Brain', description: 'Brain items and sync log', archivable: true, deletable: false },
   // The Beeper attachment byte mirror (#37) — the only thing the Beeper feature
   // writes to `data/`; every other Beeper record is Postgres. Not archivable:
@@ -87,7 +90,7 @@ export const CATEGORIES = {
   'browser-downloads': { label: 'Browser Downloads', description: 'Files the agent browser downloaded — re-downloadable, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true, purgeScope: 'category' },
   cache: { label: 'Remote API and Reading Cache', description: 'Cached remote API metadata and the author-hosted Accelerando reading source — refetched on demand, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
-  'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
+  'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false, archiveExcludes: ['calendar/google-auth'] },
   'cover-fonts': { label: 'Cover Fonts', description: 'Typefaces uploaded for music video cover lettering; covers made with one fall back to a built-in typeface if it is removed', archivable: true, deletable: false },
   'private': { label: 'Private Keys', description: 'Machine-local integration credentials — managed in Settings > Credentials', archivable: false, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
@@ -177,7 +180,7 @@ export const CATEGORIES = {
   'model-tests': { label: 'Model Capability Tests', description: 'Throwaway agent sandboxes from the capability test suite — recreated per run, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'models': { label: '3D Models', description: 'Uploaded GLB layouts referenced by catalog places — retain the authored source files', archivable: true, deletable: false },
   'music': { label: 'Music', description: 'Uploaded and generated background tracks', archivable: true, deletable: false },
-  'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: true, deletable: false },
+  'openclaw': { label: 'OpenClaw', description: 'OpenClaw integration config', archivable: false, deletable: false },
   'peer-execution': { label: 'Peer Execution Recovery', description: 'Machine-local launch evidence and completion receipts required to reconcile authorized peer maintenance — preserve unresolved operations', archivable: false, deletable: false },
   'pipeline-comparative-rank': { label: 'Comparative Rank', description: 'Cached comparative issue rankings — re-running them costs LLM calls', archivable: true, deletable: false },
   'pipeline-editorial': { label: 'Editorial Analysis', description: 'Cached editorial analyses — re-running them costs LLM calls', archivable: true, deletable: false },
@@ -207,7 +210,7 @@ export const CATEGORIES = {
   'screenshots': { label: 'Screenshots', description: 'Task screenshots and images dropped into shell sessions — shell drops auto-delete after 7 days, others after 30 days unless an open task still uses them; Persistent Mind attachments are retained by Mind', archivable: true, deletable: true, purgeScope: 'category', purgeFilter: name => !isPersistentMindScreenshotEntry(name) },
   'settings': { label: 'Settings', description: 'Per-feature settings files', archivable: true, deletable: false },
   'sharing': { label: 'Peer Sync State', description: 'Peer-sync bookkeeping — purging forces a full resync and can resurrect deleted records', archivable: true, deletable: false },
-  'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: true, deletable: false },
+  'spotify': { label: 'Spotify Sync', description: 'Machine-local Spotify sync cursor and cache — purging resets the cursor and can leave a gap in imported history', archivable: false, deletable: false },
   'sprites': { label: 'Sprites', description: 'Sprite reference art, walk frames, and runtime atlases — the only copy of the generated art; records live in Postgres', archivable: false, deletable: false },
   'story-builder': { label: 'Story Builder', description: 'Story Builder project records', archivable: true, deletable: false },
   'storyboards': { label: 'Storyboards', description: 'Storyboard beats and panels (file mirror of the Postgres store)', archivable: true, deletable: false },
@@ -599,7 +602,8 @@ async function archiveCategoryUncached(categoryKey, options) {
       await writeFileGuarded(listPath, oldFiles.join('\n'));
       await execFileAsync('tar', ['-czf', stagedArchive, '-C', stagedDays, '-T', listPath], { timeout: 120000 });
     } else {
-      await execFileAsync('tar', ['-czf', stagedArchive, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
+      const excludes = (meta.archiveExcludes ?? []).map(pattern => `--exclude=${pattern}`);
+      await execFileAsync('tar', ['-czf', stagedArchive, ...excludes, '-C', DATA_DIR, categoryKey], { timeout: 120000 });
     }
 
     // A hard link publishes complete bytes atomically and refuses an existing

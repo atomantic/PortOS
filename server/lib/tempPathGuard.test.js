@@ -93,15 +93,15 @@ describe('isTempPath', () => {
   it('judges a symlink by where it POINTS, not where it sits', async () => {
     const outside = await scratchDir();
     const root = await scratchDir();
-    const escape = join(root, 'escape');
-    await symlink(outside, escape, 'dir');
+    const escapeLink = join(root, 'escape');
+    await symlink(outside, escapeLink, 'dir');
     pretendTmpdirIs(root);
 
     // Bypass probe: a real directory in exactly the same place is accepted, so
     // the rejections below are the symlink target being followed.
     expect(isTempPath(join(root, 'escape-but-real'))).toBe(true);
-    expect(isTempPath(escape)).toBe(false);
-    expect(isTempPath(join(escape, 'repo'))).toBe(false);
+    expect(isTempPath(escapeLink)).toBe(false);
+    expect(isTempPath(join(escapeLink, 'repo'))).toBe(false);
   });
 
   it('rejects a path that climbs out with ..', async () => {

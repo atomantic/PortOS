@@ -65,7 +65,7 @@ vi.mock('./characterMetrics.js', () => ({
 vi.mock('./characterSignals.js', () => ({
   createSignalContext: vi.fn(() => FAKE_READ),
 }));
-vi.mock('./meatspace.js', () => ({
+vi.mock('./meatspace/meatspace.js', () => ({
   getBirthDate: vi.fn(async () => ({ birthDate: store.birthDate })),
   // getBirthDateStrict adds the read-trustworthiness flag the birthDateStatus derivation
   // needs (#2757). `store.readable` defaults true so existing tests are unaffected; the

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 vi.mock('../YoutubeIngestSettings', () => ({ default: () => null }));
@@ -8,10 +9,9 @@ vi.mock('../YoutubeIngestSettings', () => ({ default: () => null }));
 const api = vi.hoisted(() => ({
   getBrainSettings: vi.fn(),
   getProviders: vi.fn(),
-  getCosConfig: vi.fn(),
   getEmbeddingStatus: vi.fn(),
+  getEmbeddingConfig: vi.fn(),
   updateBrainSettings: vi.fn(),
-  updateCosConfig: vi.fn(),
   syncBrainData: vi.fn(),
 }));
 vi.mock('../../../services/apiBrain.js', () => ({
@@ -20,18 +20,16 @@ vi.mock('../../../services/apiBrain.js', () => ({
   syncBrainData: api.syncBrainData,
 }));
 vi.mock('../../../services/apiProviders.js', () => ({ getProviders: api.getProviders }));
-vi.mock('../../../services/apiAgents.js', () => ({
-  getCosConfig: api.getCosConfig,
-  updateCosConfig: api.updateCosConfig,
+vi.mock('../../../services/apiMemory.js', () => ({
+  getEmbeddingStatus: api.getEmbeddingStatus,
+  getEmbeddingConfig: api.getEmbeddingConfig,
 }));
-vi.mock('../../../services/apiMemory.js', () => ({ getEmbeddingStatus: api.getEmbeddingStatus }));
 
-import ConfigTab from './ConfigTab.jsx';
+import BrainConfigTab from './ConfigTab.jsx';
 
-// Two providers whose model lists differ in the one way the seeding rules care
-// about: `chat-only` lists no embedding-named model, `local` does — and its own
-// default is a CHAT model, which is exactly the pin the embedding picker must
-// refuse to inherit.
+// The embeddings notice links to Models → Embeddings, so it needs a router.
+const ConfigTab = (props) => <MemoryRouter><BrainConfigTab {...props} /></MemoryRouter>;
+
 const PROVIDERS = [
   { id: 'chat-only', name: 'Chat Only', type: 'api', enabled: true, defaultModel: 'gpt-4o', models: ['gpt-4o', 'gpt-4o-mini'] },
   { id: 'local', name: 'Local', type: 'api', enabled: true, defaultModel: 'llama3.2:latest', models: ['llama3.2:latest', 'nomic-embed-text'] },
@@ -41,8 +39,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.getBrainSettings.mockResolvedValue({ defaultProvider: '', defaultModel: '', confidenceThreshold: 0.6 });
   api.getProviders.mockResolvedValue({ providers: PROVIDERS });
-  api.getCosConfig.mockResolvedValue({ embeddingProviderId: '', embeddingModel: '' });
   api.getEmbeddingStatus.mockResolvedValue(null);
+  api.getEmbeddingConfig.mockResolvedValue({ source: 'settings', provider: 'ollama', model: 'nomic-embed-text', endpoint: 'http://192.0.2.10:11434/v1/embeddings', disabled: false });
 });
 
 describe('brain ConfigTab scheduled reviews opt-in', () => {
@@ -69,33 +67,32 @@ describe('brain ConfigTab provider pickers', () => {
 
     expect(screen.getByLabelText('Default Model')).toHaveValue('gpt-4o');
   });
+});
 
-  it('seeds an embedding-named model over the provider default', async () => {
+describe('brain ConfigTab embeddings (#18296)', () => {
+  it('shows the shared settings.embeddings backend and links to it instead of a second picker', async () => {
     render(<ConfigTab />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Embedding Provider'), 'local');
-
-    // `llama3.2:latest` is the provider's own default and would embed nothing
-    // usable — the embedding-named model in the same list wins.
-    expect(screen.getByLabelText('Embedding Model')).toHaveValue('nomic-embed-text');
+    expect(await screen.findByText(/Catalog and memory embed with/)).toHaveTextContent('Ollama · nomic-embed-text');
+    expect(screen.getByRole('link', { name: 'Configure embeddings' })).toHaveAttribute('href', '/models/embeddings');
+    expect(screen.queryByLabelText('Embedding Provider')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save embedding config' })).not.toBeInTheDocument();
   });
 
-  it('falls back to the provider default when nothing in the list is embedding-named', async () => {
+  it('names the legacy CoS backend while settings.embeddings is unsaved', async () => {
+    api.getEmbeddingConfig.mockResolvedValue({ source: 'legacy', provider: 'lmstudio', model: 'text-embedding-nomic-embed-text-v2-moe', endpoint: null, disabled: false });
     render(<ConfigTab />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Embedding Provider'), 'chat-only');
-
-    expect(screen.getByLabelText('Embedding Model')).toHaveValue('gpt-4o');
+    expect(await screen.findByText(/legacy Chief of Staff embedding provider/)).toHaveTextContent('LM Studio · text-embedding-nomic-embed-text-v2-moe');
   });
 
-  it('keeps the two pickers independent', async () => {
+  it('disables reprocessing while embeddings are disabled', async () => {
+    api.getEmbeddingStatus.mockResolvedValue({ available: false, disabled: true, error: 'Embeddings are disabled on Models → Embeddings' });
+    api.getEmbeddingConfig.mockResolvedValue({ source: 'settings', provider: 'none', model: null, endpoint: null, disabled: true });
     render(<ConfigTab />);
 
-    await userEvent.selectOptions(await screen.findByLabelText('Default Provider'), 'chat-only');
-    await userEvent.selectOptions(screen.getByLabelText('Embedding Provider'), 'local');
-
-    expect(screen.getByLabelText('Default Model')).toHaveValue('gpt-4o');
-    expect(screen.getByLabelText('Embedding Model')).toHaveValue('nomic-embed-text');
+    expect(await screen.findByText(/for the catalog and memory/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reprocess all embeddings' })).toBeDisabled();
   });
 });
 
@@ -105,8 +102,9 @@ describe('brain ConfigTab provider list failure', () => {
     api.getProviders.mockRejectedValueOnce(new Error('providers down'));
     render(<ConfigTab />);
 
+    // Only the classification picker reads providers; embeddings live on Models → Embeddings.
     const alerts = await screen.findAllByRole('alert');
-    expect(alerts).toHaveLength(2);
+    expect(alerts).toHaveLength(1);
     expect(alerts[0]).toHaveTextContent('Could not load AI providers');
     expect(screen.queryByLabelText('Default Provider')).not.toBeInTheDocument();
 
@@ -134,22 +132,6 @@ describe('brain ConfigTab settings read failures', () => {
 
     expect(await screen.findByLabelText('Daily Digest Time')).toHaveValue('07:30');
     expect(screen.getByLabelText('Default Provider')).toHaveValue('local');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  });
-
-  it('shows a retryable error instead of an empty embedding provider when the CoS config fails, and recovers', async () => {
-    api.getCosConfig
-      .mockRejectedValueOnce(new Error('cos down'))
-      .mockResolvedValue({ embeddingProviderId: 'local', embeddingModel: 'nomic-embed-text' });
-    render(<ConfigTab />);
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load CoS config');
-    expect(screen.queryByLabelText('Embedding Provider')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save embedding config' })).toBeDisabled();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    expect(await screen.findByLabelText('Embedding Provider')).toHaveValue('local');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

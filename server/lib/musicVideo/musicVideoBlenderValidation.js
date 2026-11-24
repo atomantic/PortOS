@@ -5,7 +5,7 @@
  */
 import { z } from 'zod';
 import {
-  MUSIC_VIDEO_BLENDER_ENGINES, MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_NOTE_STATUSES, MUSIC_VIDEO_BLENDER_OPTION_KEY,
+  MUSIC_VIDEO_BLENDER_ENGINES, MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_ID, MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_LIMITS as REF_LIMITS, MUSIC_VIDEO_BLENDER_NOTE_STATUSES, MUSIC_VIDEO_BLENDER_OPTION_KEY,
   MUSIC_VIDEO_BLENDER_OPTION_TEXT_MAX, MUSIC_VIDEO_BLENDER_QUALITIES,
   MUSIC_VIDEO_BLENDER_SETTING_LIMITS as LIMITS, MUSIC_VIDEO_BLENDER_SHEET_LIMITS as SHEET_LIMITS,
   MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES,
@@ -48,6 +48,19 @@ export const musicVideoBlenderFileWriteSchema = z.object({
   content: z.string().max(MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES),
 }).strict();
 
+const modelSlug = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/, 'slug must be lowercase letters, digits, - or _');
+
+// Add a library model to the film; `slug` omitted lets the server name and de-duplicate it.
+export const musicVideoBlenderModelAddSchema = z.object({
+  kind: z.enum(['image-to-3d', 'threejs', 'blender-model']),
+  id: z.string().min(1).max(120),
+  variant: z.enum(['mesh', 'rigged', 'animated']).optional(),
+  slug: modelSlug.optional(),
+  replace: z.boolean().optional(),
+}).strict();
+
+export const musicVideoBlenderModelSlugSchema = z.object({ slug: modelSlug }).strict();
+
 export const musicVideoBlenderSyncSchema = z.object({
   replaceScenes: z.boolean().optional(),
 }).strict();
@@ -74,6 +87,23 @@ export const musicVideoBlenderRenderSchema = z.object({
 }).strict()
   .refine((input) => input.times == null || input.quality === 'still', { message: 'times applies to stills only', path: ['times'] })
   .refine((input) => input.sheet == null || input.quality === 'sheet', { message: 'sheet applies to contact sheets only', path: ['sheet'] });
+
+// The whole list for one shot; an entry without an id is new. Whether the video exists is checked in the service.
+export const musicVideoBlenderMotionReferencesSchema = z.object({
+  references: z.array(z.object({
+    id: z.string().regex(MUSIC_VIDEO_BLENDER_MOTION_REFERENCE_ID).optional(),
+    filename: z.string().min(1).max(300),
+    inSec: z.number().min(0).max(REF_LIMITS.secMax),
+    outSec: z.number().positive().max(REF_LIMITS.secMax),
+    speed: z.number().min(REF_LIMITS.speed.min).max(REF_LIMITS.speed.max),
+    note: z.string().max(REF_LIMITS.noteMax).default(''),
+  }).strict().refine((ref) => ref.outSec > ref.inSec, { message: 'out must be after in', path: ['outSec'] })).max(REF_LIMITS.perShot),
+}).strict();
+
+// `sheet` is a contact sheet's media path (`<shot>/sheets/<file>.jpg`); omitted, the newest sheet is used.
+export const musicVideoBlenderMotionStripSchema = z.object({
+  sheet: z.string().regex(/^[A-Za-z0-9_-]+\/sheets\/sheet--?\d+--?\d+-e\d+\.jpg$/).optional(),
+}).strict();
 
 export const musicVideoBlenderCutSchema = z.object({
   quality: z.enum(['preview', 'final']),

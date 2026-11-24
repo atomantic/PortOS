@@ -37,6 +37,7 @@ import {
   detectHostCapabilities, resolveTarget, renderOptionSupportFor, DEFAULT_IMAGE_TO_3D_TARGET,
 } from './targets.js';
 import { getTargetAdapter } from './adapters.js';
+import { cancelRiggingForModel } from '../rigging/inFlight.js';
 import {
   normalizeRenderOptions, randomRenderSeed, honorTargetRenderSupport,
 } from './renderOptions.js';
@@ -346,6 +347,8 @@ export const getModel = store.getModel;
 export async function deleteModel(id) {
   const current = await store.getModel(id, { includeDeleted: true });
   const result = await store.deleteModel(id);
+  // A rig/retarget Blender worker would otherwise run on, then publish into a deleted record.
+  cancelRiggingForModel(id);
   if (current?.status === 'generating') noteImageTo3d('cancellation');
   if (current?.status === 'generating' && current.generationOperationId) {
     const kill = activeRenders.get(current.generationOperationId);

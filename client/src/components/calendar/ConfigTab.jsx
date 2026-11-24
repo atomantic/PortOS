@@ -301,22 +301,22 @@ export default function ConfigTab({ accounts, setAccounts }) {
             const enabledCount = subcals.filter(s => s.enabled && !s.dormant).length;
             return (
               <div key={account.id} className="bg-port-card rounded-lg border border-port-border">
-                <div className="flex items-center justify-between p-4">
-                  <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
                     {isGoogle && (
                       <button
                         onClick={() => toggleExpand(account.id)}
                         aria-label={isExpanded ? `Collapse calendars for ${account.name}` : `Expand calendars for ${account.name}`}
                         aria-expanded={isExpanded}
-                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white"
+                        className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-500 hover:text-white shrink-0"
                       >
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>
                     )}
-                    <Icon size={20} className={account.enabled ? 'text-port-accent' : 'text-gray-600'} />
-                    <div>
-                      <div className="text-sm font-medium text-white">{account.name}</div>
-                      <div className="text-xs text-gray-500">
+                    <Icon size={20} className={`${account.enabled ? 'text-port-accent' : 'text-gray-600'} shrink-0`} />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{account.name}</div>
+                      <div className="text-xs text-gray-500 break-words">
                         {TYPE_LABELS[account.type]} {account.email ? `· ${account.email}` : ''}
                         {isGoogle && subcals.length > 0 && ` · ${enabledCount}/${subcals.length} active`}
                         {isGoogle && subcals.length === 0 && ' · No calendars discovered'}
@@ -332,10 +332,10 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => handleToggle(account)}
-                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                      className={`pointer-coarse:min-h-11 inline-flex items-center px-2 py-1 rounded text-xs transition-colors ${
                         account.enabled
                           ? 'bg-port-success/20 text-port-success'
                           : 'bg-gray-700 text-gray-400'
@@ -346,7 +346,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                     <button
                       onClick={() => requestDelete(account.id)}
                       disabled={deleting === account.id}
-                      className="p-1 text-gray-500 hover:text-port-error transition-colors"
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error transition-colors"
                       title="Delete account"
                     >
                       {deleting === account.id ? (
@@ -375,13 +375,13 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   <div className="border-t border-port-border px-4 py-3 space-y-3">
                     {/* Sync Method & OAuth Setup — first so user configures before discovering */}
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-500 font-medium">Sync Method</span>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-gray-500 font-medium min-w-0">Sync Method</span>
                         <select
                           aria-label="Sync method"
                           value={account.syncMethod || 'claude-mcp'}
                           onChange={(e) => handleSyncMethodChange(account, e.target.value)}
-                          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
+                          className="max-w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
                         >
                           <option value="claude-mcp">Claude MCP (zero config)</option>
                           <option value="google-api">Google API (direct, faster)</option>
@@ -409,23 +409,35 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           ) : googleAuthState === 'loading' ? (
                             <BrailleSpinner text="Checking Google authorization" />
                           ) : googleAuth?.hasCredentials && googleAuth?.hasTokens ? (
-                            <div className="flex items-center justify-between px-2 py-1.5 bg-port-success/5 rounded">
-                              <div className="flex items-center gap-1.5 text-xs text-port-success">
-                                <Key size={12} />
-                                <span>Google API authenticated</span>
-                                {googleAuth.expiryDate && (
-                                  <span className="text-gray-600">
-                                    (expires {formatDateNumeric(googleAuth.expiryDate)})
-                                  </span>
-                                )}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1.5 bg-port-success/5 rounded">
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-port-success min-w-0">
+                                  <Key size={12} className="shrink-0" />
+                                  <span>Google API authenticated</span>
+                                  {googleAuth.expiryDate && (
+                                    <span className="text-gray-600">
+                                      (expires {formatDateNumeric(googleAuth.expiryDate)})
+                                    </span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={() => requestDelete('google-auth')}
+                                  disabled={clearingGoogleAuth}
+                                  className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded text-gray-600 hover:text-port-error hover:bg-gray-800 shrink-0 disabled:opacity-50"
+                                >
+                                  Clear
+                                </button>
                               </div>
-                              <button
-                                onClick={handleClearGoogleAuth}
-                                disabled={clearingGoogleAuth}
-                                className="px-2 py-0.5 text-xs rounded text-gray-600 hover:text-port-error hover:bg-gray-800"
-                              >
-                                Clear
-                              </button>
+                              {isConfirming('google-auth') && (
+                                <InlineConfirmRow
+                                  question="Clear Google API authorization? You will need to re-authorize to sync."
+                                  confirmText="Clear auth"
+                                  confirmTitle="Clear Google API authorization"
+                                  cancelTitle="Cancel"
+                                  onConfirm={() => confirmDelete(handleClearGoogleAuth)}
+                                  onCancel={cancelDelete}
+                                />
+                              )}
                             </div>
                           ) : googleAuth?.hasCredentials ? (
                             <div className="space-y-2 px-2 py-1.5 bg-port-warning/5 rounded">
@@ -530,16 +542,16 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
                     {/* Sub-calendars */}
                     <div className="border-t border-port-border pt-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs text-gray-500 font-medium">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-xs text-gray-500 font-medium min-w-0">
                           Sub-calendars {subcals.length > 0 && `(${subcals.length})`}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           {subcals.length > 0 && (
                             <button
                               onClick={() => handleEnableAll(account)}
                               disabled={savingSubcals === account.id}
-                              className="px-2 py-0.5 text-xs rounded text-gray-500 hover:text-white hover:bg-gray-800"
+                              className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded text-gray-500 hover:text-white hover:bg-gray-800"
                             >
                               Enable All
                             </button>
@@ -547,7 +559,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                           <button
                             onClick={() => handleDiscoverCalendars(account)}
                             disabled={discovering === account.id}
-                            className="flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+                            className="flex items-center gap-1 pointer-coarse:min-h-11 px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
                           >
                             {discovering === account.id ? (
                               <RefreshCw size={12} className="animate-spin" />
@@ -568,11 +580,11 @@ export default function ConfigTab({ accounts, setAccounts }) {
                       {subcals.map(sc => (
                         <div
                           key={sc.calendarId}
-                          className={`flex items-center justify-between py-1.5 px-2 rounded ${
+                          className={`flex flex-wrap items-center justify-between gap-2 py-1.5 px-2 rounded ${
                             sc.dormant ? 'opacity-50' : ''
                           }`}
                         >
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
                             <label className="relative w-4 h-4 shrink-0 cursor-pointer" title="Change color">
                               <div className="w-4 h-4 rounded-full border border-port-border" style={{ backgroundColor: sc.color || DEFAULT_AVATAR_COLOR }} />
                               <input
@@ -596,7 +608,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                               <button
                                 onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', false)}
                                 disabled={savingSubcals === account.id}
-                                className="px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
+                                className="pointer-coarse:min-h-11 inline-flex items-center px-2 py-0.5 text-xs rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30"
                               >
                                 Activate
                               </button>
@@ -605,7 +617,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                                 <button
                                   onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'enabled', !sc.enabled)}
                                   disabled={savingSubcals === account.id}
-                                  className="p-0.5"
+                                  className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center p-0.5"
                                   title={sc.enabled ? 'Disable' : 'Enable'}
                                 >
                                   {sc.enabled ? (
@@ -617,7 +629,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
                                 <button
                                   onClick={() => handleSubcalendarToggle(account, sc.calendarId, 'dormant', true)}
                                   disabled={savingSubcals === account.id}
-                                  className="px-1.5 py-0.5 text-xs rounded text-gray-600 hover:text-gray-400 hover:bg-gray-800"
+                                  className="pointer-coarse:min-h-11 inline-flex items-center px-1.5 py-0.5 text-xs rounded text-gray-600 hover:text-gray-400 hover:bg-gray-800"
                                   title="Mark dormant"
                                 >
                                   Dormant

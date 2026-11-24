@@ -50,6 +50,7 @@ import {
   summarizeAutoSkin,
   thresholdsForWorker,
 } from './autoSkinReport.js';
+import { acquireRigLane, releaseRigLane, throwIfCancelled } from './inFlight.js';
 import { requireRiggingInterpreter } from './readiness.js';
 import { buildHumanoidArmatureSpec } from './skeletonMapping.js';
 import { runRiggingWorker } from './workerProcess.js';
@@ -159,7 +160,7 @@ const rigError = (message, code, extra = {}) => new ServerError(message, { statu
  *
  * @param {{modelId: string, recordDir: string, skeletonHint?: string, overrides?: object,
  *          readiness?: object, python?: string|null, spawnImpl?: Function, rigId?: string,
- *          timeoutMs?: number, verify?: Function}} opts
+ *          timeoutMs?: number, signal?: AbortSignal, verify?: Function}} opts
  * @returns {Promise<{rigId: string, assetPath: string, reportPath: string, sha256: string,
  *   bytes: number, summary: object, report: object}>}
  */
@@ -173,6 +174,7 @@ export async function runAutoSkin({
   spawnImpl,
   rigId = `rig-${randomUUID()}`,
   timeoutMs,
+  signal,
   verify = readRiggedArtifact,
 }) {
   const interpreter = await requireRiggingInterpreter({ readiness, python });
@@ -193,8 +195,9 @@ export async function runAutoSkin({
     }, null, 2));
 
     const { code, tail } = await runRiggingWorker({
-      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs,
+      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs, signal,
     });
+    throwIfCancelled(signal);
     const report = await readJSONFile(paths.workerReport, null, { logError: false });
 
     // A non-zero exit with a readable report is the EXPECTED gate failure: the worker
@@ -215,6 +218,10 @@ export async function runAutoSkin({
     if (!staged) throw rigError('The rigging worker reported success but exported no mesh.', 'RIGGING_NO_OUTPUT');
 
     const published = await publishRigArtifacts({ paths, report });
+    if (signal?.aborted) {
+      await rm(paths.publishDir, { recursive: true, force: true }).catch(() => {});
+      throwIfCancelled(signal);
+    }
     // Read the pair back through the same reader every consumer uses, before recording
     // the rig as ready. A publish that does not verify is exactly the interrupted state
     // this contract exists to make detectable — it must not be reported as a finished
@@ -241,11 +248,6 @@ export async function runAutoSkin({
   }
 }
 
-// One rig per record at a time. A double-click would otherwise put two Blender
-// processes on the same mesh — a re-entrancy guard, not a multi-actor lock
-// (AGENTS.md single-user trust model).
-const rigsInFlight = new Set();
-
 /**
  * Rig a stored image-to-3D record and persist the result on it. The record's `rig`
  * field is the user-visible evidence: on success the published pair plus the measured
@@ -262,19 +264,21 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
   if (model.status !== 'ready' || !model.assetPath) {
     throw rigError('Render this model before rigging it.', 'RIGGING_NO_SOURCE_MESH');
   }
-  if (rigsInFlight.has(modelId)) {
-    throw new ServerError('This model is already being rigged.', { status: 409, code: 'RIGGING_IN_FLIGHT' });
-  }
-
-  rigsInFlight.add(modelId);
+  // One rig OR retarget per record at a time (shared with retarget.js).
+  const signal = acquireRigLane(modelId, 'rig');
   const startedAt = now();
-  await mutateModel(modelId, (current) => ({ ...current, rig: { ...(current.rig || {}), status: 'rigging', startedAt, error: null, reason: null } }));
+  // False until the `rigging` transition commits, so a failed initial write neither
+  // strands the lane nor overwrites the record with a `failed` it never entered.
+  let entered = false;
   try {
+    await mutateModel(modelId, (current) => ({ ...current, rig: { ...(current.rig || {}), status: 'rigging', startedAt, error: null, reason: null } }));
+    entered = true;
     const result = await run({
       modelId,
       recordDir: join(PATHS.imageTo3d, modelId),
       skeletonHint: options.skeletonHint,
       overrides: options,
+      signal,
     });
     // The verified pair already sits in its own `rig/<rigId>/` directory and is
     // never replaced, so the row that first names it takes a backup lease (#9982):
@@ -297,6 +301,7 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
       },
     })));
   } catch (error) {
+    if (!entered) throw error;
     await mutateModel(modelId, (current) => ({
       ...current,
       rig: {
@@ -311,6 +316,6 @@ export async function rigImageTo3dModel(modelId, options = {}, { run = runAutoSk
     })).catch(() => {});
     throw error;
   } finally {
-    rigsInFlight.delete(modelId);
+    releaseRigLane(modelId, 'rig');
   }
 }

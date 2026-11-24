@@ -1425,6 +1425,19 @@ CREATE TABLE IF NOT EXISTS image_to_3d_models (
 
 CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE;
 
+CREATE TABLE IF NOT EXISTS blender_models (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    );
+
+CREATE INDEX IF NOT EXISTS idx_blender_models_live_updated ON blender_models (updated_at DESC) WHERE deleted = FALSE;
+
 CREATE TABLE IF NOT EXISTS html_page_runs (
       id TEXT PRIMARY KEY,
       backend VARCHAR(32) NOT NULL,
@@ -1529,9 +1542,36 @@ CREATE TABLE IF NOT EXISTS media_assets (
       kind VARCHAR(16) NOT NULL,
       ref TEXT NOT NULL,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      provenance_refs TEXT[] NOT NULL DEFAULT '{}',
       created_at TIMESTAMPTZ DEFAULT NOW(),
       indexed_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS provenance_refs TEXT[];
+
+UPDATE media_assets SET provenance_refs = COALESCE((
+       SELECT array_agg(DISTINCT v) FROM (
+         SELECT CASE WHEN jsonb_typeof(data->'cleanedFrom') = 'string' THEN data->>'cleanedFrom' END AS v
+         UNION ALL SELECT CASE WHEN jsonb_typeof(data->'upscaledFrom') = 'string' THEN data->>'upscaledFrom' END
+         UNION ALL SELECT CASE WHEN jsonb_typeof(data->'initImageFilename') = 'string' THEN data->>'initImageFilename' END
+         UNION ALL SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(data->'referenceImageFilenames') = 'array'
+           THEN data->'referenceImageFilenames' ELSE '[]'::jsonb END)
+         UNION ALL SELECT asset->>'filename' FROM jsonb_array_elements(CASE
+           WHEN jsonb_typeof(data #> '{visualConditioning,assets}') = 'array'
+           THEN data #> '{visualConditioning,assets}' ELSE '[]'::jsonb END) AS asset
+         UNION ALL SELECT asset->>'filename' FROM jsonb_array_elements(CASE
+           WHEN jsonb_typeof(data->'requestedInputImages') = 'array'
+           THEN data->'requestedInputImages' ELSE '[]'::jsonb END) AS asset
+       ) AS refs WHERE v IS NOT NULL AND v <> ''
+     ), '{}') WHERE provenance_refs IS NULL AND kind = 'image';
+
+UPDATE media_assets SET provenance_refs = '{}' WHERE provenance_refs IS NULL;
+
+ALTER TABLE media_assets ALTER COLUMN provenance_refs SET DEFAULT '{}';
+
+ALTER TABLE media_assets ALTER COLUMN provenance_refs SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_media_assets_provenance_refs ON media_assets USING gin (provenance_refs) WHERE kind = 'image';
 
 CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets (kind, created_at DESC);
 
@@ -2411,6 +2451,8 @@ DROP INDEX IF EXISTS idx_beeper_messages_conversation_sort;
 
 CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_order ON beeper_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC);
 
+CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_id ON beeper_messages (conversation_id, id);
+
 CREATE TABLE IF NOT EXISTS beeper_participants (
     conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
     source_user_id TEXT NOT NULL,
@@ -2537,6 +2579,10 @@ CREATE TABLE IF NOT EXISTS github_notifications (
 
 CREATE INDEX IF NOT EXISTS idx_github_notifications_account_updated ON github_notifications (account_id, gh_updated_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_github_notifications_open_updated ON github_notifications (account_id, gh_updated_at DESC) WHERE state = 'open';
+
+CREATE INDEX IF NOT EXISTS idx_github_notifications_account_repo ON github_notifications (account_id, repo_full_name);
+
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS latest_comment_api_url TEXT;
 
 ALTER TABLE github_notifications ADD COLUMN IF NOT EXISTS decision TEXT;
@@ -2589,6 +2635,13 @@ CREATE TABLE IF NOT EXISTS github_notification_rules (
     UNIQUE (account_id, repo_full_name, reason, actor)
   );
 
+CREATE TABLE IF NOT EXISTS github_notification_mutes (
+    account_id TEXT NOT NULL,
+    repo_full_name TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (account_id, repo_full_name, reason)
+  );
+
 CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
     id BIGSERIAL PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -2598,6 +2651,8 @@ CREATE TABLE IF NOT EXISTS github_notification_audit_changes (
     applied_at TIMESTAMPTZ DEFAULT NOW(),
     undone_at TIMESTAMPTZ
   );
+
+CREATE INDEX IF NOT EXISTS idx_github_notification_audit_changes_account ON github_notification_audit_changes (account_id, applied_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS github_notification_audit_reports (
     account_id TEXT PRIMARY KEY,
@@ -2772,6 +2827,10 @@ CREATE TRIGGER trg_html_page_runs_audit AFTER UPDATE OR DELETE ON html_page_runs
 DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
 
 CREATE TRIGGER trg_image_to_3d_models_audit AFTER UPDATE OR DELETE ON image_to_3d_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+
+DROP TRIGGER IF EXISTS trg_blender_models_audit ON blender_models;
+
+CREATE TRIGGER trg_blender_models_audit AFTER UPDATE OR DELETE ON blender_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 
 DROP TRIGGER IF EXISTS trg_sprite_records_audit ON sprite_records;
 

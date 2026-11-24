@@ -830,7 +830,7 @@ export const PORTOS_AREA_LABELS = Object.freeze([
 /** Shared scope guidance for the one-shot repo-study label contract. */
 export const PORTOS_AREA_LABEL_GUIDANCE = [
   'Scope labels (`area:*`) are required for repo-study issues. Inspect the target files and apply every relevant existing area label, preferring the narrowest label rather than a generic guess.',
-  `The current PortOS area vocabulary is: ${PORTOS_AREA_LABELS.join(', ')}. Re-check the forge with \`gh label list --search area:\` or \`glab label list\` before filing; create a genuinely missing, clearly scoped area label before applying it instead of omitting scope (GitHub: \`gh label create <name> --color 0366D6 --description \"…\" --force\`; GitLab: \`glab label create --name <name> --color \"#0366D6\" --description \"…\"\`).`,
+  `The current PortOS area vocabulary is: ${PORTOS_AREA_LABELS.join(', ')}. Re-check the forge with \`gh label list --search area:\` or \`glab label list\` before filing; create a genuinely missing, clearly scoped area label before applying it instead of omitting scope (GitHub: \`gh label create <name> --color 0366D6 --description "…" --force\`; GitLab: \`glab label create --name <name> --color "#0366D6" --description "…"\`).`,
 ].join('\n');
 
 /**

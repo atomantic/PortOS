@@ -31,6 +31,7 @@ import { isDirectlyInvoked } from './lib/directInvocation.js';
 const MODULE_RE = /\.(?:[cm]?jsx?|tsx?)$/i;
 const DYNAMIC_IMPORT_RE = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
 const NEW_URL_RE = /new URL\(\s*['"]([^'"]+)['"]\s*,\s*import\.meta\.url\s*\)/g;
+const RAW_RELATIVE_LITERAL_RE = /['"](\.\.?\/[^'"\n\\]+)['"]/g;
 // A `/` after one of these words begins a regex literal, not a division.
 const REGEX_PRECEDING_KEYWORDS = new Set(['return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
 // `if (x) /re/.test(y)`: a `)` closing one of these headers is followed by a statement.
@@ -169,6 +170,10 @@ export function relativeSpecifiers(source) {
  * @returns {Array<{file: string, specifier: string, resolved: string, tracked: string}>}
  */
 export function importCaseMismatches(file, source, tracked, folded = foldTracked(tracked)) {
+  // Fast path: scanCode is the expensive step on every tracked module. A
+  // mismatch needs a relative quoted literal, so a file with none of them, or
+  // whose literals all resolve exactly, cannot report one.
+  if (!mayHaveCaseMismatch(file, source, tracked, folded)) return [];
   const mismatches = [];
   for (const specifier of relativeSpecifiers(source)) {
     const target = posix.normalize(posix.join(posix.dirname(file), specifier));
@@ -179,6 +184,26 @@ export function importCaseMismatches(file, source, tracked, folded = foldTracked
     if (insensitive.length > 0) mismatches.push({ file, specifier, resolved: target, tracked: insensitive[0] });
   }
   return mismatches;
+}
+
+/**
+ * Cheap, conservative pre-check for `importCaseMismatches`: false only when the
+ * exact scan could not report anything. Every executable specifier is a quoted
+ * relative literal, so a raw-text scan that finds no case-only candidate proves
+ * the full scan empty. A backslash inside a candidate's quotes can hide an
+ * escaped specifier, so those files always take the exact path.
+ */
+function mayHaveCaseMismatch(file, source, tracked, folded) {
+  if (!source.includes('./')) return false;
+  if (/['"]\\/.test(source) || /\.\.?\\/.test(source)) return true;
+  for (const match of source.matchAll(RAW_RELATIVE_LITERAL_RE)) {
+    const target = posix.normalize(posix.join(posix.dirname(file), match[1].split(/[?#]/)[0]));
+    if (target.startsWith('../')) continue;
+    const candidates = COMPLETIONS.map((completion) => `${target}${completion}`);
+    if (candidates.some((candidate) => tracked.has(candidate))) continue;
+    if (candidates.some((candidate) => folded.has(candidate.toLowerCase()))) return true;
+  }
+  return false;
 }
 
 /** Lowercased path → the tracked spellings that fold to it. */

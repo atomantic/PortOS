@@ -320,7 +320,7 @@ function recoverCompletionsUnderAdmission() {
 export async function announceTerminalTransition(job, onDurable = () => {}) {
   if (job.params?.videoProduction) {
     const tag = job.params.videoProduction;
-    const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+    const { settleVideoAttempt } = await loadMediaRuntimeModule('creativeDirectorVideoExecution');
     await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (job.status === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : job.status })
       .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
   }
@@ -473,7 +473,7 @@ async function restoreInterruptedRunningJob(j) {
     return { reattach };
   }
   if (j.kind === 'video-sharing') {
-    const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
+    const { cleanupInterruptedSharingCopy } = await loadMediaRuntimeModule('sharingCopy');
     await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
   }
   archive.push({ ...j, status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString() });
@@ -551,7 +551,7 @@ export async function restoreQueueSnapshot() {
   // their relative order if that ever changes.
   if (reattachJobs.length) queue.unshift(...reattachJobs);
   if (!persistBlocked && Array.isArray(data?.jobs)) {
-    const { cleanupOrphanTopazStaging } = await import('../videoGen/topazStaging.js');
+    const { cleanupOrphanTopazStaging } = await loadMediaRuntimeModule('topazStaging');
     await cleanupOrphanTopazStaging(listJobs()).catch(() => console.error('❌ Topaz staging cleanup failed; owned files were retained.'));
   }
   // The persisted `position` reflects the previous process' queue layout

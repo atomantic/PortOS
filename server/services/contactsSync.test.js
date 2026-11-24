@@ -1,11 +1,31 @@
-import { describe, it, expect } from 'vitest';
-import {
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+let tempDataRoot = createTempDataRoot('portos-contacts-test-');
+
+vi.mock('../lib/fileUtils.js', async (orig) => {
+  const actual = await orig();
+  return {
+    ...actual,
+    PATHS: makePathsProxy(actual, { dataRoot: () => tempDataRoot }),
+    dataPath: (...parts) => join(tempDataRoot, ...parts),
+  };
+});
+
+const {
   contactDisplayName,
   normalizeContactRecord,
   mergeContacts,
   buildContactIndex,
   resolveHandleAgainstContacts,
-} from './contactsSync.js';
+  runSync,
+  readContactCache,
+  readSyncState,
+  clearContactCache,
+} = await import('./contactsSync.js');
 
 // Fixtures use reserved NANP 555 numbers only — never real contact data.
 
@@ -45,6 +65,17 @@ describe('contactsSync pure helpers', () => {
 
     it('returns null when empty', () => {
       expect(normalizeContactRecord({ phones: [], emails: [] })).toBeNull();
+    });
+
+    it('omits sourcePath from normalized records', () => {
+      const c = normalizeContactRecord({
+        id: '1',
+        uniqueId: 'u1',
+        firstName: 'Alex',
+        phones: ['+15551234567'],
+        sourcePath: '/tmp/AddressBook/AddressBook-v22.abcddb',
+      });
+      expect('sourcePath' in c).toBe(false);
     });
   });
 
@@ -108,5 +139,104 @@ describe('contactsSync pure helpers', () => {
       expect(hit.source).toBe('contacts');
       expect(resolveHandleAgainstContacts('+19999999999', index)).toBeNull();
     });
+  });
+});
+
+function createFakeAddressBookDb(dbPath, rows) {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE ZABCDRECORD (
+        Z_PK INTEGER PRIMARY KEY,
+        ZUNIQUEID TEXT,
+        ZFIRSTNAME TEXT,
+        ZLASTNAME TEXT,
+        ZMIDDLENAME TEXT,
+        ZNICKNAME TEXT,
+        ZORGANIZATION TEXT,
+        ZNAME TEXT
+      );
+      CREATE TABLE ZABCDPHONENUMBER (ZOWNER INTEGER, ZFULLNUMBER TEXT);
+      CREATE TABLE ZABCDEMAILADDRESS (ZOWNER INTEGER, ZADDRESS TEXT);
+    `);
+    const insRec = db.prepare(
+      'INSERT INTO ZABCDRECORD (Z_PK, ZUNIQUEID, ZFIRSTNAME, ZLASTNAME, ZMIDDLENAME, ZNICKNAME, ZORGANIZATION, ZNAME) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+    const insPhone = db.prepare('INSERT INTO ZABCDPHONENUMBER (ZOWNER, ZFULLNUMBER) VALUES (?, ?)');
+    const insEmail = db.prepare('INSERT INTO ZABCDEMAILADDRESS (ZOWNER, ZADDRESS) VALUES (?, ?)');
+    for (const row of rows) {
+      insRec.run(row.pk, row.uniqueId, row.firstName || null, row.lastName || null, null, null, null, null);
+      for (const p of row.phones || []) insPhone.run(row.pk, p);
+      for (const e of row.emails || []) insEmail.run(row.pk, e);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+describe('contactsSync cache security and erasure (#18130)', () => {
+  let prevAbRoot;
+  let abRoot;
+
+  beforeEach(() => {
+    prevAbRoot = process.env.CONTACTS_AB_ROOT;
+    tempDataRoot = createTempDataRoot('portos-contacts-test-');
+    abRoot = createTempDataRoot('portos-contacts-ab-');
+    mkdirSync(abRoot, { recursive: true });
+    process.env.CONTACTS_AB_ROOT = abRoot;
+  });
+
+  afterEach(() => {
+    if (prevAbRoot === undefined) delete process.env.CONTACTS_AB_ROOT;
+    else process.env.CONTACTS_AB_ROOT = prevAbRoot;
+    rmSync(tempDataRoot, { recursive: true, force: true });
+    rmSync(abRoot, { recursive: true, force: true });
+  });
+
+  it('writes contacts-cache.json with mode 0o600, strips sourcePath, and clears cache + sync state idempotently', async () => {
+    const dbPath = join(abRoot, 'AddressBook-v22.abcddb');
+    createFakeAddressBookDb(dbPath, [
+      { pk: 1, uniqueId: 'u-1', firstName: 'Jane', lastName: 'Doe', phones: ['+1 555 010 1234'], emails: ['jane@example.com'] },
+    ]);
+
+    const result = await runSync();
+    expect(result.ok).toBe(true);
+    expect(result.contactCount).toBe(1);
+
+    const cacheFile = join(tempDataRoot, 'contacts-cache.json');
+    const stateFile = join(tempDataRoot, 'contacts-sync-state.json');
+    expect(existsSync(cacheFile)).toBe(true);
+    expect(existsSync(stateFile)).toBe(true);
+
+    if (process.platform !== 'win32') {
+      expect(statSync(cacheFile).mode & 0o777).toBe(0o600);
+    }
+
+    const cache = await readContactCache();
+    expect(cache.contacts).toHaveLength(1);
+    expect('sourcePath' in cache.contacts[0]).toBe(false);
+
+    const firstClear = await clearContactCache();
+    expect(firstClear).toEqual({ ok: true, cleared: true, cacheRemoved: true, stateRemoved: true });
+    expect(existsSync(cacheFile)).toBe(false);
+    expect(existsSync(stateFile)).toBe(false);
+
+    const emptyCache = await readContactCache();
+    expect(emptyCache.contacts).toEqual([]);
+    const emptyState = await readSyncState();
+    expect(emptyState.lastRunAt).toBeNull();
+    expect(emptyState.lastResult).toBeNull();
+
+    // Idempotent second call when already absent
+    const secondClear = await clearContactCache();
+    expect(secondClear).toEqual({ ok: true, cleared: true, cacheRemoved: false, stateRemoved: false });
+  });
+});
+
+describe('contactsSync.getStatus (#18279)', () => {
+  it('reports cache and state without any setup probe or host paths', async () => {
+    const { getStatus } = await import('./contactsSync.js');
+    const status = await getStatus();
+    expect(Object.keys(status).sort()).toEqual(['cache', 'state']);
   });
 });

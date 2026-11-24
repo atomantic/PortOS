@@ -8,6 +8,7 @@ const fixtures = vi.hoisted(() => ({
   model: { id: 'example-ltx', runtime: 'ltx2', supportedModes: ['text', 'image', 'extend'], defaultFrames: 25 },
   render: vi.fn(),
   loadHistory: vi.fn(),
+  mutateHistory: vi.fn(),
   probe: vi.fn(),
   trim: vi.fn(),
   unlink: vi.fn(),
@@ -35,7 +36,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
 }));
 vi.mock('../../lib/ffmpeg.js', () => ({ probeFrameCount: fixtures.probe, trimVideoFromFrame: fixtures.trim }));
 vi.mock('../../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), closeJobAfterDelay: vi.fn() }));
-vi.mock('./history.js', () => ({ loadHistory: fixtures.loadHistory, mutateVideoHistory: vi.fn(async (update) => update([])) }));
+vi.mock('./history.js', () => ({ loadHistory: fixtures.loadHistory, mutateVideoHistory: fixtures.mutateHistory }));
 vi.mock('./eta.js', () => ({ estimateRenderMs: vi.fn(() => null) }));
 vi.mock('./renderArgs.js', () => ({ DEFAULT_NUM_FRAMES: 121, resolveVideoDimensions: () => ({ width: 320, height: 192 }) }));
 vi.mock('./frameExtraction.js', () => ({ extractLastFrame: fixtures.extract }));
@@ -70,6 +71,7 @@ beforeEach(() => {
   fixtures.syntheticHistory = false;
   fixtures.model.runtime = 'ltx2';
   fixtures.loadHistory.mockReset().mockResolvedValue([]);
+  fixtures.mutateHistory.mockReset().mockImplementation(async (update) => update([]));
   fixtures.model.supportedModes = ['text', 'image', 'extend'];
   fixtures.render.mockImplementation(async ({ jobId }) => {
     queueMicrotask(() => videoGenEvents.emit('completed', { generationId: jobId }));
@@ -217,13 +219,63 @@ describe('bounded chain delivery', () => {
     expect(fixtures.stitch.mock.calls[0][1].continuation).toMatchObject({ requestedStrategy: 'auto', effectiveStrategy: 'frame', actualHistoryFrames: 0 });
   });
 
-  it('passes cancellation into an in-progress stitch and never reports a canceled result as completed', async () => {
+  it('passes cancellation into an in-progress stitch and settles as canceled instead of stitch failed', async () => {
     fixtures.stitch.mockImplementation(async (_ids, options) => {
       cancel();
       expect(options.signal.aborted).toBe(true);
       throw new Error('Stitch canceled');
     });
-    expect((await start()).failed.error).toMatch(/Stitch canceled/);
+    expect((await start()).failed.error).toBe('Canceled mid-chain');
+    expect(fixtures.mutateHistory).toHaveBeenCalledTimes(1);
     expect(fixtures.unlink).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides completed chunks before failing when canceled between chunks on a thrown cancel path', async () => {
+    const events = [];
+    const historyRows = [];
+    fixtures.render.mockImplementation(async ({ jobId }) => {
+      historyRows.push({ id: jobId, hidden: false });
+      queueMicrotask(() => videoGenEvents.emit('completed', { generationId: jobId }));
+      return { jobId };
+    });
+    fixtures.mutateHistory.mockImplementation(async (update) => {
+      events.push('hide');
+      return update(historyRows);
+    });
+    fixtures.probe.mockReset().mockImplementationOnce(async () => {
+      cancel();
+      return 25;
+    });
+    const onFailed = (event) => {
+      if (event.generationId === 'example-chain') events.push('failed');
+    };
+    videoGenEvents.on('failed', onFailed);
+    const result = await start().finally(() => videoGenEvents.off('failed', onFailed));
+
+    expect(result.failed.error).toBe('Canceled mid-chain');
+    expect(events).toEqual(['hide', 'failed']);
+    expect(historyRows).toHaveLength(1);
+    expect(historyRows[0].hidden).toBe(true);
+  });
+
+  it('hides completed chunks before failing when canceled during frame extraction between chunks', async () => {
+    fixtures.model.runtime = 'minimax_h3';
+    const historyRows = [];
+    fixtures.render.mockImplementation(async ({ jobId }) => {
+      historyRows.push({ id: jobId, hidden: false });
+      queueMicrotask(() => videoGenEvents.emit('completed', { generationId: jobId }));
+      return { jobId };
+    });
+    fixtures.mutateHistory.mockImplementation(async (update) => update(historyRows));
+    fixtures.extract.mockImplementationOnce(async () => {
+      cancel();
+      return { filename: 'example-last.jpg' };
+    });
+
+    expect((await start()).failed.error).toBe('Canceled mid-chain');
+    expect(fixtures.mutateHistory).toHaveBeenCalledTimes(1);
+    expect(historyRows).toHaveLength(1);
+    expect(historyRows[0].hidden).toBe(true);
+    expect(fixtures.stitch).not.toHaveBeenCalled();
   });
 });

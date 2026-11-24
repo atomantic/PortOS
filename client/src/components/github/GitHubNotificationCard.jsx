@@ -9,27 +9,11 @@ import Pill from '../ui/Pill';
 import OverflowMenu from '../ui/OverflowMenu';
 import GitHubDeploymentReview from './GitHubDeploymentReview';
 import GitHubAgentPinForm from './GitHubAgentPinForm';
+import GitHubIssueClaim from './GitHubIssueClaim';
 import GitHubPullRequestActions from './GitHubPullRequestActions';
-import { AGENT_REFUSED_LABELS, AGENT_RULE_KINDS, DECISION_ACTIONS, DECISION_VIEW, REASON_WHY, TONE_EDGE, TRUST_VIEW, subjectStatusChip } from './githubTriageLabels';
+import { AGENT_REFUSED_LABELS, AGENT_RULE_KINDS, DECISION_ACTIONS, DECISION_VIEW, REASON_LABELS, REASON_WHY, TONE_EDGE, TRUST_VIEW, notificationAudienceLabel, subjectStatusChip } from './githubTriageLabels';
 import { timeAgo } from '../../utils/formatters';
-import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent } from '../../services/apiGithub.js';
-
-// GitHub's `reason` vocabulary, phrased for a glance.
-const REASON_LABELS = {
-  approval_requested: 'Deploy approval',
-  assign: 'Assigned',
-  author: 'You opened',
-  ci_activity: 'CI',
-  comment: 'Comment',
-  invitation: 'Invitation',
-  manual: 'Subscribed',
-  mention: 'Mention',
-  review_requested: 'Review requested',
-  security_alert: 'Security alert',
-  state_change: 'State change',
-  subscribed: 'Watching',
-  team_mention: 'Team mention',
-};
+import { applyGitHubNotificationAction, resolveGitHubNotificationWithAgent, setGitHubNotificationMute } from '../../services/apiGithub.js';
 
 // The generic agent lane (GENERIC_AGENT_LANE on the server): on your own PR it
 // brings the branch up to date and works through the maintainers' comments,
@@ -145,6 +129,8 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
   const decision = DECISION_VIEW[notification.decision];
   const kind = kindOf(notification);
   const why = REASON_WHY[notification.reason];
+  const reasonLabel = REASON_LABELS[notification.reason] || notification.reason;
+  const audienceLabel = notificationAudienceLabel(notification);
   const statusChip = subjectStatusChip(notification.subjectType, notification.subjectStatus);
   // Every open row offers the button; a refused lane disables it with its reason.
   const agent = handled ? null : notification.agent;
@@ -154,10 +140,22 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
   const startAgent = async (pin) => {
     if (await onAction(notification, 'agent', pin)) setPicking(false);
   };
+  const toggleRepoMute = () => runMutation(async () => {
+    const result = await setGitHubNotificationMute({ ...notification, muted: !notification.mutedInPortOS }).catch(() => null);
+    if (result) applyUpdate(notification, { ...notification, mutedInPortOS: result.muted });
+  });
   const overflow = [
     ...(handled ? [] : MORE_ACTIONS.map(({ action, label, icon }) => ({
       id: action, label, icon, disabled: busy, onSelect: () => onAction(notification, action),
     }))),
+    ...(!notification.suspect && notification.repoFullName
+      && notification.reason !== 'security_alert' && /^[a-z][a-z0-9_]{0,63}$/.test(notification.reason) ? [{
+        id: 'repo-reason-mute',
+        label: `${notification.mutedInPortOS ? 'Unmute' : 'Mute'} "${reasonLabel}" for ${notification.repoFullName} in PortOS`,
+        icon: notification.mutedInPortOS ? Bell : BellOff,
+        disabled: busy,
+        onSelect: toggleRepoMute,
+      }] : []),
     // Handle every similar thread the same way from now on (#13192).
     ...(notification.ruleKind ? [{ id: 'add-rule', label: 'Add automation rule…', icon: ListPlus, to: automationRuleLink(notification) }] : []),
     // The same thread by GitHub's reason (e.g. "Someone commented on a thread you follow").
@@ -178,14 +176,16 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
             {notification.title}
           </Link>
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-400">
-            <Pill tone={why?.tone || 'muted'} size="xs">{REASON_LABELS[notification.reason] || notification.reason}</Pill>
+            <Pill tone={why?.tone || 'muted'} size="xs">{reasonLabel}</Pill>
+            {audienceLabel && <Pill tone="muted" size="xs">{audienceLabel}</Pill>}
+            {notification.mutedInPortOS && <Pill tone="muted" size="xs">Muted in PortOS</Pill>}
             {statusChip && <Pill tone={statusChip.tone} size="xs">{statusChip.label}</Pill>}
             {notification.subjectStatus?.awaitingReply && statusChip && statusChip.key !== 'reply' && <Pill tone="warning" size="xs">Reply needed</Pill>}
             {notification.repoFullName && <span className="min-w-0 truncate font-mono">{notification.repoFullName}</span>}
             <span className="shrink-0">· {timeAgo(notification.updatedAt)}</span>
             {accountLabel && <span className="shrink-0">· {accountLabel}</span>}
           </div>
-          {why && <p className="mt-1 text-xs text-gray-400">{why.text}</p>}
+          {why?.text && <p className="mt-1 text-xs text-gray-400">{why.text}</p>}
           {notification.deployment && (
             <p className="mt-1 min-w-0 break-words text-xs text-gray-300">
               <span className="text-white">{notification.deployment.name}</span>
@@ -250,6 +250,7 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
               <Rocket size={13} aria-hidden="true" /> Review deployment
             </button>
           )}
+          {notification.claimIssue && <GitHubIssueClaim notification={notification} busy={busy} runMutation={runMutation} />}
           {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={applyUpdate}
             busy={busy} runMutation={runMutation} />}
           {agent && !picking && (!notification.pullRequest || (agent.lane === GENERIC_LANE && canResolve)) && (

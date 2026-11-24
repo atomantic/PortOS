@@ -250,9 +250,9 @@ export async function setAnnotation(key, patch) {
   if (!patch || typeof patch !== 'object') {
     throw codedError('patch must include starred and/or note', ERR_VALIDATION);
   }
-  const hasStarred = Object.prototype.hasOwnProperty.call(patch, 'starred');
-  const hasNote = Object.prototype.hasOwnProperty.call(patch, 'note');
-  const hasRating = Object.prototype.hasOwnProperty.call(patch, 'rating');
+  const hasStarred = Object.hasOwn(patch, 'starred');
+  const hasNote = Object.hasOwn(patch, 'note');
+  const hasRating = Object.hasOwn(patch, 'rating');
   if (!hasStarred && !hasNote && !hasRating) {
     throw codedError('patch must include starred, rating and/or note', ERR_VALIDATION);
   }

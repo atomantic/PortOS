@@ -157,7 +157,13 @@ async function mutateFilmWithSong(id, change) {
     });
   } catch (error) {
     // song.json is derived context; restore it if the database could not commit.
-    if (wroteSong) await writeBlenderSong(owner, (await requireFilmProject(id)).film.settings);
+    if (wroteSong) {
+      try {
+        await writeBlenderSong(owner, (await requireFilmProject(id)).film.settings);
+      } catch (rollbackError) {
+        console.error(`❌ Film ${id.slice(0, 8)} song.json rollback failed: ${rollbackError?.message || rollbackError}`);
+      }
+    }
     throw error;
   }
 }

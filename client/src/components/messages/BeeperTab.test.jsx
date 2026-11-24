@@ -1665,7 +1665,7 @@ describe('purging one conversation mirror', () => {
     // wait, and the guard beside it rejects an inline one the test budget outlives.
     expect(await screen.findByText('Purge this mirror')).toBeInTheDocument();
     expect(screen.getByText(/4 MB of mirrored attachment bytes/)).toBeInTheDocument();
-    expect(screen.getByText(/across 3 file\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText(/across 3 files/)).toBeInTheDocument();
 
     const confirm = screen.getByRole('button', { name: /Purge mirror/i });
     expect(confirm).toBeDisabled();

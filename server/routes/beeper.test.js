@@ -4,20 +4,20 @@ import { request } from '../lib/testHelper.js';
 
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { beeperSocketEvents } from '../services/beeperSocketEvents.js';
+import { beeperSocketEvents } from '../services/beeper/beeperSocketEvents.js';
 
-vi.mock('../services/beeperStatus.js', () => ({
+vi.mock('../services/beeper/beeperStatus.js', () => ({
   getBeeperStatus: vi.fn(),
   checkBeeperConnection: vi.fn(),
 }));
-vi.mock('../services/beeperOAuth.js', () => ({
+vi.mock('../services/beeper/beeperOAuth.js', () => ({
   startBeeperOAuth: vi.fn(),
   completeBeeperOAuth: vi.fn(),
   connectWithPastedToken: vi.fn(),
   disconnectBeeper: vi.fn(),
 }));
-vi.mock('../services/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
-vi.mock('../services/beeperOutbox.js', () => ({
+vi.mock('../services/beeper/beeperSync.js', () => ({ runBeeperSweep: vi.fn(), createBeeperConversation: vi.fn() }));
+vi.mock('../services/beeper/beeperOutbox.js', () => ({
   createOutboxEntry: vi.fn(),
   sendOutboxEntry: vi.fn(),
   discardOutboxEntry: vi.fn(),
@@ -25,7 +25,7 @@ vi.mock('../services/beeperOutbox.js', () => ({
   listOutboxEntries: vi.fn(),
   clearOutboxBreaker: vi.fn(),
 }));
-vi.mock('../services/beeperConversations.js', () => ({
+vi.mock('../services/beeper/beeperConversations.js', () => ({
   listConversations: vi.fn(),
   getConversation: vi.fn(),
   listMessages: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('../services/beeperConversations.js', () => ({
   setConversationArchived: vi.fn(),
   setConversationLowPriority: vi.fn(),
 }));
-vi.mock('../services/beeperAttachments.js', () => ({
+vi.mock('../services/beeper/beeperAttachments.js', () => ({
   backfillAttachments: vi.fn(),
   ensureAttachmentBytes: vi.fn(),
   getAttachment: vi.fn(),
@@ -54,14 +54,14 @@ vi.mock('../lib/uploads.js', async (importOriginal) => ({
 }));
 
 import beeperRoutes from './beeper.js';
-import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
+import { getBeeperStatus, checkBeeperConnection } from '../services/beeper/beeperStatus.js';
 import {
   completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth,
-} from '../services/beeperOAuth.js';
-import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';
+} from '../services/beeper/beeperOAuth.js';
+import { runBeeperSweep, createBeeperConversation } from '../services/beeper/beeperSync.js';
 import {
   clearOutboxBreaker, createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
-} from '../services/beeperOutbox.js';
+} from '../services/beeper/beeperOutbox.js';
 import {
   listConversations,
   getConversation,
@@ -71,20 +71,25 @@ import {
   purgeConversation,
   setConversationArchived,
   setConversationLowPriority,
-} from '../services/beeperConversations.js';
+} from '../services/beeper/beeperConversations.js';
 import {
   backfillAttachments,
   ensureAttachmentBytes,
   getAttachment,
   getAttachmentSummary,
   setAttachmentKeep,
-} from '../services/beeperAttachments.js';
+} from '../services/beeper/beeperAttachments.js';
 import { serveLocalFile } from '../lib/uploads.js';
 import { ServerError, errorEvents } from '../lib/errorHandler.js';
-import { BeeperApiError } from '../services/beeperClient.js';
+import { BeeperApiError } from '../services/beeper/beeperClient.js';
 
 const buildApp = () => {
   const app = express();
+  // superagent always stamps the Host header from the URL, so a test-only header stands in for it.
+  app.use((req, _res, next) => {
+    if (req.headers['x-test-host']) req.headers.host = req.headers['x-test-host'];
+    next();
+  });
   app.use(express.json());
   app.use('/api/beeper', beeperRoutes);
   // The OAuth callback answers a BROWSER with a redirect to the Beeper tab, and
@@ -216,14 +221,45 @@ describe('POST /api/beeper/oauth/start', () => {
     vi.mocked(startBeeperOAuth).mockResolvedValue({ authorizationUrl: 'http://127.0.0.1:23373/oauth/authorize?x=1', redirectUri: 'x', state: 's' });
     const res = await request(buildApp())
       .post('/api/beeper/oauth/start')
-      .set('X-Forwarded-Proto', 'https')
-      .set('X-Forwarded-Host', 'example.ts.net:5555');
+      .set('X-Test-Host', 'example.ts.net:5555');
 
     expect(res.status).toBe(200);
     expect(startBeeperOAuth).toHaveBeenCalledWith({
-      redirectUri: 'https://example.ts.net:5555/api/beeper/oauth/callback',
-      clientUri: 'https://example.ts.net:5555',
+      redirectUri: 'http://example.ts.net:5555/api/beeper/oauth/callback',
+      clientUri: 'http://example.ts.net:5555',
     });
+  });
+
+  it('ignores spoofed X-Forwarded-Host / X-Forwarded-Proto headers', async () => {
+    vi.mocked(startBeeperOAuth).mockResolvedValue({ authorizationUrl: 'http://127.0.0.1:23373/oauth/authorize?x=1', redirectUri: 'x', state: 's' });
+    const res = await request(buildApp())
+      .post('/api/beeper/oauth/start')
+      .set('X-Test-Host', 'example.ts.net:5555')
+      .set('X-Forwarded-Proto', 'https')
+      .set('X-Forwarded-Host', 'evil.example.com');
+
+    expect(res.status).toBe(200);
+    expect(startBeeperOAuth).toHaveBeenCalledWith({
+      redirectUri: 'http://example.ts.net:5555/api/beeper/oauth/callback',
+      clientUri: 'http://example.ts.net:5555',
+    });
+  });
+
+  it('does not let a forged forwarded host widen the client-origin allowlist', async () => {
+    vi.mocked(startBeeperOAuth).mockResolvedValue({ authorizationUrl: 'http://127.0.0.1:23373/oauth/authorize?x=1', redirectUri: 'x', state: 's' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await request(buildApp())
+      .post('/api/beeper/oauth/start')
+      .set('X-Test-Host', 'example.ts.net:5555')
+      .set('X-Forwarded-Host', 'evil.example.com')
+      .send({ origin: 'https://evil.example.com' });
+
+    expect(res.status).toBe(200);
+    expect(startBeeperOAuth).toHaveBeenCalledWith({
+      redirectUri: 'http://example.ts.net:5555/api/beeper/oauth/callback',
+      clientUri: 'http://example.ts.net:5555',
+    });
+    warn.mockRestore();
   });
 
   // Under the Vite dev proxy (`changeOrigin: true`, no `x-forwarded-*`) the
@@ -234,8 +270,7 @@ describe('POST /api/beeper/oauth/start', () => {
     vi.mocked(startBeeperOAuth).mockResolvedValue({ authorizationUrl: 'http://127.0.0.1:23373/oauth/authorize?x=1', redirectUri: 'x', state: 's' });
     const res = await request(buildApp())
       .post('/api/beeper/oauth/start')
-      .set('X-Forwarded-Proto', 'https')
-      .set('X-Forwarded-Host', 'localhost:5555')
+      .set('X-Test-Host', 'localhost:5555')
       .send({ origin: 'http://localhost:5554' });
 
     expect(res.status).toBe(200);
@@ -251,14 +286,13 @@ describe('POST /api/beeper/oauth/start', () => {
 
     const res = await request(buildApp())
       .post('/api/beeper/oauth/start')
-      .set('X-Forwarded-Proto', 'https')
-      .set('X-Forwarded-Host', 'example.ts.net:5555')
+      .set('X-Test-Host', 'example.ts.net:5555')
       .send({ origin: 'https://example.com' });
 
     expect(res.status).toBe(200);
     expect(startBeeperOAuth).toHaveBeenCalledWith({
-      redirectUri: 'https://example.ts.net:5555/api/beeper/oauth/callback',
-      clientUri: 'https://example.ts.net:5555',
+      redirectUri: 'http://example.ts.net:5555/api/beeper/oauth/callback',
+      clientUri: 'http://example.ts.net:5555',
     });
     // The warning never carries the value: it is a host off the user's own
     // machine or tailnet, and this line can end up in a shared log.
@@ -428,7 +462,7 @@ describe('the token value never reaches a response or a log line', () => {
 });
 
 // The outbox routes (#36). The service's own gates are covered in
-// `services/beeperOutbox.test.js`; this pins the HTTP contract the composer
+// `services/beeper/beeperOutbox.test.js`; this pins the HTTP contract the composer
 // codes against — validation, the coded 4xx map, and `retryable: false` on
 // every write path so a client can never turn one refusal into two messages.
 describe('POST /api/beeper/outbox — step one, create the entry', () => {

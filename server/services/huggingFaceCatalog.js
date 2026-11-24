@@ -5,6 +5,7 @@ import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
 import { ENGINES } from './pipeline/musicGen.js'
 import { fetchOllamaRegistryVariants } from './ollamaRegistryCatalog.js'
+import { quantFromGgufFilename } from '../lib/localLlmDisk.js'
 import { reconcileFit } from '../lib/localModelAssessment.js'
 
 // Upper bound on how long the curated-catalog endpoint waits for HF variant
@@ -191,34 +192,12 @@ function hasGgufSignal(model) {
   return repoId.includes('gguf') || tags.includes('gguf') || ggufFilesOf(model).length > 0
 }
 
-function quantFromFilename(filename) {
-  const stem = normalizeText(filename).split('/').pop()
-    .replace(/\.gguf$/i, '')
-    // Multi-part GGUF shards (`…-00001-of-00002`) carry the quant before the
-    // shard suffix — strip it so BF16/F16 splits resolve to their real quant
-    // instead of failing the match and being dropped from the variant list.
-    .replace(/-\d{5}-of-\d{5}$/i, '')
-  // The quant must be its own trailing token — start-of-name or after a `-`/`_`/`.`
-  // separator. Without that boundary a repo's custom scheme suffix bleeds into a
-  // bogus standard quant (`BTL-3-Compact-AVQ2` → `Q2`), and the resulting
-  // `hf.co/<repo>:Q2` pull is rejected by Ollama with "not a valid quantization
-  // scheme". An unparseable quant is better as null: the install id then falls
-  // back to the bare repo, which Ollama resolves via its `latest` manifest.
-  // `FP16` is deliberately NOT a token here (only `F16`/`BF16`): Ollama rejects
-  // an `:FP16` tag as an invalid scheme, and an `:F16` tag on a repo whose file
-  // is named `…-fp16.gguf` 404s ("tag is not available in the repository"), so a
-  // `…-fp16.gguf` build has no pullable tag at all — dropping it from the variant
-  // list and installing the repo's `latest` is the only form that works.
-  const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
-  return match?.[1] || null
-}
-
 function pickGgufFile(model) {
   const files = ggufFilesOf(model)
   if (files.length === 0) return null
   const ranked = files
     .map((file) => {
-      const quant = quantFromFilename(file.name)
+      const quant = quantFromGgufFilename(file.name)
       const priority = quant ? QUANT_PRIORITY.findIndex((q) => q.toLowerCase() === quant.toLowerCase()) : -1
       return { ...file, quant, priority: priority === -1 ? 999 : priority }
     })
@@ -392,7 +371,7 @@ function buildVariants(model, backend, usableBytes) {
   // files (two standalone Q4_K_M builds must not read as one double-size variant).
   const groups = new Map()
   for (const file of ggufFilesOf(model)) {
-    const quant = quantFromFilename(file.name)
+    const quant = quantFromGgufFilename(file.name)
     if (!quant) continue
     const units = groups.get(quant) || new Map()
     const key = shardSetKey(file.name)
@@ -582,7 +561,7 @@ function hasDrafterTag(model) {
 // declares `mlx` + `dspark` + `speculative-decoding` but no `draft-model` tag, so
 // the tag predicate alone would offer a 30B target's drafter as a one-click
 // install (docs/research/2026-08-19-dspark-vs-dflash2.md).
-const MLX_DRAFTER_NAME_RE = /(?:^|[\/_-])(?:mtp|dflash\d*|dspark|drafter)(?:[\/_\-.]|$)/i
+const MLX_DRAFTER_NAME_RE = /(?:^|[/_-])(?:mtp|dflash\d*|dspark|drafter)(?:[/_\-.]|$)/i
 
 function isMlxDrafter(model) {
   return hasDrafterTag(model) || MLX_DRAFTER_NAME_RE.test(repoIdOf(model))

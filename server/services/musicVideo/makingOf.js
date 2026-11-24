@@ -42,7 +42,7 @@ function scrubText(value, limit) {
 }
 const text = value => scrubText(value, 16000);
 const markdown = value => text(value).replace(/!?\[[^\]]*\]\([^)]*\)/g, '[link omitted]').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const linkLabel = value => markdown(value).replace(/[\[\]\\]/g, character => escapeRegExp(character));
+const linkLabel = value => markdown(value).replace(/[[\]\\]/g, character => escapeRegExp(character));
 const jsonBlock = value => json(value).split('\n').map(line => `    ${line}`).join('\n');
 const fields = (obj, keys) => Object.fromEntries(keys.map(k => [k, text(obj?.[k])]));
 const time = value => Number.isFinite(value) && value >= 0 ? value : null;

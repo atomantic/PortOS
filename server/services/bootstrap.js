@@ -105,10 +105,10 @@ import { startMaintenanceRunScheduler } from './maintenanceRun.js';
 import { startNotificationResolveListener } from './githubNotificationResolveTask.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
-import { startBeeperScheduler } from './beeperScheduler.js';
+import { startBeeperScheduler } from './beeper/beeperScheduler.js';
 import { startEidoverseControllerSupervisor } from './eidoverseControllerRuntime.js';
-import { reconcileOutboxOnBoot } from './beeperOutbox.js';
-import { startBeeperSocket, stopBeeperSocket } from './beeperSocket.js';
+import { reconcileOutboxOnBoot } from './beeper/beeperOutbox.js';
+import { startBeeperSocket, stopBeeperSocket } from './beeper/beeperSocket.js';
 import { startImessageScheduler } from './imessageScheduler.js';
 import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
@@ -126,26 +126,25 @@ import { startOrphanShellGc } from './importerOrphanGc.js';
 import { startImageRefsGc } from './imageRefsGc.js';
 import { startImageCleanTmpGc } from './imageCleanTmpGc.js';
 import { startOrphanedPartialGc } from './orphanedPartialGc.js';
-import { startBeeperAttachmentGc } from './beeperAttachmentGc.js';
+import { startBeeperAttachmentGc } from './beeper/beeperAttachmentGc.js';
 import { startTribePurge } from './tribePurge.js';
 import { startScreenshotsGc } from './screenshotsGc.js';
 import { initBridge as initBrainMemoryBridge, replayPersistedResync as replayBrainMemoryResync } from './brainMemoryBridge.js';
 import { flushAutoSync as flushIdeaLoomAutoSync } from './idealoomAutoSync.js';
-import { initDrillCache } from './meatspacePostDrillCache.js';
-import { registerPostReminderSchedule } from './meatspacePostReminder.js';
+import { initDrillCache } from './meatspace/meatspacePostDrillCache.js';
+import { registerPostReminderSchedule } from './meatspace/meatspacePostReminder.js';
 import { registerAutobiographyReminderSchedule } from './autobiographyReminder.js';
 import { recoverInterruptedRepoClones, recoverStuckClassifications } from './brain.js';
 import { recoverStuckAnalyses } from './writersRoom/analysisSnapshots.js';
 import { recoverStuckGeneratingStages, recoverStuckAutoRuns, recoverStuckAutopilots } from './pipeline/recovery.js';
 import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
 import { requireMusicVideoRecovery } from './bootHookRegistry.js';
-import { recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
+import { recoverInterruptedBlenderModels, recoverInterruptedImageTo3dModels, recoverInterruptedThreejsModels } from './modelRecovery.js';
 import { startPolling } from './instances.js';
 import { ensureSelf } from './instanceIdentity.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
 import { relayUnloggedRecords } from './brainReconcile.js';
-import { initSyncOrchestrator } from './syncOrchestrator.js';
 import { initMediaJobQueue, resumeMediaJobCompletions, flushMediaJobQueue, quiesceMediaJobQueue } from './mediaJobQueue/index.js';
 import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import { initSpriteLocalAnimationHook } from './sprites/localAnimationJobHook.js';
@@ -517,6 +516,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // cold-bootstrap provider call.
   recoverInterruptedThreejsModels().catch(err => logBootstrapFailure('❌ Three.js model recovery failed', err));
   recoverInterruptedImageTo3dModels().catch(err => logBootstrapFailure('❌ Image-to-3D model recovery failed', err));
+  recoverInterruptedBlenderModels().catch(err => logBootstrapFailure('❌ Blender model recovery failed', err));
   // Arm the managed-model-server idle reaper. Timer only — it reads timestamps
   // and may stop a PM2 process, and makes no AI provider call, so it is safe
   // under AGENTS.md's "No cold-bootstrap LLM calls". Off in practice until the
@@ -1028,7 +1028,9 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .catch((err) => logBootstrapFailure('⚠️ tailcat serve restore failed', err, console.warn));
       },
       initSyncOrchestrator: () => {
-        initSyncOrchestrator();
+        void import('./syncOrchestrator.js')
+          .then(({ initSyncOrchestrator }) => initSyncOrchestrator())
+          .catch((err) => logBootstrapFailure('❌ Sync orchestrator init failed', err));
         // Queued remote media deletes drain when their owner comes online.
         void import('./mediaRemoteDelete.js')
           .then(({ initMediaRemoteDelete }) => initMediaRemoteDelete())

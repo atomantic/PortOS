@@ -1,13 +1,46 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
 import { clipOffsetSec, clipReversed, clipSpeedRate } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
+import { scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 
 // The song frame the film look's grain and drift follow; footage renders run at 24 fps.
 export const ANIMATIC_FPS = 24;
 // How many shots past the one on screen get their clip loaded ahead, so a short shot is
 // ready to show the moment the song reaches it.
 export const CLIP_PRELOAD_SHOTS = 2;
+
+/**
+ * The images a shot shows first: its still (also the stand-in while its clip loads),
+ * its end frame and the first photo of a sequence. Later photos load as the sequence plays.
+ */
+export function shotStillIds(scene) {
+  if (!scene) return [];
+  const first = scenePhotoSequence(scene)?.imageIds?.[0];
+  return [scene.referenceImageId, scene.endImageId, first].filter((id) => typeof id === 'string' && id);
+}
+
+/**
+ * Starts loading and decoding `ids` before the cut that shows them. A still mounted at the
+ * cut otherwise fetches there, and on a phone's slower link the frame (and any effect
+ * drawn from it) stays black until it arrives. The loaders are kept so the decoded
+ * images stay in the browser's memory cache until the window moves past them.
+ */
+export function useImagePreload(ids) {
+  const loaders = useRef(new Map());
+  const key = ids.join('|');
+  useEffect(() => {
+    const wanted = new Set(key ? key.split('|') : []);
+    for (const id of loaders.current.keys()) if (!wanted.has(id)) loaders.current.delete(id);
+    for (const id of wanted) {
+      if (loaders.current.has(id) || typeof Image !== 'function') continue;
+      const img = new Image();
+      img.src = `/data/images/${id}`;
+      img.decode?.().catch(() => {});
+      loaders.current.set(id, img);
+    }
+  }, [key]);
+}
 
 export const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
 

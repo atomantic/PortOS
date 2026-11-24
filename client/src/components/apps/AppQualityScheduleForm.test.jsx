@@ -48,6 +48,18 @@ beforeEach(() => {
 });
 
 describe('AppQualityScheduleForm', () => {
+  it('keeps the intended selection when the plan comes back empty', async () => {
+    const empty = response({
+      selectedTaskTypes: ['security'],
+      selectedFileIssuesByType: { security: true },
+      plan: { checksPerDay: 0, slots: [], claim: null, warnings: ['Not enough unoccupied hours'], options: OPTIONS },
+    });
+    getAppQualitySchedule.mockResolvedValue(empty);
+    renderForm();
+    await screen.findByRole('heading', { name: 'Weekly quality schedule' });
+    expect(screen.getByLabelText('Security')).toBeChecked();
+  });
+
   it('renders the planned week and says which checks the repository skipped', async () => {
     renderForm();
     expect(await screen.findByRole('heading', { name: 'Weekly quality schedule' })).toBeInTheDocument();

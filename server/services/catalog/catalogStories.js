@@ -66,15 +66,21 @@ export async function listCatalogStories({ type }) {
       UNION SELECT 'storyboard', pm.board_id, pm.cid FROM (${STORYBOARD_PANEL_MEMBERS_SQL}) pm),
     live AS (
       SELECT m.kind, m.id, i.id AS cid, i.type FROM members m
-        JOIN catalog_ingredients i ON i.id = m.cid AND i.deleted = false)
+        JOIN catalog_ingredients i ON i.id = m.cid AND i.deleted = false),
+    story_counts AS (
+      SELECT kind, id, COUNT(DISTINCT cid)::int AS count FROM live WHERE type = $1 GROUP BY kind, id),
+    storyboard_universes AS (
+      SELECT l.id, COALESCE(array_agg(DISTINCT u.id ORDER BY u.id), '{}') AS member_universes
+        FROM live l
+        JOIN canonical_refs r ON r.cid = l.cid AND r.ref_kind = 'universe'
+        JOIN universes u ON u.id = r.ref_id AND u.deleted = false
+       WHERE l.kind = 'storyboard' GROUP BY l.id)
     SELECT st.kind, st.id, st.name, st.universe_id, st.updated_at,
-      (SELECT COUNT(DISTINCT l.cid)::int FROM live l WHERE l.kind = st.kind AND l.id = st.id AND l.type = $1) AS count,
-      CASE WHEN st.universe_id IS NULL AND st.kind = 'storyboard' THEN (
-        SELECT COALESCE(array_agg(DISTINCT u.id ORDER BY u.id), '{}') FROM live l
-          JOIN canonical_refs r ON r.cid = l.cid AND r.ref_kind = 'universe'
-          JOIN universes u ON u.id = r.ref_id AND u.deleted = false
-         WHERE l.kind = st.kind AND l.id = st.id) END AS member_universes
+      COALESCE(sc.count, 0) AS count,
+      CASE WHEN st.universe_id IS NULL AND st.kind = 'storyboard' THEN COALESCE(su.member_universes, '{}') END AS member_universes
     FROM (${STORIES_SQL}) st
+    LEFT JOIN story_counts sc ON sc.kind = st.kind AND sc.id = st.id
+    LEFT JOIN storyboard_universes su ON st.kind = 'storyboard' AND su.id = st.id
     ORDER BY st.updated_at DESC NULLS LAST, st.name`, [type]);
   return rows.map((row) => ({
     kind: row.kind,

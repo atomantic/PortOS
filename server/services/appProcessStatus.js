@@ -14,13 +14,42 @@ export async function getDesktopProcessNames() {
   return names;
 }
 
+// PortOS-managed PM2 daemons: core ecosystem processes plus optional local
+// inference and voice servers managed directly by PortOS services.
+export const PORTOS_MANAGED_DAEMONS = new Set([
+  'portos-server',
+  'portos-cos',
+  'portos-ui',
+  'portos-autofixer',
+  'portos-browser',
+  'portos-llama-server',
+  'portos-mtplx',
+  'portos-slotstream',
+  'portos-whisper',
+]);
+
+const findAppForProcess = (apps, processName) => apps.find(candidate =>
+  candidate.pm2ProcessNames?.includes(processName)
+  || candidate.nativeLaunch?.processName === processName
+);
+
 export async function resolvePm2HomeForProcess(processName) {
   const apps = await getAllApps();
-  const app = apps.find(candidate =>
-    candidate.pm2ProcessNames?.includes(processName)
-    || candidate.nativeLaunch?.processName === processName
-  );
-  return app?.pm2Home || null;
+  return findAppForProcess(apps, processName)?.pm2Home || null;
+}
+
+/**
+ * Resolve a PM2 process name to `{ pm2Home }` only when it belongs to a
+ * registered PortOS app or PortOS's own managed daemons; returns null otherwise.
+ */
+export async function resolveRegisteredProcess(processName) {
+  if (PORTOS_MANAGED_DAEMONS.has(processName)) {
+    return { pm2Home: null };
+  }
+  const apps = await getAllApps();
+  const app = findAppForProcess(apps, processName);
+  if (!app) return null;
+  return { pm2Home: app.pm2Home || null };
 }
 
 export async function annotateExpectedExit(processes) {

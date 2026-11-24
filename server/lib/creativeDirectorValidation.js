@@ -300,6 +300,10 @@ export const creativeDirectorProjectQuerySchema = z.object({
 // `?slim=1` strips the project detail down to its summary projection.
 export const creativeDirectorProjectSlimQuerySchema = z.object({ slim: z.string().optional() });
 
+// Optional `?projectId=` on `GET /api/creative-director/tools` scopes budget
+// status to that project's daily `directive.constraints.budgetCap`.
+export const creativeDirectorToolsQuerySchema = z.object({ projectId: z.string().max(120).optional() });
+
 // One scene in the treatment, written by the agent on the treatment task.
 export const creativeDirectorSceneSchema = z.object({
   muteAudio: z.boolean().optional(),

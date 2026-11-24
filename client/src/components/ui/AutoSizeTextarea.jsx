@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import useAutoSizeTextarea from '../../hooks/useAutoSizeTextarea';
+import useAutoSizeTextarea from './useAutoSizeTextarea';
 
 /**
  * Controlled <textarea> that auto-grows to fit its content (no internal scroll,
