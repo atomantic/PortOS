@@ -100,12 +100,13 @@ function claudeContextOverride(provider) {
   if (!value || value.model || !Number.isSafeInteger(value.tokens) || !provider.command || !isClaudeCommand(provider.command)
     || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
   const output = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
-  // A smaller explicit context should not spend the whole window on the
-  // implicit output reserve. An explicit per-preset output value remains theirs.
+  const outputCap = Math.floor(value.tokens / 4);
+  // Leave at least three quarters of a chosen window for input unless the
+  // user explicitly sets a different output reserve.
   return {
     CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens),
-    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output >= value.tokens
-      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(8192, Math.floor(value.tokens / 4))) }
+    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output > outputCap
+      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputCap) }
       : {}),
   };
 }

@@ -557,14 +557,19 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     expect(buildPublicReviewActionsCliEnv(settings)).toMatchObject(settings);
   });
 
-  it('makes room for input when a chosen local window is smaller than the inherited output reserve', () => {
-    const provider = { command: 'claude', ollamaBacked: true, harnessContext: { tokens: 32768 },
+  it.each([
+    [32768, '8192'],
+    [73728, '18432'],
+    [131072, '32768'],
+    [262144, '65536'],
+  ])('leaves input room in a chosen local Claude window of %i tokens', (tokens, output) => {
+    const provider = { command: 'claude', ollamaBacked: true, harnessContext: { tokens },
       envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' } };
     expect(composeProviderEnv({ provider })).toMatchObject({
-      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(tokens), CLAUDE_CODE_MAX_OUTPUT_TOKENS: output,
     });
-    provider.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '10000';
-    expect(composeProviderEnv({ provider }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('10000');
+    provider.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '48000';
+    expect(composeProviderEnv({ provider }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('48000');
   });
 
   it('emits MAX_THINKING_TOKENS only where an omitted thinking field means OFF', () => {
