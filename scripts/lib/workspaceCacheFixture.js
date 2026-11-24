@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createVitestTempFixture, runFixtureToCompletion } from './vitestTempRootFixture.js';
 import { WORKSPACE_TEST_CACHE_ROOTS } from '../../server/lib/workspaceTestCacheRoots.js';
@@ -127,8 +127,10 @@ async function runTogether(fixtures, signal, onChild, prefix = 'dev') {
   return results.map(result => result.value);
 }
 
-const cachedResults = root => snapshot(root).filter(([name]) => name.endsWith('results.json'));
-const cachedModules = root => snapshot(join(root, 'modules')).filter(([name]) => /^[a-f0-9]{40}$/.test(name));
+const cachedModules = publication => publication.filter(([name]) => {
+  const [dir, file, ...rest] = name.split(sep);
+  return dir === 'modules' && rest.length === 0 && /^[a-f0-9]{40}$/.test(file);
+});
 
 // Assertions are supplied by the owning Vitest workspace; this shared fixture
 // imports only Node builtins and dependency-free fixture support.
@@ -149,18 +151,19 @@ export async function checkWorkspaceCacheIsolation(workspace, configName, cacheN
       expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       const cacheA = join(a.root, '.cache', cacheName);
       const cacheB = join(b.root, '.cache', cacheName);
-      expect(cachedResults(cacheA).length).toBeGreaterThan(0);
-      expect(cachedResults(cacheB).length).toBeGreaterThan(0);
-      // Actual transformed module files, not just a resolved config or metadata.
-      for (const cache of [cacheA, cacheB]) {
-        expect(cachedModules(cache).length).toBeGreaterThan(0);
-      }
-      const modules = cachedModules(cacheA);
+      const first = snapshot(cacheA);
       const sibling = snapshot(cacheB);
-      const names = snapshot(cacheA).map(([name]) => name);
+      for (const publication of [first, sibling]) {
+        expect(publication.some(([name]) => name.endsWith('results.json'))).toBe(true);
+      }
+      // Actual transformed module files, not just a resolved config or metadata.
+      for (const publication of [first, sibling]) {
+        expect(cachedModules(publication).length).toBeGreaterThan(0);
+      }
       await phase('cache-reuse', () => run(a, signal, onChild, 'reuse-1'));
-      expect(cachedModules(cacheA)).toEqual(modules);
-      expect(snapshot(cacheA).map(([name]) => name)).toEqual(names);
+      const reused = snapshot(cacheA);
+      expect(cachedModules(reused)).toEqual(cachedModules(first));
+      expect(reused.map(([name]) => name)).toEqual(first.map(([name]) => name));
       expect(snapshot(cacheB)).toEqual(sibling);
       expect(snapshot(join(dependencies, '.vitest-cache'))).toEqual(primaryModules);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
@@ -193,22 +196,27 @@ export async function checkDevCacheIsolation(expect, signal) {
         expect(loaderAt === -1 ? undefined : devArgs[loaderAt + 1]).toBe('runner');
       }
       const loader = 'runner';
-      const fixtures = ['a', 'b'].map(name => checkout(host, name, 'client', 'vitest.config.js', dependencies));
-      for (const fixture of fixtures) {
-        const parent = dirname(fixture.root);
+      const fixtures = ['a', 'b'].map(name => {
+        const parent = join(host, name);
+        const root = join(parent, 'fixture');
+        const cwd = join(parent, 'caller');
+        mkdirSync(cwd, { recursive: true });
+        link(dependencies, join(root, 'node_modules'));
+        put(join(root, 'package.json'), '{"type":"module"}');
         for (const file of ['vite.config.js', 'vite.buildEnv.js', 'vite.chunkGroups.js']) {
-          copyFileSync(join(REPO, 'client', file), join(fixture.root, file));
+          copyFileSync(join(REPO, 'client', file), join(root, file));
         }
         put(join(parent, 'package.json'), '{"type":"module","version":"0.0.0"}');
         for (const file of ['lib/portosAuthCore.js', 'server/lib/eidoverseProxyRoutes.js']) link(join(REPO, file), join(parent, file));
-        const cache = join(realpathSync(fixture.root), '.cache/vite').replaceAll('\\', '/');
-        const script = join(fixture.root, 'inspect-dev.mjs');
+        const cache = join(realpathSync(root), '.cache/vite').replaceAll('\\', '/');
+        const script = join(root, 'inspect-dev.mjs');
         put(script, `import { resolveConfig } from 'vite';
-          const config = await resolveConfig({ configFile: ${JSON.stringify(join(fixture.root, 'vite.config.js'))}, configLoader: ${JSON.stringify(loader)} }, 'serve');
+          const config = await resolveConfig({ configFile: ${JSON.stringify(join(root, 'vite.config.js'))}, configLoader: ${JSON.stringify(loader)} }, 'serve');
           if (config.cacheDir !== ${JSON.stringify(cache)}) throw Error('dev cache escaped its config owner');
           process.stdout.write(config.cacheDir);`);
-        fixture.args = [script];
-      }
+        const env = { ...process.env, TMPDIR: host, TMP: host, TEMP: host, NODE_DISABLE_COMPILE_CACHE: '1' };
+        return { args: [script], options: { cwd, env } };
+      });
       const outputs = await runTogether(fixtures, signal);
       expect(outputs[0]).not.toBe(outputs[1]);
       expect([snapshot(join(dependencies, '.vite')), snapshot(join(dependencies, '.vite-temp'))]).toEqual(primary);
