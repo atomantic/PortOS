@@ -1584,7 +1584,7 @@ describe('getState and saveState', () => {
 });
 
 it('cannot re-enable Tailcat authority/capability files in backup filters', () => {
-  const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr'];
+  const paths = ['/tailcat-serve.json', '/tailcat-serve.json.*.tmp', '/tailcat-serve.addr', '/tailcat-forwards.json', '/tailcat-forwards.json.*.tmp'];
   const excluded = computeEffectiveExcludes({ disabledDefaultExcludes: paths });
   for (const path of paths) expect(excluded).toContain(path);
 });
