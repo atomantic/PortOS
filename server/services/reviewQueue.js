@@ -559,15 +559,10 @@ const PRODUCERS = [
     drillTo: '/review?view=history',
     views: ['today', 'all', 'history'],
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
-      const history = ctx.view === 'history';
-      const items = await reviewService.getItems({
-        type: 'todo',
-        ...(history ? {} : { status: 'pending' }),
-      });
-      const matching = (Array.isArray(items) ? items : [])
-        .filter((item) => item.type === 'todo')
-        .filter((item) => history ? item.status !== 'pending' : item.status === 'pending');
-      return { items: matching, truncated: matching.length > limit };
+      const page = await reviewService.getItems(ctx.view === 'history'
+        ? { type: 'todo', matches: item => item.status !== 'pending', limit }
+        : { type: 'todo', status: 'pending', limit });
+      return { items: page.items, truncated: page.total > page.items.length };
     },
     map(item) {
       const completed = item.status !== 'pending';
@@ -593,13 +588,11 @@ const PRODUCERS = [
     drillTo: '/review?view=history',
     views: ['history'],
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
-      const items = await reviewService.getItems();
-      const matching = (Array.isArray(items) ? items : [])
-        .filter((item) => item.status !== 'pending' && item.type !== 'todo');
-      return {
-        items: matching,
-        truncated: matching.length > limit,
-      };
+      const page = await reviewService.getItems({
+        matches: item => item.status !== 'pending' && item.type !== 'todo',
+        limit,
+      });
+      return { items: page.items, truncated: page.total > page.items.length };
     },
     map(item) {
       return {

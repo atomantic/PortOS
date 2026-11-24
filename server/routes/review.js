@@ -25,11 +25,10 @@ const bulkStatusSchema = z.object({
   ids: z.array(z.string()).optional()
 });
 
-// GET /api/review/items — list all items (optional ?status=pending&type=todo filters)
+// GET /api/review/items — optional status/type filters and limit/offset pagination.
 router.get('/items', asyncHandler(async (req, res) => {
-  const { status, type } = validateRequest(reviewItemsQuerySchema, req.query);
-  const items = await reviewService.getItems({ status, type });
-  res.json(items);
+  const query = validateRequest(reviewItemsQuerySchema, req.query);
+  res.json(await reviewService.getItems(query));
 }));
 
 // GET /api/review/counts — get pending item counts by type

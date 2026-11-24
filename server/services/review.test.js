@@ -466,6 +466,8 @@ describe('review service', () => {
 
       const completedView = await getItems({ status: 'completed' });
       expect(completedView.map(i => i.id).sort()).toEqual(['archived-completed', 'live-completed']);
+      const older = await getItems({ status: 'completed', type: 'todo', limit: 1, offset: 1 });
+      expect(older).toEqual({ items: archivedItems, total: 2, limit: 1, offset: 1 });
 
       const allView = await getItems({});
       expect(allView.map(i => i.id).sort()).toEqual(['archived-completed', 'live-completed', 'live-pending']);
@@ -510,33 +512,19 @@ describe('review service', () => {
     });
   });
 
-  describe('createItem duplicate check reaches the archive', () => {
-    it('finds a duplicate alert in archive.json when the live scan misses', async () => {
-      stat.mockResolvedValue({ mtimeMs: 817001, size: 1 });
-      // Synthetic fixture: a real archived item is always >=30 days old and
-      // could never actually land inside this 24h dedup window. This exists
-      // to prove createItem's duplicate check reaches archive.json at all
-      // when the live scan misses — not to model a realistic timestamp.
-      const archivedAlert = {
-        id: 'archived-1',
-        type: 'alert',
-        status: 'dismissed',
-        metadata: { referenceId: 'ref-archived' },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      readFile.mockImplementation((path) =>
-        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify([archivedAlert]) : '[]'));
+  it('creates an alert without reading the archive when the live duplicate check misses', async () => {
+    stat.mockResolvedValue({ mtimeMs: 817001, size: 1 });
+    readFile.mockResolvedValue('[]');
 
-      const item = await createItem({
-        type: 'alert',
-        title: 'New alert for same ref',
-        metadata: { referenceId: 'ref-archived' }
-      });
-
-      expect(item.id).toBe('archived-1');
-      expect(atomicWrite).not.toHaveBeenCalled();
+    const item = await createItem({
+      type: 'alert',
+      title: 'New alert for same ref',
+      metadata: { referenceId: 'ref-archived' }
     });
+
+    expect(item).toMatchObject({ title: 'New alert for same ref', status: 'pending' });
+    expect(readFile.mock.calls.map(([path]) => String(path))).toEqual([expect.stringMatching(/items\.json$/)]);
+    expect(atomicWrite).toHaveBeenCalledOnce();
   });
 
   describe('retention', () => {

@@ -7,9 +7,10 @@ const buildQueue = vi.fn();
 const resolveQueueItem = vi.fn();
 const triageQueueItem = vi.fn();
 const promoteAskQueueItem = vi.fn();
+const getItems = vi.fn();
 const MAX_REVIEW_QUEUE_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
-vi.mock('../services/review.js', () => ({ reviewEvents: { emit: vi.fn() } }));
+vi.mock('../services/review.js', () => ({ reviewEvents: { emit: vi.fn() }, getItems }));
 vi.mock('../services/reviewQueue.js', () => ({
   buildQueue,
   MAX_REVIEW_QUEUE_SNOOZE_MS,
@@ -36,12 +37,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('GET /api/review/queue', () => {
+describe('GET /api/review/items', () => {
   it('rejects a repeated query key with 400 (items, #16428)', async () => {
     const res = await request(makeApp()).get('/api/review/items?status=a&status=b');
     expect(res.status).toBe(400);
   });
 
+  it('preserves the legacy array and opts into the page envelope with an offset alone', async () => {
+    const items = [{ id: 'recent' }, { id: 'old' }];
+    const page = { items: items.slice(1), total: 2, limit: 50, offset: 1 };
+    getItems.mockResolvedValueOnce(items).mockResolvedValueOnce(page);
+
+    const legacy = await request(makeApp()).get('/api/review/items?status=completed');
+    expect(legacy.status).toBe(200);
+    expect(legacy.body).toEqual(items);
+    expect(getItems).toHaveBeenNthCalledWith(1, { status: 'completed' });
+
+    const paginated = await request(makeApp()).get('/api/review/items?status=completed&offset=1');
+    expect(paginated.status).toBe(200);
+    expect(paginated.body).toEqual(page);
+    expect(getItems).toHaveBeenNthCalledWith(2, { status: 'completed', offset: '1' });
+  });
+});
+
+describe('GET /api/review/queue', () => {
   it('passes the requested page through without reapplying the old source cap', async () => {
     const items = Array.from({ length: 40 }, (_, index) => ({ id: `brain:b${index}` }));
     buildQueue.mockResolvedValue({
