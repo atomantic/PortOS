@@ -32,6 +32,7 @@ import { destroyGitSandbox, makeGitSandbox } from '../server/lib/gitTestRepo.js'
 import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
+import { workflowJobs } from './lib/workflowJobs.js';
 import { getAlwaysRunTests } from './ci-test-plan.js';
 import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
 import { mergeTestMemoDirs } from './merge-test-memo.js';
@@ -220,7 +221,10 @@ describe('test memo through the real runner', () => {
     }
   }, 200_000);
 
-  it('reports remaining un-memoized count via --check-remaining without running tests', () => {
+  it.each([
+    ['server', 'scripts/lib/releaseTitle.test.js'],
+    ['db', 'server/lib/db/schema/initDbSql.db.test.js'],
+  ])('reports remaining %s tests via --check-remaining without running tests', (scope, test) => {
     const fixture = mkdtempSync(join(tmpdir(), 'portos-check-remaining-'));
     const memoDir = join(fixture, 'memo');
     const outputFile = join(fixture, 'github_output');
@@ -235,12 +239,12 @@ describe('test memo through the real runner', () => {
         'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0, errors: [] }));',
         'process.stdout.write("RAN " + JSON.stringify(selection.include) + "\\n");',
       ].join('\n'));
-      const test = 'scripts/lib/releaseTitle.test.js';
-      const invoke = (args, extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server', ...args], {
+      const invoke = (args, extraEnv = {}) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), scope, ...args], {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([test]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: '', CI_SHARD: '', PORTOS_TEST_MEMO_DIR: memoDir,
+          ...(scope === 'db' ? { PGDATABASE: 'portos_test', PORTOS_REQUIRE_DB: '1' } : {}),
           GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', GITHUB_OUTPUT: outputFile, GITHUB_EVENT_NAME: 'push', ...extraEnv },
       });
 
@@ -258,18 +262,20 @@ describe('test memo through the real runner', () => {
       const warmPlan = invoke(['--check-remaining'], { GITHUB_EVENT_NAME: 'pull_request' });
       expect(warmPlan.status, warmPlan.stderr).toBe(0);
       expect(warmPlan.stdout).toContain('skipped 1 of 1 selected files');
-      expect(warmPlan.stdout).toContain('No server tests left to run.');
+      expect(warmPlan.stdout).toContain(`No ${scope} tests left to run.`);
       expect(warmPlan.stdout).not.toContain('RAN ');
       expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
 
-      writeFileSync(outputFile, '');
-      const deferred = invoke(['--check-remaining'], {
-        PORTOS_BROWSER_TEST_PROFILE: 'smoke',
-        CI_TEST_FILES: JSON.stringify(['server/routes/musicVideoRichAuthoring.browser.test.js']),
-      });
-      expect(deferred.status, deferred.stderr).toBe(0);
-      expect(deferred.stdout).toContain('Fidelity-only inputs require separate evidence.');
-      expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+      if (scope === 'server') {
+        writeFileSync(outputFile, '');
+        const deferred = invoke(['--check-remaining'], {
+          PORTOS_BROWSER_TEST_PROFILE: 'smoke',
+          CI_TEST_FILES: JSON.stringify(['server/routes/musicVideoRichAuthoring.browser.test.js']),
+        });
+        expect(deferred.status, deferred.stderr).toBe(0);
+        expect(deferred.stdout).toContain('Fidelity-only inputs require separate evidence.');
+        expect(readFileSync(outputFile, 'utf8')).toBe('remaining=0\n');
+      }
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
@@ -735,14 +741,31 @@ describe('ci.yml shard wiring', () => {
   });
 
   it('memoizes the serial database job through the db scope', () => {
-    const body = CI_JOBS.database;
-    const start = body.indexOf('- name: Run DB-backed tests (portos_test)');
-    const step = body.slice(start, body.indexOf('- name:', start + 1));
-    expect(step).toContain('run: node scripts/run-ci-tests.js db');
-    expect(step).toContain('CI_TEST_MODE: full');
-    expect(step).toContain('PGDATABASE: portos_test');
-    expect(step).toContain('PORTOS_TEST_MEMO_DIR:');
-    expect(body).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    const body = workflowJobs(WORKFLOW).database;
+    const steps = body.split(/^ {6}- name: /m).slice(1);
+    const names = steps.map(step => step.split('\n')[0]);
+    expect(names).toEqual([
+      'Restore the test memo', 'Check remaining DB tests', 'Provision test database (portos_test)',
+      'Install PostgreSQL client and audio verification tools', 'Restore a real pg_dump into a scratch database',
+      'Run DB-backed tests (portos_test)', 'Save the test memo',
+    ]);
+    const [memo, plan, provision, tools, restore, run, save] = steps;
+    expect(memo).toContain('uses: ./.github/actions/test-memo');
+    expect(memo).toContain('partition: db');
+    expect(CI_JOBS.database).toMatch(/key: test-memo-[^\n]*-db-\$\{\{ github\.run_id \}\}/);
+    expect(plan).toContain('id: db-plan');
+    expect(plan).toContain('run: node scripts/run-ci-tests.js db --check-remaining\n');
+    expect(run).toContain('run: node scripts/run-ci-tests.js db\n');
+    for (const step of [plan, run]) {
+      expect(step).toContain('CI_TEST_MODE: full');
+      expect(step).toContain('PGDATABASE: portos_test');
+      expect(step).toContain('PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo');
+    }
+    const liveRestore = 'fromJSON(needs.impact.outputs.plan).db_live_restore';
+    const dbGate = `if: fromJSON(steps.db-plan.outputs.remaining) > 0 || ${liveRestore}\n`;
+    for (const step of [provision, tools, run]) expect(step).toContain(dbGate);
+    expect(restore).toContain(`if: ${liveRestore}\n`);
+    expect(save).toContain('key: ${{ steps.test-memo.outputs.key }}');
     expect(body).toContain("steps.db-tests.outcome == 'success' && github.event_name != 'pull_request'");
   });
 

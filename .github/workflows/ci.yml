@@ -440,17 +440,6 @@ jobs:
 
       - uses: ./.github/actions/setup-server
 
-      - name: Provision test database (portos_test)
-        run: npm run setup:db:test --prefix server
-
-      # pg_dump must match the service major. The step timeout backs up the
-      # helper's 390-second download budget; cache hits never skip setup.
-      - name: Install PostgreSQL client and audio verification tools
-        timeout-minutes: 9
-        uses: ./.github/actions/db-tools
-        with:
-          pg-major: '17'
-
       # The Postgres schema is not visible to a cache key; scripts/lib/testMemo.js
       # lists the tracked files that build it as db base inputs.
       - name: Restore the test memo
@@ -460,12 +449,34 @@ jobs:
           suite: db
           partition: db
 
+      - name: Check remaining DB tests
+        id: db-plan
+        env:
+          PGDATABASE: portos_test
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: full
+        run: node scripts/run-ci-tests.js db --check-remaining
+
+      - name: Provision test database (portos_test)
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
+        run: npm run setup:db:test --prefix server
+
+      # pg_dump must match the service major. The step timeout backs up the
+      # helper's 390-second download budget.
+      - name: Install PostgreSQL client and audio verification tools
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
+        timeout-minutes: 9
+        uses: ./.github/actions/db-tools
+        with:
+          pg-major: '17'
+
       # A real pg_dump from the service's pinned image, checked by
       # inspectDatabaseDump, prepared by prepareDatabaseReplay and replayed into
       # a scratch database, then the startup maintenance-schema probe. Outside
       # the memo, so a missing Docker engine, image or psql fails instead of
       # becoming a cached pass.
       - name: Restore a real pg_dump into a scratch database
+        if: fromJSON(needs.impact.outputs.plan).db_live_restore
         timeout-minutes: 5
         env:
           PORTOS_DB_RESTORE_LIVE: '1'
@@ -476,6 +487,7 @@ jobs:
       # `⏱ db full suite` duration line itself.
       - name: Run DB-backed tests (portos_test)
         id: db-tests
+        if: fromJSON(steps.db-plan.outputs.remaining) > 0 || fromJSON(needs.impact.outputs.plan).db_live_restore
         env:
           PGDATABASE: portos_test
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
