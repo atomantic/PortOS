@@ -28,9 +28,6 @@ const ACTIVE = new Set(['queued', 'generating']);
 // Thinking models spend most of their budget reasoning before the page starts (8,000 left pages cut off mid-CSS; 24,000 still cut off a 35B thinking model mid-page), and a designed page itself runs several thousand tokens. At ~70 tok/s the cap takes about 12 minutes, inside the page timeout.
 const PAGE_MAX_TOKENS = 48_000;
 const PAGE_TIMEOUT_MS = 20 * 60 * 1000;
-// MTPLX can spend the entire deadline in reasoning even with tools disabled.
-// Its request-level guard ends that phase while leaving tokens for the HTML.
-const MTPLX_PAGE_REASONING_TOKENS = 8_192;
 // Within this share of the cap the model was cut off, not finished.
 const TRUNCATION_SHARE = 0.98;
 // Higher than the capability tests' 0.2: this brief asks for variety.
@@ -356,10 +353,7 @@ async function generateViaProvider(route, prompt, signal) {
   signal.addEventListener('abort', stop, { once: true });
   try {
     const result = await runPromptThroughProvider({
-      provider: provider.type === 'cli' && provider.mtplxBacked === true
-        ? { ...provider, thinkingBudget: MTPLX_PAGE_REASONING_TOKENS }
-        : provider,
-      model: route.model || undefined, effort: route.effort || undefined, prompt,
+      provider, model: route.model || undefined, effort: route.effort || undefined, prompt,
       source: RUN_SOURCE, timeout: PAGE_TIMEOUT_MS, allowFallback: false, toolFree: true, cwd: PATHS.data,
       onRunCreated: (createdId) => { runId = createdId; if (signal.aborted) stop(); },
     });

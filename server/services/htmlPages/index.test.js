@@ -43,11 +43,7 @@ vi.mock('../mtplxServerManager.js', () => ({
   runOnMtplxCheckpoint: vi.fn(async (_model, fn) => fn('mtplx-example-other')),
 }));
 vi.mock('../provider/providers.js', () => ({
-  getProviderById: vi.fn(async (id) => {
-    if (id === 'example-cli') return { id, name: 'Example CLI', type: 'cli', enabled: true, defaultModel: 'example-default' };
-    if (id === 'opencode-mtplx') return { id, name: 'OpenCode MTPLX', type: 'cli', enabled: true, defaultModel: 'mtplx-example', mtplxBacked: true };
-    return null;
-  }),
+  getProviderById: vi.fn(async (id) => (id === 'example-cli' ? { id, name: 'Example CLI', type: 'cli', enabled: true, defaultModel: 'example-default' } : null)),
 }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../runner.js', () => ({ stopRun: vi.fn(async () => {}) }));
@@ -242,16 +238,6 @@ describe('other targets', () => {
   it('refuses a provider that is not configured before queueing anything', async () => {
     await expect(startRuns({ routes: [{ providerId: 'gone' }], pages: PAGES })).rejects.toMatchObject({ status: 409, code: 'HTML_PAGES_PROVIDER_UNAVAILABLE' });
     expect(store.size).toBe(0);
-  });
-
-  it('bounds MTPLX reasoning in both requests without changing the selected effort', async () => {
-    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({ text: isPlanRequest(prompt) ? PLAN : goodPage }));
-    const [queued] = await startRuns({ routes: [{ providerId: 'opencode-mtplx', effort: 'high' }], pages: PAGES.slice(0, 1) });
-    expect((await settled(queued.id)).pages[0]).toMatchObject({ html: goodPage, plan: PLAN });
-    expect(runPromptThroughProvider).toHaveBeenCalledTimes(2);
-    for (const [args] of runPromptThroughProvider.mock.calls) {
-      expect(args).toMatchObject({ provider: { id: 'opencode-mtplx', thinkingBudget: 8192 }, model: 'mtplx-example', effort: 'high' });
-    }
   });
 });
 
