@@ -12,6 +12,7 @@ import {
 import { getProviders } from '../../services/apiProviders.js';
 import { formatCount, timeAgo } from '../../utils/formatters';
 import ProviderModelSelector from '../ProviderModelSelector';
+import ListLoadError from '../ui/ListLoadError';
 
 const fmtHours = (h) => `${Number(h ?? 0).toFixed(1)}h`;
 
@@ -49,32 +50,44 @@ function RulesEditor({ onClose }) {
   const [saving, setSaving] = useState(false);
   const [drafts, setDrafts] = useState({});
 
-  useEffect(() => {
-    getGoalScorecardRules().then((res) => {
-      setData(res);
-      const initial = {};
-      for (const [id, ov] of Object.entries(res?.overrides ?? {})) {
-        initial[id] = (ov.keywords ?? []).join(', ');
-      }
-      setDrafts(initial);
-    }).finally(() => setLoading(false));
+  const [loadError, setLoadError] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    getGoalScorecardRules({ silent: true })
+      .then((res) => {
+        const overrides = res?.overrides;
+        if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides) || !Array.isArray(res.rules)) {
+          throw new Error('Invalid mapping rules response');
+        }
+        setData(res);
+      })
+      .catch((error) => setLoadError(error))
+      .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
   const handleSave = () => {
+    if (data === null || saving) return;
     setSaving(true);
-    const overrides = { ...(data?.overrides ?? {}) };
+    const overrides = { ...data.overrides };
     for (const [id, csv] of Object.entries(drafts)) {
       const keywords = csv.split(',').map((k) => k.trim()).filter(Boolean);
       overrides[id] = { ...(overrides[id] ?? {}), keywords };
     }
     saveGoalScorecardRules(overrides)
-      .then((res) => { setData(res); onClose?.(); })
+      .then(() => onClose?.())
+      .catch(() => { /* The request reports the error. Keep the draft for retry. */ })
       .finally(() => setSaving(false));
   };
 
   if (loading) return <div className="text-sm text-gray-500 p-4">Loading mapping rules…</div>;
 
-  const rules = data?.rules ?? [];
+  if (data === null) return <ListLoadError what="goal mapping rules" error={loadError} onRetry={load} />;
+
+  const { rules } = data;
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -98,7 +111,7 @@ function RulesEditor({ onClose }) {
             </div>
             <input
               type="text"
-              value={drafts[rule.id] ?? ''}
+              value={drafts[rule.id] ?? (data.overrides[rule.id]?.keywords ?? []).join(', ')}
               onChange={(e) => setDrafts((prev) => ({ ...prev, [rule.id]: e.target.value }))}
               placeholder="extra keywords, comma-separated"
               aria-label={`Extra keywords for ${rule.title}`}

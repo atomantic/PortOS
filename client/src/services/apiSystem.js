@@ -654,7 +654,7 @@ export const refreshGoalScorecardNarrative = (providerId, model) => request('/in
   method: 'POST',
   body: JSON.stringify({ providerId, model })
 });
-export const getGoalScorecardRules = () => request('/insights/goal-scorecard/rules');
+export const getGoalScorecardRules = (options) => request('/insights/goal-scorecard/rules', options);
 export const saveGoalScorecardRules = (overrides) => request('/insights/goal-scorecard/rules', {
   method: 'PUT',
   body: JSON.stringify(overrides ?? {})
