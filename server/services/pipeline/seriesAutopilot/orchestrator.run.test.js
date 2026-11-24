@@ -480,6 +480,44 @@ describe('autopilot conductor', () => {
     autopilot.cancelSeriesAutopilot(seriesId);
   });
 
+  it('joins an overlapping start instead of launching a second orchestrator (#18309)', async () => {
+    state.verifyFindings = [{ severity: 'high', problem: 'x' }];
+    arcSpies.resolveVerifyIssues.mockImplementationOnce(() => new Promise(() => {}));
+    const { seriesId } = await seedComplete();
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    getSettings.mockImplementationOnce(async () => { await gate; return {}; });
+
+    const p1 = autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 5 });
+    const p2 = autopilot.startSeriesAutopilot(seriesId, {});
+    release();
+    const [first, second] = await Promise.all([p1, p2]);
+
+    expect(first.alreadyRunning).toBe(false);
+    expect(second).toMatchObject({ runId: first.runId, alreadyRunning: true });
+    expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(autopilot.cancelSeriesAutopilot(seriesId)).toBe(true);
+    expect(autopilot.__testing.runs.get(seriesId).runId).toBe(first.runId);
+  });
+
+  it('releases the start lock when the first start rejects (#18309)', async () => {
+    const { seriesId } = await seedComplete();
+    state.cosMode = 'off';
+    const [a, b] = await Promise.all([
+      autopilot.startSeriesAutopilot(seriesId, {}),
+      autopilot.startSeriesAutopilot(seriesId, {}),
+    ]);
+    expect(a).toEqual({ rejected: true, mode: 'off' });
+    expect(b).toEqual({ rejected: true, mode: 'off' });
+
+    state.cosMode = 'autonomous';
+    state.verifyFindings = [{ severity: 'high', problem: 'x' }];
+    arcSpies.resolveVerifyIssues.mockImplementationOnce(() => new Promise(() => {}));
+    const retry = await autopilot.startSeriesAutopilot(seriesId, { maxArcVerifyRounds: 5 });
+    expect(retry.alreadyRunning).toBe(false);
+    autopilot.cancelSeriesAutopilot(seriesId);
+  });
+
   it('emits an immediate cancel:acknowledged frame on cancel (#1617)', async () => {
     // Hold the run open at the arc verify step so cancel lands mid-run and the
     // terminal `canceled` frame can't have fired yet.

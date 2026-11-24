@@ -47,6 +47,28 @@ export async function startSeriesAutopilot(sId, options = {}) {
     return { runId: existing.runId, alreadyRunning: true, mode: existing.mode };
   }
 
+  // `runs.set` happens only after several awaits (state, settings, series,
+  // model report), so two overlapping starts would both pass the check above
+  // and launch two loops, orphaning the first from cancel/pause. Reserve the
+  // series synchronously (no await before this point) and let a concurrent
+  // caller join the in-flight start instead of beginning its own.
+  const inflight = startingRuns.get(sId);
+  if (inflight) {
+    const first = await inflight;
+    return first.rejected ? first : { ...first, alreadyRunning: true };
+  }
+  const starting = launchSeriesAutopilot(sId, options);
+  startingRuns.set(sId, starting);
+  try {
+    return await starting;
+  } finally {
+    startingRuns.delete(sId);
+  }
+}
+
+const startingRuns = new Map();
+
+async function launchSeriesAutopilot(sId, options) {
   const state = await loadState().catch(() => ({ config: {} }));
   const mode = getDomainMode(state.config, 'cos');
   if (mode === 'off') {
@@ -143,6 +165,8 @@ export async function startSeriesAutopilot(sId, options = {}) {
     },
   };
 
+  // Re-read after the awaits above: only a finished run may be evicted here.
+  const existing = runs.get(sId);
   if (existing) {
     // A finished run still in its replay window — evict it so this fresh run
     // fully replaces it (mirrors editorialAnalysisRunner).
