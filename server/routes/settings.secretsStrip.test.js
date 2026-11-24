@@ -97,7 +97,10 @@ describe('PUT /api/settings — secrets-strip', () => {
     expect(res.status).toBe(200);
     const persisted = readSettingsFile();
     expect(persisted.secrets?.auth?.enabled).toBe(true);
-    expect(persisted.secrets?.telegram?.token).toBe('t');
+    expect(persisted.secrets?.auth?.passwordHash).toBe('h');
+    // telegram.token is migrated out of plaintext settings.json into the 0600 private key store.
+    expect(persisted.secrets?.telegram?.token).toBeUndefined();
+    expect(readPrivateKeys().telegram).toBe('t');
   });
 
   it('continues to write other top-level keys normally', async () => {
