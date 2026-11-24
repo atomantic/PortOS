@@ -8,8 +8,6 @@
  * `CORRELATION_QUALITY_THRESHOLD`. Pure except the `getCorrelationQuality()` loader.
  */
 
-import { loadLearningData } from './store.js';
-
 // Rolling window bound, like `failureSignatures.recent`.
 const MAX_CORRELATION_SAMPLES = 200;
 
@@ -92,10 +90,4 @@ export function computeCorrelationQuality(window, { minSamples = MIN_CORRELATION
 /** True when the signal has proven, confident correlation: the `suggestModelTier` aggressiveness gate (#2344). */
 export function isCorrelationProven(quality, threshold = CORRELATION_QUALITY_THRESHOLD) {
   return !!quality?.confident && quality.score !== null && quality.score > threshold;
-}
-
-/** Load learning data and compute the current correlation-quality gauge. */
-export async function getCorrelationQuality(options = {}) {
-  const data = await loadLearningData();
-  return computeCorrelationQuality(data.correlationWindow, options);
 }

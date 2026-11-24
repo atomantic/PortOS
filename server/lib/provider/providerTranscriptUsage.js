@@ -878,12 +878,6 @@ export async function readGrokTurnsFromFile(path) {
   return { turns: applyGrokDeltas(turns), sessionId };
 }
 
-/** Streaming twin of `parseGrokTurns` for a file on disk; null when unreadable. */
-export async function parseGrokTurnsFromFile(path, opts = {}) {
-  const read = await readGrokTurnsFromFile(path);
-  return read ? billGrokTurns(read.turns, read.sessionId, opts) : null;
-}
-
 /**
  * One pass over a session's turns: bucket by UTC day (`dayOf(ms)`, ≥ `floorMs`)
  * and bill each day's turns, returning `[day, { byModel }]` pairs.

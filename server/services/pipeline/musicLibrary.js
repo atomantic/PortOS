@@ -41,14 +41,6 @@ export const MUSIC_SOURCE = Object.freeze({
 
 export const SUPPORTED_AUDIO_EXTENSIONS = Object.freeze(['.mp3', '.wav', '.m4a', '.ogg', '.flac']);
 
-export const SUPPORTED_AUDIO_MIME = Object.freeze({
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.m4a': 'audio/mp4',
-  '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac',
-});
-
 export const MUSIC_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 
 // Returns true if the MIME or filename extension marks this as one of our

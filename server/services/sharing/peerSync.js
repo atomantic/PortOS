@@ -357,22 +357,6 @@ export async function getFullSyncCoverageForPeer(peerId) {
 }
 
 /**
- * Drop every subscription targeting a given peer. Used when removing a peer
- * from the federation entirely (and by tests).
- */
-export async function unsubscribeAllForPeer(peerId) {
-  const matching = await listPeerSubscriptions({ peerId });
-  const removed = [];
-  for (const sub of matching) {
-    await unsubscribePeer(sub.id).catch((err) => {
-      logFailureWithStack(`⚠️ peerSync: unsubscribe-all failed for ${sub.id}`, err);
-    });
-    removed.push(sub.id);
-  }
-  return { removed };
-}
-
-/**
  * Drop every subscription tied to a single record (across all peers). Used
  * when a record transitions to ephemeral via PATCH — the user just opted
  * the record out of sync, so the existing subs (one per peer with the

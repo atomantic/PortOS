@@ -255,7 +255,6 @@ import {
   getFullSyncCoverageForPeer,
   subscribePeer,
   unsubscribePeer,
-  unsubscribeAllForPeer,
   unsubscribeAllForRecord,
   pruneOrphanedPeerSubscriptions,
   pushRecordToPeer,
@@ -833,20 +832,6 @@ describe('peerSync', () => {
       await expect(unsubscribePeer('peer-universe-x-peer-a')).rejects.toMatchObject({
         code: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
       });
-    });
-  });
-
-  describe('unsubscribeAllForPeer', () => {
-    it('removes every subscription targeting a peer', async () => {
-      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
-      vi.mocked(getSeries).mockResolvedValue({ id: 'ser-1' });
-      vi.mocked(listIssues).mockResolvedValue([]);
-      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
-      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 'ser-1' });
-      const result = await unsubscribeAllForPeer('peer-a');
-      expect(result.removed).toHaveLength(2);
-      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
     });
   });
 

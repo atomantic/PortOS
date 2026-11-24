@@ -173,7 +173,3 @@ export function loadFullThemes() {
   fullThemesPromise ??= import('./portosThemes.js');
   return fullThemesPromise;
 }
-
-export function loadTheme(id) {
-  return loadFullThemes().then((mod) => mod.getTheme(id));
-}

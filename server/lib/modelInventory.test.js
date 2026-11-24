@@ -13,30 +13,23 @@ import {
   localModelInventoryRow,
   loraInventoryRow,
   modelInventoryId,
-  parseModelInventoryId,
   presentInventoryRow,
 } from './modelInventory.js';
 
-describe('modelInventoryId round trip', () => {
+describe('modelInventoryId', () => {
   it.each([
     ['huggingface', 'models--black-forest-labs--FLUX.1-dev', 'hf:models--black-forest-labs--FLUX.1-dev'],
     ['lora', 'lora-example-v1.safetensors', 'lora:lora-example-v1.safetensors'],
-    // The two that a naive split gets wrong.
     ['ollama', 'qwen3:8b', 'ollama:qwen3:8b'],
     ['lmstudio', 'org/example-model-GGUF@Q4_K_M', 'lmstudio:org/example-model-GGUF@Q4_K_M'],
-  ])('%s/%s survives both directions', (backend, key, id) => {
+  ])('%s/%s mints its prefixed id', (backend, key, id) => {
     expect(modelInventoryId(backend, key)).toBe(id);
-    expect(parseModelInventoryId(id)).toEqual({ backend, key });
   });
 
-  it('refuses an id it cannot mint or read rather than inventing one', () => {
+  it('refuses an id it cannot mint rather than inventing one', () => {
     expect(modelInventoryId('unknown', 'x')).toBeNull();
     expect(modelInventoryId('ollama', '   ')).toBeNull();
     expect(modelInventoryId('ollama', undefined)).toBeNull();
-    expect(parseModelInventoryId('no-separator')).toBeNull();
-    expect(parseModelInventoryId(':leading')).toBeNull();
-    expect(parseModelInventoryId('ollama:')).toBeNull();
-    expect(parseModelInventoryId('unknownprefix:key')).toBeNull();
   });
 });
 

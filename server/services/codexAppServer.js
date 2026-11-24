@@ -566,24 +566,6 @@ export async function getCodexAccountUsage() {
   return { ...usage, fetchedAt: new Date().toISOString() };
 }
 
-/** Account history bracketed by two account reads so a sign-in change during the
- * capture is detectable. Expected failures are returned as codes: the raw messages
- * can quote upstream text and never belong in a report.
- */
-export async function getCodexAccountUsageEvidence() {
-  const readAccount = () => call(CODEX_RPC.accountRead).then(
-    (result) => ({ status: 'read', account: normalizeCodexAccount(result) }),
-    () => ({ status: 'unread', account: null }),
-  );
-  const accountBefore = await readAccount();
-  const read = await getCodexAccountUsage().then(
-    (usage) => ({ usage, failureCode: null }),
-    (err) => ({ usage: null, failureCode: err.code || CODEX_ERROR_CODES.protocol }),
-  );
-  const accountAfter = await readAccount();
-  return { ...read, accountBefore, accountAfter, runtimeVersion: connection?.runtimeVersion ?? null };
-}
-
 /**
  * The cached readiness, or `null` when nothing has probed it yet.
  *

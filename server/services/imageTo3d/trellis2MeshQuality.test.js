@@ -8,8 +8,6 @@ import {
   TRELLIS2_NORMAL_SOURCE_FACE_CAP,
   isValidDecimationTarget,
   selectTrellis2DecimationTarget,
-  trellis2FillHolesScript,
-  trellis2FillHolesStep,
   trellis2MeshQualityArgs,
 } from './trellis2MeshQuality.js';
 
@@ -123,23 +121,5 @@ describe('trellis2MeshQualityArgs', () => {
     for (const mode of TRELLIS2_ALPHA_MODES) {
       expect(() => trellis2MeshQualityArgs({ alphaMode: mode })).not.toThrow();
     }
-  });
-});
-
-describe('trellis2FillHolesStep', () => {
-  it('runs the patcher under the venv python against the clone root', () => {
-    const step = trellis2FillHolesStep('/venv/bin/python3', '/root/trellis2');
-    expect(step).toMatchObject({
-      stage: 'fill-holes-gate',
-      command: '/venv/bin/python3',
-      optional: true,
-    });
-    expect(step.args).toEqual([trellis2FillHolesScript(), '/root/trellis2']);
-  });
-
-  // Optional-ness is the safety property: a host that cannot apply the gate must
-  // still install and render, because hole filling is opt-in anyway.
-  it('is optional, so a failed gate degrades to today’s behaviour', () => {
-    expect(trellis2FillHolesStep('/p', '/r').optional).toBe(true);
   });
 });

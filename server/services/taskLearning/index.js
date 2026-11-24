@@ -51,8 +51,7 @@ export {
   recordFailureSignature,
   recordEnvironmentalFailure,
   ENVIRONMENTAL_ERROR_CATEGORIES,
-  recalculateModelTierMetrics,
-  getWindowedStats
+  recalculateModelTierMetrics
 } from './metrics.js';
 
 export {
@@ -62,7 +61,6 @@ export {
 } from './reset.js';
 
 export {
-  getTaskTypePriorityMultiplier,
   suggestModelTier,
   deriveFailureSignalAvoidance,
   getRoutingAccuracy,
@@ -76,7 +74,6 @@ export {
   computeCorrelationQuality,
   recordCorrelationSample,
   isCorrelationProven,
-  getCorrelationQuality,
   CORRELATION_QUALITY_THRESHOLD,
   MIN_CORRELATION_SAMPLES
 } from './correlationQuality.js';

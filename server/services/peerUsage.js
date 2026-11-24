@@ -1090,44 +1090,6 @@ function stackCosts(rows, labels) {
   return { series, values };
 }
 
-/** Calendar months over the same fleet, ledger and transcript sources as rolling cost. */
-export async function getFleetMonthlyUsage({ providers = [], now = new Date() } = {}) {
-  const sources = await usageHistorySources(providers);
-  const first = earliestDay(sources);
-  if (!first) return { instanceCount: sources.length, series: [], history: [] };
-  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1)).getTime();
-  const today = utcDay(now.getTime());
-  const span = Array.from({ length: Math.floor((dayMs(today) - start) / DAY_MS) + 1 }, (_, i) => utcDay(start + i * DAY_MS));
-  const months = new Map();
-  for (const day of span) {
-    if (day < first) continue;
-    const month = day.slice(0, 7);
-    if (!months.has(month)) months.set(month, { month, costs: {}, tokens: 0 });
-  }
-  const labels = new Map();
-  for (const source of sources) {
-    instanceDailyUsage(source, span, providers, labels).forEach((usage, i) => {
-      const month = months.get(span[i].slice(0, 7));
-      if (!month) return;
-      addInto(month.costs, usage.costs);
-      month.tokens += usage.tokens;
-    });
-  }
-  const rows = [...months.values()];
-  const { series, values } = stackCosts(rows.map((row) => row.costs), labels);
-  const history = rows.map((row, i) => {
-    const costs = values[i].map(roundCents);
-    return {
-      month: row.month,
-      estimatedCost: roundCents(costs.reduce((sum, cost) => sum + cost, 0)),
-      values: costs,
-      tokens: Math.round(row.tokens),
-      partial: row.month === today.slice(0, 7) || first > `${row.month}-01`,
-    };
-  });
-  return { instanceCount: sources.length, series, history };
-}
-
 let rollingMemo = null;
 
 /**

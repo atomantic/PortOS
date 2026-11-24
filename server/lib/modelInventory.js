@@ -53,8 +53,6 @@ const BACKEND_PREFIX = {
   'legacy-runtime': 'legacy-runtime',
 };
 
-const PREFIX_BACKEND = new Map(Object.entries(BACKEND_PREFIX).map(([backend, prefix]) => [prefix, backend]));
-
 /**
  * The inventory id for a model, or null when the backend or key is not usable.
  *
@@ -71,24 +69,6 @@ export function modelInventoryId(backend, key) {
   const trimmed = typeof key === 'string' ? key.trim() : '';
   if (!prefix || !trimmed) return null;
   return `${prefix}:${trimmed}`;
-}
-
-/**
- * Split an inventory id back into `{ backend, key }`, or null when it is not one.
- *
- * Splits on the FIRST colon only — an Ollama tag (`qwen3:8b`) contains colons of
- * its own, so a greedy split would truncate the key the delete action needs.
- *
- * @param {string} id
- * @returns {{ backend: string, key: string }|null}
- */
-export function parseModelInventoryId(id) {
-  if (typeof id !== 'string') return null;
-  const separator = id.indexOf(':');
-  if (separator <= 0) return null;
-  const backend = PREFIX_BACKEND.get(id.slice(0, separator));
-  const key = id.slice(separator + 1);
-  return backend && key ? { backend, key } : null;
 }
 
 /**

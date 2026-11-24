@@ -16,7 +16,7 @@ vi.mock('./memoryBackend.js', () => ({
 }));
 vi.mock('./memoryEmbeddings.js', () => ({
   estimateTokens: text => Math.ceil(text.length / 4),
-  generateQueryEmbedding: vi.fn(), truncateToTokens: vi.fn(),
+  generateQueryEmbedding: vi.fn(),
 }));
 vi.mock('./usage.js', () => ({ recordSession: async () => {} }));
 vi.mock('./agent/agentRunEventLog.js', () => ({ appendRunEvent: async () => {} }));

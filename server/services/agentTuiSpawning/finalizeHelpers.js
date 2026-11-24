@@ -1,16 +1,12 @@
 /**
  * Agent TUI finalize helpers
  *
- * Failure-analysis + worktree-inspection support for spawnTuiAgent's finalize
- * path. All side-effect-narrow and non-throwing: a failure to read the raw
- * spool, inspect the worktree, or capture a diff must never abort finish()
- * before finalizeAgent runs. Extracted from spawnTuiAgent so the "read the
- * spool tail → analyze the failure" concern is self-contained and testable.
+ * Failure-analysis support for spawnTuiAgent's finalize path. Non-throwing: a
+ * failure to read the raw spool must never abort finish() before finalizeAgent
+ * runs. Extracted from spawnTuiAgent so the "read the spool tail → analyze the
+ * failure" concern is self-contained and testable.
  */
 
-import { join } from 'path';
-import { writeFile } from 'fs/promises';
-import * as git from '../git/status.js';
 import { readFileTail } from '../../lib/fileUtils.js';
 import { commitsSince } from '../../lib/gitCommitProbe.js';
 import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';
@@ -25,31 +21,6 @@ export { commitsSince };
 // would reintroduce the OOM risk the disk spool avoids. 1MB covers that window
 // even on a repaint-heavy TUI transcript.
 export const RAW_TAIL_ANALYSIS_BYTES = 1024 * 1024;
-
-/**
- * Capture the git diff (staged + unstaged) from a worktree and save it to the
- * agent archive dir, before worktree cleanup, for post-mortems. Non-throwing.
- *
- * @returns {string|null} The captured diff, or null if none/error.
- */
-export async function captureWorktreeDiff(workspacePath, agentDir) {
-  if (!workspacePath || typeof workspacePath !== 'string') return null;
-  if (!agentDir || typeof agentDir !== 'string') return null;
-  const [staged, unstaged] = await Promise.all([
-    git.getDiff(workspacePath, true).catch(() => ''),
-    git.getDiff(workspacePath, false).catch(() => ''),
-  ]);
-  const combined = [
-    staged ? `### STAGED CHANGES ###\n${staged}` : '',
-    unstaged ? `### UNSTAGED CHANGES ###\n${unstaged}` : '',
-  ].filter(Boolean).join('\n\n');
-  if (!combined.trim()) return null;
-  const diffFile = join(agentDir, 'worktree-diff.txt');
-  await writeFile(diffFile, combined).catch((err) => {
-    console.error(`❌ Failed to capture worktree diff for agent: ${err.message}`);
-  });
-  return combined;
-}
 
 /**
  * Resolve the error-analysis payload for a finalizing agent. Successful runs

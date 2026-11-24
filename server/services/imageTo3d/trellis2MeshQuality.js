@@ -1,6 +1,6 @@
 /**
  * TRELLIS.2 (Apple Silicon / MPS) — mesh-quality knobs the upstream port hardcodes.
- * Pure selectors plus one install-step descriptor (plain data, not a spawn).
+ * Pure selectors.
  *
  * `generate.py` clamps its bake mesh to 200000 faces, tuned for the 512 pipeline; on
  * `1024_cascade` (~22.7M faces) that discards 99.1% of the geometry. The clamp guarded a mtlbvh
@@ -10,8 +10,6 @@
  * at 8.6M). Browser weight is the other limit: 1M faces lands the viewer near ~105 MB; larger
  * belongs in a separate high-detail export.
  */
-
-import { fileURLToPath } from 'node:url';
 
 /** The upstream `generate.py` clamp the runner asserts against. */
 export const TRELLIS2_DECIMATION_UPSTREAM_CLAMP = 200000;
@@ -113,28 +111,4 @@ export function trellis2MeshQualityArgs({
       ? ['--normal-map-max-source-faces', String(normalMapMaxSourceFaces)] : []),
     '--',
   ];
-}
-
-/** Absolute path to the install-time patcher that turns upstream's `fill_holes` stub into an environment check. */
-export function trellis2FillHolesScript() {
-  return fileURLToPath(new URL('./trellis2RestoreFillHoles.py', import.meta.url));
-}
-
-/**
- * The install step that adds the `fill_holes` gate. It must run AFTER setup: `setup.sh` runs
- * `patches/mps_compat.py`, which writes the stub this patches. `optional: true` so a host
- * where the gate can't be applied still installs and renders; `--fill-holes` there errors
- * loudly in the runner. Runs under the venv's Python.
- *
- * @param {string} python the venv python path
- * @param {string} root the trellis2 clone root
- * @returns {{stage: string, command: string, args: string[], optional: boolean}}
- */
-export function trellis2FillHolesStep(python, root) {
-  return {
-    stage: 'fill-holes-gate',
-    command: python,
-    args: [trellis2FillHolesScript(), root],
-    optional: true,
-  };
 }

@@ -37,9 +37,6 @@ export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
 // Production review stages the run may approve itself (`brief.autoApprove`).
 export const AUTONOMOUS_AUTO_APPROVE_LABELS = Object.freeze({ art: 'Art', storyboard: 'Storyboard', proof: 'Proof' });
 
-// Who clears the review points: the director (optional checkpoints) or the orchestrator model.
-export const AUTONOMOUS_RUN_MODES = Object.freeze(['checkpoints', 'orchestrated']);
-
 // How the orchestrator's decisions read on the run panel.
 export const ORCHESTRATOR_VERDICT_LABELS = Object.freeze({ approve: 'Approved', revise: 'Sent back', retake: 'Retake', noted: 'Notes' });
 

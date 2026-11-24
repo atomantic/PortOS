@@ -217,11 +217,8 @@ export async function resolveBeeperConfig({ baseUrl, token } = {}) {
  * generic "5xx is transient" retry policy loops forever on media the network
  * has aged out, so an asset-endpoint `502` maps to a TERMINAL
  * `ASSET_UNAVAILABLE` rather than the ordinarily-retryable `UPSTREAM_ERROR`.
- * `POST /v1/assets/download` does NOT share this — it answers `200` with an
- * `{ error }` body instead, so this `502` branch never fires for it; that
- * shape is validated separately in `downloadAsset` below. Every other status
- * follows the spec's documented meaning; `code` is never a published enum, so
- * it rides along under `details` for logging only.
+ * Every other status follows the spec's documented meaning; `code` is never a
+ * published enum, so it rides along under `details` for logging only.
  */
 export function mapBeeperResponseError(status, body, { isAssetEndpoint = false, retryEligible = true } = {}) {
   const beeperCode = body?.code;
@@ -265,7 +262,6 @@ async function beeperRequest(path, {
   token,
   requireAuth = true,
   allowRetry = false,
-  isAssetEndpoint = false,
 } = {}) {
   const resolved = await resolveBeeperConfig({ baseUrl, token });
   if (requireAuth && !resolved.token) {
@@ -318,7 +314,7 @@ async function beeperRequest(path, {
     if (totalDeadlineId !== null) clearTimeout(totalDeadlineId);
   }
 
-  if (!response.ok) throw mapBeeperResponseError(response.status, data, { isAssetEndpoint, retryEligible: allowRetry });
+  if (!response.ok) throw mapBeeperResponseError(response.status, data, { retryEligible: allowRetry });
   noteSuccess();
   return data;
 }
@@ -444,12 +440,6 @@ function cursorQuery({ cursor, direction }) {
   return query ? `?${query}` : '';
 }
 
-function clampLimit(value, { min = 1, max, fallback }) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(n)));
-}
-
 /**
  * Append arbitrary search/filter params onto a `URLSearchParams`. An array
  * value (`accountIDs`, `chatIDs`, `mediaTypes` — all declared as array query
@@ -496,16 +486,6 @@ export async function listChatsPage({ cursor, direction = 'before', accountIDs, 
   return beeperRequest(`/v1/chats${query ? `?${query}` : ''}`, { baseUrl, token, timeoutMs, allowRetry: true });
 }
 
-/** Async iterator over every chat, walking cursors automatically. */
-export function listChats({ direction = 'before', accountIDs, baseUrl, token, timeoutMs } = {}) {
-  return paginateBeeperCursor(
-    ({ cursor, direction: dir }) => listChatsPage({
-      cursor, direction: dir, accountIDs, baseUrl, token, timeoutMs,
-    }),
-    { direction },
-  );
-}
-
 export async function getChat(chatId, { baseUrl, token, timeoutMs } = {}) {
   return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}`, { baseUrl, token, timeoutMs, allowRetry: true });
 }
@@ -516,18 +496,6 @@ export async function createChat(accountID, participantID, options = {}) {
     ...options, method: 'POST',
     body: { accountID, participantIDs: [participantID], type: 'single' },
   });
-}
-
-/** `GET /v1/chats/search` — has `limit` (default 50, max 200). One page. */
-export async function searchChatsPage({ limit, cursor, direction = 'before', baseUrl, token, timeoutMs, ...params } = {}) {
-  const qs = new URLSearchParams();
-  appendSearchParams(qs, params);
-  const clamped = clampLimit(limit, { min: 1, max: 200, fallback: undefined });
-  if (clamped !== undefined) qs.set('limit', String(clamped));
-  if (cursor) qs.set('cursor', cursor);
-  if (direction) qs.set('direction', direction);
-  const query = qs.toString();
-  return beeperRequest(`/v1/chats/search${query ? `?${query}` : ''}`, { baseUrl, token, timeoutMs, allowRetry: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -557,17 +525,6 @@ export async function getMessage(chatId, messageId, { baseUrl, token, timeoutMs 
   );
 }
 
-/** `GET /v1/messages/search` — `limit` is hard-capped at 20 (default 20). One page. */
-export async function searchMessagesPage({ limit, cursor, direction = 'before', baseUrl, token, timeoutMs, ...params } = {}) {
-  const qs = new URLSearchParams();
-  appendSearchParams(qs, params);
-  const clamped = clampLimit(limit, { min: 1, max: 20, fallback: 20 });
-  qs.set('limit', String(clamped));
-  if (cursor) qs.set('cursor', cursor);
-  if (direction) qs.set('direction', direction);
-  return beeperRequest(`/v1/messages/search?${qs.toString()}`, { baseUrl, token, timeoutMs, allowRetry: true });
-}
-
 /**
  * Send a message. Retry is OFF (the client-wide default) — there is no
  * idempotency key on send, so a retried POST sends a second real message.
@@ -589,47 +546,17 @@ export async function editMessage(chatId, messageId, text, { baseUrl, token, tim
   });
 }
 
-/**
- * Delete (unsend) a message. `forEveryone` is REQUIRED and must be an
- * explicit boolean — the API defaults it to `true` when omitted, unsending
- * for every participant on networks that support it. No retry.
- */
-export async function deleteMessage(chatId, messageId, forEveryone, { baseUrl, token, timeoutMs } = {}) {
-  if (typeof forEveryone !== 'boolean') {
-    throw new BeeperApiError(
-      'deleteMessage requires an explicit boolean forEveryone — Beeper defaults an omitted value to true (unsend for everyone)',
-      { status: 400, code: 'FOR_EVERYONE_REQUIRED', retryable: false },
-    );
-  }
-  return beeperRequest(
-    `/v1/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}?forEveryone=${forEveryone}`,
-    { method: 'DELETE', baseUrl, token, timeoutMs },
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Chat state (archive / read)
 // ---------------------------------------------------------------------------
-
-/** `PATCH /v1/chats/{chatID}` with `{isArchived}` — returns the updated Chat. */
-export async function archiveChat(chatId, archived = true, { baseUrl, token, timeoutMs } = {}) {
-  return beeperRequest(`/v1/chats/${encodeURIComponent(chatId)}`, {
-    method: 'PATCH',
-    body: { isArchived: archived },
-    baseUrl, token, timeoutMs,
-  });
-}
 
 /**
  * `PATCH /v1/chats/{chatID}` — the chat-state update endpoint, and the write
  * path behind the two rail controls #9 wired (Archive, Low priority). The body
  * is an explicit allowlist rather than a passthrough: `PATCH` also carries the
  * draft field, and a spread of caller-supplied keys would let a route body
- * clear a draft (or set one) as a side effect of archiving a chat.
- *
- * `archiveChat` above stays as the narrow archive-only spelling; this is the
- * general form and returns the updated `Chat` either way. Retries are OFF
- * (`beeperRequest`'s default) — a Beeper write has no idempotency key.
+ * clear a draft (or set one) as a side effect of archiving a chat. Retries are
+ * OFF (`beeperRequest`'s default) — a Beeper write has no idempotency key.
  */
 export async function updateChat(chatId, patch = {}, { baseUrl, token, timeoutMs } = {}) {
   const body = {};
@@ -653,43 +580,6 @@ export async function markRead(chatId, { messageID } = {}, { baseUrl, token, tim
 // ---------------------------------------------------------------------------
 // Assets
 // ---------------------------------------------------------------------------
-
-/**
- * `POST /v1/assets/download` — resolves an `mxc://`/`localmxc://` reference to
- * a local file URL, returned as `{ srcURL }`. A missing/expired asset answers
- * HTTP `200` here — NOT `502` — with `{ error: '<message>' }` and no `srcURL`
- * (`AssetDownloadResponse` documents both fields as optional siblings on the
- * one 200 shape; live-verified against an unresolvable `mxc://` reference).
- * `beeperRequest` only maps non-2xx statuses, so a 200-with-`error` body would
- * otherwise pass through as a "success" carrying no file to read. Validate the
- * body here instead: an `error` string, or a response missing a non-empty
- * `srcURL`, is the same terminal condition the 502 branch of
- * `mapBeeperResponseError` exists for — `ASSET_UNAVAILABLE`, never retryable
- * — so both failure shapes converge on the same caller-facing error. The
- * `502`-on-`assets/serve` case (`GET`/`HEAD`, see below) is unrelated and
- * still goes through `mapBeeperResponseError`'s status branch. Byte streaming
- * (`GET /v1/assets/serve`, implemented below as `fetchAssetStream`/
- * `headAsset`) and disk mirroring (`beeperAttachments.js`) are not
- * implemented in `downloadAsset`.
- */
-export async function downloadAsset(url, { baseUrl, token, timeoutMs } = {}) {
-  const data = await beeperRequest('/v1/assets/download', {
-    method: 'POST',
-    body: { url },
-    baseUrl, token, timeoutMs,
-    isAssetEndpoint: true,
-  });
-  const srcURL = typeof data?.srcURL === 'string' ? data.srcURL : '';
-  if (typeof data?.error === 'string' && data.error) {
-    throw new BeeperApiError(data.error, { status: 200, code: 'ASSET_UNAVAILABLE', retryable: false });
-  }
-  if (!srcURL) {
-    throw new BeeperApiError('Beeper /v1/assets/download returned no srcURL', {
-      status: 200, code: 'ASSET_UNAVAILABLE', retryable: false,
-    });
-  }
-  return data;
-}
 
 /**
  * The byte-streaming half of the asset surface (#37): `GET /v1/assets/serve`.

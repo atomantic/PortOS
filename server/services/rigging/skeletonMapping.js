@@ -57,8 +57,6 @@ export function reduceBoneMapping({ sourceBones, targetBones, skeletonHint } = {
     : { ok: true, skeletonHint: targetHint, mappings, unmappedBones: [] };
 }
 
-export const REQUIRED_RETARGET_JOINTS = JOINTS;
-
 /**
  * Parent joint for every canonical joint (`null` = root). The armature the auto-skin
  * worker builds is derived from this, so the hierarchy lives with the bone names it

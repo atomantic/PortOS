@@ -374,30 +374,6 @@ export const ENRICHMENT_CATEGORIES = {
   }
 };
 
-// Export format configurations
-export const EXPORT_FORMATS = {
-  system_prompt: {
-    id: 'system_prompt',
-    label: 'System Prompt',
-    description: 'Combined markdown for direct injection into LLM system prompts'
-  },
-  agents_md: {
-    id: 'agents_md',
-    label: 'AGENTS.md',
-    description: 'Format for agent-instructions files (AGENTS.md / CLAUDE.md)'
-  },
-  json: {
-    id: 'json',
-    label: 'JSON',
-    description: 'Structured JSON for API integration'
-  },
-  individual: {
-    id: 'individual',
-    label: 'Individual Files',
-    description: 'Separate files for each document'
-  }
-};
-
 // Health score thresholds
 export const HEALTH_THRESHOLDS = {
   excellent: 80,
@@ -427,4 +403,3 @@ export function scoreToColor(score) {
   if (score >= 0.5) return 'text-yellow-400';
   return 'text-red-400';
 }
-

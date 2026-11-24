@@ -6,7 +6,6 @@ vi.mock('./notifications.js', () => ({
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
-vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 
 vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn(), getTaskById: vi.fn(), updateTask: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: vi.fn().mockImplementation(async (args) => args[0] === 'api' ? 'maintainer' : 'false') }));
@@ -18,7 +17,6 @@ import { getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { execGh } from './github.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { addNotification } from './notifications.js';
-import { ensureTaskThread } from './brainTaskThreads.js';
 
 const PR_URL = 'https://github.com/example-org/example-repo/pull/9';
 
@@ -44,7 +42,6 @@ describe('automated merge follow-ups', () => {
     'keeps a %s block out of human notifications and Brain commitments', async blockedCategory => {
       expect(await handBackBlockedPrRemediation({ task: followUp({ blockedCategory }), previousStatus: 'pending' })).toBe(false);
       expect(addNotification).not.toHaveBeenCalled();
-      expect(ensureTaskThread).not.toHaveBeenCalled();
       expect(execGh).not.toHaveBeenCalled();
     },
   );

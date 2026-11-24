@@ -72,7 +72,6 @@ vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMo
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
-  markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),
 }));
 
@@ -111,7 +110,6 @@ vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () 
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 vi.mock('./agentSummaryExtraction.js', () => ({
-  extractSimplifySummaries: vi.fn(() => null),
   // The landed-elsewhere check reads the run's own completion summary; the
   // default mock yields none, so a test opts in by setting `summaryText`.
   extractFinalSummary: vi.fn(() => summaryText),

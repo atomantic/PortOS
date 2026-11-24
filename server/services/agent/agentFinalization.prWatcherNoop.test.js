@@ -52,7 +52,6 @@ vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMo
 vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
-  markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),
 }));
 
@@ -79,7 +78,7 @@ vi.mock('../taskTypeHooks.js', () => ({
 }));
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
-vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
+vi.mock('./agentSummaryExtraction.js', () => ({ extractFinalSummary: vi.fn(() => null) }));
 
 import { finalizeAgent } from './agentFinalization.js';
 

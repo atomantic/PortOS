@@ -591,47 +591,6 @@ async function handleCheckinResponse(msg) {
   await bot.sendMessage(chatId, '✅ Check-in recorded. Thanks!', { parse_mode: 'HTML' });
 }
 
-/**
- * Send a check-in prompt for a specific goal (or auto-pick)
- * Exported for use by scheduled jobs
- */
-export async function sendCheckin(goalId) {
-  if (!bot || !authorizedChatId) return;
-
-  const data = await getGoals();
-  const activeGoals = data.goals.filter(g => g.status === 'active');
-
-  let targetGoal;
-  if (goalId) {
-    targetGoal = activeGoals.find(g => g.id === goalId);
-  } else {
-    // Pick most stale goal. An unreadable log can't rank staleness, and asking
-    // about an arbitrary goal would then record an answer against it — skip the
-    // send instead (the scheduled job simply retries next window).
-    const checkins = await loadCheckins();
-    if (!checkins) return;
-    let oldestTime = Infinity;
-    for (const goal of activeGoals) {
-      const last = checkins.checkins
-        .filter(c => c.goalId === goal.id)
-        .sort((a, b) => new Date(b.askedAt) - new Date(a.askedAt))[0];
-      const t = last ? new Date(last.askedAt).getTime() : 0;
-      if (t < oldestTime) { oldestTime = t; targetGoal = goal; }
-    }
-  }
-
-  if (!targetGoal) return;
-
-  const question = `How's progress on "<b>${escapeHtml(targetGoal.title)}</b>"? (currently ${targetGoal.progress ?? 0}%)`;
-  pendingCheckins.set(authorizedChatId, {
-    question,
-    goalId: targetGoal.id,
-    askedAt: new Date().toISOString()
-  });
-
-  await sendMessage(question);
-}
-
 // === Check-in persistence ===
 
 /**

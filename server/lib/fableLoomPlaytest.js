@@ -484,8 +484,3 @@ export function buildLoomPlaythroughPromptDigest(loom, report, options = {}) {
     maxChars,
   };
 }
-
-/** Compact path traces as text for legacy callers and prompt previews. */
-export function describeLoomPlaythroughsForPrompt(loom, report, options) {
-  return buildLoomPlaythroughPromptDigest(loom, report, options).text;
-}

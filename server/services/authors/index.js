@@ -32,17 +32,12 @@ export {
 // DB, but a route can call in before that gate runs ensureSchema() — the selector
 // runs it (idempotently) on the PG path, so the authors table is created on first
 // use either way.
-const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+const { selectBackend } = createRecordStoreBackendSelector({
   label: 'Authors',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
   requireDbMessage: `Authors require PostgreSQL — ${POSTGRES_SETUP_HINT}`,
 });
-
-/** Name of the active backend, or null before first call (for diagnostics/tests). */
-export function getAuthorsBackendName() {
-  return getBackendName();
-}
 
 export async function listAuthors(options = {}) {
   return (await selectBackend()).listAuthors(options);

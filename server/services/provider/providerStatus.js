@@ -109,13 +109,6 @@ export async function markProviderUsageLimit(providerId, errorInfo) {
 }
 
 /**
- * Mark a provider as unavailable due to rate limiting (temporary).
- */
-export async function markProviderRateLimited(providerId) {
-  return getProviderStatusService().markRateLimited(providerId);
-}
-
-/**
  * Mark a provider as available (recovered).
  */
 export async function markProviderAvailable(providerId) {

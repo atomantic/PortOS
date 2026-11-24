@@ -108,7 +108,6 @@ vi.mock('../git/branchEvidence.js', () => ({}));
 vi.mock('../git/sync.js', () => ({}));
 vi.mock('../git/prs.js', () => ({}));
 vi.mock('../git/cleanup.js', () => ({}));
-vi.mock('../brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn() }));
 vi.mock('../issueReconcile.js', () => ({ issueNumberFromRef: vi.fn() }));
 // handleAgentCompletion launches retirement from its finally block without
 // returning it; keep the real work but own the promise so teardown can drain it.

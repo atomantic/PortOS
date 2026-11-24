@@ -101,36 +101,6 @@ function parseDowField(dow) {
   return [...out].sort((a, b) => a - b);
 }
 
-// Parse a "simple" cron (fixed minute + hour, any day-of-month/month, an
-// enumerable day-of-week set) into { days: number[], time: 'HH:MM' }.
-// `days` is empty for an every-day (daily) schedule. Returns null when the
-// expression is an interval/stepped/complex cron the day+time picker can't
-// round-trip — callers fall back to the raw text field in that case.
-export function parseSimpleCron(expr) {
-  if (!expr) return null;
-  const parts = String(expr).trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-  const [min, hour, dom, mon, dow] = parts;
-  if (dom !== '*' || mon !== '*') return null;
-  if (!/^\d{1,2}$/.test(min) || !/^\d{1,2}$/.test(hour)) return null;
-  const minute = Number(min);
-  const hr = Number(hour);
-  if (minute > 59 || hr > 23) return null;
-  const days = parseDowField(dow);
-  if (!days) return null;
-  return { days, time: `${String(hr).padStart(2, '0')}:${String(minute).padStart(2, '0')}` };
-}
-
-// Build a cron expression from a day-of-week set + a 'HH:MM' time.
-// No days selected → every day (daily at that time). Returns '' for an
-// unparseable time so callers can treat it as "not yet set".
-export function buildWeeklyCron(days, time) {
-  const [hr, minute] = String(time || '').split(':').map(Number);
-  if (!Number.isInteger(hr) || !Number.isInteger(minute)) return '';
-  const dow = !days || days.length === 0 ? '*' : [...days].sort((a, b) => a - b).join(',');
-  return `${minute} ${hr} * * ${dow}`;
-}
-
 export const RECURRENCE_FREQUENCIES = [
   { value: 'daily', label: 'Every day' },
   { value: 'weekly', label: 'Weekly' },

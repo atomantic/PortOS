@@ -65,14 +65,6 @@ export async function resolveQwen3Python() {
 }
 
 /**
- * Check if the isolated runtime venv or compatible Python interpreter is installed.
- */
-export async function isQwen3RuntimeInstalled() {
-  const status = await getQwen3RuntimeStatus();
-  return status.ok;
-}
-
-/**
  * Probe runtime health, hardware capabilities, and downloaded model checkpoints.
  */
 export async function getQwen3RuntimeStatus() {
@@ -165,4 +157,3 @@ function runRuntime(pythonPath, args, timeout = 10000) {
     child.on('error', reject);
   });
 }
-

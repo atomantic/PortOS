@@ -9,14 +9,6 @@
  * both surfaces.
  */
 
-export const SCENE_STATUS = Object.freeze({
-  PENDING: 'pending',
-  RENDERING: 'rendering',
-  EVALUATING: 'evaluating',
-  ACCEPTED: 'accepted',
-  FAILED: 'failed',
-});
-
 // Tailwind class map keyed by scene.status. `evaluating` reuses warning
 // because the runner is waiting on the evaluator's accept/reject decision;
 // it's not yet "done" but not actively rendering either.
