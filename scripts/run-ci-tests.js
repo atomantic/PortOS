@@ -29,6 +29,10 @@ import { isClientBrowserSuite } from './lib/importReach.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+// The manifest scan is selected on relevant diffs and in the full suite.
+// Give it the scheduled guard budget without making it run on unrelated PRs.
+const SCHEDULED_GUARDS = ['scripts/generate-prompt-stage-call-sites.test.js'];
+
 /**
  * Vitest's own signature for a worker that never returned control at all — a
  * native process abort (Windows `STATUS_*` fail-fast codes such as
@@ -597,12 +601,12 @@ async function main() {
   }
   if (shouldWarmTestChrome({ scope, run: plan.run })) warmTestChrome();
   // The always-run guards' per-file budget (#16551, #16810). Only the scheduled
-  // hosted run enforces it, and only there do the guards run first as their own
-  // Vitest pass, so a related or full selection's heavy suites do not stretch
-  // their wall times. Every other run keeps them in the one pass with the rest
-  // of the selection and reports an over-budget guard as a warning.
+  // hosted run enforces it. Its guard pass also includes selected structural
+  // scans that need isolation from the heavy suites in the full selection.
+  // Other runs keep the selection together and warn about always-run guards.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const guardRun = enforceGuardBudget ? plan.run.filter(test => alwaysRun.has(test)) : [];
+  const guardRun = enforceGuardBudget
+    ? plan.run.filter(test => alwaysRun.has(test) || SCHEDULED_GUARDS.includes(test)) : [];
   const budgetWatched = enforceGuardBudget ? guardRun : plan.run.filter(test => alwaysRun.has(test));
   const rest = plan.run.filter(test => !guardRun.includes(test));
   const passes = guardRun.length > 0 && rest.length > 0

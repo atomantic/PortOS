@@ -677,11 +677,12 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       ].join('\n'));
       const guard = 'scripts/node-version-drift.guard.test.js';
       const runner = 'server/test/guards/repo.guard.test.js';
+      const scheduled = 'scripts/generate-prompt-stage-call-sites.test.js';
       const other = 'scripts/lib/releaseTitle.test.js';
       const run = (extraEnv) => spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'server'], {
         encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`, FAKE_SLOW_GUARD: guard,
-          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner]), CI_TEST_SOURCES: '[]',
+          CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify([other, guard, runner, scheduled]), CI_TEST_SOURCES: '[]',
           PORTOS_TEST_MEMO: 'off', CI_SHARD: '', CI_GUARD_BUDGET: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '', ...extraEnv },
       });
       const over = `${guard} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`;
@@ -690,22 +691,26 @@ describe('always-run guard time budget through the real runner (#16551, #16996)'
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
       expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${over}`);
-      // The always-run guards ran alone, before the rest of the selection.
-      expect(ranSets(enforced.stdout)).toEqual([[`../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+      // The selected manifest scan shares the scheduled guard pass.
+      expect(ranSets(enforced.stdout)).toEqual([[`../${scheduled}`, `../${guard}`, 'test/guards/repo.guard.test.js'], [`../${other}`]]);
+
+      const slowScheduled = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: scheduled });
+      expect(slowScheduled.status).toBe(1);
+      expect(slowScheduled.stderr).toContain(`${scheduled} 6.5s; ${runner} > fastCheck 4.6s; ${runner} > slowCheck 4.5s over the 4.0s per-guard budget.`);
 
       // Without enforcement (PR, push, release, local pregate, Windows, browser) an over-budget guard only warns:
       // it stays in the one normal pass with the rest of the selection and never fails the run.
       for (const extraEnv of [{}, { CI_GUARD_BUDGET: 'report' }]) {
         const reported = run(extraEnv);
         expect(reported.status, reported.stderr).toBe(0);
-        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, 'test/guards/repo.guard.test.js'].sort()]);
+        expect(ranSets(reported.stdout)).toEqual([[`../${guard}`, `../${other}`, `../${scheduled}`, 'test/guards/repo.guard.test.js'].sort()]);
         expect(reported.stdout).toContain(`::warning title=Always-run guard over its time budget::${over}`);
         expect(reported.stderr).not.toContain('Always-run guard over its time budget');
       }
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 3: ${guard} 0.0s; ${runner} > fastCheck 0.0s; ${runner} > slowCheck 0.0s (budget 4.0s).`);
+      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 4: ${scheduled} 0.0s; ${guard} 0.0s; ${runner} > fastCheck 0.0s (budget 4.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
