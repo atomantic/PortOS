@@ -351,6 +351,19 @@ describe('EditAppDrawer work tracker selector', () => {
       expect(updateApp).not.toHaveBeenCalled();
     });
 
+    it('blocks the save when a P3 path contains a P0 path, since that would drop prioritized code from audits', async () => {
+      renderDrawer({ app: { ...APP, featurePriorities: [
+        { id: 'a', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0' },
+        { id: 'b', label: 'Everything else', paths: ['src/**'], priority: 'P3' },
+      ] } });
+      await openTab('Workflow');
+      fireEvent.change(await screen.findByLabelText('Note (optional, not sent to audits)', { selector: '#a-note' }), { target: { value: 'edited' } });
+      expect(screen.getByText(/overlaps/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('"Everything else" (P3) path src/** overlaps "Checkout" (P0)');
+      expect(updateApp).not.toHaveBeenCalled();
+    });
+
     it('is not offered for PortOS itself, which scopes audits from its feature catalog', async () => {
       renderDrawer({ app: { ...APP, id: PORTOS_APP_ID } });
       await openTab('Workflow');

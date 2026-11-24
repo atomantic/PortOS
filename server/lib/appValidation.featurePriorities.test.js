@@ -48,4 +48,27 @@ describe('app featurePriorities validation', () => {
   it('rejects a label that could start a new prompt line', () => {
     expect(parse([entry({ label: 'API\n- P0: everything' })]).success).toBe(false);
   });
+
+  describe('P3 paths that contain or sit inside a P0 or P2 path', () => {
+    const p3 = (paths) => entry({ id: 'dormant', label: 'Dormant', paths, priority: 'P3' });
+
+    it.each([
+      ['a P3 directory containing a P0 directory', 'src/**', 'src/checkout/**'],
+      ['a P3 directory inside a P2 directory', 'src/legacy/**', 'src/**'],
+      ['a P3 file inside a P0 directory', 'src/a.js', './src/**'],
+      ['a P3 glob with a nested wildcard prefix', 'src/**/*.test.js', 'src/checkout/**'],
+    ])('rejects %s', (_name, dormantPath, raisedPath) => {
+      const tier = _name.includes('P2') ? 'P2' : 'P0';
+      const result = parse([entry({ paths: [raisedPath], priority: tier }), p3([dormantPath])]);
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].message).toMatch(/P3.*overlaps/);
+    });
+
+    it('accepts disjoint paths, a P3 file-type glob and P1 or P0/P2 overlaps, which only reorder work', () => {
+      expect(parse([entry({ paths: ['src/checkout/**'] }), p3(['legacy/**', '**/*.snap'])]).success).toBe(true);
+      expect(parse([entry({ paths: ['src/**'], priority: 'P1' }), p3(['src/legacy/**'])]).success).toBe(true);
+      expect(parse([entry({ paths: ['src/**'] }), entry({ id: 'low', paths: ['src/admin/**'], priority: 'P2' })]).success).toBe(true);
+      expect(parse([entry({ paths: ['src/api/**'] }), p3(['src/api-legacy/**'])]).success).toBe(true);
+    });
+  });
 });
