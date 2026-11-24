@@ -39,6 +39,7 @@ import {Plus,
   Library,
   MessageSquareText} from 'lucide-react';
 import toast from '../../ui/Toast';
+import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import Banner from '../../ui/Banner';
 import { FormField } from '../../ui/FormField';
 import ConversationViewer from '../ConversationViewer';
@@ -79,6 +80,13 @@ export function transcriptTeaser(content, maxLen = 220) {
 // Ideas is a first-class Brain route, but it deliberately shares this native
 // record surface so CRUD, status completion, catalog handoff, embeddings, and
 // federation continue to use the same idea model and API.
+const splitList = (text) => text.split(',').map(s => s.trim()).filter(Boolean);
+
+// The follow-ups box keeps the raw text while typing; parsing on every keystroke
+// would swallow the comma or space just typed.
+const personPayload = ({ followUpInput, ...data }) =>
+  (followUpInput == null ? data : { ...data, followUps: splitList(followUpInput) });
+
 export default function MemoryTab({ onRefresh, fixedType = null }) {
   const navigate = useNavigate();
   const { recordType, recordId } = useParams();
@@ -272,7 +280,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     let result;
     switch (session.type) {
       case 'people':
-        result = await updateBrainPerson(session.id, editForm, { silent: true }).catch(err => {
+        result = await updateBrainPerson(session.id, personPayload(editForm), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -297,7 +305,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         break;
       case 'memories': {
         const { tagInput, ...memData } = editForm;
-        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
+        if (tagInput != null) memData.tags = splitList(tagInput);
         result = await updateBrainMemory(session.id, memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
@@ -319,11 +327,11 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
     }
   };
 
-  const handleAdd = async () => {
+  const [handleAdd, adding] = useAsyncAction(async () => {
     let result;
     switch (activeType) {
       case 'people':
-        result = await createBrainPerson(addForm, { silent: true }).catch(err => {
+        result = await createBrainPerson(personPayload(addForm), { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
         });
@@ -348,7 +356,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
         break;
       case 'memories': {
         const { tagInput, ...memData } = addForm;
-        if (tagInput != null) memData.tags = tagInput.split(',').map(s => s.trim()).filter(Boolean);
+        if (tagInput != null) memData.tags = splitList(tagInput);
         result = await createBrainMemory(memData, { silent: true }).catch(err => {
           toast.error(err.message);
           return null;
@@ -364,7 +372,7 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
       paged.refreshFirst();
       onRefresh?.();
     }
-  };
+  });
 
   const handleDelete = async (id) => {
     const key = `${activeType}:${id}`;
@@ -503,8 +511,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
               <input
                 type="text"
                 placeholder="Follow-ups (comma separated)"
-                value={(form.followUps || []).join(', ')}
-                onChange={(e) => setForm({ ...form, followUps: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                value={form.followUpInput ?? (form.followUps || []).join(', ')}
+                onChange={(e) => setForm({ ...form, followUpInput: e.target.value })}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               />
             </FormField>
@@ -1025,7 +1033,8 @@ export default function MemoryTab({ onRefresh, fixedType = null }) {
               <div className="flex items-center gap-2 mt-3">
                 <button
                   onClick={handleAdd}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30"
+                  disabled={adding}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-port-accent/20 text-port-accent rounded hover:bg-port-accent/30 disabled:opacity-50"
                 >
                   <Plus size={14} />
                   Create
