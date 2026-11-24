@@ -592,7 +592,7 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     unmount();
   });
 
-  it('resolves qwen3-tts config key from GET /api/voice/config hydration and voice:config:changed', async () => {
+  it.each(['before', 'after'])('uses hydrated and updated qwen3-tts settings for a hotkey pressed %s the widget mounts', async (pressTiming) => {
     mocks.getVoiceConfig.mockResolvedValue({
       enabled: true,
       hotkey: 'Space',
@@ -600,11 +600,30 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
       llm: { fastPath: { enabled: true } },
       tts: { engine: 'qwen3-tts', qwen3: { voice: 'warm-narrator' }, rate: 1.1 },
     });
+    const chunk = deferWidgetChunk();
     localStorage.setItem(HIDDEN_KEY, '0');
     const { unmount } = renderGate();
-    await screen.findByRole('button', { name: WIDGET_MIC });
+    await settle();
+    expect(screen.getByRole('button', { name: DISENGAGE })).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: 'Voice assistant' })).toBeNull();
+    expect(mocks.loadWidget).toHaveBeenCalledOnce();
 
-    fireEvent.keyDown(window, { code: 'Space' });
+    const pressHotkey = () => expect(fireEvent.keyDown(window, { code: 'Space' })).toBe(false);
+    if (pressTiming === 'before') {
+      pressHotkey();
+      expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
+    }
+    await chunk.release();
+    await screen.findByRole('complementary', { name: 'Voice assistant' });
+    await settle();
+    if (pressTiming === 'after') {
+      expect(mocks.startWebSpeechCapture).not.toHaveBeenCalled();
+      pressHotkey();
+    }
+
+    await waitFor(() => {
+      expect(mocks.startWebSpeechCapture, 'an admitted hotkey starts one Web Speech capture').toHaveBeenCalledOnce();
+    });
     const capture = mocks.startWebSpeechCapture.mock.calls[0][0];
     await act(async () => capture.routeFinal('example utterance'));
     expect(mocks.speakSynthesized).toHaveBeenCalledWith('Example reply', {
