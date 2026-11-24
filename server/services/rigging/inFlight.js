@@ -15,15 +15,35 @@ const BUSY_MESSAGES = {
   retarget: 'This model is already being animated.',
 };
 
-/** Claim the model for `lane`, or throw 409 RIGGING_IN_FLIGHT naming who holds it. */
+/** Claim the model for `lane` and return its cancel signal, or throw 409 RIGGING_IN_FLIGHT naming who holds it. */
 export function acquireRigLane(modelId, lane) {
-  const holder = held.get(modelId);
+  const holder = held.get(modelId)?.lane;
   if (holder) {
     throw new ServerError(BUSY_MESSAGES[holder] || BUSY_MESSAGES[lane], { status: 409, code: 'RIGGING_IN_FLIGHT' });
   }
-  held.set(modelId, lane);
+  const controller = new AbortController();
+  held.set(modelId, { lane, controller });
+  return controller.signal;
 }
 
 export function releaseRigLane(modelId, lane) {
-  if (held.get(modelId) === lane) held.delete(modelId);
+  if (held.get(modelId)?.lane === lane) held.delete(modelId);
+}
+
+/**
+ * Abort the rig/retarget worker holding `modelId` (model deletion). Returns whether a
+ * lane was held; the lane's own `finally` releases it once the worker settles.
+ */
+export function cancelRiggingForModel(modelId) {
+  const entry = held.get(modelId);
+  if (!entry) return false;
+  entry.controller.abort();
+  return true;
+}
+
+/** Throw 409 RIGGING_CANCELLED when the lane was aborted (the model was deleted mid-run). */
+export function throwIfCancelled(signal) {
+  if (signal?.aborted) {
+    throw new ServerError('Rigging was cancelled because the model was deleted.', { status: 409, code: 'RIGGING_CANCELLED' });
+  }
 }
