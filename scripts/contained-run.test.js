@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { main, parseArgs } from './contained-run.js';
 
@@ -42,5 +46,77 @@ describe('contained-run', () => {
     // Only the lockfile reaches the host; the planted package.json edit is withheld.
     expect(applyPatch).toHaveBeenCalledWith('/example/worktree', lock);
     expect(await run(['--phase', 'validate', '--', 'sleep 9'], respond(200, { ...result, status: 'terminated', reason: 'timeout', exitCode: null }), { applyPatch })).toBe(124);
+  });
+
+  it('refuses --apply-patch when exitCode is non-zero even if status is completed, and refuses forged tab-comment headers', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const applyPatch = vi.fn();
+    const lock = '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-{"v":1}\n+{"v":2}\n';
+    const nonZero = { status: 'completed', exitCode: 2, log: 'failed', patch: lock, phase: 'install', nodeMajor: 24, engine: { kind: 'native' } };
+    expect(await run(['--phase', 'install', '--apply-patch', '--', 'npm ci'], respond(200, nonZero), { applyPatch })).toBe(2);
+    expect(applyPatch).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.flat().join('\n')).toContain('refused --apply-patch because the contained command exited 2');
+
+    stderr.mockClear();
+    const forged = '--- a/package.json\t/package-lock.json\n+++ b/package.json\t/package-lock.json\n@@ -1 +1 @@\n-{"v":1}\n+{"scripts":{"test":"echo pwn"}}\n';
+    const spoofed = { status: 'completed', exitCode: 0, log: 'ok', patch: forged, phase: 'install', nodeMajor: 24, engine: { kind: 'native' } };
+    expect(await run(['--phase', 'install', '--apply-patch', '--', 'npm ci'], respond(200, spoofed), { applyPatch })).toBe(0);
+    expect(applyPatch).not.toHaveBeenCalled();
+    expect(stderr.mock.calls.flat().join('\n')).toContain('patch is malformed; nothing was applied');
+  });
+
+  it.each([
+    ['human password-free workflow', null],
+    ['delegated PORTOS_API_TOKEN agent workflow', 'example-agent-token'],
+  ])('applies legitimate lockfile patches with real git apply for %s and rejects spoofing/failures', async (_label, agentToken) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'portos-contained-e2e-')));
+    try {
+      const repo = join(dir, 'repo');
+      mkdirSync(join(repo, 'server'), { recursive: true });
+      mkdirSync(join(repo, '.husky'), { recursive: true });
+      writeFileSync(join(repo, 'package.json'), '{"name":"example","version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'package-lock.json'), '{"lockfileVersion":3,"version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'server', 'package-lock.json'), '{"lockfileVersion":3,"version":"1.0.0"}\n');
+      writeFileSync(join(repo, 'yarn.lock'), '# yarn v1\n');
+      writeFileSync(join(repo, '.husky', 'pre-commit'), 'npm test\n');
+      execFileSync('git', ['init', '-q'], { cwd: repo });
+      execFileSync('git', ['add', '.'], { cwd: repo });
+
+      const env = {
+        PORTOS_URL: 'http://127.0.0.1:5555',
+        PORTOS_AGENT_KEY_FILE: join(dir, 'absent-agent-key.json'),
+        ...(agentToken ? { PORTOS_API_TOKEN: agentToken } : {}),
+      };
+
+      const forgedPatch = '--- a/.husky/pre-commit\t/package-lock.json\n+++ b/.husky/pre-commit\t/package-lock.json\n@@ -1 +1 @@\n-npm test\n+echo pwn\n';
+      expect(await main(['--phase', 'install', '--cwd', repo, '--apply-patch', '--', 'npm ci'], env, {
+        request: respond(200, { status: 'completed', exitCode: 0, log: '', patch: forgedPatch, phase: 'install', nodeMajor: 24, engine: { kind: 'native' } }),
+      })).toBe(0);
+      expect(readFileSync(join(repo, '.husky', 'pre-commit'), 'utf8')).toBe('npm test\n');
+
+      const mixedPatch = [
+        '--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{"name":"example","version":"1.0.0"}\n+{"name":"example","version":"9.9.9"}\n',
+        '--- a/package-lock.json\n+++ b/package-lock.json\n@@ -1 +1 @@\n-{"lockfileVersion":3,"version":"1.0.0"}\n+{"lockfileVersion":3,"version":"1.0.1"}\n',
+        '--- a/server/package-lock.json\n+++ b/server/package-lock.json\n@@ -1 +1 @@\n-{"lockfileVersion":3,"version":"1.0.0"}\n+{"lockfileVersion":3,"version":"1.0.2"}\n',
+        '--- a/yarn.lock\n+++ b/yarn.lock\n@@ -1 +1 @@\n-# yarn v1\n+# yarn v2\n',
+      ].join('');
+      expect(await main(['--phase', 'install', '--cwd', repo, '--apply-patch', '--', 'npm ci'], env, {
+        request: respond(200, { status: 'completed', exitCode: 1, log: '', patch: mixedPatch, phase: 'install', nodeMajor: 24, engine: { kind: 'native' } }),
+      })).toBe(1);
+      expect(readFileSync(join(repo, 'package-lock.json'), 'utf8')).toBe('{"lockfileVersion":3,"version":"1.0.0"}\n');
+
+      const request = respond(200, { status: 'completed', exitCode: 0, log: '', patch: mixedPatch, phase: 'install', nodeMajor: 24, engine: { kind: 'native' } });
+      expect(await main(['--phase', 'install', '--cwd', repo, '--apply-patch', '--', 'npm ci'], env, { request })).toBe(0);
+      const [, init] = request.mock.calls[0];
+      expect(init.headers.Authorization).toBe(agentToken ? `Bearer ${agentToken}` : undefined);
+      expect(readFileSync(join(repo, 'package.json'), 'utf8')).toBe('{"name":"example","version":"1.0.0"}\n');
+      expect(readFileSync(join(repo, 'package-lock.json'), 'utf8')).toBe('{"lockfileVersion":3,"version":"1.0.1"}\n');
+      expect(readFileSync(join(repo, 'server', 'package-lock.json'), 'utf8')).toBe('{"lockfileVersion":3,"version":"1.0.2"}\n');
+      expect(readFileSync(join(repo, 'yarn.lock'), 'utf8')).toBe('# yarn v2\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

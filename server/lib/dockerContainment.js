@@ -274,17 +274,24 @@ cd ${DOCKER_CONTAINMENT_PATHS.work} || exit 125
 echo "portos-contained: $phase phase"
 sh -c "$command"
 status=$?
+patch_fail() { echo "portos-contained: could not write the patch" >&2; exit 125; }
 patch=${DOCKER_CONTAINMENT_PATHS.output}/${DOCKER_CONTAINMENT_PATCH_FILE}
-: > "$patch"
+rm -f "$patch" && : > "$patch" || patch_fail
 if [ -f ${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST} ]; then
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    if [ -e "${DOCKER_CONTAINMENT_PATHS.work}/$f" ]; then
-      cmp -s "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f" || diff -u --label "a/$f" --label "b/$f" "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f" >> "$patch"
-    elif [ -e "${DOCKER_CONTAINMENT_PATHS.src}/$f" ]; then
-      diff -u --label "a/$f" --label /dev/null "${DOCKER_CONTAINMENT_PATHS.src}/$f" /dev/null >> "$patch"
-    fi
-  done < ${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST}
+  {
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      if [ -e "${DOCKER_CONTAINMENT_PATHS.work}/$f" ]; then
+        if ! cmp -s "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f"; then
+          diff -u --label "a/$f" --label "b/$f" "${DOCKER_CONTAINMENT_PATHS.src}/$f" "${DOCKER_CONTAINMENT_PATHS.work}/$f"
+          [ $? -le 1 ] || patch_fail
+        fi
+      elif [ -e "${DOCKER_CONTAINMENT_PATHS.src}/$f" ]; then
+        diff -u --label "a/$f" --label /dev/null "${DOCKER_CONTAINMENT_PATHS.src}/$f" /dev/null
+        [ $? -le 1 ] || patch_fail
+      fi
+    done < ${DOCKER_CONTAINMENT_PATHS.input}/${DOCKER_CONTAINMENT_TRACKED_LIST}
+  } >> "$patch" || patch_fail
 fi
 exit $status
 `;
@@ -295,6 +302,15 @@ exit $status
  * applying it would let that code run later on the host, uncontained.
  */
 export const DOCKER_CONTAINMENT_APPLY_BASENAMES = Object.freeze(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lock']);
+
+const malformedPatch = () => ({ patch: null, applied: [], withheld: [], malformed: true });
+
+function isSafePatchPath(path) {
+  if (typeof path !== 'string' || !path) return false;
+  // Reject whitespace/control chars (notably \t which git apply treats as a timestamp separator, \r, \0), quotes and backslashes.
+  if (/[\s\x00-\x1f\x7f-\x9f"\\]/.test(path)) return false;
+  return path.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
 
 /**
  * Split the driver's unified diff into per-file sections — walking hunk line
@@ -310,27 +326,43 @@ export function selectApplicablePatch(text) {
   while (i < lines.length) {
     const from = /^--- a\/(.+)$/.exec(lines[i]);
     const to = /^\+\+\+ (?:b\/(.+)|\/dev\/null)$/.exec(lines[i + 1] ?? '');
-    if (!from || !to || (to[1] !== undefined && to[1] !== from[1])) return { patch: null, applied: [], withheld: [], malformed: true };
+    if (!from || !to || (to[1] !== undefined && to[1] !== from[1])) return malformedPatch();
+    if (!isSafePatchPath(from[1]) || (to[1] !== undefined && !isSafePatchPath(to[1]))) return malformedPatch();
     const start = i;
     i += 2;
+    let hunkCount = 0;
     while (i < lines.length && lines[i].startsWith('@@')) {
       const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(lines[i]);
-      if (!hunk) return { patch: null, applied: [], withheld: [], malformed: true };
+      if (!hunk) return malformedPatch();
       let oldLeft = Number(hunk[1] ?? 1);
       let newLeft = Number(hunk[2] ?? 1);
+      if (oldLeft === 0 && newLeft === 0) return malformedPatch();
+      hunkCount += 1;
       i += 1;
       while ((oldLeft > 0 || newLeft > 0) && i < lines.length) {
         const mark = lines[i][0];
-        if (mark === ' ') { oldLeft -= 1; newLeft -= 1; } else if (mark === '-') oldLeft -= 1;
-        else if (mark === '+') newLeft -= 1;
-        else if (mark !== '\\') return { patch: null, applied: [], withheld: [], malformed: true };
+        if (mark === ' ') {
+          if (oldLeft === 0 || newLeft === 0) return malformedPatch();
+          oldLeft -= 1;
+          newLeft -= 1;
+        } else if (mark === '-') {
+          if (oldLeft === 0) return malformedPatch();
+          oldLeft -= 1;
+        } else if (mark === '+') {
+          if (newLeft === 0) return malformedPatch();
+          newLeft -= 1;
+        } else if (mark !== '\\') {
+          return malformedPatch();
+        }
         i += 1;
       }
+      if (oldLeft !== 0 || newLeft !== 0) return malformedPatch();
       while (lines[i]?.startsWith('\\')) i += 1;
     }
+    if (hunkCount === 0) return malformedPatch();
     sections.push({ path: from[1], text: lines.slice(start, i).join('\n') });
   }
-  const applicable = (path) => !path.split('/').includes('..') && DOCKER_CONTAINMENT_APPLY_BASENAMES.includes(posix.basename(path));
+  const applicable = (path) => DOCKER_CONTAINMENT_APPLY_BASENAMES.includes(posix.basename(path));
   const kept = sections.filter((section) => applicable(section.path));
   return {
     patch: kept.length ? `${kept.map((section) => section.text).join('\n')}\n` : null,
