@@ -39,6 +39,7 @@ const renderOnGeminiWeb = vi.fn();
 vi.mock('./geminiWebDriver.js', () => ({ renderOnGeminiWeb }));
 
 const gemini = await import('./geminiWeb.js');
+const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
 const { videoGenEvents } = await import('./events.js');
 const { loadHistory } = await import('./history.js');
 
@@ -146,5 +147,50 @@ describe('Gemini web video lane', () => {
     await vi.waitFor(() => expect(renderOnGeminiWeb).toHaveBeenCalled());
     expect(gemini.cancel('job-3')).toBe(true);
     expect((await done).type).toBe('failed');
+  });
+
+  it('discards output and skips publication when canceled during probeVideoGeometry', async () => {
+    let releaseProbe;
+    const probeEntered = new Promise((resolve) => {
+      probeVideoGeometry.mockImplementationOnce(() => new Promise((finishProbe) => {
+        releaseProbe = () => finishProbe({ width: 1280, height: 720, fps: 24, durationSec: 10, numFrames: 240 });
+        resolve();
+      }));
+    });
+    let downloadedPath;
+    renderOnGeminiWeb.mockImplementation(async ({ outputPath }) => {
+      downloadedPath = outputPath;
+      await writeFile(outputPath, 'clip');
+      return { chatUrl: 'https://gemini.google.com/app/example' };
+    });
+    const events = [];
+    for (const type of ['completed', 'failed']) {
+      videoGenEvents.on(type, (event) => { if (event.generationId === 'job-7') events.push(type); });
+    }
+    const done = finished('job-7');
+    await gemini.generateVideo({ jobId: 'job-7', prompt: 'x', sourceImagePath: staged, uploadedTempPath: staged });
+    await probeEntered;
+    expect(gemini.cancel('job-7')).toBe(true);
+    releaseProbe();
+    const outcome = await done;
+    expect(outcome.type).toBe('failed');
+    expect(outcome.error).toBe('Canceled');
+    expect(events).toEqual(['failed']);
+    await expect(access(downloadedPath)).rejects.toThrow();
+    await expect(access(staged)).rejects.toThrow();
+    expect((await loadHistory()).find((item) => item.id === 'job-7')).toBeUndefined();
+  });
+
+  it('cancels cleanly when outputPath is already absent at discard time', async () => {
+    renderOnGeminiWeb.mockImplementation(async () => {
+      expect(gemini.cancel('job-8')).toBe(true);
+      return { chatUrl: 'https://gemini.google.com/app/example' };
+    });
+    const done = finished('job-8');
+    await gemini.generateVideo({ jobId: 'job-8', prompt: 'x' });
+    const outcome = await done;
+    expect(outcome.type).toBe('failed');
+    expect(outcome.error).toBe('Canceled');
+    expect((await loadHistory()).find((item) => item.id === 'job-8')).toBeUndefined();
   });
 });

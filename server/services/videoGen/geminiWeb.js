@@ -191,14 +191,16 @@ async function runGeminiWebVideo(job, jobId, { prompt, aspectChoice, files, file
         reportRetryWait(job, jobId, wait);
       },
     });
-    if (entry.aborted) {
-      await unlink(outputPath);
+    const discardCanceledOutput = async () => {
+      await discardUnpublishedVideo({ jobId, outputPath });
       return finishFailure('Canceled');
-    }
+    };
+    if (entry.aborted) return discardCanceledOutput();
     // The Music Video renderer trims every clip by its measured length.
     const measured = (await probeVideoGeometry(outputPath)) || {};
-    activeRequests.delete(jobId);
     await settleInputs();
+    if (entry.aborted) return discardCanceledOutput();
+    activeRequests.delete(jobId);
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({
       job, jobId, outputPath, filename, actualSeed: null, mutateHistory: mutateVideoHistory, publication,
