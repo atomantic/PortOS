@@ -26,11 +26,15 @@ vi.mock('fs/promises', async (original) => ({
 }));
 import { chmod } from 'fs/promises';
 
+// secureAuthStore writes through fileCore; mock at that source so the fileUtils re-export is the same spy.
+vi.mock('../lib/fileCore.js', async (original) => ({
+  ...(await original()),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../lib/fileUtils.js', async (original) => ({
   ...(await original()),
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(undefined),
-  atomicWrite: vi.fn().mockResolvedValue(undefined),
 }));
 import { instanceEvents } from './instanceEvents.js';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
