@@ -61,6 +61,8 @@ export function FeaturePrioritiesSection() {
   const dataRef = useRef(null);
   const loadGeneration = useRef(0);
   const pendingLoads = useRef(0);
+  // Per-area count of socket announcements, so a slow PUT response never overwrites a newer announcement for the same area.
+  const announced = useRef({});
   const mounted = useMounted();
 
   const commit = useCallback((updater) => {
@@ -106,9 +108,19 @@ export function FeaturePrioritiesSection() {
   }, [load]);
 
   useEffect(() => {
-    socket.on('feature-priorities:updated', applyPin);
-    return () => socket.off('feature-priorities:updated', applyPin);
-  }, [applyPin]);
+    const onUpdated = (update) => {
+      announced.current[update.areaId] = (announced.current[update.areaId] || 0) + 1;
+      applyPin(update);
+    };
+    // The server does not replay events missed while disconnected, so a reconnect re-reads once (the first connect, if it lands after mount, costs one redundant read).
+    const onConnect = () => { void load(); };
+    socket.on('feature-priorities:updated', onUpdated);
+    socket.on('connect', onConnect);
+    return () => {
+      socket.off('feature-priorities:updated', onUpdated);
+      socket.off('connect', onConnect);
+    };
+  }, [applyPin, load]);
 
   // Toggling an optional feature changes its feature-off tier without any pin event.
   useEffect(() => {
@@ -121,6 +133,7 @@ export function FeaturePrioritiesSection() {
     if (savingIds.has(row.areaId)) return;
     if (tier === null ? row.source !== 'pinned' : (row.source === 'pinned' && row.tier === tier)) return;
     setSavingIds((prev) => new Set(prev).add(row.areaId));
+    const announcedBefore = announced.current[row.areaId] || 0;
     // The wrapper's default error handling toasts a failed save; the row keeps its previous value.
     const saved = await setFeaturePriorityPin(row.areaId, tier).catch(() => null);
     if (mounted.current) {
@@ -130,7 +143,8 @@ export function FeaturePrioritiesSection() {
         return next;
       });
     }
-    if (saved && mounted.current) applyPin(saved);
+    // An announcement for this area that landed during the save (our own echo or another tab) already applied the newer state.
+    if (saved && mounted.current && (announced.current[row.areaId] || 0) === announcedBefore) applyPin(saved);
   };
 
   const learning = data ? data.evidenceDays < data.minEvidenceDays : false;
