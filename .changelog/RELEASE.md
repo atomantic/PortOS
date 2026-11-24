@@ -1,34 +1,34 @@
-# Release v2.127.0 - Feedback Firefly
+# Release v2.128.0 - Sculpted Osprey
 
-Released: 2026-11-23
+Released: 2026-11-24
 
 ## Highlights
 
-- **Digital Twin Behavioral Feedback Loop**: Wired the Digital Twin behavioral feedback loop end to end, with clearer error states when recent feedback fails to load, runtime context-window limits, and improved tab confirmations and mobile touch targets.
-- **Live fal.ai Image Model Picker**: Image generation now loads fal.ai's live model catalog on demand, validates model prompt and reference-image requirements before paid runs, accepts custom model endpoint IDs, and prioritizes featured edit models for frame refinements.
-- **Plan-First HTML Pages**: HTML Pages now plans each page before generating it, displays both the prompt and plan, and organizes creation into Create, Runs, and Gallery tabs.
-- **Accessibility & Performance**: Improved keyboard, focus-trap, and screen-reader semantics across Sharing, Conflicts, Elements Song, Merge modals, and Data Manager, while speeding up catalog search, branch lane-health checks, and developer pre-push guards.
+- **Blender Models Studio**: Create, build, review, and export game-ready Blender models directly on the 3D page, complete with reference sheets, parts briefs, moving parts with 0–1 pose sliders, collision sweeps, worn-material texture baking, and one-click showcase films.
+- **Film & 3D Production Tools**: Compare Three.js builds against product-sheet reference views, catch interpenetrating parts during clip playback, view motion reference clips beside film shot contact sheets, and drop 3D library models into Blender or code films.
+- **Catalog, Embeddings & Local LLMs**: Trigger catalog embedding backfills from the Embeddings tab with disabled-provider guards, export catalog slices from the Catalog UI, and browse newly added local models including MiMo-V2.6 9B, Laguna XS 2.1, Qwen3-Coder-Next, Ornith 1.5 122B, and GLM-OCR.
+- **Performance, Security & Reliability**: Sped up GitHub notification sync, Beeper reconciliation, native usage scans, and cold-load client bundles, while tightening credential permissions (`0600`), pinning immutable Hugging Face revisions for image/audio/music models, and hardening OAuth and installer verification.
 
 ## Added
 
-- **Digital Twin Feedback Loop**: Added end-to-end behavioral feedback collection and recent-feedback display for the Digital Twin, with explicit error states if feedback fails to load.
-- **Live fal.ai Image Model Catalog**: Added an on-demand fal.ai model picker with manual refresh, schema-checked prompt and reference-image validation, custom endpoint support in Settings, and "Edit with" prioritization for music-video frame refinements.
-- **HTML Pages Planning & Tabs**: Added a planning step before HTML page generation, visible prompt and plan details, and dedicated Create, Runs, and Gallery tabs.
+- **Blender Models Engine & 3D Page**: Added a full Blender Models workspace on the 3D page with model creation, GLB export and re-import verification, reference sheets, parts briefs, build-vs-reference comparison, moving-part 0–1 pose sliders and collision sweeps, worn-material texture baking, and showcase film generation from published models.
+- **Three.js & Film Workflows**: Added one-tap product-sheet and multi-view references for Three.js model generation, clip-playback collision detection for Three.js parts, motion reference clips beside film shot contact sheets, and support for adding 3D library models to Blender or code films.
+- **Catalog & Embeddings Controls**: Added catalog embedding backfill controls in the Embeddings tab (refusing disabled providers) and catalog slice export in the Catalog UI.
+- **Local LLM Catalog & Trusted Bots**: Added MiMo-V2.6 9B, Laguna XS 2.1, Qwen3-Coder-Next, Ornith 1.5 122B, and GLM-OCR to the local LLM catalog, and added default instance-bot trust plus an explicit trusted-bots list for GitHub accounts.
 
 ## Changed
 
-- **Digital Twin Controls & Mobile Layout**: Honored Digital Twin maximum context token settings at runtime, gated Run actions on saved options, preserved unsaved drafts with confirmations across tabs, scrolled the Settings panel into view on Enable, and improved mobile layout and touch targets.
-- **Accessibility & Copy Polish**: Added dialog focus traps and ARIA semantics to Share/Sync popovers, Sharing, Conflicts, Merge modals, Elements Song, and Data Manager, and fixed singular/plural copy across seven UI surfaces.
-- **Performance & Tooling**: Omitted unused embeddings in catalog search, batched reference lookups, bounded and cached lane-health forge reads, trimmed structural guard runtime, and dropped `concurrently` from generated app scaffolds.
+- **Quality & App Health**: Updated App Quality to use an 85+ healthy target band with a recency-decay window and per-slice score history.
+- **Performance**: Bounded concurrency and batched database writes/indexes for GitHub notification sync, coalesced and cached Beeper reachability probes and Tribe lookups, split navigation search metadata and theme palettes out of the cold-load client bundle, and streamed native agent usage scans.
+- **Accessibility & Responsive Polish**: Improved keyboard navigation, focus rings, landmarks, contrast, reduced-motion support, narrow-width layouts, and large-text alignment across Goals, Flows, and Autofixer.
 
 ## Fixed
 
-- **Privacy & Security**: Stripped PortOS credentials from Eidoverse proxy upstream requests, completed Privacy Center draft erasure on vault updates and opt-outs, enforced broker disclosure fields and full names on opt-out emails, and atomically staged Tailscale HTTPS self-signed certificates with directory watching.
-- **FableLoom & Media Pipelines**: Serialized FableLoom batch cancellation with enqueueing, kept Start Batch Production available after failed or canceled runs, guarded story load-error and rollback races, prevented per-edit validation churn, pruned invalid export cache directories, preserved volume cover slots on script-only edits, and returned proper conflict errors for stale audio line targets.
-- **Messaging & Sync**: Excluded already-claimed messages from Beeper outbox fallback confirmation, preserved measured attachment sizes and participant display names on re-sync, kept Beeper download partials excluded during backups, invalidated video-history checksums on tombstone updates, and inserted missing overnight voicemail boundaries when typing.
-- **Motion, Image Generation & Branch Management**: Replaced `npx skills@latest` with a pinned SHA-256-verified archive installer for motion skills, pinned MusicGen and FLUX.2 setup environments with root-aware `ffmpeg` installation, stopped branch reconciliation from stranding failed claim checkouts or squash-merged claims, and hydrated the Weekly Quality Schedule form from saved overrides.
-- **Database & Settings**: Improved native Postgres lifecycle handling and Homebrew `psql` resolution in setup scripts, and prevented stale reset-to-defaults responses after switching apps.
+- **Security & Credentials**: Enforced `0600` permissions on secret-bearing `.env` files and credential stores, moved Telegram bot tokens to a `0600` private key store, required single-use Google and Spotify OAuth state with Host-derived origins, gated host-control routes, and verified SHA-256 checksums for Bun, Ollama, and Slotstream downloads.
+- **AI Media & Model Pinning**: Pinned immutable Hugging Face commit revisions for FLUX.2, FLUX.3 Klein, diffusers, MiniMax-Music3, and Qwen3-TTS, recovered interrupted rigging/retargeting runs on boot, made rigging readiness probes race-safe, and preserved untouched video retry parameters.
+- **FableLoom, Code Animation & Messaging**: Serialized concurrent Series Autopilot starts, recovered closed SSE streams in Autopilot and Pipeline Issue views, preserved FableLoom export jobs and volume beat-sheet progress, preloaded upcoming music-video shots, erased derived Timeline/Tribe copies when disabling subcalendars, and made Stacker News action replays idempotent.
+- **Memory & Brain**: Unified catalog and memory embedding settings, kept memory related links symmetric, preserved journal and tombstone purges, and prevented memory decay from archiving Persistent Mind memories.
 
 ## Full Changelog
 
-**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.126.0...v2.127.0
+**Full Diff**: https://github.com/atomantic/PortOS/compare/v2.127.0...v2.128.0
