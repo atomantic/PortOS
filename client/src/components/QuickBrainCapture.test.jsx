@@ -466,6 +466,14 @@ describe('QuickBrainCapture', () => {
       renderWidget();
       expect(await screen.findByRole('progressbar', { name: 'YouTube video ingest progress' })).toBeInTheDocument();
       await waitFor(() => expect(StubEventSource.instances.at(-1)?.url).toContain('job-earlier'));
+      // A second video waits and keeps its link; a thought is still captured.
+      type(YT);
+      expect(screen.getByLabelText('Capture')).toBeDisabled();
+      fireEvent.submit(screen.getByPlaceholderText(PLACEHOLDER).closest('form'));
+      expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue(YT);
+      expect(startYoutubeIngest).not.toHaveBeenCalled();
+      submit('just a thought');
+      await waitFor(() => expect(captureBrainThought).toHaveBeenCalled());
       fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
       expect(cancelYoutubeIngest).toHaveBeenCalledWith('job-earlier', { silent: true });
       act(() => StubEventSource.instances.at(-1).emit({ type: 'complete', ingest: { title: 'Example Video' }, warnings: ['The review task could not be queued'] }));
