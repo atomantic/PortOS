@@ -37,7 +37,7 @@ When a scheduled audit of PortOS itself is prepared, `resolveAuditPriorityScope(
 | `P2` | Not mentioned | Verified functional or reliability defects only |
 | `P3` | Listed as fully in scope | Removed from the inventory and from slice rotation, so `totalFiles`, `scannedFiles` and `coverage: "broad"` count `P0`-`P2`; a verified defect met while tracing other code is still filed |
 
-A scope with nothing to say (no `P0`, `P2` or `P3` area, or no `P3` area for an exempt audit) adds no section, and the prompt is byte-identical to the unscoped one. A managed app gets no scope and its prompt is unchanged. If the tiers cannot be resolved (the usage store is unreachable), the audit is dispatched unscoped and the skip is logged; a failed lookup never reads as "everything is dormant".
+A scope with nothing to say (no `P0`, `P2` or `P3` area, or no `P3` area for an exempt audit) adds no section, and the prompt is byte-identical to the unscoped one. If the tiers cannot be resolved (the usage store is unreachable), the audit is dispatched unscoped and the skip is logged; a failed lookup never reads as "everything is dormant".
 
 The complexity audits (`better-complexity`, `code-simplification`) also get a ready command that leaves the `P3` paths out of the shortlist: `npm run quality:complexity -- --exclude '<glob>'`, one `--exclude` per glob. `--exclude` takes the same `path.matchesGlob` patterns the catalog uses, drops matching files from the source and test shortlists and prints how many it excluded.
 
@@ -46,3 +46,20 @@ Subtracting an area's globs is exact because no tracked file belongs to two area
 ## Settings UI
 
 Settings > Features ends with an "Audit priority" section (`client/src/components/settings/FeaturePrioritiesSection.jsx`). Each area shows its effective tier, a source badge (`Pinned`, `Learned`, `Feature off`, `Default`) and "active N of the last 30 days"; below 14 days of evidence it says "Still learning" instead, since every enabled area then resolves to `P1`. The `Auto | P0 | P1 | P2 | P3` control calls `PUT /api/feature-priorities/:areaId`. A pin applies from the response; `Auto` and a clear announced by another tab on `feature-priorities:updated` reload the list once, because the response carries only the pin, not the re-resolved tier. There is no timer.
+
+## Managed apps
+
+A managed app has no feature-area catalog and nothing PortOS can observe, so its priorities are written by hand and nothing is learned. **Edit App > Workflow > Audit priorities** edits the optional `featurePriorities` array on the app record (the editor is not offered for PortOS itself):
+
+```json
+[{ "id": "legacy", "label": "Legacy importer", "paths": ["legacy/**", "scripts/import-*.js"], "priority": "P3", "note": "optional, never sent to audits" }]
+```
+
+- Up to 50 entries; `id` is unique, trimmed and at most 64 characters; `label` at most 80; 1 to 20 `paths` of at most 200 characters; `priority` is `P0` to `P3`; `note` at most 500.
+- `label` and `paths` are written into audit prompts (a glob sits between backticks and inside the single-quoted `--exclude '...'` argument), so a control character, newline, single quote or backtick is refused at validation.
+- Globs are `path.matchesGlob` patterns over repository-relative paths. A path no entry names is `P1`, so `P1` rows only document intent.
+- The field is local app metadata: an app saved before it existed loads and saves unchanged, `PUT /api/apps/:id` replaces the whole array (an empty array clears it), and no migration is involved. It is not an input to the per-install tier resolution above.
+
+`resolveAuditPriorityScope` builds the same `{ exempt, p0, p2, p3 }` shape from those entries (never reading the usage store), `cosManagedAppPreparation.js` passes it to `auditQualityInstructions` as it does for PortOS, and the exempt lanes behave identically. An app with no entries gets no scope, so its prompt is unchanged. The `quality:complexity` exclusion line is worded as applying only where the repository has that script; the complexity discovery step already falls back to another analyzer when it is absent.
+
+The app's **Quality** tab shows an **Audit scope** summary (count per tier, expandable to the paths) when the app has entries.

@@ -20,6 +20,7 @@ import ListLoadError from '../ui/ListLoadError';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import useListResource from '../../hooks/useListResource';
 import { copyToClipboard } from '../../lib/clipboard';
+import AppAuditPrioritiesEditor, { fromPriorityRows, priorityRowsError, toPriorityRows } from './AppAuditPrioritiesEditor';
 import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
 import { PROVIDER_TYPES } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, PR_COMPLETION_OPTIONS, prCompletionMerges, prCompletionOption, resolveUseAutoMerge, resolveAutoApprovePR, resolveAdminMerge } from '../cos/constants';
@@ -100,6 +101,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // Opt-in: repo skills are third-party prompt text, so default unchecked.
     skillDiscovery: app.skillDiscovery === true,
     deploymentModel: typeof app.deploymentModel === 'string' ? app.deploymentModel : '',
+    featurePriorities: toPriorityRows(app.featurePriorities),
+    featurePrioritiesTouched: false,
     featureOverrides: Object.fromEntries(
       APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
     ),
@@ -270,6 +273,15 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       }
     }
 
+    if (formData.featurePrioritiesTouched) {
+      const prioritiesError = priorityRowsError(formData.featurePriorities);
+      if (prioritiesError) {
+        setActiveTab('workflow');
+        setError(prioritiesError);
+        return;
+      }
+    }
+
     setSaving(true);
 
     const data = {
@@ -311,6 +323,10 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // absent preserves the legacy JIRA-work-tracker bootstrap and keeps future
     // global changes flowing to apps whose feature controls were never touched.
     if (formData.featureOverridesTouched) data.featureOverrides = formData.featureOverrides;
+
+    // Sent only once edited, so an app saved before audit priorities existed round-trips unchanged. PortOS itself
+    // scopes audits from its feature catalog, so the editor is not offered for it.
+    if (formData.featurePrioritiesTouched) data.featurePriorities = fromPriorityRows(formData.featurePriorities);
 
     // Keep the integration slice out of unrelated saves. The new feature map
     // handles tab visibility, while this legacy slice holds DataDog's runtime
@@ -842,6 +858,12 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   Audits judge which bugs are realistic from this: a single-user app skips multi-user edit races, a multi-user app keeps them. Leave empty to use the repo's requirements, PRD or spec.
                 </p>
               </div>
+              {app.id !== PORTOS_APP_ID && (
+                <AppAuditPrioritiesEditor
+                  rows={formData.featurePriorities}
+                  onChange={rows => setFormData(prev => ({ ...prev, featurePriorities: rows, featurePrioritiesTouched: true }))}
+                />
+              )}
             </div>
           )}
 
