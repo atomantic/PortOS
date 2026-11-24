@@ -42,6 +42,13 @@ beforeEach(() => {
 describe('SharingTab — federated media provider (#4348)', () => {
   const providerToggle = () => screen.getByLabelText(/Accept media generation jobs/i);
 
+  it('states accurate audio prompt/lyrics boundaries on the provider opt-in card (#18158)', async () => {
+    render(<SharingTab />);
+    await waitFor(() => expect(providerToggle()).toBeInTheDocument());
+    expect(screen.getByText(/plus song lyrics when targeting a lyric-capable model/i)).toBeInTheDocument();
+    expect(screen.queryByText(/never free text or lyrics/i)).not.toBeInTheDocument();
+  });
+
   it('keeps provider opt-in disabled until an instance password exists', async () => {
     render(<SharingTab />);
     await waitFor(() => expect(providerToggle()).toBeInTheDocument());
@@ -126,6 +133,14 @@ describe('SharingTab — federated media provider (#4348)', () => {
 });
 
 describe('SharingTab — federation pull authorization (#3659)', () => {
+  it('describes verified peer credentials and always-enforced personal categories (#18158)', async () => {
+    render(<SharingTab />);
+    await waitFor(() => expect(strictToggle()).toBeInTheDocument());
+    expect(screen.getByText(/identified by their verified peer credential/i)).toBeInTheDocument();
+    expect(screen.getByText(/Brain, Memory, Digital Twin, MeatSpace, and Character\) are always refused with 403/i)).toBeInTheDocument();
+    expect(screen.getByText(/legacy non-PII categories/i)).toBeInTheDocument();
+  });
+
   it('defaults the strict-pull toggle off when the setting is absent', async () => {
     render(<SharingTab />);
     await waitFor(() => expect(strictToggle()).toBeInTheDocument());
