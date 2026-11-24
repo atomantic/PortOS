@@ -25,7 +25,7 @@ describe('checkout-owned server Vite caches with shared dependencies', () => {
   it('saves Vitest transform and APT caches only outside pull requests', () => {
     // A PR-saved entry is scoped to its merge ref, so nothing reads it again.
     const jobs = readCiJobs();
-    const bodies = [...['client', 'server', 'database', 'browser', 'windows-server', 'macos-native'].map(id => jobs[id]), readFileSync('.github/actions/db-tools/action.yml', 'utf8')];
+    const bodies = [...['client', 'server', 'database', 'browser', 'windows-server', 'macos-native'].map(id => jobs[id]), readFileSync(new URL('../.github/actions/db-tools/action.yml', import.meta.url), 'utf8')];
     for (const body of bodies) {
       const steps = body.split(/\n\s*- name: /).filter(step => /^Cache (Vitest transform|APT package)/.test(step));
       expect(steps.length).toBeGreaterThan(0);
