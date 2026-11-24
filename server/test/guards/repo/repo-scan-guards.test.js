@@ -187,4 +187,12 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     expect(EXPLICIT_ALWAYS_RUN_TESTS.filter((p) => !tracked.has(p)), 'dead entries').toEqual([]);
     expect(EXPLICIT_ALWAYS_RUN_TESTS.filter(isGuardTest), 'redundant: the suffix already selects it').toEqual([]);
   });
+
+  it('tracks no path with a segment starting with "-" (#18118)', () => {
+    const flagNamed = trackedFiles(REPO_ROOT).filter((path) => /(?:^|\/)-/.test(path));
+    expect(
+      flagNamed,
+      'tracked paths starting with "-" break unguarded shell globbing and flag parsing; remove with `git rm -- <path>`',
+    ).toEqual([]);
+  });
 });
