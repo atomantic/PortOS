@@ -13,7 +13,9 @@ vi.mock('./githubAccounts.js', () => ({ listAccounts: vi.fn(async () => [{ host:
 
 const { query, withTransaction } = await import('../lib/db.js');
 const { execGh } = await import('./github.js');
-const { triageAccountNotifications, refreshOpenPullRequestStatus } = await import('./githubNotificationTriage.js');
+const { triageAccountNotifications, refreshOpenPullRequestStatus, createManagedAppsLoader, threadDiscussionVouched } = await import('./githubNotificationTriage.js');
+const { getAllApps } = await import('./apps.js');
+const { readOriginRemoteUrl } = await import('../lib/gitRemote.js');
 
 const account = { id: 'acct', host: 'github.com', login: 'octocat', mode: 'observe', trust: 'public' };
 const NOW = Date.parse('2026-11-21T00:00:00Z');
@@ -110,5 +112,42 @@ describe('refreshOpenPullRequestStatus', () => {
     expect(vi.mocked(query).mock.calls.filter(([sql]) => /UPDATE github_notifications/.test(sql))).toHaveLength(12);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(5);
+  });
+});
+
+describe('managed app lookup', () => {
+  it('reads each managed app origin once per loader however many stages ask', async () => {
+    vi.mocked(getAllApps).mockClear();
+    vi.mocked(readOriginRemoteUrl).mockClear();
+    vi.mocked(getAllApps).mockResolvedValueOnce([{ id: 'a', repoPath: '/repo/a' }, { id: 'b', repoPath: '/repo/b' }]);
+    const load = createManagedAppsLoader();
+
+    const [first, second, third] = await Promise.all([load(), load(), load()]);
+
+    expect(first).toBe(second);
+    expect(second).toBe(third);
+    expect(getAllApps).toHaveBeenCalledTimes(1);
+    expect(readOriginRemoteUrl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('threadDiscussionVouched', () => {
+  it('fetches the issue, review-comment and review lists concurrently', async () => {
+    vi.mocked(execGh).mockReset();
+    let active = 0;
+    let peak = 0;
+    vi.mocked(execGh).mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return '';
+    });
+
+    const vouched = await threadDiscussionVouched(account, {}, row(7));
+
+    expect(vouched).toBe(true);
+    expect(vi.mocked(execGh)).toHaveBeenCalledTimes(3);
+    expect(peak).toBe(3);
   });
 });

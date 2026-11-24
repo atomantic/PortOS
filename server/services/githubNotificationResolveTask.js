@@ -187,12 +187,21 @@ async function markResolved(taskId, agentId) {
   const { rows } = await query(`SELECT account_id, thread_id FROM github_notifications WHERE ${HANDED_TO_TASK_SQL}`, [taskId]);
   if (!rows.length) return 0;
   // Loaded lazily: githubNotifications.js reaches the Autopilot lanes, which import this module.
-  const { applyNotificationAction } = await import('./githubNotifications.js');
+  const { applyNotificationAction, requireAccountEnv } = await import('./githubNotifications.js');
+  const { getAccount } = await import('./githubAccounts.js');
+  // Resolve each account's record and `gh` token once, not per row.
+  const credentials = new Map();
+  const credentialsFor = (accountId) => {
+    if (!credentials.has(accountId)) {
+      credentials.set(accountId, getAccount(accountId).then(async (account) => ({ account, env: await requireAccountEnv(account) })));
+    }
+    return credentials.get(accountId);
+  };
   let done = 0;
   for (const row of rows) {
-    await applyNotificationAction(row.account_id, row.thread_id, 'done', {
-      actor: 'automation', learn: false, detail: { lane: GENERIC_AGENT_LANE, taskId, agentId: agentId || null },
-    }).then(() => { done += 1; }, (error) => console.error(`❌ Could not mark GitHub notification ${row.thread_id} done after its agent finished: ${error.message}`));
+    await credentialsFor(row.account_id).then(({ account, env }) => applyNotificationAction(row.account_id, row.thread_id, 'done', {
+      actor: 'automation', learn: false, detail: { lane: GENERIC_AGENT_LANE, taskId, agentId: agentId || null }, account, env,
+    })).then(() => { done += 1; }, (error) => console.error(`❌ Could not mark GitHub notification ${row.thread_id} done after its agent finished: ${error.message}`));
   }
   if (done) console.log(`✅ Marked ${done} GitHub notification(s) done after agent task ${taskId} resolved them`);
   return done;

@@ -106,7 +106,7 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
     // a failed mark-done must not fail the action: the row keeps `suggest-mark-read`
     // and the operator's Mark done button still works.
     if (result.merged) {
-      await applyNotificationAction(account.id, row.thread_id, 'done', { actor: automatic ? 'automation' : 'operator', learn: false })
+      await applyNotificationAction(account.id, row.thread_id, 'done', { actor: automatic ? 'automation' : 'operator', learn: false, account, env })
         .catch(err => console.warn(`⚠️ Merged PR #${target.number} but could not mark its notification done: ${err.message}`));
     }
     return result;
@@ -114,7 +114,7 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
 }
 
 /** Pending CI is checked again on the next scheduled run, even without thread activity. */
-export async function automateNotificationPullRequests(account, env, { now = Date.now() } = {}) {
+export async function automateNotificationPullRequests(account, env, { now = Date.now(), managedApps = managedAppsByRepoKey } = {}) {
   if (account.mode !== 'autopilot') return { merged: 0, reviews: 0 };
   const filter = pullRequestAutomationFilter(account.agentRules, 3);
   const { rows } = await query(`SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
@@ -126,7 +126,7 @@ export async function automateNotificationPullRequests(account, env, { now = Dat
     AND (${filter.sql}) ORDER BY (evidence->'pullRequestAttempt'->>'at')::timestamptz ASC NULLS FIRST, gh_updated_at DESC LIMIT 50`,
   [account.id, new Date(now - PR_ATTEMPT_RETRY_MS).toISOString(), ...filter.params]);
   const counts = { merged: 0, reviews: 0 };
-  const apps = rows.length ? await managedAppsByRepoKey() : new Map();
+  const apps = rows.length ? await managedApps() : new Map();
   await mapWithConcurrency(rows, PR_AUTOMATION_CONCURRENCY, async row => {
     const rule = pullRequestAutomationRule(account, row);
     if (!rule) return;
