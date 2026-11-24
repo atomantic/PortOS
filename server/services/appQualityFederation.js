@@ -111,7 +111,8 @@ async function eligiblePeers(deps) {
 
 export function qualityRecord(row) {
   return { category: normalizeAuditTaskType(row.category), agentId: row.agent_id,
-    measurementId: hash(row.agent_id), assessedAt: new Date(row.assessed_at).toISOString(), report: row.report };
+    measurementId: hash(row.agent_id), assessedAt: new Date(row.assessed_at).toISOString(),
+    report: row.report, slice: row.slice ?? null };
 }
 
 /** Daily category winners; null days reads all local history for publication. */
@@ -120,8 +121,8 @@ export async function readQualityRecords(appId, days, now, deps = {}) {
   start.setUTCHours(0, 0, 0, 0);
   if (days !== null) start.setUTCDate(start.getUTCDate() - days + 1);
   const result = await (deps.query || query)(
-    `SELECT category, agent_id, assessed_at, report FROM (
-       SELECT category, agent_id, assessed_at, report,
+    `SELECT category, agent_id, assessed_at, report, slice FROM (
+       SELECT category, agent_id, assessed_at, report, slice,
          rank() OVER (PARTITION BY category, (assessed_at AT TIME ZONE 'UTC')::date ORDER BY assessed_at DESC) AS run_rank
        FROM app_quality_measurements
        WHERE app_id = $1 AND ($2::timestamptz IS NULL OR assessed_at >= $2) AND assessed_at <= $3

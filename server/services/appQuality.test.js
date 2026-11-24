@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { recordAuditQuality, enrichAppsWithQuality, readRecentAuditSlices, AUDIT_SLICE_HISTORY_RUNS } from './appQuality.js';
 import { AUDIT_DEFINITIONS, AUDIT_EXECUTION_PROFILES } from '../lib/auditCatalog.js';
-import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS } from '../lib/auditQuality.js';
+import { AUDIT_DISCOVERY, auditQualityInstructions, parseAuditQualityReport, parseRecommendedAudits, summarizeAppQuality, AUDIT_FRESHNESS_MS, buildAppQualityHistory, dailyQualityRecords, numericQualityReport, parseAuditSlice, QUALITY_WINDOW_RUNS, QUALITY_HEALTHY_THRESHOLD } from '../lib/auditQuality.js';
+import { buildQualitySnapshot, exportPortosQuality, readQualityRecords } from './appQualityFederation.js';
 import { classifyQualitySnapshot, serializeQualitySnapshot } from './appQualitySnapshotFormat.js';
 
 const report = (overrides = {}) => ({ version: 1, category: 'better-complexity', score: 35, worstSeverity: 8,
@@ -171,7 +172,7 @@ describe('scheduled audit measurement workflow', () => {
   it('decays older runs with a 14-day half-life alongside confidence weights', () => {
     const now = Date.parse('2026-09-10T12:00:00Z');
     const mk = (daysAgo, score, agentId) => ({ category: 'security', agentId, assessedAt: new Date(now - daysAgo * 86400000).toISOString(),
-      report: { version: 2, category: 'security', slice: 's', sliceScore: score, worstSeverity: 1, coverage: 'broad', confidence: 'high', summary: 'x', scannedFiles: 1, totalFiles: 1 } });
+      report: { version: 2, category: 'security', slice: `slice-${agentId}`, sliceScore: score, worstSeverity: 1, coverage: 'broad', confidence: 'high', summary: 'x', scannedFiles: 1, totalFiles: 1 } });
     const records = [mk(0, 90, 'a'), mk(14, 30, 'b')];
     // weights 1 and 0.5 → (90 + 15) / 1.5 = 70
     expect(summarizeAppQuality(records, now).categories.find(c => c.id === 'security').score).toBe(70);
@@ -181,12 +182,112 @@ describe('scheduled audit measurement workflow', () => {
   // day-only release snapshot it was published into; it must count once.
   it('collapses each category to its newest run per UTC day before rolling', () => {
     const now = Date.parse('2026-09-10T12:00:00Z');
-    const local = { category: 'security', agentId: 'run-a', assessedAt: '2026-09-10T10:00:00Z', report: sliceReport({ category: 'security', sliceScore: 80 }) };
+    const local = { category: 'security', agentId: 'run-a', assessedAt: '2026-09-10T10:00:00Z', report: sliceReport({ category: 'security', slice: 'server/services', sliceScore: 80 }) };
     const release = { category: 'security', measurementId: 'f'.repeat(64), assessedAt: '2026-09-10T00:00:00.000Z', sourcePeerName: 'Release snapshot', report: report({ category: 'security', score: 80 }) };
-    const older = { category: 'react-lifecycle', agentId: 'run-b', assessedAt: '2026-09-08T10:00:00Z', report: sliceReport({ category: 'react-lifecycle', sliceScore: 20 }) };
-    const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', sliceScore: 20 }) }]);
+    const older = { category: 'react-lifecycle', agentId: 'run-b', assessedAt: '2026-09-08T10:00:00Z', report: sliceReport({ category: 'react-lifecycle', slice: 'client/src/hooks', sliceScore: 20 }) };
+    const daily = dailyQualityRecords([release, local, older, { ...local, agentId: 'run-c', assessedAt: '2026-09-08T09:00:00Z', report: sliceReport({ category: 'security', slice: 'server/lib', sliceScore: 20 }) }]);
     expect(daily.map(r => [r.category, r.agentId])).toEqual([['security', 'run-c'], ['ui-lifecycle', 'run-b'], ['security', 'run-a']]);
     expect(summarizeAppQuality(daily, now).categories.find(c => c.id === 'security')).toMatchObject({ score: 52, window: { runs: 2 } });
+  });
+
+  it('supersedes older pre-fix runs for the same normalized slice while leaving slice-less rows unaffected', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const daysAgo = n => new Date(now - n * 86400000).toISOString();
+    const v2Run = (n, slice, sliceScore, extra = {}) => ({
+      category: 'security', agentId: `run-${n}`, assessedAt: daysAgo(n),
+      report: sliceReport({ category: 'security', slice, sliceScore, worstSeverity: 2, ...extra }),
+    });
+    const records = [
+      // Partial re-audit on the same slice does NOT supersede an older qualifying run.
+      v2Run(0, 'server/services/auth, server/lib/db.js', 95, { coverage: 'partial' }),
+      // Post-fix qualifying re-audit with reordered, mixed-case, padded comma segments.
+      v2Run(1, '  Server/Lib/Db.js , server/services/auth  ', 90),
+      // Distinct slice keeps its place.
+      v2Run(2, 'client/src/pages', 86),
+      // Older pre-fix run on the same normalized slice is superseded.
+      v2Run(3, 'server/services/auth, server/lib/db.js', 40, { worstSeverity: 8 }),
+      // Slice-less rows (v1 / peer / .quality.json v3) stay unaffected and never supersede each other.
+      { category: 'security', agentId: 'peer-1', sourcePeerId: 'peer-a', assessedAt: daysAgo(4), report: report({ category: 'security', score: 88, worstSeverity: 2 }) },
+      { category: 'security', sourcePeerName: 'Release snapshot', assessedAt: daysAgo(5), report: report({ category: 'security', score: 84, worstSeverity: 2 }) },
+      // Sixth qualifying run fills the 5th window slot freed by superseding run-3.
+      v2Run(6, 'server/routes', 82),
+    ];
+    const row = summarizeAppQuality(records, now).categories.find(c => c.id === 'security');
+    expect(row.window).toEqual({ runs: 5, worstSeverity: 2 });
+    expect(row.score).toBeGreaterThanOrEqual(85);
+  });
+
+  it('isolates consolidated domain windows from pre-consolidation legacy member runs while preserving member history and legacy-only repos', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const daysAgo = n => new Date(now - n * 86400000).toISOString();
+    const mk = (category, n, score, slice, overrides = {}) => ({
+      category, agentId: `${category}-${n}`, assessedAt: daysAgo(n),
+      report: sliceReport({ category, slice, sliceScore: score, worstSeverity: 2, ...overrides }),
+    });
+
+    // Domain has a fresh qualifying native run at day 3; older legacy member runs (days 5, 10)
+    // are retired from the rolling window, while a newer legacy member run (day 1) stays eligible.
+    const mixed = [
+      mk('app-bugs', 1, 86, 'server/routes'),
+      mk('ui-runtime-bugs', 3, 90, 'server/services'),
+      mk('app-bugs', 5, 45, 'server/lib', { worstSeverity: 8 }),
+      mk('ui-lifecycle', 10, 50, 'client/src/hooks', { worstSeverity: 7 }),
+    ];
+    const mixedRow = summarizeAppQuality(mixed, now).categories.find(c => c.id === 'ui-runtime-bugs');
+    expect(mixedRow.window).toEqual({ runs: 2, worstSeverity: 2 });
+    expect(mixedRow.score).toBeGreaterThanOrEqual(87);
+    // UI member history still surfaces the retired legacy member runs.
+    expect(mixedRow.members.find(m => m.id === 'ui-lifecycle')).toMatchObject({ score: 50, stale: false });
+    expect(mixedRow.members.find(m => m.id === 'app-bugs')).toMatchObject({ score: 86, stale: false });
+
+    // Legacy-only repo (and a partial/unqualified native run) keeps legacy member runs in the window.
+    const legacyOnly = [
+      mk('ui-runtime-bugs', 1, 92, 'server/services', { coverage: 'partial' }),
+      mk('app-bugs', 5, 60, 'server/lib'),
+      mk('ui-lifecycle', 8, 70, 'client/src/hooks'),
+    ];
+    const legacyRow = summarizeAppQuality(legacyOnly, now).categories.find(c => c.id === 'ui-runtime-bugs');
+    expect(legacyRow.window.runs).toBe(2);
+    expect(legacyRow.score).toBe(65);
+  });
+
+  it('selects local slice columns for superseding without leaking slice through federation v1 or .quality.json v3', async () => {
+    const now = Date.parse('2026-09-10T12:00:00Z');
+    const dbRows = [
+      { app_id: 'portos-default', category: 'security', agent_id: 'new-run', assessed_at: '2026-09-10T10:00:00Z',
+        slice: 'server/services/auth', report: report({ category: 'security', score: 90, worstSeverity: 1 }) },
+      { app_id: 'portos-default', category: 'security', agent_id: 'old-run', assessed_at: '2026-09-05T10:00:00Z',
+        slice: 'Server/Services/Auth', report: report({ category: 'security', score: 40, worstSeverity: 8 }) },
+    ];
+    const query = vi.fn().mockResolvedValue({ rows: dbRows });
+    const [enriched] = await enrichAppsWithQuality([{ id: 'portos-default' }], {
+      now, query, getPeers: async () => [], readFile: async () => null,
+    });
+    expect(query.mock.calls[0][0]).toMatch(/SELECT app_id, category, agent_id, assessed_at, report, slice/);
+    expect(enriched.quality.categories.find(c => c.id === 'security')).toMatchObject({ score: 90, window: { runs: 1, worstSeverity: 1 } });
+
+    const localRecords = await readQualityRecords('portos-default', 30, now, { query });
+    expect(query.mock.calls[1][0]).toMatch(/SELECT category, agent_id, assessed_at, report, slice/);
+    expect(localRecords.map(r => r.slice)).toEqual(['server/services/auth', 'Server/Services/Auth']);
+
+    const peer = { id: 'peer-a', instanceId: 'instance-a', enabled: true, address: '192.0.2.1', port: 5555 };
+    const getOriginInfo = async () => ({ host: 'github.com', fullName: 'owner/app' });
+    const peerPayload = await exportPortosQuality(peer.instanceId, 30, { now, query, getOriginInfo, getPeers: async () => [peer] });
+    expect(JSON.stringify(peerPayload)).not.toMatch(/slice|server\/services\/auth/i);
+    const snapshot = await buildQualitySnapshot({ id: 'portos-default', repoPath: '/repo' }, null, { now, query, getOriginInfo });
+    expect(JSON.stringify(snapshot)).not.toMatch(/slice|server\/services\/auth/i);
+    const compactV3 = serializeQualitySnapshot(snapshot.repository,
+      snapshot.measurements.map(m => ({ ...m.report, assessedAt: m.assessedAt, measurementId: m.measurementId })));
+    expect(compactV3).toContain('"schemaVersion": 3');
+    expect(compactV3).not.toMatch(/slice|server\/services\/auth/i);
+  });
+
+  it('calibrates audit instructions for <85 slice re-verification and 70-84 localized defect scoring', () => {
+    const instructions = auditQualityInstructions('code-quality');
+    expect(instructions).toContain(`audit-slice-history that scored below ${QUALITY_HEALTHY_THRESHOLD} once its filed issues are closed`);
+    expect(instructions).toContain('70–84 mostly healthy slice with 1–2 localized moderate defects');
+    expect(instructions).toContain('40–69 recurring or systemic defects across multiple files/paths in the slice');
+    expect(instructions).toContain('The pragmatic target band is 85–95: do not chase 100/100 through speculative hardening');
   });
 
   it('retains both same-day profile scores across snapshot serialization and counts their domain once', () => {

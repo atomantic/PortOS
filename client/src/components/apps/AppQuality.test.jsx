@@ -28,7 +28,11 @@ it('shows zero as a real score up front and keeps the scoring explanation in a t
   expect(screen.getByText(/1\/18 applicable categories contribute/)).toBeInTheDocument();
   expect(screen.queryByText(/Recency-weighted equal-weight mean/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'How the quality score works' }));
-  expect(screen.getByRole('tooltip')).toHaveTextContent(/Recency-weighted equal-weight mean/);
+  const tooltip = screen.getByRole('tooltip');
+  expect(tooltip).toHaveTextContent(/Recency-weighted equal-weight mean/);
+  expect(tooltip).toHaveTextContent(/re-auditing the same slice supersedes its older pre-fix run/);
+  expect(tooltip).toHaveTextContent(/90–100 no material defect · 85–89 healthy with minor polish · 70–84 localized moderate debt · 40–69 significant problems · 10–39 severe defects · 0–9 pervasive failure/);
+  expect(tooltip).not.toHaveTextContent(/70–89/);
   // Metrics-only visitors never see the run or schedule forms until they ask.
   expect(screen.queryByText('Runner')).not.toBeInTheDocument();
   expect(screen.queryByText('Schedule form')).not.toBeInTheDocument();
