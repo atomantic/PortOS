@@ -71,9 +71,9 @@ describe('X composer scope', () => {
     expect(page.calls.typed).toEqual(['[data-testid=tweetTextarea_0]']);
   });
 
-  it('presses the modal\'s Post button on submit, not the timeline\'s', async () => {
+  it('fills the composer without ever pressing the Post button', async () => {
     const page = fakePage({ dialog: true });
-    await xAdapter.submit(page, { posts: [{ text: 'one' }] }).catch(() => {});
-    expect(page.calls.clicked).toEqual(['[role=dialog] [data-testid=tweetButton]']);
+    await xAdapter.prepare(page, { posts: [{ text: 'one' }, { text: 'two' }] });
+    expect(page.calls.clicked.filter((c) => c.includes('tweetButton'))).toEqual([]);
   });
 });
