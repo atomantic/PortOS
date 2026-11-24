@@ -209,6 +209,25 @@ describe('RapidReader shelf', () => {
     expect(screen.queryByText(/1\/5 words/)).not.toBeInTheDocument();
   });
 
+  it('resumes a shelf entry at its saved word and reopens it after the reader is closed', async () => {
+    // Five whitespace-separated tokens, four reader words: the dash joins its neighbour.
+    const text = 'alpha bravo — charlie delta';
+    api.listRapidReaderLibrary.mockResolvedValue([{ ...ENTRY, wordCount: 5 }]);
+    api.getRapidReaderLibraryEntry.mockResolvedValue({ ...ENTRY, wordCount: 5, text });
+    await renderPage('/rapid-reader/shelf-1');
+    expect(await screen.findByText(/1\/4 words/)).toBeInTheDocument();
+
+    fireEvent.keyDown(document.body, { key: ' ', code: 'Space' });
+    fireEvent.keyDown(document.body, { key: 'ArrowRight', code: 'ArrowRight' });
+    expect(screen.getByText(/2\/4 words/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('button', { name: 'Resume at word 2' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Saved Article' }));
+    expect(await screen.findByText(/2\/4 words/)).toBeInTheDocument();
+    expect(api.getRapidReaderLibraryEntry).toHaveBeenCalledTimes(2);
+  });
+
   it('puts the opened entry in the URL rather than local state', async () => {
     api.listRapidReaderLibrary.mockResolvedValue([ENTRY]);
     api.getRapidReaderLibraryEntry.mockResolvedValue({ ...ENTRY, text: 'alpha bravo charlie delta' });
