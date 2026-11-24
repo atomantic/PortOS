@@ -1747,9 +1747,15 @@ describe('FLUX.3 dispatch', () => {
   it('refuses an uncached pinned snapshot before spawning so mflux never pulls from the Hub', async () => {
     mockInspectModelCache.mockResolvedValue({ cached: false, sizeBytes: 0, snapshotPath: null });
     mockSpawn.mockReset();
-    await expect(generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42 }))
-      .rejects.toMatchObject({ code: 'FLUX3_WEIGHTS_NOT_CACHED' });
-    expect(mockSpawn).not.toHaveBeenCalled();
+    const capabilities = await import('../../lib/systemCapabilities.js');
+    const spy = vi.spyOn(capabilities, 'captureSystemCapabilities').mockReturnValue({
+      version: 1, platform: 'darwin', arch: 'arm64', appleSilicon: true, cpuCount: 8, totalMemoryGb: 64,
+    });
+    try {
+      await expect(generateImage({ modelId: 'flux3-klein-q4', prompt: base.prompt, width: 1024, height: 1024, seed: 42 }))
+        .rejects.toMatchObject({ code: 'FLUX3_WEIGHTS_NOT_CACHED' });
+      expect(mockSpawn).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
   });
   it('uses the isolated FLUX.3 CLI and checkpoint quantization for text and all ten reference images', () => {
     const text = buildArgs(base);
