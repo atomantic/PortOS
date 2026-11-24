@@ -17,7 +17,12 @@ const FORBIDDEN = {
   'server/services/telegramBridge.js': [/chatId/, /attachment\.filename/],
   'server/services/telegram.js': [/attachment\.filename/, /CHECKINS_FILE/],
   'server/services/googleOAuthAutoConfig.js': [/credentials\.clientId/],
-  'server/services/instances.js': [/\$\{address\}/, /existing\.address/, /peer\.host\}/, /normalizedHost/, /peerBaseUrl/]
+  'server/services/instances.js': [/\$\{address\}/, /existing\.address/, /peer\.host\}/, /normalizedHost/, /peerBaseUrl/],
+  'server/services/obsidian.js': [/vault\.name/, /removed\.name/, /\$\{path\}/, /fullPath/, /notePath/],
+  'server/services/platformAccounts.js': [/credentials\.username/],
+  'server/services/x.js': [/account\.username/],
+  'server/services/agent/agentActionExecutor.js': [/credentials\.username/, /agentUsername/, /params\.message/, /params\.thought/, /\.substring\(/],
+  'server/services/brainMemoryBridge.js': [/record\.name/, /record\.title/]
 };
 
 const consoleLines = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8')
