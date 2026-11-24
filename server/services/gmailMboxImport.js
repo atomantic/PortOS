@@ -205,7 +205,7 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
   const fromList = parseAddressList(headerValue(headers, 'from'));
   const toList = parseAddressList(headerValue(headers, 'to'));
   const ccList = parseAddressList(headerValue(headers, 'cc'));
-  const labels = parseGmailLabels(headerValue(headers, 'x-gmail-labels'));
+  const labels = parseGmailLabels(decodeMimeWords(headerValue(headers, 'x-gmail-labels')));
   const threadId = headerValue(headers, 'x-gm-thrid') || null;
 
   const fromEmail = fromList[0]?.email || '';
