@@ -19,7 +19,7 @@ import {
   getImessageConversationEvents,
   syncImessage,
 } from '../../services/apiMessages.js';
-import { formatClockTime, formatCount, timeAgo, formatDateNumeric } from '../../utils/formatters';
+import { formatClockTime, formatCount, timeAgo, formatDateNumeric, localDateKey } from '../../utils/formatters';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { IMessageSettingsPanel } from './IMessageSettingsPanel';
 import useLatestRequest from '../../hooks/useLatestRequest';
@@ -239,7 +239,7 @@ function ConversationDetail({
   }
 
   const lastDay = conversation?.lastAt
-    ? new Date(conversation.lastAt).toISOString().slice(0, 10)
+    ? localDateKey(new Date(conversation.lastAt))
     : null;
 
   return (
