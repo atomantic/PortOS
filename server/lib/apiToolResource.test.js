@@ -91,6 +91,7 @@ describe('buildToolResource', () => {
     expect(byName('voice.synthesize').failures).toEqual([
       { status: 400, code: 'VALIDATION_ERROR' },
       { status: 400, code: 'UNKNOWN_VOICE' },
+      { status: 403, code: 'HOST_CONTROL_FORBIDDEN' },
     ]);
   });
 
