@@ -222,7 +222,8 @@ describe('claim coordinator cleanup', () => {
   it('settles owned git work when a remote branch probe times out during cleanup', async () => {
     await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
     await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
-    const result = await run({ remoteTimeoutMs: 100 });
+    // The limit also bounds the local target read, so it must outlast a git spawn on a loaded host.
+    const result = await run({ remoteTimeoutMs: 1000 });
     expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
     expect(existsSync(checkout)).toBe(false);
   });
@@ -236,7 +237,7 @@ describe('claim coordinator cleanup', () => {
     await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
     await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
     await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
-    const result = await run({ remoteTimeoutMs: 100 });
+    const result = await run({ remoteTimeoutMs: 1000 });
     expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
     expect(existsSync(checkout)).toBe(false);
     expect((await localRef()).exitCode).toBe(1);
