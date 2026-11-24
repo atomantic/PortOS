@@ -1,5 +1,6 @@
 // Editorial checks — continuity group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   CHEKHOV_STAGE,
@@ -46,21 +47,8 @@ export const continuityChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       // All four blocks are fixed per-call overhead (re-sent on each chunk) and
@@ -222,21 +210,8 @@ export const continuityChecks = [
     severityDefault: 'low',
     defaultEnabled: true,
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     gate: hasManuscript,
     run: (ctx) => {
       const objects = describeObjectAttachments(ctx);
@@ -273,20 +248,8 @@ export const continuityChecks = [
     defaultEnabled: true,
     // Canon-only (no manuscript): compares each attachment's `origin` against the
     // attached character's `background`, both of which live on the canon.
-    configSchema: z.object({
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a large cast can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a large cast')],
     // Skip the LLM call entirely when no attachment has both an origin AND an
     // attached character with a background to contradict.
     gate: (ctx) => attachmentBackstoryRows(ctx).length > 0,
@@ -325,21 +288,8 @@ export const continuityChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a large object roster can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a large object roster can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a large object roster')],
     gate: hasManuscript,
     run: (ctx) => {
       // The per-object weight summary (prose significance + every attachment's
@@ -412,8 +362,7 @@ export const continuityChecks = [
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
     configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
+      maxFindings: findingCapSchema(12),
       // Issue gap at/above which a paid-off setup is flagged as a DISTANT payoff
       // (#1595) — setup in issue 1, payoff in issue 1+distantGap or later, far
       // enough that the reader may not still recall the plant. 0 disables the
@@ -421,15 +370,7 @@ export const continuityChecks = [
       distantGap: z.number().int().min(0).max(20).default(4),
     }),
     configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
+      findingCapField(),
       {
         key: 'distantGap',
         label: 'Distant-payoff issue gap',
@@ -504,21 +445,8 @@ export const continuityChecks = [
     // Reads the stitched manuscript corpus — so the runner only pays the
     // section-collection I/O when a manuscript-consuming check is enabled.
     needsManuscript: true,
-    configSchema: z.object({
-      // Cap findings per run so a long manuscript can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long manuscript can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField()],
     // Skip the LLM call entirely when the series authored no reveal-gated canon
     // (no revealIssue / spoiler on any entry) AND when there's no manuscript to
     // scan — there is nothing a premature reveal could be measured against.

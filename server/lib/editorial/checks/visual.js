@@ -1,5 +1,6 @@
 // Editorial checks — visual group. Extracted from checkRegistry.js (#1829).
 // Each entry is a declarative check; see ../README.md and ../checkInfra.js.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import {
   APPEARANCE_CONTINUITY_STAGE,
   EYELINE_MATCH_STAGE,
@@ -112,21 +113,8 @@ export const visualChecks = [
     category: 'continuity',
     severityDefault: 'medium',
     defaultEnabled: true,
-    configSchema: z.object({
-      // Cap findings per run so a long storyboard can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long storyboard can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a long storyboard')],
     // Skip the LLM call entirely unless at least one scene has two-or-more
     // described shots to compare an eyeline across (mirrors the deterministic
     // sibling's storyboardScenes gate, but tightened to "comparable" scenes —
@@ -161,21 +149,8 @@ export const visualChecks = [
     category: 'continuity',
     severityDefault: 'medium',
     defaultEnabled: true,
-    configSchema: z.object({
-      // Cap findings per run so a long storyboard can't flood the review.
-      maxFindings: z.number().int().min(1).max(50).default(12),
-    }),
-    configFields: [
-      {
-        key: 'maxFindings',
-        label: 'Max findings per run',
-        type: 'number',
-        min: 1,
-        max: 50,
-        step: 1,
-        help: 'Cap findings so a long storyboard can not flood the review.',
-      },
-    ],
+    configSchema: z.object({ maxFindings: findingCapSchema(12) }),
+    configFields: [findingCapField('a long storyboard')],
     // Same gate as the eyeline sibling: skip the LLM call entirely unless at least
     // one scene has two-or-more described shots to diff an appearance across
     // (summarizeStoryboardShots returns '' when nothing qualifies).

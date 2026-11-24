@@ -852,7 +852,8 @@ const musicVideoSourceTakeSchema = z.object({
   offsetSec: z.number().min(0).max(36000).optional(),
 }).strict();
 
-export const musicVideoSceneCreateSchema = z.object({
+// The fields a director authors on a shot: accepted on create and on every update.
+const sceneAuthoredFields = {
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
   prompt: z.string().max(8000).optional(),
@@ -883,6 +884,10 @@ export const musicVideoSceneCreateSchema = z.object({
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
   ...scenePanelFields,
+};
+
+export const musicVideoSceneCreateSchema = z.object({
+  ...sceneAuthoredFields,
 }).strict().refine(
   (s) => s.startSec == null || s.endSec == null || s.endSec >= s.startSec,
   { message: 'endSec must be >= startSec', path: ['endSec'] },
@@ -905,35 +910,7 @@ const musicVideoSceneLastFailureSchema = z.object({
 export const musicVideoSceneUpdateSchema = z.object({
   // #16136: approval to upgrade the selected draft clip; derived-valid (see musicVideoFinalApproval.js).
   finalApproval: z.object({ takeId: z.string().max(128), revision: z.string().max(32) }).nullable().optional(),
-  label: z.string().max(120).optional(),
-  sectionLabel: z.string().max(120).nullable().optional(),
-  prompt: z.string().max(8000).optional(),
-  framePrompt: z.string().max(8000).nullable().optional(),
-  startSec: z.number().min(0).max(36000).nullable().optional(),
-  endSec: z.number().min(0).max(36000).nullable().optional(),
-  beatAligned: z.boolean().optional(),
-  beatNeedsReview: z.boolean().optional(),
-  pacingCut: z.boolean().optional(),
-  // #8964: shot-planning fields. `loop` is an explicit, deliberate choice to
-  // repeat the source clip across a longer authored span; a scene with no
-  // `loop` key is a pre-#8964 record and keeps the legacy loop-to-fill render.
-  loop: z.boolean().optional(),
-  sectionIndex: z.number().int().min(0).max(10000).nullable().optional(),
-  lyricText: z.string().max(2000).nullable().optional(),
-  lyricAnchor: musicVideoLyricAnchorSchema.nullable().optional(),
-  visualIntent: z.string().max(2000).nullable().optional(),
-  ...sceneLayerFields,
-  // #8977: `performance` = a lip-synced singer that must follow the master
-  // recording (only a verified source-audio provider can render it); absent or
-  // `cutaway` = the ordinary image-to-video shot. See lib/musicVideo/musicVideoShotTiming.js.
-  shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
-  // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
-  coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
-  // #15588: this shot plays a window of another scene's clip. Null clears the link.
-  sourceTake: musicVideoSourceTakeSchema.nullable().optional(),
-  performanceSpeaker: z.string().trim().max(120).nullable().optional(),
-  // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
-  performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
+  ...sceneAuthoredFields,
   referenceImageId: z.string().max(256).nullable().optional(),
   videoHistoryId: z.string().max(64).nullable().optional(),
   // #11173: an optional style-break end frame (the selected `endImage` take)
@@ -952,7 +929,6 @@ export const musicVideoSceneUpdateSchema = z.object({
   // This shot's own on-screen name for its cameo (an alias, e.g. Spoodle for the Cockapoo); null uses the cameo's label.
   cameoLabel: z.string().trim().max(120).nullable().optional(),
   shotSheet: musicVideoShotSheetSchema.nullable().optional(),
-  ...scenePanelFields,
 }).strict();
 
 // The persisted MIDI-transcription pointer (a .mid basename under data/music/,

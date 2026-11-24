@@ -3,6 +3,7 @@
 // The pure detectors these checks call live in ../slopScore.js — see that
 // module's doc comment for how it EXTENDS (rather than duplicates) the
 // existing proseTics.js / cliches.js / repetition.js anti-slop primitives.
+import { findingCapField, findingCapSchema } from '../checkInfra/findingCap.js';
 import { hasManuscript } from '../checkInfra/gates.js';
 import {
   MIN_DENSITY_OCCURRENCES,
@@ -55,7 +56,7 @@ export const slopChecks = [
       tier1DensityPer1000: z.number().min(0).max(50).default(3),
       // Tier 2 occurrences within one paragraph before it reads as a cluster.
       tier2ClusterThreshold: z.number().int().min(2).max(10).default(3),
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // House-style allowlist / extra words — applied to BOTH tiers' seed lists.
       allowWords: z.string().default(''),
       extraWords: z.string().default(''),
@@ -63,7 +64,7 @@ export const slopChecks = [
     configFields: [
       { key: 'tier1DensityPer1000', label: 'Tier 1 rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose Tier 1 hard-ban word frequency per 1000 words is at or above this.' },
       { key: 'tier2ClusterThreshold', label: 'Tier 2 cluster size to flag', type: 'number', min: 2, max: 10, step: 1, help: 'How many Tier 2 suspicious words within one paragraph before the cluster is flagged. A lone Tier 2 word is never flagged.' },
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a slop-heavy draft can not flood the review.' },
+      findingCapField('a slop-heavy draft'),
       { key: 'allowWords', label: 'House-style allowlist', type: 'text', help: 'Words to leave alone (comma-separated or one per line) — applies to both tiers.' },
       { key: 'extraWords', label: 'Extra banned words to flag', type: 'text', help: 'Series-specific words to add to the seed lists (comma-separated or one per line) — applies to both tiers.' },
     ],
@@ -134,12 +135,12 @@ export const slopChecks = [
     defaultEnabled: true,
     needsManuscript: true,
     configSchema: z.object({
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // Pattern ids to mute (see slopScore.js AI_TELL_PATTERNS).
       allowPatterns: z.string().default(''),
     }),
     configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a slop-heavy draft can not flood the review.' },
+      findingCapField('a slop-heavy draft'),
       { key: 'allowPatterns', label: 'Muted AI-tell patterns', type: 'text', help: 'Pattern ids to leave alone (comma-separated or one per line): sense-of, couldnt-help-but, eyes-widened, breath-didnt-know, wave-of-emotion, heart-pounded-chest, physical-named-emotion.' },
     ],
     gate: hasManuscript,
@@ -182,7 +183,7 @@ export const slopChecks = [
     defaultEnabled: true,
     needsManuscript: true,
     configSchema: z.object({
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       // "Fast. Precise. Deadly." run detection.
       triadicMaxWords: z.number().int().min(1).max(10).default(4),
       triadicMinRun: z.number().int().min(3).max(8).default(3),
@@ -190,7 +191,7 @@ export const slopChecks = [
       negativeAssertionDensityPer1000: z.number().min(0).max(50).default(4),
     }),
     configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a tic-heavy draft can not flood the review.' },
+      findingCapField('a tic-heavy draft'),
       { key: 'triadicMaxWords', label: 'Short-sentence word cap', type: 'number', min: 1, max: 10, step: 1, help: 'A sentence at or under this word count counts as "short" for the triadic-run detector.' },
       { key: 'triadicMinRun', label: 'Short sentences in a row to flag', type: 'number', min: 3, max: 8, step: 1, help: 'How many consecutive short sentences trip the "Fast. Precise. Deadly." flag.' },
       { key: 'negativeAssertionDensityPer1000', label: '"Did not" rate to flag (per 1000 words)', type: 'number', min: 0, max: 50, step: 1, help: 'Flag a section whose "did not [verb]" / "didn\'t [verb]" frequency per 1000 words is at or above this.' },
@@ -239,14 +240,14 @@ export const slopChecks = [
     defaultEnabled: true,
     needsManuscript: true,
     configSchema: z.object({
-      maxFindings: z.number().int().min(1).max(50).default(20),
+      maxFindings: findingCapSchema(20),
       emDashThresholdPer1000: z.number().min(0).max(100).default(15),
       transitionRatioThreshold: z.number().min(0).max(1).default(0.3),
       paragraphUniformityMinRun: z.number().int().min(3).max(10).default(3),
       sectionBreakThresholdPer1000: z.number().min(0).max(50).default(8),
     }),
     configFields: [
-      { key: 'maxFindings', label: 'Max findings per run', type: 'number', min: 1, max: 50, step: 1, help: 'Cap findings so a heavy draft can not flood the review.' },
+      findingCapField('a heavy draft'),
       { key: 'emDashThresholdPer1000', label: 'Em-dash rate to flag (per 1000 words)', type: 'number', min: 0, max: 100, step: 1, help: 'Flag a section whose em-dash frequency per 1000 words is at or above this.' },
       { key: 'transitionRatioThreshold', label: 'Transition-opener ratio to flag', type: 'number', min: 0, max: 1, step: 0.05, help: 'Flag a section where more than this fraction of sentences open with an essay-style transition word.' },
       { key: 'paragraphUniformityMinRun', label: 'Uniform paragraphs in a row to flag', type: 'number', min: 3, max: 10, step: 1, help: 'How many consecutive similar-length paragraphs trip the mechanical-cadence flag.' },
