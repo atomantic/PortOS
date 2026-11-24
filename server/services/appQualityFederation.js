@@ -115,11 +115,29 @@ export function qualityRecord(row) {
     report: row.report, slice: row.slice ?? null };
 }
 
-/** Daily category winners; null days reads all local history for publication. */
-export async function readQualityRecords(appId, days, now, deps = {}) {
+function qualityQueryBounds(days, now) {
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
   if (days !== null) start.setUTCDate(start.getUTCDate() - days + 1);
+  return [days === null ? null : new Date(start.getTime() - AUDIT_FRESHNESS_MS), new Date(now)];
+}
+
+/** All local measurements in the requested history window for `getAppQualityHistory`. */
+export async function readQualityRecords(appId, days, now, deps = {}) {
+  const [since, until] = qualityQueryBounds(days, now);
+  const result = await (deps.query || query)(
+    `SELECT category, agent_id, assessed_at, report, slice
+     FROM app_quality_measurements
+     WHERE app_id = $1 AND ($2::timestamptz IS NULL OR assessed_at >= $2) AND assessed_at <= $3
+     ORDER BY category, assessed_at DESC, agent_id DESC`,
+    [appId, since, until]
+  );
+  return result.rows.map(qualityRecord);
+}
+
+/** Daily category winners; null days reads all local history for publication. */
+export async function readDailyQualityRecords(appId, days, now, deps = {}) {
+  const [since, until] = qualityQueryBounds(days, now);
   const result = await (deps.query || query)(
     `SELECT category, agent_id, assessed_at, report, slice FROM (
        SELECT category, agent_id, assessed_at, report, slice,
@@ -127,7 +145,7 @@ export async function readQualityRecords(appId, days, now, deps = {}) {
        FROM app_quality_measurements
        WHERE app_id = $1 AND ($2::timestamptz IS NULL OR assessed_at >= $2) AND assessed_at <= $3
      ) runs WHERE run_rank = 1 ORDER BY category, assessed_at DESC, agent_id DESC`,
-    [appId, days === null ? null : new Date(start.getTime() - AUDIT_FRESHNESS_MS), new Date(now)]
+    [appId, since, until]
   );
   return result.rows.map(qualityRecord);
 }
@@ -178,7 +196,7 @@ export async function exportPortosQuality(callerId, days, deps = {}, requestedRe
 export async function buildQualitySnapshot(app = { id: PORTOS_APP_ID }, days = 30, deps = {}) {
   const repository = await repositoryKey(deps, app);
   if (!repository) return null;
-  const records = await readQualityRecords(app.id, days, deps.now ?? Date.now(), deps);
+  const records = await readDailyQualityRecords(app.id, days, deps.now ?? Date.now(), deps);
   const measurements = records.flatMap(record => {
     const schema = days === null ? historicalMeasurementSchema : measurementSchema;
     const parsed = schema.safeParse({ measurementId: record.measurementId,
