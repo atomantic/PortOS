@@ -4,7 +4,7 @@ import { beeperSocketEvents } from '../services/beeper/beeperSocketEvents.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { z } from 'zod';
 import { asyncHandler, createServiceErrorMapper, ServerError } from '../lib/errorHandler.js';
-import { resolveOAuthOrigin } from '../lib/beeperOAuthOrigin.js';
+import { requestOriginFrom, resolveOAuthOrigin } from '../lib/beeperOAuthOrigin.js';
 import { PORTOS_API_URL, PORTOS_UI_URL } from '../lib/portosUrls.js';
 import { serveLocalFile } from '../lib/uploads.js';
 import { basename, dirname } from 'path';
@@ -126,21 +126,15 @@ const mapBeeperWriteError = createServiceErrorMapper({
 }, () => ({ retryable: false }));
 
 // OAuth must use the same public origin the browser used to reach this request,
-// so the flow works over HTTPS, on a Tailscale hostname, or behind a proxy —
-// never a hardcoded localhost. Same derivation as routes/spotify.js.
+// so the flow works over HTTPS or on a Tailscale hostname —
+// never a hardcoded localhost. Derived from Host + socket scheme only (never
+// X-Forwarded-*, which a caller can forge); shared with routes/spotify.js.
 //
 // It is the FALLBACK rather than the answer, because it is wrong under the Vite
 // dev proxy: `changeOrigin: true` with no `x-forwarded-*` makes the server see
 // its own HTTPS origin on the API port, and the consent redirect then lands the
 // browser on a host the certificate does not cover. The browser sends its own
 // `window.location.origin` instead, validated by `resolveOAuthOrigin`.
-function requestOrigin(req) {
-  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http')
-    .toString().split(',')[0].trim();
-  const host = (req.headers['x-forwarded-host'] || req.headers.host || '')
-    .toString().split(',')[0].trim();
-  return ['http', 'https'].includes(proto) && host ? `${proto}://${host}` : null;
-}
 
 const redirectUriFrom = (origin) => (origin ? `${origin}/api/beeper/oauth/callback` : null);
 
@@ -448,7 +442,7 @@ router.post('/oauth/start', asyncHandler(async (req, res) => {
   const { origin: clientOrigin } = validateRequest(oauthStartSchema, req.body ?? {});
   const { origin, rejectedClientOrigin } = resolveOAuthOrigin({
     clientOrigin,
-    requestOrigin: requestOrigin(req),
+    requestOrigin: requestOriginFrom(req),
     configuredOrigins: [PORTOS_UI_URL, PORTOS_API_URL],
   });
   // Never interpolate the value: it is a host off the user's own machine or
