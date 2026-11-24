@@ -304,10 +304,11 @@ export function SharingTab() {
           <h3 className="text-lg font-semibold text-white">Federation pull authorization</h3>
         </div>
         <p className="text-sm text-gray-400 mb-4">
-          Peers that pull records from this instance are identified by the instance id they send.
-          By default a pull that your per-peer sharing settings would deny is still served, and logs a
-          warning once per peer per restart — so peers running an older PortOS keep syncing.
-          Turn this on to reject those pulls with a 403 instead. This default flips in a future release.
+          Paired peers are identified by their verified peer credential (unpaired peers fall back
+          to the instance id they send). Personal and sensitive categories (Brain, Memory, Digital
+          Twin, MeatSpace, and Character) are always refused with 403 when disallowed. Turning this
+          on also rejects disallowed pulls on legacy non-PII categories (such as Catalog and other
+          older sync feeds) with a 403 instead of serving them with a once-per-peer-per-restart warning.
         </p>
         <label htmlFor="federation-strict-pull" className="flex items-start gap-3 cursor-pointer">
           <input
@@ -334,8 +335,9 @@ export function SharingTab() {
           Let registered PortOS peers submit allowlisted audio, image, and video renders to this
           machine&apos;s durable media queue. Only models you allowlist below can be requested.
           Capability status never carries prompts or job details, and completed downloads include a
-          SHA-256 integrity hash. An image or video peer sends the prompt it wants rendered; an audio
-          peer can only send a fixed musical profile, never free text or lyrics.
+          SHA-256 integrity hash. An image or video peer sends its prompt; an audio peer sends a
+          fixed musical profile (never a free-form style prompt) plus song lyrics when targeting a
+          lyric-capable model.
         </p>
 
         {!authEnabled && (

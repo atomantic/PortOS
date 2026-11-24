@@ -57,8 +57,8 @@ See [the routing and audio ADR](decisions/2026-10-04-music-video-render-pools.md
 
 ## Enable a provider
 
-1. In **Settings → Security**, configure an instance password. The provider API remains closed when authentication is off, even though ordinary PortOS APIs normally trust the private network in that posture.
-2. Register the consumer under **Instances**. The consumer must store this provider's Basic credential on its peer record and send its own registered instance id on every request.
+1. In **Settings → Security**, configure an instance password. An instance password is required to enable the provider in **Settings → Sharing** and during automatic pairing setup, while paired peer tokens (`X-PortOS-Peer-Auth`) remain verified if authentication is later turned off.
+2. Register the consumer under **Instances**, pair the peers using **Generate & pair** (`X-PortOS-Peer-Auth`), and remove the stored peer password once pairing is confirmed (see [PEER_PUSH_AUTH.md](./PEER_PUSH_AUTH.md#using-a-peers-image-video-and-llm-services)).
 3. Install and verify the desired music runtime and model under **Music**. A model must be locally ready before it can be advertised or accept work.
 4. In **Settings → Sharing → Federated media provider**, select the allowed models per kind, choose the shared active-job limit, and enable the provider.
 
@@ -93,7 +93,7 @@ reading.
 ## Configure a consumer
 
 1. Register the provider under **Instances** and make the relationship mutual so the provider recognizes this consumer's instance id.
-2. Store the provider's instance-password credential on its peer card. The normal peer health probe may work without it when provider auth is off, but the federated-media API intentionally does not.
+2. Pair the peer using **Generate & pair** (`X-PortOS-Peer-Auth`), which uses the provider's instance-password credential for the one-time pairing bootstrap. Once the peer confirms the matching sync credential, remove the stored peer password from the peer card—paired requests continue authenticating with `X-PortOS-Peer-Auth` (even if the provider later turns authentication off). Unpaired or older peers fall back to the saved Basic credential.
 3. Expand **Remote media provider** on the peer card and enable **Use this peer for remote media**. PortOS immediately probes the versioned status endpoint through `peerFetch`.
 4. Select the exact advertised engine/model pairs this instance may use, per kind — the panel lists an **Allowed audio / image / video models** group. This local allowlist is independent from the provider's sharing allowlist; both sides must permit a model.
 
@@ -265,8 +265,8 @@ prevent. Their routing lives in this instance's own settings instead:
     "mediaRouting": {
       "image": {
         "peerId": "00000000-0000-4000-8000-000000000001",
-        "engine": "comfy",
-        "modelId": "sdxl-base"
+        "engine": "local",
+        "modelId": "dev"
       },
       "video": null
     }
@@ -446,7 +446,7 @@ All successful JSON responses include `wireVersion: 1`. The version is also fixe
 
 ### Capacity status
 
-`GET /status` reports **audio only** unless the caller opts in with `?kinds=audio,image,video`. That default is what keeps an already-deployed audio-only consumer working: its own copy of the wire schema validates `kinds`/`capabilities` against a literal `audio`, can never be patched retroactively, and would reject a capability naming a kind it has not heard of. A consumer asks for a kind only when it has models allowlisted for it.
+`GET /status` reports **audio only** unless the caller opts in with `?kinds=audio,image,video`. That default is what keeps an already-deployed audio-only consumer working: its own copy of the wire schema validates `kinds`/`capabilities` against a literal `audio`, can never be patched retroactively, and would reject a capability naming a kind it has not heard of. Consumers always probe all known kinds via `?kinds=audio,image,video` so a fresh consumer with an empty allowlist still discovers image and video capabilities.
 
 `GET /status` is computed live and carries `generatedAt` plus `staleAfterMs`. Consumers must stop assigning new work after that window instead of treating stale capacity as available. A provider timestamp more than 30 seconds in the future is also rejected as unknown clock state rather than extending capacity indefinitely.
 
