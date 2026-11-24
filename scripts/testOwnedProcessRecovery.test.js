@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,22 @@ describe('test process ownership boundaries', () => {
       expect(testProcessRoot({ args: ['sh', option, `${root}/script; echo text`] }, parent, 'pvt-')).toBeNull();
     }
     expect(testProcessRoot({ args: ['chrome', `--user-data-dir=${root}/profile`] }, parent, 'pvt-')).toBe(root);
+    expect(testProcessRoot({ args: ['handler', `--database=${root}/crashpad`] }, parent, 'pvt-')).toBe(root);
+    expect(testProcessRoot({ args: ['handler', `--database=${parent}/unrelated/crashpad`] }, parent, 'pvt-')).toBeNull();
+  });
+
+  it('owns a detached crash handler by the resolved database path Chrome reports', () => {
+    const host = mkdtempSync(join(tmpdir(), 'recovery-database-'));
+    const parent = join(host, 'alias');
+    const resolved = join(realpathSync(host), 'resolved');
+    mkdirSync(resolved);
+    symlinkSync(resolved, parent, 'dir');
+    try {
+      const owner = path => testProcessRoot({ args: ['handler', `--database=${path}/crashpad`], env: {} }, parent, 'pvt-');
+      expect(owner(join(resolved, 'pvt-owned', 'fixture'))).toBe(join(parent, 'pvt-owned'));
+      expect(owner(join(resolved, 'other', 'fixture'))).toBeNull();
+      expect(owner(join(host, 'pvt-owned'))).toBeNull();
+    } finally { rmSync(host, { recursive: true, force: true }); }
   });
 
   it('waits for terminal birth identity after signaling and distinguishes unconfirmed or unknown settlement', () => {

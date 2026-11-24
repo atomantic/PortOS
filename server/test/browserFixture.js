@@ -3,6 +3,7 @@ import { lstat, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, normalize } from 'node:path';
 import { browserCleanupDeadline, reapOwnedBrowser } from '../../scripts/lib/ownedBrowserCleanup.js';
+import { ownedCrashHandlers } from '../../scripts/lib/ownedCrashHandlers.js';
 import { sandboxedChromiumOptions } from '../../scripts/lib/playwrightSandbox.js';
 
 // The capability is the retained BrowserServer's exact ChildProcess, not a
@@ -32,9 +33,11 @@ const captureProfile = (child, parentTemp) => {
  * launchServer/connect retain the supported process/kill capability; external
  * CDP adapters are deliberately ineligible. Startup plus cleanup fit the
  * existing 30s hooks. No retries: a failed launch remains a failed fixture.
+ * The private root also holds the launch's crash database, so it survives until
+ * every detached handler serving that database has exited.
  */
 export async function startOwnedBrowserFixture({
-  chromium, launchOptions = {}, startupMs = 20000, cleanupMs = 5000,
+  chromium, launchOptions = {}, startupMs = 20000, cleanupMs = 5000, ownCrashHandlers = ownedCrashHandlers,
 }) {
   const sandboxedOptions = sandboxedChromiumOptions(launchOptions);
   if (typeof chromium.launchServer !== 'function' || typeof chromium.connect !== 'function') {
@@ -46,6 +49,7 @@ export async function startOwnedBrowserFixture({
   }
   const parentTemp = realpathSync(tmpdir());
   const temp = mkdtempSync(join(parentTemp, 'portos-owned-browser-'));
+  const crashHandlers = ownCrashHandlers(temp);
   const bounded = (work, ms, label) => browserCleanupDeadline(Promise.resolve().then(work), ms,
     () => new Error(`${label} stalled after ${ms}ms`));
   // No absolute fixture paths or raw launch errors in asynchronous diagnostics.
@@ -53,7 +57,7 @@ export async function startOwnedBrowserFixture({
     console.error('❌ Owned browser fixture late cleanup failed; exit or private root removal is unconfirmed');
   });
   let server, child, browser, profile, abandoned = false;
-  let removing, reaping, disconnecting, closing;
+  let removing, reaping, retiring, disconnecting, closing;
   const requireAbsent = async (path, label) => {
     const remaining = await lstat(path).catch(error => {
       if (error.code === 'ENOENT') return null;
@@ -85,30 +89,38 @@ export async function startOwnedBrowserFixture({
   }, Math.max(1, Math.floor(cleanupMs * 0.1)), 'Browser private root removal');
   const reap = () => reaping ??= bounded(async () => {
     if (server.process() !== child) throw new Error('Owned browser process identity changed');
-    await reapOwnedBrowser(server, cleanupMs);
-    // A timeout or missing exit status above preserves the root as evidence.
+    await reapOwnedBrowser(server, cleanupMs, { crashHandlers });
+    // A timeout, missing exit status or unproven crash handler exit above
+    // preserves the root as evidence.
+    await removeRoot();
+  }, cleanupMs, 'Owned browser cleanup');
+  // Playwright kills the child of a launch it gives up on, but nothing here
+  // ever held that browser, whose crash handlers can outlive it all the same.
+  const retireFailedLaunch = () => retiring ??= bounded(async () => {
+    await crashHandlers.settle(Math.floor(cleanupMs * 0.9));
     await removeRoot();
   }, cleanupMs, 'Owned browser cleanup');
   const disconnect = () => disconnecting ??= bounded(() => browser.close(), cleanupMs, 'Browser client disconnect');
   const launching = Promise.resolve().then(() => chromium.launchServer({
     ...sandboxedOptions, timeout: startupMs, artifactsDir: temp,
     env: { ...process.env, ...launchOptions.env,
-      TMPDIR: temp, TMP: temp, TEMP: temp, MAC_CHROMIUM_TMPDIR: temp },
+      TMPDIR: temp, TMP: temp, TEMP: temp, MAC_CHROMIUM_TMPDIR: temp, ...crashHandlers.env },
   })).then(value => {
     server = value;
     child = server.process();
     profile = captureProfile(child, parentTemp);
+    if (child?.pid) crashHandlers.identify(startupMs);
     // Even after close's deadline rejected, the eventual capability is ours.
     if (abandoned) reportLate(reap());
     return value;
   }, error => {
-    if (abandoned) reportLate(removeRoot());
+    if (abandoned) reportLate(retireFailedLaunch());
     throw error;
   });
   // Cache the verdict as well as the work, including failures. A second close
   // must not signal again or turn an unconfirmed first close into success.
   const close = () => closing ??= bounded(async () => {
-    await launching.catch(async () => { await removeRoot(); });
+    await launching.catch(retireFailedLaunch);
     if (server) {
       const results = await Promise.allSettled([reap(), ...(browser ? [disconnect()] : [])]);
       const failures = results.filter(result => result.status === 'rejected');

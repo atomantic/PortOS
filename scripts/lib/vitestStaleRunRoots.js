@@ -125,6 +125,7 @@ function processKind({ args = [] }) {
     return 'node';
   }
   if (/^(chrome|chromium|google chrome|google chrome helper)(\.exe)?$/.test(executable)) return 'browser';
+  if (executable === 'chrome_crashpad_handler') return 'crashpad';
   if (/^(sh|bash|zsh)$/.test(executable)) return 'shell';
   if (/^python[0-9.]*$/.test(executable)) return 'python';
   return 'other';

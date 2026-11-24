@@ -77,6 +77,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runningTestFile, servedFilesRecording } from './browserServedFiles.js';
 import { browserCleanupDeadline as withDeadline, reapOwnedBrowser } from './ownedBrowserCleanup.js';
+import { ownedCrashHandlers } from './ownedCrashHandlers.js';
 import { sandboxedChromiumOptions } from './playwrightSandbox.js';
 import { _testChromeProcessFacts } from '../../server/services/htmlComposition/testBrowserCleanup.js';
 
@@ -281,14 +282,15 @@ export async function startBrowserFixture({
   // stand-in without `launchServer` — an attached CDP browser above all —
   // keeps only its own `close()`.
   const ownsProcess = typeof chromium.launchServer === 'function';
-  const launchBrowser = async (options, isAbandoned) => {
+  const launchBrowser = async (options, isAbandoned, crashHandlers) => {
     if (!ownsProcess) {
       const browser = await chromium.launch(options);
       return { browser, closer: () => browser.close() };
     }
     const server = await chromium.launchServer(options);
+    if (server.process()?.pid) crashHandlers.identify(options.timeout);
     const closer = async () => {
-      const evidence = await reapOwnedBrowser(server, phaseMs.cleanup, { requireProfileRemoval: true }).catch(error => {
+      const evidence = await reapOwnedBrowser(server, phaseMs.cleanup, { requireProfileRemoval: true, crashHandlers }).catch(error => {
         retainLine(`❌ ${name} browser cleanup: ${error.message}`);
         throw error;
       });
@@ -330,12 +332,14 @@ export async function startBrowserFixture({
       try { facts = sample(); } catch { facts = 'unavailable'; }
     }, sampleAt);
     const settle = () => { settled = true; clearTimeout(timer); };
+    // A retry must not settle the handlers of the attempt it replaced.
+    const crashHandlers = ownedCrashHandlers(temp, { name: `crashpad-${number}` });
     const launching = launchBrowser({
       headless: true,
       timeout,
       ...sandboxedOptions,
-      env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp },
-    }, () => abandoned || failed).then(({ browser, closer }) => {
+      env: { ...process.env, ...launchOptions.env, TMPDIR: temp, TMP: temp, TEMP: temp, MAC_CHROMIUM_TMPDIR: temp, ...crashHandlers.env },
+    }, () => abandoned || failed, crashHandlers).then(({ browser, closer }) => {
       settle();
       if (abandoned) discard({ closer, label: 'browser' });
       else own(closer, 'browser');

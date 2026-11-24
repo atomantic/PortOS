@@ -23,7 +23,7 @@ const owned = () => {
   roots.push(profile);
   const canonicalProfile = realpathSync(profile);
   const clearProfile = () => rmSync(profile, { recursive: true, force: true });
-  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+  const child = Object.assign(new EventEmitter(), { pid: 900001, exitCode: null, signalCode: null,
     spawnargs: ['example-chrome', `--user-data-dir=${profile}`] });
   const server = {
     process: () => child, wsEndpoint: () => 'ws://127.0.0.1:1/owned',
@@ -32,9 +32,12 @@ const owned = () => {
   };
   const browser = { close: vi.fn(async () => {}) };
   const chromium = { launchServer: vi.fn(async () => server), connect: vi.fn(async () => browser) };
-  const start = () => startOwnedBrowserFixture({ chromium, startupMs: 100, cleanupMs: 100,
+  // Real macOS handlers are covered by ownedCrashHandlers.test.js; no process is inspected here.
+  const crashHandlers = { env: { BREAKPAD_DUMP_LOCATION: 'example-crash-database' },
+    identify: vi.fn(), settle: vi.fn(async () => 'found=0 signalled=0 settled=0') };
+  const start = () => startOwnedBrowserFixture({ chromium, startupMs: 100, cleanupMs: 100, ownCrashHandlers: () => crashHandlers,
     launchOptions: { executablePath: 'example-chrome', headless: true, args: ['--mute-audio'] } });
-  return { child, server, browser, chromium, start, profile, canonicalProfile, clearProfile };
+  return { child, server, browser, chromium, start, profile, canonicalProfile, clearProfile, crashHandlers };
 };
 // Synthetic launch/connect readiness only; real filesystem completion uses the
 // operation handshake below rather than a number of event-loop turns.
@@ -194,6 +197,9 @@ describe('owned server browser fixture lifecycle', () => {
       ? async () => { throw new Error('synthetic removal failure'); } : async () => {});
     const closing = started.close();
     const result = closing.catch(error => error);
+    // Reach the removal this mode names: expiring the deadline while the real
+    // profile check is still pending would strand it in a later test.
+    await flushUntil(() => rm.mock.calls.length > 0);
     await vi.advanceTimersByTimeAsync(100);
     expect(await result).toBeInstanceOf(Error);
     expect(started.close()).toBe(closing);
@@ -225,6 +231,74 @@ describe('owned server browser fixture lifecycle', () => {
     expect(existsSync(temp)).toBe(true);
     expect(existsSync(other.profile)).toBe(true);
     expect(existsSync(unrelated)).toBe(true);
+  });
+
+  it.each(['graceful close', 'kill'])('settles the crash handlers it identified on launch after a confirmed %s, before removing their root', async path => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fixture = owned();
+    const other = owned();
+    if (path === 'kill') fixture.server.close.mockImplementation(stalls);
+    const settling = deferred();
+    fixture.crashHandlers.settle.mockImplementation(async () => { await settling.promise; return 'found=2 signalled=2 settled=2'; });
+    const started = await fixture.start();
+    const temp = recordRoot(fixture);
+    expect(fixture.chromium.launchServer.mock.calls[0][0].env).toMatchObject(fixture.crashHandlers.env);
+    // Recorded while the owned browser was alive, inside the startup budget.
+    expect(fixture.crashHandlers.identify).toHaveBeenCalledExactlyOnceWith(100);
+    const closing = started.close();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushUntil(() => fixture.crashHandlers.settle.mock.calls.length > 0);
+    expect(fixture.child.exitCode ?? fixture.child.signalCode).not.toBeNull();
+    const [budget] = fixture.crashHandlers.settle.mock.calls[0];
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThanOrEqual(90);
+    expect(existsSync(temp)).toBe(true);
+    expect(rm).not.toHaveBeenCalled();
+    settling.resolve();
+    await closing;
+    expect(existsSync(temp)).toBe(false);
+    expect(fixture.crashHandlers.settle).toHaveBeenCalledTimes(1);
+    expect(other.crashHandlers.settle).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['rejects', 'stalls'])('rejects and preserves the private root when crash handler settlement %s', async mode => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fixture = owned();
+    fixture.crashHandlers.settle.mockImplementation(mode === 'stalls' ? stalls
+      : async () => { throw new Error('Owned browser crash handler exit unconfirmed: found=2 signalled=1 settled=1'); });
+    const started = await fixture.start();
+    const temp = recordRoot(fixture);
+    const closing = started.close();
+    const result = closing.catch(error => error);
+    await vi.advanceTimersByTimeAsync(100);
+    const error = await result;
+    expect(error).toBeInstanceOf(Error);
+    if (mode === 'rejects') {
+      expect(error.errors[0].message).toContain('crash handler exit unconfirmed: found=2 signalled=1 settled=1; cleanup phases: close');
+      expect(error.errors[0].message).not.toContain(temp);
+    }
+    expect(started.close()).toBe(closing);
+    expect(fixture.crashHandlers.settle).toHaveBeenCalledTimes(1);
+    expect(rm).not.toHaveBeenCalled();
+    expect(existsSync(temp)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['settled', 'unproven'])('retires a failed launch whose crash handlers are %s', async mode => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fixture = owned();
+    const launch = deferred();
+    fixture.chromium.launchServer.mockReturnValue(launch.promise);
+    if (mode === 'unproven') fixture.crashHandlers.settle.mockRejectedValue(new Error('synthetic unproven exit'));
+    const starting = fixture.start().catch(error => error);
+    await flushUntil(() => fixture.chromium.launchServer.mock.calls.length > 0);
+    const temp = recordRoot(fixture);
+    launch.reject(new Error('synthetic startup failure'));
+    expect((await starting).message).toBe(`Owned browser startup failed; ${mode === 'settled' ? 'cleaned up' : 'cleanup unconfirmed'}`);
+    expect(fixture.crashHandlers.settle).toHaveBeenCalledExactlyOnceWith(90);
+    expect(existsSync(temp)).toBe(mode === 'unproven');
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('does not wait for a stalled connected client before reaping the owned process', async () => {
