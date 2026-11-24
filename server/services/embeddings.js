@@ -4,7 +4,8 @@
  * Reads `settings.embeddings = { provider, model }` and routes embedText() to
  * the configured backend (Ollama or LM Studio). When `provider === 'none'` or
  * unset, returns `{ skipped: true }` — callers persist the row without an
- * embedding and a future re-embed admin action backfills.
+ * embedding and the catalog backfill (`POST /api/catalog/embeddings/backfill`,
+ * driven from Settings → Embeddings) fills it in later.
  *
  * Vector dim is pinned to 768 (matches the `vector(768)` column on memories +
  * catalog_ingredients). Output dim is validated; a mismatch surfaces clearly

@@ -84,7 +84,7 @@ export const hideFirstRunCardSchema = z.boolean();
 
 // Provider-agnostic embeddings settings: the one setting that drives BOTH
 // catalog and memory embedding (#18296). `provider: 'none'` disables both —
-// rows persist without an embedding and a re-embed action backfills. While the
+// rows persist without an embedding and the Settings → Embeddings backfill fills them in. While the
 // key is absent the catalog is off and memory keeps the legacy CoS config.
 // Model is optional so the user can pick provider first and choose a model from
 // the live list in the UI; it is stamped into the VARCHAR(100)

@@ -1155,16 +1155,22 @@ router.post('/embeddings/backfill', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogEmbeddingsBackfillSchema, req.body || {});
   const limit = body.limit ?? 50;
 
+  // A disabled provider makes embedBatch skip every row; refuse up front so the
+  // caller sees an actionable error instead of `failed: N`.
+  const cfg = await getEmbeddingsConfig();
+  if (cfg.provider === 'none') {
+    throw new ServerError('Embeddings are disabled. Choose a provider in Settings → Embeddings before backfilling.', {
+      status: 400,
+      code: 'EMBEDDINGS_DISABLED',
+    });
+  }
+
   // When `includeStale` is true, also re-embed rows whose stored
   // embedding_model differs from the current settings model — catches the
   // "user switched provider/model and old vectors are in the wrong space"
   // case. Resolved server-side so the client doesn't have to know the
   // current settings.
-  let staleModel = null;
-  if (body.includeStale === true) {
-    const cfg = await getEmbeddingsConfig();
-    staleModel = cfg.model || null;
-  }
+  const staleModel = body.includeStale === true ? (cfg.model || null) : null;
 
   const { items: todo } = await catalogDB.listIngredients({
     limit,

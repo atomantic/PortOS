@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { RefreshCw, AlertTriangle, Check } from 'lucide-react';
+import { RefreshCw, AlertTriangle, Check, Database, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
 import toast from '../ui/Toast';
 import ListLoadError from '../ui/ListLoadError';
 import LoadFailedState from '../ui/LoadFailedState';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
+import { getCatalogStats, backfillCatalogEmbeddings } from '../../services/apiCatalog';
 import EmbeddingSourceNotice from './EmbeddingSourceNotice';
 
 // Provider-agnostic embeddings configuration: the single store (#18296) behind
@@ -27,6 +28,9 @@ const KNOWN_768_DIM = {
   ollama: ['nomic-embed-text', 'snowflake-arctic-embed:s'],
   lmstudio: ['nomic-ai/nomic-embed-text-v1.5-GGUF', 'text-embedding-nomic-embed-text-v1.5'],
 };
+
+// Rows per backfill request; the tab drains batches sequentially.
+const BACKFILL_BATCH = 50;
 
 const EMBEDDING_HINT_RE = /embed|bge|nomic|mxbai|gte|e5|arctic/i;
 
@@ -49,6 +53,11 @@ export default function EmbeddingsTab() {
   // A reachable status endpoint still reports a backend whose model list failed
   // as `modelsError` beside an empty `models` array.
   const [backendListErrors, setBackendListErrors] = useState({});
+  // Catalog coverage (`withEmbeddings` of `total`); null = unread or failed.
+  const [stats, setStats] = useState(null);
+  const [backfill, setBackfill] = useState(null); // { includeStale, embedded, failed } while running
+  const cancelRef = useRef(false);
+  const mountedRef = useRef(false);
 
   const refreshModels = async () => {
     setModelsLoading(true);
@@ -97,7 +106,20 @@ export default function EmbeddingsTab() {
     refreshModels();
   };
 
-  useEffect(() => { loadSettings(); }, []);
+  const refreshStats = async () => {
+    const next = await getCatalogStats({ silent: true }).catch(() => null);
+    if (mountedRef.current) setStats(next);
+  };
+
+  useEffect(() => {
+    mountedRef.current = true;
+    loadSettings();
+    refreshStats();
+    return () => {
+      mountedRef.current = false;
+      cancelRef.current = true;
+    };
+  }, []);
 
   const candidateModels = useMemo(() => {
     if (provider === 'none') return [];
@@ -130,6 +152,33 @@ export default function EmbeddingsTab() {
     }).catch((err) => {
       toast.error(`Save failed: ${err?.message || 'unknown error'}`);
     }).finally(() => setSaving(false));
+  };
+
+  const runBackfill = async (includeStale) => {
+    if (backfill) return;
+    cancelRef.current = false;
+    let embedded = 0;
+    let failed = 0;
+    setBackfill({ includeStale, embedded, failed });
+    let error = null;
+    while (!cancelRef.current) {
+      const batch = await backfillCatalogEmbeddings({ limit: BACKFILL_BATCH, includeStale }, { silent: true })
+        .catch((err) => { error = err; return null; });
+      if (!batch) break;
+      embedded += batch.embedded;
+      failed += batch.failed;
+      if (!mountedRef.current) return;
+      setBackfill({ includeStale, embedded, failed });
+      // Failed rows come back in the next batch, so stop once a batch embeds
+      // nothing (or the queue is short) rather than re-requesting forever.
+      if (batch.processed < BACKFILL_BATCH || batch.embedded === 0) break;
+    }
+    if (!mountedRef.current) return;
+    const cancelled = cancelRef.current;
+    setBackfill(null);
+    if (error) toast.error(`Backfill failed: ${error.message || 'unknown error'}`);
+    else toast.success(`${cancelled ? 'Backfill cancelled' : 'Backfill finished'}: ${embedded} embedded${failed ? `, ${failed} failed` : ''}`);
+    refreshStats();
   };
 
   if (loading) return <BrailleSpinner text="Loading embeddings settings" />;
@@ -234,6 +283,55 @@ export default function EmbeddingsTab() {
           )}
         </div>
       )}
+      </div>
+
+      <div className="space-y-2 border-t border-port-border pt-4">
+        <h3 className="text-sm font-medium text-gray-300">Catalog backfill</h3>
+        <p className="text-xs text-gray-500" data-testid="embedding-coverage">
+          {stats
+            ? `${stats.withEmbeddings} of ${stats.total} catalog ingredients embedded`
+            : 'Catalog embedding coverage unavailable'}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => runBackfill(false)}
+            disabled={provider === 'none' || saved.provider === 'none' || dirty || !!backfill}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded"
+          >
+            <Database size={14} />
+            Embed missing
+          </button>
+          <button
+            type="button"
+            onClick={() => runBackfill(true)}
+            disabled={provider === 'none' || saved.provider === 'none' || dirty || !!backfill}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm rounded"
+          >
+            <RefreshCw size={14} />
+            Re-embed stale / all
+          </button>
+          {backfill && (
+            <button
+              type="button"
+              onClick={() => { cancelRef.current = true; }}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-300 hover:text-white"
+            >
+              <X size={14} />
+              Cancel
+            </button>
+          )}
+        </div>
+        {backfill && (
+          <p className="text-xs text-gray-400" role="status">
+            Embedding… {backfill.embedded} embedded{backfill.failed ? `, ${backfill.failed} failed` : ''}
+          </p>
+        )}
+        {(provider === 'none' || dirty) && (
+          <p className="text-xs text-gray-500">
+            {dirty ? 'Save your changes before backfilling.' : 'Pick a provider and save to enable backfill.'}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 pt-2">
