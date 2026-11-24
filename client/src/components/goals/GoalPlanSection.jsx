@@ -2,15 +2,18 @@ import {
   ChevronDown, ChevronRight, Wand2, ArrowUp, ArrowDown, Trash2, Plus,
   CalendarPlus, CalendarX, RefreshCw, ListChecks
 } from 'lucide-react';
+import InlineConfirmRow from '../ui/InlineConfirmRow';
+import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import { PRIORITY_BADGE } from './goalConstants';
 
 export default function GoalPlanSection({
-  goal, planOpen, setPlanOpen, generatingPhases, handleGeneratePhases,
+  goal, pendingActions, planOpen, setPlanOpen, generatingPhases, handleGeneratePhases,
   proposedPhases, setProposedPhases, handleAcceptPhases,
   decomposing, handleDecompose, proposedDecomposition, setProposedDecomposition,
   handleAcceptDecomposition,
   schedulingBusy, handleSchedule, handleReschedule, handleRemoveSchedule
 }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   return (
     <div>
       <button
@@ -38,7 +41,7 @@ export default function GoalPlanSection({
             <div className="space-y-1.5">
               <p className="text-[10px] text-gray-500">{proposedPhases.length} phases proposed</p>
               {proposedPhases.map((phase, idx) => (
-                <div key={idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
+                <div key={phase._key ?? idx} className="p-2 rounded bg-port-bg border border-port-border space-y-1">
                   <div className="space-y-1">
                     <input
                       type="text"
@@ -71,8 +74,7 @@ export default function GoalPlanSection({
                           if (idx === 0) return;
                           const next = [...proposedPhases];
                           [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                          next.forEach((p, i) => { p.order = i; });
-                          setProposedPhases(next);
+                          setProposedPhases(next.map((p, i) => ({ ...p, order: i })));
                         }}
                         disabled={idx === 0}
                         aria-label="Move up"
@@ -85,8 +87,7 @@ export default function GoalPlanSection({
                           if (idx === proposedPhases.length - 1) return;
                           const next = [...proposedPhases];
                           [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                          next.forEach((p, i) => { p.order = i; });
-                          setProposedPhases(next);
+                          setProposedPhases(next.map((p, i) => ({ ...p, order: i })));
                         }}
                         disabled={idx === proposedPhases.length - 1}
                         aria-label="Move down"
@@ -117,7 +118,7 @@ export default function GoalPlanSection({
                 </div>
               ))}
               <button
-                onClick={() => setProposedPhases([...proposedPhases, { title: '', description: '', targetDate: goal.targetDate, order: proposedPhases.length }])}
+                onClick={() => setProposedPhases([...proposedPhases, { _key: `phase-new-${Date.now()}-${proposedPhases.length}`, title: '', description: '', targetDate: goal.targetDate, order: proposedPhases.length }])}
                 className="text-xs text-port-accent hover:text-port-accent/80 flex items-center gap-1"
               >
                 <Plus className="w-3 h-3" /> Add phase
@@ -125,7 +126,8 @@ export default function GoalPlanSection({
               <div className="flex gap-2">
                 <button
                   onClick={handleAcceptPhases}
-                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80"
+                  disabled={pendingActions.has('accept-phases')}
+                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
                 >
                   Accept Plan
                 </button>
@@ -246,7 +248,8 @@ export default function GoalPlanSection({
               <div className="flex gap-2">
                 <button
                   onClick={handleAcceptDecomposition}
-                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80"
+                  disabled={pendingActions.has('accept-decomposition')}
+                  className="px-3 py-1.5 text-xs rounded bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50"
                 >
                   Accept Tasks
                 </button>
@@ -289,7 +292,7 @@ export default function GoalPlanSection({
                     Reschedule
                   </button>
                   <button
-                    onClick={handleRemoveSchedule}
+                    onClick={() => requestDelete('schedule')}
                     disabled={schedulingBusy}
                     className="px-2 py-1 text-xs rounded bg-red-500/20 text-red-400 disabled:opacity-50 flex items-center justify-center gap-1"
                   >
@@ -297,6 +300,16 @@ export default function GoalPlanSection({
                     Remove
                   </button>
                 </div>
+              )}
+              {isConfirming('schedule') && (
+                <InlineConfirmRow
+                  question="Remove all scheduled time blocks for this goal?"
+                  confirmText="Remove"
+                  confirmTitle="Confirm remove schedule"
+                  cancelTitle="Cancel remove schedule"
+                  onConfirm={() => confirmDelete(() => handleRemoveSchedule())}
+                  onCancel={cancelDelete}
+                />
               )}
             </div>
           )}

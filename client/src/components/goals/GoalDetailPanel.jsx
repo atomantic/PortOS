@@ -130,6 +130,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {/* Todos */}
           <GoalTodoList
             goal={goal}
+            pendingActions={s.pendingActions}
             newTodoTitle={s.newTodoTitle}
             setNewTodoTitle={s.setNewTodoTitle}
             newTodoPriority={s.newTodoPriority}
@@ -213,6 +214,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {/* Plan Section */}
           <GoalPlanSection
             goal={goal}
+            pendingActions={s.pendingActions}
             planOpen={s.planOpen}
             setPlanOpen={s.setPlanOpen}
             generatingPhases={s.generatingPhases}
@@ -256,6 +258,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {/* Linked Activities */}
           <GoalLinkedActivities
             goal={goal}
+            pendingActions={s.pendingActions}
             activities={s.activities}
             activitiesState={s.activitiesState}
             activitiesError={s.activitiesError}
@@ -269,6 +272,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           {/* Linked Calendars */}
           <GoalLinkedCalendars
             goal={goal}
+            pendingActions={s.pendingActions}
             subcalendars={s.subcalendars}
             subcalendarsState={s.subcalendarsState}
             subcalendarsError={s.subcalendarsError}
@@ -292,7 +296,8 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
             {goal.status === 'active' && (
               <button
                 onClick={s.handleComplete}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30"
+                disabled={s.pendingActions.has('complete-goal')}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs rounded bg-port-success/20 text-port-success hover:bg-port-success/30 disabled:opacity-50"
               >
                 <Check className="w-3 h-3" />
                 Complete

@@ -2,12 +2,15 @@ import { readFile, writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { validateProposedDiff, applyDiffToLive, revertDiffFromLive } from './sandbox.js';
 
+export const isAutofixerSessionId = id => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id);
+
 // Session metadata is the authority for patch disposition. The history index is
 // written by the monitor. Manual and automatic promotion share this queue so
 // applying, restarting and rolling back one patch cannot overlap another.
 export function createStagedFixStore({ root, loadApps, execPm2 }) {
   let tail = Promise.resolve();
   let stopping = false;
+  const restarting = new Set();
   const serialize = (operation) => {
     const run = tail.then(() => {
       if (stopping) throw new Error('Autofixer is shutting down');
@@ -16,8 +19,7 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
     tail = run.catch(() => {});
     return run;
   };
-  const sessionDir = (id) => typeof id === 'string' && /^autofixer_[A-Za-z0-9_-]+$/.test(id)
-    ? join(root, 'sessions', id) : null;
+  const sessionDir = id => isAutofixerSessionId(id) ? join(root, 'sessions', id) : null;
   const metadata = async (id) => {
     const dir = sessionDir(id);
     if (!dir) return null;
@@ -58,11 +60,18 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
       if (record.processName === 'portos-autofixer') {
         // Commit the applied disposition before dispatching a restart that
         // waits for this daemon to exit. The shutdown drain cannot await it.
-        await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+        restarting.add(id);
+        try {
+          await save(id, { ...record, staged: false, promoted: true, disposition: 'applied' });
+        } catch (error) {
+          restarting.delete(id);
+          throw error;
+        }
         void execPm2(['restart', record.processName])
           .catch(error => serialize(() => rollback(error.message)))
           .then(message => { if (message) console.error(`❌ [Autofixer] ${message}`); })
-          .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`));
+          .catch(error => console.error(`❌ [Autofixer] Could not reconcile self-restart: ${error.message}`))
+          .finally(() => restarting.delete(id));
         return { success: true, disposition: 'applied', status: 202 };
       }
       const restart = await execPm2(['restart', record.processName]).catch(error => ({ error: error.message }));
@@ -81,6 +90,19 @@ export function createStagedFixStore({ root, loadApps, execPm2 }) {
   return {
     read,
     serialize,
+    async canPrune(id) {
+      const dir = sessionDir(id);
+      if (!dir || restarting.has(id)) return false;
+      try {
+        const record = JSON.parse(await readFile(join(dir, 'metadata.json'), 'utf8'));
+        return record?.staged !== true && !restarting.has(id);
+      } catch (error) {
+        // A partial session can have no metadata. Other failures leave its
+        // staged disposition unknown until a later cleanup pass.
+        if (error.code === 'ENOENT') return !restarting.has(id);
+        throw error;
+      }
+    },
     stopMutations: () => {
       stopping = true;
       return tail;

@@ -2,7 +2,7 @@ import { Link2, Unlink } from 'lucide-react';
 import ListLoadError from '../ui/ListLoadError';
 
 export default function GoalLinkedActivities({
-  goal, activities, activitiesState, activitiesError, retryActivities, selectedActivity, setSelectedActivity,
+  goal, pendingActions, activities, activitiesState, activitiesError, retryActivities, selectedActivity, setSelectedActivity,
   handleLinkActivity, handleUnlinkActivity
 }) {
   return (
@@ -21,7 +21,8 @@ export default function GoalLinkedActivities({
               {link.note && <span className="text-gray-600 truncate max-w-[100px]" title={link.note}>{link.note}</span>}
               <button
                 onClick={() => handleUnlinkActivity(link.activityName)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-600 hover:text-red-400"
+                disabled={pendingActions.has(`unlink-activity:${link.activityName}`)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-0.5 text-gray-600 hover:text-red-400 disabled:opacity-50"
                 title="Unlink" aria-label="Unlink"
               >
                 <Unlink className="w-3 h-3" />
@@ -52,7 +53,7 @@ export default function GoalLinkedActivities({
           </select>
           <button
             onClick={handleLinkActivity}
-            disabled={!selectedActivity}
+            disabled={!selectedActivity || pendingActions.has('link-activity')}
             className="shrink-0 px-2 py-1 text-xs rounded bg-port-accent/20 text-port-accent disabled:opacity-50"
           >
             Link

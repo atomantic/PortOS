@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import {
   ChevronRight, ChevronDown, Plus, GripVertical, Search, Tag, Link2, Crown, Star, Wand2, AlertTriangle
@@ -207,7 +207,7 @@ function RootDropZone() {
 }
 
 export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
-  const [expandedIds, setExpandedIds] = useState(new Set());
+  const [collapsedIds, setCollapsedIds] = useState(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [showNewGoal, setShowNewGoal] = useState(false);
   const [newGoal, setNewGoal] = useState({ ...DEFAULT_NEW_GOAL });
@@ -236,20 +236,24 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
 
   const closeDetail = useCallback(() => navigate(GOALS_LIST_PATH), [navigate]);
 
-  useEffect(() => {
-    if (!data?.roots) return;
-    const allIds = new Set();
+  const parentIds = useMemo(() => {
+    const ids = new Set();
     const collect = (goals) => {
-      for (const g of goals) {
-        if (g.children?.length) { allIds.add(g.id); collect(g.children); }
+      for (const goal of goals) {
+        if (goal.children?.length) {
+          ids.add(goal.id);
+          collect(goal.children);
+        }
       }
     };
-    collect(data.roots);
-    setExpandedIds(allIds);
-  }, [data]);
+    collect(data?.roots ?? []);
+    return ids;
+  }, [data?.roots]);
 
+  // Parents start expanded. Store only user collapses so new tree data cannot reset them.
+  const expandedIds = new Set([...parentIds].filter(id => !collapsedIds.has(id)));
   const toggleExpand = (id) => {
-    setExpandedIds(prev => {
+    setCollapsedIds(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
@@ -418,20 +422,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
             </div>
           )}
           <button
-            onClick={() => {
-              if (expandedIds.size > 0) {
-                setExpandedIds(new Set());
-              } else {
-                const allIds = new Set();
-                const collect = (goals) => {
-                  for (const g of goals) {
-                    if (g.children?.length) { allIds.add(g.id); collect(g.children); }
-                  }
-                };
-                collect(data?.roots || []);
-                setExpandedIds(allIds);
-              }
-            }}
+            onClick={() => setCollapsedIds(expandedIds.size > 0 ? parentIds : new Set())}
             className="px-3 py-1.5 text-sm rounded-lg bg-port-border text-gray-300 hover:bg-gray-600 whitespace-nowrap"
           >
             {expandedIds.size > 0 ? 'Collapse' : 'Expand'}
@@ -568,10 +559,7 @@ export default function GoalsListView({ data, onRefresh, selectedGoalId }) {
               goal={selectedGoal}
               allGoals={data?.flat}
               onClose={closeDetail}
-              onRefresh={() => {
-                closeDetail();
-                onRefresh();
-              }}
+              onRefresh={onRefresh}
             />
           ) : (
             <div className="w-full bg-port-card border-l border-port-border h-full overflow-y-auto p-4">

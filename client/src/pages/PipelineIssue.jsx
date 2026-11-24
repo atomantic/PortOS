@@ -31,6 +31,7 @@ import {
   PIPELINE_STAGE_LABELS,
 } from '../services/apiPipeline.js';
 import { usePipelineProgress } from '../hooks/usePipelineProgress';
+import { isTerminalSseFrame } from '../hooks/useSseProgress';
 import { useLockToggle } from '../hooks/useLockToggle';
 import { lazyWithReload } from '../utils/lazyWithReload';
 import IssueJudgePanel from '../components/pipeline/IssueJudgePanel';
@@ -115,7 +116,12 @@ export default function PipelineIssue() {
   const [arcRoles, setArcRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [autoRunStarting, setAutoRunStarting] = useState(false);
-  const [autoRunActive, setAutoRunActive] = useState(false);
+  // Keyed by issue id rather than a bare boolean: the page stays mounted across
+  // an issue switch, and a boolean would stay true for one render under the new
+  // id, opening (and 404ing) the new issue's SSE stream before any effect reset.
+  const [autoRunIssueId, setAutoRunIssueId] = useState(null);
+  const autoRunActive = autoRunIssueId === issueId;
+  const setAutoRunActive = useCallback((active) => setAutoRunIssueId(active ? issueIdRef.current : null), []);
   // Deep-linkable open state for the per-stage generation settings drawer; the
   // stage tabs navigate without a query string, so switching stage closes it.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -128,7 +134,7 @@ export default function PipelineIssue() {
   const [lengthProfileSaving, setLengthProfileSaving] = useState(false);
   const [arcRoleSaving, setArcRoleSaving] = useState(false);
   const [genConfigSaving, setGenConfigSaving] = useState(false);
-  const { latest, frames } = usePipelineProgress(pipelineAutoRunSseUrl, [issueId], { enabled: autoRunActive });
+  const { latest, latestUrl, closed, frames } = usePipelineProgress(pipelineAutoRunSseUrl, [issueId], { enabled: autoRunActive });
   // The page stays mounted across an issue switch, so a PATCH answered after
   // the route moved on must not paint the previous issue under the new URL.
   const applyIssueUpdate = useCallback((updated) => {
@@ -137,6 +143,8 @@ export default function PipelineIssue() {
 
   useEffect(() => {
     let canceled = false;
+    setAutoRunIssueId(null);
+    setAutoRunStarting(false);
     setIssue(null);
     setSeries(null);
     setLoading(true);
@@ -174,29 +182,42 @@ export default function PipelineIssue() {
     return () => { canceled = true; };
   }, [issueId, navigate]);
 
+  // Re-read the current issue so panels show freshly-persisted output. A
+  // request-generation ref, not a `let active` flag: callers' dependency arrays
+  // change on every progress frame, so a lifetime-scoped flag would drop the
+  // read. Superseded only by a newer read or a different issue.
+  const refreshIssue = useCallback(() => {
+    const req = ++issueRequestRef.current;
+    const forIssue = issueIdRef.current;
+    getPipelineIssue(forIssue)
+      .then((i) => { if (req === issueRequestRef.current && issueIdRef.current === forIssue) setIssue(i); })
+      .catch(() => null);
+  }, []);
+
+  // A retained `latest` from the previous issue's stream must not drive this
+  // issue, so frames only count when they came from this issue's stream URL.
+  const frameIsCurrent = latest != null && latestUrl === pipelineAutoRunSseUrl(issueId);
+  const frameIsTerminal = frameIsCurrent && isTerminalSseFrame(latest);
+
   // When auto-run reports a completed stage, refresh the issue so the panels
   // re-render with the freshly-persisted output. Cheaper than re-fetching on
   // every frame.
   useEffect(() => {
-    if (!latest) return;
-    if (latest.type === 'stage:complete' || latest.type === 'complete' || latest.type === 'error' || latest.type === 'canceled') {
-      // A request-generation ref, not a `let active` flag: `latest` is in this
-      // effect's own dependency array and every progress frame changes it, so a
-      // lifetime-scoped flag would be flipped by the next frame's cleanup and
-      // drop this read — with no replacement, since an ordinary progress frame
-      // starts none. Superseded only by a newer read or a different issue.
-      const req = ++issueRequestRef.current;
-      const forIssue = issueId;
-      getPipelineIssue(issueId)
-        .then((i) => { if (req === issueRequestRef.current && issueIdRef.current === forIssue) setIssue(i); })
-        .catch(() => null);
-    }
-    if (latest.type === 'complete' || latest.type === 'canceled' || latest.type === 'error') {
-      setAutoRunActive(false);
-    }
-  }, [latest, issueId]);
+    if (!frameIsCurrent) return;
+    if (latest.type === 'stage:complete' || isTerminalSseFrame(latest)) refreshIssue();
+    if (isTerminalSseFrame(latest)) setAutoRunActive(false);
+  }, [latest, frameIsCurrent, refreshIssue, setAutoRunActive]);
+
+  // The stream can close without a terminal frame (404, evicted replay window,
+  // server restart); nothing else would ever clear autoRunActive.
+  useEffect(() => {
+    if (!autoRunActive || !closed || frameIsTerminal) return;
+    setAutoRunActive(false);
+    refreshIssue();
+  }, [autoRunActive, closed, frameIsTerminal, refreshIssue, setAutoRunActive]);
 
   const handleAutoRun = async (opts = {}) => {
+    const forIssue = issueId;
     setAutoRunStarting(true);
     const res = await startPipelineAutoRunText(issueId, {
       providerId: series?.llm?.provider || undefined,
@@ -206,6 +227,8 @@ export default function PipelineIssue() {
       toast.error(err.message || 'Failed to start auto-run');
       return null;
     });
+    // The route may have moved on while the start request was in flight.
+    if (issueIdRef.current !== forIssue) return;
     setAutoRunStarting(false);
     if (!res) return;
     setAutoRunActive(true);
