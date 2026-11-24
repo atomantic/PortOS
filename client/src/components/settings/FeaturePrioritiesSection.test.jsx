@@ -82,6 +82,20 @@ describe('FeaturePrioritiesSection', () => {
     expect(mock.get).toHaveBeenCalledTimes(2);
   });
 
+  it('re-reads when a pin lands while a reload is in flight, so neither change is lost', async () => {
+    render(<FeaturePrioritiesSection />);
+    await screen.findByText('Brain');
+    emit('feature-priorities:updated', { areaId: 'brain', tier: 'P2' });
+    let release;
+    mock.get.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    emit('feature-priorities:updated', { areaId: 'brain', tier: null });
+    mock.get.mockResolvedValueOnce(payload([area({ tier: 'P3', source: 'pinned' }), area({ areaId: 'beeper', label: 'Beeper', tier: 'P1', source: 'default' })]));
+    emit('feature-priorities:updated', { areaId: 'beeper', tier: 'P1' });
+    await act(async () => { release(payload([area({ tier: 'P0' })])); });
+    await waitFor(() => expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P3'));
+    expect(mock.get).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps the previous value when a save fails', async () => {
     mock.set.mockRejectedValueOnce(new Error('boom'));
     render(<FeaturePrioritiesSection />);

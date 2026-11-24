@@ -59,6 +59,7 @@ export function FeaturePrioritiesSection() {
   const [savingIds, setSavingIds] = useState(() => new Set());
   const dataRef = useRef(null);
   const loadGeneration = useRef(0);
+  const pendingLoads = useRef(0);
   const mounted = useMounted();
 
   const commit = useCallback((updater) => {
@@ -70,7 +71,9 @@ export function FeaturePrioritiesSection() {
   // Last request wins: a reload started by a newer event supersedes an older response still in flight.
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
+    pendingLoads.current += 1;
     const result = await getFeaturePriorities({ silent: true }).catch((err) => err instanceof Error ? err : new Error(String(err)));
+    pendingLoads.current -= 1;
     if (!mounted.current || generation !== loadGeneration.current) return;
     if (result instanceof Error) {
       setLoadError(result);
@@ -88,9 +91,9 @@ export function FeaturePrioritiesSection() {
       return;
     }
     if (!row) return;
-    // A pin read in flight may predate this one; drop it rather than overwrite the newer value.
-    loadGeneration.current += 1;
     commit((prev) => ({ ...prev, areas: prev.areas.map((entry) => (entry.areaId === areaId ? pinRow(entry, tier) : entry)) }));
+    // A read already in flight may predate this pin and would overwrite it; supersede it with a fresh read rather than dropping it, since it may also carry another area's cleared pin.
+    if (pendingLoads.current > 0) void load();
   }, [commit, load]);
 
   useEffect(() => {
