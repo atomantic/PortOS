@@ -57,13 +57,14 @@ const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
  * earlier run when a file's bytes, the setup's replaced sources and every
  * cross-file constant it looked up are unchanged; null extracts every file.
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, requireToolVersions = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
   const host = { nodeVersion, platform, arch };
   const a = {
     fs,
     factsCache,
     workspaceRel,
     toolVersion,
+    requireToolVersions,
     listFiles,
     hashes: new Map(),
     facts: new Map(),
@@ -913,13 +914,23 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   for (const rel of [...gathered.absent].sort()) lines.push(`absent ${rel}`);
   const versions = new Map([...baseClosure.packages, ...gathered.packages]);
   for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
-  for (const tool of [...gathered.tools].sort()) lines.push(`tool ${tool} ${a.toolVersion(tool) ?? 'absent'}`);
+  const unavailableTools = [];
+  for (const tool of [...gathered.tools].sort()) {
+    const version = a.toolVersion(tool);
+    if (!version) unavailableTools.push(tool);
+    lines.push(`tool ${tool} ${version ?? 'absent'}`);
+  }
+  if (a.requireToolVersions && unavailableTools.length) {
+    const reason = `unverified tool: ${unavailableTools.join(', ')}`;
+    return { key: null, memoizable: false, reason, reasons: [reason], tools: gathered.tools, unavailableTools };
+  }
   const keyWith = (head) => sha256([...head, ...lines].join('\n'));
   return {
     key: keyWith(a.environmentLines),
     acceptedKeys: a.acceptedEnvironments.map(({ label, lines: head }) => ({ label, key: keyWith(head) })),
     memoizable: true,
     reasons: [],
+    tools: gathered.tools,
   };
 }
 

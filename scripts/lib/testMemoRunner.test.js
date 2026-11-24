@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
+  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
@@ -49,6 +49,19 @@ function writeRepo(root, files) {
 
 const repoRootDir = fileURLToPath(new URL('../..', import.meta.url));
 
+it.each([
+  ['ffprobe version 6.1.1-3ubuntu5 Copyright (c) 2007-2023 the FFmpeg developers', 0, true],
+  ['ffprobe version 6.1.1-3ubuntu4 Copyright (c) 2007-2023 the FFmpeg developers', 0, false],
+  ['', 127, false],
+])('only uses the ffmpeg fingerprint with a verified companion probe (%s)', (probe, status, matches) => {
+  const ffmpeg = 'ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers';
+  const resolver = createToolVersionResolver({
+    verifyAudioPair: true,
+    run: (program) => ({ status: program === 'ffmpeg' ? 0 : status, stdout: program === 'ffmpeg' ? ffmpeg : probe, stderr: '' }),
+  });
+  expect(resolver('ffmpeg')).toBe(matches ? ffmpeg : null);
+});
+
 describe('planTestMemo and recordTestMemo', () => {
   let root;
   let memoDir;
@@ -57,6 +70,38 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  it('retains unverified audio suites until the runtime fingerprint proves coverage', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-audio-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-audio-memo-store-'));
+    const audio = 'server/lib/audio.test.js';
+    const independent = 'server/lib/c.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [audio]: "import { execFileSync } from 'node:child_process';\nexecFileSync('ffmpeg', ['-version']);\n",
+    });
+    const inputs = { repoFiles: [audio] };
+    const version = (value) => (tool) => tool === 'ffmpeg' ? value : null;
+    const record = (prepared) => recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared,
+      passed: [audio], dependencies: new Map([[audio, [audio]]]), source: 'ci',
+    }).written;
+    expect(record(plan(inputs))).toBe(2); // Legacy coverage with an absent tool.
+    const installed = { ...inputs, requireToolVersions: true, toolVersion: version('ffmpeg version 6') };
+    expect(record(plan(installed))).toBe(2);
+    const check = (fingerprint, overrides = {}) => plan({
+      ...installed, provisionableTool: 'ffmpeg', toolVersion: version(fingerprint), ...overrides,
+    });
+    expect(check('ffmpeg version 6')).toMatchObject({ run: [], unsettled: 0 });
+    expect(check(null)).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5')).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5', { repoFiles: [audio, independent] }))
+      .toMatchObject({ run: [audio, independent], unsettled: 1 });
+    expect(check('ffmpeg version 5', { provisionableTool: undefined }))
+      .toMatchObject({ run: [audio], unsettled: 0 });
+    expect(record(check(null))).toBe(0);
+    expect(record(check('ffmpeg version 5', { freshToolVersion: version('ffmpeg version 7') }))).toBe(0);
   });
 
   // #17616: a real-Chromium suite's record carries what its fixture served, so an

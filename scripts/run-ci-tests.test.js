@@ -791,19 +791,30 @@ describe('ci.yml shard wiring', () => {
     const memoIndex = body.indexOf('- name: Restore the test memo');
     const planIndex = body.indexOf('- name: Check remaining browser suites');
     const toolsIndex = body.indexOf('- name: Install audio verification tools');
+    const recheckIndex = body.indexOf('- name: Recheck browser suites after audio setup');
     const clientIndex = body.indexOf('uses: ./.github/actions/setup-client');
     expect(memoIndex).toBeGreaterThan(0);
     expect(memoIndex).toBeLessThan(planIndex);
     expect(planIndex).toBeLessThan(toolsIndex);
-    expect(toolsIndex).toBeLessThan(clientIndex);
+    expect(toolsIndex).toBeLessThan(recheckIndex);
+    expect(recheckIndex).toBeLessThan(clientIndex);
     expect(clientIndex).toBeLessThan(start);
     const planStep = body.slice(planIndex, toolsIndex);
     expect(planStep).toContain('id: browser-plan');
     expect(planStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
-    expect(planStep).toContain('PORTOS_CI_BROWSER_OWNER: browser');
-    expect(planStep).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
-    const gate = 'if: fromJSON(steps.browser-plan.outputs.remaining) > 0';
-    expect(body.slice(toolsIndex, clientIndex)).toContain(gate);
+    expect(planStep).toContain("PORTOS_CI_BEFORE_AUDIO_SETUP: '1'");
+    expect(body.slice(toolsIndex, recheckIndex)).toContain('if: fromJSON(steps.browser-plan.outputs.remaining) > 0');
+    const recheckStep = body.slice(recheckIndex, clientIndex);
+    expect(recheckStep).toContain("if: steps.browser-plan.outputs.recheck == 'true'");
+    expect(recheckStep).toContain('run: node scripts/run-ci-tests.js server --check-remaining');
+    for (const name of ['PORTOS_TEST_MEMO_DIR', 'CI_TEST_MODE', 'CI_SHARD', 'PORTOS_CI_BROWSER_OWNER',
+      'CI_TEST_FILES', 'PORTOS_REQUIRE_BROWSER_SUITES', 'PORTOS_TEST_QUIET']) {
+      const envLine = step.match(new RegExp(`^ +${name}: .+$`, 'm'))?.[0];
+      expect(envLine).toBeDefined();
+      expect(planStep).toContain(envLine);
+      expect(recheckStep).toContain(envLine);
+    }
+    const gate = 'if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0';
     expect(body.slice(clientIndex, start)).toContain(gate);
     expect(step).toContain(gate);
   });

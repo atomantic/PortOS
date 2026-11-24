@@ -86,10 +86,11 @@ const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has
  * @param {object|null} [options.factsCache] parsed file facts from earlier runs (`factsCache.js`); loaded from the store by default
  * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
  *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
+ * @param {string} [options.provisionableTool] tool that setup can change, for counting misses that may still become hits
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
- *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
+ *   unsettled: number, unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, freshToolVersion = toolVersion, requireToolVersions = false, provisionableTool, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = serverShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry, factsCache = memoDir ? loadFactsCache(memoDir, scope) : null }) {
   const candidates = mode === 'files' ? uniqueSorted(repoFiles)
     : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
@@ -99,7 +100,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
     ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, requireToolVersions, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot), factsCache };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null, served = null) => {
@@ -114,7 +115,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   let fresh = null;
   const freshAnalyze = (test, recorded, served = null) => {
     if (!fresh) {
-      const again = createTestMemoAnalyzer(options);
+      const again = createTestMemoAnalyzer({ ...options, toolVersion: freshToolVersion });
       fresh = { analyzer: again, baseClosure: again.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
     return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded, served });
@@ -151,6 +152,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
 
   const skipped = [];
   const run = [];
+  let unsettled = 0;
   let unanalyzed = 0;
   // This run's own entry first, then one written under settings whose verdict
   // also proves this run's cases (`acceptVerdictsFrom`); `from` names those.
@@ -169,12 +171,17 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     // file that runs has had its floor read here, before Vitest starts, which
     // `recordTestMemo`'s changed-during-the-run check relies on.
     const recorded = memoDir && info ? hit(test, info.recorded) : null;
-    const floor = memoDir && info && !recorded ? hit(test, info.floor) : null;
-    if (recorded || floor) { skipped.push({ test, via: recorded ? 'recorded' : 'floor', ...(recorded ?? floor) }); continue; }
+    if (recorded) { skipped.push({ test, via: 'recorded', ...recorded }); continue; }
+    const floor = memoDir && info ? hit(test, info.floor) : null;
+    if (floor) { skipped.push({ test, via: 'floor', ...floor }); continue; }
     run.push(test);
+    if (provisionableTool && memoDir && info && [info.recorded, info.floor].some(verdict =>
+      verdict?.tools?.has(provisionableTool) && !verdict.unavailableTools?.some(tool => tool !== provisionableTool))) {
+      unsettled += 1;
+    }
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
+  return { selected, slice, run, skipped, unsettled, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0, factsCache };
 }
 
 export function memoSummaryLine(plan) {
@@ -481,21 +488,29 @@ export function seedVitestDependencies(repoRoot, scope, tests) {
  * Version strings for `TEST_MEMO_TOOLS`, resolved once per process the way
  * the suites find the programs: `PORTOS_TEST_PYTHON` or `python3`, `ffmpeg`
  * on PATH, and Chrome through the suites' own candidate list
- * (`resolveTestChrome`). Null (keyed as `absent`) when the program cannot
- * be run.
+ * (`resolveTestChrome`). Null when the program cannot be run.
  */
-export function createToolVersionResolver({ env = process.env } = {}) {
+export function createToolVersionResolver({ env = process.env, verifyAudioPair = false, run = spawnSync } = {}) {
   const cache = new Map();
   const firstLine = (command, args) => {
     if (!command) return null;
-    const result = spawnSync(command, args, { encoding: 'utf8', timeout: 15_000 });
+    const result = run(command, args, { env, encoding: 'utf8', timeout: 15_000 });
     if (result.error || result.status !== 0) return null;
     return `${result.stdout}${result.stderr}`.trim().split('\n')[0] || null;
+  };
+  const audioVersion = () => {
+    const version = firstLine('ffmpeg', ['-version']);
+    if (!verifyAudioPair || !version) return version;
+    // The suite needs the companion tool from the same package. Keep the
+    // original ffmpeg line as the key so existing verified entries still hit.
+    const probe = firstLine('ffprobe', ['-version']);
+    const release = version.match(/^ffmpeg version (\S+)/)?.[1];
+    return release && probe?.match(/^ffprobe version (\S+)/)?.[1] === release ? version : null;
   };
   return (tool) => {
     if (cache.has(tool)) return cache.get(tool);
     const version = tool === 'python' ? firstLine(env.PORTOS_TEST_PYTHON || 'python3', ['--version'])
-      : tool === 'ffmpeg' ? firstLine('ffmpeg', ['-version'])
+      : tool === 'ffmpeg' ? audioVersion()
         : tool === 'chrome' ? firstLine(resolveTestChrome(env), ['--version'])
           : null;
     cache.set(tool, version);
