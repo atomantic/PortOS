@@ -664,6 +664,29 @@ describe('music routes', () => {
     expect(setup.spawn).toHaveBeenCalledTimes(1);
   });
 
+  it('POST /setup/runtime-install does not start an install whose client left during the probe', async () => {
+    let finishProbe;
+    cuda.probe = () => new Promise((resolve) => { finishProbe = resolve; });
+    gen.healthy = false;
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const client = new AbortController();
+    const closed = new Promise((resolve) => server.on('connection', (socket) => socket.once('close', resolve)));
+    const url = `http://127.0.0.1:${server.address().port}/api/music/setup/runtime-install?runtime=test-cuda`;
+    const left = fetch(url, { method: 'POST', signal: client.signal }).then((response) => response.text()).catch((error) => error);
+    await vi.waitFor(() => expect(finishProbe).toEqual(expect.any(Function)));
+    client.abort();
+    await Promise.all([left, closed]);
+    finishProbe({ status: 'available', gpus: [], maxVramGb: 40, error: null });
+    cuda.probe = null;
+    // The claim is released, so the retry is the first and only install.
+    await vi.waitFor(async () => {
+      expect((await request(app).post('/api/music/setup/runtime-install?runtime=test-cuda')).text).toContain('Starting Test CUDA install.');
+    });
+    expect(setup.spawn).toHaveBeenCalledTimes(1);
+    await new Promise((resolve) => server.close(resolve));
+  });
+
   it('POST /setup/runtime-install releases its CUDA claim when the probe rejects', async () => {
     cuda.probe = vi.fn().mockRejectedValueOnce(new Error('CUDA probe failed'));
     gen.healthy = false;

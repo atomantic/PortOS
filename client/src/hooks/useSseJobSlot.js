@@ -34,6 +34,9 @@ const IDLE_PROGRESS = Object.freeze({ percent: 0, stage: null });
  * - `onKickoffError(err, startArg)` → return true to suppress the kickoff toast.
  * - `onKickoffSuccess(jobId, startArg)` — fires when the kickoff resolves.
  *
+ * - `findActive()` — optional; on mount resolves the `{ jobId, context }` of a job an earlier page
+ *   started (or null), adopted as `attach` does unless the slot was taken meanwhile.
+ *
  * `attach(jobId, context)` adopts a job some OTHER request already started
  * (e.g. a workflow step whose response carried the jobId) into the idle slot,
  * so it gets the same progress, terminal and cancel handling. Returns false
@@ -55,6 +58,7 @@ export default function useSseJobSlot({
   onKickoffError,
   onKickoffSuccess,
   onSettled,
+  findActive,
 } = {}) {
   // jobId is null during preparation; context already owns the target then.
   const [job, setJob] = useState(null);
@@ -162,6 +166,16 @@ export default function useSseJobSlot({
     setJob(slot);
     return true;
   };
+
+  useEffect(() => {
+    if (!findActive) return undefined;
+    let live = true;
+    // A failed read leaves the slot idle: the job itself is unaffected.
+    findActive()
+      .then((found) => { if (live && found?.jobId) attach(found.jobId, found.context); })
+      .catch((err) => console.warn(`⚠️ Could not check for a running job: ${err?.message || err}`));
+    return () => { live = false; };
+  }, []);
 
   const cancel = () => {
     if (!mounted.current || !job?.jobId) return;

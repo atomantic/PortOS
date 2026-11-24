@@ -19,6 +19,9 @@ export const startVideoDownload = (url, options = {}) => request('/devtools/vide
   ...options,
 });
 
+// `{ jobs: [{ jobId, url }] }` — downloads still running, newest first.
+export const listActiveVideoDownloads = (options = {}) => request('/devtools/video-download/active', options);
+
 export const videoDownloadEventsUrl = (jobId) =>
   `/api/devtools/video-download/${encodeURIComponent(jobId)}/events`;
 

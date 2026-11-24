@@ -10,9 +10,15 @@
  * reservation is film-only.
  */
 import { createBlenderJobRegistry } from '../blenderWorkspace/jobRegistry.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { filmOwnerKey } from './owner.js';
 
 const registry = createBlenderJobRegistry({ keyOf: filmOwnerKey, label: 'Blender film', keptPerOwner: 20 });
+// Running Blender or browser work, for the idle verdict and the update warning.
+const liveJobs = trackedRenderMap('film', {
+  noun: 'film job',
+  link: (_jobId, owner) => (owner.kind === 'music-video' ? `/music-video/${encodeURIComponent(owner.id)}` : null),
+});
 // Reserve before sync preparation awaits; queued jobs take over the slot afterward.
 const preparingSyncs = new Set();
 
@@ -22,7 +28,11 @@ export const createBlenderJob = (owner, { kind, shotId = null, quality = null, l
 });
 
 /** Apply `change` to a job. A status change is sent at once; frame progress is throttled. */
-export const updateBlenderJob = (entry, change) => registry.update(entry, change);
+export function updateBlenderJob(entry, change) {
+  registry.update(entry, change);
+  if (!registry.isActive(entry)) liveJobs.delete(entry.job.id);
+  else if (entry.job.status === 'running') liveJobs.set(entry.job.id, entry.owner);
+}
 
 export const isBlenderJobActive = (entry) => registry.isActive(entry);
 
@@ -47,5 +57,6 @@ export const listBlenderJobs = (owner) => registry.list(owner);
 /** Test seam: forget every job. */
 export function __resetBlenderJobsForTests() {
   registry.reset();
+  for (const id of [...liveJobs.keys()]) liveJobs.delete(id);
   preparingSyncs.clear();
 }

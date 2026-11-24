@@ -15,6 +15,7 @@ vi.mock('../services/apiProviders.js', () => ({
 vi.mock('../services/apiBrain.js', () => ({
   startYoutubeIngest: vi.fn(),
   cancelYoutubeIngest: vi.fn(),
+  listActiveYoutubeIngests: vi.fn(async () => ({ jobs: [] })),
   youtubeIngestEventsUrl: (jobId) => `/api/brain/youtube/ingest/${jobId}/events`,
   captureBrainThought: vi.fn(),
   getYoutubeIngestSettings: vi.fn(),
@@ -47,7 +48,7 @@ globalThis.EventSource = StubEventSource;
 
 import { getApps } from '../services/apiApps.js';
 import { getProviders } from '../services/apiProviders.js';
-import { startYoutubeIngest, captureBrainThought, getYoutubeIngestSettings } from '../services/apiBrain.js';
+import { startYoutubeIngest, captureBrainThought, getYoutubeIngestSettings, listActiveYoutubeIngests, cancelYoutubeIngest } from '../services/apiBrain.js';
 import toast from './ui/Toast';
 import QuickBrainCapture from './QuickBrainCapture';
 
@@ -457,6 +458,27 @@ describe('QuickBrainCapture', () => {
       const retryProgress = await screen.findByRole('progressbar', { name: 'YouTube video ingest progress' });
       expect(retryProgress).toHaveAttribute('aria-valuenow', '0');
       expect(screen.getByText('starting…')).toHaveAttribute('aria-live', 'polite');
+    });
+
+    it('picks up an ingest left running on an earlier visit, with Cancel, and keeps its warnings', async () => {
+      listActiveYoutubeIngests.mockResolvedValueOnce({ jobs: [{ jobId: 'job-earlier', videoId: 'oCnxnaVg0bY' }] });
+      cancelYoutubeIngest.mockResolvedValue({});
+      renderWidget();
+      expect(await screen.findByRole('progressbar', { name: 'YouTube video ingest progress' })).toBeInTheDocument();
+      await waitFor(() => expect(StubEventSource.instances.at(-1)?.url).toContain('job-earlier'));
+      // A second video waits and keeps its link; a thought is still captured.
+      type(YT);
+      expect(screen.getByLabelText('Capture')).toBeDisabled();
+      fireEvent.submit(screen.getByPlaceholderText(PLACEHOLDER).closest('form'));
+      expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue(YT);
+      expect(startYoutubeIngest).not.toHaveBeenCalled();
+      submit('just a thought');
+      await waitFor(() => expect(captureBrainThought).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      expect(cancelYoutubeIngest).toHaveBeenCalledWith('job-earlier', { silent: true });
+      act(() => StubEventSource.instances.at(-1).emit({ type: 'complete', ingest: { title: 'Example Video' }, warnings: ['The review task could not be queued'] }));
+      await waitFor(() => expect(toast.info).toHaveBeenCalledWith('The review task could not be queued'));
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
 
     it('does not fetch ingest settings until a YouTube URL is typed', () => {

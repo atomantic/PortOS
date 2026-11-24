@@ -27,6 +27,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { ensureDemucsRuntime } from './demucsRuntime.js';
 import { getProject } from './projects.js';
 
@@ -81,7 +82,7 @@ const stemName = (project) => `${String(project?.name || 'music-video').replace(
 
 // jobId -> job; projectId -> running jobId
 const separationJobs = new Map();
-const activeByProject = new Map();
+const activeByProject = trackedRenderMap('vocal-separation', { noun: 'vocal separation', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
 
 export const attachVocalSeparationSseClient = (jobId, res) => attachSse(separationJobs, jobId, res);
 

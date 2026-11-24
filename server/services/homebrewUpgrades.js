@@ -22,6 +22,7 @@ import { classifyHomebrewOutdated, postgresFormulaFor } from '../lib/homebrewUpg
 import { PATHS } from '../lib/paths.js';
 import { findCommandOnPath, safeChildProcessOptions, withoutServerSecretsEnv } from '../lib/processEnv.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
+import { trackedRenderMap } from './renderActivity.js';
 
 const runFile = promisify(execFile);
 export const HOMEBREW_PROGRESS_EVENT = 'software:homebrew';
@@ -40,6 +41,8 @@ const PYTHON_PROBE = 'import ssl, ctypes, sqlite3';
 
 let statusCache = null; // { at, value }
 let currentJob = null;
+// A PortOS update would kill brew mid-upgrade and leave a formula unlinked.
+const liveRuns = trackedRenderMap('homebrew', { noun: 'Homebrew job', link: () => '/settings/software' });
 let lastRun = null;
 
 // The database setup authenticates as PortOS does, so it keeps the connection settings.
@@ -331,6 +334,7 @@ export async function startHomebrewJob({ kind, names = [], acknowledgeRisk = fal
   };
 
   currentJob = { kind, names: selected.map((pkg) => pkg.name), startedAt: new Date().toISOString() };
+  liveRuns.set('brew', kind);
   Promise.resolve().then(async () => {
     const upgraded = [];
     const failed = [];
@@ -362,6 +366,7 @@ export async function startHomebrewJob({ kind, names = [], acknowledgeRisk = fal
       lastRun = { kind, finishedAt: new Date().toISOString(), upgraded, failed, results };
       statusCache = null;
       currentJob = null;
+      liveRuns.delete('brew');
       io?.emit('software:changed', { reason: 'homebrew' });
     }
   });
@@ -387,7 +392,7 @@ export async function setHomebrewHold({ names, hold, io, deps = {} }) {
 }
 
 export const __testing = {
-  reset: () => { statusCache = null; currentJob = null; lastRun = null; },
+  reset: () => { statusCache = null; currentJob = null; lastRun = null; liveRuns.delete('brew'); },
   getJob: () => currentJob,
   linkedFormulae,
 };

@@ -26,8 +26,10 @@ import {
   deleteDownload,
   buildDownloadHistoryEntry,
   cancelVideoDownload,
+  listActiveVideoDownloads,
   __testing,
 } from './videoDownload.js';
+import { listActiveRenders } from './renderActivity.js';
 
 describe('videoDownload URL allowlist', () => {
   it('accepts YouTube watch, shorts, and youtu.be', () => {
@@ -135,6 +137,19 @@ describe('buildDownloadHistoryEntry (contract shape)', () => {
     });
     expect(entry.title).toBe('Downloaded video');
     expect(entry).not.toHaveProperty('durationSec');
+  });
+});
+
+describe('a running download', () => {
+  it('is listed for a reloaded page and counts as live work until it ends', () => {
+    const job = { id: 'live', url: 'https://youtu.be/example0001', status: 'running', clients: [], process: null };
+    __testing.downloadJobs.set('live', job);
+    expect(listActiveVideoDownloads()).toEqual([{ jobId: 'live', url: job.url }]);
+    expect(listActiveRenders()).toContainEqual(expect.objectContaining({ kind: 'video-download', to: '/devtools/video-download' }));
+    job.status = 'done';
+    expect(listActiveVideoDownloads()).toEqual([]);
+    __testing.downloadJobs.delete('live');
+    expect(listActiveRenders()).toEqual([]);
   });
 });
 

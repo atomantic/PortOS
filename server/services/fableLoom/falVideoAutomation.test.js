@@ -34,6 +34,7 @@ vi.mock('./records.js', () => ({
   getLoom: (...args) => mocks.getLoom(...args),
 }));
 
+import { listActiveRenders } from '../renderActivity.js';
 import { SOCKET_EVENT_CONTRACTS } from '../../lib/socketEventContracts.js';
 
 import {
@@ -281,8 +282,10 @@ describe('FableLoom fal.ai browser automation', () => {
     const [first, second] = await Promise.all([firstRequest, secondRequest]);
 
     expect(second.id).toBe(first.id);
+    expect(listActiveRenders()).toEqual([expect.objectContaining({ kind: 'fal-browser-video', to: '/fableloom/loom-1' })]);
     await waitForTerminalJob(first);
     expect(mocks.connectOverCDP).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(listActiveRenders()).toEqual([]));
   });
 
   it('waits for a new result instead of downloading a video left in the persistent tab', async () => {

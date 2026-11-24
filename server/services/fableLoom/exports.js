@@ -28,6 +28,7 @@ import {
 } from '../../lib/fableLoomExport.js';
 import { getUniverse } from '../universeBuilder.js';
 import { loadHistory } from '../videoGen/history.js';
+import { trackedRenderMap } from '../renderActivity.js';
 import { getLoom } from './records.js';
 import { checkExportCancelled, readFableLoomExportSource } from './exportMedia.js';
 import { readFableLoomVoiceReference } from './exportVoice.js';
@@ -36,7 +37,7 @@ import { fableLoomRunEvents } from './runEvents.js';
 import { FABLELOOM_STATIC_PLAYER_FILES } from './staticPlayerFiles.js';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const active = new Map();
+const active = trackedRenderMap('fableloom-export', { noun: 'FableLoom export', link: (_jobId, job) => `/fableloom/${encodeURIComponent(job.loomId)}` });
 const downloads = new Map();
 const controllers = new Map();
 const completions = new Map();
