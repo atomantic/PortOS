@@ -56,6 +56,37 @@ describe('Stacker News sync', () => {
     expect(executeStackerNewsOperation).toHaveBeenCalledWith('sub', expect.objectContaining({ name: 'art' }), 'api-key');
   });
 
+  it.each(['skips', 'fails'])('runs one forced sync after an overlapping scheduled sync %s', async (outcome) => {
+    accountRow.enabled = false;
+    const scheduledAccount = Promise.withResolvers();
+    query.mockImplementationOnce(() => scheduledAccount.promise);
+    const scheduled = syncAccount(accountId);
+    const manual = syncAccount(accountId, { force: true });
+    const concurrentManual = syncAccount(accountId, { force: true });
+    const results = Promise.allSettled([scheduled, manual, concurrentManual]);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(executeStackerNewsOperation).not.toHaveBeenCalled();
+
+    const failure = new Error('Scheduled account read failed');
+    if (outcome === 'fails') scheduledAccount.reject(failure);
+    else scheduledAccount.resolve({ rows: [accountRow] });
+
+    const [scheduledResult, ...manualResults] = await results;
+    if (outcome === 'fails') {
+      expect(scheduledResult).toEqual({ status: 'rejected', reason: failure });
+    } else {
+      expect(scheduledResult).toMatchObject({ status: 'fulfilled', value: { skipped: true, reason: 'monitoring_disabled' } });
+    }
+    for (const result of manualResults) {
+      expect(result).toMatchObject({ status: 'fulfilled', value: {
+        skipped: false, transport: 'api', username: 'example_user', territories: 1,
+        ingested: 1, analyzed: 0, newestItemLimit: 30,
+      } });
+    }
+    expect(executeStackerNewsOperation.mock.calls.filter(([name]) => name === 'me')).toHaveLength(1);
+  });
+
   // Stacker News grants API keys on request only, so the default install has no
   // key at all — reads must still work through the signed-in pinned browser.
   it('syncs with no API key stored by reading through the pinned browser', async () => {
