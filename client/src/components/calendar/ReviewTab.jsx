@@ -126,8 +126,8 @@ export default function ReviewTab({ accounts = [] }) {
   return (
     <div className="space-y-4 max-w-3xl">
       {/* Date Navigation */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
           <button aria-label="Previous" onClick={() => changeDate(-1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white">
             <ChevronLeft size={18} />
           </button>
@@ -160,7 +160,7 @@ export default function ReviewTab({ accounts = [] }) {
 
       {/* Summary */}
       {review && !loading && (
-        <div className="flex gap-4 text-xs">
+        <div className="flex flex-wrap gap-2 sm:gap-4 text-xs">
           <span className="text-gray-500">{formatCount(review.summary.totalEvents)} events</span>
           {review.summary.confirmed > 0 && (
             <span className="text-port-success">{formatCount(review.summary.confirmed)} confirmed</span>
@@ -261,7 +261,7 @@ export default function ReviewTab({ accounts = [] }) {
                             <Target size={12} className="text-port-accent shrink-0" />
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 mt-0.5">
                           {event.isAllDay ? (
                             <span>All day</span>
                           ) : (
@@ -325,19 +325,19 @@ export default function ReviewTab({ accounts = [] }) {
                   {isEditing && (
                     <div className="mt-2 pt-2 border-t border-port-border space-y-2">
                       <div className="text-xs text-gray-400">Log progress for this event:</div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <select
                           aria-label="Goal"
                           value={editForm.goalId}
                           onChange={e => setEditForm(f => ({ ...f, goalId: e.target.value }))}
-                          className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
+                          className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white"
                         >
                           <option value="">No goal</option>
                           {event.matchingGoals?.map(mg => (
                             <option key={mg.goalId} value={mg.goalId}>{mg.goalTitle}</option>
                           ))}
                         </select>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 shrink-0">
                           <Clock size={12} className="text-gray-500" />
                           <input
                             type="number"

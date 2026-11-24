@@ -190,3 +190,31 @@ describe('Calendar token clearing', () => {
     expect(api.getCalendarTokenStatus).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('SyncTab narrow-viewport layout', () => {
+  it('applies flex-wrap and min-w-0 on account, sync-progress, and token status rows', async () => {
+    api.getCalendarTokenStatus.mockResolvedValue({
+      providers: [{ provider: 'google-calendar-with-long-name', hasToken: true }],
+    });
+    const longAccount = {
+      ...account,
+      type: 'google-calendar',
+      name: 'Very Long Calendar Account Name That Would Overflow At 320px',
+    };
+    render(<MemoryRouter><SyncTab accounts={[longAccount]} onRefresh={vi.fn()} /></MemoryRouter>);
+
+    const accountHeading = await screen.findByText(longAccount.name);
+    const labelBlock = accountHeading.parentElement;
+    expect(labelBlock.className).toContain('min-w-0');
+    expect(labelBlock.parentElement.className).toContain('flex-wrap');
+
+    emit('started');
+    emit('progress', { message: 'Syncing long calendar progress status message across narrow cards' });
+    const progressEl = screen.getByText('Syncing long calendar progress status message across narrow cards');
+    expect(progressEl.parentElement.className).toContain('min-w-0');
+
+    const providerHeading = await screen.findByText('google-calendar-with-long-name');
+    expect(providerHeading.parentElement.className).toContain('min-w-0');
+    expect(providerHeading.parentElement.parentElement.className).toContain('flex-wrap');
+  });
+});

@@ -91,17 +91,17 @@ export default function MonthView({ accounts }) {
   return (
     <div className="space-y-4">
       {/* Nav header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <button aria-label="Previous month" onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <button aria-label="Previous month" onClick={() => navigate(-1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors shrink-0">
             <ChevronLeft size={18} />
           </button>
-          <button aria-label="Next month" onClick={() => navigate(1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors">
+          <button aria-label="Next month" onClick={() => navigate(1)} className="p-1.5 min-w-[44px] min-h-[44px] flex items-center justify-center text-gray-400 hover:text-white rounded hover:bg-port-border transition-colors shrink-0">
             <ChevronRight size={18} />
           </button>
-          <h2 className="text-lg font-semibold text-white ml-2">{monthLabel}</h2>
+          <h2 className="text-lg font-semibold text-white ml-2 truncate">{monthLabel}</h2>
         </div>
-        <button onClick={goToday} className="px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded hover:bg-port-border transition-colors">
+        <button onClick={goToday} className="px-3 py-1.5 text-sm text-gray-400 hover:text-white bg-port-card border border-port-border rounded hover:bg-port-border transition-colors shrink-0">
           Today
         </button>
       </div>
@@ -121,77 +121,79 @@ export default function MonthView({ accounts }) {
           actionLabel="Add a calendar account"
         />
       ) : (
-        <div className="border border-port-border rounded-lg overflow-hidden bg-port-card">
-          {/* Day name headers */}
-          <div className="grid grid-cols-7 border-b border-port-border">
-            {DAY_NAMES.map(name => (
-              <div key={name} className="text-center py-2 text-xs font-medium text-gray-400">
-                {name}
-              </div>
-            ))}
-          </div>
+        <div className="border border-port-border rounded-lg overflow-x-auto bg-port-card">
+          <div className="min-w-[308px]">
+            {/* Day name headers */}
+            <div className="grid grid-cols-7 border-b border-port-border">
+              {DAY_NAMES.map(name => (
+                <div key={name} className="text-center py-2 text-xs font-medium text-gray-400">
+                  {name}
+                </div>
+              ))}
+            </div>
 
-          {/* Day cells */}
-          <div className="grid grid-cols-7">
-            {cells.map((cell, i) => {
-              const dayStr = cell.date.toDateString();
-              const dayEvents = eventsByDay[dayStr] || [];
-              const isToday = dayStr === todayStr;
-              return (
-                <div
-                  key={i}
-                  className={`min-h-[80px] p-0 sm:p-1 min-w-0 border-b border-r border-port-border/50 ${
-                    !cell.isCurrentMonth ? 'bg-port-bg/50' : ''
-                  } ${i % 7 === 6 ? 'border-r-0' : ''}`}
-                >
-                  {dayEvents.length > 0 ? (
-                    <button
-                      type="button"
-                      aria-label={`View day events for ${formatDateFull(cell.date)}`}
-                      onClick={e => openDay(cell, e.currentTarget)}
-                      className={`text-xs mb-0.5 w-[44px] h-[44px] flex items-center justify-center rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent ${isToday ? 'bg-port-accent text-white' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}
-                    >
-                      {cell.date.getDate()}
-                    </button>
-                  ) : (
-                    <div className={`text-xs mb-0.5 h-[44px] flex items-center pl-1 ${isToday ? 'text-port-accent' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {cell.date.getDate()}
-                    </div>
-                  )}
-                  <div className="space-y-0.5">
-                    {dayEvents.slice(0, 3).map(event => {
-                      const evColor = colorMap.get(event.subcalendarId) || null;
-                      return (
-                        <button
-                          key={`${event.accountId}-${event.id}`}
-                          onClick={() => openEvent(event)}
-                          className="w-full text-left px-1 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 truncate transition-colors hover:brightness-125"
-                          style={eventChipStyle(evColor, theme?.mode)}
-                        >
-                          {!event.isAllDay && (
-                            <span className="text-gray-500 mr-1">
-                              {new Date(event.startTime).toDateString() === dayStr
-                                ? formatTimeOfDay(event.startTime) : 'Continues'}
-                            </span>
-                          )}
-                          {event.title}
-                        </button>
-                      );
-                    })}
-                    {dayEvents.length > 3 && (
+            {/* Day cells */}
+            <div className="grid grid-cols-7">
+              {cells.map((cell, i) => {
+                const dayStr = cell.date.toDateString();
+                const dayEvents = eventsByDay[dayStr] || [];
+                const isToday = dayStr === todayStr;
+                return (
+                  <div
+                    key={i}
+                    className={`min-h-[80px] p-0 sm:p-1 min-w-0 border-b border-r border-port-border/50 ${
+                      !cell.isCurrentMonth ? 'bg-port-bg/50' : ''
+                    } ${i % 7 === 6 ? 'border-r-0' : ''}`}
+                  >
+                    {dayEvents.length > 0 ? (
                       <button
                         type="button"
-                        aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
+                        aria-label={`View day events for ${formatDateFull(cell.date)}`}
                         onClick={e => openDay(cell, e.currentTarget)}
-                        className="w-full text-left text-[10px] pointer-coarse:min-h-11 text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
+                        className={`text-xs mb-0.5 w-[44px] h-[44px] flex items-center justify-center rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent ${isToday ? 'bg-port-accent text-white' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}
                       >
-                        +{dayEvents.length - 3} more
+                        {cell.date.getDate()}
                       </button>
+                    ) : (
+                      <div className={`text-xs mb-0.5 h-[44px] flex items-center pl-1 ${isToday ? 'text-port-accent' : cell.isCurrentMonth ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {cell.date.getDate()}
+                      </div>
                     )}
+                    <div className="space-y-0.5">
+                      {dayEvents.slice(0, 3).map(event => {
+                        const evColor = colorMap.get(event.subcalendarId) || null;
+                        return (
+                          <button
+                            key={`${event.accountId}-${event.id}`}
+                            onClick={() => openEvent(event)}
+                            className="w-full text-left px-1 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 truncate transition-colors hover:brightness-125"
+                            style={eventChipStyle(evColor, theme?.mode)}
+                          >
+                            {!event.isAllDay && (
+                              <span className="text-gray-500 mr-1">
+                                {new Date(event.startTime).toDateString() === dayStr
+                                  ? formatTimeOfDay(event.startTime) : 'Continues'}
+                              </span>
+                            )}
+                            {event.title}
+                          </button>
+                        );
+                      })}
+                      {dayEvents.length > 3 && (
+                        <button
+                          type="button"
+                          aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
+                          onClick={e => openDay(cell, e.currentTarget)}
+                          className="w-full text-left text-[10px] pointer-coarse:min-h-11 text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
+                        >
+                          +{dayEvents.length - 3} more
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
