@@ -296,6 +296,42 @@ describe('useProviderModels — a modelFilter whose identity changes', () => {
   });
 });
 
+describe('useProviderModels — failed reads', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('reports error (not an empty success) on a failed read, and retry fills the list', async () => {
+    getProviders.mockRejectedValueOnce(new Error('boom'));
+    getProviders.mockResolvedValueOnce({ activeProvider: 'codex', providers: [CODEX] });
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.providers).toEqual([]);
+
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.error).toBeNull();
+    expect(result.current.providers.map((p) => p.id)).toEqual(['codex']);
+  });
+
+  it('keeps the list and selection when a later reload fails', async () => {
+    getProviders.mockResolvedValueOnce({ activeProvider: 'codex', providers: [CODEX] });
+    getProviders.mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.selectedProviderId).toBe('codex'));
+
+    await act(async () => { await result.current.retry(); });
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.providers.map((p) => p.id)).toEqual(['codex']);
+    expect(result.current.selectedProviderId).toBe('codex');
+  });
+
+  it('a successful empty read has no error', async () => {
+    getProviders.mockResolvedValueOnce({ activeProvider: '', providers: [] });
+    const { result } = renderHook(() => useProviderModels({ silent: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+});
+
 // A COMPOSITE selection (#7566) is not a `GET /api/providers` record: the hook
 // resolves it from the shared catalog and lists it beside the presets, so a
 // restored pin drives `availableModels`/`selectedProvider` like any preset.

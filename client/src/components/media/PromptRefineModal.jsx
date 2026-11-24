@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ListPlus, Sparkles, Wand2, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
+import ListLoadError from '../ui/ListLoadError';
 import Modal from '../ui/Modal';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
@@ -35,6 +36,8 @@ export default function PromptRefineModal({ item, open, onClose }) {
     setSelectedProviderId,
     setSelectedModel,
     loading: providersLoading,
+    error: providersError,
+    retry: retryProviders,
   } = useProviderModels();
   const [feedback, setFeedback] = useState('');
   const [refinedPrompt, setRefinedPrompt] = useState('');
@@ -170,7 +173,10 @@ export default function PromptRefineModal({ item, open, onClose }) {
             disabled={providersLoading || refining}
           />
 
-          {providers.length === 0 && !providersLoading && (
+          {providersError && providers.length === 0 && !providersLoading && (
+            <ListLoadError what="AI providers" error={providersError} onRetry={retryProviders} />
+          )}
+          {!providersError && providers.length === 0 && !providersLoading && (
             <p className="text-xs text-port-warning">No enabled providers are configured.</p>
           )}
 
