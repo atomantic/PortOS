@@ -2,7 +2,7 @@ import socket from '../services/socket';
 const socketEvent = event => { for (const [name, handler] of socket.on.mock.calls) if (name === event) handler({}); };
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
@@ -134,6 +134,11 @@ import { PROVIDER_CARD_STATE } from '../utils/providers';
 // mount the real route table rather than a bare page — clicking Edit
 // navigates, and a deep link can be rendered directly. The three views are
 // route prefixes of the same page (#7567).
+function ShellLocation() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="shell-location">{`${pathname}${search}`}</div>;
+}
+
 const mountPage = (initialPath = '/ai/presets') => render(
   <MemoryRouter initialEntries={[initialPath]}>
     <Routes>
@@ -147,6 +152,7 @@ const mountPage = (initialPath = '/ai/presets') => render(
       <Route path="/ai/services" element={<AIProviders />} />
       <Route path="/ai/services/new" element={<AIProviders />} />
       <Route path="/ai/services/:serviceSlug" element={<AIProviders />} />
+      <Route path="/shell" element={<ShellLocation />} />
     </Routes>
   </MemoryRouter>
 );
@@ -1851,6 +1857,28 @@ describe('Launch in Shell button on TUI provider cards', () => {
     expect(link.getAttribute('href')).not.toContain('cmd=');
     // The resolved line is still surfaced, so the user can see what will run.
     expect(link).toHaveAttribute('title', expect.stringContaining('--model gpt-5'));
+  });
+
+  it('turns into a managed-app picker that launches the shell in the chosen app', async () => {
+    baseMocks();
+    api.getApps.mockResolvedValue([
+      { id: 'app-b', name: 'Beta App', repoPath: '/repos/beta app' },
+      { id: 'app-a', name: 'Alpha App', repoPath: '/repos/alpha' },
+      { id: 'app-old', name: 'Old App', repoPath: '/repos/old', archived: true },
+      { id: 'app-norepo', name: 'No Repo App' },
+    ]);
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'codex', name: 'Codex TUI', type: 'tui', command: 'codex', args: [], enabled: true, tuiCommandLine: 'codex' }],
+      activeProvider: null,
+    });
+
+    await renderPage();
+
+    const picker = await screen.findByRole('combobox', { name: 'Launch in Shell in app' });
+    // Only live apps with a checkout to cd into, alphabetical after the prompt.
+    expect(within(picker).getAllByRole('option').map(o => o.textContent)).toEqual(['Launch in Shell…', 'Alpha App', 'Beta App']);
+    fireEvent.change(picker, { target: { value: 'app-b' } });
+    expect(await screen.findByTestId('shell-location')).toHaveTextContent('/shell?provider=codex&cwd=%2Frepos%2Fbeta+app');
   });
 
   it('renders no button for a CLI provider, or when the server sent no command line', async () => {

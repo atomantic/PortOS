@@ -361,6 +361,7 @@ export default function ProviderPresetsTab({
                     <ProviderCard
                       key={provider.id}
                       provider={provider}
+                      apps={apps}
                       cardState={cardStateByProviderId[provider.id]}
                       daemonReadiness={readiness[provider.id]}
                       runtime={runtimeByProviderId[provider.id]}
