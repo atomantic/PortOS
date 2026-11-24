@@ -188,6 +188,10 @@ describe('MtplxServerCard', () => {
     const handlers = await renderCard({ installed: false, running: false, supported: true });
     fireEvent.click(screen.getByRole('button', { name: /Install MTPLX/ }));
     expect(handlers.onInstall).toHaveBeenCalled();
+    const text = document.body.textContent;
+    expect(text).toContain('PortOS-private, hash-verified Python runtime under data/tools/mtplx');
+    expect(text).toContain('does not change Homebrew or your system Python');
+    expect(text).not.toContain('`mtplx`');
   });
 
   // The Homebrew `mtplx` is a wrapper that downloads MTPLX itself on first run,
@@ -199,6 +203,7 @@ describe('MtplxServerCard', () => {
     });
 
     expect(screen.getByText(/Installed — runtime not yet downloaded/)).toBeInTheDocument();
+    expect(screen.getByText(/installs PortOS's own private, hash-verified runtime/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Start MTPLX/ })).toBeNull();
     // Nor the checkpoint panel: every action in it invokes the same wrapper.
     expect(screen.queryByRole('button', { name: /Download default checkpoint/ })).toBeNull();
