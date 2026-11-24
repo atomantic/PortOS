@@ -116,6 +116,29 @@ export async function readPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
 }
 
 /**
+ * Every active protected memory (chosen name plus each protection tier), paged
+ * past the 100-row context cap of `readPersistentMindMemories`. Bundle export and
+ * import dedup need the complete set: a truncated view makes re-imports duplicate.
+ */
+export async function readAllProtectedPersistentMindMemories(mindId = PERSISTENT_MIND_ID) {
+  const PAGE = 100;
+  const base = { status: 'active', sourceAgentId: mindId, sortBy: 'createdAt', sortOrder: 'asc', limit: PAGE, includeCount: false };
+  const tags = [PERSISTENT_MIND_CHOSEN_NAME_TAG, ...Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS)];
+  const ids = new Set();
+  for (const tag of tags) {
+    for (let offset = 0; ; offset += PAGE) {
+      const { memories = [] } = await memoryBackend.getMemories({ ...base, tags: [tag], offset });
+      memories.forEach((memory) => ids.add(memory.id));
+      if (memories.length < PAGE) break;
+    }
+  }
+  const details = ids.size ? await memoryBackend.peekMemories([...ids]) : [];
+  return details.filter((memory) => memory?.status === 'active' && memory.sourceAgentId === mindId
+    && !isPersistentMindContinuationNote(memory))
+    .sort(comparePersistentMindMemories).map(projectPersistentMindMemory);
+}
+
+/**
  * The one current continuation note, read independently of the ordinary memory
  * page. Attribution comes only from a runtime event matching this exact wording,
  * so an edited or legacy record reads as unattributed rather than mind-authored.
