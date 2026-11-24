@@ -14,7 +14,7 @@ import { clearJlistCache, execPm2, getAppStatusStrict } from './pm2.js';
 export { MKSERVE_MODEL };
 export const MKSERVE_APP = 'portos-mkserve';
 const HOST = '127.0.0.1';
-const PORT = PORTS.MKSERVE ?? 8002;
+const PORT = PORTS.MKSERVE;
 const ORIGIN = 'http://' + HOST + ':' + PORT;
 const ENDPOINT = ORIGIN + '/v1';
 const START_TIMEOUT_MS = 180_000;
@@ -67,13 +67,9 @@ function isManaged(app) {
     && option(args, '--port') === String(PORT) && args.includes(MKSERVE_MODEL);
 }
 
-async function readApp() {
-  clearJlistCache();
-  return getAppStatusStrict(MKSERVE_APP);
-}
-
 async function requireAppStatus() {
-  const app = await readApp();
+  clearJlistCache();
+  const app = await getAppStatusStrict(MKSERVE_APP);
   if (!app) throw error('PortOS could not read its process manager. Check PortOS and retry.', 503, 'PM2_UNAVAILABLE');
   if (app.status !== 'not_found' && !isManaged(app)) {
     throw error('An unmanaged PM2 process uses the mkserve service name. PortOS will not change it.', 409, 'NAME_IN_USE');
@@ -108,7 +104,7 @@ export async function getMkserveRuntimeStatus() {
   const supported = supportsMkserve();
   const base = { supported, endpoint: ENDPOINT, installed: false, version: null, availableVersion: MKSERVE_VERSION, updateAvailable: false };
   if (!supported) return { ...base, state: 'unsupported', reason: SUPPORTED_REASON };
-  const [installed, app, health] = await Promise.all([readMkserveInstall(), readApp(), probeMkserve()]);
+  const [installed, app, health] = await Promise.all([readMkserveInstall(), getAppStatusStrict(MKSERVE_APP), probeMkserve()]);
   const status = { ...base, installed: !!installed, version: installed?.version ?? null,
     updateAvailable: !!installed && installed.bundle !== MKSERVE_BUNDLE };
   const managed = isManaged(app);
