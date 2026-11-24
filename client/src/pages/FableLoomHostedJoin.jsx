@@ -246,6 +246,18 @@ export default function FableLoomHostedJoin() {
     }
   };
 
+  const isTalkKey = (e) => e.key === ' ' || e.key === 'Enter';
+  const handleTalkKeyDown = (e) => {
+    if (!isTalkKey(e)) return;
+    e.preventDefault();
+    if (!e.repeat) startRecording();
+  };
+  const handleTalkKeyUp = (e) => {
+    if (!isTalkKey(e)) return;
+    e.preventDefault();
+    stopRecording();
+  };
+
   // Retire the generation first so the recorder's onstop never ships the
   // audio of a turn the server already refused.
   discardRecordingRef.current = () => {
@@ -285,49 +297,50 @@ export default function FableLoomHostedJoin() {
     return (
       <main id="main-content" className="h-dvh-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center">
         <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center mb-4">
-          <AlertCircle className="w-8 h-8 text-red-400" />
+          <AlertCircle aria-hidden="true" className="w-8 h-8 text-red-400" />
         </div>
         <h1 className="text-xl font-bold mb-2">Hosted Play Error</h1>
-        <p className="text-slate-400 text-sm max-w-xs">{authError}</p>
+        <p role="alert" className="text-slate-400 text-sm max-w-xs">{authError}</p>
       </main>
     );
   }
 
   return (
-    <main id="main-content" className="h-dvh-screen bg-slate-950 text-white flex flex-col justify-between max-w-md mx-auto relative overflow-y-auto shadow-2xl">
-      {recordingError && <p role="alert" className="px-4 text-sm text-red-400">{recordingError}</p>}
-      <audio ref={audioPlayerRef} className="hidden" />
-
-      {/* Header */}
+    <div className="h-dvh-screen bg-slate-950 text-white flex flex-col max-w-md mx-auto relative overflow-y-auto shadow-2xl">
+      {/* Sibling of <main> so it keeps its banner landmark role */}
       <header className="shrink-0 px-5 py-4 border-b border-slate-800/80 bg-slate-900/50 backdrop-blur flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <Smartphone className="w-5 h-5 text-indigo-400" />
+          <Smartphone aria-hidden="true" className="w-5 h-5 text-indigo-400" />
           <div>
             <h1 className="text-sm font-semibold text-white leading-none">FableLoom Play</h1>
             <p className="text-[11px] text-slate-400 mt-0.5">Audience Microphone UI</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px]">
-          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+        <div role="status" aria-live="polite" className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px]">
+          <span aria-hidden="true" className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
           <span className="text-slate-300 font-medium">{connected ? 'Connected' : 'Connecting…'}</span>
         </div>
       </header>
 
+      <main id="main-content" className="flex-1 min-h-0 flex flex-col justify-between">
+      {recordingError && <p role="alert" className="px-4 text-sm text-red-400">{recordingError}</p>}
+      <audio ref={audioPlayerRef} className="hidden" />
+
       {/* Live Turn Phase Banner */}
-      <div className="shrink-0 px-4 py-2.5 border-b border-slate-800 bg-slate-900/30 flex items-center justify-center">
+      <div role="status" aria-live="polite" className="shrink-0 px-4 py-2.5 border-b border-slate-800 bg-slate-900/30 flex items-center justify-center">
         {turnPhase === 'listening' ? (
           <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold animate-pulse">
-            <Mic className="w-4 h-4" />
+            <Mic aria-hidden="true" className="w-4 h-4" />
             <span>Listening to audience… Speak now</span>
           </div>
         ) : turnPhase === 'thinking' ? (
           <div className="flex items-center gap-2 text-indigo-400 text-xs font-semibold">
-            <Loader2 className="w-4 h-4 animate-spin" />
+            <Loader2 aria-hidden="true" className="w-4 h-4 animate-spin" />
             <span>Protagonist is deciding…</span>
           </div>
         ) : turnPhase === 'speaking' ? (
           <div className="flex items-center gap-2 text-amber-400 text-xs font-semibold animate-pulse">
-            <Volume2 className="w-4 h-4" />
+            <Volume2 aria-hidden="true" className="w-4 h-4" />
             <span>Protagonist is speaking…</span>
           </div>
         ) : (
@@ -340,10 +353,13 @@ export default function FableLoomHostedJoin() {
       {/* Transcript Stream */}
       <div
         ref={transcriptScrollRef}
+        role="log"
+        aria-live="polite"
+        aria-label="Conversation transcript"
         className="flex-1 min-h-[8rem] p-4 overflow-y-auto space-y-3 font-sans text-sm"
       >
         {transcript.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 text-xs py-12">
+          <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 text-xs py-12">
             <p>Stand by. When the story pauses for a decision, tap and speak to give your input.</p>
           </div>
         ) : (
@@ -384,6 +400,11 @@ export default function FableLoomHostedJoin() {
             onPointerUp={stopRecording}
             onPointerLeave={stopRecording}
             onPointerCancel={stopRecording}
+            onKeyDown={handleTalkKeyDown}
+            onKeyUp={handleTalkKeyUp}
+            onBlur={stopRecording}
+            aria-pressed={isRecording}
+            aria-describedby="hosted-talk-hint"
             disabled={controlsDisabled}
             className={`w-24 h-24 rounded-full flex flex-col items-center justify-center gap-1.5 shadow-2xl transition-all select-none touch-none ${
               isRecording
@@ -393,13 +414,13 @@ export default function FableLoomHostedJoin() {
                   : 'bg-indigo-600 hover:bg-indigo-500 text-white active:scale-95'
             }`}
           >
-            <Mic className={`w-8 h-8 ${isRecording ? 'animate-bounce' : ''}`} />
+            <Mic aria-hidden="true" className={`w-8 h-8 ${isRecording ? 'animate-bounce' : ''}`} />
             <span className="text-[10px] font-bold uppercase tracking-wider">
               {isRecording ? 'Release' : 'Hold Talk'}
             </span>
           </button>
-          <span className="text-[11px] text-slate-400 mt-2 font-medium">
-            {isRecording ? 'Listening… release when done' : 'Hold button to speak with protagonist'}
+          <span id="hosted-talk-hint" className="text-[11px] text-slate-400 mt-2 font-medium">
+            {isRecording ? 'Listening… release when done' : 'Hold button (or hold Space/Enter) to speak with protagonist'}
           </span>
         </div>
 
@@ -414,7 +435,7 @@ export default function FableLoomHostedJoin() {
             aria-describedby={textInput.length > MAX_TEXT_CHARACTERS ? 'hosted-text-count hosted-text-limit-error' : 'hosted-text-count'}
             aria-invalid={textInput.length > MAX_TEXT_CHARACTERS}
             disabled={controlsDisabled}
-            className="flex-1 bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+            className="flex-1 bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500"
           />
           <button
             type="submit"
@@ -422,7 +443,7 @@ export default function FableLoomHostedJoin() {
             disabled={!textInput.trim() || textInput.length > MAX_TEXT_CHARACTERS || controlsDisabled}
             className="min-w-[44px] min-h-[44px] p-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white transition-colors flex items-center justify-center"
           >
-            <Send className="w-4 h-4" />
+            <Send aria-hidden="true" className="w-4 h-4" />
           </button>
         </form>
         <p id="hosted-text-count" className="mt-1 text-right text-[11px] text-slate-400">
@@ -434,6 +455,7 @@ export default function FableLoomHostedJoin() {
           </p>
         )}
       </div>
-    </main>
+      </main>
+    </div>
   );
 }
