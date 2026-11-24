@@ -29,7 +29,6 @@ const api = vi.hoisted(() => ({
   getModelPinWarnings: vi.fn().mockResolvedValue({ pins: [], providers: {} }),
   clearModelPin: vi.fn(),
   setActiveProvider: vi.fn().mockResolvedValue({}),
-  getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
   stopRun: vi.fn().mockResolvedValue({}),
   // The compatibility matrix reads the composition catalog (#7567). Empty by
@@ -71,7 +70,6 @@ vi.mock('../services/apiMoaPresets', () => ({
   createMoaPreset: vi.fn(), updateMoaPreset: vi.fn(), deleteMoaPreset: vi.fn(),
 }));
 vi.mock('../services/apiSystem.js', () => ({ getInstances: api.getInstances }));
-vi.mock('../services/apiAgents.js', () => ({ getOrchestrationProfiles: api.getOrchestrationProfiles }));
 vi.mock('../services/apiRuns.js', () => ({ createRun: api.createRun, stopRun: api.stopRun }));
 vi.mock('../services/apiHarnesses.js', () => ({ getHarnesses: api.getHarnesses }));
 vi.mock('../services/apiProviders', () => ({
@@ -1971,26 +1969,13 @@ describe('vLLM-backed TUI provider', () => {
   });
 });
 
-describe('AIProviders orchestration profiles', () => {
+describe('AIProviders Run Prompt and orchestration settings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.getApps.mockResolvedValue([]);
     api.getProviderStatuses.mockResolvedValue({ providers: {} });
     api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
-    api.getOrchestrationProfiles.mockResolvedValue({
-      profiles: [
-        {
-          id: 'deep-research',
-          name: 'Deep Research',
-          description: 'o3-mini planner + sonnet coder',
-          profile: {
-            architect: { provider: 'codex', model: 'o3-mini', effort: 'high' },
-            implementer: { provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'medium' },
-          },
-        },
-      ],
-    });
     api.createRun.mockResolvedValue({ runId: 'run-123' });
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
   });
@@ -2004,44 +1989,33 @@ describe('AIProviders orchestration profiles', () => {
     expect(link).toHaveAttribute('href', '/settings/orchestration');
   });
 
-  it('allows selecting an orchestration profile in the run panel and renders role chips', async () => {
+  it('runs a prompt directly on the selected provider', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'prov-1', name: 'Prov 1', type: 'api', enabled: true, hardwareUnavailable: false }],
       activeProvider: 'prov-1',
     });
     await renderPage();
 
-    // Open runner panel
     const runBtn = await screen.findByRole('button', { name: 'Run Prompt' });
     fireEvent.click(runBtn);
 
-    // Profile selector should be available
-    const profileSelect = await screen.findByLabelText('Orchestration profile');
-    expect(profileSelect).toBeInTheDocument();
-    fireEvent.change(profileSelect, { target: { value: 'deep-research' } });
-
-    // Role chips should appear
-    expect(await screen.findByText('o3-mini planner + sonnet coder')).toBeInTheDocument();
-    expect(screen.getByText('architect:')).toBeInTheDocument();
-    expect(screen.getByText('o3-mini')).toBeInTheDocument();
-    expect(screen.getByText('(high)')).toBeInTheDocument();
-
-    // Fill prompt and execute
-    const promptInput = screen.getByLabelText('Prompt');
-    fireEvent.change(promptInput, { target: { value: 'Test run with orchestration' } });
+    const promptInput = await screen.findByLabelText('Prompt');
+    expect(screen.queryByLabelText('Orchestration profile')).not.toBeInTheDocument();
+    fireEvent.change(promptInput, { target: { value: 'Test direct run' } });
 
     const executeBtn = screen.getByRole('button', { name: 'Execute' });
     fireEvent.click(executeBtn);
 
     await waitFor(() => {
-      expect(api.createRun).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(api.createRun.mock.calls).toStrictEqual([[
+        {
           providerId: 'prov-1',
-          prompt: 'Test run with orchestration',
-          orchestrationProfileId: 'deep-research',
-        }),
-        expect.anything()
-      );
+          prompt: 'Test direct run',
+          workspacePath: undefined,
+          workspaceName: undefined,
+        },
+        { silent: true },
+      ]]);
     });
   });
 });
@@ -2529,28 +2503,6 @@ describe('AIProviders list resources (#12171)', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
     expect(await screen.findByLabelText('Known PortOS peer')).toBeInTheDocument();
-  });
-
-  it('shows error row with Retry when orchestration profiles fail to load, not an empty profile select', async () => {
-    vi.clearAllMocks();
-    api.getProviders.mockResolvedValue({ providers: [{ id: 'p1', name: 'P1', type: 'api', enabled: true }], activeProvider: 'p1' });
-    api.getApps.mockResolvedValue([]);
-    api.getProviderStatuses.mockResolvedValue({ providers: {} });
-    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
-    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
-    api.getOrchestrationProfiles.mockRejectedValueOnce(new Error('profiles offline'));
-
-    await renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Run Prompt' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load orchestration profiles — profiles offline');
-    expect(screen.queryByLabelText('Orchestration profile')).not.toBeInTheDocument();
-
-    api.getOrchestrationProfiles.mockResolvedValueOnce({ profiles: [{ id: 'deep-research', name: 'Deep Research' }] });
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-
-    const profileSelect = await screen.findByLabelText('Orchestration profile');
-    expect(within(profileSelect).getByRole('option', { name: 'Deep Research' })).toBeInTheDocument();
   });
 
   it('shows error row with Retry when sample providers fail to load, not "all samples already added"', async () => {
