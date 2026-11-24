@@ -358,18 +358,19 @@ async function foldCiDuplicates(client, accountId) {
     [accountId],
   );
   const newest = new Map();
+  const folded = [];
   for (const row of rows) {
     const key = `${row.repo_full_name}#${row.branch}`;
-    if (!newest.has(key)) {
-      newest.set(key, row.thread_id);
-      continue;
-    }
-    await client.query(
-      `UPDATE github_notifications SET decision = 'duplicate', evidence = evidence || jsonb_build_object('foldedInto', $3::text), updated_at = NOW()
-       WHERE account_id = $1 AND thread_id = $2`,
-      [accountId, row.thread_id, newest.get(key)],
-    );
+    if (!newest.has(key)) newest.set(key, row.thread_id);
+    else folded.push({ threadId: row.thread_id, into: newest.get(key) });
   }
+  if (!folded.length) return;
+  await client.query(
+    `UPDATE github_notifications n SET decision = 'duplicate', evidence = n.evidence || jsonb_build_object('foldedInto', f.into_thread), updated_at = NOW()
+     FROM unnest($2::text[], $3::text[]) AS f(thread_id, into_thread)
+     WHERE n.account_id = $1 AND n.thread_id = f.thread_id`,
+    [accountId, folded.map((f) => f.threadId), folded.map((f) => f.into)],
+  );
 }
 
 /**
@@ -488,30 +489,56 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
   const decisions = {};
   let triaged = 0;
   await withTransaction(async (client) => {
-    for (const row of held) {
+    if (held.length) {
       await client.query(
-        `UPDATE github_notifications SET triaged_for = $3 WHERE account_id = $1 AND thread_id = $2 AND decision = 'handed-off'`,
-        [account.id, row.thread_id, row.gh_updated_at],
+        `UPDATE github_notifications n SET triaged_for = h.triaged_for
+         FROM unnest($2::text[], $3::timestamptz[]) AS h(thread_id, triaged_for)
+         WHERE n.account_id = $1 AND n.thread_id = h.thread_id AND n.decision = 'handed-off'`,
+        [account.id, held.map((row) => row.thread_id), held.map((row) => row.gh_updated_at)],
       );
     }
-    for (const { row, result } of results) {
-      // Triage spent seconds in `gh` after reading this row. Write only if the row
-      // is still as read: a hand-off, learned decision, PR action or Assist verdict
-      // landing meanwhile wins, and the next check re-triages this thread.
-      const evidence = carryTurnEvidence(row, result.evidence);
-      const { rowCount } = await client.query(
-        `UPDATE github_notifications SET decision = $3, trust = $4, suspect = $5, evidence = $6::jsonb, triaged_for = $7, updated_at = NOW()
-         WHERE account_id = $1 AND thread_id = $2
-           AND state = $8 AND decision IS NOT DISTINCT FROM $9 AND evidence = $10::jsonb`,
-        [account.id, row.thread_id, result.decision, result.trust, result.suspect, toPgJson(evidence), row.gh_updated_at, row.state, row.decision, toPgJson(row.evidence)],
+    if (results.length) {
+      // Triage spent seconds in `gh` after reading each row. Write only rows still
+      // as read: a hand-off, learned decision, PR action or Assist verdict landing
+      // meanwhile wins, and the next check re-triages that thread. RETURNING names
+      // the rows that actually transitioned.
+      const prepared = results.map(({ row, result }) => ({ row, result, evidence: carryTurnEvidence(row, result.evidence) }));
+      const { rows: written } = await client.query(
+        `UPDATE github_notifications n SET decision = r.decision, trust = r.trust, suspect = r.suspect, evidence = r.evidence::jsonb,
+           triaged_for = r.triaged_for, updated_at = NOW()
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[], $6::text[], $7::timestamptz[], $8::text[], $9::text[], $10::text[])
+           AS r(thread_id, decision, trust, suspect, evidence, triaged_for, old_state, old_decision, old_evidence)
+         WHERE n.account_id = $1 AND n.thread_id = r.thread_id
+           AND n.state = r.old_state AND n.decision IS NOT DISTINCT FROM r.old_decision AND n.evidence = r.old_evidence::jsonb
+         RETURNING n.thread_id`,
+        [
+          account.id,
+          prepared.map((p) => p.row.thread_id),
+          prepared.map((p) => p.result.decision),
+          prepared.map((p) => p.result.trust),
+          prepared.map((p) => p.result.suspect),
+          prepared.map((p) => toPgJson(p.evidence)),
+          prepared.map((p) => p.row.gh_updated_at),
+          prepared.map((p) => p.row.state),
+          prepared.map((p) => p.row.decision),
+          prepared.map((p) => toPgJson(p.row.evidence)),
+        ],
       );
-      if (!rowCount) continue;
-      triaged += 1;
-      decisions[result.decision] = (decisions[result.decision] || 0) + 1;
-      if (row.decision !== result.decision) {
+      const transitioned = new Set(written.map((w) => w.thread_id));
+      const events = [];
+      for (const { row, result } of prepared) {
+        if (!transitioned.has(row.thread_id)) continue;
+        triaged += 1;
+        decisions[result.decision] = (decisions[result.decision] || 0) + 1;
+        if (row.decision !== result.decision) {
+          events.push({ threadId: row.thread_id, detail: toPgJson({ decision: result.decision, rule: result.evidence.rule, mode: account.mode }) });
+        }
+      }
+      if (events.length) {
         await client.query(
-          `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'triaged', $3::jsonb)`,
-          [account.id, row.thread_id, toPgJson({ decision: result.decision, rule: result.evidence.rule, mode: account.mode })],
+          `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail)
+           SELECT $1, e.thread_id, 'automation', 'triaged', e.detail::jsonb FROM unnest($2::text[], $3::text[]) AS e(thread_id, detail)`,
+          [account.id, events.map((e) => e.threadId), events.map((e) => e.detail)],
         );
       }
     }

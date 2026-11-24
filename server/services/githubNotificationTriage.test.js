@@ -60,7 +60,8 @@ describe('triageAccountNotifications reads', () => {
     vi.mocked(withTransaction).mockImplementation(async (fn) => fn({
       query: vi.fn(async (sql, params) => {
         writes.push([sql, params]);
-        return { rows: [], rowCount: 1 };
+        // The batched verdict CAS reports every thread as transitioned.
+        return /RETURNING n\.thread_id/.test(sql) ? { rows: params[1].map((thread_id) => ({ thread_id })), rowCount: params[1].length } : { rows: [], rowCount: 1 };
       }),
     }));
   });
@@ -83,6 +84,11 @@ describe('triageAccountNotifications reads', () => {
     expect(calls.filter((endpoint) => endpoint === 'repos/acme/widgets')).toHaveLength(1);
     expect(maxInFlight).toBeGreaterThan(1);
     expect(maxInFlight).toBeLessThanOrEqual(5);
+    // One batched verdict CAS and one batched event insert, not a statement per thread.
+    expect(writes.filter(([sql]) => /RETURNING n\.thread_id/.test(sql))).toHaveLength(1);
+    const eventInserts = writes.filter(([sql]) => /INSERT INTO github_notification_events/.test(sql));
+    expect(eventInserts).toHaveLength(1);
+    expect(eventInserts[0][1][1]).toHaveLength(12);
   });
 
   it('keeps per-thread spam history and writes verdicts in input order', async () => {
@@ -94,8 +100,9 @@ describe('triageAccountNotifications reads', () => {
       return { rows: [] };
     });
     await triageAccountNotifications(account, {}, { now: NOW });
-    const updated = writes.filter(([sql]) => /SET decision/.test(sql)).map(([, params]) => params[1]);
-    expect(updated).toEqual(['t1', 't2']);
+    const verdictWrites = writes.filter(([sql]) => /RETURNING n\.thread_id/.test(sql));
+    expect(verdictWrites).toHaveLength(1);
+    expect(verdictWrites[0][1][1]).toEqual(['t1', 't2']);
   });
 });
 
