@@ -443,6 +443,8 @@ export default function Eidoverse() {
             aria-hidden={showLoadingCurtain || undefined}
             tabIndex={showLoadingCurtain ? -1 : undefined}
             className="absolute inset-0 h-full w-full border-0 bg-port-bg"
+            aria-hidden={showLoadingCurtain || undefined}
+            tabIndex={showLoadingCurtain ? -1 : undefined}
             allow="camera; microphone; fullscreen; gamepad; xr-spatial-tracking"
             onLoad={() => { setIframeReady(true); frame.onFrameLoad(); }}
           />
@@ -552,7 +554,13 @@ export default function Eidoverse() {
             Controls
           </Link>
         </header>
+<<<<<<< HEAD
         <main id="main-content" className="flex min-h-0 flex-1 flex-col">{frameStage}</main>
+=======
+        <main id="main-content" className="flex min-h-0 flex-1 flex-col">
+          {frameStage}
+        </main>
+>>>>>>> 429694c55 (fix: give Layout-free routes their own main landmark)
         {worldDrawer}
       </div>
     );
