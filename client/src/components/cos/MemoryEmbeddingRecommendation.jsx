@@ -20,7 +20,7 @@ export default function MemoryEmbeddingRecommendation({ onSelect, disabled }) {
         Recommended: <strong>nomic-embed-text</strong> on Ollama
       </p>
       <p className="text-xs text-port-text-muted">
-        A dedicated text embedding model for semantic memory retrieval (768 dimensions, about 274 MB).
+        A dedicated text embedding model for semantic memory and catalog retrieval (768 dimensions, about 274 MB).
         Chat models may not support embeddings. Download runs on this PortOS machine and requires Ollama.
       </p>
       <div className="flex flex-wrap items-center gap-3">
@@ -28,12 +28,12 @@ export default function MemoryEmbeddingRecommendation({ onSelect, disabled }) {
           onClick={() => installed ? select() : install()}
           className="inline-flex items-center gap-2 rounded-lg bg-port-accent px-3 py-2 text-sm text-white disabled:opacity-50">
           <Download size={14} aria-hidden="true" />
-          {installing ? 'Downloading nomic-embed-text…' : selecting ? 'Saving…' : installed ? 'Use for memory embeddings' : 'Download nomic-embed-text'}
+          {installing ? 'Downloading nomic-embed-text…' : selecting ? 'Saving…' : installed ? 'Use for embeddings' : 'Download nomic-embed-text'}
         </button>
         <Link to="/models/llms-runtimes" className="text-xs text-port-accent hover:underline">Manage Ollama</Link>
       </div>
       <p role="status" className="text-xs text-port-text-muted">
-        {installed ? 'Installed locally. Use for memory embeddings to save Ollama and this model.' : 'Your saved provider and model stay in place until you choose Use for memory embeddings.'}
+        {installed ? 'Installed locally. Use for embeddings to save Ollama and this model as the shared embeddings setting.' : 'Your saved provider and model stay in place until you choose Use for embeddings.'}
       </p>
     </div>
   );

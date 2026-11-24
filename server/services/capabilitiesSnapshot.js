@@ -5,14 +5,14 @@ import {
   summarizeCapabilities,
   summarizeSetupCapabilities,
 } from '../lib/capabilityMap.js';
-import { getAllProviders, getProviderById } from './provider/providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { getProviderPrerequisiteReadinessMap } from './provider/providerPrerequisites.js';
 import { getProviderReadinessMap } from './provider/providerReadiness.js';
 import { getAllProviderStatuses } from './provider/providerStatus.js';
 import { listAccounts as listCalendarAccounts } from './calendarAccounts.js';
 import { listAccounts as listMessageAccounts } from './messageAccounts.js';
 import { countMemories } from './memoryBackend.js';
-import { getConfig as getCosConfig } from './cos/cosState.js';
+import { resolveEmbeddingSource } from './memoryEmbeddings.js';
 import { getVoiceConfig } from './voice/config.js';
 import { getNetworkExposureSetupStatus } from '../lib/networkExposure.js';
 import { getGenomeSummary } from './genome.js';
@@ -22,18 +22,13 @@ import * as telegramBridge from './telegramBridge.js';
 import { getAppStatusSummary } from './appProcessStatus.js';
 
 
-// Resolve whether a memory-embedding provider is actually reachable-by-config
-// (mirrors memoryEmbeddings.initConfig) without firing the live LM Studio probe
-// — the probe auto-loads a model as a side effect, which a read-only status
-// page must not trigger.
+// Resolve whether memory embedding is configured, through the same resolver
+// memoryEmbeddings uses (settings.embeddings, else the legacy CoS pair) but
+// without the live LM Studio probe — the probe auto-loads a model as a side
+// effect, which a read-only status page must not trigger.
 async function resolveEmbeddingProviderConfigured() {
-  const cosConfig = await getCosConfig();
-  const providerId = cosConfig?.embeddingProviderId || 'lmstudio';
-  const provider = await getProviderById(providerId);
-  // Mirror memoryEmbeddings.initConfig exactly: it keys off `endpoint` alone and
-  // does NOT gate on `enabled`, so embeddings still generate from a disabled-but-
-  // endpoint'd provider. Checking `enabled` here would misreport that as "off".
-  return !!provider?.endpoint;
+  const source = await resolveEmbeddingSource();
+  return !source.disabled && !!source.endpoint;
 }
 
 async function resolveTelegram() {

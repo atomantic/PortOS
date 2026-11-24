@@ -37,6 +37,9 @@ export const searchMemories = (query, options = {}, requestOptions = {}) => requ
 export const getMemoryGraph = (options = {}) => request('/memory/graph', options);
 export const getMemoryStats = (options) => request('/memory/stats', options);
 export const getEmbeddingStatus = () => request('/memory/embeddings/status');
+// The resolved embedding backend (settings.embeddings, else the legacy CoS
+// pair) without probing it — safe for read-only summaries.
+export const getEmbeddingConfig = (options = {}) => request('/memory/embeddings/config', options);
 export const getMemoryBackendStatus = () => request('/memory/backend/status', { silent: true });
 export const approveMemory = (id, options = {}) => request(`/memory/${id}/approve`, { method: 'POST', ...options });
 export const rejectMemory = (id, options = {}) => request(`/memory/${id}/reject`, { method: 'POST', ...options });

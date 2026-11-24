@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getProviders } from '../../../services/apiProviders.js';
 import { getBrainSettings, syncBrainData, updateBrainSettings } from '../../../services/apiBrain.js';
-import { getCosConfig, updateCosConfig } from '../../../services/apiAgents.js';
 import { getEmbeddingStatus } from '../../../services/apiMemory.js';
 import { filterSelectableModels } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -21,7 +20,7 @@ import toast from '../../ui/Toast';
 import YoutubeIngestSettings from '../YoutubeIngestSettings';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
-import useSettingsForm from '../../../hooks/useSettingsForm';
+import EmbeddingSourceNotice from '../../settings/EmbeddingSourceNotice';
 
 const DAYS_OF_WEEK = [
   'monday',
@@ -36,15 +35,12 @@ const DAYS_OF_WEEK = [
 // Module-level so useListResource sees a stable fetcher; the pickers own the error UI.
 const fetchProviders = async () => (await getProviders({ silent: true }))?.providers || [];
 
-const EMBEDDING_INITIAL = { embeddingProvider: '', embeddingModel: '' };
-
 export default function ConfigTab({ onRefresh }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState(null);
   // A failed read must not render hard-coded defaults as the stored values.
   const [settingsFailed, setSettingsFailed] = useState(false);
-  const [cosConfigFailed, setCosConfigFailed] = useState(false);
   const { items: providers, state: providersState, error: providersError, retry: retryProviders } = useListResource(fetchProviders);
   const [selectedProvider, setSelectedProvider] = useState('');
   const [selectedModel, setSelectedModel] = useState('');
@@ -53,15 +49,10 @@ export default function ConfigTab({ onRefresh }) {
   const [dailyDigestTime, setDailyDigestTime] = useState('09:00');
   const [weeklyReviewDay, setWeeklyReviewDay] = useState('sunday');
   const [weeklyReviewTime, setWeeklyReviewTime] = useState('16:00');
-  // Embedding config lives in CoS config (embeddingProviderId/embeddingModel),
-  // separate from the brain settings above — it drives semantic search /
-  // pgvector, not classification.
-  const { values: embeddingForm, isDirty: embeddingDirty, set: setEmbeddingField, load: loadEmbeddingForm, markSaved: markEmbeddingSaved } = useSettingsForm(EMBEDDING_INITIAL);
-  const { embeddingProvider, embeddingModel } = embeddingForm;
-  const setEmbeddingProvider = (value) => setEmbeddingField('embeddingProvider', value);
-  const setEmbeddingModel = (value) => setEmbeddingField('embeddingModel', value);
+  // The embedding provider/model is the shared settings.embeddings store
+  // (#18296), edited only on Models → Embeddings; this tab shows it, its live
+  // status and the brain re-embed action.
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
-  const [savingEmbedding, setSavingEmbedding] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
 
   useEffect(() => {
@@ -69,14 +60,12 @@ export default function ConfigTab({ onRefresh }) {
   }, []);
 
   const fetchData = async () => {
-    const [settingsData, cosConfig, embStatus] = await Promise.all([
+    const [settingsData, embStatus] = await Promise.all([
       getBrainSettings({ silent: true }).catch(() => null),
-      getCosConfig({ silent: true }).catch(() => null),
       getEmbeddingStatus().catch(() => null)
     ]);
 
     setSettingsFailed(!settingsData);
-    setCosConfigFailed(!cosConfig);
 
     if (settingsData) {
       setSettings(settingsData);
@@ -89,61 +78,18 @@ export default function ConfigTab({ onRefresh }) {
       setWeeklyReviewTime(settingsData.weeklyReviewTime || '16:00');
     }
 
-    if (cosConfig) {
-      loadEmbeddingForm({ embeddingProvider: cosConfig.embeddingProviderId || '', embeddingModel: cosConfig.embeddingModel || '' });
-    }
     if (embStatus) setEmbeddingStatus(embStatus);
 
     setLoading(false);
   };
 
-  const refreshEmbeddingStatus = async () => {
-    const embStatus = await getEmbeddingStatus().catch(() => null);
-    if (embStatus) setEmbeddingStatus(embStatus);
-  };
-
-  // Models offered for the EMBEDDING provider. We don't filter to "embed"-named
-  // models — provider model lists vary — but surface the whole selectable list
-  // so the user can pick e.g. nomic-embed-text on Ollama.
-  const getEmbeddingModels = () => {
-    if (!embeddingProvider) return [];
-    const provider = providers.find(p => p.id === embeddingProvider);
-    return filterSelectableModels(provider?.models);
-  };
-
   // Picking a provider re-seeds the model, because a model from the previous
-  // provider would not resolve. Held here rather than inline in the selector's
-  // `onProviderChange` so the two pickers' seeding rules read side by side:
-  // classification takes the provider's own default, embeddings prefer an
-  // embedding-named model over it.
+  // provider would not resolve.
   const handleProviderChange = (providerId) => {
     setSelectedProvider(providerId);
     const provider = providers.find(p => p.id === providerId);
     const models = filterSelectableModels(provider?.models);
     setSelectedModel(provider?.defaultModel || models[0] || '');
-  };
-
-  const handleEmbeddingProviderChange = (providerId) => {
-    setEmbeddingProvider(providerId);
-    const provider = providers.find(p => p.id === providerId);
-    const models = filterSelectableModels(provider?.models);
-    // A provider's own default is usually a CHAT model — embedding it returns
-    // nothing usable — so an embedding-named model in the list wins over it.
-    const embed = models.find(m => /embed|nomic|bge|minilm|mxbai/i.test(m));
-    setEmbeddingModel(embed || provider?.defaultModel || models[0] || '');
-  };
-
-  const handleSaveEmbedding = async () => {
-    setSavingEmbedding(true);
-    const result = await updateCosConfig({ embeddingProviderId: embeddingProvider, embeddingModel }, { silent: true })
-      .catch(err => { toast.error(err.message || 'Failed to save embedding config'); return null; });
-    setSavingEmbedding(false);
-    if (result) {
-      markEmbeddingSaved(embeddingForm, embeddingForm);
-      toast.success('Embedding config saved');
-      // The server reinitializes embeddings on this PUT — re-probe availability.
-      await refreshEmbeddingStatus();
-    }
   };
 
   const handleReprocess = async () => {
@@ -282,21 +228,22 @@ export default function ConfigTab({ onRefresh }) {
         </div>
       </section>
 
-      {/* Embedding Provider & Model — drives semantic search (pgvector). This
-          is a SEPARATE provider/model from the classification one above; many
-          installs run classification on a chat model and embeddings on a small
-          dedicated embedding model (e.g. Ollama nomic-embed-text). */}
+      {/* Embeddings — drives semantic search (pgvector). The provider/model is
+          the shared settings.embeddings store (#18296), separate from the
+          classification provider above and edited on Models → Embeddings. */}
       <section className="p-4 bg-port-card border border-port-border rounded-lg space-y-4">
         <div className="flex items-center gap-2 mb-1">
           <Database className="w-5 h-5 text-port-accent" />
           <h3 className="text-md font-semibold text-white">Embeddings (semantic search)</h3>
         </div>
 
+        <EmbeddingSourceNotice />
+
         {/* Live backend status. Green requires a positive model-present signal
             (the backend always returns modelPresent now) — a reachable backend
             with no usable embedding model is a warning, not success, because
             embedding calls would silently return null. */}
-        {embeddingStatus && (
+        {embeddingStatus && !embeddingStatus.disabled && (
           embeddingStatus.available && embeddingStatus.modelPresent === true ? (
             <div className="flex items-center gap-2 text-xs text-port-success">
               <CheckCircle size={14} />
@@ -307,64 +254,25 @@ export default function ConfigTab({ onRefresh }) {
               <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
               <span>
                 {embeddingStatus.available
-                  ? `Backend reachable but no usable embedding model ("${embeddingStatus.embeddingModel || embeddingModel}") — pick/install one (e.g. nomic-embed-text on Ollama) before reprocessing.`
+                  ? `Backend reachable but no usable embedding model ("${embeddingStatus.embeddingModel || 'none'}") — pick/install one (e.g. nomic-embed-text on Ollama) before reprocessing.`
                   : `Embedding backend unreachable: ${embeddingStatus.error || 'unknown error'}`}
               </span>
             </div>
           )
         )}
 
-        <div className="space-y-4">
-          <div>
-            {cosConfigFailed ? <ListLoadError what="CoS config" onRetry={fetchData} /> : providersState === 'error' ? providerLoadError : (
-              <ProviderModelSelector
-                id="embeddingProvider"
-                providers={providers}
-                selectedProviderId={embeddingProvider}
-                selectedModel={embeddingModel}
-                availableModels={getEmbeddingModels()}
-                onProviderChange={handleEmbeddingProviderChange}
-                onModelChange={setEmbeddingModel}
-                label="Embedding Provider"
-                modelLabel="Embedding Model"
-                emptyProviderOption="Select a provider..."
-                emptyModelOption="Select a model..."
-                alwaysShowModel
-                modelDisabled={!embeddingProvider || getEmbeddingModels().length === 0}
-                layout="stacked"
-              />
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              Backend that generates vector embeddings (must serve an OpenAI-compatible <span className="font-mono">/v1/embeddings</span>).
-              Changing the model can change vector dimensions — reprocess after switching so all entries share one space.
-            </p>
-          </div>
-
-          {/* Save + Reprocess */}
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <button
-              onClick={handleSaveEmbedding}
-              disabled={cosConfigFailed || !embeddingDirty || savingEmbedding}
-              className="flex items-center gap-2 px-3 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {savingEmbedding ? <BrailleSpinner /> : <Save size={14} />}
-              Save embedding config
-            </button>
-            <button
-              onClick={handleReprocess}
-              disabled={reprocessing || cosConfigFailed || embeddingDirty}
-              title={embeddingDirty ? 'Save the embedding config first' : 'Re-embed every brain record'}
-              className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border text-white rounded-lg text-sm hover:bg-port-card disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {reprocessing ? <BrailleSpinner /> : <RefreshCw size={14} />}
-              Reprocess all embeddings
-            </button>
-          </div>
-          {embeddingDirty && (
-            <p className="text-xs text-port-warning">Save the embedding config before reprocessing.</p>
-          )}
+        <div className="space-y-2">
+          <button
+            onClick={handleReprocess}
+            disabled={reprocessing || embeddingStatus?.disabled === true}
+            title={embeddingStatus?.disabled ? 'Embeddings are disabled' : 'Re-embed every brain record'}
+            className="flex items-center gap-2 px-3 py-2 bg-port-bg border border-port-border text-white rounded-lg text-sm hover:bg-port-card disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {reprocessing ? <BrailleSpinner /> : <RefreshCw size={14} />}
+            Reprocess all embeddings
+          </button>
           <p className="text-xs text-gray-500">
-            Reprocess re-embeds every brain record (memories, people, projects, ideas, daily log) — run it after importing or switching models. It drains sequentially in the background.
+            Reprocess re-embeds every brain record (memories, people, projects, ideas, daily log) — run it after importing or switching models so all entries share one vector space. It drains sequentially in the background.
           </p>
         </div>
       </section>

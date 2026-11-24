@@ -98,6 +98,11 @@ vi.mock('../services/apiSystem.js', async (importOriginal) => ({
   getInstanceFeatures: api.getInstanceFeatures,
 }));
 vi.mock('../services/apiLocalLlm', () => localLlm);
+// The Config tab's embeddings notice reads the shared settings.embeddings backend (#18296).
+vi.mock('../services/apiMemory', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getEmbeddingConfig: async () => ({ source: 'settings', provider: 'ollama', model: 'nomic-embed-text', endpoint: null, disabled: false }),
+}));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../services/socket', () => ({ default: socketStub }));
 // TaskAddForm drags in the reviewer/model picker plumbing (local-LLM status,

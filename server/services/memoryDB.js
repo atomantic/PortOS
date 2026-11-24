@@ -109,15 +109,21 @@ function rowToMeta(row) {
 // dimensions" on EVERY insert, aborting the whole bridge resync. Store NULL with
 // one clear warning instead; the record stays un-searchable until it's
 // re-embedded with a matching-dimension model. Returns `{ value, model }` for
-// the embedding + embedding_model columns so both stay consistent.
-function embeddingColumns(embedding) {
+// the embedding + embedding_model columns so both stay consistent; `model` is
+// the ACTIVE embedding model that produced the vector (#18296), not the default.
+async function embeddingColumns(embedding) {
   if (!embedding) return { value: null, model: null };
   const expected = DEFAULT_MEMORY_CONFIG.embeddingDimension;
   if (embedding.length !== expected) {
-    console.warn(`⚠️ Skipping memory embedding: got ${embedding.length} dims, column expects ${expected} — check the Brain embedding model`);
+    console.warn(`⚠️ Skipping memory embedding: got ${embedding.length} dims, column expects ${expected} — check the shared embeddings setting (/models/embeddings)`);
     return { value: null, model: null };
   }
-  return { value: arrayToPgvector(embedding), model: DEFAULT_MEMORY_CONFIG.embeddingModel };
+  // Lazy: the embedder (provider/settings/CoS config) loads only when a vector
+  // is written. `embedding_model` is VARCHAR(100); the legacy CoS model field
+  // is unbounded.
+  const { getActiveEmbeddingModel } = await import('./memoryEmbeddings.js');
+  const model = await getActiveEmbeddingModel();
+  return { value: arrayToPgvector(embedding), model: model ? model.slice(0, 100) : null };
 }
 
 /**
@@ -129,7 +135,7 @@ async function insertMemory(client, data, embedding, reviewOrigin = null) {
   const now = new Date().toISOString();
 
   const originInstanceId = await getInstanceId();
-  const embeddingCol = embeddingColumns(embedding);
+  const embeddingCol = await embeddingColumns(embedding);
 
   const result = await client.query(
     `INSERT INTO memories (
@@ -287,7 +293,7 @@ export async function upsertBrainMemory(key, data, embedding = null, legacyId = 
       memory = await insertMemory(client, data, embedding);
       await client.query('UPDATE brain_memory_links SET memory_id = $2 WHERE bridge_key = $1', [key, memory.id]);
     } else if (embedding) {
-      const columns = embeddingColumns(embedding);
+      const columns = await embeddingColumns(embedding);
       await client.query('UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3',
         [columns.value, columns.model, id]);
       memory.embedding = columns.value ? embedding : null;
@@ -545,7 +551,7 @@ export async function updateMemory(id, updates) {
  * Update a memory's embedding
  */
 export async function updateMemoryEmbedding(id, embedding) {
-  const embeddingCol = embeddingColumns(embedding);
+  const embeddingCol = await embeddingColumns(embedding);
   const result = await query(
     `UPDATE memories SET embedding = $1, embedding_model = $2 WHERE id = $3 RETURNING *`,
     [embeddingCol.value, embeddingCol.model, id]

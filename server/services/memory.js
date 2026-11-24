@@ -46,10 +46,20 @@ export { DEFAULT_MEMORY_CONFIG };
 // Re-export the cache invalidator so existing import sites keep working.
 export { invalidateCaches };
 
+// Lazy: the embedder (provider/settings/CoS config) loads only when a vector
+// is written, so stamping `embeddingModel` doesn't drag it into every importer.
+async function activeEmbeddingModelFor(embedding) {
+  if (!embedding) return null;
+  const { getActiveEmbeddingModel } = await import('./memoryEmbeddings.js');
+  return getActiveEmbeddingModel();
+}
+
 /**
  * Create a new memory
  */
 export async function createMemory(data, embedding = null) {
+  // The model that produced `embedding`, resolved before the lock (#18296).
+  const embeddingModel = await activeEmbeddingModelFor(embedding);
   return withMemoryLock(async () => {
     const index = await loadIndex();
     const embeddings = await loadEmbeddings();
@@ -72,7 +82,7 @@ export async function createMemory(data, embedding = null) {
       sourceAgentId: data.sourceAgentId || null,
       sourceAppId: data.sourceAppId || null,
       embedding: embedding || null,
-      embeddingModel: embedding ? DEFAULT_MEMORY_CONFIG.embeddingModel : null,
+      embeddingModel,
       confidence: data.confidence ?? 0.8,
       importance: data.importance ?? 0.5,
       accessCount: 0,
@@ -94,7 +104,7 @@ export async function createMemory(data, embedding = null) {
     // Store embedding separately
     if (embedding) {
       embeddings.vectors[id] = embedding;
-      embeddings.model = DEFAULT_MEMORY_CONFIG.embeddingModel;
+      embeddings.model = embeddingModel;
       embeddings.dimension = embedding.length;
       await saveEmbeddings(embeddings);
     }
@@ -280,20 +290,21 @@ export async function updateMemory(id, updates) {
  * Update a memory's embedding
  */
 export async function updateMemoryEmbedding(id, embedding) {
+  const embeddingModel = await activeEmbeddingModelFor(embedding);
   return withMemoryLock(async () => {
     const memory = await loadMemory(id);
     if (!memory) return null;
 
     // Update memory with new embedding
     memory.embedding = embedding;
-    memory.embeddingModel = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    memory.embeddingModel = embeddingModel;
     memory.updatedAt = new Date().toISOString();
     await saveMemory(memory);
 
     // Update embeddings file
     const embeddings = await loadEmbeddings();
     embeddings.vectors[id] = embedding;
-    embeddings.model = DEFAULT_MEMORY_CONFIG.embeddingModel;
+    embeddings.model = embeddingModel;
     embeddings.dimension = embedding.length;
     await saveEmbeddings(embeddings);
 

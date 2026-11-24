@@ -7,14 +7,16 @@ import ListLoadError from '../ui/ListLoadError';
 import LoadFailedState from '../ui/LoadFailedState';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { getLocalLlmStatus } from '../../services/apiLocalLlm';
+import EmbeddingSourceNotice from './EmbeddingSourceNotice';
 
-// Provider-agnostic embeddings configuration. Powers the creative catalog's
-// semantic search + the memory system's vector storage. Vector dim is pinned
+// Provider-agnostic embeddings configuration: the single store (#18296) behind
+// the creative catalog's semantic search AND memory (Brain, Chief of Staff)
+// retrieval; other surfaces only link here. Vector dim is pinned
 // to 768 (matches the live `vector(768)` columns); the dropdown calls out
 // known 768-dim models so the user picks one that won't get rejected.
 
 const PROVIDERS = [
-  { id: 'none', label: 'Disabled', description: "Don't embed at ingest. Rows persist; semantic search returns empty until you backfill." },
+  { id: 'none', label: 'Disabled', description: "Don't embed catalog or memory records. Rows persist; semantic search falls back to text until you backfill." },
   { id: 'ollama', label: 'Ollama', description: 'Use a locally installed Ollama embedding model.' },
   { id: 'lmstudio', label: 'LM Studio', description: 'Use an LM Studio embedding model.' },
 ];
@@ -32,6 +34,9 @@ export default function EmbeddingsTab() {
   const [provider, setProvider] = useState('none');
   const [model, setModel] = useState('');
   const [saved, setSaved] = useState({ provider: 'none', model: '' });
+  // settings.embeddings never saved: memory still runs on the legacy CoS
+  // config, which the notice names, until the first save here.
+  const [unsaved, setUnsaved] = useState(false);
   const [models, setModels] = useState({ ollama: [], lmstudio: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -85,6 +90,7 @@ export default function EmbeddingsTab() {
     }
     setSettingsFailed(false);
     const cfg = settings.embeddings || {};
+    setUnsaved(!cfg.provider);
     setProvider(cfg.provider || 'none');
     setModel(cfg.model || '');
     setSaved({ provider: cfg.provider || 'none', model: cfg.model || '' });
@@ -119,6 +125,7 @@ export default function EmbeddingsTab() {
       embeddings: { provider, model: model.trim() || null },
     }, { silent: true }).then(() => {
       setSaved({ provider, model: model.trim() || '' });
+      setUnsaved(false);
       toast.success('Embeddings settings saved');
     }).catch((err) => {
       toast.error(`Save failed: ${err?.message || 'unknown error'}`);
@@ -140,9 +147,12 @@ export default function EmbeddingsTab() {
     <div className="space-y-6">
       <p className="text-sm text-gray-400">
         Vector embeddings power semantic search across the creative catalog (Characters, Ideas,
-        Scenes, …) and the memory system. PortOS expects 768-dimensional vectors;
-        pick a 768-dim model below or your saves will be rejected.
+        Scenes, …) and the memory system (Brain, Chief of Staff retrieval). PortOS expects
+        768-dimensional vectors; pick a 768-dim model below or your saves will be rejected.
+        Switching models changes the vector space, so re-embed afterwards (Brain → Config →
+        Reprocess for memory, the catalog backfill for ingredients).
       </p>
+      {unsaved && <EmbeddingSourceNotice inPlace />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       {/* Provider picker */}

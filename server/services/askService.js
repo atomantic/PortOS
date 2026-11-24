@@ -22,6 +22,7 @@
 import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { hybridSearchMemories, peekMemories, recordMemoryAccess } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
+import { embedSearchQuery } from './embeddings.js';
 import { hybridSearchIngredients } from './catalog/catalogDB.js';
 import { getCatalogType } from '../lib/catalog/catalogTypes.js';
 import { getInboxLog, getProjects, getIdeas } from './brainStorage.js';
@@ -147,8 +148,10 @@ async function retrieveMemories(question, queryEmbeddingPromise = generateQueryE
 // catalog slice shares Ask's scoring/budget model. Snippet is the type's
 // primary-content payload field (falling back to summary/description/name).
 // Vector matches only appear once embeddings are backfilled; FTS works
-// immediately. No try/catch — gatherSources' allSettled isolates failures.
-async function retrieveCatalog(question, queryEmbeddingPromise = generateQueryEmbedding(question).catch(() => null)) {
+// immediately. The query vector comes from the catalog's own embedder
+// (embeddings.js) — the backend that wrote the rows — never the memory one.
+// No try/catch — gatherSources' allSettled isolates failures.
+async function retrieveCatalog(question, queryEmbeddingPromise = embedSearchQuery(question)) {
   const queryEmbedding = await queryEmbeddingPromise;
   const hits = await hybridSearchIngredients(question, queryEmbedding, {
     limit: PER_SOURCE_LIMIT.catalog,
@@ -330,19 +333,21 @@ async function retrieveCalendar(queryTokens, timeWindow) {
 export async function gatherSources(question, { timeWindow, maxSources = 12 } = {}) {
   const queryTokens = tokenize(question);
 
-  // One embedding request shared by the memory and catalog retrievers; a
+  // Memory and catalog rows are each queried with the embedder that wrote them
+  // (#18296), so a vector is never compared against another model's space. A
   // failure resolves null so catalog falls back to FTS-only and memory to [].
-  const queryEmbeddingPromise = generateQueryEmbedding(question).catch(() => null);
+  const memoryEmbeddingPromise = generateQueryEmbedding(question).catch(() => null);
+  const catalogEmbeddingPromise = embedSearchQuery(question);
 
   // Fan out — each retriever is independently failable, so allSettled keeps
   // a single-source outage from killing the answer.
   const [memSettled, brainSettled, autoSettled, goalSettled, calSettled, catSettled] = await Promise.allSettled([
-    retrieveMemories(question, queryEmbeddingPromise),
+    retrieveMemories(question, memoryEmbeddingPromise),
     retrieveBrainNotes(question, queryTokens),
     retrieveAutobiography(queryTokens),
     retrieveGoals(queryTokens),
     retrieveCalendar(queryTokens, timeWindow),
-    retrieveCatalog(question, queryEmbeddingPromise),
+    retrieveCatalog(question, catalogEmbeddingPromise),
   ]);
 
   const all = [

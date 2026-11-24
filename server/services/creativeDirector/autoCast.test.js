@@ -8,8 +8,9 @@ vi.mock('../catalog/catalogDB.js', () => ({
   linkIngredientsToCreativeDirector: vi.fn(async () => []),
   cdRefRoleForType: (type) => ({ character: 'cast', place: 'location', object: 'prop', scene: 'scene' }[type] || 'reference'),
 }));
-vi.mock('../memoryEmbeddings.js', () => ({
-  generateQueryEmbedding: vi.fn(async () => [0.1, 0.2, 0.3]),
+// The catalog's own embedder — the brief must share the ingredient rows' space.
+vi.mock('../embeddings.js', () => ({
+  embedSearchQuery: vi.fn(async () => [0.1, 0.2, 0.3]),
 }));
 vi.mock('./local.js', () => ({
   getProject: vi.fn(),
@@ -23,7 +24,7 @@ import {
   toSuggestionView,
 } from './autoCast.js';
 import { hybridSearchIngredients, linkIngredientsToCreativeDirector } from '../catalog/catalogDB.js';
-import { generateQueryEmbedding } from '../memoryEmbeddings.js';
+import { embedSearchQuery } from '../embeddings.js';
 import { getProject, updateProject } from './local.js';
 
 const hit = (id, type, name, rrfScore = 0.5, searchMethod = 'hybrid') => ({
@@ -41,7 +42,7 @@ const mockSearch = (rows) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  generateQueryEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
+  embedSearchQuery.mockResolvedValue([0.1, 0.2, 0.3]);
   linkIngredientsToCreativeDirector.mockResolvedValue([]);
 });
 
@@ -90,8 +91,15 @@ describe('suggestCastForBrief', () => {
     expect(out.map((h) => h.ingredient.id)).toEqual(['i1']);
   });
 
-  it('degrades to FTS-only when the embedding provider fails', async () => {
-    generateQueryEmbedding.mockRejectedValue(new Error('no provider'));
+  it('embeds the brief with the catalog embedder and searches with that vector', async () => {
+    mockSearch([hit('c1', 'character', 'Mara')]);
+    await suggestCastForBrief({ brief: 'rain noir' });
+    expect(embedSearchQuery).toHaveBeenCalledWith('rain noir');
+    expect(hybridSearchIngredients).toHaveBeenCalledWith('rain noir', [0.1, 0.2, 0.3], expect.any(Object));
+  });
+
+  it('degrades to FTS-only when the embedding provider yields no vector', async () => {
+    embedSearchQuery.mockResolvedValue(null);
     mockSearch([hit('c1', 'character', 'Mara')]);
     const out = await suggestCastForBrief({ brief: 'rain noir' });
     expect(out).toHaveLength(1);

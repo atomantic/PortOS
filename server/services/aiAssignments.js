@@ -126,7 +126,7 @@ const addSettingsEntries = async (entries) => {
     model: settings.embeddings?.model || null,
     providerOptions: embeddingProviders,
     providerTypes: [],
-    notes: 'Powers semantic search, including Chief of Staff memory retrieval.',
+    notes: 'Powers semantic search for the creative catalog and memory (Brain, Chief of Staff retrieval). Until saved, memory keeps the legacy Chief of Staff embedding config.',
     link: '/models/embeddings',
   }));
 

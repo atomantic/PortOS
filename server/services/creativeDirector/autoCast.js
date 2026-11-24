@@ -22,7 +22,7 @@ import {
   hybridSearchIngredients,
   linkIngredientsToCreativeDirector,
 } from '../catalog/catalogDB.js';
-import { generateQueryEmbedding } from '../memoryEmbeddings.js';
+import { embedSearchQuery } from '../embeddings.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
 import { getProject, updateProject } from './local.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -78,7 +78,9 @@ export async function suggestCastForBrief({ brief, types = DEFAULT_CASTABLE_TYPE
   const text = (typeof brief === 'string' ? brief : '').trim();
   if (!text) return [];
   const castable = Array.isArray(types) && types.length ? types : DEFAULT_CASTABLE_TYPES;
-  const embedding = await generateQueryEmbedding(text, { types: castable }).catch(() => null);
+  // The catalog's own embedder: the brief must land in the same vector space as
+  // the ingredient rows `embedIngredient` wrote (#18296).
+  const embedding = await embedSearchQuery(text);
   // hybridSearchIngredients filters by a SINGLE `type`, so query each castable
   // type and merge — post-filtering one global page would let a brief that
   // matches many non-castable items (ideas/concepts/custom types) fill the page

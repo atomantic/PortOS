@@ -150,6 +150,21 @@ export async function embedIngredient(ingredient) {
 }
 
 /**
+ * Query vector for catalog hybrid search (`hybridSearchIngredients`). It MUST
+ * come from the same provider/model `embedIngredient`/`embedBatch` wrote the
+ * rows with, or pgvector compares vectors from two different spaces (#18296),
+ * so catalog searchers call this rather than the memory embedder. Returns the
+ * vector, or `null` when embeddings are disabled or the embed failed — the
+ * search then degrades to FTS-only.
+ */
+export async function embedSearchQuery(text) {
+  const out = await embedText(text).catch((err) => ({ success: false, error: err?.message || String(err) }));
+  if (out?.success) return out.embedding;
+  if (!out?.skipped) console.warn(`🧬 embedSearchQuery failed: ${out?.error || 'unknown'} — catalog search falls back to text only`);
+  return null;
+}
+
+/**
  * Embed an array of texts in parallel with a concurrency cap.
  *
  * Used by the catalog backfill and the `/api/catalog/embeddings/backfill`
