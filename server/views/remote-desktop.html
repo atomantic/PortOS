@@ -4,18 +4,19 @@
   <!-- Classic script so the token leaves the URL during parsing, before the module graph loads (and even if it fails). The token is embedded in the module below. -->
   <script>if (location.search) history.replaceState(null, '', location.pathname);</script><!-- portos-allow-hidden-content -->
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title>PortOS Remote Desktop</title>
   <style>
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #080b12; }
-    #screen { position: fixed; inset: 0 0 calc(52px + env(safe-area-inset-bottom)); background: #080b12; }
-    #toolbar { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; min-height: calc(52px + env(safe-area-inset-bottom)); padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 7px; overflow-x: auto; background: rgba(16, 21, 32, .96); border-top: 1px solid #293148; }
+    #screen { position: fixed; inset: 0 0 calc(58px + env(safe-area-inset-bottom)); background: #080b12; }
+    #toolbar { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; min-height: calc(58px + env(safe-area-inset-bottom)); padding: 7px 8px calc(7px + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 7px; overflow-x: auto; background: rgba(16, 21, 32, .96); border-top: 1px solid #293148; }
     button, input { font: inherit; }
-    button { min-width: 42px; height: 36px; padding: 0 11px; border: 1px solid #3a4665; border-radius: 9px; color: #f5f7ff; background: #222b40; font-weight: 600; }
-    button:active, button.active { background: #536dfe; border-color: #7890ff; }
+    button { min-width: 44px; min-height: 44px; padding: 0 11px; border: 1px solid #3a4665; border-radius: 9px; color: #f5f7ff; background: #222b40; font-weight: 600; }
+    button:active, button.active { background: #3852e0; border-color: #7890ff; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #93c5fd; outline-offset: 2px; }
     #status { margin-right: auto; white-space: nowrap; color: #aeb9d4; font-size: 13px; }
     #gate { position: fixed; z-index: 10; inset: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top, #1d2947, #080b12 65%); }
     #gate[hidden] { display: none; }
@@ -24,28 +25,30 @@
     p { margin: 0 0 18px; color: #b6bfd2; line-height: 1.45; }
     label { display: block; margin-bottom: 7px; font-size: 13px; color: #cbd3e5; }
     #password { width: 100%; height: 46px; padding: 0 13px; border: 1px solid #43506f; border-radius: 10px; color: white; background: #0e1421; }
-    #connect { width: 100%; height: 46px; margin-top: 12px; background: #536dfe; border-color: #7890ff; }
+    #connect { width: 100%; height: 46px; margin-top: 12px; background: #3852e0; border-color: #7890ff; }
     #error { min-height: 20px; margin: 10px 0 0; color: #ff9b9b; font-size: 13px; }
     #keyboardSink { position: fixed; z-index: 4; left: 50%; bottom: 0; width: 2px; height: 2px; opacity: .01; resize: none; }
   </style>
 </head>
 <body>
-  <div id="screen" aria-label="Remote desktop canvas"></div>
-  <div id="toolbar" hidden>
-    <span id="status">Connecting…</span>
-    <button id="keyboard" type="button" aria-label="Show keyboard">⌨︎</button>
-    <button data-modifier="MetaLeft" data-keysym="65511" type="button">⌘</button>
-    <button data-modifier="ControlLeft" data-keysym="65507" type="button">Ctrl</button>
-    <button data-modifier="AltLeft" data-keysym="65513" type="button">Opt</button>
-    <button data-key="Tab" data-keysym="65289" type="button">Tab</button>
-    <button data-key="Escape" data-keysym="65307" type="button">Esc</button>
-    <button id="cad" type="button">Ctrl Alt Del</button>
-    <button id="disconnect" type="button">Close</button>
-  </div>
-  <textarea id="keyboardSink" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Remote keyboard input"></textarea>
-  <div id="gate">
+  <main>
+    <div id="screen" role="application" aria-label="Remote desktop canvas" inert></div>
+    <div id="toolbar" role="toolbar" aria-label="Remote desktop controls" hidden inert>
+      <span id="status" role="status" aria-live="polite">Connecting…</span>
+      <button id="keyboard" type="button" aria-label="Show keyboard">⌨︎</button>
+      <button data-modifier="MetaLeft" data-keysym="65511" type="button" aria-label="Command" aria-pressed="false">⌘</button>
+      <button data-modifier="ControlLeft" data-keysym="65507" type="button" aria-pressed="false">Ctrl</button>
+      <button data-modifier="AltLeft" data-keysym="65513" type="button" aria-pressed="false">Opt</button>
+      <button data-key="Tab" data-keysym="65289" type="button">Tab</button>
+      <button data-key="Escape" data-keysym="65307" type="button">Esc</button>
+      <button id="cad" type="button">Ctrl Alt Del</button>
+      <button id="disconnect" type="button">Close</button>
+    </div>
+    <textarea id="keyboardSink" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Remote keyboard input" inert></textarea>
+  </main>
+  <div id="gate" role="dialog" aria-modal="true" aria-labelledby="gate-title">
     <form class="card" id="credentials">
-      <h1>Remote Desktop</h1>
+      <h1 id="gate-title">Remote Desktop</h1>
       <p>Enter the VNC password configured on this PortOS machine. It is used only for this PortOS connection and is not stored by PortDeck.</p>
       <label for="password">VNC password</label>
       <input id="password" type="password" autocomplete="off" required>
@@ -67,8 +70,21 @@
     const toolbar = document.querySelector('#toolbar');
     const status = document.querySelector('#status');
     const sink = document.querySelector('#keyboardSink');
+    const modifierButtons = [...document.querySelectorAll('[data-modifier]')];
     const heldModifiers = new Map();
     let rfb;
+
+    const setGateOpen = (open) => {
+      gate.hidden = !open;
+      screen.inert = open;
+      toolbar.inert = open;
+      sink.inert = open;
+      if (open) password.focus();
+    };
+
+    const getGateFocusables = () => [...gate.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((el) => !el.hidden && !el.closest('[hidden]'));
 
     const connect = () => {
       error.textContent = '';
@@ -81,16 +97,15 @@
       rfb.qualityLevel = 7;
       rfb.compressionLevel = 6;
       rfb.addEventListener('connect', () => {
-        gate.hidden = true;
+        setGateOpen(false);
         status.textContent = 'Connected';
         password.value = '';
       });
       rfb.addEventListener('credentialsrequired', () => {
-        gate.hidden = false;
-        password.focus();
+        setGateOpen(true);
       });
       rfb.addEventListener('securityfailure', (event) => {
-        gate.hidden = false;
+        setGateOpen(true);
         error.textContent = event.detail?.reason || 'The VNC server rejected the password.';
         password.select();
       });
@@ -98,7 +113,7 @@
         releaseModifiers();
         rfb = undefined;
         status.textContent = 'Disconnected';
-        gate.hidden = false;
+        setGateOpen(true);
         error.textContent = event.detail?.clean ? 'Session ended.' : 'The remote desktop connection was lost. Return to PortDeck and start a new session.';
       });
     };
@@ -106,7 +121,10 @@
     const releaseModifiers = () => {
       for (const [code, keysym] of heldModifiers) rfb?.sendKey(keysym, code, false);
       heldModifiers.clear();
-      document.querySelectorAll('[data-modifier]').forEach((button) => button.classList.remove('active'));
+      modifierButtons.forEach((button) => {
+        button.classList.remove('active');
+        button.setAttribute('aria-pressed', 'false');
+      });
     };
 
     const unicodeKeysym = (character) => {
@@ -119,6 +137,26 @@
       releaseModifiers();
     };
 
+    document.addEventListener('keydown', (event) => {
+      if (gate.hidden || event.key !== 'Tab') return;
+      const focusables = getGateFocusables();
+      if (focusables.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey) {
+        if (document.activeElement === first || !gate.contains(document.activeElement)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (document.activeElement === last || !gate.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       if (rfb) rfb.sendCredentials({ password: password.value });
@@ -127,14 +165,18 @@
     document.querySelector('#keyboard').addEventListener('click', () => sink.focus());
     document.querySelector('#disconnect').addEventListener('click', () => rfb?.disconnect());
     document.querySelector('#cad').addEventListener('click', () => rfb?.sendCtrlAltDel());
-    document.querySelectorAll('[data-modifier]').forEach((button) => button.addEventListener('click', () => {
-      const code = button.dataset.modifier;
-      const keysym = Number(button.dataset.keysym);
-      const down = !heldModifiers.has(code);
-      rfb?.sendKey(keysym, code, down);
-      if (down) heldModifiers.set(code, keysym); else heldModifiers.delete(code);
-      button.classList.toggle('active', down);
-    }));
+    modifierButtons.forEach((button) => {
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => {
+        const code = button.dataset.modifier;
+        const keysym = Number(button.dataset.keysym);
+        const down = !heldModifiers.has(code);
+        rfb?.sendKey(keysym, code, down);
+        if (down) heldModifiers.set(code, keysym); else heldModifiers.delete(code);
+        button.classList.toggle('active', down);
+        button.setAttribute('aria-pressed', String(down));
+      });
+    });
     document.querySelectorAll('[data-key]').forEach((button) => button.addEventListener('click', () => {
       rfb?.sendKey(Number(button.dataset.keysym), button.dataset.key);
       releaseModifiers();
@@ -150,6 +192,8 @@
       rfb?.sendKey(special[event.key], event.code || event.key);
       releaseModifiers();
     });
+
+    setGateOpen(true);
   </script>
 </body>
 </html>
