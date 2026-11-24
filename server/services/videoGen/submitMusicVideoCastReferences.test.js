@@ -11,7 +11,7 @@ const m = vi.hoisted(() => ({
 
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: { run: (_kind, _resource, fn) => fn() } }));
 vi.mock('../settings.js', () => ({ getSettings: async () => m.settings }));
-vi.mock('./local.js', () => ({
+vi.mock('./modelCatalog.js', () => ({
   listVideoModels: () => [{
     id: 'omni', name: 'Omni', runtime: 'fastvideo', supportedModes: ['image'],
     maxReferenceImages: 4, maxReferenceTotal: 3, maxReferenceAudios: 3,
@@ -20,10 +20,10 @@ vi.mock('./local.js', () => ({
     supportedModes: ['text', 'image'], defaultFrames: 121,
   }],
   defaultVideoModelId: (_capabilities, preferredId) => preferredId || 'omni',
-  loadHistory: async () => [],
-  BYOV_VIDEO_RUNTIMES: new Set(['fastvideo', 'ltx25']),
-  DEFAULT_NUM_FRAMES: 121,
 }));
+vi.mock('./history.js', async (importOriginal) => ({ ...(await importOriginal()), loadHistory: async () => [] }));
+vi.mock('./runtimes.js', async (importOriginal) => ({ ...(await importOriginal()), BYOV_VIDEO_RUNTIMES: new Set(['fastvideo', 'ltx25']) }));
+vi.mock('./renderArgs.js', async (importOriginal) => ({ ...(await importOriginal()), DEFAULT_NUM_FRAMES: 121 }));
 vi.mock('../../lib/uploads.js', async (load) => ({
   ...(await load()),
   assertFileNotMediaManifest: async () => {},

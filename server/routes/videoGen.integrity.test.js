@@ -52,7 +52,9 @@ vi.mock('../lib/pythonSetup.js', () => ({
   isAllowedPython: vi.fn(() => true),
 }));
 
-vi.mock('../services/videoGen/local.js', () => ({
+// The route and prepareParams.js reach these through different modules
+// (local.js facade vs the catalog/history leaves); one set of fns serves both.
+const videoGenLeaves = vi.hoisted(() => ({
   listVideoModels: vi.fn(() => [
     { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' },
     {
@@ -68,6 +70,19 @@ vi.mock('../services/videoGen/local.js', () => ({
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   getHistoryItem: vi.fn(async () => null),
+}));
+vi.mock('../services/videoGen/modelCatalog.js', () => ({
+  listVideoModels: videoGenLeaves.listVideoModels,
+  defaultVideoModelId: videoGenLeaves.defaultVideoModelId,
+}));
+vi.mock('../services/videoGen/history.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadHistory: videoGenLeaves.loadHistory,
+  getHistoryItem: videoGenLeaves.getHistoryItem,
+}));
+
+vi.mock('../services/videoGen/local.js', () => ({
+  ...videoGenLeaves,
   deleteHistoryItem: vi.fn(),
   setHistoryItemHidden: vi.fn(),
   extractLastFrame: vi.fn(),

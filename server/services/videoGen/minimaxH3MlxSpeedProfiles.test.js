@@ -11,7 +11,7 @@ import { findCachedRepoFile } from '../../lib/hfCache.js';
 import { sha256File, PATHS } from '../../lib/fileUtils.js';
 import { resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable } from './runtimes.js';
 import { getSettings } from '../settings.js';
-import { listVideoModels } from './local.js';
+import { listVideoModels } from './modelCatalog.js';
 import { modelDownloadTargets } from './modelCache.js';
 import { readSafetensorsHeader } from '../../lib/safetensors.js';
 
@@ -19,9 +19,10 @@ vi.mock('fs', async (original) => ({ ...(await original()), existsSync: vi.fn(()
 vi.mock('node:fs/promises', async (original) => ({ ...(await original()), stat: vi.fn(async () => ({ size: profile.adapter.sizeBytes, isFile: () => true })) }));
 vi.mock('../../lib/fileUtils.js', async (original) => ({ ...(await original()), sha256File: vi.fn() }));
 vi.mock('../../lib/hfCache.js', async (original) => ({ ...(await original()), findCachedRepoFile: vi.fn() }));
-vi.mock('./runtimes.js', async (original) => ({ ...(await original()), resolveByovRuntimeLoraCapable: vi.fn(), resolveMiniMaxH3MlxSpeedCapable: vi.fn() }));
-vi.mock('./local.js', () => ({ listVideoModels: vi.fn(), defaultVideoModelId: vi.fn(), loadHistory: vi.fn(),
-  BYOV_VIDEO_RUNTIMES: new Set(['minimax_h3']), DEFAULT_NUM_FRAMES: 124 }));
+vi.mock('./runtimes.js', async (original) => ({ ...(await original()), resolveByovRuntimeLoraCapable: vi.fn(), resolveMiniMaxH3MlxSpeedCapable: vi.fn(), BYOV_VIDEO_RUNTIMES: new Set(['minimax_h3']) }));
+vi.mock('./modelCatalog.js', () => ({ listVideoModels: vi.fn(), defaultVideoModelId: vi.fn() }));
+vi.mock('./history.js', async (importOriginal) => ({ ...(await importOriginal()), loadHistory: vi.fn() }));
+vi.mock('./renderArgs.js', async (importOriginal) => ({ ...(await importOriginal()), DEFAULT_NUM_FRAMES: 124 }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn() }));
 vi.mock('../../lib/safetensors.js', async (original) => ({ ...(await original()), readSafetensorsHeader: vi.fn() }));
 vi.mock('../loras.js', async (original) => ({ ...(await original()), getLoraKeyLayout: vi.fn(async () => 'bare') }));

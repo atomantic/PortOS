@@ -41,7 +41,7 @@ vi.mock('./local.js', () => ({
 }));
 vi.mock('./sceneEvaluator.js', () => ({ dispatchSceneEvaluation: vi.fn(async () => {}) }));
 vi.mock('./videoReview.js', () => ({ videoReviewAllowsDispatch: vi.fn(async () => reviewState.allowsDispatch) }));
-vi.mock('../videoGen/local.js', () => ({
+vi.mock('../videoGen/frameExtraction.js', () => ({
   extractLastFrame: vi.fn(async () => null),
   sampleEvaluationFrames: vi.fn(async () => []),
 }));

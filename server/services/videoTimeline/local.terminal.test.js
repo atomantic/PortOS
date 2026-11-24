@@ -57,14 +57,14 @@ vi.mock('../../lib/processEnv.js', () => ({
   safeChildProcessOptions: (options = {}) => ({ ...options, env: {}, windowsHide: true }),
 }));
 vi.mock('../../lib/killWithEscalation.js', () => ({ killWithEscalation: vi.fn() }));
-vi.mock('../videoGen/local.js', () => ({
+vi.mock('../videoGen/history.js', () => ({
   loadHistory: vi.fn(),
   mutateVideoHistory: vi.fn(async (fn) => fn([])),
 }));
 
 import { renderProject, getRenderJobStatus } from './local.js';
 import { readJSONFile } from '../../lib/fileUtils.js';
-import { loadHistory } from '../videoGen/local.js';
+import { loadHistory } from '../videoGen/history.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];

@@ -52,7 +52,7 @@ vi.mock('../videoTimeline/local.js', () => ({
   getRenderJobStatus: () => ({ status: 'running' }),
 }));
 
-vi.mock('../videoGen/local.js', () => ({ loadHistory: async () => [FINAL_ENTRY] }));
+vi.mock('../videoGen/history.js', () => ({ loadHistory: async () => [FINAL_ENTRY] }));
 vi.mock('../mediaCollections.js', () => ({ addItem: (...a) => addCollectionItemMock(...a) }));
 
 vi.mock('../pipeline/issues.js', async () => {

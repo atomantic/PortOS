@@ -33,7 +33,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
+import { loadHistory, mutateVideoHistory } from '../videoGen/history.js';
 import {
   TIMELINE_SCHEMA_VERSION,
   IMAGE_ASSET_KINDS,

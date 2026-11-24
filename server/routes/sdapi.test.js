@@ -37,9 +37,12 @@ vi.mock('../services/imageGenEvents.js', async () => {
   return { imageGenEvents: new EventEmitter() };
 });
 
-vi.mock('../services/videoGen/local.js', () => ({
+vi.mock('../services/videoGen/modelCatalog.js', () => ({
   listVideoModels: vi.fn(() => []),
   defaultVideoModelId: vi.fn(() => 'ltx_video'),
+}));
+vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   warmByovLoraCapabilities: vi.fn(async () => {}),
 }));
 

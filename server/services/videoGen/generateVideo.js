@@ -1,6 +1,6 @@
-import { a2vLoraStageCapable } from './runtimes.js';
+import { listVideoModels, resolveVideoModel, defaultVideoModelId } from './modelCatalog.js';
 import { prepareVideoConditioningMedia } from './conditioningMedia.js';
-import { planVideoBatch, supportsWarmVideoBatch, validateVideoBatch } from './batch.js';
+import { planVideoBatch, validateVideoBatch } from './batch.js';
 import { normalizeVideoFailure } from '../../lib/videoFailure.js';
 /**
  * Video Gen — local render runner (mlx_video on macOS, diffusers on Windows).
@@ -29,7 +29,7 @@ import {
 } from '../../lib/videoReferenceModes.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
-import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
+import { getVideoModels, getTextEncoderRepo } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
@@ -39,20 +39,17 @@ import { provenanceForRender } from '../../lib/assetProvenance.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { isLtx2FamilyRuntime } from '../../lib/runners.js';
 import {
-  publicVideoTextEncoderOptions, resolveVideoTextEncoder,
+  resolveVideoTextEncoder,
 } from '../../lib/videoTextEncoders.js';
 import {
   isIcLoraMode, icLoraSpecForMode, icLoraSupportsRuntime, icLoraFrameIssue, resolveIcLoraWeight,
 } from '../../lib/icLoraWeights.js';
 import {
   BYOV_VIDEO_RUNTIMES,
-  byovRuntimeLoraCapable,
   resolveByovRuntimeLoraCapable,
-  modelAnchorsLastFrame,
   routesToWindowsHelper,
   byovRuntimeExpectedRevision,
   isByovRuntimeCurrent,
-  runtimeUsesMlx,
 } from './runtimes.js';
 import { getSettings } from '../settings.js';
 import { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem } from './history.js';
@@ -75,13 +72,12 @@ import {
 } from '../../lib/videoSpeedProfiles.js';
 import {
   isFullDecode,
-  publicVideoDraftDecodeOptions,
   draftDecodeDeclineReason,
   resolveVideoDraftDecoder,
 } from '../../lib/videoDraftDecoders.js';
 import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
-import { extendLatentFrames, supportsContextWindow, publicContinuationCapability, resolveContinuityRequest } from '../../lib/videoContinuity.js';
+import { extendLatentFrames, supportsContextWindow, resolveContinuityRequest } from '../../lib/videoContinuity.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
@@ -93,63 +89,7 @@ export { attachSseClient, cancel } from './jobState.js';
 export { loadHistory, saveHistory, mutateVideoHistory, getHistoryItem, buildLocalVideoJobRecord };
 
 
-// Catalog comes from data/media-models.json (see server/lib/mediaModels.js).
-// Cached as a plain object at boot for O(1) lookup by id, matching the prior shape.
-// NOTE: this is a BOOT snapshot — a model added at runtime via the HuggingFace
-// installer (mediaModels.addUserModelEntry hot-reloads the registry cache) is
-// NOT in here. Render-time lookups must go through resolveVideoModel() so a
-// just-added model is renderable without a restart (issue #2124). Kept exported
-// for back-compat with any deep importer.
-export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id, m]));
-
-// Resolve a model by id from the LIVE registry (getVideoModels reads the
-// hot-reloadable cache). Never revive disabled or removed entries from the
-// boot snapshot. This is what the
-// render path uses so a runtime-added model resolves without a server restart.
-// Attach the runtime capabilities a model entry can't express on its own:
-// whether an FFLF last frame is a real anchor, and whether the *installed* BYOV
-// runner can apply user LoRAs (H3's DiT is quantized, so that depends on the
-// pinned checkout plus PortOS's activation-space adapter — see runtimes.js
-// `loraProbeArgs`). Both are declared in
-// runtimes.js and surfaced here so the Video Gen form and videoLoraFamily() read
-// them off the model instead of keeping their own lists. Applied by BOTH model
-// resolvers, so the render path and the API payload can never disagree about
-// what a model supports.
-// Also attached: the substitutable prompt conditioners the model's runtime can
-// load (lib/videoTextEncoders.js). Decorated rather than declared on the
-// registry entry so the picker can never offer an option this build's runner
-// has no key-remap for — and empty for every runtime without substitutions, so
-// the client renders no picker instead of a one-entry select.
-const decorateVideoModel = (m) => (m ? {
-  ...m,
-  supportsWarmBatch: supportsWarmVideoBatch(m),
-  continuationCapability: publicContinuationCapability(m),
-  a2vLoraStageCapable: a2vLoraStageCapable(m.runtime),
-  lastFrameAnchored: modelAnchorsLastFrame(m),
-  runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
-  textEncoderOptions: publicVideoTextEncoderOptions(m),
-  // The preview-fidelity decode choices this entry offers
-  // (lib/videoDraftDecoders.js). Empty for every model that declares no draft
-  // decoder, so the client renders no control instead of a one-entry select.
-  draftDecodeOptions: publicVideoDraftDecodeOptions(m),
-  // Does a render on this model put the display to sleep? An MLX render must
-  // (spawnWatch.js sleeps it so WindowServer stops contending with Metal and
-  // tripping the Apple GPU watchdog), and a user who is not told that reads the
-  // dark screen as a crash and wakes it — which is the failure the sleep exists
-  // to prevent. Decorated here rather than derived client-side so the warning
-  // and the behaviour can never disagree about which runtimes do it. Whether it
-  // will ACTUALLY happen also depends on the platform and the user's opt-out,
-  // which are per-install facts reported once on /status as
-  // `displaySleepOnRender`.
-  sleepsDisplayDuringRender: runtimeUsesMlx(m.runtime),
-} : m);
-
-export const resolveVideoModel = (modelId) =>
-  decorateVideoModel(getVideoModels().find((m) => m.id === modelId) || null);
-
-export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
-
-export const defaultVideoModelId = (capabilities, preferredId) => getDefaultVideoModelId(capabilities, preferredId);
+export { listVideoModels, resolveVideoModel, defaultVideoModelId };
 
 /**
  * The prompt a local video render sends, with each selected LoRA's trigger word

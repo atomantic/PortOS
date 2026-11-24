@@ -75,7 +75,7 @@ async function onVideoCompleted({ generationId, videos } = {}) {
   const wanted = new Set(ids.filter((id) => typeof id === 'string' && id));
   if (!wanted.size) return;
   return queueMediaIndexRefresh(async () => {
-    const { loadHistory } = await import('../videoGen/local.js');
+    const { loadHistory } = await import('../videoGen/history.js');
     const history = await loadHistory().catch(() => []);
     const entries = Array.isArray(history) ? history.filter((h) => wanted.has(h.id)) : [];
     for (const entry of entries) {

@@ -98,7 +98,7 @@ export async function startPerformanceRepair(projectId, sceneId, input) {
   const { assertCurrentPerformanceTakes } = await import('./performanceShot.js');
   const { resolveMasterAudioPath } = await import('./masterAudioPath.js');
   await assertCurrentPerformanceTakes(project, await resolveMasterAudioPath(project));
-  const { getHistoryItem } = await import('../videoGen/local.js');
+  const { getHistoryItem } = await import('../videoGen/history.js');
   const entry = await getHistoryItem(scene.videoHistoryId);
   const path = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
   const ffmpeg = await findFfmpeg();

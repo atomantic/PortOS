@@ -62,13 +62,10 @@ import { getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
-import {
-  listVideoModels,
-  defaultVideoModelId,
-  BYOV_VIDEO_RUNTIMES,
-  loadHistory,
-  DEFAULT_NUM_FRAMES,
-} from './local.js';
+import { listVideoModels, defaultVideoModelId } from './modelCatalog.js';
+import { BYOV_VIDEO_RUNTIMES } from './runtimes.js';
+import { loadHistory } from './history.js';
+import { DEFAULT_NUM_FRAMES } from './renderArgs.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,

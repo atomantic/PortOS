@@ -27,7 +27,8 @@ import { assertHostControl } from '../services/authGate.js';
 import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
 import { createImageGenWaiter } from '../services/imageGenWaiter.js';
-import { listVideoModels, defaultVideoModelId, warmByovLoraCapabilities } from '../services/videoGen/local.js';
+import { listVideoModels, defaultVideoModelId } from '../services/videoGen/modelCatalog.js';
+import { warmByovLoraCapabilities } from '../services/videoGen/runtimes.js';
 
 const router = Router();
 
