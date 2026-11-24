@@ -371,8 +371,10 @@ describe('git base versus worktree head', () => {
     write('server/heavy.js', 'export const heavy = 1;\n');
     write('server/new.test.js', "import './heavy.js';\n");
 
-    const base = measureGitTree(root, sha);
     const head = measureWorkingTree(root);
+    const base = measureGitTree(root, sha, head.texts);
+    expect(head.texts.get('server/wide.js')).toContain('./heavy.js');
+    expect(base.texts.get('server/wide.js')).toBe('export const wide = 1;\n');
     expect(base.tests.get('server/keep.test.js').has('server/heavy.js')).toBe(false);
     expect(head.tests.get('server/keep.test.js').has('server/heavy.js')).toBe(true);
     const report = compareImportGrowth(base, head);

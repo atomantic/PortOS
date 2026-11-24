@@ -363,6 +363,7 @@ describe('pregate hidden-content invocation', () => {
 
   it('passes the selected release base to the import guard while a main base still enforces growth', () => {
     copyFileSync(join(REPO_ROOT, 'scripts/lib/importGrowth.js'), join(root, 'scripts/lib/importGrowth.js'));
+    copyFileSync(join(REPO_ROOT, 'scripts/lib/guardCorpus.js'), join(root, 'scripts/lib/guardCorpus.js'));
     // Exercise the real guard in a child stage against a real Git base. Each
     // existing suite gains three leaves, exceeding the unchanged 2,500 limit.
     write('server/lib/wide.js', 'export const wide = true;\n');

@@ -104,8 +104,9 @@ export function createGuardCorpus(root = REPO_ROOT) {
   const indexEntries = () => {
     if (index) return index;
     const seen = new Set();
+    const records = git(['ls-files', '--stage', '-z']).split('\0');
     index = [];
-    for (const record of git(['ls-files', '--stage', '-z']).split('\0')) {
+    for (const record of records) {
       const tab = record.indexOf('\t');
       if (tab < 0) continue;
       const path = record.slice(tab + 1);
@@ -116,6 +117,14 @@ export function createGuardCorpus(root = REPO_ROOT) {
     return index;
   };
   const untrackedPaths = () => (untracked ??= git(['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean));
+  const trackedPaths = () => (indexPaths ??= indexEntries().map(({ path }) => path));
+  const workingTreeCandidates = () => {
+    if (!workingPaths) {
+      const tracked = new Set(trackedPaths());
+      workingPaths = Object.freeze([...untrackedPaths().filter((path) => !tracked.has(path)), ...tracked]);
+    }
+    return workingPaths;
+  };
 
   /** The `lstat` of a root-relative path, or null when nothing is there; once per path. */
   const lstatOf = (path) => {
@@ -162,16 +171,13 @@ export function createGuardCorpus(root = REPO_ROOT) {
     root: base,
     /** Present tracked paths matching `pathspecs`, relative to `cwd`: `trackedFiles(cwd, pathspecs)`. */
     tracked(pathspecs = [], { cwd = base } = {}) {
-      indexPaths ??= indexEntries().map(({ path }) => path);
-      return list(indexPaths, pathspecs, cwd, gitTrackedFiles);
+      return list(trackedPaths(), pathspecs, cwd, gitTrackedFiles);
     },
+    /** Tracked and non-ignored untracked candidates. Walkers that check presence on read can skip a separate stat pass. */
+    workingTreeCandidates,
     /** Present tracked plus untracked, non-ignored paths: `workingTreeFiles(cwd, pathspecs)`, untracked first as git prints them. */
     workingTree(pathspecs = [], { cwd = base } = {}) {
-      if (!workingPaths) {
-        const tracked = new Set(indexEntries().map(({ path }) => path));
-        workingPaths = [...untrackedPaths().filter((path) => !tracked.has(path)), ...tracked];
-      }
-      return list(workingPaths, pathspecs, cwd, gitWorkingTreeFiles);
+      return list(workingTreeCandidates(), pathspecs, cwd, gitWorkingTreeFiles);
     },
     /**
      * `{ path, mode }` index entries matching root-relative `pathspecs`, present on
