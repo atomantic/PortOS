@@ -254,7 +254,7 @@ async function finishRun(projectId, runId, status, failureReason) {
 function summarizeResult(result) {
   if (!result || typeof result !== 'object') return {};
   const out = {};
-  for (const k of ['id', 'jobId', 'seriesId', 'issueId', 'universeId', 'name', 'status']) {
+  for (const k of ['id', 'jobId', 'seriesId', 'issueId', 'universeId', 'workId', 'name', 'status']) {
     if (result[k] != null) out[k] = result[k];
   }
   return out;
