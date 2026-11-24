@@ -21,7 +21,7 @@
  *
  * Pure: no I/O, no request object.
  */
-import { isLoopbackHostname } from '../../lib/portosAuthCore.js';
+import { isAllowedHost, isLoopbackHostname } from '../../lib/portosAuthCore.js';
 
 // Re-exported so other Beeper-facing modules reuse this one loopback-spelling predicate.
 export { isLoopbackHostname };
@@ -45,6 +45,21 @@ export function parseBrowserOrigin(value) {
   // so demanding the input equal it is one check for all four.
   if (url.origin !== trimmed) return null;
   return url;
+}
+
+/**
+ * The origin this request actually arrived on, from the socket scheme
+ * (`req.secure`) and the `Host` header. `X-Forwarded-*` is deliberately ignored:
+ * PortOS enables no `trust proxy` and sits behind no trusted reverse proxy, so
+ * those headers are caller-controlled and would let a forged request poison the
+ * OAuth `redirect_uri`. The host must also be one PortOS answers on
+ * (`isAllowedHost`). Returns `null` when no valid origin can be derived.
+ */
+export function requestOriginFrom(req) {
+  const host = req?.headers?.host;
+  if (typeof host !== 'string' || !isAllowedHost(host)) return null;
+  const candidate = `${req.secure ? 'https' : 'http'}://${host.trim().toLowerCase()}`;
+  return parseBrowserOrigin(candidate)?.origin ?? null;
 }
 
 /** The hostname of an origin-ish string, lowercased, or `null`. */
