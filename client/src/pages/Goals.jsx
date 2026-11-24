@@ -27,8 +27,6 @@ const TAB_PRESENTATION = {
 export const TABS = buildPageNavTabs(getPageNavTabs('goals'), TAB_PRESENTATION, 'Goals');
 
 export default function Goals() {
-  // `/goals/list/:goalId` carries no `:tab` segment, so `useValidTab` falls back to
-  // 'list' — the only view with a routed per-goal detail panel today.
   const { tab: rawTab, goalId } = useParams();
   const tab = useValidTab(TABS, 'list');
   const navigate = useNavigate();
@@ -69,7 +67,7 @@ export default function Goals() {
   }, [rawTab, tab, navigate]);
 
   const handleTabChange = (tabId) => {
-    navigate(`/goals/${tabId}`, { replace: true });
+    navigate(goalId ? `/goals/${tabId}/${encodeURIComponent(goalId)}` : `/goals/${tabId}`, { replace: true });
   };
 
   return (
@@ -114,7 +112,7 @@ export default function Goals() {
           // chunk arriving late shouldn't look different from the data arriving
           // late (#4147).
           <Suspense fallback={<PageSkeleton header="none" label="Loading goal tree" fullHeight cards={4} sidebar={false} />}>
-            <GoalsTreeView data={data} onRefresh={loadData} />
+            <GoalsTreeView data={data} onRefresh={loadData} selectedGoalId={goalId} />
           </Suspense>
         )}
       </div>
