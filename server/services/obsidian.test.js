@@ -26,6 +26,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 const {
   addVault,
+  scanVault,
   upsertNote,
   getNote,
   createNote,
@@ -154,5 +155,22 @@ describe('DEFAULT_ICLOUD_OBSIDIAN & detectVaults', () => {
     expect(detected).toEqual([
       { name: 'VaultOne', path: validVault },
     ]);
+  });
+});
+
+describe('obsidian.scanVault metadata prefix', () => {
+  it('parses frontmatter/tags from the same 2048-code-unit window as a full read, incl. multibyte', async () => {
+    // 3-byte chars push the tag past the 2048-unit boundary only if bytes were mis-sliced.
+    const pad = '漢'.repeat(2100);
+    writeFileSync(join(VAULT_DIR, 'multi.md'), `---\ntitle: x\n---\n#early ${pad} #late-beyond-window ${'y'.repeat(50_000)}`);
+    writeFileSync(join(VAULT_DIR, 'short.md'), '#tiny');
+    const { notes, total } = await scanVault(vaultId);
+    expect(total).toBe(2);
+    const multi = notes.find((n) => n.name === 'multi');
+    expect(multi.hasFrontmatter).toBe(true);
+    expect(multi.tags).toContain('early');
+    expect(multi.tags).not.toContain('late-beyond-window');
+    expect(multi.size).toBeGreaterThan(50_000);
+    expect(notes.find((n) => n.name === 'short').tags).toContain('tiny');
   });
 });

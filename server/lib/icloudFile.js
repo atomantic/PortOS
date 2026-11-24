@@ -69,7 +69,7 @@
  * `obsidian.createNote` together.
  */
 
-import { readFile, stat } from 'fs/promises';
+import { open, readFile, stat } from 'fs/promises';
 import { realpathSync } from 'fs';
 import { dirname } from 'path';
 import { spawn } from './childProcess.js';
@@ -355,20 +355,32 @@ let readFlight = createSingleFlight();
  * `UV_THREADPOOL_SIZE` is raised in `ecosystem.config.cjs`.
  */
 export async function readIfMaterialized(path, options = {}) {
-  const { encoding = 'utf-8' } = options;
-  // Key on encoding too: a utf-8 string is not a base64 string.
-  return readFlight.run(`${encoding}\u0000${path}`, () => guardedRead(path, options));
+  const { encoding = 'utf-8', prefixBytes } = options;
+  // Key on encoding too: a utf-8 string is not a base64 string. A prefix read
+  // must never share a flight with a full read of the same path (or vice versa).
+  const mode = prefixBytes ? `prefix:${prefixBytes}` : 'full';
+  return readFlight.run(`${encoding}\u0000${mode}\u0000${path}`, () => guardedRead(path, options));
 }
 
 async function guardedRead(path, options) {
-  const { encoding = 'utf-8', label = 'iCloud file' } = options;
+  const { encoding = 'utf-8', label = 'iCloud file', prefixBytes } = options;
   if (await isSuspectedDataless(path)) {
     requestMaterialization(path, { label });
     const err = new Error(`${label} is evicted from local storage (iCloud); refusing to block on read`);
     err.code = ICLOUD_NOT_MATERIALIZED;
     throw err;
   }
-  return readFile(path, encoding);
+  if (!prefixBytes) return readFile(path, encoding);
+  // Bounded read: at most `prefixBytes` bytes. A multibyte character may be cut
+  // at the end; callers that slice by code units must request enough bytes.
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(prefixBytes);
+    const { bytesRead } = await fh.read(buf, 0, prefixBytes, 0);
+    return buf.subarray(0, bytesRead).toString(encoding);
+  } finally {
+    await fh.close();
+  }
 }
 
 /** Test hook: clear the one-shot warning + dedupe/single-flight state. */
