@@ -320,6 +320,23 @@ describe.skipIf(!runDb)('media asset index DB round-trip', () => {
     expect(await db.listAssets()).toEqual([{ filename: `${PFX}keep.png` }]);
   });
 
+  it('reconcile leaves unchanged rows alone, writes changed ones and prunes neither', async () => {
+    const names = [`${PFX}same.png`, `${PFX}edited.png`];
+    const gallery = (prompt) => async () => names.map((filename, index) => ({
+      filename, prompt: index ? prompt : 'same', createdAt: '2026-06-01T00:00:00.000Z',
+    }));
+    const rowVersions = async () => Object.fromEntries((await query(
+      'SELECT ref, xmin::text AS version FROM media_assets WHERE ref = ANY($1)', [names],
+    )).rows.map(row => [row.ref, row.version]));
+    await db.reconcileMediaAssets({ listGallery: gallery('before'), loadHistory: async () => [] });
+    const first = await rowVersions();
+    await db.reconcileMediaAssets({ listGallery: gallery('after'), loadHistory: async () => [] });
+    const second = await rowVersions();
+    expect(second[names[0]]).toBe(first[names[0]]);
+    expect(second[names[1]]).not.toBe(first[names[1]]);
+    expect((await db.listAssets({ kind: 'image' })).find(row => row.filename === names[1]).prompt).toBe('after');
+  });
+
   it('does not prune a row indexed after reconcile started (concurrent generation)', async () => {
     await new Promise((r) => setTimeout(r, 10));
     const listGallery = async () => {
