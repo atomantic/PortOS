@@ -1,18 +1,34 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ACTIONLINT_SHA256_LINUX_AMD64, ACTIONLINT_VERSION, parseActionlintVersion, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
+import { archiveUrl, installActionlint, verifySha256 } from './install-actionlint.js';
 import { resolveTargets } from './run-actionlint.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('pinned actionlint', () => {
-  it('mirrors its version and linux/amd64 archive SHA-256 literally in the CI lint job', () => {
+  it('provisions from the pins: verifies the checksum before extraction and fails on a wrong one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'actionlint-'));
+    const bytes = Buffer.from('not a real archive');
+    const urls = [];
+    const extract = vi.fn();
+    await expect(installActionlint({ dir, fetchArchive: async (u) => { urls.push(u); return bytes; }, extract })).rejects.toThrow(/checksum mismatch/);
+    expect(extract).not.toHaveBeenCalled();
+    expect(urls).toEqual([archiveUrl()]);
+    expect(archiveUrl()).toContain(`v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz`);
+    expect(() => verifySha256(bytes, createHash('sha256').update(bytes).digest('hex'))).not.toThrow();
+    expect(ACTIONLINT_SHA256_LINUX_AMD64).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('keeps the pins out of the CI workflow', () => {
     const ci = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
-    expect(ci).toContain(`ACTIONLINT_VERSION: ${ACTIONLINT_VERSION}`);
-    expect(ci).toContain(`ACTIONLINT_SHA256_LINUX_AMD64: ${ACTIONLINT_SHA256_LINUX_AMD64}`);
+    expect(ci).not.toContain(ACTIONLINT_SHA256_LINUX_AMD64);
+    expect(ci).toContain('node scripts/install-actionlint.js');
   });
 
   it('parses the bare version from the first line of `actionlint -version`', () => {
