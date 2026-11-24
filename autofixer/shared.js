@@ -18,7 +18,7 @@ export const PM2_BIN = join(dirname(require.resolve('pm2/package.json')), 'bin',
 export async function execPm2(pm2Args, { timeoutMs = COMMAND_TIMEOUT_MS } = {}) {
   // Package resolution can succeed while the PM2 entry point is a dangling link.
   if (!existsSync(PM2_BIN)) {
-    throw new Error(`PM2 binary not found at ${PM2_BIN} — run "npm install" in the repo root`);
+    throw new Error(`PM2 binary not found — run "npm install" in the repo root`);
   }
   const child = spawn(process.execPath, [PM2_BIN, ...pm2Args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const result = await waitForChild(child, { timeoutMs });

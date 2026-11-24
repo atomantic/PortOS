@@ -3,7 +3,7 @@ import { writeFile, rename } from 'node:fs/promises';
 
 const harness = vi.hoisted(() => ({
   apps: vi.fn(), sweep: vi.fn(), index: null, metadataExists: false, validate: vi.fn(), pm2: vi.fn(), list: vi.fn(), provider: vi.fn(),
-  settings: {}, startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(),
+  settings: {}, isGit: vi.fn(), startUi: vi.fn(), verify: vi.fn(), apply: vi.fn(),
 }));
 vi.mock('./ui.js', () => ({ startAutofixerUi: harness.startUi }));
 vi.mock('./shared.js', () => ({
@@ -24,7 +24,7 @@ vi.mock('../server/lib/cliProviderRun.js', () => ({
 vi.mock('./sandbox.js', () => ({
   sanitizeChildEnv: () => ({}), collectSecretEnvValues: () => [],
   buildFixPrompt: ({ errorLogs, outputLogs }) => JSON.stringify({ errorLogs, outputLogs }),
-  pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: async () => true,
+  pickRepairProvider: () => ({ provider: { id: 'example-cli' }, mode: 'claude-disallowed-tools' }), isGitRepo: (...args) => harness.isGit(...args),
   repairWorkspaceHold: async () => null,
   createDisposableWorktree: async () => ({ path: '/example/worktree' }),
   collectWorktreeDiff: async () => '', removeWorktree: vi.fn(),
@@ -48,6 +48,7 @@ beforeEach(() => {
   harness.pm2.mockReset().mockResolvedValue({ stdout: '' });
   harness.provider.mockReset().mockResolvedValue({ error: 'Example agent stopped', exitCode: 1 });
   harness.settings = {};
+  harness.isGit.mockReset().mockResolvedValue(true);
   harness.startUi.mockReset().mockResolvedValue(vi.fn());
   harness.index = null;
   harness.metadataExists = false;
@@ -82,6 +83,14 @@ describe('Autofixer daemon repair input boundary', () => {
     await nextCycle();
     expect(harness.startUi).toHaveBeenCalledTimes(2);
     expect(harness.list).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a non-git checkout without logging the host repoPath', async () => {
+    harness.isGit.mockResolvedValue(false);
+    await start();
+    const logged = [...errorLog.mock.calls, ...progressLog.mock.calls].flat().join('\n');
+    expect(logged).toContain('app checkout is not a git repository');
+    expect(logged).not.toContain('/example/repo');
   });
 
   it('never tries to repair the combined watchdog itself', async () => {

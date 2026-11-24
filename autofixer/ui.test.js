@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -97,6 +97,39 @@ const mutate = async (action, address = '192.0.2.10', headers = {}, process = 'e
   }
   return res;
 };
+
+describe('Autofixer read projections', () => {
+  it('GET /api/apps omits host paths and unrelated app fields', async () => {
+    harness.loadApps.mockResolvedValue([{ id: 'a1', name: 'Example', repoPath: '/example/repo', envFile: '/example/.env', startCommands: ['x'], pm2ProcessNames: ['p1'] }, { id: 'a2', name: 'Bare' }]);
+    await loadUi();
+    const res = response();
+    await harness.routes.get('/api/apps').at(-1)({ params: {} }, res);
+    expect(res.body).toEqual([{ id: 'a1', name: 'Example', pm2ProcessNames: ['p1'] }, { id: 'a2', name: 'Bare', pm2ProcessNames: [] }]);
+  });
+
+  it('GET /api/fixes/:session returns the patch without repoPath', async () => {
+    const id = 'autofixer_example_123';
+    await mkdir(join(dataDir, 'sessions', id), { recursive: true });
+    await writeFile(join(dataDir, 'sessions', id, 'metadata.json'), JSON.stringify({
+      sessionId: id, staged: true, processName: 'p1', appName: 'Example', repoPath: '/example/repo', appId: 'a1', diffBytes: 4, changedFiles: ['f.js'],
+    }));
+    await writeFile(join(dataDir, 'sessions', id, 'fix.patch'), '+fix');
+    await loadUi();
+    const res = response();
+    await harness.routes.get('/api/fixes/:session').at(-1)({ params: { session: id } }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.patch).toBe('+fix');
+    expect(res.body.record).toEqual({ sessionId: id, staged: true, processName: 'p1', appName: 'Example', diffBytes: 4, changedFiles: ['f.js'] });
+    expect(JSON.stringify(res.body)).not.toContain('/example/repo');
+  });
+
+  it('GET /api/fixes/:session keeps 404 errors', async () => {
+    await loadUi();
+    const res = response();
+    await harness.routes.get('/api/fixes/:session').at(-1)({ params: { session: 'missing' } }, res);
+    expect(res.statusCode).toBe(404);
+  });
+});
 
 describe('Autofixer process-control authority', () => {
   it.each([
