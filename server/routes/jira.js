@@ -411,6 +411,9 @@ router.post('/reports/generate', asyncHandler(async (req, res) => {
       throw new ServerError('JIRA is not enabled for this app', { status: 400, code: 'JIRA_NOT_ENABLED' });
     }
     const report = await jiraReports.generateReport(appId, app);
+    if (!report) {
+      throw new ServerError('Set this app\'s JIRA instance and project key before generating a report', { status: 400, code: 'JIRA_NOT_CONFIGURED' });
+    }
     res.json(report);
   } else {
     const reports = await jiraReports.generateAllReports();
