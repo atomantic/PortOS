@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { pbkdf2 } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,14 +40,20 @@ const owned = () => {
     launchOptions: { executablePath: 'example-chrome', headless: true, args: ['--mute-audio'] } });
   return { child, server, browser, chromium, start, profile, canonicalProfile, clearProfile, crashHandlers };
 };
-// Synthetic launch/connect readiness only; real filesystem completion uses the
-// operation handshake below rather than a number of event-loop turns.
+// Saved before a test installs fake timers. A fixed setImmediate spin can finish
+// every turn while libuv still holds the profile lstat (#18476): the removal
+// the test named then runs after the test has moved on, and its `rm` lands in
+// a later case. A real delay leaves the fake clock — and the cleanup deadlines
+// — where they are, and gives that stat a chance to finish first.
+const realSetTimeout = setTimeout;
 const flushUntil = async check => {
-  for (let i = 0; i < 1000; i++) {
-    if (check()) return;
-    await new Promise(resolve => setImmediate(resolve));
+  if (check()) return;
+  await new Promise(resolve => setImmediate(resolve));
+  const deadline = Date.now() + 2000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('Synthetic fixture did not settle');
+    await new Promise(resolve => realSetTimeout(resolve, 5));
   }
-  throw new Error('Synthetic fixture did not settle');
 };
 const recordRoot = fixture => {
   const temp = fixture.chromium.launchServer.mock.calls[0][0].env.TMPDIR;
@@ -205,6 +212,26 @@ describe('owned server browser fixture lifecycle', () => {
     expect(started.close()).toBe(closing);
     expect(fixture.child.exitCode).toBe(0);
     expect(existsSync(temp)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sees private-root removal when the profile check waits behind other libuv work', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const fixture = owned();
+    const started = await fixture.start();
+    const temp = recordRoot(fixture);
+    // Default pool is 4. Fill it before the profile stat so a setImmediate-only
+    // handshake can return before lstat posts, which is the CI failure mode.
+    const pool = Math.max(4, Number(process.env.UV_THREADPOOL_SIZE) || 4);
+    const busy = Promise.all(Array.from({ length: pool }, () => new Promise(resolve => {
+      pbkdf2('fixture', 'salt', 800000, 16, 'sha256', () => resolve());
+    })));
+    rm.mockImplementation(async () => {});
+    const closing = started.close().catch(error => error);
+    await flushUntil(() => rm.mock.calls.length > 0);
+    expect(await closing).toBeInstanceOf(Error);
+    expect(existsSync(temp)).toBe(true);
+    await busy;
     expect(vi.getTimerCount()).toBe(0);
   });
 
