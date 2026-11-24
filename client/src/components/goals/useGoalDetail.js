@@ -95,6 +95,28 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const [schedulingBusy, setSchedulingBusy] = useState(false);
   const [checkInsOpen, setCheckInsOpen] = useState(false);
   const [checkingIn, setCheckingIn] = useState(false);
+  // In-flight keys for one-shot mutations (accept/complete/link/toggle/delete). The ref is the
+  // synchronous double-click guard (state lags a render); the Set mirrors it so buttons can disable.
+  const pendingRef = useRef(new Set());
+  const [pendingActions, setPendingActions] = useState(() => new Set());
+
+  // Runs `fn` at most once per key at a time. Failures are swallowed on purpose — `request()` already
+  // toasts them — so callers never leak an unhandled rejection and their proposal/input state is
+  // left untouched for retry. Resolves true only when `fn` succeeded.
+  const runGuarded = async (key, fn) => {
+    if (pendingRef.current.has(key)) return false;
+    pendingRef.current.add(key);
+    setPendingActions(new Set(pendingRef.current));
+    try {
+      await fn();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      pendingRef.current.delete(key);
+      setPendingActions(new Set(pendingRef.current));
+    }
+  };
 
   const startEdit = () => {
     setForm({
@@ -168,7 +190,9 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setGeneratingPhases(true);
     setProposedPhases(null);
     try {
-      setProposedPhases(await generateGoalPhases(goal.id));
+      const phases = await generateGoalPhases(goal.id);
+      // Stable client key so reorder/delete doesn't mis-associate controlled inputs by index.
+      setProposedPhases(phases.map((p, i) => ({ ...p, _key: `phase-${i}` })));
     } catch {
       // Deliberately swallowed — see the single-layer note above.
     } finally {
@@ -178,7 +202,8 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleAcceptPhases = async () => {
     if (!proposedPhases?.length) return;
-    await acceptGoalPhases(goal.id, proposedPhases);
+    const ok = await runGuarded('accept-phases', () => acceptGoalPhases(goal.id, proposedPhases));
+    if (!ok) return;
     setProposedPhases(null);
     onRefresh();
   };
@@ -202,7 +227,8 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleAcceptDecomposition = async () => {
     if (!proposedDecomposition?.length) return;
-    await acceptGoalDecomposition(goal.id, proposedDecomposition);
+    const ok = await runGuarded('accept-decomposition', () => acceptGoalDecomposition(goal.id, proposedDecomposition));
+    if (!ok) return;
     setProposedDecomposition(null);
     onRefresh();
   };
@@ -278,14 +304,15 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const handleReschedule = () => runSchedulingAction(rescheduleGoalTimeBlocks);
 
   const handleDelete = async () => {
-    await deleteGoal(goal.id);
+    const ok = await runGuarded('delete-goal', () => deleteGoal(goal.id));
+    if (!ok) return;
     onClose();
     onRefresh();
   };
 
   const handleComplete = async () => {
-    await updateGoal(goal.id, { status: 'completed' });
-    onRefresh();
+    const ok = await runGuarded('complete-goal', () => updateGoal(goal.id, { status: 'completed' }));
+    if (ok) onRefresh();
   };
 
   const handleAddMilestone = async () => {
@@ -327,7 +354,8 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleLinkActivity = async () => {
     if (!selectedActivity) return;
-    await linkGoalActivity(goal.id, { activityName: selectedActivity });
+    const ok = await runGuarded('link-activity', () => linkGoalActivity(goal.id, { activityName: selectedActivity }));
+    if (!ok) return;
     setSelectedActivity('');
     onRefresh();
   };
@@ -359,32 +387,33 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const handleDeleteProgress = async (entryId) => {
-    await deleteGoalProgress(goal.id, entryId);
-    onRefresh();
+    const ok = await runGuarded(`delete-progress:${entryId}`, () => deleteGoalProgress(goal.id, entryId));
+    if (ok) onRefresh();
   };
 
   const handleUnlinkActivity = async (activityName) => {
-    await unlinkGoalActivity(goal.id, activityName);
-    onRefresh();
+    const ok = await runGuarded(`unlink-activity:${activityName}`, () => unlinkGoalActivity(goal.id, activityName));
+    if (ok) onRefresh();
   };
 
   const handleLinkCalendar = async () => {
     if (!selectedCalendar) return;
     const sc = subcalendars.find(s => s.calendarId === selectedCalendar);
     if (!sc) return;
-    await linkGoalCalendar(goal.id, {
+    const ok = await runGuarded('link-calendar', () => linkGoalCalendar(goal.id, {
       subcalendarId: sc.calendarId,
       subcalendarName: sc.name,
       matchPattern: calendarMatchPattern
-    });
+    }));
+    if (!ok) return;
     setSelectedCalendar('');
     setCalendarMatchPattern('');
     onRefresh();
   };
 
   const handleUnlinkCalendar = async (subcalendarId) => {
-    await unlinkGoalCalendar(goal.id, subcalendarId);
-    onRefresh();
+    const ok = await runGuarded(`unlink-calendar:${subcalendarId}`, () => unlinkGoalCalendar(goal.id, subcalendarId));
+    if (ok) onRefresh();
   };
 
   // The return value is the signal (issue #3520): ProgressSlider renders its own
@@ -428,13 +457,13 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
 
   const handleToggleTodo = async (todo) => {
     const nextStatus = todo.status === 'done' ? 'pending' : 'done';
-    await updateGoalTodo(goal.id, todo.id, { status: nextStatus });
-    onRefresh();
+    const ok = await runGuarded(`todo:${todo.id}`, () => updateGoalTodo(goal.id, todo.id, { status: nextStatus }));
+    if (ok) onRefresh();
   };
 
   const handleDeleteTodo = async (todoId) => {
-    await deleteGoalTodo(goal.id, todoId);
-    onRefresh();
+    const ok = await runGuarded(`todo:${todoId}`, () => deleteGoalTodo(goal.id, todoId));
+    if (ok) onRefresh();
   };
 
   const addTag = () => {
@@ -482,7 +511,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     form, setForm,
     tagInput, setTagInput,
     newMilestone, setNewMilestone,
-    milestoneSubmitting, milestoneActions,
+    milestoneSubmitting, milestoneActions, pendingActions,
     activities, activitiesState: activitiesList.state, activitiesError: activitiesList.error, retryActivities: activitiesList.retry,
     selectedActivity, setSelectedActivity,
     showProgressForm, setShowProgressForm,

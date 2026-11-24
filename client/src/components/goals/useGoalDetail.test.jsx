@@ -17,6 +17,16 @@ const decomposeGoal = vi.fn(() => Promise.resolve([]));
 const addGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeMilestoneTask = vi.fn(() => Promise.resolve({}));
+const acceptGoalPhases = vi.fn(() => Promise.resolve({}));
+const acceptGoalDecomposition = vi.fn(() => Promise.resolve({}));
+const deleteGoal = vi.fn(() => Promise.resolve({}));
+const updateGoalTodo = vi.fn(() => Promise.resolve({}));
+const deleteGoalTodo = vi.fn(() => Promise.resolve({}));
+const deleteGoalProgress = vi.fn(() => Promise.resolve({}));
+const linkGoalActivity = vi.fn(() => Promise.resolve({}));
+const unlinkGoalActivity = vi.fn(() => Promise.resolve({}));
+const linkGoalCalendar = vi.fn(() => Promise.resolve({}));
+const unlinkGoalCalendar = vi.fn(() => Promise.resolve({}));
 
 vi.mock('../../services/apiMeatspace.js', () => ({
   getActivities: (...args) => getActivities(...args),
@@ -41,6 +51,16 @@ vi.mock('../../services/apiGoals.js', () => ({
   addGoalMilestone: (...args) => addGoalMilestone(...args),
   completeGoalMilestone: (...args) => completeGoalMilestone(...args),
   completeMilestoneTask: (...args) => completeMilestoneTask(...args),
+  acceptGoalPhases: (...args) => acceptGoalPhases(...args),
+  acceptGoalDecomposition: (...args) => acceptGoalDecomposition(...args),
+  deleteGoal: (...args) => deleteGoal(...args),
+  updateGoalTodo: (...args) => updateGoalTodo(...args),
+  deleteGoalTodo: (...args) => deleteGoalTodo(...args),
+  deleteGoalProgress: (...args) => deleteGoalProgress(...args),
+  linkGoalActivity: (...args) => linkGoalActivity(...args),
+  unlinkGoalActivity: (...args) => unlinkGoalActivity(...args),
+  linkGoalCalendar: (...args) => linkGoalCalendar(...args),
+  unlinkGoalCalendar: (...args) => unlinkGoalCalendar(...args),
 }));
 
 const { useGoalDetail } = await import('./useGoalDetail');
@@ -389,7 +409,7 @@ describe('useGoalDetail handleGeneratePhases', () => {
     await act(async () => { await result.current.handleGeneratePhases(); });
 
     expect(generateGoalPhases).toHaveBeenCalledWith(GOAL.id);
-    expect(result.current.proposedPhases).toEqual([{ title: 'Phase 1', order: 0 }]);
+    expect(result.current.proposedPhases).toEqual([{ title: 'Phase 1', order: 0, _key: 'phase-0' }]);
     expect(result.current.generatingPhases).toBe(false);
   });
 
@@ -397,7 +417,7 @@ describe('useGoalDetail handleGeneratePhases', () => {
     generateGoalPhases.mockResolvedValueOnce([{ title: 'Old phase', order: 0 }]);
     const { result } = renderGoalDetail();
     await act(async () => { await result.current.handleGeneratePhases(); });
-    expect(result.current.proposedPhases).toEqual([{ title: 'Old phase', order: 0 }]);
+    expect(result.current.proposedPhases).toEqual([{ title: 'Old phase', order: 0, _key: 'phase-0' }]);
 
     generateGoalPhases.mockRejectedValueOnce(new Error('server exploded'));
     await act(async () => { await result.current.handleGeneratePhases(); });
@@ -586,5 +606,86 @@ describe('useGoalDetail progress entry date', () => {
     act(() => { result.current.setProgressForm({ ...result.current.progressForm, date: '2026-10-01', note: 'Backfill' }); });
     await act(async () => { await result.current.handleAddProgress(); });
     expect(addGoalProgress).toHaveBeenCalledWith('goal-1', expect.objectContaining({ date: '2026-10-01' }));
+  });
+});
+
+describe('useGoalDetail guarded mutations', () => {
+  const PHASES = [{ title: 'P1', description: '', targetDate: '2030-01-01', order: 0 }];
+  // Each row: [name, call, api mock]
+  const CASES = [
+    ['handleComplete', r => r.handleComplete(), () => updateGoal],
+    ['handleDelete', r => r.handleDelete(), () => deleteGoal],
+    ['handleDeleteProgress', r => r.handleDeleteProgress('p1'), () => deleteGoalProgress],
+    ['handleUnlinkActivity', r => r.handleUnlinkActivity('Run'), () => unlinkGoalActivity],
+    ['handleUnlinkCalendar', r => r.handleUnlinkCalendar('cal-1'), () => unlinkGoalCalendar],
+    ['handleToggleTodo', r => r.handleToggleTodo({ id: 't1', status: 'pending' }), () => updateGoalTodo],
+    ['handleDeleteTodo', r => r.handleDeleteTodo('t1'), () => deleteGoalTodo]
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+  });
+
+  it.each(CASES)('%s ignores a duplicate call while in flight', async (_n, call, api) => {
+    let release;
+    api().mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const { result } = renderGoalDetail();
+    let first;
+    act(() => { first = call(result.current); });
+    expect(result.current.pendingActions.size).toBe(1);
+    await act(async () => { await call(result.current); });
+    expect(api()).toHaveBeenCalledTimes(1);
+    await act(async () => { release({}); await first; });
+    expect(result.current.pendingActions.size).toBe(0);
+  });
+
+  it.each(CASES)('%s swallows an API rejection without refreshing', async (_n, call, api) => {
+    api().mockRejectedValueOnce(new Error('boom'));
+    const { result, onRefresh } = renderGoalDetail();
+    await act(async () => { await call(result.current); });
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(result.current.pendingActions.size).toBe(0);
+  });
+
+  it('handleAcceptPhases gates double-clicks and keeps the proposal on failure', async () => {
+    generateGoalPhases.mockResolvedValueOnce(PHASES);
+    const { result, onRefresh } = renderGoalDetail();
+    await act(async () => { await result.current.handleGeneratePhases(); });
+    expect(result.current.proposedPhases[0]._key).toBeTruthy();
+
+    acceptGoalPhases.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => { await result.current.handleAcceptPhases(); });
+    expect(result.current.proposedPhases).toHaveLength(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    let release;
+    acceptGoalPhases.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    let first;
+    act(() => { first = result.current.handleAcceptPhases(); });
+    await act(async () => { await result.current.handleAcceptPhases(); });
+    expect(acceptGoalPhases).toHaveBeenCalledTimes(2);
+    await act(async () => { release({}); await first; });
+    expect(result.current.proposedPhases).toBeNull();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleAcceptDecomposition keeps the proposal on failure', async () => {
+    decomposeGoal.mockResolvedValueOnce([{ title: 'M1', tasks: [] }]);
+    const { result, onRefresh } = renderGoalDetail();
+    await act(async () => { await result.current.handleDecompose(); });
+    acceptGoalDecomposition.mockRejectedValueOnce(new Error('boom'));
+    await act(async () => { await result.current.handleAcceptDecomposition(); });
+    expect(result.current.proposedDecomposition).toHaveLength(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('handleLinkActivity keeps the selection on failure', async () => {
+    linkGoalActivity.mockRejectedValueOnce(new Error('boom'));
+    const { result } = renderGoalDetail();
+    act(() => { result.current.setSelectedActivity('Run'); });
+    await act(async () => { await result.current.handleLinkActivity(); });
+    expect(result.current.selectedActivity).toBe('Run');
   });
 });
