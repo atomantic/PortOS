@@ -503,7 +503,7 @@ export async function deleteItem(id) {
 
     const [removed] = items.splice(index, 1);
     await save(items);
-    console.log(`📋 Review item deleted: ${removed.type} — ${removed.title}`);
+    console.log(`📋 Review item deleted: ${removed.type} (${removed.id})`);
     return { result: removed, events: [['item:deleted', removed]] };
   });
 }
