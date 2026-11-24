@@ -36,7 +36,7 @@ const { extractLastFrame } = await import('./frameExtraction.js');
 const { getHistoryItem } = await import('./history.js');
 const { stitchVideos } = await import('./stitchVideos.js');
 const { videoGenEvents } = await import('./events.js');
-const { generateContinuousVideoEpisode, composeEpisodeClips } = await import('./continuousVideo.js');
+const { generateContinuousVideoEpisode, composeEpisodeClips, attachEpisodeSseClient } = await import('./continuousVideo.js');
 
 // Two-beat scene: a 20-word opening beat (always 'fresh'), then a second
 // 20-word beat that overflows BEAT_MAX_WORDS (35) and becomes a 'continue'
@@ -168,10 +168,21 @@ describe('generateContinuousVideoEpisode', () => {
 
   it('refuses an explicitly unavailable H3 temporal episode before any clip renders', async () => {
     resolveVideoModel.mockReturnValue({ runtime: 'minimax_h3', name: 'Example H3' });
-    await expect(generateContinuousVideoEpisode({
+    const jobId = 'h3-refused';
+    const writes = [];
+    const mockRes = { writeHead: vi.fn(), write: vi.fn((chunk) => writes.push(chunk)), end: vi.fn(), req: { on: vi.fn() } };
+    const promise = generateContinuousVideoEpisode({
       scenes, bible, framings: [null, 'medium shot'],
       renderOptions: { continuityStrategy: 'window' },
-    })).rejects.toMatchObject({ code: 'VIDEO_TEMPORAL_UNAVAILABLE' });
+      jobId,
+    });
+    // Synchronous job registration lets an immediate SSE attach observe the
+    // terminal error frame instead of 404ing before resolveEpisodeContinuity finishes.
+    expect(attachEpisodeSseClient(jobId, mockRes)).toBe(true);
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/temporal|window|hardware|comparison/i);
+    expect(writes.join('')).toContain('"type":"error"');
     expect(localGenerate).not.toHaveBeenCalled();
     expect(extractLastFrame).not.toHaveBeenCalled();
   });
@@ -264,5 +275,50 @@ describe('generateContinuousVideoEpisode', () => {
     expect(localGenerate).toHaveBeenCalledTimes(2);
     expect(stitchVideos).not.toHaveBeenCalled();
     expect(unlinkGuarded).toHaveBeenCalledExactlyOnceWith(trimVideoFromFrame.mock.calls[0][1]);
+  });
+
+  it('registers SSE before delayed backend import resolves and schedules cleanup on setup rejection', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.resetModules();
+      vi.doMock('./generateVideo.js', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          get generateVideo() { throw new Error('cold backend import failed'); },
+        };
+      });
+      const mod = await import('./continuousVideo.js');
+      const jobId = 'delayed-setup-fail';
+      const writes = [];
+      const mockRes = { writeHead: vi.fn(), write: vi.fn((chunk) => writes.push(chunk)), end: vi.fn(), req: { on: vi.fn() } };
+
+      const promise = mod.generateContinuousVideoEpisode({
+        scenes, bible, framings: [null, 'medium shot'], backend: 'local', jobId,
+      });
+
+      // Must attach synchronously while dynamic backend import is still pending.
+      expect(mod.attachEpisodeSseClient(jobId, mockRes)).toBe(true);
+      expect(mockRes.writeHead).toHaveBeenCalledWith(200, expect.objectContaining({ 'Content-Type': 'text/event-stream' }));
+
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain('cold backend import failed');
+      expect(writes.join('')).toContain('"type":"error"');
+      expect(writes.join('')).toContain('cold backend import failed');
+
+      // Late client within cleanup window receives replayed error; after delay job is evicted.
+      const lateWrites = [];
+      const lateRes = { writeHead: vi.fn(), write: vi.fn((chunk) => lateWrites.push(chunk)), end: vi.fn(), req: { on: vi.fn() } };
+      expect(mod.attachEpisodeSseClient(jobId, lateRes)).toBe(true);
+      expect(lateWrites.join('')).toContain('cold backend import failed');
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockRes.end).toHaveBeenCalled();
+      expect(mod.attachEpisodeSseClient(jobId, lateRes)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      vi.resetModules();
+    }
   });
 });

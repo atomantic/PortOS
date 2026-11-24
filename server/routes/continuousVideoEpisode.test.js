@@ -2,7 +2,7 @@ import {
   describe, it, expect, vi, beforeEach,
 } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+import { request, startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/settings.js', () => ({
@@ -123,6 +123,53 @@ describe('continuousVideoEpisode routes', () => {
     it('404s when the job is not found', async () => {
       const r = await request(app).get('/api/continuous-video/missing/events');
       expect(r.status).toBe(404);
+    });
+
+    it('attaches SSE immediately after POST while cold backend import is still pending and streams setup rejection', async () => {
+      vi.resetModules();
+      vi.doUnmock('../services/videoGen/continuousVideo.js');
+      vi.doUnmock('../lib/videoPromptLinter.js');
+      vi.doMock('../services/videoGen/generateVideo.js', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return {
+          get generateVideo() { throw new Error('cold import crashed'); },
+        };
+      });
+
+      const { default: realRouter } = await import('./continuousVideoEpisode.js');
+      const liveApp = express();
+      liveApp.use(express.json());
+      liveApp.use('/api/continuous-video', realRouter);
+      liveApp.use(errorMiddleware);
+
+      const server = await startLoopbackServer(liveApp);
+      const { port } = server.address();
+      const baseUrl = `http://127.0.0.1:${port}`;
+      try {
+        const postRes = await fetch(`${baseUrl}/api/continuous-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scenes, bible, backend: 'local' }),
+        });
+        expect(postRes.status).toBe(200);
+        const { jobId } = await postRes.json();
+
+        // Attach immediately while dynamic backend import is still blocked.
+        const sseRes = await fetch(`${baseUrl}/api/continuous-video/${jobId}/events`);
+        expect(sseRes.status).toBe(200);
+        expect(sseRes.headers.get('content-type')).toContain('text/event-stream');
+
+        const reader = sseRes.body.getReader();
+        const { value } = await reader.read();
+        const text = new TextDecoder().decode(value);
+        expect(text).toContain('"type":"error"');
+        expect(text).toContain('cold import crashed');
+        await reader.cancel();
+      } finally {
+        server.closeAllConnections?.();
+        await closeLoopbackServer(server);
+        vi.resetModules();
+      }
     });
   });
 });
