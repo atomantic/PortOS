@@ -1373,6 +1373,33 @@ describe('Integration: applyGoalOrganization', () => {
     expect(updatedA.parentId).toBeNull();
   });
 
+  it('promotes a child above its former parent whichever one is listed first', async () => {
+    const oldRoot = await createGoal({ title: 'Old root' });
+    const pillar = await createGoal({ title: 'Pillar', parentId: oldRoot.id });
+    const leaf = await createGoal({ title: 'Leaf', parentId: oldRoot.id });
+
+    const result = await applyGoalOrganization([
+      { id: oldRoot.id, goalType: 'sub-apex', suggestedParentId: pillar.id },
+      { id: pillar.id, goalType: 'apex', suggestedParentId: null },
+      { id: leaf.id, goalType: 'standard', suggestedParentId: pillar.id }
+    ]);
+
+    expect(result.applied).toBe(3);
+    const parents = Object.fromEntries((await getGoals()).goals.map(g => [g.title, g.parentId]));
+    expect(parents).toEqual({ 'Old root': pillar.id, Pillar: null, Leaf: pillar.id });
+  });
+
+  it('keeps a goal under its current parent when the suggested one would form a cycle', async () => {
+    const root = await createGoal({ title: 'Root' });
+    const mid = await createGoal({ title: 'Mid', parentId: root.id });
+    const leaf = await createGoal({ title: 'Leaf', parentId: mid.id });
+
+    const result = await applyGoalOrganization([{ id: mid.id, suggestedParentId: leaf.id }]);
+
+    expect(result.applied).toBe(0);
+    expect((await getGoals()).goals.find(g => g.id === mid.id).parentId).toBe(root.id);
+  });
+
   it('should ignore invalid goalType values', async () => {
     const goal = await createGoal({ title: 'Test Goal', goalType: 'standard' });
 
