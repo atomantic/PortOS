@@ -165,3 +165,31 @@ describe('CreateApp — standardization when the socket drops', () => {
     expect(screen.queryByText(/Connection lost during standardization/)).toBeNull();
   });
 });
+
+describe('CreateApp — description submission', () => {
+  beforeEach(() => {
+    for (const key of Object.keys(handlers)) delete handlers[key];
+  });
+
+  const submitWith = async (text) => {
+    const { createApp } = await import('../services/apiApps.js');
+    createApp.mockClear();
+    const user = userEvent.setup();
+    await detectApp();
+    const field = screen.getByLabelText('Description');
+    await user.clear(field);
+    if (text) await user.type(field, text);
+    await user.click(screen.getByRole('button', { name: 'Save App' }));
+    return createApp.mock.calls[0][0];
+  };
+
+  it('sends the description trimmed', async () => {
+    const data = await submitWith('  A brief note  ');
+    expect(data.description).toBe('A brief note');
+  });
+
+  it('omits the description when blank', async () => {
+    const data = await submitWith('   ');
+    expect(data.description).toBeUndefined();
+  });
+});
