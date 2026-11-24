@@ -14,6 +14,7 @@ vi.mock('../../lib/hfCache.js', () => ({
 }));
 
 // ---- Pure-helper tests (no mocks needed) ---------------------------------
+import { inspectModelCache } from '../../lib/hfCache.js';
 import {
   buildMusicGenArgs,
   buildSidecarArgs,
@@ -28,6 +29,7 @@ import {
   DEFAULT_ENGINE_ID,
   MUSICGEN_MODELS,
   AUDIOLDM2_MODELS,
+  ACESTEP15_MODELS,
   MINIMAX_MUSIC3_MLX_MODELS,
   DEFAULT_MUSICGEN_MODEL_ID,
   DEFAULT_AUDIOLDM2_MODEL_ID,
@@ -105,12 +107,19 @@ describe('ENGINES backend registry', () => {
     expect(ENGINES.audioldm2.maxDurationSec).toBeGreaterThan(ENGINES.musicgen.maxDurationSec);
   });
 
-  it('keeps ACE-Step 1.5 separate from v1 and requires its fixed installed snapshot', () => {
+  it('keeps ACE-Step 1.5 separate from v1 and pins its fixed installed snapshot revision', () => {
     expect(ENGINES.acestep15).toMatchObject({
       id: 'acestep15', installEnv: 'INSTALL_ACESTEP15', lyrics: true,
-      customModels: false, fixedModelInstall: true,
+      customModels: false, fixedModelInstall: true, supportsModelRevision: true,
     });
-    expect(ENGINES.acestep15.models).toEqual([expect.objectContaining({ repo: 'ACE-Step/Ace-Step1.5' })]);
+    expect(ACESTEP15_MODELS).toEqual([
+      expect.objectContaining({
+        id: 'ace-step-v1.5',
+        repo: 'ACE-Step/Ace-Step1.5',
+        revision: expect.stringMatching(/^[0-9a-f]{40}$/),
+      }),
+    ]);
+    expect(ENGINES.acestep15.models).toEqual(ACESTEP15_MODELS);
     expect(ENGINES.acestep15.scriptPath).toMatch(/generate_acestep15\.py$/);
     expect(ENGINES.acestep.models[0].repo).toBe('ACE-Step/ACE-Step-v1-3.5B');
   });
@@ -235,13 +244,16 @@ describe('clampDuration', () => {
 });
 
 describe('buildSidecarArgs', () => {
-  it('routes ACE-Step 1.5 to its own sidecar with the fixed model repo and lyrics', () => {
+  it('routes ACE-Step 1.5 to its own sidecar with the pinned model revision and lyrics', () => {
+    const pinnedRevision = ACESTEP15_MODELS[0].revision;
     const { args } = buildSidecarArgs({
       engineId: 'acestep15', pythonPath: '/venv/python', repo: 'ACE-Step/Ace-Step1.5',
-      prompt: 'bright pop', lyrics: '[Verse] Example', durationSec: 999, outputPath: '/tmp/out.wav',
+      revision: pinnedRevision, prompt: 'bright pop', lyrics: '[Verse] Example',
+      durationSec: 999, outputPath: '/tmp/out.wav',
     });
     expect(args[0]).toMatch(/generate_acestep15\.py$/);
     expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', 'ACE-Step/Ace-Step1.5']);
+    expect(args.slice(args.indexOf('--revision'), args.indexOf('--revision') + 2)).toEqual(['--revision', pinnedRevision]);
     expect(args.slice(args.indexOf('--duration'), args.indexOf('--duration') + 2)).toEqual(['--duration', '240']);
     expect(args.slice(args.indexOf('--lyrics'), args.indexOf('--lyrics') + 2)).toEqual(['--lyrics', '[Verse] Example']);
   });
@@ -410,6 +422,7 @@ const h = vi.hoisted(() => ({
   finishChild: null,
   musicgenPython: '/fake/venv-musicgen/bin/python3',
   audioldm2Python: '/fake/venv-audioldm2/bin/python3',
+  acestep15Python: '/fake/venv-acestep15/bin/python3',
   minimaxMusic3Python: '/fake/venv-minimax-music3/bin/python3',
   minimaxMusic3MlxPython: '/fake/venv-minimax-music3-mlx/bin/python3',
   // isEngineHealthy's import probe: which interpreters it ran, and whether the
@@ -516,6 +529,7 @@ vi.mock('../../lib/pythonSetup.js', async () => {
     ...actual,
     resolveMusicgenPython: () => h.musicgenPython,
     resolveAudioldm2Python: () => h.audioldm2Python,
+    resolveAcestep15Python: () => h.acestep15Python,
     resolveMinimaxMusic3Python: () => h.minimaxMusic3Python,
     resolveMinimaxMusic3MlxPython: () => h.minimaxMusic3MlxPython,
   };
@@ -535,6 +549,7 @@ beforeEach(() => {
   h.mockStdout = 'STAGE:done\nRESULT:{"output":"x","durationSec":12.5,"sampleRate":32000}\n';
   h.musicgenPython = '/fake/venv-musicgen/bin/python3';
   h.audioldm2Python = '/fake/venv-audioldm2/bin/python3';
+  h.acestep15Python = '/fake/venv-acestep15/bin/python3';
   h.minimaxMusic3Python = '/fake/venv-minimax-music3/bin/python3';
   h.minimaxMusic3MlxPython = '/fake/venv-minimax-music3-mlx/bin/python3';
   h.probeCalls.length = 0;
@@ -544,6 +559,7 @@ beforeEach(() => {
   h.rosettaAppleSilicon = false;
   cuda.status = 'available';
   cuda.maxVramGb = 40;
+  vi.mocked(inspectModelCache).mockReset().mockResolvedValue({ cached: true });
   invalidateEngineHealth();
 });
 
@@ -652,6 +668,55 @@ describe('generateMusic backend selection', () => {
       status: 503,
       code: 'PIPELINE_MUSIC_VRAM_INSUFFICIENT',
     });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it('routes ACE-Step 1.5 to its sidecar and inspects/pins the immutable HF revision', async () => {
+    const pinnedRevision = ACESTEP15_MODELS[0].revision;
+    await generateMusic({
+      prompt: 'bright pop',
+      lyrics: '[verse]\nExample words',
+      engine: 'acestep15',
+      durationSec: 45,
+    });
+    expect(inspectModelCache).toHaveBeenCalledWith('ACE-Step/Ace-Step1.5', { revision: pinnedRevision });
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].bin).toBe('/fake/venv-acestep15/bin/python3');
+    expect(spawnCalls[0].args[0]).toMatch(/generate_acestep15\.py$/);
+    expect(spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--model'), spawnCalls[0].args.indexOf('--model') + 2)).toEqual([
+      '--model', 'ACE-Step/Ace-Step1.5',
+    ]);
+    expect(spawnCalls[0].args.slice(spawnCalls[0].args.indexOf('--revision'), spawnCalls[0].args.indexOf('--revision') + 2)).toEqual([
+      '--revision', pinnedRevision,
+    ]);
+  });
+
+  it('rejects ACE-Step 1.5 when only a mismatched or missing cached snapshot exists', async () => {
+    const pinnedRevision = ACESTEP15_MODELS[0].revision;
+    vi.mocked(inspectModelCache).mockImplementationOnce(async (_repo, { revision } = {}) => ({
+      cached: revision === 'b'.repeat(40),
+    }));
+    await expect(generateMusic({
+      prompt: 'bright pop',
+      engine: 'acestep15',
+    })).rejects.toMatchObject({
+      status: 503,
+      code: 'PIPELINE_MUSIC_MODEL_MISSING',
+    });
+    expect(inspectModelCache).toHaveBeenCalledWith('ACE-Step/Ace-Step1.5', { revision: pinnedRevision });
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it('rejects an unpinned repo override on a revision-pinned engine before cache inspection or spawn', async () => {
+    await expect(generateMusic({
+      prompt: 'bright pop',
+      engine: 'acestep15',
+      repo: 'ACE-Step/Ace-Step1.5',
+    })).rejects.toMatchObject({
+      status: 400,
+      code: 'PIPELINE_MUSIC_MODEL_UNPINNED',
+    });
+    expect(inspectModelCache).not.toHaveBeenCalled();
     expect(spawnCalls).toHaveLength(0);
   });
 
