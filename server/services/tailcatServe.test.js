@@ -20,6 +20,12 @@ import {
   DEFAULT_SERVE_PORT,
 } from './tailcatServe.js';
 
+vi.mock('fs/promises', async (original) => ({
+  ...(await original()),
+  chmod: vi.fn().mockResolvedValue(undefined),
+}));
+import { chmod } from 'fs/promises';
+
 vi.mock('../lib/fileUtils.js', async (original) => ({
   ...(await original()),
   readJSONFile: vi.fn(),
@@ -150,6 +156,7 @@ describe('tailcatServe helpers', () => {
     expect(_liveServeForTests()?.child).toBe(child);
     expect(saved?.serve?.enabled).toBe(true);
     expect(saved?.serve?.tcAddress).toBe(EXAMPLE_TC);
+    expect(chmod).toHaveBeenCalledWith(expect.stringMatching(/tailcat-serve\.json$/), 0o600);
     expect(instanceEvents.emit.mock.calls).toEqual([['tailcat:serve:changed'], ['tailcat:serve:changed']]);
   });
 

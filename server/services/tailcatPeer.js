@@ -20,7 +20,8 @@
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { spawn } from '../lib/childProcess.js';
-import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPortReachable } from '../lib/connectivity.js';
@@ -102,7 +103,7 @@ async function loadForwards() {
 
 async function saveForwards(entries) {
   await ensureDir(PATHS.data);
-  await atomicWrite(FORWARDS_FILE, { version: 1, forwards: entries });
+  await writeSecureJson(FORWARDS_FILE, { version: 1, forwards: entries });
 }
 
 /**

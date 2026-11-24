@@ -25,7 +25,8 @@ import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
-import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { dataPath, readJSONFile, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { writeSecureJson } from '../lib/secureAuthStore.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -266,7 +267,7 @@ async function loadServeData() {
 
 async function saveServeEntry(entry) {
   await ensureDir(PATHS.data);
-  await atomicWrite(SERVE_FILE, { version: 2, serve: entry });
+  await writeSecureJson(SERVE_FILE, { version: 2, serve: entry });
   instanceEvents.emit('tailcat:serve:changed');
 }
 
