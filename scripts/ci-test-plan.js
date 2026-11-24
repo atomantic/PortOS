@@ -18,9 +18,9 @@ import {
   MAX_CHANGED_CODE_FILES, NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_SOURCE_FILES, SLASHDO_CONTRACT_TEST_FILES,
   SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_PATH_RE, browserSuitesIn, featureDirectory, fixtureOwnerFor,
   fullTriggersFor, getAlwaysRunTests, hasWindowsRiskFile, isDocumentationOnly, isExecutable, isGeneratedData,
-  isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isSharedClientDependency, isTestFile,
-  TOOLING_TESTS, pathMatchesFeature, runnerForTest, splitByRunner, structuralTestsFor, toolingTestsFor, touchesJobInputs,
-  uniqueSorted, windowsContractTests, windowsSelectionFor,
+  isLintSurface, isPythonScript, isRouteOnlyAppDiff, isServerRunnerFile, isServerSeed, isSharedClientDependency,
+  isTestFile, TOOLING_TESTS, pathMatchesFeature, runnerForTest, serverSeedTestsFor, splitByRunner,
+  structuralTestsFor, toolingTestsFor, touchesJobInputs, uniqueSorted, windowsContractTests, windowsSelectionFor,
 } from './lib/ciPlanRules.js';
 import {
   FULL_SUITE_SHARDS, MAX_TARGETED_TEST_FILES, emitGitHubPlan, fansOut, reachCount, shardIndexes,
@@ -33,10 +33,10 @@ export { BROWSER_SUITES } from './lib/browserSuites.js';
 export {
   DOCKER_CONTAINMENT_LIVE_ENTRIES, DOCKER_CONTAINMENT_LIVE_PATH_RE, EXPLICIT_ALWAYS_RUN_TESTS, FIXTURE_OWNERS,
   LINUX_CONTAINMENT_PATH_RE, LINUX_CONTAINMENT_TESTS, MACOS_NATIVE_PATH_RE, MACOS_NATIVE_TESTS,
-  NODE_MINIMUM_PATH_RE, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH, SUPERCOLLIDER_LIVE_ENTRIES,
-  SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS, WINDOWS_RISK_RULES,
-  getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, sourceReferencePattern, splitByRunner,
-  structuralTestsFor,
+  NODE_MINIMUM_PATH_RE, SERVER_SEED_OWNERS, SLASHDO_CONTRACT_TEST_FILES, SLASHDO_GITLINK_PATH,
+  SUPERCOLLIDER_LIVE_ENTRIES, SUPERCOLLIDER_LIVE_PATH_RE, TOOLING_OWNER_RE, TOOLING_TESTS, WINDOWS_CONTRACT_TESTS,
+  WINDOWS_RISK_RULES, getAlwaysRunTests, getGuardTests, isRouteOnlyAppDiff, isServerSeed, serverSeedTestsFor,
+  sourceReferencePattern, splitByRunner, structuralTestsFor,
 } from './lib/ciPlanRules.js';
 export {
   PLATFORM_PACKAGE_RES, WINDOWS_INSTALLED_WORKSPACES, classifyDependencyChange,
@@ -284,7 +284,7 @@ function buildSuitePlan(changedFiles, {
   const directTests = executable.filter(isTestFile).filter((path) => trackedSet.has(path));
   const sourceFiles = executable.filter((path) => !isTestFile(path));
   const unsupportedSources = sourceFiles.filter((path) => (
-    !isServerRunnerFile(path) && !path.startsWith('client/')
+    !isServerRunnerFile(path) && !isServerSeed(path) && !path.startsWith('client/')
   ));
   if (unsupportedSources.length > 0) {
     return fullPlan(changed, `unmapped executable surface: ${unsupportedSources[0]}`, { appRouteOnly, trackedSet });
@@ -308,14 +308,17 @@ function buildSuitePlan(changedFiles, {
   const isClientSource = (path) => path.startsWith('client/') || clientDependencySet.has(path);
   const serverSources = jsSources.filter(isServerRunnerFile);
   const clientSources = jsSources.filter(isClientSource);
+  const serverSeeds = jsSources.filter(isServerSeed);
   const hasServerSource = serverSources.length > 0;
   const hasClientSource = clientSources.length > 0;
+  const hasServerSeed = serverSeeds.length > 0;
   const serverFeatures = uniqueSorted(serverSources.map(featureDirectory).filter(Boolean));
   const clientFeatures = uniqueSorted(clientSources.map(featureDirectory).filter(Boolean));
   const features = uniqueSorted([...serverFeatures, ...clientFeatures]);
   const selectedTests = [
     ...directTests,
     ...fixtureTests,
+    ...serverSeeds.flatMap((seed) => serverSeedTestsFor(seed, trackedSet)),
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
     ...toolingTestsFor(changed, trackedSet),
@@ -401,6 +404,7 @@ function buildSuitePlan(changedFiles, {
   if (features.length) reason = `targeted features: ${features.join(', ')}`;
   else if (jsSources.length === 0 && pythonSources.length > 0) reason = 'python script parsing contracts';
   else if (jsSources.length === 0 && fixtureTests.length > 0) reason = 'text fixture owners';
+  else if (serverSources.length === 0 && clientSources.length === 0 && pythonSources.length === 0 && hasServerSeed) reason = 'server seed contracts';
 
   return finishPlan({
     full: false,
@@ -422,7 +426,7 @@ function buildSuitePlan(changedFiles, {
       files: changed.filter((path) => isLintSurface(path) && trackedSet.has(path)),
     },
     build: hasClientSource,
-    smoke: hasServerSource,
+    smoke: hasServerSource || hasServerSeed,
     windows,
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
