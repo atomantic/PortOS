@@ -32,6 +32,7 @@ import {
   removeMtplxModel,
   getSlotstreamServerStatus,
   getManagedInklingRuntimeStatus,
+  saveSplashContextWindow,
   controlManagedInklingRuntime,
   startSlotstreamServer,
   stopSlotstreamServer,
@@ -276,6 +277,16 @@ export default function LocalLlmRuntimesView({ view } = {}) {
       }));
       return result;
     },
+  );
+  const updateSplashContext = (contextWindow) => runAction(
+    'runtime-context-splash',
+    async () => {
+      const result = await saveSplashContextWindow(contextWindow);
+      inklingRequests.current.splash = (inklingRequests.current.splash ?? 0) + 1;
+      setInklingStatuses((previous) => ({ ...previous, splash: { ...previous.splash, ...result } }));
+      return result;
+    },
+    'Saved Splash context for its next start',
   );
   const inklingAction = (runtime, action) => {
     if (Object.hasOwn(INKLING_CHANGE_LABELS, action)) setInklingConfirm({ runtime, action });
@@ -969,6 +980,7 @@ export default function LocalLlmRuntimesView({ view } = {}) {
           actionInProgress={actionInProgress}
           onRefresh={() => loadInklingStatus(selectedRuntime)}
           onAction={inklingAction}
+          onSaveContext={updateSplashContext}
         />
       )}
 

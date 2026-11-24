@@ -40,6 +40,7 @@ import {
   localLlmLmStudioServiceSchema,
   localLlmMtplxStartSchema,
   managedInklingActionSchema,
+  splashContextSchema,
   localLlmSlotstreamStartSchema,
   localLlmSlotstreamDownloadSchema,
   localLlmMtplxSearchSchema,
@@ -59,7 +60,7 @@ import {
 } from '../services/llamaServerManager.js'
 import { MTPLX_APP, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx } from '../services/mtplxServerManager.js'
 import { getSplashRuntimeStatus } from '../services/splashRuntimeStatus.js'
-import { SPLASH_APP, installSplashRuntime, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
+import { SPLASH_APP, installSplashRuntime, saveSplashContextWindow, startSplashServer, stopSplashServer } from '../services/splashServerManager.js'
 import { MKSERVE_APP, getMkserveRuntimeStatus, installMkserve, startMkserveServer, stopMkserveServer } from '../services/mkserveRuntimeManager.js'
 import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream } from '../services/slotstreamServerManager.js'
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
@@ -1190,6 +1191,13 @@ const runtimeActionRoute = (runtime, label, action, run) => asyncHandler(async (
 })
 
 router.get('/splash/status', runtimeStatusRoute('splash', getSplashRuntimeStatus))
+router.put('/splash/context', asyncHandler(async (req, res) => {
+  const { contextWindow } = validateRequest(splashContextSchema, req.body ?? {})
+  if (inklingOperations.has('splash')) {
+    throw new ServerError('Splash already has an operation in progress.', { status: 409 })
+  }
+  res.json(await saveSplashContextWindow(contextWindow))
+}))
 router.post('/splash/install', runtimeActionRoute('splash', 'Splash', 'install', installSplashRuntime))
 router.post('/splash/upgrade', runtimeActionRoute('splash', 'Splash', 'upgrade', installSplashRuntime))
 router.post('/splash/start', runtimeActionRoute('splash', 'Splash', 'start', startSplashServer))
