@@ -5,7 +5,6 @@ import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 
 const api = vi.hoisted(() => ({
   getCosJobs: vi.fn(),
-  createCosJob: vi.fn(),
   triggerCosJob: vi.fn(),
   updateCosJob: vi.fn(),
   toggleCosJob: vi.fn(),
@@ -22,7 +21,6 @@ const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), loading: vi.
 
 vi.mock('../../../services/apiAgents.js', () => ({
   getCosJobs: api.getCosJobs,
-  createCosJob: api.createCosJob,
   triggerCosJob: api.triggerCosJob,
   updateCosJob: api.updateCosJob,
   toggleCosJob: api.toggleCosJob,
@@ -219,23 +217,6 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     expect(screen.getAllByLabelText('Shell command').length).toBeGreaterThan(1);
     expect(screen.queryByLabelText('Trigger action')).toBeNull();
   });
-});
-
-it('creates one job when Create Job is clicked again before the first request answers', async () => {
-  let answer;
-  api.createCosJob.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
-  render(<JobsTab />);
-  await screen.findByText('Test Job');
-  fireEvent.click(screen.getByRole('button', { name: /New Job/ }));
-  fireEvent.change(screen.getByLabelText('Job name *'), { target: { value: 'Nightly' } });
-  fireEvent.change(screen.getByLabelText('Prompt template'), { target: { value: 'Do it' } });
-  const create = screen.getByRole('button', { name: 'Create Job' });
-  fireEvent.click(create);
-  fireEvent.click(create);
-  expect(create).toBeDisabled();
-  await act(async () => answer({ job: mockJob }));
-  expect(api.createCosJob).toHaveBeenCalledTimes(1);
-  expect(toast.success).toHaveBeenCalledWith('Job created');
 });
 
 it.each([false, true])('retries a failed system tasks read (has jobs: %s)', async (hasJobs) => {

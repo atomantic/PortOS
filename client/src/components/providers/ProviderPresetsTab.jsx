@@ -49,7 +49,6 @@ export default function ProviderPresetsTab({
   addingSample,
   onAddSample,
   onAddAllSamples,
-  addingAllSamples,
   showRunPanel,
   apps,
   appsState,
@@ -114,8 +113,7 @@ export default function ProviderPresetsTab({
               {addableSamples.length > 1 && (
                 <button
                   onClick={onAddAllSamples}
-                  disabled={addingAllSamples}
-                  className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 text-sm bg-port-accent hover:bg-port-accent/80 text-white rounded transition-colors"
                 >
                   Add All ({addableSamples.length})
                 </button>

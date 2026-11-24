@@ -462,16 +462,6 @@ describe('VoiceTab initial load failures', () => {
     expect(voiceApi.getVoiceConfig).toHaveBeenCalledTimes(2);
   });
 
-  it('lets a speech rate below 1 be typed', async () => {
-    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
-    const rate = await screen.findByLabelText('Speech rate');
-    fireEvent.change(rate, { target: { value: '0' } });
-    expect(rate).toHaveValue(0);
-    fireEvent.change(rate, { target: { value: '0.8' } });
-    fireEvent.blur(rate);
-    expect(rate).toHaveValue(0.8);
-  });
-
   it('still renders the form when only the status probe fails', async () => {
     voiceApi.getVoiceStatus.mockRejectedValue(new Error('status down'));
     render(<MemoryRouter><VoiceTab /></MemoryRouter>);

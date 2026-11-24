@@ -698,7 +698,7 @@ export default function AIProviders() {
     return updated;
   };
 
-  const [handleAddAllSamples, addingAllSamples] = useAsyncAction(async () => {
+  const handleAddAllSamples = async () => {
     if (addableSamples.length === 0) return;
 
     const succeededIds = [];
@@ -724,7 +724,7 @@ export default function AIProviders() {
     } else {
       toast.warning(`Added ${succeededIds.length} provider${succeededIds.length === 1 ? '' : 's'}, ${failedIds.length} failed`);
     }
-  });
+  };
 
   const handleRuntimeInstallComplete = () => {
     toast.success(`${installingRuntime?.label || 'Runtime'} installed and ready to test`);
@@ -988,7 +988,6 @@ export default function AIProviders() {
           addingSample={addingSample}
           onAddSample={handleAddSample}
           onAddAllSamples={handleAddAllSamples}
-          addingAllSamples={addingAllSamples}
           showRunPanel={showRunPanel}
           apps={apps}
           appsState={appsState}

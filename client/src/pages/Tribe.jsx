@@ -273,19 +273,14 @@ export default function Tribe() {
     }, { replace: true });
   };
 
-  const loggingTouchRef = useRef(new Set());
   const logTouch = async (id) => {
-    if (loggingTouchRef.current.has(id)) return;
-    loggingTouchRef.current.add(id);
     const now = new Date();
     const date = localDateStr(now);
     const result = await createTribeTouchpoint(id, {
       happenedAt: now.toISOString(), localDate: date,
       channel: contacts.find((contact) => contact.id === id)?.channel || '',
       summary: 'Manual touchpoint', source: 'user',
-    }, { silent: true })
-      .catch((err) => { toast.error(err.message || 'Failed to log touchpoint'); return null; })
-      .finally(() => loggingTouchRef.current.delete(id));
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to log touchpoint'); return null; });
     if (!result?.id) return;
     setContacts((current) => current.map((contact) => (contact.id === id ? { ...contact, lastContact: date } : contact)));
     if (draft.id === id) setDraft((current) => ({ ...current, lastContact: date, loadedLastContact: date }));

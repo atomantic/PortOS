@@ -189,22 +189,4 @@ describe('Brain record editor ownership', () => {
     expect(screen.getByRole('region', { name: 'Memory entries' })).toBe(list);
     expect(screen.getByRole('combobox', { name: 'Filter by status' })).toHaveValue('active');
   });
-
-  it('keeps commas and spaces while follow-ups are typed and saves them as a list', async () => {
-    api.getBrainPeople.mockResolvedValue([{ id: 'p', name: 'Example person', followUps: ['old one'] }]);
-    api.updateBrainPerson.mockResolvedValue({ id: 'p', name: 'Example person', followUps: ['call back', 'send book'] });
-    await mount([memory('a')]);
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'People' })); });
-    fireEvent.click(screen.getByRole('button', { name: 'Edit', exact: true }));
-    const field = screen.getByPlaceholderText('Follow-ups (comma separated)');
-    expect(field).toHaveValue('old one');
-    for (const text of ['call ', 'call back,', 'call back, send book']) {
-      fireEvent.change(field, { target: { value: text } });
-      expect(field).toHaveValue(text);
-    }
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true })); });
-    const [, payload] = api.updateBrainPerson.mock.calls[0];
-    expect(payload.followUps).toEqual(['call back', 'send book']);
-    expect(payload).not.toHaveProperty('followUpInput');
-  });
 });

@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ArrowLeft, Reply, Sparkles, Send, RefreshCw, Archive, Trash2, User, ImageOff } from 'lucide-react';
 import toast from '../ui/Toast';
-import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { formatCount, formatDateTime } from '../../utils/formatters';
 import { getSettings } from '../../services/apiSystem.js';
 import {
@@ -215,7 +214,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
     }
   };
 
-  const [handleCreateDraft, savingDraft] = useAsyncAction(async () => {
+  const handleCreateDraft = async () => {
     if (!account) return toast.error('No account available');
     const to = [displayedMessage.from?.email].filter(Boolean);
     const subject = `Re: ${displayedMessage.subject || ''}`;
@@ -233,7 +232,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
     setShowReply(false);
     setReplyBody('');
     setGeneratedDraftId(null);
-  });
+  };
 
   const handleAction = (action) => {
     if (!displayedMessage.accountId) return;
@@ -289,8 +288,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
           <div className="flex gap-2">
             <button
               onClick={handleCreateDraft}
-              disabled={savingDraft}
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 bg-port-accent text-white rounded-lg text-sm hover:bg-port-accent/80 transition-colors"
             >
               <Send size={16} /> Save Draft
             </button>

@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { useAsyncAction } from '../hooks/useAsyncAction';
 import {
   ClipboardList,
   Plus,
@@ -115,7 +114,7 @@ export default function Review() {
     getReviewBriefing().catch(() => null).then(setBriefing);
   }, []);
 
-  const [handleCreateTodo, creatingTodo] = useAsyncAction(async (e) => {
+  const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
     // Failure toasts via the shared request wrapper; keep the typed text so it can be retried.
@@ -127,7 +126,7 @@ export default function Review() {
       const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
       navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }
-  });
+  };
 
   const handleQueueDismiss = (itemOrId) => {
     const key = queueItemKey(itemOrId);
@@ -327,7 +326,7 @@ export default function Review() {
             />
             <button
               type="submit"
-              disabled={creatingTodo || !newTodo.trim()}
+              disabled={!newTodo.trim()}
               className="px-3 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition-colors flex items-center gap-1.5"
             >
               <Plus size={16} />
