@@ -557,6 +557,16 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     expect(buildPublicReviewActionsCliEnv(settings)).toMatchObject(settings);
   });
 
+  it('makes room for input when a chosen local window is smaller than the inherited output reserve', () => {
+    const provider = { command: 'claude', ollamaBacked: true, harnessContext: { tokens: 32768 },
+      envVars: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:11434' } };
+    expect(composeProviderEnv({ provider })).toMatchObject({
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
+    });
+    provider.envVars.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '10000';
+    expect(composeProviderEnv({ provider }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe('10000');
+  });
+
   it('emits MAX_THINKING_TOKENS only where an omitted thinking field means OFF', () => {
     // Ollama's Anthropic endpoint maps an omitted `thinking` field to its
     // non-thinking mode, so the var is a real off switch there. SGLang falls

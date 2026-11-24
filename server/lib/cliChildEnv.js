@@ -97,9 +97,17 @@ function claudeLocalEnvDefaults(provider) {
 
 function claudeContextOverride(provider) {
   const value = provider?.harnessContext;
-  if (!value || value.model || !isClaudeCommand(provider.command) || !provider.command
+  if (!value || value.model || !Number.isSafeInteger(value.tokens) || !provider.command || !isClaudeCommand(provider.command)
     || !(provider.envVars?.ANTHROPIC_BASE_URL || provider.envVars?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)) return {};
-  return { CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens) };
+  const output = provider.splashBacked === true ? 8192 : isLocalBackedClaude(provider) ? Number(CLAUDE_LOCAL_MAX_OUTPUT_TOKENS) : 32000;
+  // A smaller explicit context should not spend the whole window on the
+  // implicit output reserve. An explicit per-preset output value remains theirs.
+  return {
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(value.tokens),
+    ...(provider.envVars?.CLAUDE_CODE_MAX_OUTPUT_TOKENS == null && output >= value.tokens
+      ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(8192, Math.floor(value.tokens / 4))) }
+      : {}),
+  };
 }
 
 /**
