@@ -339,6 +339,25 @@ describe('GitTab merged branches checked out in worktrees', () => {
     expect(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' })).toBeInTheDocument();
   });
 
+  it('also discloses worktree removal when merged cleanup is confirmed from the remote branches panel', async () => {
+    getRemoteBranches.mockResolvedValue({
+      branches: [
+        { name: 'claim/issue-1', fullRef: 'origin/claim/issue-1', merged: true, hasLocal: true, isDefault: false, isProtected: false },
+      ],
+      defaultBranch: 'main',
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    const remoteCleanBtn = await screen.findByRole('button', { name: 'Clean 1 merged' });
+    expect(remoteCleanBtn).toHaveAttribute(
+      'title',
+      'Deletes merged branches locally and on the remote, removing the 2 worktrees holding one — unless it still has uncommitted or unmerged work, or is in use'
+    );
+    fireEvent.click(remoteCleanBtn);
+
+    expect(await screen.findByRole('button', { name: 'Delete all merged (local + remote + worktrees)' })).toBeInTheDocument();
+  });
+
   it('re-reads the branches after a cleanup that removed a worktree, so stale worktree badges clear', async () => {
     cleanupMergedBranches.mockResolvedValue({
       deleted: [{ name: 'claim/issue-1', local: 'deleted', remote: null, worktree: 'removed' }],

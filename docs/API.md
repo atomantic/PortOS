@@ -38,12 +38,11 @@ sibling settings and concurrent independent edits. Supplied objects and arrays
 replace that key; explicit null/empty values clear fields where their schema allows.
 Unreadable/malformed persisted settings and failed writes return errors.
 
-Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
-`localLlm.mtplx`, `localLlm.slotstream`, `imageGen`, `imageGen.external`,
-`imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
-`imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
-`writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
-`music.chiptune` and `music.designer`. The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
+Supported paths are `localLlm.{ollama,lmstudio,llama,mtplx,slotstream}`,
+`imageGen`, `imageGen.{external,local,codex,grok,agy,fal,runway,higgsfield,google,gemini,expose}`,
+`renderDefaults`, `videoGen`, `videoGen.{grok,gemini,fal,runway,higgsfield,google,reactor}`,
+`pipeline`, `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`,
+`autoUpdate`, and `music.{chiptune,designer}` (see `settingsSlicePartialSchemas` in `server/lib/settingsValidation.js`). The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
@@ -152,7 +151,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/messages` | Messages (email) integration |
 | `/api/digital-twin/social-accounts`, `/api/digital-twin/identity`, `/api/digital-twin/autobiography` | Digital-twin sub-domains |
 | `/api/meatspace`, `/api/meatspace/genome` | MeatSpace (health, POST) and genome markers |
-| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and the local runtime servers PortOS can start/stop (Ollama, LM Studio, `llama-server`, MTPLX, Slotstream — the last three as PM2 processes; `POST /api/local-llm/save-startup` is `pm2 save`), plus MTPLX's checkpoint catalog — `GET /api/local-llm/mtplx/models/search`, `POST .../models/pull` (byte progress on the `mtplx:download` socket event), `POST .../models/remove`. Slotstream lifecycle is `GET /api/local-llm/slotstream/status` (which also carries the curated checkpoint catalog), `POST .../start` (never downloads weights), `POST .../stop`, `POST .../install`, and `POST /api/local-llm/slotstream/models/download` — the separate, explicit action that fetches a checkpoint, with byte progress on the `slotstream:download` socket event. |
+| `/api/lmstudio`, `/api/local-llm` | Local LLM backends and managed runtimes (Ollama, LM Studio, plus PM2-managed `llama-server`, MTPLX, Slotstream, Splash, mkserve; `POST /api/local-llm/save-startup` runs `pm2 save`). MTPLX adds `GET /api/local-llm/mtplx/models/search` and `POST .../models/{pull,remove}` (`mtplx:download` progress). Slotstream adds `GET /api/local-llm/slotstream/status` (with catalog), `POST .../{start,stop,install}`, and `POST /api/local-llm/slotstream/models/download` (`slotstream:download` progress; `start` never downloads weights). Splash and mkserve each expose `/splash/*` and `/mkserve/*` (`status`, `install`, `upgrade`, `start`, `stop`). |
 | `/api/code-review` | Code review runs |
 | `/api/voice`, `/api/voice/public` | Voice assistant |
 | `/api/api-docs` | Generated HTTP/event catalogs, OpenAPI 3.0.3 documents, AsyncAPI 3 document, and the minimized semantic tool resource |

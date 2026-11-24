@@ -95,6 +95,8 @@ Define all ports in a top-level `PORTS` object as the single source of truth:
 // =============================================================================
 // Port Configuration - All ports defined here as single source of truth
 // =============================================================================
+const path = require('path');
+
 const PORTS = {
   API: 5570,        // REST API server
   UI: 5571,         // Web UI
@@ -114,7 +116,8 @@ module.exports = {
     },
     {
       name: 'my-ui',
-      script: 'node_modules/.bin/vite',
+      script: path.join(__dirname, 'client', 'node_modules', 'vite', 'bin', 'vite.js'),
+      cwd: path.join(__dirname, 'client'),
       args: `--port ${PORTS.UI}`,
       env: {
         VITE_PORT: PORTS.UI
@@ -178,12 +181,12 @@ PortOS automatically detects ports from env vars:
 > That guard covers the Eidoverse bridge only — it is not a general defence, which is
 > why the range rule above still matters.
 
-PostgreSQL in native mode listens on the system default `:5432`, outside these ranges. Two third-party
-local runtimes also sit outside them, each on its own upstream default so an unmodified install works
-against PortOS without editing anything: MTPLX on `:8000` and the vLLM Qwen3.8-27B container on
-`:18020` (`syv-ai/qwen38-27b-rtx3090`'s own compose file). The SGLang Qwen3.8-27B container sits
-next to it on `:18021` — that port is PortOS's own choice rather than an upstream default, since
-SGLang publishes an image but no compose project (its own default is `:30000`).
+PostgreSQL in native mode listens on the system default `:5432`, outside these ranges. Several local
+and dedicated-host runtimes also sit outside them: MTPLX on `:8000` (its upstream default) with
+managed Splash (`:8001`) and mkserve (`:8002`) beside it; the vLLM Qwen3.8-27B container on
+`:18020` (`syv-ai/qwen38-27b-rtx3090`'s own compose file); the SGLang Qwen3.8-27B container on
+`:18021` (PortOS's own choice rather than SGLang's `:30000` default); and the authenticated
+Fleet LLM host on `:18022`.
 
 ## Viewing Port Usage
 
