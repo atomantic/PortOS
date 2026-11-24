@@ -4,10 +4,13 @@ import useLatestRequest from '../../../hooks/useLatestRequest';
 import { RefreshCw, Clock } from 'lucide-react';
 import { formatCount, timeAgo } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
+import ListLoadError from '../../ui/ListLoadError';
 
 export default function LogTab({ vaultId, allNotes }) {
   const [log, setLog] = useState(null);
   const [loading, setLoading] = useState(true);
+  // A log that exists but could not be read is not an absent log.
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const logExists = allNotes?.some(n => n.path === 'wiki/log.md');
   // Wiki.jsx keeps this tab mounted across a vault switch, so a read for the
@@ -17,9 +20,11 @@ export default function LogTab({ vaultId, allNotes }) {
   const loadLog = async () => {
     const isCurrent = beginLoad();
     setLoading(true);
-    const data = await getNote(vaultId, 'wiki/log.md').catch(() => null);
+    const data = await getNote(vaultId, 'wiki/log.md', { silent: true }).catch(() => null);
     if (!isCurrent()) return;
-    setLog(data?.error ? null : data);
+    const ok = Boolean(data) && !data.error;
+    setLoadFailed(!ok);
+    setLog(ok ? data : null);
     setLoading(false);
   };
 
@@ -27,6 +32,7 @@ export default function LogTab({ vaultId, allNotes }) {
     if (logExists) loadLog();
     else {
       beginLoad();
+      setLoadFailed(false);
       setLog(null);
       setLoading(false);
     }
@@ -66,6 +72,8 @@ export default function LogTab({ vaultId, allNotes }) {
       </div>
     );
   }
+
+  if (loadFailed) return <ListLoadError what="the activity log" onRetry={loadLog} />;
 
   if (!log) {
     return (
