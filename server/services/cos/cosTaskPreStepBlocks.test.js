@@ -201,6 +201,12 @@ describe('resolveSwarmBlock', () => {
     expect(block).toContain('$(mktemp -d)/issue-<num>');
   });
 
+  it('deletes the mktemp scratch root after Phase 7 only when the swarm merges', () => {
+    const sentence = 'After Phase 7, the orchestrator deletes the `mktemp -d` scratch root it created for this run, and only that root.';
+    expect(resolveSwarmBlock('claim-issue', 3)).toContain(sentence);
+    expect(resolveSwarmBlock('claim-issue', 3, { leaveOpen: true })).not.toContain(sentence);
+  });
+
   it('instructs each agent to verify its own issue trailer after create and after each edit', () => {
     // Belt to the namespacing's braces: the PR-body flow is create-then-edit, so
     // a stale/foreign body can land minutes later during the review loop. `gh`

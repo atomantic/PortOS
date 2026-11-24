@@ -21,3 +21,23 @@ export function localReviewBridgeRequest(request, cwd) {
   if (request.kind === 'claim-review') reviewRequest.toolFree = true;
   return { ...reviewRequest, cwd };
 }
+
+/**
+ * Shell block that runs `pipeline` (diff command | jq | bridge) and prints the review findings.
+ * The reply lives in shell variables, never a temp file: agents routinely dropped the cleanup `trap`
+ * of the old mktemp form and left bridge replies and diffs in the host temp directory (#18466).
+ * `pipefail` makes a failing diff command fail the run instead of reviewing an empty diff.
+ */
+export function buildLocalReviewShell(pipeline) {
+  return `set -o pipefail
+RESPONSE="$(${pipeline})"; STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  echo "Local reviewer failed: $(printf '%s' "$RESPONSE" | jq -r '.error // "review diff or bridge command failed"' 2>/dev/null || echo "review diff or bridge command failed")" >&2
+  exit 1
+fi
+if ! FINDINGS="$(printf '%s' "$RESPONSE" | jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)')"; then
+  echo "Local reviewer failed: $(printf '%s' "$RESPONSE" | jq -r '.error // "missing .findings in reviewer response"')" >&2
+  exit 1 # Never treat an absent or malformed response as clean.
+fi
+printf '%s\\n' "$FINDINGS"`;
+}

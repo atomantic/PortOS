@@ -15,15 +15,17 @@ A previous agent finished task **task-example** and opened **PR https://github.c
 **Loop UNTIL all required reviewers are satisfied and optional reviewers are satisfied or explicitly inconclusive (or the stop mode triggers), capped at 10 iterations per reviewer:**
 1. For EACH reviewer in order — `ollama` → `copilot` → `codex` → `@example-user` — run a full review-and-fix sub-loop before advancing to the next. **copilot**: request a Copilot review when you reach its turn (poll every 5–15s, max 5 min/round), then re-request on later rounds. **codex**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or `git diff main...HEAD`). When invoking a reviewer with a pinned model or reasoning effort, pass it: `codex --model gpt-5.6-sol -c model_reasoning_effort=high …`. Follow the **CLI Reviewer Procedure** section below for the exact headless invocation and review-only contract — do NOT probe the CLI or guess flags. **ollama**: Pipe the diff into PortOS's local-review bridge and extract its review text before evaluating it.
 ```bash
-REVIEW_RESPONSE=$(mktemp)
-trap 'rm -f "$REVIEW_RESPONSE" "${REVIEW_RESPONSE}.findings"' EXIT
-glab mr diff 42 | jq -Rs '{ backend: "ollama", timeoutMs: 1800000, diff: . }' | node /portos/server/scripts/run-local-code-review.mjs > "$REVIEW_RESPONSE"
-if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "${REVIEW_RESPONSE}.findings"; then
-  echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
-  exit 1 # Never treat an absent or malformed response as clean.
-else
-  cat "${REVIEW_RESPONSE}.findings"
+set -o pipefail
+RESPONSE="$(glab mr diff 42 | jq -Rs '{ backend: "ollama", timeoutMs: 1800000, diff: . }' | node /portos/server/scripts/run-local-code-review.mjs)"; STATUS=$?
+if [ "$STATUS" -ne 0 ]; then
+  echo "Local reviewer failed: $(printf '%s' "$RESPONSE" | jq -r '.error // "review diff or bridge command failed"' 2>/dev/null || echo "review diff or bridge command failed")" >&2
+  exit 1
 fi
+if ! FINDINGS="$(printf '%s' "$RESPONSE" | jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)')"; then
+  echo "Local reviewer failed: $(printf '%s' "$RESPONSE" | jq -r '.error // "missing .findings in reviewer response"')" >&2
+  exit 1 # Never treat an absent or malformed response as clean.
+fi
+printf '%s\n' "$FINDINGS"
 ```
 Only an `ok: true` response with a validated `clean` or `findings` verdict and a successfully extracted `.findings` value is review text; treat it like any other reviewer's findings. This run pins settings for `ollama` → `"model": "qwen3-coder"` — add those keys to the JSON object (`jq -Rs '{ backend: "ollama", model: "…", timeoutMs: 1800000, diff: . }'`) so the review runs with them instead of the install defaults. Send ONLY the keys named above; a key with no pinned value overrides the install default with junk. **@github reviewers**: request `@example-user` as MR reviewer using the GitLab project UI or API, then inspect `glab mr view 42` for their review and address any findings; their approval gates the merge.
 2. Fix EVERY finding from the review in this worktree, including non-blocking findings and nits; run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, and resolve ALL review threads from that review, including non-blocking findings and nits.
