@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import ListLoadError from '../ui/ListLoadError';
 import { Plus, Eye, EyeOff, Pencil, Trash2, ShieldCheck, ShieldAlert } from 'lucide-react';
 import {
   getVaultRecords,
@@ -26,13 +27,14 @@ function Toggle({ checked, disabled, onChange, label }) {
 }
 
 export default function PrivacyVaultTab({ subjectId }) {
-  const [records, setRecords] = useState([]);
+  const [records, setRecords] = useState(null);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [revealed, setRevealed] = useState({}); // id -> plaintext (never persisted)
   const [confirmDelete, setConfirmDelete] = useState(null);
-  const [keyConfigured, setKeyConfigured] = useState(true);
+  const [keyConfigured, setKeyConfigured] = useState(null);
+  const [errors, setErrors] = useState({});
 
   // `?subject=` switches reuse this mounted tab: without the guard a slow read
   // for the previous subject lands last and shows their records under this one.
@@ -41,11 +43,15 @@ export default function PrivacyVaultTab({ subjectId }) {
     const isCurrent = beginRequest();
     setLoading(true);
     Promise.allSettled([
-      getVaultRecords(undefined, { subjectId }), getPrivacyStatus({ subjectId }),
+      getVaultRecords(undefined, { subjectId, silent: true }), getPrivacyStatus({ subjectId, silent: true }),
     ]).then(([recs, status]) => {
       if (!isCurrent()) return;
-      setRecords(recs.status === 'fulfilled' ? recs.value : []);
+      const errors = {};
+      if (recs.status === 'fulfilled') setRecords(recs.value);
+      else errors.records = recs.reason;
       if (status.status === 'fulfilled') setKeyConfigured(status.value.keyConfigured !== false);
+      else errors.status = status.reason;
+      setErrors(errors);
       setLoading(false);
     });
   }, [subjectId, beginRequest]);
@@ -59,7 +65,7 @@ export default function PrivacyVaultTab({ subjectId }) {
     setDrawerOpen(false);
     setRecords((prev) => (wasEditing
       ? prev.map((r) => (r.id === saved.id ? saved : r))
-      : [saved, ...prev]));
+      : [saved, ...(prev ?? [])]));
     // A replaced value invalidates any revealed plaintext.
     setRevealed((prev) => { const next = { ...prev }; delete next[saved.id]; return next; });
   };
@@ -99,14 +105,15 @@ export default function PrivacyVaultTab({ subjectId }) {
 
   // Group records by type for a scannable table.
   const groups = VAULT_TYPES
-    .map((t) => ({ ...t, rows: records.filter((r) => r.type === t.id) }))
+    .map((t) => ({ ...t, rows: (records ?? []).filter((r) => r.type === t.id) }))
     .filter((g) => g.rows.length > 0);
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm">
-          {keyConfigured ? (
+          {errors.status && <ListLoadError what="vault encryption status" error={errors.status} onRetry={load} retrying={loading} />}
+          {keyConfigured === null ? null : keyConfigured ? (
             <span className="inline-flex items-center gap-1.5 text-port-success">
               <ShieldCheck size={16} /> Encryption engaged
             </span>
@@ -124,9 +131,10 @@ export default function PrivacyVaultTab({ subjectId }) {
         </button>
       </div>
 
-      {loading ? (
+      {errors.records && <ListLoadError what="vault records" error={errors.records} onRetry={load} retrying={loading} />}
+      {loading && records === null ? (
         <div className="text-gray-500 text-sm py-8 text-center">Loading vault…</div>
-      ) : records.length === 0 ? (
+      ) : records === null ? null : records.length === 0 ? (
         <div className="border border-dashed border-port-border rounded-lg p-8 text-center text-gray-500 text-sm">
           No vault records yet. Add your identity facts (name, addresses, phones, emails) — each is encrypted at rest.
         </div>

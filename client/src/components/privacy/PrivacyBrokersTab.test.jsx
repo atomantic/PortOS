@@ -54,6 +54,11 @@ vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), war
 
 import PrivacyBrokersTab from './PrivacyBrokersTab.jsx';
 import {
+  getPrivacyScanStatus,
+  getPrivacyBrokerCases,
+  getPrivacyBrokers,
+  getPrivacyOptOutDigest,
+  getPrivacyOptOutSchedule,
   runPrivacyOptOut,
   refreshPrivacyBrokers,
   getPrivacyCaseEvidence,
@@ -66,6 +71,42 @@ import {
 const renderTab = (props = {}) => render(<MemoryRouter initialEntries={['/privacy/brokers']}><PrivacyBrokersTab {...props} /></MemoryRouter>);
 
 describe('PrivacyBrokersTab', () => {
+  it('reports every failed read without exposure counts and keeps run controls disabled', async () => {
+    const failure = new Error('Unavailable');
+    for (const read of [getPrivacyScanStatus, getPrivacyBrokerCases, getPrivacyBrokers, getPrivacyOptOutDigest, getPrivacyOptOutSchedule]) {
+      read.mockRejectedValueOnce(failure);
+    }
+    renderTab();
+
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(5));
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(5);
+    expect(screen.queryByText(/brokers enabled|due for re-check|No cases yet|Broker database \(0\)/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Scan now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Run opt-out pass' })).toBeDisabled();
+  });
+
+  it('shows successful sections when scan status alone fails', async () => {
+    getPrivacyScanStatus.mockRejectedValueOnce(new Error('Unavailable'));
+    renderTab();
+
+    expect(await screen.findByText(/Could not load broker scan status/)).toBeInTheDocument();
+    expect(screen.getByText('WhitePages')).toBeInTheDocument();
+    expect(screen.getByText('Human tasks (2)')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Removed \(1\)/i })).toBeInTheDocument();
+    expect(screen.queryByText(/brokers enabled/)).toBeNull();
+  });
+
+  it('keeps the case rows when the post-scan refresh fails', async () => {
+    renderTab();
+    expect(await screen.findByText('WhitePages')).toBeInTheDocument();
+    getPrivacyBrokerCases.mockRejectedValueOnce(new Error('Unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Scan now' }));
+
+    expect(await screen.findByText(/Could not load broker cases/)).toBeInTheDocument();
+    expect(screen.getByText('WhitePages')).toBeInTheDocument();
+    expect(screen.queryByText(/No cases yet/)).toBeNull();
+  });
+
   it('shows the missing send account next action after an opt-out pass', async () => {
     const toast = (await import('../ui/Toast')).default;
     runPrivacyOptOut.mockResolvedValueOnce({ submitted: [], skipped: 1, nextActions: ['Connect a Gmail or Outlook account to send opt-out emails'] });
