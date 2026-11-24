@@ -39,6 +39,7 @@ vi.mock('../../notifications.js', () => h.notificationsFactory());
 // Mocked bindings, so a test can drive the budget and persisted settings per call.
 const { getDomainBudgetStatus } = await import('../../domainUsage.js');
 const { getSettings } = await import('../../settings.js');
+const { loadState } = await import('../../cos/cosState.js');
 
 // Real services + the unit under test (imported AFTER the mocks above).
 const seriesSvc = await import('../series.js');
@@ -74,6 +75,24 @@ it('blocks expansion on an unresolved pilot and confines first-issue production 
   const plan = autopilot.__testing.buildDryRunPlan(await seriesSvc.getSeries(seriesId), await issuesSvc.listIssues(seriesId), { productionScope: 'first-issue' });
   expect(plan.some((step) => step.kind === 'textStages')).toBe(false);
   expect(plan.find((step) => step.kind === 'editorialChecks').estLlmCalls).toBe(1);
+});
+
+it('joins a second start while the first is still resolving', async () => {
+  const { seriesId } = await seedComplete();
+  loadState.mockImplementationOnce(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    return { config: {} };
+  });
+
+  const [first, second] = await Promise.all([
+    autopilot.startSeriesAutopilot(seriesId, { includeVisual: false }),
+    autopilot.startSeriesAutopilot(seriesId, { includeVisual: false }),
+  ]);
+
+  expect(first.runId).toBeTruthy();
+  expect(second.runId).toBe(first.runId);
+  expect(second.alreadyRunning).toBe(false);
+  await waitFor(runFinished(seriesId));
 });
 
 it('normalizes duplicate volume records before the conductor can seed their empty copies', async () => {

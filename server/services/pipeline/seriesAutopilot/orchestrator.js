@@ -41,7 +41,20 @@ import { buildDryRunPlan } from './dryRun.js';
  * progress lands via SSE. When the cos domain is `off`, returns
  * `{ rejected:true, mode:'off' }` WITHOUT starting (route maps to 409).
  */
+// A start is in flight from the first await until the run record exists. Two
+// requests in that window would both see no run, resolve their own options and
+// dispatch duplicate loops, so the second joins the first promise.
+const startingRuns = new Map();
+
 export async function startSeriesAutopilot(sId, options = {}) {
+  const pending = startingRuns.get(sId);
+  if (pending) return pending;
+  const start = startSeriesAutopilotOnce(sId, options).finally(() => startingRuns.delete(sId));
+  startingRuns.set(sId, start);
+  return start;
+}
+
+async function startSeriesAutopilotOnce(sId, options = {}) {
   const existing = runs.get(sId);
   if (existing && !existing.finished) {
     return { runId: existing.runId, alreadyRunning: true, mode: existing.mode };
