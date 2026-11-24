@@ -4,6 +4,7 @@ import { basename, join, dirname } from 'path';
 import { pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
 import { isWorktreeRoot } from '../server/lib/dataRoot.js';
+import { isSmokeBoot } from '../server/lib/runtimeEnv.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import {
   DEFAULT_ROOT_DIR,
@@ -304,6 +305,15 @@ async function runPendingMigrations({ rootDir, migrationsDir, appliedFile, throu
     const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
     if (!migration || typeof migration.up !== 'function') {
       throw new Error(`Migration "${file}" does not export an up() function`);
+    }
+
+    // The boot smoke runs file storage with no PostgreSQL service. A migration
+    // that opens a connection directly would abort the sweep and strand every
+    // later file migration, so skip it WITHOUT recording it applied (the smoke's
+    // ledger is disposable; a real boot still runs it in order).
+    if (migration.requiresPostgres === true && isSmokeBoot()) {
+      console.log(`⏭️ Smoke boot: skipping PostgreSQL-only migration ${file} (not recorded as applied)`);
+      continue;
     }
 
     console.log(`🔄 Running migration: ${file}`);
