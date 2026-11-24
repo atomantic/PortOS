@@ -161,4 +161,35 @@ describe.skipIf(!runDb)('versioned DB-migration runner', () => {
     expect(ran).toBe(0);
     await rm(d, { recursive: true, force: true });
   });
+
+  it('serializes concurrent runDbMigrations() callers so a pending migration runs once without 23505', async () => {
+    const file = `${PREFIX}001-concurrent.js`;
+    const counterKey = `__portosTestMigRuns_${PREFIX}`;
+    globalThis[counterKey] = 0;
+    const d = await mkdtemp(join(tmpdir(), 'db-mig-conc-'));
+    try {
+      await writeFile(
+        join(d, file),
+        `export async function up(client) {
+          globalThis['${counterKey}'] += 1;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          await client.query('CREATE TABLE ${SCRATCH} (id TEXT PRIMARY KEY)');
+        }`,
+      );
+
+      const results = await Promise.all([
+        runDbMigrations({ migrationsDir: d, db }),
+        runDbMigrations({ migrationsDir: d, db }),
+      ]);
+
+      expect(results.slice().sort((a, b) => a - b)).toEqual([0, 1]);
+      expect(globalThis[counterKey]).toBe(1);
+
+      const rec = await query(`SELECT id FROM schema_migrations WHERE id = $1`, [file]);
+      expect(rec.rows).toHaveLength(1);
+    } finally {
+      delete globalThis[counterKey];
+      await rm(d, { recursive: true, force: true });
+    }
+  });
 });
