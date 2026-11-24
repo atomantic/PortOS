@@ -200,6 +200,68 @@ describe('StackerNews', () => {
     await waitFor(() => expect(screen.getByLabelText('Territory')).toBeEnabled());
   });
 
+  describe('Compose action targets', () => {
+    const accountId = '10000000-0000-4000-8000-000000000001';
+    const territoryId = '10000000-0000-4000-8000-000000000002';
+    const itemId = '10000000-0000-4000-8000-000000000003';
+    const kindField = () => screen.getByLabelText('Action', { selector: '#action-kind' });
+    const submitButton = () => screen.getByRole('button', { name: 'Send to approval queue' });
+
+    beforeEach(() => {
+      api.getStackerNewsAccounts.mockResolvedValue({ accounts: [{ ...accounts[0], id: accountId }] });
+      api.getStackerNewsTerritories.mockResolvedValue({ territories: [{ id: territoryId, label: 'Art' }] });
+      api.getStackerNewsItems.mockResolvedValue({
+        items: [{ id: itemId, accountId, territoryId, kind: 'post', title: 'Source post' }],
+      });
+      api.createStackerNewsAction.mockImplementation(async (data) => ({
+        ...data, id: 'queued-action', state: 'pending_review',
+      }));
+    });
+
+    it.each([
+      ['draft_post', false],
+      ['publish_post', false],
+      ['draft_post', true],
+      ['publish_post', true],
+    ])('queues %s with only a territory (Prepare reply used: %s)', async (kind, fromReply) => {
+      const user = userEvent.setup();
+      renderPage(`/stacker-news/${accountId}/${fromReply ? 'review' : 'drafts'}`);
+      if (fromReply) {
+        await user.click(await screen.findByRole('button', { name: 'Prepare reply' }));
+        expect(screen.getByLabelText('Source item')).toHaveValue(itemId);
+      }
+      await screen.findByRole('option', { name: 'Source post' });
+      await user.selectOptions(kindField(), kind);
+      await screen.findByRole('option', { name: 'Art' });
+      await user.selectOptions(screen.getByLabelText('Territory'), territoryId);
+      await user.type(screen.getByLabelText('Title'), 'New post');
+      await user.type(screen.getByLabelText('Draft text'), 'Post body');
+      await user.click(submitButton());
+      expect(api.createStackerNewsAction).toHaveBeenCalledExactlyOnceWith({
+        accountId, kind, territoryId, payload: { title: 'New post', body: 'Post body' },
+      }, { silent: true });
+      await waitFor(() => expect(currentUrl()).toBe(`/stacker-news/${accountId}/review`));
+    });
+
+    it.each(['draft_comment', 'publish_comment'])('queues %s after switching from territory settings', async (kind) => {
+      const user = userEvent.setup();
+      renderPage(`/stacker-news/${accountId}/drafts`);
+      await user.selectOptions(await screen.findByLabelText('Action', { selector: '#action-kind' }), 'open_browser');
+      await user.selectOptions(screen.getByLabelText('Handoff'), 'territory_settings');
+      await screen.findByRole('option', { name: 'Art' });
+      await user.selectOptions(screen.getByLabelText('Territory'), territoryId);
+      await user.selectOptions(kindField(), kind);
+      await screen.findByRole('option', { name: 'Source post' });
+      await user.selectOptions(screen.getByLabelText('Source item'), itemId);
+      await user.type(screen.getByLabelText('Draft text'), 'Comment body');
+      await user.click(submitButton());
+      expect(api.createStackerNewsAction).toHaveBeenCalledExactlyOnceWith({
+        accountId, kind, itemId, payload: { body: 'Comment body' },
+      }, { silent: true });
+      await waitFor(() => expect(currentUrl()).toBe(`/stacker-news/${accountId}/review`));
+    });
+  });
+
   it('drops a retry response after the selected account changes', async () => {
     const user = userEvent.setup();
     const retry = deferred();
