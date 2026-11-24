@@ -187,8 +187,8 @@ export async function detectVaults(baseDir = DEFAULT_ICLOUD_OBSIDIAN) {
 // Returns `null` for an evicted note so each caller can skip it and degrade to
 // partial results, rather than failing the whole scan/search. Every other error
 // still propagates unchanged.
-async function readNoteContent(fullPath, skipped) {
-  return readIfMaterialized(fullPath, { label: 'Obsidian note' }).catch((err) => {
+async function readNoteContent(fullPath, skipped, readOptions = {}) {
+  return readIfMaterialized(fullPath, { label: 'Obsidian note', ...readOptions }).catch((err) => {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
       console.log('☁️ Obsidian note evicted from local storage; skipping');
       if (skipped) skipped.count += 1;
@@ -226,6 +226,8 @@ export async function scanVault(vaultId, { folder } = {}) {
  * Light scan: reads only file stats and first ~1KB for frontmatter/tags.
  * Skips full content parsing for performance on large vaults.
  */
+const METADATA_WINDOW = 2048;
+
 async function walkDir(rootPath, currentPath, results, folderFilter, skipped) {
   const entries = await readdir(currentPath, { withFileTypes: true });
 
@@ -247,9 +249,10 @@ async function walkDir(rootPath, currentPath, results, folderFilter, skipped) {
       const stats = await stat(fullPath);
 
       // Read only first 2KB for frontmatter + inline tags (skip full content)
-      const fd = await readNoteContent(fullPath, skipped);
+      // 4 bytes/code unit upper bound, so the decoded slice matches a full read.
+      const fd = await readNoteContent(fullPath, skipped, { prefixBytes: METADATA_WINDOW * 4 });
       if (fd === null) continue;
-      const header = fd.length > 2048 ? fd.slice(0, 2048) : fd;
+      const header = fd.length > METADATA_WINDOW ? fd.slice(0, METADATA_WINDOW) : fd;
       const { frontmatter, tags } = parseNoteMetadata(header);
 
       results.push({

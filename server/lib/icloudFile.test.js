@@ -621,3 +621,27 @@ describe('materializeAndWait', () => {
     expect(warnSpy.mock.calls.flat().join(' ')).toMatch(/brctl not found/);
   });
 });
+
+describe('readIfMaterialized prefixBytes', () => {
+  it('keeps prefix and full reads distinct in the shared flight', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('fs');
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const dir = mkdtempSync(join(tmpdir(), 'icloud-prefix-'));
+    const file = join(dir, 'a.md');
+    writeFileSync(file, 'abcdefghij'.repeat(100));
+    readFileMock.mockResolvedValue('abcdefghij'.repeat(100));
+    let prefix; let full;
+    try {
+      [prefix, full] = await Promise.all([
+        icloud.readIfMaterialized(file, { prefixBytes: 10 }),
+        icloud.readIfMaterialized(file),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(prefix).toBe('abcdefghij');
+    expect(full.length).toBe(1000);
+    expect(readFileMock).toHaveBeenCalledTimes(1);
+  });
+});
