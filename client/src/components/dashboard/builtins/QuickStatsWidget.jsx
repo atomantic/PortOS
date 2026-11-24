@@ -1,5 +1,8 @@
+import AppsLoadError from './AppsLoadError';
+
 export default function QuickStatsWidget({ dashboardState }) {
-  const { appStats } = dashboardState;
+  const { appStats, appsError, refetchApps } = dashboardState;
+  if (appsError) return <AppsLoadError title="Quick Stats" message={appsError} onRetry={refetchApps} />;
   return (
     <div className="@container bg-port-card border border-port-border rounded-xl p-4 h-full">
       <h2 className="text-sm font-semibold text-white mb-3">Quick Stats</h2>

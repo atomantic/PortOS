@@ -1,9 +1,11 @@
 import { Link } from 'react-router';
 import AppTile from '../../AppTile';
 import { MicroGlyph } from '../../micrographics';
+import AppsLoadError from './AppsLoadError';
 
 export default function AppsGridWidget({ dashboardState }) {
-  const { apps, sortedApps, activeApps, refetch } = dashboardState;
+  const { apps, sortedApps, activeApps, refetch, appsError, refetchApps } = dashboardState;
+  if (appsError) return <AppsLoadError message={appsError} onRetry={refetchApps} />;
   const archivedCount = apps.length - activeApps.length;
   if (apps.length === 0) {
     return (

@@ -73,7 +73,7 @@ export const WIDGETS = [
   { id: 'death-clock',       label: 'Meatspace Time Remaining', Component: DeathClockWidget,    width: 'quarter', defaultH: 4 },
   { id: 'daily-post',        label: 'Daily POST',            Component: DailyPostWidget,        width: 'quarter', defaultH: 3, gate: postFeatureEnabled },
   { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', needs: ['tribeCare'], defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
-  { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', needs: ['apps'], defaultH: 3, gate: (s) => s.apps.length > 0 },
+  { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', needs: ['apps'], defaultH: 3, gate: (s) => s.apps.length > 0 || !!s.appsError },
   { id: 'decision-log',      label: 'Decision Log',          Component: DecisionLogWidget,      width: 'quarter', defaultH: 4 },
   { id: 'feeds',             label: 'Feeds Digest',          Component: FeedsWidget,            width: 'quarter', needs: ['feeds'], defaultH: 4, gate: (s) => (s.feeds?.totalFeeds ?? 0) > 0 },
   { id: 'meatspace-streak',  label: 'Health Logging Streak', Component: MeatSpaceStreakWidget,  width: 'third',   needs: ['meatspaceLogging'], defaultH: 4, gate: (s) => (s.meatspaceLogging?.totalLogged ?? 0) > 0 },
