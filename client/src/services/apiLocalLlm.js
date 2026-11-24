@@ -155,11 +155,28 @@ export const installMtplx = () =>
 
 // Managed Inkling runtimes. Mutations enqueue work; status and the runtime
 // progress event report completion independently of the request.
+const inklingRequests = {
+  splash: {
+    status: (options) => request('/local-llm/splash/status', options),
+    install: (options) => request('/local-llm/splash/install', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/splash/upgrade', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/splash/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/splash/stop', { ...options, method: 'POST' }),
+  },
+  mkserve: {
+    status: (options) => request('/local-llm/mkserve/status', options),
+    install: (options) => request('/local-llm/mkserve/install', { ...options, method: 'POST' }),
+    upgrade: (options) => request('/local-llm/mkserve/upgrade', { ...options, method: 'POST' }),
+    start: (options) => request('/local-llm/mkserve/start', { ...options, method: 'POST' }),
+    stop: (options) => request('/local-llm/mkserve/stop', { ...options, method: 'POST' }),
+  },
+};
+
 export const getManagedInklingRuntimeStatus = (runtime, options) =>
-  request(`/local-llm/${runtime}/status`, options);
+  inklingRequests[runtime].status(options);
 
 export const controlManagedInklingRuntime = (runtime, action, options) =>
-  request(`/local-llm/${runtime}/${action}`, { ...options, method: 'POST' });
+  inklingRequests[runtime][action](options);
 
 // Slotstream (SSD-streaming MoE on Apple Silicon) — a PM2-managed process,
 // same lifecycle shape as MTPLX. A start never downloads weights.

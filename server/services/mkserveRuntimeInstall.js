@@ -8,6 +8,7 @@ import { atomicWrite, sha256File, sha256Text } from '../lib/fileCore.js';
 import { PATHS } from '../lib/paths.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
+import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 
 export const MKSERVE_VERSION = '95e315c808a7d935c10ef924a8fc0d901bfc3b89';
 export const MKSERVE_MODEL = 'thinkingmachines/Inkling-2-Mini';
@@ -104,7 +105,7 @@ function downloadEnvironment() {
 async function command(bin, args, message, { timeoutMs = 20 * MINUTE, cwd, env = {}, network = false } = {}) {
   // Only fixed curl/uv invocations get the machine's proxy/CA settings. The
   // unpacked engine and daemon never receive them or other server credentials.
-  const exactEnv = { ...cleanEnv(), ...(network ? downloadEnvironment() : {}), ...env };
+  const exactEnv = withSpawnCwdEnv({ ...cleanEnv(), ...(network ? downloadEnvironment() : {}), ...env }, cwd);
   const result = await runStreamingCommand(bin, args, undefined, {
     cwd, timeoutMs, processGroup: true,
     // The streaming helper's normal env option merges with process.env.
