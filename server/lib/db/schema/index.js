@@ -19,6 +19,7 @@ import { humanActivityDdl } from './humanActivity.js';
 import { postDdl } from './post.js';
 import { commissionsDdl } from './commissions.js';
 import { userActionsDdl } from './userActions.js';
+import { featureUsageDdl } from './featureUsage.js';
 import { reviewQueueTriageDdl } from './reviewQueueTriage.js';
 import { autonomousJobNotepadsDdl } from './autonomousJobNotepads.js';
 import { cosAgentFeedbackDdl } from './cosAgentFeedback.js';
@@ -53,6 +54,7 @@ export {
   postDdl,
   commissionsDdl,
   userActionsDdl,
+  featureUsageDdl,
   reviewQueueTriageDdl,
   autonomousJobNotepadsDdl,
   cosAgentFeedbackDdl,
@@ -89,7 +91,7 @@ export {
 };
 
 // Phase 1 — the `upgrades` list: memory-sync columns + migration tracker, then
-// the machine-local Tribe / human-activity / POST / commission / user-action /
+// the machine-local Tribe / human-activity / POST / commission / user-action / feature-usage /
 // AI-connection-graph tables. Run first, before the catalog block.
 export function buildUpgradeDdl() {
   return [
@@ -99,6 +101,7 @@ export function buildUpgradeDdl() {
     ...postDdl,
     ...commissionsDdl,
     ...userActionsDdl,
+    ...featureUsageDdl,
     ...reviewQueueTriageDdl,
     ...autonomousJobNotepadsDdl,
     ...cosAgentFeedbackDdl,

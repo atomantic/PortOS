@@ -145,6 +145,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/catalog` | Creative ingredients catalog |
 | `/api/tribe` | Tribe relationship graph |
 | `/api/user-actions` | Read-only, machine-local operator-action ledger |
+| `/api/feature-priorities` | Feature area priority tiers (`P0`-`P3`) that scheduled audits read. `GET` returns `{ areas, evidenceDays, minEvidenceDays }`, each area `{ areaId, label, instanceFeatureId, tier, source, activeDays30, lastActiveDay }` with `source` one of `pinned`, `feature-off`, `learned`, `default`. `PUT /:areaId` `{ tier: "P0"|"P1"|"P2"|"P3"|null }` pins or clears a tier and emits `feature-priorities:updated`. `POST /visit` `{ path }` is the focused-page-dwell beacon (operator callers only; peer, basic-auth and agent-session callers are refused or skipped). Usage is machine-local and never federated |
 | `/api/skills` | Agent skill registry |
 | `/api/notes` | Notes |
 | `/api/calendar` | Calendar integration |

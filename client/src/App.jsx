@@ -7,6 +7,7 @@ import { getSettings, updateSettings, getSelfInstance } from './services/apiSyst
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
 import PageLoader from './components/PageLoader';
+import useFeatureUsageBeacon from './components/featureUsage/useFeatureUsageBeacon';
 import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
 
@@ -261,6 +262,7 @@ export default function App() {
   const isHostedAudienceRoute = isPublicGuestRoute(pathname);
   useTimezoneBootstrap(!isHostedAudienceRoute);
   useDocumentTitle(!isHostedAudienceRoute);
+  useFeatureUsageBeacon(!isHostedAudienceRoute);
 
   const routeContent = (
     <Suspense fallback={<PageLoader />}>
