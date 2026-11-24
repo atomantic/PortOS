@@ -71,6 +71,10 @@ export async function getProjectRecord(id) {
   return present(rows[0]) || null;
 }
 
+export async function deleteProjectRecord(id) {
+  await query('DELETE FROM code_animation_projects WHERE id = $1', [id]);
+}
+
 export async function pageProjectRecords({ limit, cursor }) {
   let after = decodePageCursor(cursor);
   if (after?.legacyOffset) {
