@@ -11,6 +11,7 @@ vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmiss
 const store = await import('../imageTo3d/db.js');
 const { rigImageTo3dModel } = await import('./autoSkin.js');
 const { retargetImageTo3dModel } = await import('./retarget.js');
+const { cancelRiggingForModel } = await import('./inFlight.js');
 
 const MODEL_ID = 'image3d-example';
 const rigResult = { rigId: 'rig-example', assetPath: '/rig.glb', sha256: 'a'.repeat(64), bytes: 1, summary: {} };
@@ -82,5 +83,34 @@ describe('a running retarget excludes a rig on the same model', () => {
     await expect(rig(async () => { throw new Error('blender exploded'); })).rejects.toThrow('blender exploded');
     expect(current.rig.status).toBe('failed');
     expect((await rig()).rig.status).toBe('ready');
+  });
+});
+
+describe.each([
+  ['rig', rig, (record) => record.rig],
+  ['retarget', retarget, (record) => record.retarget],
+])('%s lane cancellation on model deletion', (_name, start, field) => {
+  it('aborts the run signal, frees the lane and records the cancellation', async () => {
+    let seen;
+    const held = gate();
+    const running = start(async ({ signal }) => {
+      seen = signal;
+      await held.promise;
+      if (signal.aborted) {
+        const { throwIfCancelled } = await import('./inFlight.js');
+        throwIfCancelled(signal);
+      }
+      return rigResult;
+    });
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    expect(seen.aborted).toBe(false);
+
+    expect(cancelRiggingForModel(MODEL_ID)).toBe(true);
+    expect(seen.aborted).toBe(true);
+    held.release();
+
+    await expect(running).rejects.toMatchObject({ code: 'RIGGING_CANCELLED' });
+    expect(field(current).status).toBe('failed');
+    expect(cancelRiggingForModel(MODEL_ID)).toBe(false);
   });
 });

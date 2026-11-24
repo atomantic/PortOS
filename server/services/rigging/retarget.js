@@ -54,7 +54,7 @@ import {
   RIG_STAGING_DIR_NAME,
 } from './autoSkin.js';
 import { resolveClipSource } from './clipLibrary.js';
-import { acquireRigLane, releaseRigLane } from './inFlight.js';
+import { acquireRigLane, releaseRigLane, throwIfCancelled } from './inFlight.js';
 import { requireRiggingInterpreter } from './readiness.js';
 import {
   DEFAULT_RETARGET_MODE,
@@ -145,7 +145,7 @@ export function selectClip(clips, requested) {
  * rather than returning a partial mapping — a caller must not be able to proceed with
  * "most of" a skeleton.
  */
-async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint, clipName, spawnImpl, timeoutMs }) {
+async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint, clipName, spawnImpl, timeoutMs, signal }) {
   await atomicWrite(paths.probeJobFile, JSON.stringify({
     pass: 'probe',
     clip_glb: clipPath,
@@ -154,8 +154,9 @@ async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint,
   }, null, 2));
 
   const { code, tail } = await runRiggingWorker({
-    python: interpreter, script: WORKER_SCRIPT, jobFile: paths.probeJobFile, spawnImpl, timeoutMs,
+    python: interpreter, script: WORKER_SCRIPT, jobFile: paths.probeJobFile, spawnImpl, timeoutMs, signal,
   });
+  throwIfCancelled(signal);
   const probe = await readJSONFile(paths.probeReport, null, { logError: false });
   if (code !== 0 || !probe) {
     throw retargetError(
@@ -204,7 +205,7 @@ async function probeAndMap({ interpreter, paths, clipPath, rigGlb, skeletonHint,
  * @param {{modelId: string, recordDir: string, rigId: string, clipPath: string,
  *          clipName?: string|null, skeletonHint?: string, mode?: string, overrides?: object,
  *          readiness?: object, python?: string|null, spawnImpl?: Function,
- *          retargetId?: string, timeoutMs?: number, verify?: Function}} opts
+ *          retargetId?: string, timeoutMs?: number, signal?: AbortSignal, verify?: Function}} opts
  * @returns {Promise<object>}
  */
 export async function runRetarget({
@@ -221,6 +222,7 @@ export async function runRetarget({
   spawnImpl,
   retargetId = `retarget-${randomUUID()}`,
   timeoutMs,
+  signal,
   verify = readRiggedArtifact,
 }) {
   const interpreter = await requireRiggingInterpreter({ readiness, python });
@@ -241,7 +243,7 @@ export async function runRetarget({
   await ensureDir(paths.stageDir);
   try {
     const { mapping, clip } = await probeAndMap({
-      interpreter, paths, clipPath, rigGlb: source.glbPath, skeletonHint, clipName, spawnImpl, timeoutMs,
+      interpreter, paths, clipPath, rigGlb: source.glbPath, skeletonHint, clipName, spawnImpl, timeoutMs, signal,
     });
 
     await atomicWrite(paths.jobFile, JSON.stringify({
@@ -259,8 +261,9 @@ export async function runRetarget({
     }, null, 2));
 
     const { code, tail } = await runRiggingWorker({
-      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs,
+      python: interpreter, script: WORKER_SCRIPT, jobFile: paths.jobFile, spawnImpl, timeoutMs, signal,
     });
+    throwIfCancelled(signal);
     const report = await readJSONFile(paths.workerReport, null, { logError: false });
 
     // A non-zero exit with a readable report is the EXPECTED gate failure: the worker
@@ -284,6 +287,10 @@ export async function runRetarget({
       paths,
       report: { ...report, kind: RETARGET_REPORT_KIND, source_rig_id: rigId, source_clip: basename(clipPath) },
     });
+    if (signal?.aborted) {
+      await rm(paths.publishDir, { recursive: true, force: true }).catch(() => {});
+      throwIfCancelled(signal);
+    }
     // Read the pair back through the same reader every consumer uses, before recording
     // the retarget as ready. A publish that does not verify is exactly the interrupted
     // state this contract exists to make detectable.
@@ -340,7 +347,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
   }
 
   const mode = options.mode || DEFAULT_RETARGET_MODE;
-  acquireRigLane(modelId, 'retarget');
+  const signal = acquireRigLane(modelId, 'retarget');
   const startedAt = now();
   // False until the `retargeting` transition commits (see autoSkin.js).
   let entered = false;
@@ -359,6 +366,7 @@ export async function retargetImageTo3dModel(modelId, options = {}, {
       skeletonHint: model.rig.skeletonHint || 'mixamo',
       mode,
       overrides: options,
+      signal,
     });
     // The verified pair already sits in its own `retarget/<retargetId>/` directory
     // and is never replaced, so the row that first names it takes a backup lease
