@@ -89,7 +89,7 @@ import {
   readVideoDefault,
   resolveVideoBucketKey,
 } from './mediaModelBuckets.js';
-import { RUNNER_FAMILIES, flux2RepoRevision } from './runners.js';
+import { RUNNER_FAMILIES, flux2RepoRevision, diffusersRepoRevision } from './runners.js';
 import { ServerError } from './errorHandler.js';
 import { applyVideoDisclosures } from './videoDisclosure.js';
 import { applyVideoFinishProfiles, sanitizeFinishProfiles } from './videoFinishProfiles.js';
@@ -1209,8 +1209,10 @@ const DEFAULT_REGISTRY = {
       name: 'HiDream-I1 Full (17B, ~34 GB @ bf16, 50 steps)',
       runner: 'hidream',
       repo: 'HiDream-ai/HiDream-I1-Full',
+      revision: diffusersRepoRevision('HiDream-ai/HiDream-I1-Full'),
       pipelineClass: 'HiDreamImagePipeline',
       textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderRevision: diffusersRepoRevision('meta-llama/Meta-Llama-3.1-8B-Instruct'),
       textEncoderClass: 'LlamaForCausalLM',
       tokenizerClass: 'PreTrainedTokenizerFast',
       steps: 50,
@@ -1223,8 +1225,10 @@ const DEFAULT_REGISTRY = {
       name: 'HiDream-I1 Fast (17B distilled, ~34 GB, 16 steps)',
       runner: 'hidream',
       repo: 'HiDream-ai/HiDream-I1-Fast',
+      revision: diffusersRepoRevision('HiDream-ai/HiDream-I1-Fast'),
       pipelineClass: 'HiDreamImagePipeline',
       textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+      textEncoderRevision: diffusersRepoRevision('meta-llama/Meta-Llama-3.1-8B-Instruct'),
       textEncoderClass: 'LlamaForCausalLM',
       tokenizerClass: 'PreTrainedTokenizerFast',
       steps: 16,
@@ -1243,6 +1247,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image (20B MMDiT, ~40 GB @ bf16, best text rendering)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image'),
       pipelineClass: 'QwenImagePipeline',
       steps: 30,
       guidance: 4.0,
@@ -1252,6 +1257,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image-Edit (20B, image-to-image + text-rewrite)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image-Edit',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image-Edit'),
       pipelineClass: 'QwenImageEditPipeline',
       steps: 30,
       guidance: 4.0,
@@ -1267,6 +1273,7 @@ const DEFAULT_REGISTRY = {
       name: 'Qwen-Image 2.1 (7B DiT, generation + editing, research license)',
       runner: 'qwen',
       repo: 'Qwen/Qwen-Image-2.1',
+      revision: diffusersRepoRevision('Qwen/Qwen-Image-2.1'),
       pipelineClass: 'QwenImage21Pipeline',
       steps: 40,
       guidance: 1.0,
@@ -1280,6 +1287,7 @@ const DEFAULT_REGISTRY = {
       name: 'Z-Image-Turbo (bf16, ~13 GB)',
       runner: 'z-image',
       repo: 'Tongyi-MAI/Z-Image-Turbo',
+      revision: diffusersRepoRevision('Tongyi-MAI/Z-Image-Turbo'),
       steps: 8,
       guidance: 1.0,
       cfgDisabled: true,
@@ -1293,6 +1301,7 @@ const DEFAULT_REGISTRY = {
       name: 'ERNIE-Image (~16 GB @ bf16, 50 steps)',
       runner: 'ernie',
       repo: 'baidu/ERNIE-Image',
+      revision: diffusersRepoRevision('baidu/ERNIE-Image'),
       pipelineClass: 'ErnieImagePipeline',
       usePromptEnhancer: true,
       steps: 50,
@@ -1303,6 +1312,7 @@ const DEFAULT_REGISTRY = {
       name: 'ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)',
       runner: 'ernie',
       repo: 'baidu/ERNIE-Image-Turbo',
+      revision: diffusersRepoRevision('baidu/ERNIE-Image-Turbo'),
       pipelineClass: 'ErnieImagePipeline',
       usePromptEnhancer: true,
       steps: 8,
@@ -1521,6 +1531,31 @@ const backfillFlux2Revisions = (list) => {
     for (const [repoKey, revKey] of FLUX2_REVISION_FIELDS) {
       if (revKey in entry) continue;
       const pin = typeof entry[repoKey] === 'string' ? flux2RepoRevision(entry[repoKey]) : null;
+      if (pin) next = { ...next, [revKey]: pin };
+    }
+    return next;
+  });
+};
+
+// Same fork-safe commit-pin backfill for persisted diffusers-runner entries
+// (HiDream/Qwen/Z-Image/ERNIE): a revision lands only while the repo is still a
+// shipped one with a known pin; an explicit revision (including '') wins.
+const DIFFUSERS_RUNNERS = new Set([
+  RUNNER_FAMILIES.HIDREAM, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.Z_IMAGE, RUNNER_FAMILIES.ERNIE,
+]);
+const DIFFUSERS_REVISION_FIELDS = [
+  ['repo', 'revision'],
+  ['textEncoderRepo', 'textEncoderRevision'],
+];
+
+const backfillDiffusersRevisions = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || !DIFFUSERS_RUNNERS.has(entry.runner)) return entry;
+    let next = entry;
+    for (const [repoKey, revKey] of DIFFUSERS_REVISION_FIELDS) {
+      if (revKey in entry) continue;
+      const pin = typeof entry[repoKey] === 'string' ? diffusersRepoRevision(entry[repoKey]) : null;
       if (pin) next = { ...next, [revKey]: pin };
     }
     return next;
@@ -1779,9 +1814,9 @@ const normalizeRegistry = (parsed) => {
   // (treat as fresh install — let the new entries land).
   const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
   const isImageBootstrap = shippedImage === null;
-  const upgradedImage = backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
+  const upgradedImage = backfillDiffusersRevisions(backfillFlux2Revisions(backfillKvRepo(backfillEditOnly(backfillCfgDisabled(
     upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
-  ))));
+  )))));
   // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
   // Image is getting `_shippedDefaults` for the first time in this release, so
   // there's no prior history of deletions to preserve via the union trick the

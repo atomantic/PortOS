@@ -673,6 +673,32 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
     initImageStrength: null,
   };
 
+  it('threads pinned revisions to the diffusers runner, omitting them for unpinned custom repos', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const sha = 'a'.repeat(40);
+    const encSha = 'b'.repeat(40);
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'hidream-i1-full',
+        runner: 'hidream',
+        repo: 'HiDream-ai/HiDream-I1-Full',
+        revision: sha,
+        textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
+        textEncoderRevision: encSha,
+        textEncoderClass: 'LlamaForCausalLM',
+      },
+    });
+    expect(args[args.indexOf('--revision') + 1]).toBe(sha);
+    expect(args[args.indexOf('--text-encoder-revision') + 1]).toBe(encSha);
+    const { args: custom } = buildArgs({
+      ...baseInput,
+      model: { id: 'custom', runner: 'z-image', repo: 'someone/fork' },
+    });
+    expect(custom).not.toContain('--revision');
+    expect(custom).not.toContain('--text-encoder-revision');
+  });
+
   it('routes z-image models to the FLUX.2 venv + z_image_turbo.py', () => {
     mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
     const { bin, args } = buildArgs({

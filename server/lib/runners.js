@@ -120,6 +120,22 @@ export const FLUX2_REPO_REVISIONS = Object.freeze({
   'black-forest-labs/FLUX.2-klein-9B-kv': '6c882f3fd7da58b360c43079d32affdc953d8670',
 });
 
+// Immutable Hugging Face commit SHAs for every shipped diffusers-runner repo (HiDream, Qwen-Image, Z-Image, ERNIE, plus HiDream's gated Llama text encoder), for the same reason as FLUX2_REPO_REVISIONS: floating `main` lets a re-pushed upstream swap weights/config under every install. Shared by model entries and the load-time backfill; bump a SHA only after reviewing the upstream diff.
+export const DIFFUSERS_REPO_REVISIONS = Object.freeze({
+  'HiDream-ai/HiDream-I1-Full': '8ccbbfb270ccdae26d6bb0081df67dc81e4033bf',
+  'HiDream-ai/HiDream-I1-Fast': '4856a5d8cd6fbd194780ed9f289bdf696d3afc10',
+  'meta-llama/Meta-Llama-3.1-8B-Instruct': '0e9e39f249a16976918f6564b8830bc894c89659',
+  'Qwen/Qwen-Image': '75e0b4be04f60ec59a75f475837eced720f823b6',
+  'Qwen/Qwen-Image-Edit': 'ac7f9318f633fc4b5778c59367c8128225f1e3de',
+  'Qwen/Qwen-Image-2.1': 'd26bb61231c349cf6b7896fa83353113880e1ba3',
+  'Tongyi-MAI/Z-Image-Turbo': 'f332072aa78be7aecdf3ee76d5c247082da564a6',
+  'baidu/ERNIE-Image': '5346b31d68c9c23758ba56ef8be5e9dc174c7f99',
+  'baidu/ERNIE-Image-Turbo': 'bc68c81e2a1730a394d5fc9fae70713dee940140',
+});
+
+// Pinned commit for a shipped diffusers-runner repo; null for a user fork / unknown repo (those float unless the entry sets its own revision).
+export const diffusersRepoRevision = (repo) => DIFFUSERS_REPO_REVISIONS[repo] || null;
+
 // The bf16 base repo to render a LoRA against for a (quantized or not) FLUX.2 model, from its size variant; null when unknown.
 export const flux2Bf16BaseRepo = (model) => FLUX2_BF16_BASE_REPOS[flux2VariantFromModel(model)] || null;
 

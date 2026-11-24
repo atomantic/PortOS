@@ -1251,6 +1251,34 @@ describe('mediaModels registry', () => {
     expect(bf16.revision).toBe('');
   });
 
+  it('fresh install: every shipped diffusers-runner repo (and HiDream text encoder) is pinned to a 40-hex commit', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const diffusers = getImageModels().filter((m) => ['hidream', 'qwen', 'z-image', 'ernie'].includes(m.runner));
+    expect(diffusers.map((m) => m.id).sort()).toEqual([
+      'ernie-image', 'ernie-image-turbo', 'hidream-i1-fast', 'hidream-i1-full',
+      'qwen-image', 'qwen-image-2.1', 'qwen-image-edit', 'z-image-turbo-bf16',
+    ]);
+    for (const m of diffusers) {
+      expect(m.revision).toMatch(SHA);
+      if (m.textEncoderRepo) expect(m.textEncoderRevision).toMatch(SHA);
+    }
+  });
+
+  it('backfills diffusers revisions onto persisted shipped entries but leaves forks and explicit revisions alone', async () => {
+    writeImageRegistry([
+      { id: 'hidream-i1-full', runner: 'hidream', repo: 'HiDream-ai/HiDream-I1-Full', textEncoderRepo: 'meta-llama/Meta-Llama-3.1-8B-Instruct', steps: 50, guidance: 5 },
+      { id: 'qwen-image', runner: 'qwen', repo: 'my-fork/Qwen-Image', steps: 30, guidance: 4 },
+      { id: 'ernie-image', runner: 'ernie', repo: 'baidu/ERNIE-Image', revision: 'main', steps: 50, guidance: 4 },
+    ]);
+    const { getImageModels } = await import('./mediaModels.js');
+    const byId = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
+    expect(byId['hidream-i1-full'].revision).toMatch(SHA);
+    expect(byId['hidream-i1-full'].textEncoderRevision).toMatch(SHA);
+    expect('revision' in byId['qwen-image']).toBe(false);
+    expect(byId['ernie-image'].revision).toBe('main');
+  });
+
   it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
     // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
     // _shippedDefaults.image at all.
