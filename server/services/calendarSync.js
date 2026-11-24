@@ -165,15 +165,50 @@ export async function getEvents(options = {}) {
 }
 
 export async function purgeDisabledSubcalendars(accountId) {
-  return mutateCache(accountId, (cache, account) => {
+  return mutateCache(accountId, async (cache, account) => {
     if (!account?.subcalendars?.length) return { purged: 0 };
 
     const enabledIds = new Set(
       account.subcalendars.filter(sc => sc.enabled && !sc.dormant).map(sc => sc.calendarId)
     );
-    const before = cache.events.length;
-    cache.events = cache.events.filter(e => !e.subcalendarId || enabledIds.has(e.subcalendarId));
-    const purged = before - cache.events.length;
+    const disabledIds = new Set(
+      account.subcalendars.filter(sc => !sc.enabled || sc.dormant).map(sc => sc.calendarId)
+    );
+    const kept = [];
+    const removed = [];
+    for (const event of cache.events) {
+      if (!event.subcalendarId || enabledIds.has(event.subcalendarId)) {
+        kept.push(event);
+      } else {
+        removed.push(event);
+        disabledIds.add(event.subcalendarId);
+      }
+    }
+    const disabledSubcalendarIds = [...disabledIds].filter(Boolean);
+    const keptKeys = new Set(kept.map(e => e.externalId || e.id).filter(Boolean));
+    const removedEventKeys = [...new Set(
+      removed.map(e => e.externalId || e.id).filter(key => key && !keptKeys.has(key))
+    )];
+
+    if (disabledSubcalendarIds.length > 0 || removedEventKeys.length > 0) {
+      // Derived copies (titles, descriptions, attendees) live in Timeline and Tribe (#18229).
+      // Run inside the cache queue after subcalendars are updated and before pruning cache.events
+      // so a failed DB erase retains legacy removedEventKeys on retry.
+      const [humanActivity, { deleteAutoTouchpoints }] = await Promise.all([
+        import('./humanActivity.js'),
+        import('./tribe.js'),
+      ]);
+      const scope = {
+        accountId,
+        ...(disabledSubcalendarIds.length > 0 ? { subcalendarIds: disabledSubcalendarIds } : {}),
+        ...(removedEventKeys.length > 0 ? { calendarEventIds: removedEventKeys } : {}),
+      };
+      await humanActivity.deleteEvents({ ...scope, source: 'calendar' });
+      await deleteAutoTouchpoints(scope);
+    }
+
+    cache.events = kept;
+    const purged = removed.length;
     if (purged > 0) {
       console.log(`🧹 Purged ${purged} events from disabled subcalendars for account ${accountId}`);
     }
@@ -355,6 +390,7 @@ export async function logCalendarTouchpoints(accountId, events = []) {
         location: event.location,
         startTime: event.startTime,
         endTime: event.endTime,
+        subcalendarId: event.subcalendarId || null,
       },
     });
   }

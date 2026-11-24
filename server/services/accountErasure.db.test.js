@@ -109,6 +109,110 @@ describe.skipIf(!runDb)('derived-data erasure (#12984)', () => {
     expect(await touchpointCount(`calendar_account_id = $2`, [CAL_B])).toBe(1);
   });
 
+  it('disabling a subcalendar erases its Timeline, Tribe, and audit rows while preserving enabled subcalendars and other accounts (#18229)', async () => {
+    const SUBCAL_ON = `sub-on-${nonce}`;
+    const SUBCAL_OFF = `sub-off-${nonce}`;
+    const SCOPED_CAL = `cal-sub-${nonce}`;
+    const OTHER_CAL = `cal-other-${nonce}`;
+    const calSource = `calendar`;
+    const personId = personIds[0];
+
+    const tpOff = await tribe.autoCreateTouchpoint(personId, {
+      happenedAt: '2026-07-04T15:00:00Z',
+      channel: 'Calendar',
+      summary: 'Private subcalendar meeting',
+      source: 'calendar',
+      calendarAccountId: SCOPED_CAL,
+      calendarEventId: 'evt-off',
+      dedupeKey: `cal:${SCOPED_CAL}:evt-off`,
+      metadata: { subcalendarId: SUBCAL_OFF },
+    });
+    const tpLegacyOff = await tribe.autoCreateTouchpoint(personId, {
+      happenedAt: '2026-07-04T16:00:00Z',
+      channel: 'Calendar',
+      summary: 'Legacy subcalendar meeting without metadata.subcalendarId',
+      source: 'calendar',
+      calendarAccountId: SCOPED_CAL,
+      calendarEventId: 'evt-legacy-off',
+      dedupeKey: `cal:${SCOPED_CAL}:evt-legacy-off`,
+      metadata: { title: 'Legacy' },
+    });
+    const tpOn = await tribe.autoCreateTouchpoint(personId, {
+      happenedAt: '2026-07-04T17:00:00Z',
+      channel: 'Calendar',
+      summary: 'Enabled subcalendar meeting',
+      source: 'calendar',
+      calendarAccountId: SCOPED_CAL,
+      calendarEventId: 'evt-shared',
+      dedupeKey: `cal:${SCOPED_CAL}:evt-shared`,
+      metadata: { subcalendarId: SUBCAL_ON },
+    });
+    const tpOtherAcct = await tribe.autoCreateTouchpoint(personId, {
+      happenedAt: '2026-07-04T18:00:00Z',
+      channel: 'Calendar',
+      summary: 'Other account meeting',
+      source: 'calendar',
+      calendarAccountId: OTHER_CAL,
+      calendarEventId: 'evt-off',
+      dedupeKey: `cal:${OTHER_CAL}:evt-off`,
+      metadata: { subcalendarId: SUBCAL_OFF },
+    });
+
+    // Seed an earlier audit snapshot alongside the delete trigger snapshot to confirm full cleanup.
+    await query(
+      `INSERT INTO record_audit (table_name, record_id, action, row_snapshot)
+       SELECT 'tribe_touchpoints', id::text, 'tombstone', to_jsonb(t) FROM tribe_touchpoints t
+       WHERE id = ANY($1::uuid[])`,
+      [[tpOff.id, tpLegacyOff.id, tpOn.id]],
+    );
+
+    const calEvent = (accountId, key, subcalendarId) => ({
+      source: calSource,
+      accountId,
+      kind: 'calendar.event',
+      happenedAt: '2026-07-04T15:00:00Z',
+      dedupeKey: `cal:${accountId}:${key}`,
+      title: 'Calendar event',
+      metadata: { externalId: key, subcalendarId },
+    });
+    await humanActivity.recordEvents([
+      calEvent(SCOPED_CAL, 'evt-off', SUBCAL_OFF),
+      calEvent(SCOPED_CAL, 'evt-on', SUBCAL_ON),
+      calEvent(OTHER_CAL, 'evt-off', SUBCAL_OFF),
+    ]);
+
+    try {
+      const haDeleted = await humanActivity.deleteEvents({
+        accountId: SCOPED_CAL,
+        source: 'calendar',
+        subcalendarIds: [SUBCAL_OFF],
+        calendarEventIds: ['evt-legacy-off'],
+      });
+      const tpDeleted = await tribe.deleteAutoTouchpoints({
+        accountId: SCOPED_CAL,
+        subcalendarIds: [SUBCAL_OFF],
+        calendarEventIds: ['evt-legacy-off', 'evt-shared'],
+      });
+
+      expect(haDeleted).toEqual({ deleted: 1 });
+      expect(tpDeleted.touchpoints).toBe(2);
+      expect(tpDeleted.auditRows).toBeGreaterThanOrEqual(2);
+
+      expect(await count('SELECT COUNT(*) AS n FROM human_activity_events WHERE account_id = $1 AND metadata->>\'subcalendarId\' = $2', [SCOPED_CAL, SUBCAL_OFF])).toBe(0);
+      expect(await count('SELECT COUNT(*) AS n FROM human_activity_events WHERE account_id = $1 AND metadata->>\'subcalendarId\' = $2', [SCOPED_CAL, SUBCAL_ON])).toBe(1);
+      expect(await count('SELECT COUNT(*) AS n FROM human_activity_events WHERE account_id = $1', [OTHER_CAL])).toBe(1);
+
+      expect(await count('SELECT COUNT(*) AS n FROM tribe_touchpoints WHERE id = ANY($1::uuid[])', [[tpOff.id, tpLegacyOff.id]])).toBe(0);
+      expect(await count(`SELECT COUNT(*) AS n FROM record_audit WHERE table_name = 'tribe_touchpoints' AND record_id = ANY($1::text[])`, [[tpOff.id, tpLegacyOff.id]])).toBe(0);
+      expect(await count('SELECT COUNT(*) AS n FROM tribe_touchpoints WHERE id = ANY($1::uuid[])', [[tpOn.id, tpOtherAcct.id]])).toBe(2);
+      expect(await count(`SELECT COUNT(*) AS n FROM record_audit WHERE table_name = 'tribe_touchpoints' AND record_id = $1`, [tpOn.id])).toBe(1);
+    } finally {
+      await query('DELETE FROM human_activity_events WHERE source = $1 AND account_id = ANY($2::text[])', [calSource, [SCOPED_CAL, OTHER_CAL]]).catch(() => {});
+      await query('DELETE FROM tribe_touchpoints WHERE calendar_account_id = ANY($1::text[])', [[SCOPED_CAL, OTHER_CAL]]).catch(() => {});
+      await query(`DELETE FROM record_audit WHERE table_name = 'tribe_touchpoints' AND record_id = ANY($1::text[])`, [[tpOff.id, tpLegacyOff.id, tpOn.id, tpOtherAcct.id]]).catch(() => {});
+    }
+  });
+
   it('iMessage purge removes that chat\'s touchpoints and snapshots only', async () => {
     await purgeConversation(encodeChatKey(CHAT_A));
     expect(await touchpointCount(`dedupe_key = $2`, [`imsg:${CHAT_A}:2026-07-04`])).toBe(0);
