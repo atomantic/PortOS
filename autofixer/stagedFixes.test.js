@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'fs/promises';
+import { chmod, mkdtemp, mkdir, stat, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFileSync } from 'child_process';
@@ -30,6 +30,18 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 describe('staged repair lifecycle', () => {
+  it.skipIf(process.platform === 'win32')('replaces legacy metadata with a private file even after a stale temp write', async () => {
+    const metadata = join(root, 'sessions', id, 'metadata.json');
+    const temp = `${metadata}.tmp`;
+    await chmod(metadata, 0o644);
+    await writeFile(temp, 'interrupted write');
+    await chmod(temp, 0o644);
+
+    expect(await store.mutate(id, 'discard')).toEqual({ success: true, disposition: 'discarded' });
+    expect((await stat(metadata)).mode & 0o777).toBe(0o600);
+    await expect(stat(temp)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('shows the proposal, applies its actual git patch once, and persists history disposition', async () => {
     expect((await store.read(id)).patch).toBe(patch);
     const results = await Promise.all([store.mutate(id, 'apply'), store.mutate(id, 'apply')]);
