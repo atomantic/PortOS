@@ -149,6 +149,23 @@ const THINKING_STYLE = {
 
 const asObject = (value) => (isPlainObject(value) ? value : {});
 
+// Ollama's OpenAI-compatible endpoint sends and reads `reasoning` on assistant
+// messages. OpenCode otherwise echoes `reasoning_content`, which the Inkling
+// renderer never sees on the next tool step. OpenCode 2 also migrates this
+// legacy model-level field when reading the `provider` config shape.
+function localModelEntry(providerKey, id, existing) {
+  if (providerKey !== 'ollama' || !/^inkling-2-mini(?::[^/]+)?$/.test(id)) {
+    return { name: id, tool_call: true };
+  }
+  return {
+    name: id,
+    reasoning: true,
+    interleaved: { field: 'reasoning' },
+    ...asObject(existing),
+    tool_call: true,
+  };
+}
+
 /**
  * The OpenCode permissions that open an interactive gate: `question`, and
  * `plan_enter` / `plan_exit` (the plan agent's hand-back to a human). OpenCode denies
@@ -248,7 +265,8 @@ export function buildAgentGeneration(generation, providerKey) {
  * optionally merging into a parsed `base` (typically the stored `OPENCODE_CONFIG_CONTENT`).
  *
  * The base is PRESERVED (custom `permission`, `baseURL`, extra provider keys,
- * hand-maintained models); this only unions the given models in. With no usable id
+ * hand-maintained models); this only unions the given models in. Existing Inkling
+ * model settings win over the generated reasoning defaults. With no usable id
  * the base is returned unchanged; with no base, the runtime's canonical endpoint is
  * used. The one overwritten field is root `permission`: interactive-gate denials are
  * re-applied (see `denyInteractiveGates`).
@@ -280,7 +298,7 @@ export function buildOpencodeConfig(models, base = null, providerKey = 'ollama',
         : {};
       config.provider[providerKey].models = {
         ...existing,
-        ...Object.fromEntries(bareIds.map((id) => [id, { name: id, tool_call: true }])),
+        ...Object.fromEntries(bareIds.map((id) => [id, localModelEntry(providerKey, id, existing[id])])),
       };
     }
   }
