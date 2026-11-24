@@ -1,4 +1,5 @@
 import { isDefaultA2vLoraStages } from '../../lib/videoLoraStageValidation.js';
+import { CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 /**
  * Submit a validated video-generation request to its federated, hosted, or local
  * dispatch lane. HTTP parsing and validation stay in the route; this service
@@ -100,8 +101,7 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       ['chained chunks', body.chunks > 1],
       ['an explicit continuation strategy', body.continuityStrategy != null],
       ['warm render batches', body.batchSize > 1],
-      ['the Grok backend', body.backend === 'grok'],
-      ['the Gemini backend', body.backend === 'gemini'],
+      ['a hosted video backend', CLOUD_VIDEO_GEN_MODES.includes(body.backend)],
       ['a FableLoom scene tag', body.fableLoom],
       // Inspire is a per-runtime capability the caller cannot prove for a peer.
       // Refuse it instead of returning an anchored clip under an Inspire label.
