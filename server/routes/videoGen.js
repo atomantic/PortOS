@@ -766,6 +766,9 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // itself rides a separate basename mapping below (its param is an absolute
   // path, which the whitelist exists to keep off this surface).
   'icStrength', 'icAttentionStrength', 'icSkipStage2',
+  // Plain scalars the local warm batch and hosted lanes persist; the client
+  // restores them so a reload keeps the in-flight render's batch/size/audio.
+  'batchSize', 'resolution', 'generateAudio',
 ];
 const pickJobParams = (job) => {
   const params = job?.params;
