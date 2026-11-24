@@ -6,13 +6,23 @@ const calls = vi.hoisted(() => ({
   cleanupMerged: vi.fn(async () => ({ cleaned: ['b'], skipped: [] })),
   recoverRenders: vi.fn(async () => undefined),
   recoverExcerpts: vi.fn(async () => undefined),
+  importTopaz: vi.fn(),
+  importBlenderHook: vi.fn(),
+  initBlenderHook: vi.fn(),
 }));
 vi.mock('./agent/agentManagement.js', () => ({
   cleanupOrphanedAgents: (...args) => calls.cleanupOrphanedAgents(...args),
   handleOrphanedTask: (...args) => calls.handleOrphanedTask(...args),
 }));
 vi.mock('./branchReconcile.js', () => ({ cleanupMerged: (...args) => calls.cleanupMerged(...args) }));
-vi.mock('./videoGen/topazJob.js', () => ({ runVideoUpscale: () => 'topaz' }));
+vi.mock('./videoGen/topazJob.js', () => {
+  calls.importTopaz();
+  return { runVideoUpscale: () => 'topaz' };
+});
+vi.mock('./blenderModels/referenceImageHook.js', () => {
+  calls.importBlenderHook();
+  return { initBlenderModelReferenceHook: calls.initBlenderHook };
+});
 vi.mock('./videoGen/upscaleJob.js', () => ({ runVideoUpscale: () => 'ltx' }));
 vi.mock('./videoGen/stitchJob.js', () => ({ runVideoStitch: () => 'stitch' }));
 vi.mock('./videoGen/verticalJob.js', () => ({ runVideoVertical: () => 'vertical' }));
@@ -32,7 +42,8 @@ const ENTRY = {
   creativeDirectorVideoExecution: 'settleVideoAttempt', musicVideoProjects: 'getProject',
 };
 
-import { registerBootHooks } from './bootHooks.js';
+import { registerBootHooks, warmMediaBootHooks } from './bootHooks.js';
+import { createMediaJobHookLoader } from './mediaJobQueue/hookRegistry.js';
 import {
   MEDIA_RUNTIME_MODULES, QUEUE_IMPORTING_RUNTIMES, loadMediaRuntimeModule,
   registerMediaJobTerminalHooks, registerMediaRuntimeModules,
@@ -51,6 +62,13 @@ describe('boot hook registration (#17499, #18217)', () => {
     await expect(loadMediaRuntimeModule('creativeDirectorVideoExecution')).rejects.toThrow(/not registered/);
 
     registerBootHooks();
+
+    expect(calls.importTopaz).not.toHaveBeenCalled();
+    expect(calls.importBlenderHook).not.toHaveBeenCalled();
+    await warmMediaBootHooks();
+    expect(calls.importTopaz).toHaveBeenCalledOnce();
+    expect(calls.importBlenderHook).toHaveBeenCalledOnce();
+    expect(calls.initBlenderHook).not.toHaveBeenCalled();
 
     const recovery = requireCosOrphanRecoveryHandlers();
     await expect(recovery.cleanupOrphanedAgents()).resolves.toBe(2);
@@ -80,6 +98,12 @@ describe('boot hook registration (#17499, #18217)', () => {
     expect(hooks.filter(([matches]) => matches({ params: { deckCard: { deckId: 'd1' } } }))).toHaveLength(2);
     expect(hooks.filter(([matches]) => matches({ owner: 'pipeline:issue-1:comicPages:page1:proof', params: {} }))).toHaveLength(1);
     expect(MEDIA_RUNTIME_MODULES.length).toBeGreaterThanOrEqual(39);
+
+    const ensureHooks = createMediaJobHookLoader();
+    const job = { params: { blenderModelReference: { modelId: 'm1' } } };
+    await Promise.all([ensureHooks(job), ensureHooks(job)]);
+    expect(calls.importBlenderHook).toHaveBeenCalledOnce();
+    expect(calls.initBlenderHook).toHaveBeenCalledOnce();
   });
 
   it('refuses a runtime loader set that omits a kind the queue dispatches and rejects malformed terminal hooks', () => {

@@ -6,7 +6,8 @@ import { SOCKET_MAX_PAYLOAD_BYTES } from './lib/socketPayloadLimits.js';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
-import { createLazyRouter } from './lib/lazyRouter.js';
+import { createLazyRouter, warmLazyRouters } from './lib/lazyRouter.js';
+import { scheduleModuleWarmup } from './lib/moduleWarmup.js';
 import { defaultRequestBody } from './lib/defaultRequestBody.js';
 import { mountAssetRoutes, mountClientDist } from './services/assetMounts.js';
 import { existsSync } from 'fs';
@@ -608,6 +609,14 @@ if (isSmokeBoot() && process.send) {
     process.send({ type: 'portos:smoke-ready', port: httpServer.address()?.port });
   });
 }
+
+// Shrink the window in which a checkout update can mix module revisions.
+// Early requests still use their router's shared first-load promise.
+scheduleModuleWarmup(httpServer, async () => {
+  await warmLazyRouters();
+  const { warmMediaBootHooks } = await import('./services/bootHooks.js');
+  await warmMediaBootHooks();
+});
 
 // Post-route boot: background service inits + schedulers, then the ordered
 // instance/sync/media-queue/DB chain that ends in httpServer.listen(). Not
