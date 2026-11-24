@@ -552,7 +552,7 @@ describe('executeCliRun — tool-free OpenCode', () => {
     await executeCliRun({
       runId: 'html-page',
       provider: {
-        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true, thinkingBudget: 8192,
         args: ['run', '--agent', 'custom', '--attach', 'http://localhost:4096', '--model', model, '--thinking', '--variant=low'],
         envVars: {
           OPENCODE_PERMISSION: '{"bash":"allow"}',
@@ -568,7 +568,7 @@ describe('executeCliRun — tool-free OpenCode', () => {
     expect(JSON.parse(env.OPENCODE_PERMISSION)).toBe('deny');
     expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
       permission: 'deny',
-      agent: { build: { permission: { bash: 'deny' } } },
+      agent: { build: { permission: { bash: 'deny' }, thinking_budget: 8192 } },
       provider: { mtplx: { models: { example: { tool_call: false } } } },
     });
     expect(child.stdin.write).toHaveBeenCalledWith(prompt);

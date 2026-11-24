@@ -251,7 +251,7 @@ const readBoolean = (value) =>
  * nothing is configured. OpenCode applies generation controls to agents (`build` is
  * its primary coding agent), not provider definitions.
  *
- * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, effort?:unknown}|null|undefined} generation
+ * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, effort?:unknown, thinkingBudget?:number}|null|undefined} generation
  * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
  * @returns {object|null}
  */
@@ -275,6 +275,9 @@ export function buildAgentGeneration(generation, providerKey) {
         ? { think: thinking }
         : { chat_template_kwargs: { enable_thinking: thinking } }),
     ...(effort === undefined ? {} : { reasoningEffort: effort }),
+    ...(providerKey === 'mtplx' && Number.isSafeInteger(generation.thinkingBudget) && generation.thinkingBudget > 0
+      ? { thinking_budget: generation.thinkingBudget }
+      : {}),
   };
   return Object.keys(build).length > 0 ? build : null;
 }
@@ -325,8 +328,12 @@ export function buildOpencodeConfig(models, base = null, providerKey = 'ollama',
   const build = buildAgentGeneration(generation, providerKey);
   if (build) {
     config.agent = { ...(config.agent && typeof config.agent === 'object' ? config.agent : {}) };
+    const storedBuild = asObject(config.agent.build);
+    if (build.thinking_budget && Number.isSafeInteger(storedBuild.thinking_budget) && storedBuild.thinking_budget > 0) {
+      build.thinking_budget = Math.min(build.thinking_budget, storedBuild.thinking_budget);
+    }
     config.agent.build = {
-      ...(config.agent.build && typeof config.agent.build === 'object' ? config.agent.build : {}),
+      ...storedBuild,
       ...build,
     };
   }
