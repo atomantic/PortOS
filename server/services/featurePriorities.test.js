@@ -12,6 +12,7 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { getFeatureArea } from '../lib/featureAreas.js';
+import { auditQualityInstructions } from '../lib/auditQuality.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-audit-scope-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
@@ -124,5 +125,62 @@ describe('resolveAuditPriorityScope', () => {
     expect(log).toHaveBeenCalledWith('⏭️ Feature priority scope unavailable for performance-efficiency, auditing without it: Feature usage tracking requires PostgreSQL');
     expect(warn).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveAuditPriorityScope for a managed app', () => {
+  const MANAGED = {
+    id: 'app-1',
+    name: 'Example App',
+    featurePriorities: [
+      { id: 'checkout', label: 'Checkout', paths: ['src/checkout/**', 'src/cart/*.js'], priority: 'P0', note: 'revenue path' },
+      { id: 'admin', label: 'Admin tools', paths: ['src/admin/**'], priority: 'P2' },
+      { id: 'legacy', label: 'Legacy importer', paths: ['legacy/**', 'scripts/import-*.js'], priority: 'P3' },
+      { id: 'core', label: 'Core', paths: ['src/core/**'], priority: 'P1' },
+    ],
+  };
+
+  it('builds the same shape from the app entries, leaves P1 out and never reads the usage store', async () => {
+    usageStore.failure = new Error('the store must not be read');
+    expect(await resolveAuditPriorityScope(MANAGED, 'performance-efficiency')).toEqual({
+      exempt: false,
+      p0: [{ label: 'Checkout', globs: ['src/checkout/**', 'src/cart/*.js'] }],
+      p2: [{ label: 'Admin tools', globs: ['src/admin/**'] }],
+      p3: [{ label: 'Legacy importer', globs: ['legacy/**', 'scripts/import-*.js'] }],
+    });
+  });
+
+  it('marks the exempt lanes exempt', async () => {
+    expect((await resolveAuditPriorityScope(MANAGED, 'security')).exempt).toBe(true);
+    expect((await resolveAuditPriorityScope(MANAGED, 'upgrade-rehearsal')).exempt).toBe(true);
+  });
+
+  it('is null for an app with no entries, so its prompt is the one it always got', async () => {
+    for (const featurePriorities of [undefined, null, [], 'nope']) {
+      expect(await resolveAuditPriorityScope({ id: 'app-1', name: 'x', featurePriorities }, 'accessibility')).toBeNull();
+    }
+  });
+
+  it('ignores hand-edited entries that fail the stored shape', async () => {
+    const scope = await resolveAuditPriorityScope({ id: 'app-1', featurePriorities: [
+      null, { label: 'No paths', paths: [], priority: 'P3' }, { label: 'Bad tier', paths: ['a/**'], priority: 'P9' },
+      { label: 7, paths: ['a/**'], priority: 'P3' }, { label: 'Mixed', paths: ['b/**', 4, ' '], priority: 'P3' },
+    ] }, 'accessibility');
+    expect(scope).toEqual({ exempt: false, p0: [], p2: [], p3: [{ label: 'Mixed', globs: ['b/**'] }] });
+  });
+
+  it('reaches the prompt: P3 leaves a non-exempt inventory and stays in scope for an exempt lane', async () => {
+    const app = { ...MANAGED, deploymentModel: 'One team.' };
+    const audit = auditQualityInstructions('performance-efficiency', app, { priorityScope: await resolveAuditPriorityScope(app, 'performance-efficiency') });
+    expect(audit).toContain('remove every path matching these globs from the step 1 inventory');
+    const complexity = auditQualityInstructions('better-complexity', app, { priorityScope: await resolveAuditPriorityScope(app, 'better-complexity') });
+    expect(complexity).toContain("--exclude 'legacy/**' --exclude 'scripts/import-*.js'");
+    expect(complexity).toContain('only where the repository has the quality:complexity script');
+    const security = auditQualityInstructions('security', app, { priorityScope: await resolveAuditPriorityScope(app, 'security') });
+    expect(security).toContain('P3 areas stay fully in scope for this lane');
+    expect(security).not.toContain('--exclude');
+    const plain = { id: 'app-1', name: 'x', deploymentModel: 'One team.' };
+    expect(auditQualityInstructions('performance-efficiency', plain, { priorityScope: await resolveAuditPriorityScope(plain, 'performance-efficiency') }))
+      .toBe(auditQualityInstructions('performance-efficiency', plain));
   });
 });

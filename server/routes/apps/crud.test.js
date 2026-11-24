@@ -530,6 +530,21 @@ describe('Apps CRUD Routes', () => {
       expect(appsService.notifyAppsChanged).toHaveBeenCalledWith('update', 'app-001');
     });
 
+    it('passes the validated featurePriorities through and rejects a malformed array without writing', async () => {
+      const featurePriorities = [{ id: 'checkout', label: 'Checkout', paths: ['src/checkout/**'], priority: 'P0' }];
+      appsService.updateApp.mockResolvedValue({ id: 'app-001', name: 'App', featurePriorities });
+
+      const ok = await request(app).put('/api/apps/app-001').send({ featurePriorities });
+      expect(ok.status).toBe(200);
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { featurePriorities });
+      expect(ok.body.featurePriorities).toEqual(featurePriorities);
+
+      appsService.updateApp.mockClear();
+      const bad = await request(app).put('/api/apps/app-001').send({ featurePriorities: [{ ...featurePriorities[0], paths: ["src/it's"] }] });
+      expect(bad.status).toBe(400);
+      expect(appsService.updateApp).not.toHaveBeenCalled();
+    });
+
     it('should return 404 if app not found', async () => {
       appsService.updateApp.mockResolvedValue(null);
 
