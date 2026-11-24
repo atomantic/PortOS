@@ -65,6 +65,7 @@ export default function DocumentsTab({ appId, repoPath }) {
     // An edit belongs to the document it was opened on: kept open across a URL
     // change it would save that document's text into this one.
     setEditing(false);
+    setCreating(null);
     if (!selectedDoc) {
       setDocContent(null);
       return undefined;
@@ -121,7 +122,6 @@ export default function DocumentsTab({ appId, repoPath }) {
 
   const enterCreateMode = (filename) => {
     setCreating(filename);
-    setDocContent(null);
     setEditContent('');
     setEditing(true);
   };

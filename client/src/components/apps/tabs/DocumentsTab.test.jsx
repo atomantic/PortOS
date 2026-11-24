@@ -116,6 +116,14 @@ describe('DocumentsTab', () => {
     expect(await screen.findByRole('heading', { name: 'README.md' })).toBeInTheDocument();
   });
 
+  it('returns to the open document when creating another is cancelled', async () => {
+    renderTab();
+    await screen.findByRole('button', { name: 'Edit' });
+    fireEvent.click(await screen.findByRole('button', { name: /AGENTS\.md/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+  });
+
   it('keeps a slow save out of the document opened meanwhile', async () => {
     let finish;
     saveAppDocument.mockReturnValue(new Promise(resolve => { finish = resolve; }));
