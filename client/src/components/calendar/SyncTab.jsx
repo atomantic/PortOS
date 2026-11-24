@@ -98,28 +98,28 @@ export default function SyncTab({ accounts, onRefresh }) {
           {accounts.map((account) => (
             <div
               key={account.id}
-              className="flex items-center justify-between p-4 bg-port-card rounded-lg border border-port-border"
+              className="flex flex-wrap items-center justify-between gap-3 p-4 bg-port-card rounded-lg border border-port-border"
             >
-              <div>
-                <div className="text-sm font-medium text-white">{account.name}</div>
-                <div className="text-xs text-gray-500">
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-white truncate">{account.name}</div>
+                <div className="text-xs text-gray-500 break-words">
                   {account.lastSyncAt
                     ? `Last sync: ${formatDateTime(account.lastSyncAt)}`
                     : 'Never synced'}
                   {account.lastSyncStatus && ` (${account.lastSyncStatus})`}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
                 {syncing[account.id] === 'auth-required' && (
                   <span className="flex items-center gap-1 text-xs text-port-warning">
                     <AlertCircle size={14} /> Auth required
                   </span>
                 )}
                 {syncing[account.id] === 'syncing' ? (
-                  <div className="flex items-center gap-2">
-                    <RefreshCw size={16} className="text-port-accent animate-spin" />
+                  <div className="flex items-center gap-2 min-w-0">
+                    <RefreshCw size={16} className="text-port-accent animate-spin shrink-0" />
                     {mcpProgress[account.id] && account.type === 'google-calendar' && (
-                      <span className="text-xs text-gray-500">{mcpProgress[account.id]}</span>
+                      <span className="text-xs text-gray-500 break-words">{mcpProgress[account.id]}</span>
                     )}
                   </div>
                 ) : account.type === 'google-calendar' ? (
@@ -162,11 +162,11 @@ export default function SyncTab({ accounts, onRefresh }) {
             {(tokenStatus.providers || []).map((status) => (
               <div
                 key={status.provider}
-                className="flex items-center justify-between p-4 bg-port-card rounded-lg border border-port-border"
+                className="flex flex-wrap items-center justify-between gap-3 p-4 bg-port-card rounded-lg border border-port-border"
               >
-                <div>
-                  <div className="text-sm font-medium text-white capitalize">{status.provider}</div>
-                  <div className="text-xs text-gray-500">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-white capitalize truncate">{status.provider}</div>
+                  <div className="text-xs text-gray-500 break-words">
                     {status.hasToken ? (
                       <span className="text-port-success">Token present</span>
                     ) : (

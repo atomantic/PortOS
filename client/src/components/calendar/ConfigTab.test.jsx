@@ -116,3 +116,36 @@ describe('calendar account deletion', () => {
     expect(fetchMock).toHaveBeenLastCalledWith(`/api/calendar/accounts/${account.id}`, expect.objectContaining({ method: 'DELETE' }));
   });
 });
+
+describe('ConfigTab narrow-viewport layout', () => {
+  it('applies flex-wrap and min-w-0 on account, sync-method, Google auth, and sub-calendar rows', async () => {
+    const richAccount = {
+      ...account,
+      email: 'example.long.address@example.com',
+      subcalendars: [{ calendarId: 'cal-1@example.com', name: 'Long Subcalendar Name', enabled: true }],
+    };
+    render(<MemoryRouter><ConfigTab accounts={[richAccount]} setAccounts={vi.fn()} /></MemoryRouter>);
+
+    const accountName = screen.getByText('Example Calendar');
+    const labelBlock = accountName.parentElement;
+    expect(labelBlock.className).toContain('min-w-0');
+    expect(labelBlock.parentElement.className).toContain('min-w-0');
+    expect(labelBlock.parentElement.parentElement.className).toContain('flex-wrap');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand calendars for Example Calendar' }));
+    const authText = await screen.findByText('Google API authenticated');
+    expect(authText.parentElement.className).toContain('min-w-0');
+    expect(authText.parentElement.parentElement.className).toContain('flex-wrap');
+
+    const syncSelect = screen.getByLabelText('Sync method');
+    expect(syncSelect.parentElement.className).toContain('flex-wrap');
+
+    const subcalHeading = screen.getByText(/Sub-calendars/);
+    expect(subcalHeading.parentElement.className).toContain('flex-wrap');
+
+    const subcalName = screen.getByText('Long Subcalendar Name');
+    expect(subcalName.parentElement.className).toContain('min-w-0');
+    expect(subcalName.parentElement.parentElement.className).toContain('min-w-0');
+    expect(subcalName.parentElement.parentElement.parentElement.className).toContain('flex-wrap');
+  });
+});

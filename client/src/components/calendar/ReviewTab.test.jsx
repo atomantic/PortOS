@@ -134,4 +134,41 @@ describe('ReviewTab', () => {
       expect(screen.getByText('New day event')).toBeTruthy();
     });
   });
+
+  describe('narrow-viewport layout', () => {
+    it('wraps date header, summary bar, event metadata, and goal edit row without squashing duration', async () => {
+      vi.setSystemTime(new Date(2026, 0, 2, 12));
+      getDailyReview.mockResolvedValueOnce({
+        ...reviewPage([{
+          id: 'goal-evt',
+          title: 'Deep Focus Session',
+          startTime: '2026-01-02T09:00:00',
+          endTime: '2026-01-02T10:00:00',
+          subcalendarName: 'Personal Calendar With Long Name',
+          matchingGoals: [{ goalId: 'g1', goalTitle: 'Ship Reliability Improvements' }],
+        }]),
+        lastSyncAt: null,
+      });
+
+      render(<MemoryRouter><ReviewTab accounts={[{ id: 'acct-1' }]} /></MemoryRouter>);
+      await screen.findByText('Deep Focus Session');
+
+      const dateInput = screen.getByLabelText('Review date');
+      expect(dateInput.parentElement.className).toContain('flex-wrap');
+      expect(dateInput.parentElement.parentElement.className).toContain('flex-wrap');
+
+      const summaryCount = screen.getByText('1 events');
+      expect(summaryCount.parentElement.className).toContain('flex-wrap');
+
+      const subcalMeta = screen.getByText(/Personal Calendar With Long Name/);
+      expect(subcalMeta.parentElement.className).toContain('flex-wrap');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm - it happened' }));
+      const goalSelect = screen.getByLabelText('Goal');
+      expect(goalSelect.className).toContain('min-w-0');
+      expect(goalSelect.parentElement.className).toContain('flex-wrap');
+      const durationInput = screen.getByLabelText('Duration in minutes');
+      expect(durationInput.parentElement.className).toContain('shrink-0');
+    });
+  });
 });
