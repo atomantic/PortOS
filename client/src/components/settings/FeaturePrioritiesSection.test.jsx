@@ -117,6 +117,29 @@ describe('FeaturePrioritiesSection', () => {
     await waitFor(() => expect(within(rowOf('Beeper')).getByText('Default')).toBeTruthy());
   });
 
+  it('does not let a slow save response overwrite a newer announcement for the same area', async () => {
+    render(<FeaturePrioritiesSection />);
+    await screen.findByText('Brain');
+    let resolveSave;
+    mock.set.mockReturnValueOnce(new Promise((resolve) => { resolveSave = resolve; }));
+    fireEvent.click(within(rowOf('Brain')).getByRole('button', { name: 'Brain: P3' }));
+    emit('feature-priorities:updated', { areaId: 'brain', tier: 'P3' });
+    mock.get.mockResolvedValueOnce(payload([area()]));
+    emit('feature-priorities:updated', { areaId: 'brain', tier: null });
+    await waitFor(() => expect(within(rowOf('Brain')).getByText('Learned')).toBeTruthy());
+    await act(async () => { resolveSave({ areaId: 'brain', tier: 'P3' }); });
+    expect(within(rowOf('Brain')).getByText('Learned')).toBeTruthy();
+    expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P0');
+  });
+
+  it('re-reads after a socket reconnect', async () => {
+    render(<FeaturePrioritiesSection />);
+    await screen.findByText('Brain');
+    mock.get.mockResolvedValueOnce(payload([area({ tier: 'P2', source: 'pinned' })]));
+    emit('connect');
+    await waitFor(() => expect(within(rowOf('Brain')).getByTestId('tier-brain').textContent).toBe('P2'));
+  });
+
   it('keeps the previous value when a save fails', async () => {
     mock.set.mockRejectedValueOnce(new Error('boom'));
     render(<FeaturePrioritiesSection />);
