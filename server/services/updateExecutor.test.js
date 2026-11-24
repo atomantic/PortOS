@@ -191,7 +191,13 @@ describe('executeUpdate', () => {
     expect(() => child.emit('error', new Error('late launcher timeout'))).not.toThrow();
   });
 
-  it.each(['/usr/bin/nodejs', '/opt/renamed-runtime'])('keeps a live supervisor with %s and a seconds-truncated start time', async executable => {
+  it.each([
+    '/usr/bin/nodejs /mock/scripts/deferred-update.mjs',
+    '/opt/renamed-runtime /mock/scripts/deferred-update.mjs',
+    // ps prints only the name while a process's arguments are unreadable (mid-exec): BSD, then procps.
+    '(node)',
+    '[node]',
+  ])('keeps a live supervisor shown as %s with a seconds-truncated start time', async command => {
     const root = mkdtempSync(join(tmpdir(), 'update-live-supervisor-'));
     const admission = createMaintenanceAdmission(root);
     const child = createMockChild();
@@ -202,7 +208,7 @@ describe('executeUpdate', () => {
       const startedAt = Math.floor(Date.now() / 1000) * 1000;
       const launched = await launchUpdate('v1.0.0', () => {}, { admission, monitorIntervalMs: 10,
         supervisorAbsent: () => false, supervisorSnapshot: async () => [{ pid: child.pid,
-          startedAt, command: `${executable} /mock/scripts/deferred-update.mjs` }] });
+          startedAt, state: 'S', command }] });
       await vi.advanceTimersByTimeAsync(30);
       expect(admission.deferredUpdate.launch()?.id).toBeTruthy();
       child.emit('error', new Error('synthetic stop'));

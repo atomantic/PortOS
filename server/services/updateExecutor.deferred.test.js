@@ -60,7 +60,8 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
     installAdmittedUpdateFixture(root, "writeFileSync('request-consent', process.env.PORTOS_UPDATE_INTERRUPT || '');");
     const launch = await requestManualUpdate({ args: ['--request'], root,
       launch: launchUpdate, emit: vi.fn() });
-    await expect(launch.completion).resolves.toMatchObject({ success: true });
+    const outcome = await launch.completion;
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ success: true });
     expect(await readFile(join(root, 'request-consent'), 'utf8')).toBe('');
   });
   it('continues a legacy browser confirmation through the real detached update with its prior acknowledgments', async () => {
@@ -88,7 +89,8 @@ describe.skipIf(process.platform === 'win32')('service launch through the real d
     admission.deferredUpdate.finish(newer.id, false);
     const id = await request();
     const continued = await continueManualUpdateRecovery({ id, root, directory: admission.directory, launch: launchUpdate });
-    await expect(continued.completion).resolves.toMatchObject({ success: true });
+    const outcome = await continued.completion;
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ success: true });
     expect(await readFile(join(root, 'browser-consent-applied'), 'utf8')).toBe('client|1');
     expect(admission.deferredUpdate.operation()).toBeNull();
   });
