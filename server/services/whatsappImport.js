@@ -65,10 +65,10 @@ import { getUserTimezone } from './userTimezone.js';
 const BIDI_MARKS = /[‎‏‪-‮]/g;
 
 // One message-line header: an optional `[`, a date (three numeric groups in some
-// order), a time (12h with AM/PM or 24h), an optional `]`, and an optional
+// order), a time (12h with AM/PM, also written `p. m.`, or 24h), an optional `]`, and an optional
 // Android ` - ` separator, then the remainder ("Sender: body" or a system line).
 // The capture groups are (d1, d2, d3, hour, minute, second?, ampm?, rest).
-const HEADER_RE = /^\[?\s*(\d{1,4})[./-](\d{1,2})[./-](\d{1,4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp]\.?[Mm]\.?)?\s*\]?\s*(?:[-–]\s+)?(.*)$/;
+const HEADER_RE = /^\[?\s*(\d{1,4})[./-](\d{1,2})[./-](\d{1,4}),?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp]\.?\s?[Mm]\.?)?\s*\]?\s*(?:[-–]\s+)?(.*)$/;
 
 // Convert a 12h clock + AM/PM token to a 0–23 hour. A 24h line (no token) passes
 // through unchanged. 12 AM → 0, 12 PM → 12.

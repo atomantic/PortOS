@@ -123,6 +123,11 @@ describe('spotifyRecordToCandidate', () => {
     expect(a.dedupeKey).toContain('Band A');
   });
 
+  it('keeps podcast plays from the legacy account-data export', () => {
+    const c = spotifyRecordToCandidate({ endTime: '2022-01-15 09:05', podcastName: 'Dev Talk', episodeName: 'Pilot', msPlayed: 60000 });
+    expect(c).toMatchObject({ title: 'Pilot', summary: 'Dev Talk', metadata: { type: 'episode', showName: 'Dev Talk' } });
+  });
+
   it('classifies podcast episodes and uses the show name as summary', () => {
     const c = spotifyRecordToCandidate({
       ts: '2023-06-01T12:00:00Z',
