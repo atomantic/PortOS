@@ -30,6 +30,7 @@ const UNAUDITED_SYSTEM = [
   'catalog_ingredient_revisions', 'catalog_ingredient_media',
   // Machine-local operational state, runs, renders and event streams
   'human_activity_events', 'post_runs', 'post_attempts', 'commission_feedback', 'user_action_events',
+  'feature_usage_days',
   // Explicitly toggled local display preferences; unmute is intentional and re-creatable.
   'github_notification_mutes',
   'review_queue_triage', 'autonomous_job_notepads', 'cos_pending_agent_feedback',

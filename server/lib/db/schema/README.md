@@ -33,6 +33,7 @@ identical catalogs.
 | `post.js` | `postDdl` | MeatSpace POST normalized runs and attempts (machine-local) |
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
 | `userActions.js` | `userActionsDdl` | Operator-action ledger — what the human did in the UI (machine-local) |
+| `featureUsage.js` | `featureUsageDdl` | Focused page visits per feature area per local day, the usage signal behind feature priority tiers (machine-local) |
 | `reviewQueueTriage.js` | `reviewQueueTriageDdl` | Machine-local Review Hub presentation markers — snooze, optional dismissal, and delivery generation keyed by canonical action identity |
 | `autonomousJobNotepads.js` | `autonomousJobNotepadsDdl` | Machine-local per-job durable KV notepad for CoS Autonomous Jobs (bounded cursors/watermarks, never federated) |
 | `cosTasks.js` | `cosTasksDdl` | The CoS task queues, one row per task (stored form, queue order, completed-at window) plus a per-queue write version |
@@ -60,7 +61,7 @@ identical catalogs.
 
 ### Composer (`index.js`)
 
-- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `usageLedger` → `peerExecution`).
+- `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `featureUsage` → `reviewQueueTriage` → `cosAgentFeedback` → `cosTasks` → `cosAgents` → `aiGraph` → `usageLedger` → `peerExecution`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
   `beeper` → `githubNotifications` → `audit` DDL → audit triggers → `syncFeed` DDL → sync-feed triggers).
