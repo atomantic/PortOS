@@ -48,7 +48,7 @@ vi.mock('../services/auth.js', async load => ({ ...await load(), isAuthEnabled: 
 import routes from './codeAnimationFilms.js';
 import musicVideoBlenderRoutes from './musicVideoBlender.js';
 import { getTrack } from '../services/tracks/index.js';
-import { mutateFilmProject } from '../services/codeAnimation/projectStore.js';
+import { getProjectRecord, mutateFilmProject } from '../services/codeAnimation/projectStore.js';
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from '../services/film/jobs.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
@@ -194,6 +194,26 @@ it('refreshes silent song context with timeline edits and refuses an unwritable 
   const refused = await request(app).patch(base()).send({ timeline: { durationSec: 15, fps: 24 } });
   expect(refused.status).toBe(400);
   expect(state.projects.get(id)).toEqual(original);
+});
+
+it('preserves the original DB commit error when song.json rollback fails', async () => {
+  await create(); await scaffoldAndSync();
+  const original = structuredClone(state.projects.get(id));
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    mutateFilmProject.mockImplementationOnce(async (filmId, change) => {
+      await change(structuredClone(state.projects.get(filmId)));
+      getProjectRecord.mockRejectedValueOnce(new Error('DB unreachable during rollback'));
+      throw Object.assign(new Error('DB commit failed'), { status: 503 });
+    });
+    const response = await request(app).patch(base()).send({ timeline: { durationSec: 15, fps: 24 } });
+    expect(response.status).toBe(503);
+    expect(response.body.error).toBe('DB commit failed');
+    expect(state.projects.get(id)).toEqual(original);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('song.json rollback failed: DB unreachable during rollback'));
+  } finally {
+    errorSpy.mockRestore();
+  }
 });
 
 // Catches cross-store promotion reusing source timing/output or sharing mutable source files.
