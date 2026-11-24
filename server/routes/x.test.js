@@ -49,6 +49,31 @@ describe('X routes', () => {
     expect(x.createAccount).toHaveBeenCalledTimes(1);
   });
 
+  it('answers 404 for a missing draft and 409 only for a wrong-state one', async () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    const missing = Object.assign(new Error('X draft not found'), { status: 404 });
+    x.reviewDraft.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/x/drafts/${id}/review`).send({ state: 'approved' })).status).toBe(404);
+    x.reviewDraft.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/x/drafts/${id}/review`).send({ state: 'approved' })).status).toBe(409);
+    x.openApprovedDraft.mockRejectedValueOnce(missing);
+    expect((await request(app).post(`/api/x/drafts/${id}/open`).send({})).status).toBe(404);
+    x.openApprovedDraft.mockResolvedValueOnce(null);
+    expect((await request(app).post(`/api/x/drafts/${id}/open`).send({})).status).toBe(409);
+  });
+
+  it.each(['posts', 'drafts'])('404s %s for an unknown account and 200s an empty list for a real one', async (kind) => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    x.listPosts.mockResolvedValue([]);
+    x.listDrafts.mockResolvedValue([]);
+    x.getAccount.mockResolvedValueOnce(null);
+    expect((await request(app).get(`/api/x/accounts/${id}/${kind}`)).status).toBe(404);
+    x.getAccount.mockResolvedValueOnce({ id });
+    const ok = await request(app).get(`/api/x/accounts/${id}/${kind}`);
+    expect(ok.status).toBe(200);
+    expect(ok.body[kind]).toEqual([]);
+  });
+
   it('keeps browser handoffs behind the named destination allowlist', async () => {
     x.openAccountDestination.mockResolvedValue({ pageId: 'page-1', url: 'https://x.com/example_user' });
     const response = await request(app)
