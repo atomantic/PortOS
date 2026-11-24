@@ -84,9 +84,20 @@ async function pullFromOrigin(subject) {
  * (`gitTestRepo.js`), so the remaining cost on a slow filesystem (Windows)
  * is that copy-and-delete cycle repeating once per test.
  */
+// Agent sessions inject the forge identity as GIT_AUTHOR_*/GIT_COMMITTER_* env,
+// which overrides the fixtures' per-clone `git config user.*`. The rebased-sha
+// case needs the contributor's cherry-pick to differ from the primary's copy,
+// so the suite must not inherit these.
+const IDENTITY_ENV = ['GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'];
+
 function useGitSandbox() {
   let sandbox;
+  const savedEnv = {};
   beforeAll(async () => {
+    for (const key of IDENTITY_ENV) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     sandbox = await makeGitSandbox({ prefix: 'portos-branch-jack-' });
     sandbox.initialHead = (await execGit(['rev-parse', 'HEAD'], sandbox.repo)).stdout.trim();
   });
@@ -95,6 +106,10 @@ function useGitSandbox() {
     ({ scratch, repo } = sandbox);
   });
   afterAll(async () => {
+    for (const key of IDENTITY_ENV) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
     await destroyGitSandbox(sandbox.scratch);
   });
 }
