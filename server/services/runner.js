@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
-import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } from '../lib/provider/providerModels.js';
+import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -391,11 +391,12 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   }
 
   let output = '';
-  // Codex can echo the prompt on stderr and Claude can print sign-in notices.
-  // Both write their answer to stdout; keep the full transcript for diagnostics.
+  // Keep CLI diagnostics in the full transcript and out of the reply. The
+  // tool-free OpenCode invocation pins the default format with thinking hidden.
   let assistantOutput = '';
   const isClaude = isClaudeProvider(provider);
-  const stdoutIsResponse = isCodexProvider(provider) || isClaude;
+  const toolFreeOpenCode = toolFree && isOpencodeCommand(provider.command);
+  const stdoutIsResponse = isCodexProvider(provider) || isClaude || toolFreeOpenCode;
   const signInWarningPrefix = '\nWarning: this sign-in ends between ';
   let stderrTail = '\n';
   let claudeSignInExpiring = false;
@@ -491,6 +492,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
     provider,
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,
+    ...(toolFreeOpenCode ? { toolFree: true, model: extractBakedModel(builtArgs) || provider.defaultModel } : {}),
   });
 
   // See the executeCliRun docblock above for why this is a resolve+wrap, not

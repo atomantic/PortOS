@@ -37,6 +37,7 @@ export const htmlPagePromptParts = () => ({
     '',
     '',
     'Rules:',
+    '- Implement the plan directly. Keep any additional planning brief so you can return the complete page.',
     '- Everything inline: one file with its own <style> and <script>. No external fonts, images, scripts or network requests.',
     '- Reply with only the complete HTML document, starting at <!doctype html>.',
   ].join('\n'),

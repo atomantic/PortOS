@@ -450,10 +450,10 @@ function applyOpenCodeContext(config, namespace, override) {
  *
  * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
- * @param {{safetyProfile?:string|null}} [options] - `no-tool` public-review applies `hardenOpencodeConfigForNoTool`.
+ * @param {{safetyProfile?:string|null,toolFree?:boolean}} [options] - apply the no-tool config for a public review or a private one-shot.
  * @returns {{OPENCODE_CONFIG_CONTENT?: string}} env vars to merge
  */
-export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } = {}) {
+export function buildOpencodeEnvVars(provider, model, { safetyProfile = null, toolFree = false } = {}) {
   const providerKey = getOpencodeLocalProviderNamespace(provider);
   if (!isOpencodeCommand(provider?.command)) {
     return {};
@@ -464,7 +464,7 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
   // provider running against the user's `~/.config/opencode`; `OPENCODE_CONFIG_CONTENT`
   // REPLACES that file wholesale, so synthesizing one would drop their providers.
   // Seeded Zen records ship `{"permission":"allow"}` and take the path below.
-  if (!providerKey && !base) return {};
+  if (!providerKey && !base && !toolFree) return {};
 
   const ids = [
     ...(Array.isArray(provider?.models) ? provider.models : []),
@@ -498,9 +498,12 @@ export function buildOpencodeEnvVars(provider, model, { safetyProfile = null } =
   }
   // LAST: overrides everything above, including a stored `permission: "allow"` and
   // `tool_call: true`. The enforcement boundary.
-  if (isPublicReviewNoToolProfile(safetyProfile)) hardenOpencodeConfigForNoTool(config);
+  if (toolFree || isPublicReviewNoToolProfile(safetyProfile)) hardenOpencodeConfigForNoTool(config);
   return {
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+    // OpenCode reads this after the inline config. Replace any saved override
+    // so it cannot restore root permissions on the private one-shot.
+    ...(toolFree ? { OPENCODE_PERMISSION: JSON.stringify(DENY_ALL_PERMISSIONS) } : {}),
     ...(apiKey && gateway ? { [gateway.apiKeyEnv]: apiKey } : {}),
   };
 }

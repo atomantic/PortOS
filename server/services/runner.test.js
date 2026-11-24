@@ -540,6 +540,48 @@ describe('executeCliRun — Claude response channel', () => {
   });
 });
 
+describe('executeCliRun — tool-free OpenCode', () => {
+  it('disables tools for the selected MTPLX model and returns only the answer', async () => {
+    const child = makeChild();
+    spawn.mockReturnValueOnce(child);
+    const onComplete = vi.fn();
+    const prompt = 'Return a standalone HTML document.';
+    const model = 'mtplx/example';
+    const diagnostics = '\u001b[0m\n> build · example\n\u001b[0m\n';
+    const page = '<!doctype html><html><body>Example</body></html>\n';
+    await executeCliRun({
+      runId: 'html-page',
+      provider: {
+        id: 'opencode-mtplx', command: 'opencode', type: 'cli', mtplxBacked: true,
+        args: ['run', '--agent', 'custom', '--attach', 'http://localhost:4096', '--model', model, '--thinking', '--variant=low'],
+        envVars: {
+          OPENCODE_PERMISSION: '{"bash":"allow"}',
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: 'allow', agent: { build: { permission: { bash: 'allow' } } } }),
+        },
+      },
+      prompt, workspacePath: TEST_WORKSPACE, toolFree: true, onComplete,
+    });
+
+    const [command, args, { env }] = spawn.mock.calls[0];
+    expect(command).toBe('opencode');
+    expect(args).toEqual(['run', '--pure', '--agent', 'build', '--variant', 'low', '-m', model]);
+    expect(JSON.parse(env.OPENCODE_PERMISSION)).toBe('deny');
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT)).toMatchObject({
+      permission: 'deny',
+      agent: { build: { permission: { bash: 'deny' } } },
+      provider: { mtplx: { models: { example: { tool_call: false } } } },
+    });
+    expect(child.stdin.write).toHaveBeenCalledWith(prompt);
+
+    child.stderr.emit('data', Buffer.from(diagnostics));
+    child.stdout.emit('data', Buffer.from(page));
+    child.emit('close', 0);
+    await flushMicrotasks();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true, text: page }));
+    expect(writeFile).toHaveBeenCalledWith(expect.stringContaining('output.txt'), diagnostics + page);
+  });
+});
+
 describe('executeCliRun — wall-clock timeout classification', () => {
   // The CLI runner kills its own child on timeout, so the close event carries
   // `exitCode: null` rather than the 124 finalizeRunRecord keys on. Without the
