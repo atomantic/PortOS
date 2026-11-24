@@ -2,7 +2,6 @@ import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'rea
 import { useLocation, useNavigate, useParams } from 'react-router';
 import { Bot, Cpu, Gauge, Network, Package, Plug, Plus, TerminalSquare } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import { getOrchestrationProfiles } from '../services/apiAgents.js';
 import { getApps } from '../services/apiApps.js';
 import {
   getSampleProviders,
@@ -132,17 +131,6 @@ export default function AIProviders() {
   const [showRunPanel, setShowRunPanel] = useState(false);
   const [runPrompt, setRunPrompt] = useState('');
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
-  const loadOrchestrationProfiles = useCallback(async () => {
-    const result = await getOrchestrationProfiles?.({ silent: true });
-    return Array.isArray(result) ? result : result?.profiles || [];
-  }, []);
-  const {
-    items: orchestrationProfiles,
-    state: orchestrationProfilesState,
-    error: orchestrationProfilesError,
-    retry: retryOrchestrationProfiles,
-  } = useListResource(loadOrchestrationProfiles);
-  const [selectedProfileId, setSelectedProfileId] = useState('');
   const loadApps = useCallback(async () => {
     const list = await getApps({ silent: true });
     return Array.isArray(list) ? list : [];
@@ -650,7 +638,6 @@ export default function AIProviders() {
       prompt: runPrompt,
       workspacePath: workspace?.repoPath,
       workspaceName: workspace?.name,
-      orchestrationProfileId: selectedProfileId || undefined,
     }, { silent: true }).catch(err => ({ error: err.message }));
 
     if (result.error) {
@@ -1001,12 +988,6 @@ export default function AIProviders() {
           onAddSample={handleAddSample}
           onAddAllSamples={handleAddAllSamples}
           showRunPanel={showRunPanel}
-          orchestrationProfiles={orchestrationProfiles}
-          orchestrationProfilesState={orchestrationProfilesState}
-          orchestrationProfilesError={orchestrationProfilesError}
-          retryOrchestrationProfiles={retryOrchestrationProfiles}
-          selectedProfileId={selectedProfileId}
-          setSelectedProfileId={setSelectedProfileId}
           apps={apps}
           appsState={appsState}
           appsError={appsError}
