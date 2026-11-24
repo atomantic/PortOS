@@ -98,6 +98,18 @@ describe('provider seed parity — data.reference ↔ aiToolkit sample', () => {
         }
         if (id === 'antigravity-cli' || id === 'antigravity-tui') {
           expect(provider.models, `${seedName}.${id} lost Gemini 4 Argon`).toContain('gemini-4-argon-medium');
+          expect(provider.models, `${seedName}.${id} missing Gemini 4 Neon`).toEqual(expect.arrayContaining([
+            'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low',
+            'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low',
+            'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro',
+          ]));
+          expect(provider, `${seedName}.${id} missing concrete Antigravity tier defaults`).toMatchObject({
+            defaultModel: 'gemini-4-neon-medium',
+            lightModel: 'gemini-3.8-flash-medium',
+            mediumModel: 'gemini-4-neon-medium',
+            heavyModel: 'gemini-4-neon-high',
+            ultraModel: 'gemini-4-neon-xhigh',
+          });
         }
       }
     }

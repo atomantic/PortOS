@@ -846,11 +846,30 @@ describe('providerModels', () => {
     });
 
     it('leaves every current Antigravity fallback choice available to server pickers', () => {
-      const agyModels = SHIPPED_PROVIDERS.providers['antigravity-cli'].models;
-      expect(agyModels).toContain('gemini-4-argon-medium');
+      const agy = SHIPPED_PROVIDERS.providers['antigravity-cli'];
+      const agyModels = agy.models;
+      expect(agyModels).toEqual(expect.arrayContaining([
+        'gemini-4-neon-high',
+        'gemini-4-neon-xhigh',
+        'gemini-4-neon-medium',
+        'gemini-4-neon-low',
+        'gemini-4-argon-medium',
+        'gemini-4-hydrogen-xhigh',
+        'gemini-pro-orchestrator-neon',
+        'gemini-pro-orchestrator-g1-pro',
+      ]));
       expect(filterSelectableModels(agyModels)).toEqual(
         agyModels.filter((id) => id !== ANTIGRAVITY_CONFIGURED_DEFAULT),
       );
+      expect(splitAntigravityModel('gemini-4-neon-xhigh')).toEqual({ base: 'gemini-4-neon', effort: 'xhigh' });
+      expect(splitAntigravityModel('gemini-pro-orchestrator-neon')).toEqual({ base: 'gemini-pro-orchestrator-neon', effort: null });
+      expect(effortLevelsForProvider(agy, 'gemini-4-neon')).toEqual(['low', 'medium', 'high', 'xhigh']);
+      expect(effortLevelsForProvider(agy, 'gemini-pro-orchestrator-neon')).toBeNull();
+      expect(resolveCliEffort('xhigh', agy, 'gemini-4-neon')).toBe('xhigh');
+      expect(resolveCliModel(agy.defaultModel)).toBe('gemini-4-neon-medium');
+      expect(resolveCliModel(agy.lightModel)).toBe('gemini-3.8-flash-medium');
+      expect(resolveCliModel(agy.heavyModel)).toBe('gemini-4-neon-high');
+      expect(resolveCliModel(agy.ultraModel)).toBe('gemini-4-neon-xhigh');
     });
   });
 

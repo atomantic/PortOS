@@ -37,6 +37,28 @@ describe('provider sample generator', () => {
     expect(providers.grok.models).toContain('grok-4');
     expect(providers.grok.contextWindow).toBe(500000);
   });
+
+  it('offers Gemini 4 Neon and concrete tier defaults on Antigravity presets while retaining Argon and configured-default', () => {
+    for (const variant of ['sample', 'reference']) {
+      const providers = buildProviders(variant);
+      for (const id of ['antigravity-cli', 'antigravity-tui']) {
+        expect(providers[id].models).toEqual(expect.arrayContaining([
+          'antigravity-configured-default',
+          'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low',
+          'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low',
+          'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low',
+          'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro',
+        ]));
+        expect(providers[id]).toMatchObject({
+          defaultModel: 'gemini-4-neon-medium',
+          lightModel: 'gemini-3.8-flash-medium',
+          mediumModel: 'gemini-4-neon-medium',
+          heavyModel: 'gemini-4-neon-high',
+          ultraModel: 'gemini-4-neon-xhigh',
+        });
+      }
+    }
+  });
   it('matches the committed toolkit sample byte-for-byte', () => {
     const committed = readFileSync(SAMPLE_PATH, 'utf8');
     const fresh = serializeDocument(buildDocument('sample'));

@@ -24,8 +24,18 @@ const PRIOR_CODEX_MODEL_CATALOGS = [
   ['gpt-5.6-luna', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.3-codex-spark'],
 ];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const ANTIGRAVITY_MODEL_DEFAULTS = {
+  defaultModel: 'gemini-4-neon-medium',
+  lightModel: 'gemini-3.8-flash-medium',
+  mediumModel: 'gemini-4-neon-medium',
+  heavyModel: 'gemini-4-neon-high',
+  ultraModel: 'gemini-4-neon-xhigh',
+};
 const ANTIGRAVITY_MODELS = [
+  'gemini-4-neon-high', 'gemini-4-neon-xhigh', 'gemini-4-neon-medium', 'gemini-4-neon-low',
   'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low',
+  'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-low',
+  'gemini-pro-orchestrator-neon', 'gemini-pro-orchestrator-g1-pro',
   'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
   'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
   'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
@@ -33,6 +43,14 @@ const ANTIGRAVITY_MODELS = [
 ];
 const ANTIGRAVITY_MODEL_CATALOG = [ANTIGRAVITY_CONFIGURED_DEFAULT, ...ANTIGRAVITY_MODELS];
 const PRIOR_ANTIGRAVITY_MODEL_CATALOGS = [
+  [
+    ANTIGRAVITY_CONFIGURED_DEFAULT,
+    'gemini-4-argon-medium', 'gemini-4-argon-high', 'gemini-4-argon-low',
+    'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+    'claude-opus-5-5-low', 'claude-opus-5-5-medium', 'claude-opus-5-5-high',
+    'claude-sonnet-5-5-low', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-high',
+    'gpt-oss-120b-medium',
+  ],
   [
     ANTIGRAVITY_CONFIGURED_DEFAULT,
     'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
@@ -162,6 +180,17 @@ function migrateAntigravityProviders(data) {
   return changed;
 }
 
+function upgradeAntigravityTierPins(provider, { populateMissing }) {
+  for (const [key, target] of Object.entries(ANTIGRAVITY_MODEL_DEFAULTS)) {
+    const current = provider[key];
+    const isSentinel = current === ANTIGRAVITY_CONFIGURED_DEFAULT;
+    const isUnset = current == null || current === '';
+    if (isSentinel || (isUnset && (populateMissing || key === 'ultraModel'))) {
+      provider[key] = target;
+    }
+  }
+}
+
 function migrateAntigravityModelCatalog(data) {
   if (!data?.providers) return false;
   let changed = false;
@@ -175,6 +204,7 @@ function migrateAntigravityModelCatalog(data) {
     const isPriorSeededList = matchesAnyExactCatalog(provider.models, PRIOR_ANTIGRAVITY_MODEL_CATALOGS);
     if (!isSentinelOnly && !isPriorSeededList) continue;
     provider.models = [...ANTIGRAVITY_MODEL_CATALOG];
+    upgradeAntigravityTierPins(provider, { populateMissing: isSentinelOnly });
     changed = true;
   }
   return changed;
