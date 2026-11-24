@@ -115,6 +115,14 @@ describe('Dashboard first paint', () => {
       expect(api.getSystemHealth).toHaveBeenCalledTimes(callsBefore);
     });
 
+    it('renders app tiles and counts from the base apps request, without the quality audit', async () => {
+      api.getApps.mockResolvedValue([app]);
+      renderPage();
+      expect(await screen.findByText('Alpha')).toBeInTheDocument();
+      expect(screen.getByText('Total Apps')).toBeInTheDocument();
+      expect(api.getApps).toHaveBeenCalledWith();
+    });
+
     it('still shows the first-app action for a genuinely empty result', async () => {
       api.getApps.mockResolvedValue([]);
       renderPage();

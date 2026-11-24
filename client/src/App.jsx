@@ -6,7 +6,7 @@ import { FullWidthMain, PaddedMain } from './components/PageShell';
 import { getSettings, updateSettings, getSelfInstance } from './services/apiSystem.js';
 import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { previousPathRedirects, previousPathTarget } from './lib/previousPaths';
-import BrailleSpinner from './components/BrailleSpinner';
+import PageLoader from './components/PageLoader';
 import { readShellBootstrap } from './services/shellBootstrap.js';
 import { lazyWithReload } from './utils/lazyWithReload';
 
@@ -158,13 +158,6 @@ const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 const EidoverseGuest = lazyWithReload(() => import('./pages/EidoverseGuest'));
 const Login = lazyWithReload(() => import('./pages/Login'));
 const NotFound = lazyWithReload(() => import('./pages/NotFound'));
-
-// Loading fallback for lazy-loaded pages
-const PageLoader = () => (
-  <div className="flex items-center justify-center h-64">
-    <BrailleSpinner text="Loading" />
-  </div>
-);
 
 // Preserve query string + hash on a hand-written redirect.
 function RedirectWithSearch({ to }) {
