@@ -10,6 +10,11 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => {
     extraOverrides: root => ({ root: join(root, 'primary') }),
   });
 });
+// backupSharedAdmission imports PATHS from paths.js directly, bypassing the fileUtils redirect.
+vi.mock('../../lib/paths.js', async importOriginal => {
+  const { makePathsProxy, lazyTempDataRoot } = await import('../../lib/mockPathsDataRoot.js');
+  return makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-recovered-audit-') });
+});
 vi.mock('../../lib/maintenanceAdmission.js', () => ({ maintenance: {
   continueSettlement: fn => fn(), recoverOwned: vi.fn(), withResource: (_kind, _id, fn) => fn(), finishResource: vi.fn(), markResourceUnsettled: vi.fn(),
 } }));
