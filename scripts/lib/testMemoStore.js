@@ -164,6 +164,11 @@ const listDir = (path) => {
   try { return readdirSync(path); } catch { return []; }
 };
 
+/** A cold store cannot have hits under any tool fingerprint. */
+export function hasMemoEntries(dir) {
+  return memoDirs(dir).some(root => listDir(join(root, 'entries')).length > 0);
+}
+
 /**
  * Fold `sourceDir`'s store into `targetDir`. A matrix shard only records the
  * tests in its slice, so a job that restores one shard's lineage would see

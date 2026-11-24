@@ -35,6 +35,18 @@ const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === pr
 const localState = (target) => target === 'data' || target.startsWith('data/');
 const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
 
+const CLIENT_LOCKFILE = 'client/package-lock.json';
+
+function lockedClientPackages(fs) {
+  if (fs.kind('client/node_modules') !== null) return null;
+  try {
+    const lock = JSON.parse(fs.read(CLIENT_LOCKFILE)?.toString('utf8'));
+    return lock.lockfileVersion === 3 && lock.packages?.[''] ? lock.packages : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The analyzer over an abstract filesystem (`read(rel) -> Buffer|null`,
  * `kind(rel) -> 'file'|'dir'|null`, `list(rel) -> string[]`), so the whole
@@ -57,13 +69,15 @@ const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
  * earlier run when a file's bytes, the setup's replaced sources and every
  * cross-file constant it looked up are unchanged; null extracts every file.
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, requireToolVersions = false, planBeforeClientSetup = false, caseFilter = [], acceptVerdictsFrom = [], listFiles = null, factsCache = null }) {
   const host = { nodeVersion, platform, arch };
   const a = {
     fs,
     factsCache,
     workspaceRel,
     toolVersion,
+    requireToolVersions,
+    clientPackages: planBeforeClientSetup ? lockedClientPackages(fs) : null,
     listFiles,
     hashes: new Map(),
     facts: new Map(),
@@ -216,6 +230,7 @@ function dataTree(a, dirRel) {
     files.add(rel);
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     for (const target of f.edgeTargets) if (!files.has(target)) pending.push(target);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packageVersions.set(name, version);
@@ -294,6 +309,7 @@ function servedTree(a, dir, servedFiles) {
     if (rel.endsWith('.css')) { pending.push(...cssReferences(a, rel)); continue; }
     if (!JS_EXT.test(rel)) continue;
     const f = factsFor(a, rel);
+    if (f.inputs.has(CLIENT_LOCKFILE)) files.add(CLIENT_LOCKFILE);
     if (!served.has(rel)) pending.push(...f.edgeTargets);
     for (const missing of f.absent) absent.add(missing);
     for (const [name, version] of f.packages) packages.set(name, version);
@@ -348,10 +364,19 @@ function packageVersion(a, fromRel, spec) {
   }
   roots.push(a.workspaceRel);
   let found = null;
+  const packagePath = `node_modules/${name}`;
   for (const root of roots) {
-    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}node_modules/${name}/package.json`);
-    if (bytes === null) continue;
-    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? '') }; } catch { found = null; }
+    const bytes = a.fs.read(`${root === '' ? '' : `${root}/`}${packagePath}/package.json`);
+    if (bytes === null) {
+      const locked = root === 'client' ? a.clientPackages?.[packagePath] : null;
+      // An npm ci from this lock can be predicted only for unconditional,
+      // integrity-pinned packages. Execution always reads installed manifests.
+      if (typeof locked?.version !== 'string' || !locked.version || typeof locked.integrity !== 'string'
+        || !locked.integrity || locked.link || locked.optional || locked.devOptional || locked.os || locked.cpu || locked.libc) continue;
+      found = { name, version: locked.version, client: true };
+      break;
+    }
+    try { found = { name, version: String(JSON.parse(bytes.toString('utf8')).version ?? ''), client: root === 'client' }; } catch { found = null; }
     break;
   }
   a.packages.set(cacheKey, found);
@@ -541,7 +566,12 @@ function resolveCwdLiterals(r, cwdLiterals) {
 
 function addPackage(r, spec, { mock = false } = {}) {
   const pkg = packageVersion(r.a, r.rel, spec);
-  if (pkg) { r.resolved.packages.set(pkg.name, pkg.version); return; }
+  if (pkg) {
+    r.resolved.packages.set(pkg.name, pkg.version);
+    // Preflight and execution bind client package versions to the same lock.
+    if (pkg.client && r.a.fs.kind(CLIENT_LOCKFILE) === 'file') r.resolved.inputs.add(CLIENT_LOCKFILE);
+    return;
+  }
   if (mock) { r.resolved.packages.set(packageNameOf(spec), 'absent'); return; }
   r.resolved.unresolvedEdges.push(`package not installed: ${packageNameOf(spec)}`);
 }
@@ -913,13 +943,23 @@ function verdict(a, testRel, gathered, extra, baseClosure, { requireEdges }) {
   for (const rel of [...gathered.absent].sort()) lines.push(`absent ${rel}`);
   const versions = new Map([...baseClosure.packages, ...gathered.packages]);
   for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
-  for (const tool of [...gathered.tools].sort()) lines.push(`tool ${tool} ${a.toolVersion(tool) ?? 'absent'}`);
+  const unavailableTools = [];
+  for (const tool of [...gathered.tools].sort()) {
+    const version = a.toolVersion(tool);
+    if (!version) unavailableTools.push(tool);
+    lines.push(`tool ${tool} ${version ?? 'absent'}`);
+  }
+  if (a.requireToolVersions && unavailableTools.length) {
+    const reason = `unverified tool: ${unavailableTools.join(', ')}`;
+    return { key: null, memoizable: false, reason, reasons: [reason], tools: gathered.tools, unavailableTools };
+  }
   const keyWith = (head) => sha256([...head, ...lines].join('\n'));
   return {
     key: keyWith(a.environmentLines),
     acceptedKeys: a.acceptedEnvironments.map(({ label, lines: head }) => ({ label, key: keyWith(head) })),
     memoizable: true,
     reasons: [],
+    tools: gathered.tools,
   };
 }
 

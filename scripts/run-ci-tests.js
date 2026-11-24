@@ -19,7 +19,7 @@ import {
   memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { saveFactsCache } from './lib/testMemo/factsCache.js';
-import { resolveMemoDir } from './lib/testMemoStore.js';
+import { hasMemoEntries, resolveMemoDir } from './lib/testMemoStore.js';
 import { SERVED_FILES_ENV, readServedFiles } from './lib/browserServedFiles.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
@@ -576,10 +576,18 @@ async function main() {
   // related set can exceed the Windows command-line limit.
   const caseFilter = browserProfileArgs();
   const acceptVerdictsFrom = profile !== undefined ? browserProfileAcceptedVerdicts(profile) : [];
+  const browserJob = process.env.PORTOS_CI_BROWSER_OWNER === 'browser';
+  const toolVersion = createToolVersionResolver({ verifyAudioPair: browserJob });
+  const beforeAudioSetup = browserJob && checkRemaining && process.env.PORTOS_CI_BEFORE_AUDIO_SETUP === '1';
   const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
-    ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser'
-      ? { shardSlice: (files, shard) => browserShardSlice(files, shard, profile) } : {}),
-    toolVersion: createToolVersionResolver() });
+    ...(browserJob ? {
+      shardSlice: (files, shard) => browserShardSlice(files, shard, profile),
+      requireToolVersions: true,
+      planBeforeClientSetup: checkRemaining,
+      freshToolVersion: createToolVersionResolver({ verifyAudioPair: true }),
+    } : {}),
+    provisionableTool: beforeAudioSetup && hasMemoEntries(memoDir) ? 'ffmpeg' : undefined,
+    toolVersion });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     // The next run's planner starts from these parsed facts; a pull request's store is discarded.
@@ -593,6 +601,12 @@ async function main() {
       ? `No ${scope} tests left to run${shard ? ' in this shard' : ''}.`
       : `Remaining ${scope} tests${shard ? ` (shard ${process.env.CI_SHARD})` : ''}: ${plan.run.length}.`);
     writeStepOutput('remaining', String(plan.run.length));
+    // Once any file definitely needs to run, the normal runner will replan
+    // after setup. Only a potentially empty shard needs a separate check.
+    if (beforeAudioSetup && plan.unsettled > 0 && plan.unsettled === plan.run.length) {
+      console.log('Recheck after audio setup: all remaining memo verdicts may depend on ffmpeg.');
+      writeStepOutput('recheck', 'true');
+    }
     process.exitCode = 0;
     return;
   }
@@ -692,6 +706,7 @@ async function main() {
     source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
   });
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
+  if (browserJob && status === 0 && written > 0) writeStepOutput('memo-written', 'true');
   // A passed file that stores nothing re-runs on every trusted run; say which and why.
   for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
   if (status === 0) pruneMemo();

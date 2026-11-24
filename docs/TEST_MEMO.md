@@ -409,9 +409,9 @@ Every other key line (file bytes, records, packages, tools, Node, platform,
 arch and other env values) stays this run's own, and entries are still written
 under the run's own key only.
 
-Smoke uses its own stable two-shard assignment before the runner checks memo
-entries. The smoke jobs restore and merge both trusted full-run browser shard
-lineages, so a suite that moves can still reuse its former owner's verdict.
+Smoke can use a different stable shard assignment. Smoke jobs read all trusted
+full-run browser shard lineages, so a suite that moves can still reuse its
+former owner's verdict.
 Full-profile jobs keep their per-partition restore and save behavior.
 
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
@@ -422,6 +422,17 @@ on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a
 skip `(recorded key, full profile verdict)`.
+
+Browser shards check the memo before provisioning audio tools. A shard with
+verified hits for every suite skips audio and client setup. Before a client
+install exists, the check can use unconditional package versions from the
+integrity-pinned client lockfile, which must match the lockfile in the memo
+key. Test execution still keys the installed package manifests. If provisioning
+ffmpeg could turn every remaining verdict into a hit, the shard checks again
+before client setup and browser startup. A cold memo or a definite miss goes
+straight from audio provisioning to the usual client setup and test runner.
+Only a successful browser run that records green entries saves a new memo.
+An unavailable tool cannot supply a browser memo hit or green entry.
 
 ## Shards
 

@@ -562,6 +562,7 @@ jobs:
           CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
+          PORTOS_CI_BEFORE_AUDIO_SETUP: '1'
         run: node scripts/run-ci-tests.js server --check-remaining
 
       # The step timeout backs up the helper's download budget.
@@ -572,10 +573,23 @@ jobs:
         with:
           include-postgres: 'false'
 
+      - name: Recheck browser suites after audio setup
+        id: browser-recheck
+        if: steps.browser-plan.outputs.recheck == 'true'
+        env:
+          PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
+          CI_TEST_MODE: files
+          CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          PORTOS_CI_BROWSER_OWNER: browser
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
+          PORTOS_REQUIRE_BROWSER_SUITES: '1'
+          PORTOS_TEST_QUIET: 1
+        run: node scripts/run-ci-tests.js server --check-remaining
+
       # The test runner reads the runner's Chrome tree into the page cache
       # (scripts/ci-warm-test-chrome.sh, #9641) only when a suite will run (#17750).
       - uses: ./.github/actions/setup-client
-        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0
         with:
           setup-node: 'false'
 
@@ -584,7 +598,7 @@ jobs:
       # client bundler is missing, so a skip can never pass this step.
       - name: Run cross-workspace browser suites
         id: browser-tests
-        if: fromJSON(steps.browser-plan.outputs.remaining) > 0
+        if: fromJSON(steps.browser-recheck.outputs.remaining || steps.browser-plan.outputs.remaining) > 0
         # The independent supervisor emits progress and owns a 12m deadline;
         # this 15m step limit is only a fallback before the 20m job boundary.
         timeout-minutes: 15
@@ -600,7 +614,7 @@ jobs:
         run: node scripts/watch-ci-tests.js server
 
       - name: Save the test memo
-        if: steps.browser-tests.outcome == 'success' && github.event_name != 'pull_request'
+        if: steps.browser-tests.outcome == 'success' && steps.browser-tests.outputs.memo-written == 'true' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-test-memo

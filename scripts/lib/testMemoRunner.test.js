@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLIENT_BROWSER_SHARD_OWNERS, LOCAL_PRUNE_INTERVAL_MS, MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
+  clearVitestDependencies, createToolVersionResolver, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, pruneTestMemo, readVitestDependencies,
   SERVER_HEAVY_SHARD_OWNERS, recordTestMemo, seedVitestDependencies, serverShardSlice, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
 import { EXCLUSIVE_CAPTURE_TESTS, EXCLUSIVE_TESTS, vitestCaptureProjects } from '../vitestCiPool.js';
@@ -49,6 +49,19 @@ function writeRepo(root, files) {
 
 const repoRootDir = fileURLToPath(new URL('../..', import.meta.url));
 
+it.each([
+  ['ffprobe version 6.1.1-3ubuntu5 Copyright (c) 2007-2023 the FFmpeg developers', 0, true],
+  ['ffprobe version 6.1.1-3ubuntu4 Copyright (c) 2007-2023 the FFmpeg developers', 0, false],
+  ['', 127, false],
+])('only uses the ffmpeg fingerprint with a verified companion probe (%s)', (probe, status, matches) => {
+  const ffmpeg = 'ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers';
+  const resolver = createToolVersionResolver({
+    verifyAudioPair: true,
+    run: (program) => ({ status: program === 'ffmpeg' ? 0 : status, stdout: program === 'ffmpeg' ? ffmpeg : probe, stderr: '' }),
+  });
+  expect(resolver('ffmpeg')).toBe(matches ? ffmpeg : null);
+});
+
 describe('planTestMemo and recordTestMemo', () => {
   let root;
   let memoDir;
@@ -57,6 +70,84 @@ describe('planTestMemo and recordTestMemo', () => {
   const plan = (overrides = {}) => planTestMemo({
     scope: 'server', mode: 'files', repoFiles: TESTS.map((t) => `server/${t}`), repoSources: [], memoDir, repoRoot: root,
     env: { NODE_ENV: 'test' }, platform: 'linux', arch: 'x64', nodeVersion: '24.1.0', listTests: () => TESTS, ...overrides,
+  });
+
+  it('retains unverified audio suites until the runtime fingerprint proves coverage', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-audio-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-audio-memo-store-'));
+    const audio = 'server/lib/audio.test.js';
+    const independent = 'server/lib/c.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [audio]: "import { execFileSync } from 'node:child_process';\nconst ffmpeg = await findFfmpeg();\nexecFileSync(ffmpeg, ['-version']);\n",
+    });
+    const inputs = { repoFiles: [audio] };
+    const version = (value) => (tool) => tool === 'ffmpeg' ? value : null;
+    const record = (prepared) => recordTestMemo({
+      scope: 'server', repoRoot: root, memoDir, plan: prepared,
+      passed: [audio], dependencies: new Map([[audio, [audio]]]), source: 'ci',
+    }).written;
+    expect(record(plan(inputs))).toBe(2); // Legacy coverage with an absent tool.
+    const installed = { ...inputs, requireToolVersions: true, toolVersion: version('ffmpeg version 6') };
+    expect(record(plan(installed))).toBe(2);
+    const check = (fingerprint, overrides = {}) => plan({
+      ...installed, provisionableTool: 'ffmpeg', toolVersion: version(fingerprint), ...overrides,
+    });
+    expect(check('ffmpeg version 6')).toMatchObject({ run: [], unsettled: 0 });
+    expect(check(null)).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5')).toMatchObject({ run: [audio], unsettled: 1 });
+    expect(check('ffmpeg version 5', { repoFiles: [audio, independent] }))
+      .toMatchObject({ run: [audio, independent], unsettled: 1 });
+    expect(check('ffmpeg version 5', { provisionableTool: undefined }))
+      .toMatchObject({ run: [audio], unsettled: 0 });
+    expect(record(check(null))).toBe(0);
+    expect(record(check('ffmpeg version 5', { freshToolVersion: version('ffmpeg version 7') }))).toBe(0);
+  });
+
+  it('reuses a client browser fixture verdict before installing its exact locked packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-lock-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-lock-memo-'));
+    const test = 'server/lib/view.test.js';
+    const panel = 'client/src/Panel.jsx';
+    const lock = { lockfileVersion: 3, packages: { '': {}, 'node_modules/react': { version: '19.2.0', integrity: 'sha512-example' } } };
+    const manifest = 'client/node_modules/react/package.json';
+    writeRepo(root, {
+      ...FILES,
+      'client/package.json': '{"name":"client"}',
+      'client/package-lock.json': JSON.stringify(lock),
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+      [manifest]: '{"version":"19.2.0"}',
+      [panel]: "import { createElement } from 'react';\nexport const Panel = () => createElement('div');\n",
+      [test]: "import { it } from 'vitest';\nimport { chromium } from 'playwright-core';\nconst client = join(import.meta.dirname, '../../client');\n"
+        + 'fixture = await startBrowserFixture({ createServer, chromium, viteConfig: () => ({ configFile: false, root: client }) });\n',
+    });
+    const check = (planBeforeClientSetup = false) => plan({ repoFiles: [test], planBeforeClientSetup, toolVersion: () => 'Chrome test build' });
+    const served = new Map([[test, { roots: ['client'], files: [panel] }]]);
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: check(), passed: [test],
+      dependencies: new Map([[test, [test]]]), served, source: 'ci' }).written).toBeGreaterThan(0);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    expect(check().run).toEqual([test]);
+    expect(check(true).skipped).toEqual([{ test, via: 'recorded' }]);
+    writeRepo(root, { [manifest]: '{"version":"19.3.0"}' });
+    expect(check(true).run).toEqual([test]);
+    rmSync(join(root, 'client/node_modules'), { recursive: true });
+    writeRepo(root, { 'client/package-lock.json': JSON.stringify({ ...lock, name: 'changed' }) });
+    expect(check(true).run).toEqual([test]);
+  });
+
+  it('does not change coverage for a test that reads client source without resolving client packages', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-browser-source-plan-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-browser-source-memo-'));
+    const test = 'server/lib/view.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'client/package-lock.json': '{"lockfileVersion":3,"packages":{"":{}}}',
+      'client/src/plain.js': 'export const plain = true;\n',
+      [test]: "import { plain } from '../../client/src/plain.js';\n",
+    });
+    const installed = plan({ repoFiles: [test] });
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: installed, passed: [test], source: 'ci' }).written).toBe(1);
+    expect(plan({ repoFiles: [test], planBeforeClientSetup: true }).run).toEqual([]);
   });
 
   it('runs the CTC contract in strict related CI even when a permissive verdict is available', () => {
