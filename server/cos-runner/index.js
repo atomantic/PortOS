@@ -628,6 +628,10 @@ export function createCosRunner(deps = {}) {
       }
     }
 
+    if (activeAgents.has(agentId)) {
+      return res.status(409).json({ error: `Agent ${agentId} is already running` });
+    }
+
     console.log(`🤖 Spawning agent ${agentId} for task ${taskId} (CLI: ${command})`);
 
     // Ensure workspacePath is valid
@@ -961,10 +965,15 @@ export function createCosRunner(deps = {}) {
     killProcessTree(agent.process, 'SIGTERM');
     // NOT armForceKill: a pause keeps its map entry (the agent is meant to be
     // resumable) and only escalates while the pause is still in force.
+    if (agent.killTimer) clearTimeout(agent.killTimer);
     agent.killTimer = setTimeout(() => {
-      agent.killTimer = null;
-      const current = activeAgents.get(agentId);
-      if (current?.paused) killProcessTree(current.process, 'SIGKILL');
+      try {
+        agent.killTimer = null;
+        const current = activeAgents.get(agentId);
+        if (current?.paused) killProcessTree(current.process, 'SIGKILL');
+      } catch (err) {
+        console.error(`❌ Pause force kill failed for ${agentId}: ${err?.message || err}`);
+      }
     }, sigkillGraceMs);
 
     res.json({ success: true, agentId, pid: agent.pid, pausedAt });
