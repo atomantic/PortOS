@@ -190,6 +190,49 @@ describe('getRiggingReadiness caching', () => {
     expect(probe).toHaveBeenCalledTimes(2);
   });
 
+  it('shares a cold probe and starts the TTL when it resolves', async () => {
+    const result = { ready: true, reason: null };
+    const { promise, resolve } = Promise.withResolvers();
+    const probe = vi.fn(() => promise);
+    let time = 1_000;
+    const options = { probe, now: () => time };
+    const first = getRiggingReadiness(options);
+    expect(getRiggingReadiness(options)).toBe(first);
+    await Promise.resolve();
+    expect(probe).toHaveBeenCalledTimes(1);
+
+    time = 70_000;
+    resolve(result);
+    await expect(first).resolves.toBe(result);
+    expect(await getRiggingReadiness(options)).toBe(result);
+    expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('probes again after a transient failure, even after a previously cached result', async () => {
+    const failure = { ready: false, reason: 'runtime-probe-failed' };
+    const probe = countingProbe().mockResolvedValueOnce({ ready: true, reason: null })
+      .mockResolvedValueOnce(failure);
+    const options = { probe, now: () => 1_000 };
+    await getRiggingReadiness(options);
+    await expect(getRiggingReadiness({ ...options, refresh: true })).resolves.toBe(failure);
+    await expect(getRiggingReadiness(options)).resolves.toMatchObject({ reason: 'runtime-not-installed' });
+    expect(probe).toHaveBeenCalledTimes(3);
+  });
+
+  it('lets a refresh supersede a slow probe without letting that probe overwrite the cache', async () => {
+    const older = Promise.withResolvers();
+    const ready = { ready: true, reason: null };
+    const probe = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValueOnce(ready);
+    const first = getRiggingReadiness({ probe });
+    const refresh = getRiggingReadiness({ probe, refresh: true });
+    expect(getRiggingReadiness({ probe })).toBe(refresh);
+    await expect(refresh).resolves.toBe(ready);
+    older.resolve({ ready: false, reason: 'runtime-not-installed' });
+    await first;
+    expect(await getRiggingReadiness({ probe })).toBe(ready);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
   it('bypasses the cache on an explicit refresh', async () => {
     const probe = countingProbe();
     const first = await getRiggingReadiness({ now: () => 1_000, probe });
