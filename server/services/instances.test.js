@@ -10,7 +10,8 @@ vi.unmock('./instances.js');
 // Mock dependencies before importing the module
 vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined)
+  rename: vi.fn().mockResolvedValue(undefined),
+  chmod: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
