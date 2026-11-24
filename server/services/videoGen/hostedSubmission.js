@@ -141,9 +141,9 @@ async function stageRunwayInputs(ctx) {
 // combination the chosen family cannot take before anything is staged.
 async function stageHiggsfieldInputs(ctx) {
   const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
-  const refuse = async (message) => {
+  const refuse = async (message, code = 'VALIDATION_ERROR') => {
     await cleanupStaged();
-    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+    throw new ServerError(message, { status: 400, code });
   };
   if (uploads.audioFile) await refuse('Use the shot’s Song audio control for a Higgsfield song reference.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
@@ -155,7 +155,7 @@ async function stageHiggsfieldInputs(ctx) {
       referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {
-    await refuse(err.message, err.code || 'VALIDATION_ERROR');
+    await refuse(err.message, err.code);
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
