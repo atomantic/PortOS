@@ -184,6 +184,8 @@ there is one, is copied to `src/showcase/sheet.<ext>`. The `showcase` starter (`
 4. **Close-ups**: one per saved compare camera.
 5. **Reference to model**: the approved sheet cross-dissolves to the render from the three-quarter view. Skipped without an approved sheet.
 
+Every shot but Controls holds the model with each control at its default; the GLB's clips play only in Controls.
+
 Film options: background, accent color, turn length, label parts. Every shot is a pure function of time (`kit/plan.py`, standard
 library only, so describe needs no Blender). The timeline starts at the shots' natural length; a longer or shorter timeline scales
 every shot in proportion, and with a soundtrack attached each inner boundary snaps to the nearest downbeat. A model with no controls

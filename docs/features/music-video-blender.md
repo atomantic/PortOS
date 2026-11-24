@@ -91,6 +91,8 @@ from portos_film import models
 root, actions = models.load(ctx, "robot-dog", height=1.8)  # one empty, scaled to meters, standing on z = 0
 ```
 
+Blender's importer leaves an animated file's first clip playing on the scene's timeline. To hold or drive the pose yourself, pass `settle=` a function that clears each object's `animation_data.action`; it runs before the model is measured and grounded.
+
 The driver reports each loaded `models/<slug>.glb` with the shot's imports, so a shot goes out of date when that file changes without listing it in `deps`; renders from before this have no model hashes and stay current. A Three.js module is for `"space": "three"` code shots. Forking and promoting a film copy `src/models/` with the rest of `src/`.
 
 **Create starter workspace** copies a small complete film into `src/`: a stage, three figures and lights that follow

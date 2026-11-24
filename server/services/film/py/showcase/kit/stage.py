@@ -132,6 +132,15 @@ def _seek(tracks, seconds):
         data.action = None
 
 
+def _settle(data):
+    """Stop the clip the importer left playing (every frame and render would replay it) and hold each control at its default."""
+    for obj in bpy.data.objects:
+        if obj.animation_data:
+            obj.animation_data.action = None
+    for control in plan.controls_of(data):
+        _seek(_imported_tracks("control:", control["id"]), timing_value(plan.default_of(control)))
+
+
 def _label(text, color, size, collection):
     curve = bpy.data.curves.new("Label " + text, "FONT")
     curve.body = text
@@ -163,7 +172,7 @@ def build(ctx, data, options, shot):
     _light("Fill", "AREA", diag * diag * 70.0, (center[0] - diag * 2.5, center[1] - diag * 1.5, center[2] + diag), center, collection, size=diag * 2.0)
     _light("Rim", "AREA", diag * diag * 90.0, (center[0], center[1] + diag * 2.5, center[2] + diag * 1.5), center, collection, size=diag * 2.0)
 
-    root, _actions = models.load(ctx, MODEL_SLUG)
+    root, _actions = models.load(ctx, MODEL_SLUG, settle=lambda: _settle(data))
     scene_camera = bpy.data.objects.new("Showcase camera", bpy.data.cameras.new("Showcase camera"))
     collection.objects.link(scene_camera)
     scene.camera = scene_camera
