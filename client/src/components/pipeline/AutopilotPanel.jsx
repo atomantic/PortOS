@@ -563,7 +563,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     return () => { canceled = true; };
   }, [hydrate]);
 
-  const { latest, frames } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
+  const { latest, frames, closed } = usePipelineProgress(pipelineAutopilotSseUrl, [seriesId], { enabled: active });
 
   // `frames` is the hook's bounded history (useSseProgress `maxFrames`), so a
   // full pass per frame batch stays cheap: the newest `progress` frame is the
@@ -593,6 +593,31 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const activeRunSeriesIdRef = useRef(seriesId);
   const settledRunIdRef = useRef(null);
   const terminalVersionRef = useRef(0);
+  // Live series identity for async continuations (start()'s awaits, the
+  // closed-stream recovery): a callback closed over series A must not write
+  // run state onto the panel after it has been pointed at series B.
+  const seriesIdRef = useRef(seriesId);
+  seriesIdRef.current = seriesId;
+
+  // The panel is reused across `seriesId` changes rather than remounted, so
+  // every piece of per-run state must be dropped synchronously on a switch —
+  // otherwise series A's Stop/Pause controls, LLM label and milestone map
+  // linger on series B and override its persisted marker. Declared BEFORE the
+  // re-attach effect so that effect's status fetch re-seeds B after this reset.
+  useEffect(() => {
+    activeRunIdRef.current = null;
+    settledRunIdRef.current = null;
+    terminalVersionRef.current += 1;
+    setActive(false);
+    setPausePending(false);
+    setStarting(false);
+    setMode(null);
+    setPlan(null);
+    setPlanTotals(null);
+    setSeedProgress(null);
+    setTerminal(null);
+    setRunLlm(null);
+  }, [seriesId]);
 
   // Read a run's `start` frame — mode (the dry-run badge), the resolved run
   // provider/model, and a dry-run's plan. Shared by the SSE frame and the
@@ -687,7 +712,27 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     if (obLine) toast(obLine);
   }, [active, latest, seriesId]);
 
+  // A stream that closes WITHOUT a terminal frame (404 on an evicted run, server
+  // restart, dropped replay window) would otherwise leave `active` true forever:
+  // the run-ended effect above only fires on a terminal frame. Reconcile with
+  // the status route instead and release the card if no run remains.
+  useEffect(() => {
+    if (!active || !closed || (latest && RUN_ENDED.has(latest.type))) return undefined;
+    let canceled = false;
+    getPipelineAutopilotStatus(seriesId, { silent: true })
+      .then((s) => {
+        if (canceled || seriesIdRef.current !== seriesId || s?.active) return;
+        setActive(false);
+        setPausePending(false);
+        getPipelineSeries(seriesId, { silent: true }).then((next) => { if (next && seriesIdRef.current === seriesId) onSeriesUpdateRef.current?.(next); }).catch(() => null);
+        listPipelineIssues(seriesId, { silent: true }).then((is) => { if (seriesIdRef.current === seriesId) onIssuesUpdateRef.current?.(Array.isArray(is) ? is : []); }).catch(() => null);
+      })
+      .catch(() => null);
+    return () => { canceled = true; };
+  }, [active, closed, latest, seriesId]);
+
   const start = useCallback(async () => {
+    const forSeriesId = seriesId;
     setStarting(true);
     setPlan(null);
     setPlanTotals(null);
@@ -704,6 +749,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     // resolves them from the persisted setting.
     const roundOverrides = options.collectOverrides();
     if (Object.keys(roundOverrides).length) await persistRounds(roundOverrides);
+    // The user navigated away while the settings saved: don't launch a run on
+    // a series they are no longer looking at.
+    if (seriesIdRef.current !== forSeriesId) return;
     // Per-run readiness-gate override (#1580): send it ONLY when the user picked a
     // specific gate. Unlike the round inputs we never persist it — '' leaves the
     // server to resolve the gate from the saved setting (then the default).
@@ -732,6 +780,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
     const scopeOverride = productionScope === 'first-issue' ? { productionScope } : {};
     const res = await startPipelineAutopilot(seriesId, { includeVisual, fileGaps, ...scopeOverride, ...roundOverrides, ...gateOverride, ...unlockOverride, ...llmOverride }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Could not start autopilot'); return null; });
+    // The panel now shows another series — the run (if it started) is picked up
+    // from the status route when the user returns to it.
+    if (seriesIdRef.current !== forSeriesId) return;
     setStarting(false);
     if (!res) return;
     setMode(res.mode || null);
