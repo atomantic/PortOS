@@ -89,6 +89,11 @@
   #detail .desc { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
   #detail h2 { font-size: 14px; margin-bottom: 4px; }
   .step {
+    display: block;
+    width: 100%;
+    text-align: left;
+    color: inherit;
+    font: inherit;
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 7px 8px;
@@ -103,7 +108,7 @@
     min-width: 18px;
     height: 18px;
     border-radius: 9px;
-    background: var(--accent);
+    background: #2563eb;
     color: #fff;
     font-size: 11px;
     line-height: 18px;
@@ -124,7 +129,16 @@
   .node-info { font-size: 12.5px; }
   .node-info .file { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; margin: 4px 0 8px; }
   .node-info ul { margin: 4px 0 0 16px; }
-  .node-info li a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .node-flow-link {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-align: left;
+  }
+  .node-flow-link:hover { text-decoration: underline; }
   #resetBtn {
     margin: 8px;
     flex: none;
@@ -155,17 +169,29 @@
   .node {
     position: absolute;
     background: var(--card);
+    color: var(--text);
     border: 1px solid var(--border);
     border-radius: 6px;
     padding: 4px 8px;
+    font: inherit;
     font-size: 12px;
+    text-align: left;
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     transition: opacity 0.15s, border-color 0.15s;
   }
-  .node:hover, .node:focus-visible { border-color: var(--muted); outline: none; }
+  .node:hover { border-color: var(--muted); }
+  .node:focus-visible,
+  .flow-btn:focus-visible,
+  #resetBtn:focus-visible,
+  #mobileSelect:focus-visible,
+  .step:focus-visible,
+  .node-flow-link:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
+  }
   .node.dim { opacity: 0.22; }
   .node.hl { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .node.selected { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
@@ -174,8 +200,12 @@
   path.edge.hidden { opacity: 0; }
   path.edge.focus { stroke-width: 3; }
   .badge { pointer-events: none; }
-  .badge circle { fill: var(--accent); }
+  .badge circle { fill: #2563eb; }
   .badge text { fill: #fff; font-size: 10px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .node, path.edge { transition: none; }
+  }
 
   /* Legend */
   #legend {
@@ -218,16 +248,16 @@
   <span class="sub">click a flow to trace it across the system &middot; click a node for details &middot; Esc to reset</span>
 </header>
 <div id="app">
-  <div id="sidebar">
+  <aside id="sidebar" aria-label="Flows and details">
     <select id="mobileSelect" aria-label="Select flow"></select>
-    <div id="flowList"></div>
+    <nav id="flowList" aria-label="Integration flows"></nav>
     <button id="resetBtn" type="button">Show all</button>
-    <div id="detail"></div>
-  </div>
-  <div id="diagramWrap">
+    <div id="detail" aria-live="polite"></div>
+  </aside>
+  <main id="diagramWrap" aria-label="System diagram">
     <div id="diagram"></div>
     <div id="legend"></div>
-  </div>
+  </main>
 </div>
 <script>
 (async () => {
@@ -269,6 +299,7 @@
   svg.setAttribute('id', 'edges');
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
+  svg.setAttribute('aria-hidden', 'true');
   diagram.appendChild(svg);
 
   groupsSorted.forEach((g, ci) => {
@@ -283,20 +314,17 @@
   const nodeEls = new Map();
   for (const n of data.nodes) {
     const p = pos.get(n.id);
-    const el = document.createElement('div');
+    const el = document.createElement('button');
+    el.type = 'button';
     el.className = 'node';
     el.textContent = n.label;
     el.title = n.file ? `${n.label} — ${n.file}` : n.label;
-    el.setAttribute('role', 'button');
-    el.tabIndex = 0;
+    el.setAttribute('aria-pressed', 'false');
     el.style.left = p.x + 'px';
     el.style.top = p.y + 'px';
     el.style.width = p.w + 'px';
     el.style.height = p.h + 'px';
     el.addEventListener('click', () => showNode(n.id));
-    el.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showNode(n.id); }
-    });
     diagram.appendChild(el);
     nodeEls.set(n.id, el);
   }
@@ -345,7 +373,7 @@
   // ---- legend ----
   const legend = document.getElementById('legend');
   legend.innerHTML = data.transports.map((t) =>
-    `<span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="${t.color}" stroke-width="2"${t.dash ? ` stroke-dasharray="${t.dash}"` : ''}/></svg>${t.label}</span>`
+    `<span><svg width="26" height="8" aria-hidden="true"><line x1="0" y1="4" x2="26" y2="4" stroke="${t.color}" stroke-width="2"${t.dash ? ` stroke-dasharray="${t.dash}"` : ''}/></svg>${t.label}</span>`
   ).join('');
 
   // ---- sidebar flow list ----
@@ -369,6 +397,7 @@
       btn.type = 'button';
       btn.className = 'flow-btn';
       btn.dataset.flow = f.id;
+      btn.setAttribute('aria-pressed', 'false');
       btn.innerHTML = `${f.label} <span class="n">· ${f.steps.length} hops</span>`;
       btn.addEventListener('click', () => selectFlow(f.id));
       flowList.appendChild(btn);
@@ -386,6 +415,7 @@
 
   // ---- selection ----
   let activeFlowId = null;
+  const scrollBehavior = () => (window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
 
   function syncUrl(flowId) {
     if (EMBED) {
@@ -401,7 +431,10 @@
   }
 
   function clearHighlights() {
-    for (const el of nodeEls.values()) el.classList.remove('dim', 'hl', 'selected');
+    for (const el of nodeEls.values()) {
+      el.classList.remove('dim', 'hl', 'selected');
+      el.setAttribute('aria-pressed', 'false');
+    }
     for (const path of edges.values()) path.classList.remove('hl', 'hidden', 'focus');
     if (badgeLayer) { badgeLayer.remove(); badgeLayer = null; }
   }
@@ -409,7 +442,11 @@
   function selectFlow(flowId, { fromUrl = false } = {}) {
     activeFlowId = flowId;
     clearHighlights();
-    flowBtns.forEach((b) => b.classList.toggle('active', b.dataset.flow === flowId));
+    flowBtns.forEach((b) => {
+      const active = b.dataset.flow === flowId;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-pressed', String(active));
+    });
     mobileSelect.value = flowId || '';
     if (!fromUrl) syncUrl(flowId);
 
@@ -452,18 +489,18 @@
     wrap.scrollTo({
       left: Math.max(0, (Math.min(...xs) + Math.max(...xs) + COL_W) / 2 - wrap.clientWidth / 2),
       top: Math.max(0, (Math.min(...ys) + Math.max(...ys) + NODE_H) / 2 - wrap.clientHeight / 2),
-      behavior: 'smooth'
+      behavior: scrollBehavior()
     });
 
     // step panel
     detail.innerHTML = `<h2>${flow.label}</h2><div class="desc">${flow.description}</div>` +
       flow.steps.map((s, i) => {
         const t = transportsById.get(s.transport);
-        return `<div class="step" data-i="${i}">
+        return `<button type="button" class="step" data-i="${i}">
           <div class="route"><span class="num">${i + 1}</span>${nodesById.get(s.from).label} → ${nodesById.get(s.to).label}<span class="chip" style="color:${t.color};border-color:${t.color}">${t.label}</span></div>
           <div class="label">${s.label}</div>
           <div class="payload">${s.payload}</div>
-        </div>`;
+        </button>`;
       }).join('');
     detail.querySelectorAll('.step').forEach((el) => {
       const step = flow.steps[Number(el.dataset.i)];
@@ -475,13 +512,12 @@
         fromEl.classList.toggle('selected', on);
         toEl.classList.toggle('selected', on);
       };
-      el.tabIndex = 0;
       el.addEventListener('mouseenter', () => focusEdge(true));
       el.addEventListener('mouseleave', () => focusEdge(false));
       el.addEventListener('focus', () => focusEdge(true));
       el.addEventListener('blur', () => focusEdge(false));
       el.addEventListener('click', () => {
-        fromEl.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        fromEl.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: scrollBehavior() });
       });
     });
     detail.scrollTop = 0;
@@ -490,16 +526,18 @@
   function showNode(nodeId) {
     const n = nodesById.get(nodeId);
     if (activeFlowId) selectFlow(null); else clearHighlights();
-    nodeEls.get(nodeId).classList.add('selected');
+    const nodeEl = nodeEls.get(nodeId);
+    nodeEl.classList.add('selected');
+    nodeEl.setAttribute('aria-pressed', 'true');
     const inFlows = data.flows.filter((f) => f.steps.some((s) => s.from === nodeId || s.to === nodeId));
     detail.innerHTML = `<div class="node-info">
       <h2>${n.label}</h2>
       ${n.file ? `<div class="file">${n.file}</div>` : ''}
       <div class="desc">${n.desc || ''}</div>
-      ${inFlows.length ? `Appears in:<ul>${inFlows.map((f) => `<li><a data-flow="${f.id}">${f.label}</a></li>`).join('')}</ul>` : 'Not part of any documented flow yet.'}
+      ${inFlows.length ? `Appears in:<ul>${inFlows.map((f) => `<li><button type="button" class="node-flow-link" data-flow="${f.id}">${f.label}</button></li>`).join('')}</ul>` : 'Not part of any documented flow yet.'}
     </div>`;
-    detail.querySelectorAll('a[data-flow]').forEach((a) =>
-      a.addEventListener('click', () => selectFlow(a.dataset.flow))
+    detail.querySelectorAll('.node-flow-link[data-flow]').forEach((btn) =>
+      btn.addEventListener('click', () => selectFlow(btn.dataset.flow))
     );
   }
 
