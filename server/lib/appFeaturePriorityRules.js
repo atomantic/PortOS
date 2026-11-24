@@ -24,6 +24,9 @@ const literalPrefix = (glob) => {
   return end === -1 ? segments : segments.slice(0, end);
 };
 
+// `**`, `**/*` and `*/**` cover every path in the repository, so they contain any raised path.
+const coversRepository = (glob) => glob.trim().split('/').filter(Boolean).every((segment) => segment === '**' || segment === '*');
+
 const nests = (a, b) => {
   const [short, long] = a.length <= b.length ? [a, b] : [b, a];
   return short.length > 0 && short.every((segment, index) => segment === long[index]);
@@ -31,7 +34,8 @@ const nests = (a, b) => {
 
 /**
  * The first P3 path that contains, or sits inside, a P0 or P2 path, as an error message, or null when none does. A glob with no literal
- * directory prefix (`**\/*.snap`) is not compared: it is a deliberate file-type exclusion, not a directory claim.
+ * directory prefix (`**\/*.snap`) is not compared: it is a deliberate file-type exclusion, not a directory claim. A glob that matches the
+ * whole repository (`**`, `**\/*`) contains every raised path.
  * @param {{ label: string, paths: string[], priority: string }[]} entries
  */
 export function auditPathConflict(entries) {
@@ -40,7 +44,7 @@ export function auditPathConflict(entries) {
   for (const dormant of entries.filter(isP3)) {
     for (const dormantPath of dormant.paths) {
       for (const other of raised) {
-        const otherPath = other.paths.find((path) => nests(literalPrefix(dormantPath), literalPrefix(path)));
+        const otherPath = other.paths.find((path) => coversRepository(dormantPath) || nests(literalPrefix(dormantPath), literalPrefix(path)));
         if (otherPath) {
           return `"${dormant.label}" (P3) path ${dormantPath} overlaps "${other.label}" (${other.priority}) path ${otherPath}; a P3 path is left out of audits, so it cannot contain or sit inside a P0 or P2 path`;
         }
