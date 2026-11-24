@@ -42,3 +42,7 @@ A scope with nothing to say (no `P0`, `P2` or `P3` area, or no `P3` area for an 
 The complexity audits (`better-complexity`, `code-simplification`) also get a ready command that leaves the `P3` paths out of the shortlist: `npm run quality:complexity -- --exclude '<glob>'`, one `--exclude` per glob. `--exclude` takes the same `path.matchesGlob` patterns the catalog uses, drops matching files from the source and test shortlists and prints how many it excluded.
 
 Subtracting an area's globs is exact because no tracked file belongs to two areas (guarded in `server/test/guards/repo/featureAreaCatalog.test.js`).
+
+## Settings UI
+
+Settings > Features ends with an "Audit priority" section (`client/src/components/settings/FeaturePrioritiesSection.jsx`). Each area shows its effective tier, a source badge (`Pinned`, `Learned`, `Feature off`, `Default`) and "active N of the last 30 days"; below 14 days of evidence it says "Still learning" instead, since every enabled area then resolves to `P1`. The `Auto | P0 | P1 | P2 | P3` control calls `PUT /api/feature-priorities/:areaId`. A pin applies from the response; `Auto` and a clear announced by another tab on `feature-priorities:updated` reload the list once, because the response carries only the pin, not the re-resolved tier. There is no timer.
