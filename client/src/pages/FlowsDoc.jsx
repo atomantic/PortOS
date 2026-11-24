@@ -42,7 +42,7 @@ export default function FlowsDoc() {
           rel="noreferrer"
           className="flex items-center gap-1.5 text-sm text-port-accent hover:underline"
         >
-          <ExternalLink size={14} />
+          <ExternalLink size={14} aria-hidden="true" />
           Open full screen
         </a>
       </div>
