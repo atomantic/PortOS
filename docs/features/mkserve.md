@@ -19,7 +19,9 @@ listener it did not start.
 **Update** installs the newer pinned bundle when PortOS ships one. Stop a running
 managed mkserve before updating. The update reuses the verified checkpoint if the
 model revision has not changed; a failed update does not activate a partial
-installation. Interrupted checkpoint downloads can resume when you retry.
+installation. Once the new bundle is active, PortOS removes the superseded
+managed bundle and any checkpoint it replaced. Interrupted checkpoint downloads
+can resume when you retry.
 
 The build and checkpoint are reproducible caches under `data/cache/mkserve`,
 excluded from PortOS backups. The engine is pinned to the reviewed upstream

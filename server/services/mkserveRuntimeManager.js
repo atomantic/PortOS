@@ -128,7 +128,7 @@ export function installMkserve({ onProgress: progress } = {}) {
     if (installed) operation = 'updating';
     const app = await requireAppStatus();
     if (isManaged(app) && ACTIVE.has(app.status)) throw error('Stop the managed mkserve server before updating or repairing it.');
-    await installPinnedMkserve((message) => onProgress(progress, message));
+    await installPinnedMkserve((message) => onProgress(progress, message), installed);
     return { success: true, message: installed ? 'mkserve updated' : 'mkserve installed' };
   });
 }

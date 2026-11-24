@@ -183,7 +183,7 @@ async function installRuntime(paths, emit) {
   ], 'Could not install the verified mkserve wheels. Check your connection and retry.', uvOptions);
 }
 
-export async function installPinnedMkserve(emit) {
+export async function installPinnedMkserve(emit, previous) {
   const paths = mkserveInstallPaths(MKSERVE_BUNDLE, MODEL_REVISION);
   await installRuntime(paths, emit);
   await installCheckpoint(paths.weights, emit);
@@ -194,8 +194,22 @@ export async function installPinnedMkserve(emit) {
     '-m', 'mkserve', 'pull', MKSERVE_MODEL,
     '--card', 'm5max', '--engine', 'offline-c', '--model-dir', paths.weights, '--workdir', paths.build,
   ], 'The pinned mkserve engine could not validate the local checkpoint.', { cwd: paths.source });
+  await activateMkserveInstall(previous);
+}
+
+// Only retire the exact prior managed bundle after the new one is active.
+export async function activateMkserveInstall(previous) {
   await atomicWrite(MARKER, JSON.stringify({
     bundle: MKSERVE_BUNDLE, version: MKSERVE_VERSION, revision: MODEL_REVISION,
     files: CHECKPOINT_FILES,
   }));
+  if (!isMkserveRevision(previous?.bundle) || !isMkserveRevision(previous?.revision)) return;
+  const { work, weights } = mkserveInstallPaths(previous.bundle, previous.revision);
+  const retired = [
+    previous.bundle !== MKSERVE_BUNDLE && work,
+    previous.revision !== MODEL_REVISION && weights,
+  ].filter(Boolean);
+  await Promise.all(retired.map((path) => rm(path, { recursive: true, force: true }).catch((err) => {
+    console.error(`⚠️ Could not reclaim superseded mkserve cache: ${err.code || 'unknown error'}`);
+  })));
 }
