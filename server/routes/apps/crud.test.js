@@ -200,6 +200,33 @@ describe('Apps CRUD Routes', () => {
       }
     });
 
+    it('asks git about a repository once across list reads but re-checks a plain directory', async () => {
+      const plainDir = mkdtempSync(join(tmpdir(), 'portos-plain-cache-'));
+      const gitDir = mkdtempSync(join(tmpdir(), 'portos-git-cache-'));
+      try {
+        appsService.getAllApps.mockResolvedValue([
+          { id: 'plain', name: 'Plain', repoPath: plainDir, pm2ProcessNames: [] },
+          { id: 'repo', name: 'Repo', repoPath: gitDir, pm2ProcessNames: [] },
+        ]);
+        pm2Service.listProcessesStrict.mockResolvedValue([]);
+        streamingDetect.parseEcosystemFromPath.mockResolvedValue([]);
+        execFileSync('git', ['init', '-q'], { cwd: gitDir });
+        execGit.mockClear();
+
+        for (let read = 0; read < 2; read += 1) {
+          const response = await request(app).get('/api/apps');
+          expect(Object.fromEntries(response.body.map(a => [a.id, a.isGitRepo]))).toEqual({ plain: false, repo: true });
+        }
+
+        const probes = execGit.mock.calls.map(([, cwd]) => cwd);
+        expect(probes.filter(cwd => cwd === gitDir)).toHaveLength(1);
+        expect(probes.filter(cwd => cwd === plainDir)).toHaveLength(2);
+      } finally {
+        rmSync(plainDir, { recursive: true, force: true });
+        rmSync(gitDir, { recursive: true, force: true });
+      }
+    });
+
     it('leaves Git capability unknown when the probe is unavailable without relaxing worktree guards', async () => {
       const gitDir = mkdtempSync(join(tmpdir(), 'portos-unavailable-git-'));
       try {
