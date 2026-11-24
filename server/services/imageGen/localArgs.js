@@ -61,6 +61,7 @@ const diffusersRenderArgs = ({ model, prompt, negativePrompt, width, height, ste
   if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
   if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
   if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
+  if (model.revision) args.push('--revision', String(model.revision));
   if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
   if (model.usePromptEnhancer) args.push('--use-pe');
   // HiDream needs a 4th text encoder loaded separately (Llama-3.1-8B) —
@@ -68,6 +69,7 @@ const diffusersRenderArgs = ({ model, prompt, negativePrompt, width, height, ste
   // `tokenizer_4` kwargs at from_pretrained() time. The runner script
   // branches on these flags; Z-Image / ERNIE / Qwen leave them unset.
   if (model.textEncoderRepo) args.push('--text-encoder-repo', String(model.textEncoderRepo));
+  if (model.textEncoderRepo && model.textEncoderRevision) args.push('--text-encoder-revision', String(model.textEncoderRevision));
   if (model.textEncoderClass) args.push('--text-encoder-class', String(model.textEncoderClass));
   if (model.tokenizerClass) args.push('--tokenizer-class', String(model.tokenizerClass));
   return { bin: torchPython, args, providerInputs: {

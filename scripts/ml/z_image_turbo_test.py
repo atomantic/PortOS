@@ -106,6 +106,35 @@ class RunnerContract(unittest.TestCase):
         self.assertIn('QwenImage21Pipeline', stderr.getvalue())
         self.assertIn('FLUX2_FORCE_REINSTALL=1', stderr.getvalue())
 
+    def test_revisions_reach_every_from_pretrained_call(self):
+        with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
+            runner = importlib.import_module('z_image_turbo')
+        calls = []
+
+        def record(name):
+            def from_pretrained(repo, **kwargs):
+                calls.append((name, repo, kwargs.get('revision')))
+                return SimpleNamespace()
+            return SimpleNamespace(from_pretrained=from_pretrained)
+
+        transformers = SimpleNamespace(LlamaForCausalLM=record('encoder'), AutoTokenizer=record('tokenizer'))
+        diffusers = SimpleNamespace(HiDreamImagePipeline=record('pipeline'), AutoPipelineForText2Image=record('auto'))
+        with patch.dict(sys.modules, {'diffusers': diffusers, 'transformers': transformers}), patch.multiple(
+            runner, suppress_cosmetic_clip_truncation=lambda: None, probe_hf_auth=lambda _: None,
+            heartbeat=lambda _: contextlib.nullcontext(), place_pipeline=lambda *_: 'cpu',
+        ), contextlib.redirect_stderr(io.StringIO()):
+            runner.load_pipeline('org/pipe', 'cpu', 'bf16', 'HiDreamImagePipeline', 'org/enc', 'LlamaForCausalLM', '',
+                                 revision='r' * 40, text_encoder_revision='e' * 40)
+            runner.load_pipeline('org/auto', 'cpu', 'bf16', revision='a' * 40)
+            runner.load_pipeline('org/custom', 'cpu', 'bf16')
+        self.assertEqual(calls, [
+            ('encoder', 'org/enc', 'e' * 40),
+            ('tokenizer', 'org/enc', 'e' * 40),
+            ('pipeline', 'org/pipe', 'r' * 40),
+            ('auto', 'org/auto', 'a' * 40),
+            ('auto', 'org/custom', None),
+        ])
+
     def test_qwen21_reference_images_encode_in_the_vae_dtype(self):
         with patch.dict(sys.modules, {'torch': SimpleNamespace()}):
             runner = importlib.import_module('z_image_turbo')
