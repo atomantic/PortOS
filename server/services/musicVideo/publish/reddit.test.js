@@ -20,9 +20,6 @@ function sessionPage(responses = {}) {
     if (path === '/api/me.json') return jsonResponse({ data: { name: 'example-user', modhash: 'example-modhash' } });
     if (path.endsWith('/about/rules.json')) return jsonResponse({ rules: [{ short_name: 'Stay on topic' }] });
     if (path.endsWith('/api/link_flair_v2.json')) return jsonResponse([{ id: 'clip', text: ' Clip ', mod_only: false }]);
-    if (path.endsWith('/submitted.json')) return jsonResponse({ data: { children: [{ data: post }] } });
-    if (path === '/api/submit') return jsonResponse({ json: { data: post, errors: [] } });
-    if (path === '/api/comment') return jsonResponse({ json: { errors: [] } });
     throw new Error(`Unexpected request: ${path}`);
   });
   const timeout = vi.fn(AbortSignal.timeout);
@@ -100,7 +97,7 @@ function videoPage({ buttonDisabled = 0 } = {}) {
     const document = { querySelectorAll: () => [host] };
     const evaluate = () => { button.disabled = checks++ < buttonDisabled; return runInNewContext(`(${callback.toString()})()`, { document }); };
     for (let i = 0; i <= buttonDisabled; i++) if (evaluate()) return true;
-    return false;
+    throw new Error('timeout');
   });
   const page = {
     ...sessionOnly,
@@ -165,12 +162,16 @@ describe('Reddit native video draft', () => {
 describe('Reddit post detection', () => {
   const landed = (url, shown = true) => ({
     url: () => url,
-    waitForFunction: vi.fn(async () => { if (!shown) throw new Error('timeout'); return true; }),
+    waitForFunction: vi.fn(async (_fn, text) => {
+      if (!shown) throw new Error('timeout');
+      return text;
+    }),
   });
 
   it('canonicalizes an old.reddit.com post URL to www.reddit.com', async () => {
     const page = landed('https://old.reddit.com/r/example/comments/abc123/clip');
     await expect(redditAdapter.findPost(page, { title: post.title })).resolves.toBe('https://www.reddit.com/r/example/comments/abc123/clip');
+    expect(page.waitForFunction).toHaveBeenCalledWith(expect.any(Function), post.title, expect.any(Object));
   });
 
   it.each([

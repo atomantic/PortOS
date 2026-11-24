@@ -13,7 +13,6 @@ const fakePage = ({ dialog, dialogDelay = 0 }) => {
     goto: async () => {},
     url: () => 'https://x.com/compose/post',
     waitForTimeout: async () => {},
-    waitForURL: async () => { throw new Error('stop here'); },
     evaluate: async (fn, arg) => {
       if (Array.isArray(arg) && typeof arg[0] === 'number') return Array.from({ length: arg[0] }, () => 5);
       return 'example';
