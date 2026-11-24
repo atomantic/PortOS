@@ -9,7 +9,7 @@
  * Explicit action only; machine-local. The film is self-contained: later changes
  * to the model never touch it, and the Files tab's Update copy refreshes the GLB.
  */
-import { copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, rm } from 'node:fs/promises';
 import { dirname, extname } from 'node:path';
 import { blenderRefusal } from '../blenderWorkspace/containment.js';
 import { requireBlenderModel, getBlenderModelAsset } from '../blenderModels/models.js';
@@ -19,6 +19,7 @@ import { addFilmModel } from '../film/models.js';
 import { scaffoldBlenderWorkspace, writeBlenderFile } from '../film/sources.js';
 import { assertInsideWithoutSymlinks, blenderWorkspaceDir, resolveBlenderSourceFile } from '../film/workspace.js';
 import { codeAnimationFilmOwner, createFilmProject } from './films.js';
+import { deleteProjectRecord } from './projectStore.js';
 
 export const SHOWCASE_FPS = 24;
 export const SHOWCASE_MAX_CLOSEUPS = 6;
@@ -83,11 +84,20 @@ export async function createShowcaseFilm(modelId, { title } = {}) {
   const data = buildShowcaseData(model, report, { sheet: sheet.path });
 
   const project = await createFilmProject({ title: title ?? `${model.name} showcase`, timeline: { durationSec: showcaseDurationSec(data), fps: SHOWCASE_FPS } });
-  const owner = await codeAnimationFilmOwner(project.id);
-  await scaffoldBlenderWorkspace(owner, 'showcase');
-  await addFilmModel(owner, { kind: 'blender-model', id: modelId, slug: 'model' });
-  if (sheet.file) await copySheet(owner, sheet.file, sheet.path);
-  await writeBlenderFile(owner, 'showcase.json', `${JSON.stringify(data, null, 2)}\n`);
+  let owner;
+  try {
+    owner = await codeAnimationFilmOwner(project.id);
+    await scaffoldBlenderWorkspace(owner, 'showcase');
+    await addFilmModel(owner, { kind: 'blender-model', id: modelId, slug: 'model' });
+    if (sheet.file) await copySheet(owner, sheet.file, sheet.path);
+    await writeBlenderFile(owner, 'showcase.json', `${JSON.stringify(data, null, 2)}\n`);
+  } catch (error) {
+    await Promise.all([
+      deleteProjectRecord(project.id).catch((err) => console.warn(`⚠️ Rollback failed to delete showcase film record ${project.id.slice(0, 8)}: ${err.message}`)),
+      owner ? rm(owner.workspaceDir, { recursive: true, force: true }).catch((err) => console.warn(`⚠️ Rollback failed to remove showcase film workspace ${owner.workspaceLabel}: ${err.message}`)) : Promise.resolve(),
+    ]);
+    throw error;
+  }
   console.log(`🎬 Made showcase film ${project.id.slice(0, 8)} from Blender model ${modelId.slice(0, 15)}${sheet.path ? ' with its approved sheet' : ''}`);
   return project;
 }

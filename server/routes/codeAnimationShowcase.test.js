@@ -13,6 +13,7 @@ vi.mock('../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot
 vi.mock('../services/codeAnimation/projectStore.js', () => ({
   getProjectRecord: vi.fn(async id => structuredClone(library.projects.get(id) || null)),
   createProjectRecord: vi.fn(async (id, data) => { const project = { id, ...data }; library.projects.set(id, project); return structuredClone(project); }),
+  deleteProjectRecord: vi.fn(async id => { library.projects.delete(id); }),
 }));
 vi.mock('../services/codeAnimation/events.js', () => ({ emitCodeAnimationChanged: vi.fn(), emitCodeAnimationFilm: vi.fn() }));
 vi.mock('../services/blenderModels/models.js', () => ({
@@ -30,7 +31,8 @@ vi.mock('../services/blenderModels/references.js', () => ({ approvedOverallSheet
 
 import routes from './codeAnimationFilms.js';
 import { listBlenderJobs } from '../services/film/jobs.js';
-import { showcaseDurationSec } from '../services/codeAnimation/showcase.js';
+import { deleteProjectRecord } from '../services/codeAnimation/projectStore.js';
+import { createShowcaseFilm, showcaseDurationSec } from '../services/codeAnimation/showcase.js';
 
 const app = express();
 app.use(express.json());
@@ -100,4 +102,20 @@ it('refuses an unpublished or missing model before creating anything', async () 
   expect((await request(app).post('/api/code-animation/films/showcase').send({ modelId: 'nope' })).status).toBe(404);
   expect((await request(app).post('/api/code-animation/films/showcase').send({})).status).toBe(400);
   expect(library.projects.size).toBe(0);
+});
+
+it('rolls back the created project record and workspace directory when a post-insert step fails', async () => {
+  library.sheet = join(ROOT(), 'missing-sheet.png');
+  await expect(createShowcaseFilm('m1')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(library.projects.size).toBe(0);
+  const filmsDir = join(ROOT(), 'code-animation', 'films');
+  expect(existsSync(filmsDir) ? readdirSync(filmsDir) : []).toEqual([]);
+});
+
+it('preserves the original error even if rollback cleanup fails', async () => {
+  library.sheet = join(ROOT(), 'missing-sheet.png');
+  deleteProjectRecord.mockRejectedValueOnce(new Error('db cleanup error'));
+  await expect(createShowcaseFilm('m1')).rejects.toMatchObject({ code: 'ENOENT' });
+  const filmsDir = join(ROOT(), 'code-animation', 'films');
+  expect(existsSync(filmsDir) ? readdirSync(filmsDir) : []).toEqual([]);
 });
