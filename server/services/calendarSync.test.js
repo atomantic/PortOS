@@ -22,10 +22,11 @@ vi.mock('./googleAuth.js', () => ({
   GOOGLE_API_TIMEOUT_MS: 30_000,
 }));
 
-// tribe.js is loaded dynamically by logCalendarTouchpoints; mock it so the
-// producer test asserts the candidates without a live Postgres.
+// tribe.js is loaded dynamically by logCalendarTouchpoints and purgeDisabledSubcalendars;
+// mock it so the producer test asserts without a live Postgres.
 vi.mock('./tribe.js', () => ({
   autoLogTouchpoints: vi.fn().mockResolvedValue({ created: 0, matched: 0 }),
+  deleteAutoTouchpoints: vi.fn().mockResolvedValue({ touchpoints: 0, auditRows: 0 }),
 }));
 
 vi.mock('../lib/fileUtils.js', async importOriginal => ({
@@ -38,16 +39,18 @@ vi.mock('./calendarApiSync.js', () => ({ syncOutlookCalendarApi: vi.fn() }));
 vi.mock('./humanActivity.js', () => ({
   calendarActivityCandidates: vi.fn(() => []),
   recordEvents: vi.fn(),
+  deleteEvents: vi.fn().mockResolvedValue({ deleted: 0 }),
 }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
 
 import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
-import { syncAccount, logCalendarTouchpoints, loadCache, getEvents, CACHE_DIR } from './calendarSync.js';
+import { syncAccount, logCalendarTouchpoints, purgeDisabledSubcalendars, loadCache, getEvents, CACHE_DIR } from './calendarSync.js';
 import { getUserTimezone } from './userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
 import { toUserDayKey } from '../lib/activeDays.js';
-import { autoLogTouchpoints } from './tribe.js';
+import { autoLogTouchpoints, deleteAutoTouchpoints } from './tribe.js';
+import { deleteEvents } from './humanActivity.js';
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';
 import { getAccount, listAccounts } from './calendarAccounts.js';
@@ -121,27 +124,38 @@ describe('logCalendarTouchpoints — candidate building (#2033)', () => {
     autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
   });
 
-  it('builds a calendar candidate with a stable per-event dedupe key', async () => {
-    await logCalendarTouchpoints(ACCOUNT_ID, [{
-      externalId: 'evt-1',
-      title: 'Coffee with Ada',
-      location: 'Cafe',
-      startTime: PAST,
-      organizer: { name: 'Ada', email: 'ada@work.com' },
-      attendees: [{ name: 'Me', email: 'me@x.com' }],
-    }]);
+  it('builds a calendar candidate with a stable per-event dedupe key and metadata.subcalendarId', async () => {
+    await logCalendarTouchpoints(ACCOUNT_ID, [
+      {
+        externalId: 'evt-1',
+        subcalendarId: 'work@example.com',
+        title: 'Coffee with Ada',
+        location: 'Cafe',
+        startTime: PAST,
+        organizer: { name: 'Ada', email: 'ada@work.com' },
+        attendees: [{ name: 'Me', email: 'me@x.com' }],
+      },
+      {
+        externalId: 'evt-2',
+        title: 'Outlook Sync',
+        startTime: PAST,
+        attendees: [{ name: 'Ada', email: 'ada@work.com' }],
+      },
+    ]);
 
     expect(autoLogTouchpoints).toHaveBeenCalledTimes(1);
     const [candidates] = autoLogTouchpoints.mock.calls[0];
-    expect(candidates).toHaveLength(1);
+    expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({
       source: 'calendar',
       dedupeKey: `cal:${ACCOUNT_ID}:evt-1`,
       calendarEventId: 'evt-1',
       happenedAt: new Date(PAST).toISOString(),
       summary: 'Coffee with Ada',
+      metadata: { subcalendarId: 'work@example.com' },
     });
     expect(candidates[0].identities).toHaveLength(2);
+    expect(candidates[1].metadata.subcalendarId).toBeNull();
   });
 
   it('skips future, cancelled, declined, and attendee-less events', async () => {
@@ -153,6 +167,87 @@ describe('logCalendarTouchpoints — candidate building (#2033)', () => {
     ]);
     // All four filtered out → producer never calls the logger.
     expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+});
+
+describe('purgeDisabledSubcalendars — cache and derived store erasure (#18229)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    deleteEvents.mockResolvedValue({ deleted: 0 });
+    deleteAutoTouchpoints.mockResolvedValue({ touchpoints: 0, auditRows: 0 });
+  });
+
+  it('purges disabled and dormant subcalendars from cache, Timeline, and Tribe while preserving active keys', async () => {
+    getAccount.mockResolvedValue({
+      id: ACCOUNT_ID,
+      type: 'google-calendar',
+      subcalendars: [
+        { calendarId: 'enabled-cal', enabled: true, dormant: false },
+        { calendarId: 'disabled-cal', enabled: false, dormant: false },
+        { calendarId: 'dormant-cal', enabled: true, dormant: true },
+      ],
+    });
+    readJSONFile.mockResolvedValue({
+      events: [
+        { id: '1', externalId: 'gcal-keep', subcalendarId: 'enabled-cal' },
+        { id: '2', externalId: 'gcal-shared', subcalendarId: 'enabled-cal' },
+        { id: '3', externalId: 'gcal-shared', subcalendarId: 'disabled-cal' },
+        { id: '4', externalId: 'gcal-off', subcalendarId: 'disabled-cal' },
+        { id: '5', externalId: 'gcal-dormant', subcalendarId: 'dormant-cal' },
+        { id: '6', externalId: 'no-subcal' },
+      ],
+    });
+
+    const result = await purgeDisabledSubcalendars(ACCOUNT_ID);
+    expect(result).toEqual({ purged: 3, remaining: 3 });
+    expect(atomicWrite.mock.calls.at(-1)[1].events.map(e => e.id)).toEqual(['1', '2', '6']);
+    expect(deleteEvents).toHaveBeenCalledWith({
+      accountId: ACCOUNT_ID,
+      source: 'calendar',
+      subcalendarIds: ['disabled-cal', 'dormant-cal'],
+      calendarEventIds: ['gcal-off', 'gcal-dormant'],
+    });
+    expect(deleteAutoTouchpoints).toHaveBeenCalledWith({
+      accountId: ACCOUNT_ID,
+      subcalendarIds: ['disabled-cal', 'dormant-cal'],
+      calendarEventIds: ['gcal-off', 'gcal-dormant'],
+    });
+  });
+
+  it('still erases Postgres copies for disabled subcalendars even when cache has zero matching events', async () => {
+    getAccount.mockResolvedValue({
+      id: ACCOUNT_ID,
+      type: 'google-calendar',
+      subcalendars: [
+        { calendarId: 'enabled-cal', enabled: true, dormant: false },
+        { calendarId: 'disabled-cal', enabled: false, dormant: false },
+      ],
+    });
+    readJSONFile.mockResolvedValue({ events: [{ id: '1', externalId: 'gcal-keep', subcalendarId: 'enabled-cal' }] });
+
+    expect(await purgeDisabledSubcalendars(ACCOUNT_ID)).toEqual({ purged: 0, remaining: 1 });
+    expect(deleteEvents).toHaveBeenCalledWith({
+      accountId: ACCOUNT_ID,
+      source: 'calendar',
+      subcalendarIds: ['disabled-cal'],
+    });
+    expect(deleteAutoTouchpoints).toHaveBeenCalledWith({
+      accountId: ACCOUNT_ID,
+      subcalendarIds: ['disabled-cal'],
+    });
+  });
+
+  it('skips derived erasure when all subcalendars are enabled and none are purged', async () => {
+    getAccount.mockResolvedValue({
+      id: ACCOUNT_ID,
+      type: 'google-calendar',
+      subcalendars: [{ calendarId: 'enabled-cal', enabled: true, dormant: false }],
+    });
+    readJSONFile.mockResolvedValue({ events: [{ id: '1', externalId: 'gcal-keep', subcalendarId: 'enabled-cal' }] });
+
+    expect(await purgeDisabledSubcalendars(ACCOUNT_ID)).toEqual({ purged: 0, remaining: 1 });
+    expect(deleteEvents).not.toHaveBeenCalled();
+    expect(deleteAutoTouchpoints).not.toHaveBeenCalled();
   });
 });
 

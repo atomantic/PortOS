@@ -191,7 +191,7 @@ router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   const { subcalendars } = validateRequest(updateSubcalendarsSchema, req.body);
   const account = await calendarAccounts.updateSubcalendars(req.params.id, subcalendars);
   if (!account) throw new ServerError('Account not found', { status: 404, code: 'NOT_FOUND' });
-  // Auto-purge cached events for disabled subcalendars
+  // Auto-purge cached and derived events for disabled subcalendars
   await calendarSync.purgeDisabledSubcalendars(req.params.id);
   req.app.get('io')?.emit('calendar:changed', {});
   res.json(account);

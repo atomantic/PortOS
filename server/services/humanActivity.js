@@ -24,7 +24,7 @@ import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
  */
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
-import { normalizeIdentifier } from '../lib/tribeMatch.js';
+import { buildCalendarSubcalendarClause, normalizeFilterIds, normalizeIdentifier } from '../lib/tribeMatch.js';
 import { getLocalParts, localDayRangeUtc, todayInTimezone, resolveEventInstant, resolveCalendarInstant } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { toPgJson } from '../lib/pgJson.js';
@@ -818,20 +818,30 @@ export async function forEachEventPage({ from, to, pageSize = 2000 } = {}, onPag
  *   - `ids` (optionally scoped with `source`), or
  *   - `source` + (`chatGuid`, `conversationId`, `threadId` and/or `handle`), or
  *   - `accountId` (alone or with `source`) — erases everything an account's sync
- *     copied in when the account is deleted (#12984)
+ *     copied in when the account is deleted (#12984), or scoped to specific
+ *     `subcalendarIds` / `calendarEventIds` on `source = 'calendar'` (#18229).
  *
  * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
  * mutates the external source (chat.db, Gmail, …).
  */
-export async function deleteEvents({ ids, source, chatGuid, conversationId, threadId, handle, accountId, client } = {}) {
-  if (!client) await ensureReady();
+export async function deleteEvents({ ids, source, chatGuid, conversationId, threadId, handle, accountId, subcalendarIds, calendarEventIds, client } = {}) {
   const hasIds = Array.isArray(ids) && ids.length > 0;
   const hasChat = chatGuid != null && String(chatGuid).length > 0;
   const hasConversation = conversationId != null && String(conversationId).length > 0;
   const hasThread = threadId != null && String(threadId).length > 0;
   const hasHandle = handle != null && String(handle).length > 0;
   const hasAccount = accountId != null && String(accountId).length > 0;
-  if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasThread || hasHandle))) return { deleted: 0 };
+  const hasCalendarFilter = subcalendarIds !== undefined || calendarEventIds !== undefined;
+  const subcalendars = normalizeFilterIds(subcalendarIds);
+  const calendarEvents = normalizeFilterIds(calendarEventIds);
+  if (hasCalendarFilter) {
+    if (!hasAccount || (source && source !== 'calendar') || (subcalendars.length === 0 && calendarEvents.length === 0)) {
+      return { deleted: 0 };
+    }
+  } else if (!hasIds && !hasAccount && !(source && (hasChat || hasConversation || hasThread || hasHandle))) {
+    return { deleted: 0 };
+  }
+  if (!client) await ensureReady();
 
   const clauses = [];
   const params = [];
@@ -839,13 +849,23 @@ export async function deleteEvents({ ids, source, chatGuid, conversationId, thre
     params.push(ids.map(String));
     clauses.push(`id = ANY($${params.length}::text[])`);
   }
-  if (source) {
-    params.push(String(source));
+  const effectiveSource = source || (hasCalendarFilter ? 'calendar' : null);
+  if (effectiveSource) {
+    params.push(String(effectiveSource));
     clauses.push(`source = $${params.length}`);
   }
   if (hasAccount) {
     params.push(String(accountId));
     clauses.push(`account_id = $${params.length}`);
+  }
+  if (hasCalendarFilter) {
+    const calendarClause = buildCalendarSubcalendarClause({
+      subcalendars,
+      calendarEvents,
+      eventIdColumn: "metadata->>'externalId'",
+      params,
+    });
+    if (calendarClause) clauses.push(calendarClause);
   }
   if (hasChat) {
     params.push(String(chatGuid));

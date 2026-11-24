@@ -578,3 +578,36 @@ it('purges Signal touchpoints by exact source and conversation metadata, includi
     expect.stringContaining("source = 'signal' AND metadata->>'conversationId' = $1"), ['opaque:%_id:child']);
   expect(transactionQuery).toHaveBeenNthCalledWith(2, expect.stringContaining('DELETE FROM record_audit'), [['example-touchpoint']]);
 });
+
+it('scopes calendar subcalendar touchpoint erasure to accountId and source=calendar without widening to the whole account (#18229)', async () => {
+  withTransaction.mockReset();
+  for (const invalid of [
+    { subcalendarIds: ['cal-off'] },
+    { calendarEventIds: ['evt-1'] },
+    { accountId: 'acct-1', subcalendarIds: [] },
+    { accountId: 'acct-1', subcalendarIds: [], calendarEventIds: [] },
+  ]) {
+    expect(await deleteAutoTouchpoints(invalid)).toEqual({ touchpoints: 0, auditRows: 0 });
+  }
+  expect(withTransaction).not.toHaveBeenCalled();
+
+  const transactionQuery = vi.fn()
+    .mockResolvedValueOnce({ rows: [{ id: 'tp-1' }, { id: 'tp-2' }] })
+    .mockResolvedValueOnce({ rowCount: 4 });
+  withTransaction.mockImplementationOnce((work) => work({ query: transactionQuery }));
+
+  expect(await deleteAutoTouchpoints({
+    accountId: 'acct-1',
+    subcalendarIds: ['cal-off'],
+    calendarEventIds: ['evt-legacy'],
+  })).toEqual({ touchpoints: 2, auditRows: 4 });
+
+  const [sql, params] = transactionQuery.mock.calls[0];
+  expect(sql).toContain("source = 'calendar' AND calendar_account_id = $1");
+  expect(sql).toContain(
+    "(metadata->>'subcalendarId' = ANY($2::text[]) OR (NULLIF(metadata->>'subcalendarId', '') IS NULL AND calendar_event_id = ANY($3::text[])))",
+  );
+  expect(sql).not.toContain("source = 'message'");
+  expect(params).toEqual(['acct-1', ['cal-off'], ['evt-legacy']]);
+  expect(transactionQuery).toHaveBeenNthCalledWith(2, expect.stringContaining('DELETE FROM record_audit'), [['tp-1', 'tp-2']]);
+});
