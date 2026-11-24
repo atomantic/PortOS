@@ -18,7 +18,7 @@ import { join } from 'path';
 import { mkdir, readdir, rm, stat } from 'fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
-import { atomicWrite } from '../../lib/fileUtils.js';
+import { atomicWrite } from '../../lib/fileCore.js';
 import { isTopLevelEntryName, makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml } from './jobStore.js';

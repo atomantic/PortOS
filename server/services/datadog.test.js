@@ -18,6 +18,10 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
 }));
 
+vi.mock('../lib/fileCore.js', () => ({
+  atomicWrite: vi.fn(async (p, data) => writeFileMock(p, typeof data === 'string' ? data : JSON.stringify(data))),
+}));
+
 vi.mock('../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
