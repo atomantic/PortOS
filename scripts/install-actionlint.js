@@ -6,9 +6,9 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { ACTIONLINT_SHA256_LINUX_AMD64, ACTIONLINT_VERSION } from './lib/actionlint.js';
 
 export function archiveName(version = ACTIONLINT_VERSION) {
@@ -47,7 +47,7 @@ export async function installActionlint({ dir, fetchArchive = defaultFetch, extr
   return binDir;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   const dir = process.env.RUNNER_TEMP || process.env.TMPDIR || '/tmp';
   const binDir = await installActionlint({ dir });
   if (process.env.GITHUB_PATH) appendFileSync(process.env.GITHUB_PATH, `${binDir}\n`);

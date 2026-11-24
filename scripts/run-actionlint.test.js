@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ACTIONLINT_SHA256_LINUX_AMD64, ACTIONLINT_VERSION, parseActionlintVersion, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { archiveUrl, installActionlint, verifySha256 } from './install-actionlint.js';
@@ -12,8 +12,12 @@ import { resolveTargets } from './run-actionlint.js';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('pinned actionlint', () => {
+  const roots = [];
+  afterEach(() => { for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true }); });
+
   it('provisions from the pins: verifies the checksum before extraction and fails on a wrong one', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'actionlint-'));
+    roots.push(dir);
     const bytes = Buffer.from('not a real archive');
     const urls = [];
     const extract = vi.fn();
