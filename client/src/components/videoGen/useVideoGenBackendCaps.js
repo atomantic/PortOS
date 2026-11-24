@@ -140,7 +140,7 @@ export function useVideoGenBackendCaps({ enabled, mode }) {
         falModelPickRef.current = p.modelId;
         setFalModelId(p.modelId);
       }
-      if (p.resolution) setFalResolution(p.resolution);
+      setFalResolution(p.resolution || '');
       setFalGenerateAudio(p.generateAudio === true);
       return imageOrText(p);
     }
