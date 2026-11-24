@@ -641,14 +641,20 @@ async function syncAccountUnlocked(accountId, { force = false } = {}) {
 }
 
 export async function syncAccount(accountId, options = {}) {
-  if (syncLocks.has(accountId)) return syncLocks.get(accountId);
+  const active = syncLocks.get(accountId);
+  if (active) {
+    if (!options.force || active.force) return active.promise;
+    // Reacquire after settlement so concurrent manual requests share one forced run.
+    await active.promise.catch(() => {});
+    return syncAccount(accountId, options);
+  }
   const run = syncAccountUnlocked(accountId, options)
     .catch(async (error) => {
       await query('UPDATE stacker_news_accounts SET last_error=$2,updated_at=NOW() WHERE id=$1', [accountId, error.message.slice(0, 2_000)]).catch(() => {});
       throw error;
     })
     .finally(() => syncLocks.delete(accountId));
-  syncLocks.set(accountId, run);
+  syncLocks.set(accountId, { promise: run, force: options.force });
   return run;
 }
 

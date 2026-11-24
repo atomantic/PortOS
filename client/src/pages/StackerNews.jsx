@@ -359,7 +359,12 @@ export default function StackerNews() {
     setNotice(`Pinned browser identity: @${result.username || 'unknown'}. ${result.matchesConfigured ? 'Matches this account.' : 'Mismatch: handoffs are blocked.'}`);
   });
   const syncNow = () => selected && finish('sync', syncStackerNewsAccount(selected.id, { silent: true }), async (result) => {
-    setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} newest item(s) checked, ${result.analyzed} analyzed (cap ${result.newestItemLimit || selected.syncItemLimit || 30} per community).`); await Promise.all([loadAccounts(), loadSelected()]);
+    if (result.skipped) {
+      setNotice(result.reason === 'monitoring_disabled' ? 'Sync skipped because monitoring is disabled.' : 'Sync was skipped.');
+    } else {
+      setNotice(`Sync complete via ${result.transport === 'api' ? 'the API key' : 'the pinned browser'}: ${result.ingested} newest item(s) checked, ${result.analyzed} analyzed (cap ${result.newestItemLimit || selected.syncItemLimit || 30} per community).`);
+    }
+    await Promise.all([loadAccounts(), loadSelected()]);
   });
   const analyze = (item) => finish(`analyze-${item.id}`, analyzeStackerNewsItem(item.id, { silent: true }), (result) => {
     setAnalysisResults((previous) => ({ ...previous, [item.id]: result }));

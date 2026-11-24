@@ -145,6 +145,26 @@ describe('StackerNews', () => {
     expect(socket.off).toHaveBeenCalledWith(event, onChanged);
   });
 
+  it.each([
+    [{ skipped: true, reason: 'monitoring_disabled' }, 'Sync skipped because monitoring is disabled.'],
+    [{ skipped: false, transport: 'api', ingested: 1, analyzed: 0, newestItemLimit: 30 }, /Sync complete via the API key: 1 newest item\(s\) checked, 0 analyzed/],
+  ])('reports the manual sync result across a scheduled refresh (%j)', async (result, notice) => {
+    const user = userEvent.setup();
+    const manual = deferred();
+    api.syncStackerNewsAccount.mockReturnValueOnce(manual.promise);
+    renderPage('/stacker-news/a1/review');
+    expect(await screen.findByText(/No stored content/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Sync newest' }));
+    expect(api.syncStackerNewsAccount).toHaveBeenCalledWith('a1', { silent: true });
+
+    const [, onChanged] = socket.on.mock.calls.find(([name]) => name === 'stacker-news:changed');
+    await act(async () => onChanged({ accountId: 'a1' }));
+    await act(async () => manual.resolve(result));
+
+    expect(screen.getByText(notice)).toBeInTheDocument();
+    expect(screen.queryByText(/undefined (newest|analyzed)/)).not.toBeInTheDocument();
+  });
+
   it('retries an account read without claiming the deep-linked account is missing', async () => {
     const user = userEvent.setup();
     api.getStackerNewsAccounts.mockRejectedValueOnce(new Error('Account read failed'));
