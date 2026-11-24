@@ -39,6 +39,9 @@ export const useVoiceEnabled = () => useContext(VoiceEnabledContext);
 // the bootstrap read must not overwrite: an event can overtake that read.
 const hydrate = (previous, cfg, updated) => {
   const engine = cfg?.tts?.engine;
+  const ttsKey = engine
+    ? [engine, engine.replace(/-tts$/, '')].find((key) => cfg?.tts?.[key] && typeof cfg.tts[key] === 'object')
+    : undefined;
   return {
     enabled: updated.has('enabled') ? previous.enabled : !!cfg?.enabled,
     hotkey: updated.has('hotkey') ? previous.hotkey : cfg?.hotkey || 'Space',
@@ -49,7 +52,7 @@ const hydrate = (previous, cfg, updated) => {
     vad: updated.has('vad') ? previous.vad : cfg?.vad || null,
     tts: updated.has('tts')
       ? previous.tts
-      : { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate },
+      : { engine, voice: ttsKey ? cfg.tts[ttsKey]?.voice : undefined, rate: cfg?.tts?.rate },
   };
 };
 

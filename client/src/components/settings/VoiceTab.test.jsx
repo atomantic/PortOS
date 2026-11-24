@@ -427,6 +427,20 @@ describe('VoiceTab FaceTime identity gating', () => {
     fireEvent.change(handle, { target: { value: '+15550100' } });
     buttons().forEach((b) => expect(b).toBeEnabled());
   });
+
+  it('surfaces the server refusal message on a 409 FaceTime test call', async () => {
+    voiceApi.getVoiceConfig.mockResolvedValue({ ...structuredClone(config), facetime: { ...saved } });
+    voiceApi.controlFaceTime.mockRejectedValueOnce(Object.assign(
+      new Error('No FaceTime call host tab is attached'),
+      { code: 'NO_CALL_HOST', status: 409, context: { command: 'call', reason: 'no-call-host' } },
+    ));
+    render(<MemoryRouter><VoiceTab /></MemoryRouter>);
+    const testCallBtn = await screen.findByRole('button', { name: 'Test call' });
+    await waitFor(() => expect(testCallBtn).toBeEnabled());
+    fireEvent.click(testCallBtn);
+    await waitFor(() => expect(screen.getByText(/No FaceTime call host tab is attached/)).toBeInTheDocument());
+    expect(voiceApi.controlFaceTime).toHaveBeenCalledWith('call', { silent: true });
+  });
 });
 
 describe('VoiceTab initial load failures', () => {

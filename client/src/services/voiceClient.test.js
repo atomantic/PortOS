@@ -928,3 +928,61 @@ describe('voice output candidacy at module load', () => {
     expect(emittedEvents()).toEqual(['voice:output:available', 'voice:output:claim']);
   });
 });
+
+describe('speakSynthesized error envelope handling', () => {
+  let client;
+
+  beforeAll(async () => {
+    client = await import('./voiceClient.js');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('redirects to /login on 401 AUTH_REQUIRED and preserves API error fields', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('window', { location: { pathname: '/voice', search: '?tab=1', replace } });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: 'Sign in required', code: 'AUTH_REQUIRED' }),
+    });
+
+    await expect(client.speakSynthesized('hello')).rejects.toMatchObject({
+      message: 'Sign in required',
+      code: 'AUTH_REQUIRED',
+      status: 401,
+    });
+    expect(replace).toHaveBeenCalledWith('/login?next=%2Fvoice%3Ftab%3D1');
+  });
+
+  it.each([
+    {
+      status: 400,
+      body: { error: 'Text is required', code: 'VALIDATION_ERROR', context: { field: 'text' } },
+    },
+    {
+      status: 403,
+      body: { error: 'Voice synthesis disabled', code: 'FORBIDDEN', context: { feature: 'voice' } },
+    },
+    {
+      status: 503,
+      body: { error: 'TTS runtime unavailable', code: 'TTS_UNAVAILABLE', context: { engine: 'qwen3-tts' } },
+    },
+  ])('propagates message, code, status, and context on HTTP $status errors', async ({ status, body }) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: false,
+      status,
+      json: async () => body,
+    });
+
+    await expect(client.speakSynthesized('hello')).rejects.toMatchObject({
+      message: body.error,
+      code: body.code,
+      status,
+      context: body.context,
+    });
+  });
+});
