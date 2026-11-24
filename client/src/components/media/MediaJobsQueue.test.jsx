@@ -1098,6 +1098,16 @@ describe('MediaJobsQueue — video retry decode override (#5449)', () => {
     expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
   });
 
+  it('sends no overrides when retrying an untouched local job without a stored model ID', async () => {
+    const user = userEvent.setup();
+    getVideoGenModelContext.mockResolvedValue({ models: MODELS });
+    await openRetryEditor(user, failedJob({ modelId: undefined }));
+    await screen.findByLabelText('Model');
+
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('decodefail000dead', null, { silent: true });
+  });
+
   it('requeues a full-decode job at draft fidelity when the user switches it', async () => {
     const user = userEvent.setup();
     getVideoGenModelContext.mockResolvedValue({ models: MODELS });

@@ -347,7 +347,7 @@ export default function App() {
             <Route path="digital-twin/:tab" element={<DigitalTwin />} />
             <Route path="privacy/:tab" element={<Privacy />} />
             <Route path="goals/:tab" element={<Goals />} />
-            <Route path="goals/list/:goalId" element={<Goals />} />
+            <Route path="goals/:tab/:goalId" element={<Goals />} />
             <Route path="feature-agents" element={<FeatureAgents />} />
             <Route path="feature-agents/create" element={<FeatureAgentDetail />} />
             <Route path="feature-agents/:id/:tab" element={<FeatureAgentDetail />} />

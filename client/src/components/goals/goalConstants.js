@@ -6,7 +6,9 @@ import {
 // (see client/src/AGENTS.md), so a specific goal is shareable, bookmarkable, and
 // linkable from other surfaces — e.g. the Character sheet's Life Goals card.
 export const GOALS_LIST_PATH = '/goals/list';
+export const GOALS_TREE_PATH = '/goals/tree';
 export const goalDetailPath = (goalId) => `${GOALS_LIST_PATH}/${encodeURIComponent(goalId)}`;
+export const goalTreeDetailPath = (goalId) => `${GOALS_TREE_PATH}/${encodeURIComponent(goalId)}`;
 
 export const CATEGORY_CONFIG = {
   creative: { label: 'Creative', icon: Lightbulb, color: 'text-purple-400', bg: 'bg-purple-500/20', hex: '#a855f7' },

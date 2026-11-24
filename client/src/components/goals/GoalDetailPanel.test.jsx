@@ -323,3 +323,20 @@ describe('GoalDetailPanel link picker load states', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
+
+it('can clear and save a time block config after removing its last preferred day', async () => {
+  await renderPanel({
+    ...baseGoal,
+    timeBlockConfig: { preferredDays: ['mon'], timeSlot: 'evening', sessionDurationMinutes: 90 },
+  });
+  await openEdit();
+
+  fireEvent.click(screen.getByRole('button', { name: 'mon' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Clear config' }));
+  expect(screen.queryByRole('button', { name: 'Clear config' })).toBeNull();
+
+  await act(async () => {
+    fireEvent.click(screen.getByText('Save'));
+  });
+  expect(updateGoal).toHaveBeenCalledWith('g-1', expect.objectContaining({ timeBlockConfig: null }));
+});

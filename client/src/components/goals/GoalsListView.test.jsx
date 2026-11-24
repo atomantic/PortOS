@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation, useParams } from 'react-router';
 import { stubSequentialLayout, pressKey, pressKeyTimes, dndAnnouncement } from '../../test/dndKeyboardDrag';
@@ -246,14 +247,56 @@ describe('routed goal selection', () => {
     expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
   });
 
-  it('returns to the index when the panel closes or the goal is mutated', async () => {
+  it('returns to the index when the panel closes', async () => {
     const user = userEvent.setup();
     const onRefresh = await renderList(vi.fn(), { path: '/goals/list/g1' });
 
-    await user.click(screen.getByRole('button', { name: 'refresh-detail' }));
+    await user.click(screen.getByRole('button', { name: 'close-detail' }));
 
     expect(currentPath()).toBe('/goals/list');
-    expect(onRefresh).toHaveBeenCalled();
+    expect(screen.queryByTestId('detail-panel-goal')).not.toBeInTheDocument();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps the panel mounted and preserves collapsed branches when a mutation refreshes the tree', async () => {
+    const user = userEvent.setup();
+    const parent = { ...GOALS[0], children: [GOALS[1]] };
+    const newParent = { ...GOALS[1], id: 'g3', title: 'Practice navigation' };
+    const newChild = { ...GOALS[1], id: 'g4', title: 'Read a nautical chart' };
+
+    function RefreshingList() {
+      const [data, setData] = useState({ roots: [parent, newParent], flat: [parent, GOALS[1], newParent] });
+      const refresh = () => {
+        const updatedParent = { ...parent, title: 'Sail across the Atlantic' };
+        const updatedNewParent = { ...newParent, children: [newChild] };
+        setData({
+          roots: [updatedParent, updatedNewParent],
+          flat: [updatedParent, GOALS[1], updatedNewParent, newChild],
+        });
+      };
+      return <RoutedList data={data} onRefresh={refresh} />;
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/goals/list/g1']}>
+        <Routes>
+          <Route path="/goals/list/:goalId?" element={<RefreshingList />} />
+        </Routes>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Restore the boat')).toBeInTheDocument();
+    const parentRow = screen.getByText('Sail across an ocean', { selector: '[role=button] span' }).closest('[role=button]');
+    await user.click(within(parentRow).getByRole('button', { name: 'Collapse' }));
+    await user.click(screen.getByRole('button', { name: 'start-edit' }));
+    await user.click(screen.getByRole('button', { name: 'refresh-detail' }));
+
+    expect(currentPath()).toBe('/goals/list/g1');
+    expect(screen.getByTestId('detail-panel-goal')).toHaveTextContent('Sail across the Atlantic');
+    expect(screen.getByTestId('edit-form')).toBeInTheDocument();
+    expect(screen.queryByText('Restore the boat')).not.toBeInTheDocument();
+    expect(screen.getByText('Read a nautical chart')).toBeInTheDocument();
   });
 
   it('shows a not-found fallback for a stale or deleted goal id', async () => {
@@ -394,4 +437,15 @@ it('organizes with the chosen provider and model only after submission', async (
   await act(async () => { finish(NEW_APEX_SUGGESTION); });
   expect(screen.getByText('Goal Organization')).toBeInTheDocument();
   expect(createGoal).not.toHaveBeenCalled();
+});
+
+describe('filtered-empty state', () => {
+  it('offers Clear search when a search matches nothing', async () => {
+    const user = userEvent.setup();
+    await renderList();
+    await user.type(screen.getByPlaceholderText('Search goals...'), 'zzz-no-match');
+    expect(screen.getByText('No matching goals found.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.queryByText('No matching goals found.')).not.toBeInTheDocument();
+  });
 });

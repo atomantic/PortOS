@@ -10,6 +10,7 @@ import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName, formatPercent } from '../../../utils/formatters';
 import MemoryHistory from './MemoryHistory';
 import MemoryRunsUsedBy from './MemoryRunsUsedBy';
+import { normalizeMemoryType } from '../../../lib/legacyMemoryType';
 
 const MEMORY_EVENTS = ['cos:memory:updated', 'cos:memory:deleted'];
 
@@ -18,7 +19,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   const [formData, setFormData] = useState({
     content: memory.content || '',
     summary: memory.summary || '',
-    type: memory.type || 'observation',
+    type: normalizeMemoryType(memory.type),
     category: memory.category || 'other',
     tags: memory.tags || [],
     sourceAppId: memory.sourceAppId || '',
@@ -49,7 +50,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
     setFormData({
       content: full.content || '',
       summary: full.summary || '',
-      type: full.type || 'observation',
+      type: normalizeMemoryType(full.type),
       category: full.category || 'other',
       tags: full.tags || [],
       sourceAppId: full.sourceAppId || '',
