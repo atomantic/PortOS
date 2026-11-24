@@ -16,7 +16,7 @@ vi.mock('../services/apiGoals.js', async (importOriginal) => ({
   getGoals: vi.fn(async () => ({ goals: [] })),
 }));
 
-import { getAskConversation, streamAskTurn, promoteAskConversation, promoteAskTurn } from '../services/apiAsk.js';
+import { listAskConversations, getAskConversation, streamAskTurn, promoteAskConversation, promoteAskTurn } from '../services/apiAsk.js';
 import { getGoals } from '../services/apiGoals.js';
 import Ask from './Ask';
 
@@ -131,4 +131,17 @@ describe('Ask attached goal pill', () => {
     expect(router.state.location.pathname).toBe('/digital-twin/goals');
     expect(router.state.location.search).toBe('?id=goal%201');
   });
+});
+
+it.each([false, true])('retries a failed conversation list read (has conversations: %s)', async (hasConversations) => {
+  const conversations = hasConversations ? [{ id: 'example', title: 'Example conversation', mode: 'ask' }] : [];
+  listAskConversations.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ conversations });
+  const router = createMemoryRouter([{ path: '/ask', element: <Ask /> }], { initialEntries: ['/ask'] });
+  render(<RouterProvider router={router} />);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load conversations');
+  expect(screen.queryByText(/No conversations yet/)).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasConversations ? 'Example conversation' : /No conversations yet/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

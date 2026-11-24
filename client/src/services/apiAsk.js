@@ -4,7 +4,7 @@
 
 import { request, API_BASE, throwStreamApiError } from './apiCore.js';
 
-export const listAskConversations = () => request('/ask');
+export const listAskConversations = (options) => request('/ask', options);
 export const getAskConversation = (id) => request(`/ask/${encodeURIComponent(id)}`);
 // `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
 // when it already renders its own error UI.

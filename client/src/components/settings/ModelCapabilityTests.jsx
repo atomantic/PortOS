@@ -23,6 +23,7 @@
  * live transcript is already on screen when the first frame arrives.
  */
 
+import ListLoadError from '../ui/ListLoadError';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
@@ -553,7 +554,7 @@ function CapabilityTestDrawer({
   );
 }
 
-function CapabilityRecommendations({ report, onOpen }) {
+function CapabilityRecommendations({ report, onOpen, stale }) {
   const tests = report?.tests || [];
   const models = report?.models || [];
   const tasks = TASK_FILTERS.filter((task) => task.id !== 'all');
@@ -587,7 +588,7 @@ function CapabilityRecommendations({ report, onOpen }) {
                     Read the result
                   </button>
                 </>
-              ) : (
+              ) : !stale && (
                 <span className="text-[10px] text-gray-600 italic">Run the {task.label.toLowerCase()} check to rank it.</span>
               )}
             </div>
@@ -600,7 +601,7 @@ function CapabilityRecommendations({ report, onOpen }) {
 
 // ---- the panel --------------------------------------------------------------
 
-export default function ModelCapabilityTests({ report, loading, onReload, disabled = false }) {
+export default function ModelCapabilityTests({ report, loading, error, onReload, disabled = false }) {
   const [searchParams, updateParams] = useUrlParams();
   const backend = searchParams.get('capBackend') || '';
   const modelId = searchParams.get('capModel') || '';
@@ -850,7 +851,7 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
         </div>
       )}
 
-      <CapabilityRecommendations report={report} onOpen={openRecommended} />
+      {report && <CapabilityRecommendations report={report} onOpen={openRecommended} stale={Boolean(error)} />}
 
       {/* A runtime PortOS could not reach. Every line carries the fix: for the
           runtimes PortOS can start, a link to the page that starts them; for the
@@ -883,9 +884,10 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
         </p>
       )}
 
+      {error && <ListLoadError what="capability tests" error={error} onRetry={onReload} retrying={loading} />}
       {loading && !report ? (
         <BrailleSpinner text="Loading capability tests" />
-      ) : models.length === 0 ? (
+      ) : models.length === 0 ? !error && (
         <p className="text-xs text-gray-500">
           No local models are installed, so there is nothing to test yet.
         </p>
@@ -915,7 +917,7 @@ export default function ModelCapabilityTests({ report, loading, onReload, disabl
             </select>
             <span className="text-[10px] text-gray-600">{visibleModels.length} of {models.length} models</span>
           </div>
-          {visibleModels.length === 0 ? (
+          {visibleModels.length === 0 ? !error && (
             <p className="text-xs text-gray-500">No models match this filter.</p>
           ) : (
             <div className="border border-port-border rounded overflow-x-auto">

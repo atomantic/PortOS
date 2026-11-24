@@ -623,7 +623,7 @@ export const transitionJiraTicket = (instanceId, ticketId, transitionId, options
 });
 
 // JIRA Status Reports
-export const getJiraReports = () => request('/jira/reports');
+export const getJiraReports = (options) => request('/jira/reports', options);
 export const generateJiraReport = (appId) => request('/jira/reports/generate', {
   method: 'POST',
   body: JSON.stringify(appId ? { appId } : {})

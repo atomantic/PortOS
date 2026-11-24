@@ -453,3 +453,15 @@ describe('AiAssignmentsTab card field names', () => {
     expect(screen.getByRole('group', { name: 'Model' })).toHaveTextContent('gemma2:9b');
   });
 });
+
+it.each([false, true])('retries an unread assignment list (has assignments: %s)', async (hasAssignments) => {
+  const assignments = hasAssignments ? [entry({ id: 'settings.example' })] : [];
+  getAiAssignments.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(payload(assignments));
+  renderTab();
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load AI assignments');
+  expect(screen.queryByText(/No assignments match/)).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasAssignments ? 'Production planning model' : /No assignments match/)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});

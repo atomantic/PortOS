@@ -294,3 +294,17 @@ describe('SyncTab token debug', () => {
     expect(api.getMessageTokenStatus).toHaveBeenCalledTimes(2);
   });
 });
+
+it('only shows the empty account copy after a successful empty read', async () => {
+  const onRefresh = vi.fn();
+  const { rerender } = render(<SyncTab accounts={[]} accountsUnavailable onRefresh={onRefresh} />);
+  await act(async () => {});
+  expect(screen.queryByText(/No accounts configured/)).not.toBeInTheDocument();
+
+  rerender(<SyncTab accounts={[]} onRefresh={onRefresh} />);
+  expect(screen.getByText(/No accounts configured/)).toBeInTheDocument();
+
+  rerender(<SyncTab accounts={[{ id: 'example', name: 'Example account' }]} onRefresh={onRefresh} />);
+  expect(screen.getByText('Example account')).toBeInTheDocument();
+  expect(screen.queryByText(/No accounts configured/)).not.toBeInTheDocument();
+});

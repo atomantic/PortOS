@@ -35,8 +35,8 @@ export const getContextPlans = (options) => request('/local-llm/context-plans', 
 // per HF-backed entry) — the recommended-models picker wants it. Callers that only
 // need catalog metadata (e.g. the playground decorating installed models) omit it
 // to keep the response fast and fully local.
-export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =>
-  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`);
+export const getLocalLlmCatalog = (backend, q = '', { variants = false, silent } = {}) =>
+  request(`/local-llm/catalog?backend=${encodeURIComponent(backend)}${q ? `&q=${encodeURIComponent(q)}` : ''}${variants ? '&variants=1' : ''}`, { silent });
 
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
@@ -98,8 +98,8 @@ export const adoptJevHead = (decisionId, options) =>
 export const discardJevHead = (decisionId, { adopted = false } = {}, options) =>
   request('/local-llm/jev/heads/discard', { method: 'POST', body: JSON.stringify({ decisionId, adopted }), ...options });
 
-export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12) =>
-  request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+export const getLocalLlmHuggingFaceSearch = (backend, q = '', category = 'all', limit = 12, options) =>
+  request(`/local-llm/huggingface-search?backend=${encodeURIComponent(backend)}&category=${encodeURIComponent(category)}&limit=${encodeURIComponent(limit)}${q ? `&q=${encodeURIComponent(q)}` : ''}`, options);
 
 // `options` lets callers opt into `{ silent: true }` so structured failure codes
 // (e.g. OLLAMA_OUTDATED → offer to upgrade in place) can be handled by the UI

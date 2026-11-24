@@ -1,6 +1,7 @@
+import ListLoadError from '../components/ui/ListLoadError';
 import { useNavigate, useParams } from 'react-router';
 import { Mail, RefreshCw, Settings, MessageSquare, MessageCircle, Users } from 'lucide-react';
-import { Suspense, useState, useEffect, useCallback } from 'react';
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react';
 import { getMessageAccounts } from '../services/apiMessages.js';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
@@ -73,16 +74,26 @@ export default function Messages() {
   // account they already have (#3281).
   const [accounts, setAccounts] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [accountsError, setAccountsError] = useState(null);
+  const accountsRequest = useRef(0);
 
   const fetchAccounts = useCallback(async () => {
-    const data = await getMessageAccounts().catch(() => null);
-    setAccounts(Array.isArray(data) ? data : null);
-    setLoading(false);
+    const request = ++accountsRequest.current;
+    setLoading(true);
+    await getMessageAccounts({ silent: true })
+      .then((data) => {
+        if (request !== accountsRequest.current) return;
+        if (!Array.isArray(data)) throw new Error('Invalid account list');
+        setAccounts(data);
+        setAccountsError(null);
+      })
+      .catch((error) => { if (request === accountsRequest.current) setAccountsError(error); })
+      .finally(() => { if (request === accountsRequest.current) setLoading(false); });
   }, []);
 
-  // Tabs that only iterate accounts want a plain array; the load-failed sentinel
-  // is forwarded to the inbox alone, which is the one surface that acts on it.
+  // Keep the last successful read available during a sync refresh or retry.
   const accountList = accounts || [];
+  const accountsUnavailable = accounts === null || Boolean(accountsError);
 
   // ConfigTab mutates the list with functional updaters — normalize the sentinel
   // so `prev` is always an array there.
@@ -112,11 +123,11 @@ export default function Messages() {
       case 'inbox':
         return <InboxTab accounts={accounts} />;
       case 'config':
-        return <ConfigTab accounts={accountList} setAccounts={updateAccounts} />;
+        return <ConfigTab accounts={accountList} setAccounts={updateAccounts} accountsUnavailable={accountsUnavailable} />;
       case 'drafts':
         return <DraftsTab accounts={accountList} />;
       case 'sync':
-        return <SyncTab accounts={accountList} onRefresh={fetchAccounts} />;
+        return <SyncTab accounts={accountList} onRefresh={fetchAccounts} accountsUnavailable={accountsUnavailable} />;
       case 'imessage':
         return <IMessageTab />;
       case 'signal':
@@ -130,7 +141,7 @@ export default function Messages() {
     }
   };
 
-  if (loading && ACCOUNT_TAB_IDS.has(activeTab)) {
+  if (loading && accounts === null && !accountsError && ACCOUNT_TAB_IDS.has(activeTab)) {
     return (
       <PageSkeleton
         header="bar"
@@ -174,6 +185,9 @@ export default function Messages() {
 
       <div className={`flex-1 min-h-0 ${fullBleed ? 'overflow-hidden' : 'overflow-auto p-4'}`}>
         <Suspense fallback={<PageSkeleton header="none" label="Loading messages tab" cards={3} sidebar={false} />}>
+          {accountsError && (activeTab === 'sync' || activeTab === 'config' || activeTab === 'drafts') && (
+            <ListLoadError what="message accounts" error={accountsError} onRetry={fetchAccounts} retrying={loading} className="mb-4" />
+          )}
           {renderTabContent()}
         </Suspense>
       </div>

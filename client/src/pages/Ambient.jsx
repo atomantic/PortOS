@@ -1,3 +1,4 @@
+import ListLoadError from '../components/ui/ListLoadError';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { ArrowLeft, Maximize, Minimize } from 'lucide-react';
@@ -6,7 +7,7 @@ import { getCosQuickSummary, getCosGoalProgressSummary } from '../services/apiAg
 import { getCalendarEvents } from '../services/apiCalendar.js';
 import { useSocketResource } from '../hooks/useSocketResource';
 import { useSocket } from '../hooks/useSocket';
-import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
+import { formatClockTime, formatCount, formatDateFull, formatTimeOfDay } from '../utils/formatters';
 import DeathClockCountdown from '../components/DeathClockCountdown';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard';
 import { allDayCalendarDate } from '../components/calendar/calendarUtils';
@@ -51,16 +52,16 @@ export default function Ambient() {
   }, {
     events: DEATH_CLOCK_EVENTS
   });
-  const { data: cosSummary, refetch: refreshSummary } = useSocketResource(() => {
+  const { data: cosSummary, error: summaryError, loading: summaryLoading, refetch: refreshSummary } = useSocketResource(() => {
     reconciledDays.current.summary = new Date().toDateString();
     return getCosQuickSummary({ silent: true });
   }, {
     namespace: 'cos', events: SUMMARY_EVENTS
   });
-  const { data: goals } = useSocketResource(() => getCosGoalProgressSummary({ silent: true }), {
+  const { data: goals, error: goalsError, loading: goalsLoading, refetch: refreshGoals } = useSocketResource(() => getCosGoalProgressSummary({ silent: true }), {
     namespace: 'cos', events: GOAL_EVENTS
   });
-  const { data: calendarEvents, error: calendarError, refetch: refreshCalendar } = useSocketResource(async () => {
+  const { data: calendarEvents, error: calendarError, loading: calendarLoading, refetch: refreshCalendar } = useSocketResource(async () => {
     const now = new Date();
     reconciledDays.current.calendar = now.toDateString();
     const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -199,7 +200,7 @@ export default function Ambient() {
         )}
 
         <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6 mt-4">
-          <AmbientPanel title="Today" count={upcomingEvents.length}>
+          <AmbientPanel title="Today" count={calendarEvents ? upcomingEvents.length : '—'}>
             {calendarError && (
               <div role="alert" className="text-sm text-port-error mb-2">
                 Calendar unavailable; last loaded events may be stale.{' '}
@@ -207,7 +208,7 @@ export default function Ambient() {
               </div>
             )}
             {upcomingEvents.length === 0 ? (
-              <div className="text-gray-400 text-sm">{calendarError ? 'Calendar unavailable' : 'No upcoming events'}</div>
+              !calendarError && <div role="status" className="text-gray-400 text-sm">{calendarLoading ? 'Loading events…' : 'No upcoming events'}</div>
             ) : (
               <div className="space-y-2">
                 {upcomingEvents.map((event, i) => (
@@ -228,9 +229,10 @@ export default function Ambient() {
             )}
           </AmbientPanel>
 
-          <AmbientPanel title="Goals" count={goals?.goals?.length}>
+          <AmbientPanel title="Goals" count={goals ? goals.goals?.length ?? 0 : '—'}>
+            {goalsError && <ListLoadError what="goals" onRetry={refreshGoals} className="mb-2" />}
             {!goals?.goals?.length ? (
-              <div className="text-gray-400 text-sm">No active goals</div>
+              !goalsError && <div role="status" className="text-gray-400 text-sm">{goalsLoading ? 'Loading goals…' : 'No active goals'}</div>
             ) : (
               <div className="space-y-3">
                 {goals.goals.slice(0, 5).map((goal) => (
@@ -259,10 +261,12 @@ export default function Ambient() {
           </AmbientPanel>
 
           <AmbientPanel title="Agent Activity">
+            {summaryError && <ListLoadError what="agent activity" onRetry={refreshSummary} className="mb-2" />}
+            {summaryLoading && <div className="text-gray-400 text-sm">Loading agent activity…</div>}
             <div className="grid grid-cols-3 gap-3">
-              <AmbientStat label="Running" value={today.running || 0} color={today.running > 0 ? 'rgb(var(--port-accent))' : null} />
-              <AmbientStat label="Completed" value={today.completed || 0} color={today.completed > 0 ? 'rgb(var(--port-success))' : null} />
-              <AmbientStat label="Failed" value={today.failed || 0} color={today.failed > 0 ? 'rgb(var(--port-error))' : null} />
+              <AmbientStat label="Running" value={cosSummary ? today.running ?? 0 : null} color={today.running > 0 ? 'rgb(var(--port-accent))' : null} />
+              <AmbientStat label="Completed" value={cosSummary ? today.completed ?? 0 : null} color={today.completed > 0 ? 'rgb(var(--port-success))' : null} />
+              <AmbientStat label="Failed" value={cosSummary ? today.failed ?? 0 : null} color={today.failed > 0 ? 'rgb(var(--port-error))' : null} />
             </div>
             {cosSummary?.status?.running && (
               <div className="mt-3 flex items-center gap-2">
@@ -293,8 +297,8 @@ function AmbientPanel({ title, count, children }) {
     <div className="bg-white/[0.02] border border-white/[0.04] rounded-2xl p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider">{title}</h2>
-        {count != null && count > 0 && (
-          <span className="text-xs text-gray-400 tabular-nums">{count}</span>
+        {(count === '—' || count > 0) && (
+          <span className="text-xs text-gray-400 tabular-nums">{formatCount(count)}</span>
         )}
       </div>
       {children}
@@ -306,7 +310,7 @@ function AmbientStat({ label, value, color }) {
   return (
     <div className="text-center">
       <div className="text-2xl font-light tabular-nums" style={{ color: color || '#9ca3af' }}>
-        {value}
+        {formatCount(value)}
       </div>
       <div className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</div>
     </div>

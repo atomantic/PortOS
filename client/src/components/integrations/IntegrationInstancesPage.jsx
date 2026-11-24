@@ -1,3 +1,4 @@
+import ListLoadError from '../ui/ListLoadError';
 import { useEffect, useState } from 'react';
 import toast from '../ui/Toast';
 import { FormField } from '../ui/FormField';
@@ -15,6 +16,8 @@ export default function IntegrationInstancesPage({
 }) {
   const [instances, setInstances] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const [editingInstance, setEditingInstance] = useState(null);
   const [testingInstance, setTestingInstance] = useState(null);
   const [testResults, setTestResults] = useState({});
@@ -26,20 +29,22 @@ export default function IntegrationInstancesPage({
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
     api.get(`${apiBase}/instances`, { silent: true })
       .then(response => {
-        if (active) setInstances(response.instances || {});
+        if (!active) return;
+        setInstances(response.instances || {});
+        setLoadError(null);
       })
       .catch(error => {
         if (!active) return;
-        console.error(`❌ Failed to load ${title} instances: ${error.message}`);
-        toast.error(`Failed to load ${title} instances: ${error.message}`);
+        setLoadError(error);
       })
       .finally(() => {
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [apiBase, title]);
+  }, [apiBase, attempt]);
 
   const resetForm = () => {
     setEditingInstance(null);
@@ -133,7 +138,7 @@ export default function IntegrationInstancesPage({
     }
   };
 
-  if (loading) return <PageSkeleton header="bar" fullHeight padded label={`Loading ${title}`} titleWidthClass={skeletonWidth} cards={2} />;
+  if (loading && !loadError) return <PageSkeleton header="bar" fullHeight padded label={`Loading ${title}`} titleWidthClass={skeletonWidth} cards={2} />;
 
   return (
     <div className="flex h-full flex-col">
@@ -192,7 +197,8 @@ export default function IntegrationInstancesPage({
         </div>}
 
         <div className="space-y-4 @5xl/page:col-start-2 @5xl/page:row-start-1">
-          {Object.values(instances).length === 0 ? <div className="bg-gray-800 rounded-lg p-8 text-center">
+          {loadError && <ListLoadError what={`${title} instances`} error={loadError} onRetry={() => setAttempt((n) => n + 1)} retrying={loading} />}
+          {Object.values(instances).length === 0 ? !loadError && <div className="bg-gray-800 rounded-lg p-8 text-center">
             <p className="text-gray-400">No {title} instances configured.</p>
             <p className="text-gray-500 text-sm mt-2">{emptyDescription}</p>
           </div> : Object.values(instances).map(instance => {

@@ -37,7 +37,7 @@ const DEFAULT_SELECTORS = {
   teams: { messageItem: "[role='listitem']" },
 };
 
-export default function SyncTab({ accounts, onRefresh }) {
+export default function SyncTab({ accounts, onRefresh, accountsUnavailable = false }) {
   const [rawSelectors, setRawSelectors] = useState({});
   // null = loading, 'ready', or 'error'. After a failed read the rows show built-in
   // defaults, not the saved selectors, so editing is shut until a read succeeds.
@@ -162,7 +162,7 @@ export default function SyncTab({ accounts, onRefresh }) {
       {/* Sync Status */}
       <div>
         <h2 className="text-lg font-semibold text-white mb-3">Sync Status</h2>
-        {accounts.length === 0 && (
+        {!accountsUnavailable && accounts.length === 0 && (
           <p className="text-gray-500 text-sm">No accounts configured. Add one in the Accounts tab.</p>
         )}
         <div className="space-y-2">

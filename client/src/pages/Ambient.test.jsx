@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ambient from './Ambient';
@@ -254,4 +254,28 @@ describe('Ambient accessibility', () => {
     await press();
     expect(screen.getByText('Home page')).toBeTruthy();
   });
+});
+
+it('shows errors and unknown counts until goal and agent reads succeed on Retry', async () => {
+  getCosGoalProgressSummary.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ goals: [] });
+  getCosQuickSummary.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ today: { running: 7, completed: 2, failed: 1 } });
+  getCalendarEvents.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ events: [], total: 0 });
+  await mount();
+
+  const goals = within(screen.getByRole('heading', { name: 'Goals' }).parentElement.parentElement);
+  const activity = within(screen.getByRole('heading', { name: 'Agent Activity' }).parentElement.parentElement);
+  const calendar = within(screen.getByRole('heading', { name: 'Today' }).parentElement.parentElement);
+  expect(goals.getByRole('alert')).toHaveTextContent('Could not load goals');
+  expect(goals.queryByText('No active goals')).not.toBeInTheDocument();
+  expect(activity.getByRole('alert')).toHaveTextContent('Could not load agent activity');
+  expect(activity.getAllByText('—')).toHaveLength(3);
+  expect(calendar.getByRole('alert')).toHaveTextContent('Calendar unavailable');
+  expect(calendar.queryByText('No upcoming events')).not.toBeInTheDocument();
+
+  await flush(() => fireEvent.click(goals.getByRole('button', { name: 'Retry' })));
+  await flush(() => fireEvent.click(activity.getByRole('button', { name: 'Retry' })));
+  await flush(() => fireEvent.click(calendar.getByRole('button', { name: 'Retry calendar' })));
+  expect(goals.getByText('No active goals')).toBeInTheDocument();
+  expect(activity.getByText('7')).toBeInTheDocument();
+  expect(calendar.getByText('No upcoming events')).toBeInTheDocument();
 });
