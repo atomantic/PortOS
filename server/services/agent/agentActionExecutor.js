@@ -333,7 +333,7 @@ async function executeMonitor(client, agent, schedule, params) {
   cutoff.setDate(cutoff.getDate() - days);
   const posts = allPosts.filter(p => new Date(p.created_at) >= cutoff);
 
-  console.log(`👀 Found ${allPosts.length} total posts by ${agentUsername}, ${posts.length} within ${days} days`);
+  console.log(`👀 Found ${allPosts.length} total posts for account ${schedule.accountId}, ${posts.length} within ${days} days`);
 
   const upvoted = [];
   const replied = [];
@@ -397,7 +397,7 @@ async function executeMonitor(client, agent, schedule, params) {
   }
 
   if (suspended) {
-    console.log(`🚫 Account ${agentUsername} suspended — halting monitor, marking account`);
+    console.log(`🚫 Account ${schedule.accountId} suspended — halting monitor, marking account`);
     await platformAccounts.updateAccountStatus(schedule.accountId, 'suspended');
   }
 
@@ -464,7 +464,7 @@ async function executeMoltworldHeartbeat(client, account, params) {
     y
   });
 
-  console.log(`💓 Moltworld: Heartbeat for ${account.credentials.username} at (${x}, ${y})`);
+  console.log(`💓 Moltworld: Heartbeat for account ${account.id} at (${x}, ${y})`);
 
   return {
     type: 'mw_heartbeat',
@@ -489,7 +489,7 @@ async function executeMoltworldExplore(client, account, params) {
     thinking
   });
 
-  console.log(`🌍 Moltworld: Explore to (${x}, ${y}) for ${account.credentials.username}`);
+  console.log(`🌍 Moltworld: Explore to (${x}, ${y}) for account ${account.id}`);
 
   return {
     type: 'mw_explore',
@@ -530,7 +530,8 @@ async function executeMoltworldSay(client, params) {
     sayTo: params.sayTo
   });
 
-  console.log(`💬 Moltworld: Said "${(params.message || '').substring(0, 50)}"`);
+  const messageLength = (params.message || '').length;
+  console.log(`💬 Moltworld: Said (${messageLength} chars)`);
 
   return {
     type: 'mw_say',
@@ -545,7 +546,8 @@ async function executeMoltworldSay(client, params) {
  */
 async function executeMoltworldThink(client, params) {
   const _result = await client.think(params.thought || 'Thinking...');
-  console.log(`💭 Moltworld: Thought "${(params.thought || '').substring(0, 50)}"`);
+  const thoughtLength = (params.thought || '').length;
+  console.log(`💭 Moltworld: Thought (${thoughtLength} chars)`);
   return { type: 'mw_think', thought: params.thought };
 }
 
@@ -579,7 +581,7 @@ async function executeMoltworldInteract(client, account, params) {
     results.built = buildResult;
   }
 
-  console.log(`🤝 Moltworld: Interact at (${x}, ${y}) for ${account.credentials.username}`);
+  console.log(`🤝 Moltworld: Interact at (${x}, ${y}) for account ${account.id}`);
   return results;
 }
 

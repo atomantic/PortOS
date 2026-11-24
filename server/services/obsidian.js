@@ -58,7 +58,7 @@ export async function addVault({ name, path }) {
 
   vaults.push(vault);
   await saveVaults(vaults);
-  console.log(`📓 Added Obsidian vault: ${vault.name} (${path})`);
+  console.log(`📓 Added Obsidian vault: ${vault.id}`);
   return vault;
 }
 
@@ -69,7 +69,7 @@ export async function removeVault(id) {
 
   const removed = vaults.splice(index, 1)[0];
   await saveVaults(vaults);
-  console.log(`📓 Removed Obsidian vault: ${removed.name}`);
+  console.log(`📓 Removed Obsidian vault: ${removed.id}`);
   return true;
 }
 
@@ -190,7 +190,7 @@ export async function detectVaults(baseDir = DEFAULT_ICLOUD_OBSIDIAN) {
 async function readNoteContent(fullPath, skipped) {
   return readIfMaterialized(fullPath, { label: 'Obsidian note' }).catch((err) => {
     if (err.code === ICLOUD_NOT_MATERIALIZED) {
-      console.log(`☁️ Obsidian note evicted from local storage; skipping: ${fullPath}`);
+      console.log('☁️ Obsidian note evicted from local storage; skipping');
       if (skipped) skipped.count += 1;
       return null;
     }
@@ -354,7 +354,7 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
   // exists to prevent — so it must only ever arrive from an explicit click, never
   // as a retry default, and never from `upsertNote`'s background mirrors.
   if (force) {
-    console.warn(`⚠️ force-save bypassing the iCloud dataless screen for note: ${notePath}`);
+    console.warn(`⚠️ force-save bypassing the iCloud dataless screen for vault ${vaultId}`);
   } else if (await isSuspectedDataless(fullPath)) {
     // Snapshot before/after so the refusal can say something TRUE about retrying.
     // This does NOT gate the server's own write decision — that stays the
@@ -401,7 +401,7 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
   }
 
   await writeFileGuarded(fullPath, content, 'utf-8');
-  console.log(`📓 Updated note: ${notePath} in vault ${vault.name}`);
+  console.log(`📓 Updated note in vault ${vault.id}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });
 }
 
@@ -442,7 +442,7 @@ export async function createNote(vaultId, notePath, content = '') {
   // `mortalLoomStore` used to carry for it was deleted rather than copied here.
   // See the "only ONE representation" section in server/lib/icloudFile.js.
   await writeFileGuarded(fullPath, content, 'utf-8');
-  console.log(`📓 Created note: ${notePath} in vault ${vault.name}`);
+  console.log(`📓 Created note in vault ${vault.id}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });
 }
 
@@ -508,7 +508,7 @@ export async function deleteNote(vaultId, notePath) {
   // strictly worse than useless: the guard's own remedy is `materializeAndWait`,
   // i.e. downloading every byte of a file purely to throw it away.
   await unlinkGuarded(fullPath);
-  console.log(`📓 Deleted note: ${notePath} from vault ${vault.name}`);
+  console.log(`📓 Deleted note from vault ${vault.id}`);
   return true;
 }
 

@@ -212,7 +212,7 @@ async function syncAccountUnlocked(accountId) {
   };
   const { posts, foreignIds } = mergePosts(safeUsername(account.username), profileResult.posts || [], latestPosts);
   const readError = buildXReadError(diagnostics);
-  if (readError) console.warn(`⚠️ X read for @${account.username} came back empty — reporting affected visibility checks as unknown`);
+  if (readError) console.warn(`⚠️ X read for account ${accountId} came back empty — reporting affected visibility checks as unknown`);
 
   await withTransaction(async (client) => {
     // Rows an older sync stored for someone else's repost; only ids seen in this read are purged.
