@@ -113,7 +113,21 @@ runs:
     # restore and stay warm across a lockfile bump. Both server Vitest configs
     # are hashed for every job, so one key shape serves the unit, DB, browser,
     # Windows and macOS jobs; the suffix keeps their parallel saves apart.
+    # A PR-saved cache is private to its merge ref and never read again, so PRs only restore.
+    - name: Cache Vitest transform artifacts (restore only on pull requests)
+      if: github.event_name == 'pull_request'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          server/.cache/vitest
+          server/.cache/vitest-db
+        key: vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json', 'server/vitest.config.js', 'server/vitest.config.db.js', 'scripts/vitestCiPool.js') }}${{ inputs.vitest-key-suffix }}
+        restore-keys: |
+          vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
+          vitest-server-${{ runner.os }}-
+
     - name: Cache Vitest transform artifacts
+      if: github.event_name != 'pull_request'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |

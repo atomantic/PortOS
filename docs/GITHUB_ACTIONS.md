@@ -289,9 +289,9 @@ Each test job restores Vite/Vitest transform artifacts from checkout-owned
 `.cache/` paths (`server/.cache/vitest`, `server/.cache/vitest-db`,
 `client/.cache/vitest`), outside `node_modules`, which `npm ci` wipes and
 worktrees may share. The server key hashes the lockfile, both server Vitest
-configs and `scripts/vitestCiPool.js`, plus a per-job/per-shard suffix from the
-`setup-server` caller so parallel saves never race; restore-keys keep it warm
-across a lockfile bump.
+configs and `scripts/vitestCiPool.js`, plus a per-job/per-shard suffix so
+parallel saves never race; restore-keys survive a lockfile bump. Pull requests
+only restore this and the APT cache; other events save them.
 `scripts/run-ci-tests.js`
 writes Vitest wall time to the job summary so later runs can be compared
 against the pre-change full-suite job wall on `main` (2026-08-16, run

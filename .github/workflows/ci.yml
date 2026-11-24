@@ -289,7 +289,20 @@ jobs:
 
       - uses: ./.github/actions/setup-client
 
+      # A PR-saved cache is private to its merge ref and never read again, so PRs only restore.
+      - name: Cache Vitest transform artifacts (restore only on pull requests)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            client/.cache/vitest
+          key: vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json', 'client/vitest.config.js', 'scripts/vitestCiPool.js') }}-${{ matrix.shard }}of${{ strategy.job-total }}
+          restore-keys: |
+            vitest-client-${{ runner.os }}-${{ hashFiles('client/package-lock.json') }}-
+            vitest-client-${{ runner.os }}-
+
       - name: Cache Vitest transform artifacts
+        if: github.event_name != 'pull_request'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
