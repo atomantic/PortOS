@@ -27,6 +27,8 @@ import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { staticImportClosure as walkImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
 import {
+  BOOT_CLOSURE_GROWTH_LIMIT,
+  compareImportGrowth,
   evaluateWorkingTreeImportGrowth,
   formatImportGrowthReport,
   measureClosures,
@@ -426,12 +428,31 @@ describe('heavy test imports stay hoisted to file scope (#7951)', () => {
 
 const REPO_ROOT = dirname(SERVER_DIR);
 
+// Shared across both growth checks in this file so base/head git walks run once.
+let cachedHeadMeasurement = null;
+function getHeadMeasurement() {
+  if (!cachedHeadMeasurement) cachedHeadMeasurement = measureWorkingTree(REPO_ROOT);
+  return cachedHeadMeasurement;
+}
+
+let cachedGrowthReport = null;
+function getGrowthReport() {
+  if (!cachedGrowthReport) {
+    cachedGrowthReport = evaluateWorkingTreeImportGrowth({
+      repoRoot: REPO_ROOT,
+      headMeasurement: cachedHeadMeasurement,
+      measureHead: () => getHeadMeasurement(),
+    });
+  }
+  return cachedGrowthReport;
+}
+
 describe('server suite import growth (#7993)', () => {
-  // One head walk feeds both the growth comparison and the instances.js
-  // reach count. evaluateWorkingTreeImportGrowth used to walk again.
+  // One head walk feeds the growth comparison, the boot-closure delta, and the
+  // instances.js reach count so neither guard walks the tree again.
   let headMeasurement;
   beforeAll(() => {
-    headMeasurement = measureWorkingTree(REPO_ROOT);
+    headMeasurement = getHeadMeasurement();
   }, 60_000);
 
   it('memoized closure walk agrees with staticImportClosure', () => {
@@ -454,8 +475,8 @@ describe('server suite import growth (#7993)', () => {
   // per-edge regressions. It fails closed when the base commit cannot be
   // read — a timeout or a throw here is a guard failure, not a pass.
   it('does not fan a heavy subtree into existing suites relative to the merge base', () => {
-    const report = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, headMeasurement });
-    expect(report.ok, formatImportGrowthReport(report)).toBe(true);
+    const report = getGrowthReport();
+    expect(report.skipped ? report.ok : report.suiteOk, formatImportGrowthReport(report)).toBe(true);
     if (!report.skipped) expect(report.timings.headCollectMs).toBeNull();
   }, 60_000);
 
@@ -528,14 +549,40 @@ describe('heavy single-feature packages stay out of the boot closure', () => {
   it('loads the worktree manager on demand', () => {
     expect(closure.files.has(abs('services/worktreeManager.js'))).toBe(false);
   });
-  // Measured at 1,417 after deferring the sync orchestrator and the safetensors
-  // importer (#18091). The cap stays at 1,448, which leaves 31 modules of
-  // headroom so a few independent PRs can each add a boot-reachable leaf and
-  // still merge. A boot-reachable addition that would cross this cap has to
-  // defer or offset that import in the same change; do not raise the cap to
-  // absorb it.
-  it('loads at most 1,448 local modules before boot', () => {
-    expect(closure.files.size).toBeLessThanOrEqual(1448);
+  // Base-relative boot-closure growth guard (#18119): replaces the fixed 1,448
+  // absolute cap so ordinary incremental growth across unrelated PRs does not
+  // exhaust shared headroom, while any single PR adding more than
+  // BOOT_CLOSURE_GROWTH_LIMIT (15) boot-reachable modules fails and names them.
+  it(`adds at most ${BOOT_CLOSURE_GROWTH_LIMIT} boot-reachable local modules relative to the base commit`, () => {
+    const report = getGrowthReport();
+    expect(report.skipped ? report.ok : report.bootClosure?.ok, formatImportGrowthReport(report)).toBe(true);
+    if (report.skipped) return;
+    expect(report.bootClosure, 'server/index.js boot closure must be measured').toBeTruthy();
+    expect(report.bootClosure.head).toBe(closure.files.size);
+  }, 60_000);
+  it('allows small boot-closure growth and rejects regressions over +15 modules', () => {
+    const buildBoot = (extraCount) => {
+      const files = {
+        'server/index.js': Array.from({ length: extraCount }, (_, i) => `import './leaf-${i}.js';`).join('\n') + '\n',
+      };
+      for (let i = 0; i < extraCount; i += 1) files[`server/leaf-${i}.js`] = `export const v = ${i};\n`;
+      return measureClosures([], (rel) => files[rel] ?? null);
+    };
+    const base = buildBoot(1);
+    const smallReport = compareImportGrowth(base, buildBoot(4));
+    expect(smallReport.ok).toBe(true);
+    expect(smallReport.bootClosure.delta).toBe(3);
+
+    const failReport = compareImportGrowth(base, buildBoot(1 + BOOT_CLOSURE_GROWTH_LIMIT + 1));
+    expect(failReport.ok).toBe(false);
+    expect(failReport.bootClosure.ok).toBe(false);
+    expect(failReport.bootClosure.delta).toBe(BOOT_CLOSURE_GROWTH_LIMIT + 1);
+    expect(formatImportGrowthReport(failReport)).toContain(`server/leaf-${BOOT_CLOSURE_GROWTH_LIMIT + 1}.js`);
+  });
+  it('skips boot-closure growth enforcement on release promotions', () => {
+    const skippedReport = evaluateWorkingTreeImportGrowth({ repoRoot: REPO_ROOT, env: { GITHUB_BASE_REF: 'release' } });
+    expect(skippedReport).toEqual({ ok: true, skipped: expect.stringMatching(/release cycle/) });
+    expect(formatImportGrowthReport(skippedReport)).toMatch(/not measured/);
   });
   it('still sees a package that index.js reaches statically', () => {
     expect(closure.packages.has('express')).toBe(true);
