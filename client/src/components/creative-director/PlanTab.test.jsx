@@ -103,10 +103,22 @@ describe('plan board', () => {
     await settle();
   });
 
-  it('renders a dry-run banner when creative autonomy is dry-run', async () => {
+  it('renders a dry-run banner linking to /cos/config when creative autonomy is dry-run', async () => {
     getCreativeToolCatalog.mockResolvedValue({ ...CATALOG, mode: 'dry-run' });
     renderTab(directiveProject());
     await waitFor(() => expect(screen.getByText(/previewed/i)).toBeTruthy());
+    const link = screen.getByRole('link', { name: /Chief of Staff .* Config/i });
+    expect(link.getAttribute('href')).toBe('/cos/config');
+    expect(screen.queryByText(/Settings/i)).toBeNull();
+  });
+
+  it('renders an off banner linking to /cos/config when creative autonomy is off', async () => {
+    getCreativeToolCatalog.mockResolvedValue({ ...CATALOG, mode: 'off' });
+    renderTab(directiveProject());
+    await waitFor(() => expect(screen.getByText(/shown for review only/i)).toBeTruthy());
+    const link = screen.getByRole('link', { name: /Chief of Staff .* Config/i });
+    expect(link.getAttribute('href')).toBe('/cos/config');
+    expect(screen.queryByText(/Settings/i)).toBeNull();
   });
 });
 

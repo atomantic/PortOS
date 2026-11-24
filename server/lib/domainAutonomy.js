@@ -45,7 +45,10 @@ export const DOMAIN_IDS = AUTONOMY_DOMAINS.map((d) => d.id);
 const isValidMode = (mode) => DOMAIN_MODES.includes(mode);
 
 /**
- * Coerce a raw (hand-edited/partial) map to a complete `{ [domainId]: mode }`: unknown keys dropped, missing/invalid become `execute`.
+ * Coerce a raw (hand-edited/partial) map to `{ [domainId]: mode }`: unknown keys dropped,
+ * missing/invalid core domains become `execute`. A valid explicit `creative` override is
+ * preserved, while absent/null/invalid `creative` remains omitted so `getCreativeAutonomyMode`
+ * continues mirroring `cos`.
  *
  * @param {unknown} raw
  * @returns {Record<string, string>}
@@ -56,6 +59,9 @@ export function normalizeDomainAutonomy(raw) {
   for (const id of DOMAIN_IDS) {
     const candidate = source[id];
     normalized[id] = isValidMode(candidate) ? candidate : DEFAULT_DOMAIN_MODE;
+  }
+  if (isValidMode(source[CREATIVE_DOMAIN_ID])) {
+    normalized[CREATIVE_DOMAIN_ID] = source[CREATIVE_DOMAIN_ID];
   }
   return normalized;
 }

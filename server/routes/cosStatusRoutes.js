@@ -13,7 +13,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getProviderById } from '../services/provider/providers.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { z } from 'zod';
-import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
+import { CREATIVE_DOMAIN_ID, DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
 import { AVATAR_VARIANT_PATTERN, RIGGED_VARIANT_PREFIX } from '../lib/avatarVariants.js';
 // Single source of truth for the avatar-style vocabulary (#6253); the client
 // picker re-exports the same leaf.
@@ -81,9 +81,12 @@ export const cosConfigSchema = z.object({
   persistentMindCapabilities: persistentMindCapabilitiesSchema.optional(),
   // Per-domain autonomy guardrails (#711): partial map of domainId → mode.
   // Partial is fine — updateConfig() merges it over the stored map.
-  domainAutonomy: z.object(
-    Object.fromEntries(DOMAIN_IDS.map((id) => [id, z.enum(DOMAIN_MODES).optional()]))
-  ).strict().optional(),
+  // `creative` (#2183, #18144) also accepts `null` to clear an explicit override
+  // and return to mirroring `cos`.
+  domainAutonomy: z.object({
+    ...Object.fromEntries(DOMAIN_IDS.map((id) => [id, z.enum(DOMAIN_MODES).optional()])),
+    [CREATIVE_DOMAIN_ID]: z.enum(DOMAIN_MODES).nullable().optional(),
+  }).strict().optional(),
   // Per-domain daily budgets (#711): partial map of domainId → { cap → value }.
   // Each cap is a non-negative integer or null (clear). Partial is fine —
   // updateConfig() field-merges it over the stored map. 0/null = unlimited.
