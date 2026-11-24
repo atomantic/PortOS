@@ -26,7 +26,7 @@ export function SpotifyTab() {
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     loading, loadError, retry, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving,
-    status, setStatus, dirty, save,
+    status, setStatus, statusError, loadStatus, dirty, save,
   } = useSyncSourceSettings({ domain: 'spotify', defaultInterval: 25, getStatus: getSpotifyStatus });
 
   const [clientId, setClientId] = useState('');
@@ -42,8 +42,6 @@ export function SpotifyTab() {
   const [playlistsSyncing, setPlaylistsSyncing] = useState(false);
   const [playlistQuery, setPlaylistQuery] = useState('');
   const auth = status?.auth;
-
-  const loadStatus = () => getSpotifyStatus({ silent: true }).catch(() => null).then((st) => { if (st) setStatus(st); return st; });
 
   const loadPlaylists = () => {
     setPlaylistsLoading(true);
@@ -70,7 +68,7 @@ export function SpotifyTab() {
       searchParams.delete('oauthError');
       setSearchParams(searchParams, { replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, loadStatus]);
 
   const handleSave = async () => {
     if (!await save()) return;
@@ -158,10 +156,12 @@ export function SpotifyTab() {
   const playlistTrackCount = storedPlaylists.reduce((total, playlist) => total + (playlist.tracks?.length || 0), 0);
 
   if (loading) return <BrailleSpinner />;
+  if (statusError && !status) return <ListLoadError what="Spotify status" error={statusError} onRetry={loadStatus} />;
 
   return (
     <div className="space-y-6">
       {loadError && <SettingsLoadError onRetry={retry} />}
+      {statusError && <ListLoadError what="Spotify status" error={statusError} onRetry={loadStatus} />}
       <UnreadableSyncStateNotice status={status} />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">

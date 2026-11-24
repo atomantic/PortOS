@@ -6,7 +6,7 @@
  * status endpoint.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSettings, updateSettings } from '../services/apiSystem.js';
 
 const clampInterval = (value, defaultInterval) => Math.max(1, Math.min(1440, Math.floor(Number(value) || defaultInterval)));
@@ -19,8 +19,21 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
   const [savedInterval, setSavedInterval] = useState(defaultInterval);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState(null);
+  const [statusError, setStatusError] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const statusRequest = useRef(0);
+
+  const loadStatus = useCallback(async () => {
+    const request = ++statusRequest.current;
+    await getStatus({ silent: true })
+      .then((value) => {
+        if (request !== statusRequest.current) return;
+        setStatus(value);
+        setStatusError(null);
+      })
+      .catch((error) => { if (request === statusRequest.current) setStatusError(error); });
+  }, [getStatus]);
 
   // Re-runs the load effect; a failed settings read must not seed defaults that Save would persist.
   const retry = useCallback(() => { setLoading(true); setLoadError(false); setAttempt((n) => n + 1); }, []);
@@ -29,11 +42,10 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
     let active = true;
     Promise.all([
       getSettings({ silent: true }).catch(() => null),
-      getStatus({ silent: true }).catch(() => null),
+      loadStatus(),
     ])
-      .then(([settings, sourceStatus]) => {
+      .then(([settings]) => {
         if (!active) return;
-        setStatus(sourceStatus);
         if (!settings) { setLoadError(true); return; }
         const config = settings?.[domain] || {};
         const nextEnabled = typeof config.enabled === 'boolean' ? config.enabled : false;
@@ -44,8 +56,11 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
         setSavedInterval(nextInterval);
       })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [attempt, defaultInterval, domain, getStatus]);
+    return () => {
+      active = false;
+      statusRequest.current += 1;
+    };
+  }, [attempt, defaultInterval, domain, loadStatus]);
 
   const dirty = enabled !== savedEnabled || Number(intervalMinutes) !== Number(savedInterval);
 
@@ -62,5 +77,5 @@ export function useSyncSourceSettings({ domain, defaultInterval, getStatus }) {
     return true;
   };
 
-  return { loading, loadError, retry, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving, status, setStatus, dirty, save };
+  return { loading, loadError, retry, enabled, setEnabled, intervalMinutes, setIntervalMinutes, saving, status, setStatus, statusError, loadStatus, dirty, save };
 }

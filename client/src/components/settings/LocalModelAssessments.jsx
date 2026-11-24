@@ -839,6 +839,8 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   // claims. Disk-only on the server — safe to load with the tab.
   const [capabilityReport, setCapabilityReport] = useState(null);
   const [capabilityLoading, setCapabilityLoading] = useState(true);
+  const [capabilityError, setCapabilityError] = useState(null);
+  const capabilityRequest = useRef(0);
 
   const [searchParams, updateParams] = useUrlParams();
   const measureBackend = searchParams.get('measureBackend') || '';
@@ -891,12 +893,16 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
   useEffect(() => { load(intent); }, [load, intent]);
 
   const loadCapabilities = useCallback(async () => {
+    const request = ++capabilityRequest.current;
     setCapabilityLoading(true);
-    // The panel renders its own empty/error state (client/src/AGENTS.md: custom
-    // catch ⇒ silent).
-    const data = await getModelCapabilityTests({ silent: true }).catch(() => null);
-    setCapabilityReport(data);
-    setCapabilityLoading(false);
+    await getModelCapabilityTests({ silent: true })
+      .then((data) => {
+        if (request !== capabilityRequest.current) return;
+        setCapabilityReport(data);
+        setCapabilityError(null);
+      })
+      .catch((error) => { if (request === capabilityRequest.current) setCapabilityError(error); })
+      .finally(() => { if (request === capabilityRequest.current) setCapabilityLoading(false); });
   }, []);
 
   useEffect(() => { loadCapabilities(); }, [loadCapabilities]);
@@ -1184,6 +1190,7 @@ export function LocalModelAssessments({ view, taskView, assessmentKey } = {}) {
           <ModelCapabilityTests
             report={capabilityReport}
             loading={capabilityLoading}
+            error={capabilityError}
             onReload={loadCapabilities}
             disabled={busy}
           />

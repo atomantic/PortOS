@@ -1,3 +1,4 @@
+import ListLoadError from '../ui/ListLoadError';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import { Download, RefreshCw, Search, Plus, ExternalLink, Star, Play, AlertTriangle, X } from 'lucide-react';
@@ -107,9 +108,7 @@ const FORMAT_META = {
 export default function LocalLlmLibraryView() {
   const navigate = useNavigate();
   const [catalogSource, setCatalogSource] = useState('recommended');
-  const [catalog, setCatalog] = useState([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState('');
+  const [catalogResult, setCatalogResult] = useState({ key: null, models: [], loading: true, error: null });
   // Total unified/system memory (GB) reported by the HF search, used to caption
   // the RAM-aware quant defaults. null until the first Hugging Face search.
   const [systemMemoryGb, setSystemMemoryGb] = useState(null);
@@ -132,37 +131,32 @@ export default function LocalLlmLibraryView() {
   const reloadCatalogRef = useRef(null);
   const reloadCatalog = useCallback(() => reloadCatalogRef.current?.(), []);
   const {
-    status, selected, setSelected, runAction, installBackend: installRuntimeBackend,
+    status, statusError, loading: statusLoading, loadStatus, selected, setSelected, runAction, installBackend: installRuntimeBackend,
     actionInProgress, busy, progressMsg, setProgressMsg,
-  } = useLocalLlmStatus({ onReload: reloadCatalog });
+  } = useLocalLlmStatus({ onReload: reloadCatalog, inlineErrors: true });
 
   // `source` and `category` are required rather than defaulted from state: a
   // state default would put them in the dep list, so `loadCatalog`'s identity
   // would change on every category click and re-trigger the debounce effect —
   // the exact refetch the effect below is written to avoid. Every call site
   // passes both.
-  const loadCatalog = useCallback((backend, q, source, category) => {
+  const loadCatalog = useCallback((backend, q, source, category, key) => {
     const requestId = ++catalogRequestId.current;
-    setCatalogLoading(true);
-    setCatalogError('');
+    setCatalogResult((prev) => ({ key, models: prev.key === key ? prev.models : [], loading: true, error: null }));
     const request = source === 'huggingface'
-      ? getLocalLlmHuggingFaceSearch(backend, q, category, 18)
-      : getLocalLlmCatalog(backend, q, { variants: true });
+      ? getLocalLlmHuggingFaceSearch(backend, q, category, 18, { silent: true })
+      : getLocalLlmCatalog(backend, q, { variants: true, silent: true });
     return request
       .then((r) => {
         if (requestId !== catalogRequestId.current) return;
-        setCatalog(r.models || []);
+        setCatalogResult({ key, models: r.models || [], loading: false, error: null });
         if (Number.isFinite(r.systemMemoryGb)) setSystemMemoryGb(r.systemMemoryGb);
         // A fresh result set invalidates any per-card quant overrides.
         setSelectedVariants({});
       })
       .catch((err) => {
         if (requestId !== catalogRequestId.current) return;
-        setCatalog([]);
-        setCatalogError(source === 'huggingface' ? (err?.message || 'Hugging Face search failed') : '');
-      })
-      .finally(() => {
-        if (requestId === catalogRequestId.current) setCatalogLoading(false);
+        setCatalogResult((prev) => ({ ...prev, loading: false, error: err }));
       });
   }, []);
 
@@ -176,19 +170,26 @@ export default function LocalLlmLibraryView() {
   // enrichment. `catalogCategoryKey` is the category when it matters and a
   // constant when it doesn't, which keeps the whole effect one code path.
   const catalogCategoryKey = catalogSource === 'huggingface' ? activeCategory : 'client-filtered';
+  const catalogKey = JSON.stringify([selected, query, catalogSource, catalogCategoryKey]);
+  const catalog = catalogResult.key === catalogKey ? catalogResult.models : [];
+  const catalogLoading = catalogResult.key !== catalogKey || catalogResult.loading;
+  const catalogError = catalogResult.key === catalogKey ? catalogResult.error : null;
   useEffect(() => {
-    const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory), catalogSource === 'huggingface' ? 450 : 250);
-    return () => clearTimeout(t);
+    const t = setTimeout(() => loadCatalog(selected, query, catalogSource, activeCategory, catalogKey), catalogSource === 'huggingface' ? 450 : 250);
+    return () => {
+      clearTimeout(t);
+      catalogRequestId.current += 1;
+    };
     // `activeCategory` is intentionally absent: `catalogCategoryKey` IS it
     // whenever the source consumes it, so the effect re-runs (with a fresh
     // closure) exactly when the category matters. On the curated source the
     // closure can hold a stale category, which is harmless because that branch
     // of loadCatalog never reads the argument.
     // Dependency list is intentionally partial.
-  }, [selected, query, catalogSource, catalogCategoryKey, loadCatalog]);
+  }, [selected, query, catalogSource, catalogKey, loadCatalog]);
 
   useEffect(() => {
-    reloadCatalogRef.current = () => loadCatalog(selected, query, catalogSource, activeCategory);
+    reloadCatalogRef.current = () => loadCatalog(selected, query, catalogSource, activeCategory, catalogKey);
   });
 
   const selectedData = status?.[selected];
@@ -522,12 +523,6 @@ export default function LocalLlmLibraryView() {
             )}
           </div>
         )}
-        {selectedData?.available && selectedData?.modelsError && (
-          <p role="status" className="text-xs text-port-warning">
-            Couldn't list {labelFor(selected)} models (showing what's available): {selectedData.modelsError}
-          </p>
-        )}
-
         {/* Free-text install + search */}
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="flex-1 flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3 focus-within:border-port-accent">
@@ -589,7 +584,7 @@ export default function LocalLlmLibraryView() {
           </div>
         )}
         {catalogError && (
-          <p role="status" className="text-xs text-port-warning">{catalogError}</p>
+          <ListLoadError what="model catalog" error={catalogError} onRetry={reloadCatalog} />
         )}
         {Number.isFinite(systemMemoryGb) && catalog.some((m) => Array.isArray(m.variants) && m.variants.length > 1) && (
           <p className="text-[11px] text-gray-500">
@@ -820,15 +815,24 @@ export default function LocalLlmLibraryView() {
               </div>
             </div>
           ))}
-          {catalog.length === 0 && (
+          {!catalogLoading && !catalogError && catalog.length === 0 && (
             <p className="text-xs text-gray-500">No catalog matches{query ? ` for "${query}"` : ''}.</p>
           )}
-          {catalog.length > 0 && visibleCatalogGroups.length === 0 && (
+          {!catalogLoading && !catalogError && catalog.length > 0 && visibleCatalogGroups.length === 0 && (
             <p className="text-xs text-gray-500">No {categoryLabel(activeCategory)} matches{query ? ` for "${query}"` : ''}.</p>
           )}
         </div>
 
-        <LocalLlmInstalledModels
+        {(statusError || selectedData?.modelsError) && (
+          <ListLoadError
+            what={`installed ${labelFor(selected)} models`}
+            error={statusError || { message: selectedData.modelsError }}
+            onRetry={loadStatus}
+            retrying={statusLoading}
+          />
+        )}
+        {statusLoading && !selectedData && <BrailleSpinner text="Loading installed models" />}
+        {(installedModels.length > 0 || (selectedData && !statusError && !selectedData.modelsError)) && <LocalLlmInstalledModels
           actionInProgress={actionInProgress}
           backend={selected}
           busy={busy}
@@ -842,7 +846,7 @@ export default function LocalLlmLibraryView() {
           onToggleCompare={toggleCompareTarget}
           remove={remove}
           requestDelete={requestDelete}
-        />
+        />}
       </div>
       <DownloadPreflightConfirm
         open={Boolean(downloadConfirm)}

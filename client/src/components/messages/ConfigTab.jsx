@@ -39,7 +39,7 @@ Additional instructions: {{instructions}}
 
 Write a professional, concise reply. Match the tone of the original message.`;
 
-export default function ConfigTab({ accounts, setAccounts }) {
+export default function ConfigTab({ accounts, setAccounts, accountsUnavailable = false }) {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', type: 'gmail', email: '' });
   const [saving, setSaving] = useState(false);
@@ -511,7 +511,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
           </div>
         )}
 
-        {accounts.length === 0 && !showForm && (
+        {!accountsUnavailable && accounts.length === 0 && !showForm && (
           <div className="text-center py-12 text-gray-500">
             <Mail size={48} className="mx-auto mb-4 opacity-50" />
             <p>No accounts configured</p>

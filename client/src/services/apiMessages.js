@@ -5,7 +5,7 @@
 import { request } from './apiCore.js';
 
 // Messages
-export const getMessageAccounts = () => request('/messages/accounts');
+export const getMessageAccounts = (options) => request('/messages/accounts', options);
 export const createMessageAccount = (data, options = {}) => request('/messages/accounts', { method: 'POST', body: JSON.stringify(data), ...options });
 export const updateMessageAccount = (id, data, options = {}) => request(`/messages/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data), ...options });
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });

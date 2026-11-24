@@ -323,7 +323,7 @@ export const getCosLatestBriefing = (options = {}) => request('/cos/briefings/la
 export const getCosBriefing = (date, options = {}) => request(`/cos/briefings/${date}`, options);
 
 // CoS Activity
-export const getCosTodayActivity = () => request('/cos/activity/today');
+export const getCosTodayActivity = (options) => request('/cos/activity/today', options);
 // "While you were away" — agent runs since the client's last-visit marker.
 // `since` is an ISO-8601 string; omit it to let the server fall back to 24h.
 export const getCosWhileAwayActivity = (since, options) =>

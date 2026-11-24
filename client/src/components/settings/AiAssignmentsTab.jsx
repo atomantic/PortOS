@@ -1,3 +1,4 @@
+import ListLoadError from '../ui/ListLoadError';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
@@ -57,6 +58,7 @@ const UNSET_PROVIDER = '__unset__';
 
 export default function AiAssignmentsTab() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [saving, setSaving] = useState({});
   const [data, setData] = useState({ providers: [], assignments: [] });
   const [drafts, setDrafts] = useState({});
@@ -84,15 +86,14 @@ export default function AiAssignmentsTab() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const next = await getAiAssignments({ silent: true }).catch((err) => {
-      toast.error(`Failed to load AI assignments: ${err.message}`);
-      return null;
-    });
-    if (next) {
-      setData(next);
-      setDrafts(Object.fromEntries((next.assignments || []).map((entry) => [entry.id, getDraft(entry)])));
-    }
-    setLoading(false);
+    await getAiAssignments({ silent: true })
+      .then((next) => {
+        setData(next);
+        setDrafts(Object.fromEntries((next.assignments || []).map((entry) => [entry.id, getDraft(entry)])));
+        setLoadError(null);
+      })
+      .catch(setLoadError)
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -249,6 +250,8 @@ export default function AiAssignmentsTab() {
   if (loading) {
     return <div className="text-sm text-gray-400">Loading AI assignments...</div>;
   }
+
+  if (loadError) return <ListLoadError what="AI assignments" error={loadError} onRetry={load} />;
 
   // Both layouts render from these parts so draft state, handlers and ids
   // never diverge; `isLg` picks exactly one tree, keeping label ids unique.

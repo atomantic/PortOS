@@ -12,14 +12,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 vi.mock('../components/messages/InboxTab', () => ({ default: () => <div>inbox panel</div> }));
-vi.mock('../components/messages/ConfigTab', () => ({ default: () => <div>config panel</div> }));
+vi.mock('../components/messages/ConfigTab', () => ({ default: ({ accounts, accountsUnavailable }) => <div>config panel {accountsUnavailable ? 'unavailable' : accounts.length}</div> }));
 vi.mock('../components/messages/DraftsTab', () => ({ default: () => <div>drafts panel</div> }));
-vi.mock('../components/messages/SyncTab', () => ({ default: () => <div>sync panel</div> }));
+vi.mock('../components/messages/SyncTab', () => ({ default: ({ accounts, accountsUnavailable }) => <div>sync panel {accountsUnavailable ? 'unavailable' : accounts.length}</div> }));
 vi.mock('../components/messages/IMessageTab', () => ({ default: () => <div>imessage panel</div> }));
 vi.mock('../components/messages/SignalTab', () => ({ default: () => <div>signal panel</div> }));
 vi.mock('../components/messages/BeeperTab', () => ({ default: () => <div>beeper panel</div> }));
@@ -37,6 +37,7 @@ vi.mock('../services/apiSystem.js', async (importOriginal) => ({
 }));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
+import { getMessageAccounts } from '../services/apiMessages.js';
 import Messages, { TABS } from './Messages';
 
 beforeEach(() => {
@@ -174,4 +175,18 @@ describe('Messages TABS ↔ nav manifest', () => {
     expect(byId.beeper).toBe('beeper');
     expect(byId.inbox).toBeUndefined();
   });
+});
+
+it.each([
+  ['sync', []], ['sync', [{ id: 'example' }]],
+  ['config', []], ['config', [{ id: 'example' }]],
+])('forwards unavailable accounts to %s and passes the successful Retry result (%j)', async (tab, accounts) => {
+  getMessageAccounts.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(accounts);
+  renderAt(`/messages/${tab}`);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load message accounts');
+  expect(await screen.findByText(`${tab} panel unavailable`)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(`${tab} panel ${accounts.length}`)).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

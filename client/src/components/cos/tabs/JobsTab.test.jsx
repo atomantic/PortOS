@@ -218,3 +218,14 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     expect(screen.queryByLabelText('Trigger action')).toBeNull();
   });
 });
+
+it.each([false, true])('retries a failed system tasks read (has jobs: %s)', async (hasJobs) => {
+  api.getCosJobs.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce({ jobs: hasJobs ? [mockJob] : [] });
+  render(<JobsTab />);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load system tasks');
+  expect(screen.queryByText('No system tasks configured.')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasJobs ? mockJob.name : 'No system tasks configured.')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});

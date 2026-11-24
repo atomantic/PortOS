@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import ListLoadError from '../ui/ListLoadError';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import {
   Contact, Loader2, RefreshCw, ShieldCheck, ShieldAlert,
@@ -24,6 +25,7 @@ import {
 export default function ContactsTab() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState(null);
+  const [statusError, setStatusError] = useState(null);
   const [setup, setSetup] = useState(null);
   const [checking, setChecking] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -32,13 +34,22 @@ export default function ContactsTab() {
   const [loadingSuggest, setLoadingSuggest] = useState(false);
   const [importingId, setImportingId] = useState(null);
 
+  const statusRequest = useRef(0);
   const reload = async () => {
-    const st = await getContactsStatus({ silent: true }).catch(() => null);
-    setStatus(st);
+    const request = ++statusRequest.current;
+    setLoading(true);
+    await getContactsStatus({ silent: true })
+      .then((data) => {
+        if (request !== statusRequest.current) return;
+        setStatus(data);
+        setStatusError(null);
+      })
+      .catch((error) => { if (request === statusRequest.current) setStatusError(error); })
+      .finally(() => { if (request === statusRequest.current) setLoading(false); });
   };
 
   useEffect(() => {
-    reload().finally(() => setLoading(false));
+    reload();
   }, []);
 
   const handleCheck = async () => {
@@ -109,7 +120,7 @@ export default function ContactsTab() {
     setSuggestions((prev) => prev.filter((x) => (x.contactId || x.handle) !== (s.contactId || s.handle)));
   };
 
-  if (loading) return <BrailleSpinner />;
+  if (loading && !status && !statusError) return <BrailleSpinner />;
 
   const cache = status?.cache;
   const last = status?.state?.lastResult;
@@ -179,23 +190,24 @@ export default function ContactsTab() {
 
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <h3 className="text-sm font-semibold text-white mb-2">Cache</h3>
+        {statusError && <ListLoadError what="Contacts status" error={statusError} onRetry={reload} retrying={loading} className="mb-3" />}
         <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
           <div>
             <dt className="text-gray-500 text-xs uppercase">Contacts</dt>
-            <dd className="text-gray-200">{cache?.contactCount ?? 0}</dd>
+            <dd className="text-gray-200">{formatCount(cache?.contactCount ?? (status && !statusError ? 0 : null))}</dd>
           </div>
           <div>
             <dt className="text-gray-500 text-xs uppercase">Sources (last sync)</dt>
-            <dd className="text-gray-200">{cache?.sourceCount ?? last?.sourceCount ?? '—'}</dd>
+            <dd className="text-gray-200">{formatCount(cache?.sourceCount ?? last?.sourceCount)}</dd>
           </div>
           <div>
             <dt className="text-gray-500 text-xs uppercase">Last synced</dt>
             <dd className="text-gray-200">
-              {formatDateTime(cache?.syncedAt, 'Never')}
+              {formatDateTime(cache?.syncedAt, status && !statusError ? 'Never' : '—')}
             </dd>
           </div>
         </dl>
-        {(cache?.contactCount || 0) === 0 && (
+        {status && !statusError && (cache?.contactCount || 0) === 0 && (
           <p className="mt-3 text-xs text-gray-500">
             Run <strong className="text-gray-400">Sync Contacts now</strong>, then open Comms → iMessage —
             conversation titles resolve at read time (no iMessage re-sync required).

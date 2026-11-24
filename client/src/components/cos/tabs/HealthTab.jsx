@@ -14,6 +14,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
   const [backfilling, setBackfilling] = useState(false);
   const [todayActivity, setTodayActivity] = useState(null);
   const [loadingActivity, setLoadingActivity] = useState(true);
+  const [activityFailed, setActivityFailed] = useState(false);
 
   useEffect(() => {
     loadLearning();
@@ -22,8 +23,9 @@ export default function HealthTab({ health, healthLoading = false, healthError =
 
   const loadTodayActivity = async () => {
     setLoadingActivity(true);
-    const data = await getCosTodayActivity().catch(() => null);
-    setTodayActivity(data);
+    const data = await getCosTodayActivity({ silent: true }).catch(() => null);
+    setActivityFailed(!data);
+    if (data) setTodayActivity(data);
     setLoadingActivity(false);
   };
 
@@ -63,6 +65,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
             </div>
             <button
               onClick={loadTodayActivity}
+              disabled={loadingActivity}
               aria-label="Refresh activity"
               className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-gray-500 hover:text-white transition-colors"
             >
@@ -70,11 +73,9 @@ export default function HealthTab({ health, healthLoading = false, healthError =
             </button>
           </div>
 
-          {loadingActivity ? (
-            <div className="text-center py-4 text-gray-500">Loading activity...</div>
-          ) : !todayActivity ? (
-            <div className="text-center py-4 text-gray-500">Could not load activity data</div>
-          ) : todayActivity.stats.completed === 0 ? (
+          {activityFailed && <ListLoadError what="activity data" onRetry={loadTodayActivity} retrying={loadingActivity} />}
+          {loadingActivity && !todayActivity && <div className="text-center py-4 text-gray-500">Loading activity...</div>}
+          {todayActivity && (todayActivity.stats.completed === 0 ? !activityFailed && (
             <div className="text-center py-4 text-gray-500">
               No tasks completed today yet. CoS will start working when tasks are available.
             </div>
@@ -133,7 +134,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
                 </div>
               </div>
             </div>
-          )}
+          ))}
         </div>
 
         {/* System Health */}
@@ -229,7 +230,7 @@ export default function HealthTab({ health, healthLoading = false, healthError =
                 </div>
               ))}
             </div>
-          ) : (
+          ) : todayActivity && !activityFailed && (
             <div className="text-center py-4 text-gray-500 text-sm">
               No accomplishments yet today
             </div>

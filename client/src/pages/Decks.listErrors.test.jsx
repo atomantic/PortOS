@@ -31,3 +31,15 @@ describe('Decks universe picker list', () => {
     expect(api.listUniverseSummaries).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each([false, true])('retries a failed decks read (has decks: %s)', async (hasDecks) => {
+  api.listUniverseSummaries.mockResolvedValue([]);
+  api.listDecks.mockRejectedValueOnce(new Error('Offline')).mockResolvedValueOnce(hasDecks ? [{ id: 'deck-1', name: 'Example deck', kind: 'tarot' }] : []);
+  render(<MemoryRouter><Decks /></MemoryRouter>);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load decks');
+  expect(screen.queryByText('No decks yet')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  expect(await screen.findByText(hasDecks ? 'Example deck' : 'No decks yet')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
