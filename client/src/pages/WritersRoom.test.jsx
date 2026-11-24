@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { Link, MemoryRouter, Route, Routes } from 'react-router';
 
 vi.mock('../services/apiWritersRoom', async (importOriginal) => ({
   ...await importOriginal(),
@@ -88,6 +88,23 @@ describe('WritersRoom open work failures', () => {
     expect(screen.queryByText('No work selected')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Back to library' }));
     expect(await screen.findByText('No work selected')).toBeInTheDocument();
+  });
+
+  it('returns to the library when Back interrupts a work that is still loading', async () => {
+    getWritersRoomWork.mockReturnValueOnce(new Promise(() => {}));
+    render(
+      <MemoryRouter initialEntries={['/writers-room/works/slow']}>
+        <Link to="/writers-room">leave</Link>
+        <Routes>
+          <Route path="/writers-room" element={<WritersRoom />} />
+          <Route path="/writers-room/works/:workId" element={<WritersRoom />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Loading work…')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('leave'));
+    expect(await screen.findByText('No work selected')).toBeInTheDocument();
+    expect(screen.queryByText('Loading work…')).toBeNull();
   });
 
   it('offers Retry after a failed read and opens the work once it recovers', async () => {

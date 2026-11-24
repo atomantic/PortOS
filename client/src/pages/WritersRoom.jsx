@@ -84,6 +84,7 @@ export default function WritersRoom() {
     setWorkError(null);
     if (!workId) {
       setActiveWork(null);
+      setLoadingWork(false);
       return;
     }
     let cancelled = false;
