@@ -3,6 +3,12 @@ import { execFile } from '../../lib/childProcess.js';
 
 const execFileAsync = promisify(execFile);
 
+// A zombie, or a process BSD ps flags `E` (already inside kernel exit), runs no
+// more user code: it cannot start a write or act on a signal. Linux ps has no
+// `E` flag. A syscall already in flight may still land, so profile removal retries.
+const isZombie = state => state.startsWith('Z');
+const isExiting = state => !isZombie(state) && state.includes('E');
+
 // Only numeric identity/state are read: command lines can contain private data.
 async function liveMembers(pgid, timeout) {
   const { stdout } = await execFileAsync('ps', ['-A', '-o', 'pid=', '-o', 'pgid=', '-o', 'stat='], {
@@ -14,7 +20,7 @@ async function liveMembers(pgid, timeout) {
     return { pid: Number(match[1]), group: Number(match[2]), state: match[3] };
   });
   if (!rows.some(row => row.pid === process.pid)) throw new Error('Composition browser group observation incomplete');
-  return rows.filter(row => row.group === pgid && !row.state.startsWith('Z'));
+  return rows.filter(row => row.group === pgid && !isZombie(row.state) && !isExiting(row.state));
 }
 
 const safeSignal = signal => ['SIGTERM', 'SIGKILL'].includes(signal) ? signal : 'other';
@@ -45,19 +51,20 @@ export async function observeBrowserProcessGroup(pgid, timeout) {
       const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+(\S+)\s*$/.exec(line);
       if (!match) throw new Error('Invalid process observation');
       return { pid: Number(match[1]), parent: Number(match[2]), group: Number(match[3]),
-        uid: observedUid(match[4]), ruid: observedUid(match[5]), state: PROCESS_STATES[match[6][0]] ?? 'other' };
+        uid: observedUid(match[4]), ruid: observedUid(match[5]),
+        state: isExiting(match[6]) ? 'exiting' : PROCESS_STATES[match[6][0]] ?? 'other' };
     });
     if (!rows.some(row => row.pid === process.pid)) return 'unavailable';
     const leader = rows.find(row => row.pid === pgid);
     const members = rows.filter(row => row.group === pgid);
-    const states = Object.fromEntries([...Object.values(PROCESS_STATES), 'other'].map(state => [state, 0]));
+    const states = Object.fromEntries([...Object.values(PROCESS_STATES), 'exiting', 'other'].map(state => [state, 0]));
     for (const member of members) states[member.state]++;
     const count = value => Math.min(999, value);
     const relationship = (value, expected) => !leader ? 'absent' : value === expected ? 'same' : 'other';
     return `leader:${leader?.state ?? 'absent'}|parent:${relationship(leader?.parent, process.pid)}`
       + `|group:${relationship(leader?.group, pgid)}|uid:${relationship(leader?.uid, process.geteuid?.())}`
       + `|ruid:${relationship(leader?.ruid, process.getuid?.())}`
-      + `|live:${count(members.length - states.zombie)}|zombies:${count(states.zombie)}`
+      + `|live:${count(members.length - states.zombie - states.exiting)}|zombies:${count(states.zombie)}`
       + `|foreignUid:${count(members.filter(row => row.uid !== process.geteuid?.()).length)}`
       + `|states:${Object.entries(states).filter(([, n]) => n).map(([state, n]) => `${state}:${count(n)}`).join('+') || 'empty'}`
       + `|capped:${members.length > 999}`;
@@ -81,9 +88,12 @@ export function signalBrowserProcessGroup(pgid, signal, state, phase) {
 }
 
 // Only a group tied to the retained direct child's observed exit is eligible.
-// Zombies cannot write; a live leader at the departed PID means reuse and must
-// not be signaled. The caller may still hold an open stdio handle whose `close`
-// event is delayed by descendants, so `exit` is the required reaping boundary.
+// A live leader at the departed PID means reuse and must not be signaled. The
+// caller may still hold an open stdio handle whose `close` event is delayed by
+// descendants, so `exit` is the required reaping boundary.
+// macOS refuses a group signal with EPERM once every member is exiting or a
+// zombie, which on a loaded host can outlast the deadline (#18434). So EPERM is a
+// real refusal only if a later observation still finds a live member.
 export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = { error: 'none' }) {
   const failure = message => {
     const code = state.error === 'none' ? 'none' : safeCode(state.error);
@@ -96,6 +106,7 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
   }
   let termAt;
   let killed = false;
+  let refusalConfirmed = false;
   while (true) {
     const remaining = Math.floor(deadline - performance.now());
     if (remaining <= 0) throw failure('Composition browser group cleanup exceeded its deadline');
@@ -107,7 +118,7 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
         : 'Composition browser group observation failed');
     }
     if (!members.length) {
-      if (state.error !== 'none') {
+      if (state.error !== 'none' && (refusalConfirmed || state.error !== 'EPERM')) {
         const signal = safeSignal(state.failedSignal);
         const phase = safePhase(state.failedPhase);
         console.warn(`⚠️ Composition browser group quiesced after signal failure (code=${safeCode(state.error)}, signal=${signal}, phase=${phase})`);
@@ -115,6 +126,7 @@ export async function drainBrowserProcessGroup(pgid, deadline, graceMs, state = 
       return;
     }
     if (members.some(row => row.pid === pgid)) throw failure('Composition browser group identity changed');
+    refusalConfirmed = state.error !== 'none';
     const signal = termAt === undefined ? 'SIGTERM'
       : !killed && performance.now() - termAt >= graceMs ? 'SIGKILL' : null;
     if (signal && state.error === 'none') {

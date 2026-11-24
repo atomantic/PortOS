@@ -459,7 +459,8 @@ function removeTestArtifactsRoot({ path, dev, ino }, childSettled, detachedGroup
     if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== dev || current.ino !== ino) {
       return 'refused; root identity changed';
     }
-    rmSync(path, { recursive: true, force: true });
+    // A settled group may still hold members finishing kernel exit.
+    rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
   return lstatSync(path, { throwIfNoEntry: false }) ? 'incomplete; root still exists' : null;
 }
